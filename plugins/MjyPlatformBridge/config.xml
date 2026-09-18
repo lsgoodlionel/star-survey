@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+    <metadata>
+        <name>MjyPlatformBridge</name>
+        <type>plugin</type>
+        <creationDate>2026-09-18</creationDate>
+        <last_update>2026-09-18</last_update>
+        <author>MJY Platform</author>
+        <license>GNU General Public License version 2 or later</license>
+        <version>0.1.0</version>
+        <description><![CDATA[MJY: reliable response lifecycle event log and completion scanner (P0 prototype)]]></description>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <updaters disabled="disabled">
+    </updaters>
+</config>

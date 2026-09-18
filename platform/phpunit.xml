@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Test suites for MJY platform code living in the engine repository.
+  Run from the repository root:
+    platform/deploy/test/run-tests.sh -c platform/phpunit.xml
+-->
+<phpunit
+    bootstrap="../tests/bootstrap.php"
+    stderr="true"
+    colors="true">
+    <testsuites>
+        <testsuite name="mjy-plugins">
+            <directory>../plugins/MjyPlatformBridge/tests</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>
