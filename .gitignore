@@ -78,6 +78,8 @@
 /plugins/*
 !/plugins/index.html
 !/plugins/Demo/
+# MJY platform plugins (see platform/docs/adr/0004-single-repository.md)
+!/plugins/Mjy*/
 
 #ignore old styles
 /styles/

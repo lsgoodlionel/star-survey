@@ -1,0 +1,83 @@
+# Local development stack
+#   dev:  docker compose -f docker-compose.dev.yml up -d
+#   test: platform/deploy/test/run-tests.sh [--fresh] [phpunit args]
+#         TEST_DB=pgsql platform/deploy/test/run-tests.sh ...  (PostgreSQL 16)
+services:
+  web:
+    build: ./platform/deploy/dev
+    image: survey-web
+    container_name: survey-web
+    ports:
+      - "${WEB_PORT:-8090}:80"
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  db:
+    image: mariadb:10.11
+    container_name: survey-db
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      MARIADB_DATABASE: limesurvey
+      MARIADB_USER: limesurvey
+      MARIADB_PASSWORD: ${DB_PASSWORD:-limesurvey}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "${DB_PORT:-3307}:3306"
+    volumes:
+      - survey-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 20
+
+  # Isolated test stack mirroring .github/workflows/functional.yml:
+  # root/root DB account, admin/password superadmin, debug=0, own tmp dir.
+  test-db:
+    profiles: ["test"]
+    image: mariadb:10.11
+    container_name: survey-test-db
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: limesurvey
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 20
+
+  test-pg:
+    profiles: ["test"]
+    image: postgres:16-alpine
+    container_name: survey-test-pg
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: limesurvey
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "limesurvey"]
+      interval: 5s
+      retries: 20
+
+  test-web:
+    profiles: ["test"]
+    image: survey-web
+    container_name: survey-test-web
+    volumes:
+      - ./:/var/www/html
+      - ./platform/deploy/test/.runtime/config.php:/var/www/html/application/config/config.php
+      - test-tmp:/var/www/html/tmp
+    depends_on:
+      test-db:
+        condition: service_healthy
+
+volumes:
+  survey-db:
+  test-tmp:
