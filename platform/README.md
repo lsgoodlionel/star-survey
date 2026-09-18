@@ -14,6 +14,8 @@
 | `platform/docs/p0/` | P0 技术验证进度与证据 |
 | `platform/phpunit.xml` | 平台自有测试套件 |
 | `plugins/MjyPlatformBridge/` | 答卷生命周期事件日志与补偿扫描（P0-00.4 原型） |
+| `platform/tests/e2e/` | 端到端测试脚本 |
+| `platform/tests/fixtures/plugins/FaultInjector/` | 仅测试用的故障注入插件，只挂载进测试容器 |
 
 ## 常用命令（在仓库根目录执行）
 
@@ -26,6 +28,9 @@ platform/deploy/test/run-tests.sh --fresh
 
 # 平台自有测试
 platform/deploy/test/run-tests.sh -c platform/phpunit.xml
+
+# 端到端故障注入（真实 HTTP 填写＋SIGKILL），加 TEST_DB=pgsql 切换数据库
+platform/deploy/test/run-fault-injection.sh
 
 # 代码风格（仓库规则集）
 docker exec survey-web vendor/bin/phpcs --standard=phpcs.ruleset.xml plugins/MjyPlatformBridge

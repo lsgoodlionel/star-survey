@@ -74,6 +74,8 @@ services:
       - ./:/var/www/html
       - ./platform/deploy/test/.runtime/config.php:/var/www/html/application/config/config.php
       - test-tmp:/var/www/html/tmp
+      # TEST ONLY fault injection plugin (P0-00.4); never mounted in dev or prod.
+      - ./platform/tests/fixtures/plugins/FaultInjector:/var/www/html/plugins/FaultInjector:ro
     depends_on:
       test-db:
         condition: service_healthy
