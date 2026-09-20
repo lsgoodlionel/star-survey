@@ -1,0 +1,17 @@
+# 可选叠加层：把 Web 映射到宿主端口，供人工访问。
+#
+# 用法：setup.sh --expose
+#
+# 代价必须写清楚：docker 的端口映射需要一个带网关的网络，一旦把 web 接上
+# edge-net，容器就重新具备了出网能力，internal:true 提供的“气隙”即失效。
+# 真实交付里这一层应当换成：客户侧反向代理 + 主机防火墙只放行入站。
+services:
+  web:
+    ports:
+      - "${PRIVATE_WEB_PORT:-8094}:80"
+    networks:
+      - private-net
+      - edge-net
+
+networks:
+  edge-net:

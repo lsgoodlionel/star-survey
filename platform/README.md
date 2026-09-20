@@ -14,7 +14,14 @@
 | `platform/docs/p0/` | P0 技术验证进度与证据 |
 | `platform/phpunit.xml` | 平台自有测试套件 |
 | `plugins/MjyPlatformBridge/` | 答卷生命周期事件日志与补偿扫描（P0-00.4 原型） |
+| `platform/deploy/exam/` | 考试与配额验证栈（8093 端口，自带数据库与 tmp 卷） |
+| `platform/phpunit-runtime-policy.xml` | `MjyRuntimePolicy` 的测试套件 |
+| `plugins/MjyRuntimePolicy/` | 考试计时与硬名额租约（P0-00.7 原型） |
+| `platform/phpunit-questions.xml` | `MjyQuestionExtensions` 的测试套件 |
+| `plugins/MjyQuestionExtensions/` | 自增表格的服务端校验、结构化副表与上传会话（P0-00.3 原型） |
+| `themes/question/mjy-repeating-table/` | 自增表格题型主题（扩展长文本题 `T`） |
 | `platform/tests/e2e/` | 端到端测试脚本 |
+| `platform/tests/fixtures/surveys/` | 端到端用的问卷 fixture（`.lss`） |
 | `platform/tests/fixtures/plugins/FaultInjector/` | 仅测试用的故障注入插件，只挂载进测试容器 |
 
 ## 常用命令（在仓库根目录执行）
@@ -31,6 +38,16 @@ platform/deploy/test/run-tests.sh -c platform/phpunit.xml
 
 # 端到端故障注入（真实 HTTP 填写＋SIGKILL），加 TEST_DB=pgsql 切换数据库
 platform/deploy/test/run-fault-injection.sh
+
+# 题型纵切（数组题 / 自增表格 / 上传题走完整生命周期）
+platform/deploy/test/run-tests.sh -c platform/phpunit-questions.xml
+platform/deploy/test/run-question-slice.sh
+
+# 考试与配额（独立的 survey-exam 栈：起栈、跑验证、拆栈）
+platform/deploy/exam/setup.sh
+EXAM_CONCURRENCY=100 platform/deploy/exam/run-exam-policy.sh
+docker exec survey-exam-web vendor/bin/phpunit -c platform/phpunit-runtime-policy.xml
+platform/deploy/exam/teardown.sh
 
 # 代码风格（仓库规则集）
 docker exec survey-web vendor/bin/phpcs --standard=phpcs.ruleset.xml plugins/MjyPlatformBridge

@@ -1,0 +1,67 @@
+# P0-00.8 私有化最小单节点安装栈。
+#
+# 与 dev / test / tenancy 三套栈完全隔离：项目名固定 survey-private，
+# 容器名前缀 survey-private-*，不共用任何卷。
+#
+# 与开发栈的三点关键差别（都来自 ADR 0002 决定 3）：
+#   1. 代码树是本实例独占的命名卷 engine-code，不是仓库的绑定挂载。
+#      一个租户写进去的 PHP 文件不可能被邻居实例执行（对应 F-01/F-02）。
+#   2. config.php / allowed_hosts.php / security.php 都落在这个独占卷里。
+#   3. 默认网络 private-net 是 internal:true —— 没有网关，容器无法访问外网。
+#      这是“气隙”在本栈里的可执行定义，不是口头声明。
+#
+#   起栈：     platform/deploy/private/setup.sh
+#   起栈并映射宿主端口 8094（会重新引入出网能力，见文档）：
+#              platform/deploy/private/setup.sh --expose
+#   自检：     platform/deploy/private/preflight.sh
+#   备份/恢复：platform/deploy/private/backup.sh / restore.sh
+#   拆除：     platform/deploy/private/teardown.sh
+#
+# 这里的口令只用于本地验证栈，禁止出现在任何真实环境中。
+name: survey-private
+
+services:
+  db:
+    # 交付时必须换成 images.lock 里的 digest 引用。
+    image: ${PRIVATE_DB_IMAGE:-mariadb:10.11}
+    container_name: survey-private-db
+    environment:
+      MARIADB_ROOT_PASSWORD: ${PRIVATE_DB_ROOT_PASSWORD:-private-root}
+      MARIADB_DATABASE: ${PRIVATE_DB_NAME:-survey_private}
+      MARIADB_USER: ${PRIVATE_DB_USER:-survey_private}
+      MARIADB_PASSWORD: ${PRIVATE_DB_PASSWORD:-private-db-pass}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - engine-db:/var/lib/mysql
+    networks:
+      - private-net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 20
+
+  web:
+    image: ${PRIVATE_ENGINE_IMAGE:-survey-web}
+    container_name: survey-private-web
+    volumes:
+      # 本实例独占的引擎代码副本。setup.sh 首次起栈时从仓库灌入。
+      - engine-code:/var/www/html
+      # tmp 与 upload 再单独切出来，便于备份只取数据、不取代码。
+      - engine-tmp:/var/www/html/tmp
+      - engine-upload:/var/www/html/upload
+    networks:
+      - private-net
+    depends_on:
+      db:
+        condition: service_healthy
+
+networks:
+  private-net:
+    # internal:true ⇒ docker 不给这个网络配网关，容器出不了网。
+    internal: true
+
+volumes:
+  engine-code:
+  engine-db:
+  engine-tmp:
+  engine-upload:

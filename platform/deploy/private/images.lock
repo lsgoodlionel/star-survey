@@ -1,0 +1,44 @@
+# P0-00.8 私有化交付：容器镜像摘要锁定清单
+#
+# 离线/内网交付时必须按 digest 拉取，不能按 tag。tag 会漂移：本清单编制当天
+# postgres:16-alpine 在本机的 RepoDigest 是 e013e867…（2026-06-16 拉取），
+# 而 Docker Hub 上同一个 tag 已经指向 3c5c8892…，两者相差三个月。
+#
+# 校验方式（联网侧，落盘前执行）：
+#   docker buildx imagetools inspect <image>@<digest>
+# 导出方式（联网侧）：
+#   platform/deploy/private/export-images.sh  →  产出 images-<arch>.tar
+# 导入方式（内网侧）：
+#   docker load -i images-<arch>.tar
+#
+# 格式：<用途> <镜像引用>
+# 架构：以下 digest 为 multi-arch index（manifest list）摘要，linux/amd64 与
+#       linux/arm64 都由同一个 index digest 覆盖；docker pull 会按本机架构选层。
+
+# --- 运行时镜像（内网必须存在）-------------------------------------------
+# 引擎运行时基础镜像。survey-web 由 platform/deploy/dev/Dockerfile 从此构建。
+base-php      php:8.3-apache@sha256:257dcf070787a1ffc782d90bd589297b63a007064d024cdfb6d30464836ded56
+
+# 数据库（MariaDB 路线）。本机已验证实例即此 digest。
+db-mariadb    mariadb:10.11@sha256:7f22313fc130a377a44999965bcb0a08dd5b21e8502824c1b864f792f9bc66ab
+
+# 数据库（PostgreSQL 路线，ADR 0001 决定 5 的生产首选）。
+# 注意：下面是本机在用的版本；Docker Hub 当前 tag 已漂移到
+# sha256:3c5c8892d184f738f4fe282d14ddaa613a38f00f4189d2d94725ebe6f2909ddb。
+# 交付前必须重新定版并在此处只保留一行。
+db-postgres   postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+
+# --- 仅构建期需要（内网可不落盘）----------------------------------------
+# 构建引擎镜像时用于拷贝 composer 二进制。
+build-composer composer:2@sha256:a5f59b9fd2faf31218632be4809dc6491761085e8064c31dc3b84378c48c248b
+
+# 备份/恢复与本地校验用的小工具镜像。
+util-alpine   alpine:3.20
+
+# --- 已知缺口（交付前必须堵上）------------------------------------------
+# GAP-1: platform/deploy/dev/Dockerfile 的 FROM 写的是 php:8.3-apache（无 digest），
+#        本机 survey-web 构建于 2026-09-18，其基础镜像 digest 已无法事后还原。
+#        可还原的只有 PHP_VERSION=8.3.33。交付镜像必须改用 FROM ...@sha256: 重建。
+# GAP-2: 该 Dockerfile 执行 apt-get update / pecl install xdebug，两者都需要联网且
+#        不可复现（Debian 快照与 PECL 版本会漂移）。交付构建必须钉死 apt 快照源与
+#        xdebug 版本，且生产镜像不应包含 xdebug。
