@@ -1,0 +1,104 @@
+
+<?php
+/**
+ * @var $oSurveyTheme TemplateConfiguration
+ */
+
+require_once Yii::getPathOfAlias('application.extensions.admin.grid.FloatingActionsWidget.actions.SurveyThemeMassiveActions') . '.php';
+
+$aFloatingActions = \actions\SurveyThemeMassiveActions::getActions();
+$this->widget(
+    'application.extensions.admin.grid.CLSGridView',
+    [
+        'dataProvider' => $oSurveyTheme->searchGrid(),
+        'filter' => $oSurveyTheme,
+        'id' => 'themeoptions-grid',
+        'lsCaption' => gT('Survey themes'),
+        'lsPageSizeCurrentValue'  => $pageSize,
+        'columns' => [
+            [
+                'id' => 'id',
+                'class' => 'CCheckBoxColumn',
+                'selectableRows' => '100',
+            ],
+            [
+                'header' => gT('Preview'),
+                'name' => 'preview',
+                'value' => '$data->preview',
+                'type' => 'raw',
+                'htmlOptions' => ['class' => 'col-lg-1'],
+                'filter' => false,
+            ],
+
+            [
+                'header' => gT('Name'),
+                'name' => 'template_name',
+                'value' => '"<strong>".CHtml::encode($data->template->title)."</strong>" ."<br>" .CHtml::encode($data->template_name)',
+                'htmlOptions' => ['class' => 'col-lg-2'],
+                'type' => 'raw',
+            ],
+
+            [
+                'header' => gT('Description'),
+                'name' => 'template_description',
+                'value' => '$data->description',
+                'htmlOptions' => ['class' => 'col-lg-3 can-contain-link'],
+                'type' => 'raw',
+            ],
+
+            [
+                'header' => gT('Type'),
+                'name' => 'template_type',
+                'value' => '$data->typeIcon',
+                'type' => 'raw',
+                'htmlOptions' => ['class' => 'col-lg-2 text-center'],
+                'filter' => ['core' => 'Core theme', 'user' => 'User theme'],
+            ],
+
+            [
+                'header' => gT('Extends'),
+                'name' => 'template_extends',
+                'value' => '$data->template->extends',
+                'htmlOptions' => ['class' => 'col-lg-2 text-center'],
+            ],
+
+            [
+                'header' => '',
+                'name' => 'actions',
+                'value' => '$data->buttons',
+                'type' => 'raw',
+                'htmlOptions' => ['class' => 'col-lg-1  text-center'],
+                'filter' => false,
+            ],
+
+        ],
+        'lsShowSelectionBar' => false,
+        'ajaxUpdate' => true,
+        'ajaxType' => 'POST',
+        'afterAjaxUpdate' => 'function(id, data){window.LS.doToolTip();}',
+    ]
+);
+
+if (!empty($aFloatingActions)) {
+    $this->widget(
+        'ext.admin.grid.FloatingActionsWidget.FloatingActionsWidget',
+        [
+            'pk'       => 'id',
+            'gridId'   => 'themeoptions-grid',
+            'aActions' => $aFloatingActions,
+        ]
+    );
+}
+?>
+
+<!-- To update rows per page via ajax setSession-->
+<?php
+$script = '
+                jQuery(document).on("change", "#themeoptions-pageSize", function(){
+                    $.fn.yiiGridView.update("themeoptions-grid",{ data:{ pageSize: $(this).val() }});
+                });
+                ';
+App()->getClientScript()->registerScript('themeoptions-grid', $script, LSYii_ClientScript::POS_POSTSCRIPT);
+?>
+
+

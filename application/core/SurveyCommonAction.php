@@ -1,0 +1,787 @@
+<?php
+
+/*
+* LimeSurvey
+* Copyright (C) 2007-2026 The LimeSurvey Project Team
+* All rights reserved.
+* License: GNU/GPL License v2 or later, see LICENSE.php
+* LimeSurvey is free software. This version may have been modified pursuant
+* to the GNU General Public License, and as distributed it includes or
+* is derivative of works licensed under the GNU General Public License or
+* other free or open source software licenses.
+* See COPYRIGHT.php for copyright notices and details.
+*
+*/
+
+use LimeSurvey\Menu\Menu;
+use LimeSurvey\Menu\MenuItem;
+
+/**
+* Survey Common Action
+*
+* This controller contains common functions for survey related views.
+*
+* @package        LimeSurvey
+* @subpackage    Backend
+* @author        LimeSurvey Team
+* @method        void index()
+*/
+class SurveyCommonAction extends CAction
+{
+    public function __construct($controller = null, $id = null)
+    {
+        parent::__construct($controller, $id);
+        Yii::app()->request->updateNavigationStack();
+        // Make sure viewHelper can be autoloaded
+        Yii::import('application.helpers.viewHelper');
+    }
+
+    /**
+     * Override runWithParams() implementation in CAction to help us parse
+     * requests with subactions.
+     *
+     * @param array $params URL Parameters
+     * @return bool
+     */
+    public function runWithParams($params)
+    {
+        // Default method that would be called if the subaction and run() do not exist
+        $sDefault = 'index';
+        // Check for a subaction
+        if (empty($params['sa'])) {
+            $sSubAction = $sDefault; // default
+        } else {
+            $sSubAction = $params['sa'];
+        }
+        // Check if the class has the method
+        $oClass = new ReflectionClass($this);
+        if (!$oClass->hasMethod($sSubAction)) {
+            // If it doesn't, revert to default Yii method, that is run() which should reroute us somewhere else
+            $sSubAction = 'run';
+        }
+
+        // Populate the params. eg. surveyid -> iSurveyId
+        $params = $this->addPseudoParams($params);
+
+        if (!empty($params['iSurveyId'])) {
+            LimeExpressionManager::SetSurveyId($params['iSurveyId']); // must be called early - it clears internal cache if a new survey is being used
+        }
+        // Check if the method is public and of the action class, not its parents
+        // ReflectionClass gets us the methods of the class and parent class
+        // If the above method existence check passed, it might not be neceessary that it is of the action class
+        $oMethod  = new ReflectionMethod($this, $sSubAction);
+
+        // Get the action classes from the admin controller as the urls necessarily do not equal the class names. Eg. survey -> surveyaction
+        // Merges it with actions from admin modules
+        $aActions = array_merge(App()->getController()->getActionClasses(), Yii::app()->getController()->getAdminModulesActionClasses());
+
+        if (empty($aActions[$this->getId()]) || strtolower($oMethod->getDeclaringClass()->name) != strtolower((string) $aActions[$this->getId()]) || !$oMethod->isPublic()) {
+            // Either action doesn't exist in our allowlist, or the method class doesn't equal the action class or the method isn't public
+            // So let us get the last possible default method, ie. index
+            $oMethod = new ReflectionMethod($this, $sDefault);
+        }
+
+        // We're all good to go, let's execute it
+        // runWithParamsInternal would automatically get the parameters of the method and populate them as required with the params
+        return parent::runWithParamsInternal($this, $oMethod, $params);
+    }
+
+    /**
+     * Some functions have different parameters, which are just an alias of the
+     * usual parameters we're getting in the url. This function just populates
+     * those variables so that we don't end up in an error.
+     *
+     * This is also used while rendering wrapped template
+     * {@link SurveyCommonAction::renderWrappedTemplate()}
+     *
+     * @param array $params Parameters to parse and populate
+     * @return array Populated parameters
+     * @throws CHttpException
+     */
+    private function addPseudoParams($params)
+    {
+        // Return if params isn't an array
+        if (empty($params) || !is_array($params)) {
+            return $params;
+        }
+
+        $pseudos = array(
+            'id' => 'iId',
+            'gid' => 'iGroupId',
+            'qid' => 'iQuestionId',
+            /* priority is surveyid,surveyId,sid : surveyId=1&sid=2 set iSurveyId to 1 */
+            'sid' => array('iSurveyId', 'iSurveyID', 'surveyid'), // Old link use sid
+            'surveyId' => array('iSurveyId', 'iSurveyID', 'surveyid'), // PluginHelper->sidebody : if disable surveyId usage : broke API
+            'surveyid' => array('iSurveyId', 'iSurveyID', 'surveyid'),
+            'srid' => 'iSurveyResponseId',
+            'scid' => 'iSavedControlId',
+            'uid' => 'iUserId',
+            'ugid' => 'iUserGroupId',
+            'fieldname' => 'sFieldName',
+            'fieldtext' => 'sFieldText',
+            'action' => 'sAction',
+            'lang' => 'sLanguage',
+            'browseLang' => 'sBrowseLang',
+            'tokenids' => 'aTokenIds',
+            'tokenid' => 'iTokenId',
+            'subaction' => 'sSubAction', // /!\ Already filled by sa : can be different (usage of subaction in quota at 2019-09-04)
+        );
+        // Foreach pseudo, take the key, if it exists,
+        // Populate the values (taken as an array) as keys in params
+        // with that key's value in the params
+        // Check whether two params differ (security check)
+        foreach ($pseudos as $key => $pseudo) {
+            // We care only for user parameters, not by code parameters (see issue #15221)
+            if ($checkParam = Yii::app()->getRequest()->getParam($key)) {
+                $pseudo = (array) $pseudo;
+                foreach ($pseudo as $pseud) {
+                    if (empty($params[$pseud])) {
+                        $params[$pseud] = $checkParam;
+                    } elseif ($params[$pseud] != $checkParam) {
+                        // Throw error about multiple params (and if they are different) #15204
+                        throw new CHttpException(403, sprintf(gT("Invalid parameter %s (%s already set)"), $pseud, $key));
+                    }
+                }
+            }
+        }
+
+        /* Control sid,gid and qid params validity see #12434 */
+        // Fill param with according existing param, replace existing parameters.
+        // iGroupId/gid can be found with qid/iQuestionId
+        if (!empty($params['iQuestionId'])) {
+            if ((string) (int) $params['iQuestionId'] !== (string) $params['iQuestionId']) {
+                // pgsql need filtering before find
+                throw new CHttpException(403, gT("Invalid question ID"));
+            }
+            $oQuestion = Question::model()->find("qid=:qid", array(":qid" => $params['iQuestionId'])); //Move this in model to use cache
+            if (!$oQuestion) {
+                throw new CHttpException(404, gT("Question not found"));
+            }
+            if (!isset($params['iGroupId'])) {
+                $params['iGroupId'] = $params['gid'] = $oQuestion->gid;
+            }
+        }
+        // iSurveyId/iSurveyID/sid can be found with gid/iGroupId
+        if (!empty($params['iGroupId'])) {
+            if ((string) (int) $params['iGroupId'] !== (string) $params['iGroupId']) {
+                // pgsql need filtering before find
+                throw new CHttpException(403, gT("Invalid group ID"));
+            }
+            $oGroup = QuestionGroup::model()->find("gid=:gid", array(":gid" => $params['iGroupId'])); //Move this in model to use cache
+            if (!$oGroup) {
+                throw new CHttpException(404, gT("Group not found"));
+            }
+            if (!isset($params['iSurveyId'])) {
+                $params['iSurveyId'] = $params['iSurveyID'] = $params['surveyid'] = $params['sid'] = $oGroup->sid;
+            }
+        }
+        // Finally control validity of sid
+        if (!empty($params['iSurveyId'])) {
+            if ((string) (int) $params['iSurveyId'] !== (string) $params['iSurveyId']) {
+                // pgsql need filtering before find
+                // 403 mean The request was valid, but the server is refusing action.
+                throw new CHttpException(403, gT("Invalid survey ID"));
+            }
+            $oSurvey = Survey::model()->findByPk($params['iSurveyId']);
+            if (!$oSurvey) {
+                throw new CHttpException(404, gT("Survey not found"));
+            }
+            // Minimal permission needed, extra permission must be tested in each controller
+            if (!Permission::model()->hasSurveyPermission($params['iSurveyId'], 'survey', 'read')) {
+                // 403 mean (too) The user might not have the necessary permissions for a resource.
+                // 401 semantically means "unauthenticated"
+                throw new CHttpException(403);
+            }
+            $params['iSurveyId'] = $params['iSurveyID'] = $params['surveyid'] = $params['sid'] = $oSurvey->sid;
+        }
+        // Finally return the populated array
+        return $params;
+    }
+
+    /**
+     * Action classes require them to have a run method. We reroute it to index
+     * if called.
+     */
+    public function run()
+    {
+        $this->index();
+    }
+
+    /**
+     * Routes the action into correct subaction
+     *
+     * @access protected
+     * @param string $sa
+     * @param string[] $get_vars
+     * @return mixed
+     */
+    protected function route($sa, array $get_vars)
+    {
+        $func_args = array();
+        foreach ($get_vars as $k => $var) {
+                    $func_args[$k] = Yii::app()->request->getQuery($var);
+        }
+
+        return call_user_func_array(array($this, $sa), $func_args);
+    }
+
+    /**
+     * @inheritdoc
+     * @param string $_viewFile_
+     */
+    public function renderInternal($_viewFile_, $_data_ = null, $_return_ = false)
+    {
+        // we use special variable names here to avoid conflict when extracting data
+        if (is_array($_data_)) {
+            extract($_data_, EXTR_PREFIX_SAME, 'data');
+        } else {
+            $data = $_data_;
+        }
+
+        if ($_return_) {
+            ob_start();
+            ob_implicit_flush(0);
+            require($_viewFile_);
+            return ob_get_clean();
+        } else {
+            require($_viewFile_);
+        }
+    }
+
+    /**
+     * Rendering the subviews and views of renderWrappedTemplate
+     *
+     * @param string $sAction
+     * @param array|string $aViewUrls
+     * @param array $aData
+     * @return string
+     */
+    protected function renderCentralContents($sAction, $aViewUrls, $aData = [])
+    {
+
+        //// This will be handle by subviews inclusions
+        $aViewUrls = (array) $aViewUrls;
+        $sViewPath = '/admin/';
+        if (!empty($sAction)) {
+                    $sViewPath .= $sAction . '/';
+        }
+        //TODO : while refactoring, we must replace the use of $aViewUrls by $aData[.. conditions ..],
+        //todo and then call to function such as $this->nsurveysummary($aData);
+        // Load views
+        $content = "";
+
+        foreach ($aViewUrls as $sViewKey => $viewUrl) {
+            if (empty($sViewKey) || !in_array($sViewKey, array('message', 'output'))) {
+                if (is_numeric($sViewKey)) {
+                    $content .= Yii::app()->getController()->renderPartial($sViewPath . $viewUrl, $aData, true);
+                } elseif (is_array($viewUrl)) {
+                    foreach ($viewUrl as $aSubData) {
+                        $aSubData = array_merge($aData, $aSubData);
+                        $content .= Yii::app()->getController()->renderPartial($sViewPath . $sViewKey, $aSubData, true);
+                    }
+                }
+            } else {
+                switch ($sViewKey) {
+                    // We'll use some Bootstrap alerts, and call them inside each correct view.
+                    // Message
+                    case 'message':
+                        if (empty($viewUrl['class'])) {
+                            $content .= Yii::app()->getController()->showMessageBox($viewUrl['title'], $viewUrl['message'], null, true);
+                        } else {
+                            $content .= Yii::app()->getController()->showMessageBox($viewUrl['title'], $viewUrl['message'], $viewUrl['class'], true);
+                        }
+                        break;
+
+                        // Output
+                    case 'output':
+                        //// TODO : http://goo.gl/ABl5t5
+                        $content .= $viewUrl;
+
+                        if (isset($aViewUrls['afteroutput'])) {
+                            $content .= $aViewUrls['afteroutput'];
+                        }
+                        break;
+                }
+            }
+        }
+        return $content;
+    }
+
+    /**
+     * Renders template(s) wrapped in header and footer
+     *
+     * Addition of parameters should be avoided if they can be added to $aData
+     *
+     * NOTE FROM LOUIS : We want to remove this function, which doesn't respect MVC pattern.
+     * The work it's doing should be handle by layout files, and subviews inside views.
+     * Eg : for route "admin/survey/sa/listquestiongroups/surveyid/282267"
+     *       the Group controller should use a main layout (with admin menu bar as a widget), then render the list view, in which the question group bar is called as a subview.
+     *
+     * So for now, we try to evacuate all the renderWrappedTemplate logic (if statements, etc.)
+     * to subfunctions, then it will be easier to remove.
+     * Comments starting with //// indicate how it should work in the future
+     *
+     * @param string $sAction Current action, the folder to fetch views from
+     * @param array|string $aViewUrls View url(s)
+     * @param array $aData Data to be passed on. Optional.
+     * @param string|boolean $sRenderFile File to be rendered as a layout. Optional.
+     * @throws CHttpException
+     */
+    protected function renderWrappedTemplate($sAction = '', $aViewUrls = array(), $aData = array(), $sRenderFile = false)
+    {
+        // Gather the data
+
+        // This call 2 times addPseudoParams because it's already done in runWithParams : why ?
+        $aData = $this->addPseudoParams($aData);
+
+        $basePath = (string) Yii::getPathOfAlias('application.views.admin.super');
+
+        if ($sRenderFile == false) {
+            if (!empty($aData['surveyid'])) {
+                //todo REFACTORING this should be moved into LSBaseController->beforeRender()
+                $aData['oSurvey'] = Survey::model()->findByPk($aData['surveyid']);
+
+                // Needed to evaluate EM expressions in question summary
+                // See bug #11845
+                LimeExpressionManager::SetSurveyId($aData['surveyid']);
+                LimeExpressionManager::StartProcessingPage(false, true);
+
+                // If 'landOnSideMenuTab' is not set already, default to 'settings'.
+                if (empty($aData['sidemenu']['landOnSideMenuTab'])) {
+                    $aData['sidemenu']['landOnSideMenuTab'] = 'settings';
+                }
+
+                $renderFile = $basePath . '/layout_insurvey.php';
+            } else {
+                $renderFile = $basePath . '/layout_main.php';
+            }
+        } else {
+            $renderFile = $basePath . '/' . $sRenderFile;
+        }
+        $content = $this->renderCentralContents($sAction, $aViewUrls, $aData);
+        $out = $this->renderInternal($renderFile, ['content' => $content, 'aData' => $aData], true);
+
+        App()->getClientScript()->render($out);
+        echo $out;
+    }
+
+    /**
+     * Display the update notification
+     *
+     *
+     * REFACTORED (in LayoutHelper.php)
+     *
+     * Passes security_update_available and stability_labels to the notification view.
+     *
+     * @return string|void Rendered notification HTML, or void if no update
+     * @throws CException
+     */
+    protected function updatenotification()
+    {
+        // Never use Notification model for database update.
+        // TODO: Real fix: No database queries while doing database update, meaning
+        // don't call renderWrappedTemplate.
+        if (get_class($this) == 'databaseupdate') {
+            return;
+        }
+
+        if (!Yii::app()->user->isGuest && Yii::app()->getConfig('updatable')) {
+            $updateModel = new UpdateForm();
+            $updateNotification = $updateModel->updateNotification;
+
+            if ($updateNotification->result) {
+                $scriptToRegister = Yii::app()->getConfig('packages') . DIRECTORY_SEPARATOR . 'comfort_update' . DIRECTORY_SEPARATOR . 'comfort_update.js';
+                App()->getClientScript()->registerScriptFile($scriptToRegister);
+                return $this->getController()->renderPartial("/admin/update/_update_notification", array(
+                    'security_update_available' => $updateNotification->security_update,
+                    'stability_labels' => Yii::app()->session['update_stability_labels'] ?? [],
+                ));
+            }
+        }
+    }
+
+    /**
+     * Display notifications
+     *
+     * * REFACTORED (in LayoutHelper.php)
+     */
+    protected function notifications()
+    {
+            $aMessage = App()->session['arrayNotificationMessages'];
+        if (!is_array($aMessage)) {
+            $aMessage = array();
+        }
+            unset(App()->session['arrayNotificationMessages']);
+            return $this->getController()->renderPartial("notifications/notifications", array('aMessage' => $aMessage));
+    }
+
+    /**
+     *
+     * REFACTORED in LayoutHelper
+     *
+     * Survey summary
+     * @param array $aData
+     */
+    protected function nsurveysummary($aData)
+    {
+        if (isset($aData['display']['surveysummary'])) {
+            if ((empty($aData['display']['menu_bars']['surveysummary']) || !is_string($aData['display']['menu_bars']['surveysummary'])) && !empty($aData['gid'])) {
+                $aData['display']['menu_bars']['surveysummary'] = 'viewgroup';
+            }
+            $this->_surveysummary($aData);
+        }
+    }
+
+    /**
+     * Header
+     *
+     * * REFACTORED (in LayoutHelper.php)
+     *
+     * @param array $aData
+     */
+    protected function showHeaders($aData, $sendHTTPHeader = true)
+    {
+        if (!isset($aData['display']['header']) || $aData['display']['header'] !== false) {
+            // Send HTTP header
+            if ($sendHTTPHeader) {
+                header("Content-type: text/html; charset=UTF-8"); // needed for correct UTF-8 encoding
+            }
+            Yii::app()->getController()->getAdminHeader(false, false, $aData);
+        }
+    }
+
+    /**
+     * showadminmenu() function returns html text for the administration button bar
+     *
+     * REFACTORED (in LayoutHelper.php)
+     *
+     * @access public
+     * @param $aData
+     * @return string
+     * @global string $homedir
+     * @global string $scriptname
+     * @global string $surveyid
+     * @global string $setfont
+     * @global string $imageurl
+     * @global int $surveyid
+     */
+    protected function showadminmenu($aData)
+    {
+        // We don't wont the admin menu to be shown in login page
+        if (!Yii::app()->user->isGuest) {
+            if (!(Yii::app()->getConfig('ssl_disable_alert')) && strtolower(Yii::app()->getConfig('force_ssl') != 'on') && \Permission::model()->hasGlobalPermission("superadmin")) {
+                $not = new UniqueNotification(array(
+                    'user_id' => App()->user->id,
+                    'importance' => Notification::HIGH_IMPORTANCE,
+                    'title' => gT('SSL not enforced'),
+                    'message' => '<span class="ri-error-warning-fill"></span>&nbsp;' .
+                        gT("Warning: Please enforce SSL encryption in Global settings/Security after SSL is properly configured for your webserver.")
+                ));
+                $not->save();
+            }
+
+            // Count active survey
+            $aData['dataForConfigMenu']['activesurveyscount'] = $aData['activesurveyscount'] = Survey::model()->permission(Yii::app()->user->getId())->active()->count();
+
+            // Count survey
+            $aData['dataForConfigMenu']['surveyscount'] = Survey::model()->count();
+
+            // Count user
+            $aData['dataForConfigMenu']['userscount'] = User::model()->count();
+
+            //Check if have a comfortUpdate key
+            if (Yii::app()->getConfig('update_key') != '') {
+                $aData['dataForConfigMenu']['comfortUpdateKey'] = gT('Activated');
+            } else {
+                $aData['dataForConfigMenu']['comfortUpdateKey'] = gT('None');
+            }
+
+            $aData['sitename'] = Yii::app()->getConfig("sitename");
+
+            // Fetch extra menus from plugins, e.g. last visited surveys
+            $aData['extraMenus'] = $this->fetchExtraMenus($aData);
+            //new create process (including survey, survey group, import survey)
+            $aData['extraMenus'][] = $this->getCreateMenu();
+
+            // Get notification menu
+            $surveyId = $aData['surveyid'] ?? null;
+            Yii::import('application.controllers.admin.NotificationController');
+            $aData['adminNotifications'] = NotificationController::getMenuWidget($surveyId, true /* show spinner */);
+
+            $this->getController()->renderPartial("/layouts/adminmenu", $aData);
+        }
+        return null;
+    }
+
+    /**
+     * REFACTORED in LayoutHelper (necessary to have it here,
+     * until all controllers have been refactored...)
+     *
+     * Returns extra menu for the new create process (including create, copy, and import survey).
+     *
+     * @return Menu
+     */
+    public function getCreateMenu()
+    {
+        $itemClass = 'create-menu-item';
+        $menuItemHeader = [
+            'isDivider' => false,
+            'isSmallText' => true,
+            'label' => gT('New survey...'),
+            'href' => '#',
+            'iconClass' => 'ri-add-line',
+        ];
+        $menuItems[] = (new MenuItem($menuItemHeader));
+
+        $menuItemNewSurvey = [
+            'isDivider' => false,
+            'isSmallText' => false,
+            'label' => gT('Create'),
+            'href' => \Yii::app()->createUrl('surveyAdministration/newSurvey'),
+            'iconClass' => 'ri-add-line',
+            'id' => 'create-survey-link',
+            'itemClass' => $itemClass
+        ];
+        $menuItems[] = (new MenuItem($menuItemNewSurvey));
+
+        $menuItemCopySurvey = [
+            'isDivider' => false,
+            'isSmallText' => false,
+            'label' => gT('Copy'),
+            'isModal' => true,
+            'modalId' => 'copySurvey_modal',
+            'iconClass' => 'ri-file-copy-line',
+            'itemClass' => $itemClass
+        ];
+        $menuItems[] = (new MenuItem($menuItemCopySurvey));
+
+        $menuItemImport = [
+            'isDivider' => false,
+            'isSmallText' => false,
+            'label' => gT('Import'),
+            'isModal' => true,
+            'modalId' => 'importSurvey_modal',
+            'iconClass' => 'ri-upload-line',
+            'itemClass' => $itemClass
+        ];
+        $menuItems[] = (new MenuItem($menuItemImport));
+
+        $options = [
+            'id' => 'createMenuButton',
+            'label' => '+',
+            'iconClass' => 'ri-add-line',
+            'isDropDown' => true,
+            'isDropDownButton' => true,
+            'dropDownButtonClass' => 'btn btn-info btn-create dropdown-toggle-no-caret',
+            'menuItems' => $menuItems,
+            'isPrepended' => true,
+        ];
+
+        $createMenu = new Menu($options);
+
+        return $createMenu;
+    }
+
+    /**
+     * REFACTORED in LayoutHelper.php
+     *
+     * @param $aData
+     * @throws CException
+     */
+    protected function titlebar($aData)
+    {
+        if (isset($aData['title_bar'])) {
+            $this->getController()->renderPartial("/layouts/title_bar", $aData);
+        }
+    }
+
+    /**
+     * Render the save/cancel bar for Organize question groups/questions
+     *
+     * REFACTORED in LayoutHelper
+     *
+     * @param array $aData
+     *
+     * @since 2014-09-30
+     * @author LimeSurvey GmbH
+     */
+    protected function organizequestionbar($aData)
+    {
+        if (isset($aData['organizebar'])) {
+            if (isset($aData['questionbar']['closebutton']['url'])) {
+                $sAlternativeUrl = $aData['questionbar']['closebutton']['url'];
+                $aData['questionbar']['closebutton']['url'] = Yii::app()->request->getUrlReferrer(Yii::app()->createUrl($sAlternativeUrl));
+            }
+
+            $aData['questionbar'] = $aData['organizebar'];
+            $this->getController()->renderPartial("/admin/survey/Question/questionbar_view", $aData);
+        }
+    }
+
+    /**
+     * Render the quick-menu that is shown
+     * when side-menu is hidden.
+     *
+     * REFACTORED in LayoutHelper
+     *
+     * Only show home-icon for now.
+     *
+     * Add support for plugin to attach
+     * icon elements using event afterQuickMenuLoad
+     *
+     * @param array $aData
+     * @return string
+     * @todo Make quick-menu user configurable
+     */
+    protected function renderQuickmenu(array $aData)
+    {
+        $event = new PluginEvent('afterQuickMenuLoad', $this);
+        $event->set('aData', $aData);
+        $result = App()->getPluginManager()->dispatchEvent($event);
+
+        $quickMenuItems = $result->get('quickMenuItems');
+        if (!empty($quickMenuItems)) {
+            usort($quickMenuItems, function ($b1, $b2) {
+                return (int) $b1['order'] > (int) $b2['order'];
+            });
+        }
+
+        $aData['quickMenuItems'] = $quickMenuItems;
+
+        if ($aData['quickMenuItems'] === null) {
+            $aData['quickMenuItems'] = array();
+        }
+
+        $html = $this->getController()->renderPartial('/admin/super/quickmenu', $aData, true);
+        return $html;
+    }
+
+    /**
+     * Returns content from event beforeSideMenuRender
+     *
+     * REFACTORED in LayoutHelper
+     *
+     * @param array $aData
+     * @return string
+     */
+    protected function beforeSideMenuRender(array $aData)
+    {
+        $event = new PluginEvent('beforeSideMenuRender', $this);
+        $event->set('aData', $aData);
+        $result = App()->getPluginManager()->dispatchEvent($event);
+        return $result->get('html');
+    }
+
+    /**
+     * REFACTORED in LayoutHelper
+     *
+     * listquestion groups
+     * @param array $aData
+     */
+    protected function listquestiongroups(array $aData)
+    {
+        if (isset($aData['display']['menu_bars']['listquestiongroups'])) {
+            $this->getController()->renderPartial("/questionAdministration/listQuestions", $aData);
+        }
+    }
+
+    /**
+     * REFACTORED in LayoutHelper
+     *
+     * @param $aData
+     * @throws CException
+     */
+    protected function listquestions($aData)
+    {
+        if (isset($aData['display']['menu_bars']['listquestions'])) {
+            $iSurveyID = $aData['surveyid'];
+            $oSurvey = $aData['oSurvey'];
+
+            // The DataProvider will be build from the Question model, search method
+            $model = new Question('search');
+
+            // Global filter
+            if (isset($_GET['Question'])) {
+                $model->setAttributes($_GET['Question'], false);
+            }
+
+            // Filter group
+            if (isset($_GET['gid'])) {
+                $model->gid = $_GET['gid'];
+            }
+
+            // Set number of page
+            if (isset($_GET['pageSize'])) {
+                App()->user->setState('pageSize', (int) $_GET['pageSize']);
+            }
+
+            $aData['pageSize'] = App()->user->getState('pageSize', App()->params['defaultPageSize']);
+
+            // We filter the current survey ID
+            $model->sid = $iSurveyID;
+
+            $aData['model'] = $model;
+
+            $this->getController()->renderPartial("/admin/survey/Question/listquestions", $aData);
+        }
+    }
+
+    /**
+     * Get extra menus from plugins that are using event beforeAdminMenuRender
+     *
+     * @param array $aData
+     * @return array<ExtraMenu>
+     */
+    protected function fetchExtraMenus(array $aData)
+    {
+        $event = new PluginEvent('beforeAdminMenuRender', $this);
+        $event->set('data', $aData);
+        $result = App()->getPluginManager()->dispatchEvent($event);
+
+        $extraMenus = $result->get('extraMenus');
+
+        if ($extraMenus === null) {
+            $extraMenus = array();
+        }
+
+        return $extraMenus;
+    }
+
+    /**
+     * Method to render an array as a json document
+     *
+     * REFACTORED in LSBaseController (this one called by a lot of actions in different controllers)
+     *
+     * @param array $aData
+     * @return void
+     */
+    protected function renderJSON($aData, $success = true)
+    {
+
+        $aData['success'] = $aData['success'] ?? $success;
+
+        if (Yii::app()->getConfig('debug') > 0) {
+            $aData['debug'] = [$_POST, $_GET];
+        }
+
+        echo Yii::app()->getController()->renderPartial('/admin/super/_renderJson', [
+            'data' => $aData
+        ], true, false);
+        return;
+    }
+
+    /**
+     * Validates that the request method is POST.
+     *
+     * This is intended to be used on subactions. When possible (eg. when refactoring
+     * a SurveyCommonAction into an actual controller), use 'postOnly' filter instead.
+     *
+     * @throws CHttpException with 405 status if the request method is not POST.
+     */
+    protected function requirePostRequest()
+    {
+        if (!Yii::app()->getRequest()->isPostRequest) {
+            throw new CHttpException(405, gT("Invalid action"));
+        }
+    }
+}

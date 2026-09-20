@@ -1,0 +1,79 @@
+<?php
+
+namespace ls\tests\unit\helpers;
+
+use ls\tests\TestBaseClass;
+
+/**
+ * Tests the CopySurveyResources service class
+ * @since 2022-02-02
+ * @group copysurveyresources
+ */
+class CopySurveyResourcesTest extends TestBaseClass
+{
+    /**
+     * Copy survey resources
+     */
+    public function testCopySurveyResources()
+    {
+        // Import survey with one group and question
+        $surveyFile = self::$surveysFolder . '/limesurvey_survey_994476_CopySurveyResources.lss';
+        self::importSurvey($surveyFile);
+        $sourceSid = self::$testSurvey->sid;
+
+        // Add resource
+        if (DIRECTORY_SEPARATOR === '/') {
+            self::chmodRecursive(\Yii::app()->getConfig('uploaddir'), 0777);
+        }
+        $basedestdir = \Yii::app()->getConfig('uploaddir') . "/surveys";
+        $destdir = $basedestdir . "/$sourceSid/images/";
+        if (!is_dir($destdir)) {
+            $dirCreated = mkdir($destdir, 0777, true);
+        }
+        $this->assertTrue($dirCreated, "Couldn't create dir '$destdir'");
+        $file = self::$dataFolder . '/file_upload/dalahorse.jpg';
+        $this->assertTrue(file_exists($file));
+        copy($file, $destdir . "dalahorse.jpg");
+        $this->assertTrue(file_exists($destdir . "dalahorse.jpg"));
+
+        // Copy survey
+        \Yii::import('application.helpers.export_helper', true);
+        \Yii::import('application.helpers.admin.import_helper', true);
+        $sourceData = \surveyGetXMLData($sourceSid);
+        $importResults = \XMLImportSurvey('', $sourceData);
+        $this->assertIsArray($importResults);
+        $this->assertArrayHasKey('newsid', $importResults);
+
+        $targetSid = $importResults['newsid'];
+
+        // Copy resources
+        $resourceCopier = new \LimeSurvey\Models\Services\CopySurveyResources();
+        [$copiedFilesInfo, $errorFilesInfo] = $resourceCopier->copyResources($sourceSid, $targetSid);
+        $this->assertEmpty($errorFilesInfo);
+        $this->assertNotEmpty($copiedFilesInfo);
+        $this->assertEquals("dalahorse.jpg", $copiedFilesInfo[0]['filename']);
+    }
+
+    /**
+     * Recursively chmod a directory tree without shell commands.
+     */
+    private static function chmodRecursive(string $path, int $mode): void
+    {
+        if (!is_dir($path)) {
+            return;
+        }
+        chmod($path, $mode);
+        $items = scandir($path);
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $fullPath = $path . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($fullPath)) {
+                self::chmodRecursive($fullPath, $mode);
+            } else {
+                chmod($fullPath, $mode);
+            }
+        }
+    }
+}

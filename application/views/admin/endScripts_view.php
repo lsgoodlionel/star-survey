@@ -1,0 +1,3 @@
+<?php
+
+// See extensions/LimeScript

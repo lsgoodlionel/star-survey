@@ -1,0 +1,130 @@
+<?php
+
+if (!defined('BASEPATH')) {
+    exit('No direct script access allowed');
+}
+/*
+* LimeSurvey
+* Copyright (C) 2007-2026 The LimeSurvey Project Team
+* All rights reserved.
+* License: GNU/GPL License v2 or later, see LICENSE.php
+* LimeSurvey is free software. This version may have been modified pursuant
+* to the GNU General Public License, and as distributed it includes or
+* is derivative of works licensed under the GNU General Public License or
+* other free or open source software licenses.
+* See COPYRIGHT.php for copyright notices and details.
+*
+*/
+
+/**
+ * Return the database-specific random function to use in ORDER BY sql statements
+ *
+ * @return string
+ */
+function dbRandom()
+{
+    $driver = Yii::app()->db->getDriverName();
+    switch ($driver) {
+        case 'dblib':
+        case 'mssql':
+        case 'sqlsrv':
+            $srandom = 'NEWID()';
+            break;
+
+        case 'pgsql':
+            $srandom = 'RANDOM()';
+            break;
+
+        case 'mysql':
+        case 'mysqli':
+            $srandom = 'RAND()';
+            break;
+
+        default:
+            //Some db type that is not mentioned above, could fail and if so should get an entry above.
+            $srandom = 0 + lcg_value() * (abs(1));
+            break;
+    }
+
+    return $srandom;
+}
+
+/**
+ *  Return a sql statement for finding LIKE named tables
+ *  Be aware that you have to escape underscore chars by using a backslash
+ * otherwise you might get table names returned you don't want
+ *
+ * @param mixed $table
+ * @return string
+ */
+function dbSelectTablesLike($table)
+{
+    switch (Yii::app()->db->getDriverName()) {
+        case 'mysqli':
+        case 'mysql':
+            return "SHOW TABLES LIKE '$table'";
+        case 'dblib':
+        case 'mssql':
+        case 'sqlsrv':
+            return "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES where TABLE_TYPE='BASE TABLE' and TABLE_NAME LIKE '$table' ESCAPE '\'";
+        case 'pgsql':
+            return "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' and table_name like '$table'";
+        default:
+            safeDie("Couldn't create 'select tables like' query for connection type '" . Yii::app()->db->getDriverName() . "'");
+    }
+}
+
+/**
+* Gets the table names. Do not prefix.
+* @param string $table String to match
+* @uses dbSelectTablesLike() To get the tables like sql query
+* @return array Array of matched table names
+*/
+function dbGetTablesLike($table)
+{
+    return (array) Yii::app()->db->createCommand(dbSelectTablesLike("{{{$table}}}"))->queryColumn();
+}
+
+/**
+ * Wraps field names with RDBMS-specific quote characters and returns them as a comma-separated string.
+ * @param array|string $fields A field name, comma-separated field names, or an array of field names.
+ * @return string
+ */
+function dbQuoteFields(array|string $fields)
+{
+    if (is_string($fields)) {
+        if (strpos($fields, ',') !== false) {
+            $fields = explode(',', $fields);
+        } else {
+            $fields = [$fields];
+        }
+    }
+
+    if (is_array($fields) && count($fields) > 0) {
+        $driver = App()->db->getDriverName();
+        switch ($driver) {
+            case 'mysql':
+            case 'mysqli':
+                $fields = array_map(function ($f) {
+                    return '`' . trim($f) . '`';
+                }, $fields);
+                break;
+            case 'dblib':
+            case 'mssql':
+            case 'sqlsrv':
+                $fields = array_map(function ($f) {
+                    return '[' . trim($f) . ']';
+                }, $fields);
+                break;
+            case 'pgsql':
+                $fields = array_map(function ($f) {
+                    return '"' . trim($f) . '"';
+                }, $fields);
+                break;
+            default:
+                $fields = array_map('trim', $fields);
+                break;
+        }
+    }
+    return implode(', ', $fields);
+}

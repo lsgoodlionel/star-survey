@@ -1,0 +1,28 @@
+{#
+/**
+ * Multiple Choice Html : item row
+ *
+ * @var $name
+ * @var $code
+ * @var $answer
+ * @var $checkedState
+ * @var $myfname
+ */
+#}
+
+<!-- answer_row -->
+<li id='javatbd{{ myfname }}' class='answer-item radio-item' {{ sDisplayStyle }} >
+    <input
+        type="radio"
+        value="{{ code }}"
+        name="{{ name }}"
+        id="answer{{ name }}{{ code }}"
+        {{ checkedState }}
+        aria-labelledby="ls-question-text-{{ name }} answer-label-{{ name }}{{ code }}"
+        onclick="if (document.getElementById('answer{{ name }}othertext') != null) document.getElementById('answer{{ name }}othertext').value='';checkconditions(this.value, this.name, this.type)"
+     />
+    <label id="answer-label-{{ name }}{{ code }}" for="answer{{ name }}{{ code }}" class="control-label radio-label">
+        {{ processString(answer) }}
+    </label>
+</li>
+<!-- end of answer_row -->

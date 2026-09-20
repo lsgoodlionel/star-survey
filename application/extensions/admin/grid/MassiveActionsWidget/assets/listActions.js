@@ -1,0 +1,443 @@
+/**
+ * Massive actions Widget, action behaviour
+ *
+ * This JavaScript define what's happen when user click on an action
+ */
+
+/**
+ * When the modal body contains a results table from _action_results.php, copy the
+ * modal heading into an empty caption so the table has an accessible name that matches the dialog.
+ *
+ * @param {jQuery} $modal
+ * @param {jQuery} $container  Element that received the injected HTML (e.g. .modal-body-text)
+ */
+function syncMassiveActionResultsTableCaption($modal, $container) {
+    var titleText = $modal.find('.modal-header .modal-title').first().text().trim();
+    if (!titleText) {
+        return;
+    }
+    $container.find('table.table caption.massive-action-results-caption').each(function () {
+        var $cap = $(this);
+        if (!$cap.text().trim()) {
+            $cap.text(titleText);
+        }
+    });
+}
+
+/**
+ * Safely resolve a dotted global path (e.g. "LS.CPDB.onClickExport") to a callable,
+ * bound to its immediate parent object so method context is preserved.
+ * Used for the 'custom-js' and 'on-success' action callbacks so we avoid eval().
+ *
+ * @param {string} path  Dotted path to a function, resolved from window (e.g. "LS.AjaxHelper.onSuccess").
+ * @return {Function|null}  The bound function, or null if the path does not resolve to a function.
+ */
+function resolveActionCallback(path) {
+    if (typeof path !== 'string' || path === '') {
+        return null;
+    }
+    var parts = path.split('.');
+    var context = null;
+    var current = window;
+    for (var i = 0; i < parts.length; i++) {
+        if (current == null || typeof current[parts[i]] === 'undefined') {
+            return null;
+        }
+        context = current;
+        current = current[parts[i]];
+    }
+    return typeof current === 'function' ? current.bind(context) : null;
+}
+
+/**
+ * Define what happen when an action is clicked:
+ *
+ * - redirection:
+ *      post
+ *      fill session
+ *
+ * - Show a validation modal:-
+ *      perform an ajax request and close
+ *      perform an ajax request and show the result in the modal
+ */
+var onClickListAction =  function (e) {
+    e.preventDefault();
+    console.log('onClickListAction');
+    if($(this).data('disabled')) {
+        console.log('disabled');
+        return;
+    }
+    var $that          = $(this);                                                             // The clicked link
+    var $actionUrl     = $that.data('url');                                                   // The url of the Survey Controller action to call
+    var onSuccess      = $that.data('on-success');
+    var $gridid        = $('#'+$(this).closest('div.listActions').data('grid-id'));
+    var $grididvalue   = $gridid.attr('id');
+    var $oCheckedItems = LS.gridSelection.getAll($grididvalue); // All pages, not just current
+    $oCheckedItems = JSON.stringify($oCheckedItems);
+    var actionType     = $that.data('actionType');
+    var selectedList   = $(".selected-items-list");
+    // In select-all mode no ids are sent; a selectAll flag is posted instead
+    var isSelectAllMode = LS.gridSelection.isSelectAll($grididvalue);
+
+    if ($oCheckedItems == '[]' && !isSelectAllMode) {
+        //If no item selected, the error modal "please select first an item" is shown
+        // TODO: add a variable in the widget to replace "item" by the item type (e.g: survey, question, token, etc.)
+        console.log('error first');
+        const errModalEl = document.getElementById('error-first-select' + $grididvalue);
+        if (errModalEl) {
+            errModalEl.setAttribute('tabindex', '-1');
+            const errBsModal = bootstrap.Modal.getOrCreateInstance(errModalEl, {});
+            errModalEl.addEventListener('shown.bs.modal', function focusErrModal() {
+                errModalEl.focus({ preventScroll: true });
+            }, { once: true });
+            errBsModal.show();
+        }
+        return;
+    }
+    
+    
+    // TODO : Switch action (post, session, ajax...)
+
+    // For actions without modal, doing a redirection
+    // TODO: replace all of them with the method above
+
+    // TODO : Switch case "redirection (with 2 type; post or fill session)"
+    if(actionType == "redirect")
+    {
+        $oCheckedItems = LS.gridSelection.getAll($grididvalue); // So we can join
+        var newForm = jQuery('<form>', {
+            'action': $actionUrl,
+            'target': $that.data('target') ?? '_blank',
+            'method': 'POST'
+        }).append(jQuery('<input>', {
+            'name': $that.data('input-name'),
+            'value': $oCheckedItems.join($that.data('input-separator') ?? '|'),
+            'type': 'hidden'
+        })).append(jQuery('<input>', {
+            'name': LS.data.csrfTokenName,
+            'value': LS.data.csrfToken,
+            'type': 'hidden'
+        })).appendTo('body');
+        newForm.submit();
+        console.log('redirect');
+        return;
+    }
+
+    // For actions without modal, doing a redirection
+    // Using session before redirect rather than form submission
+    if(actionType == 'fill-session-and-redirect')
+    {
+        // postUrl is defined as a var in the View, if not the basic url is used
+        var setSessionUrl = postUrl || $actionUrl;
+        $(this).load(setSessionUrl, {
+            itemsid:$oCheckedItems},function(){
+                $(location).attr('href',$actionUrl);
+            });
+        console.log('fill session');
+        return;
+    }
+
+    // Set window location href. Used by download files in responses list view.
+    if (actionType == 'window-location-href') {
+        var $oCheckedItems = LS.gridSelection.getAll($grididvalue); // So we can join
+        console.log('href = ...');
+        window.location.href = $actionUrl + $oCheckedItems.join(',');
+        return;
+    }
+
+    /**
+     * Custom action
+     * Will run Javascript function in 'custom-js'. First argument is array of item ids, defined by 'pk'.
+     */
+    if (actionType == 'custom') {
+        var js = $that.data('custom-js');
+        var func = resolveActionCallback(js);
+        var itemIds = LS.gridSelection.getAll($grididvalue);
+        if (func) { func(itemIds); }
+        console.log('func itemIds');
+        return;
+    }
+
+    // TODO: switch case "Modal"
+    var $modal  = $('#'+$that.data('modal-id'));   // massive-actions-modal-<?php echo $this->gridid;?>-<?php $aAction['action'];?>-<?php echo $key; ?>
+
+    // Needed modal elements
+    var $modalTitle    = $modal.find('.modal-title');                   // Modal Title
+    var $modalBody     = $modal.find('.modal-body-text');               // Modal Body
+    var $modalButton   = $modal.find('.btn-ok');
+
+    var $modalClose    = $modal.find('.modal-footer-close');            // Modal footer with close button
+    var $ajaxLoader    = $("#ajaxContainerLoading");                    // Ajax loader
+
+    // Original modal state
+    var $oldModalTitle     = $modalTitle.text();
+    var $oldModalBody      = $modalBody.html();
+    var $oldModalButtons   = $modal.find('.modal-footer-buttons');     // Modal footer with yes/no buttons
+    var $modalShowSelected = $modal.data('show-selected');
+    var $modalSelectedUrl = $modal.data('selected-url');
+    
+    //Display selected data in modals after clicked on action
+    if($modalShowSelected == 'yes' && $modalSelectedUrl ){  
+        
+        //set csrfToken for ajaxpost
+        var csrfToken = $('meta[name="csrf-token"]').attr("content");
+        
+        //clear selected list view 
+        selectedList.empty();
+
+        console.log('before ajax');
+        //ajaxpost to set data in the selected items div 
+        $.ajax({
+            url :$modalSelectedUrl,
+            type : 'POST',
+            data : {$grididvalue, $oCheckedItems,csrfToken},
+            success: function(html, statut){    
+                selectedList.html(html);
+            },
+            error: function(requestObject, error, errorThrown){
+                    console.log(error);
+            }
+        });           
+    }
+
+    // When user close the modal, we put it back to its original state
+    $modal.on('hidden.bs.modal', function (e) {
+        $modalTitle.text($oldModalTitle);               // the modal title
+        $modalBody.empty().append($oldModalBody);       // modal body
+        $modalClose.hide();                             // Hide the 'close' button
+        $oldModalButtons.show();                        // Show the 'Yes/No' buttons
+
+        if ($that.data('grid-reload') == "yes")
+        {
+            LS.gridSelection.clear($grididvalue);              // Reset persisted selection
+            $gridid.yiiGridView('update');                         // Update the surveys list
+            setTimeout(function(){
+                $(document).trigger("actions-updated");}, 500);    // Raise an event if some widgets inside the modals need some refresh (eg: position widget in question list)
+        }
+
+    })
+
+    /* Define what should be done when user confirm the mass action */
+    /* remove all existing action before adding the new one */
+    $modalButton.off('click').on('click', function(){
+        var $form = $modal.find('form');
+        if ($form.data('trigger-validation')) {
+            if (!$form[0].reportValidity()) {
+                return;
+            }
+        }
+
+        // Custom datas comming from the modal (like sid)
+        var $postDatas  = {sItems:$oCheckedItems};
+        if (LS.gridSelection.isSelectAll($grididvalue)) {
+            $postDatas['selectAll'] = 1;
+            $postDatas['filterQuery'] = LS.gridSelection.getFilterQuery($grididvalue);
+            if (typeof LS.gridSelection.getExcluded === 'function') {
+                $postDatas['excludedItems'] = JSON.stringify(LS.gridSelection.getExcluded($grididvalue));
+            }
+        }
+        $modal.find('.custom-data').each(function(i, el)
+        {
+            if ($(this).hasClass('btn-group')){ // ext.ButtonGroupWidget.ButtonGroupWidget
+                $(this).find('input:checked').each(function(i, el)
+                {
+                    $postDatas[$(this).attr('name')]=$(this).val();
+                });
+            } else if ($(this).attr('type') == 'checkbox') {
+                if ($(this).prop('checked')) {
+                    $postDatas[$(this).attr('name')]=$(this).val();
+                }
+            } else {
+                $postDatas[$(this).attr('name')]=$(this).val();
+            }
+        });
+
+        // Custom attributes to updates (like question attributes)
+        var aAttributesToUpdate = [];
+        $modal.find('.attributes-to-update').each(function(i, el)
+        {
+            aAttributesToUpdate.push($(this).attr('name') || $(this).attr('id'));
+        });
+        $postDatas['aAttributesToUpdate'] = JSON.stringify(aAttributesToUpdate);
+        $postDatas['grididvalue'] = $grididvalue;
+
+        $modal.find('input.post-value, select.post-value').each(function(i, el) {
+            $postDatas[$(el).attr('name')] = $(el).val();
+        });
+
+        // Update the modal elements
+        // TODO: ALL THIS DEPEND ON KEEPOPEN OR NOT
+        $modalBody.empty();                                         // Empty the modal body
+        $oldModalButtons.hide();                                    // Hide the 'Yes/No' buttons
+        $modalClose.show();                                         // Show the 'close' button
+        $ajaxLoader.show();                                         // Show the ajax loader
+        selectedList.empty();                                       //clear selected Item list
+
+        // Ajax request
+        $.ajax({
+            url : $actionUrl,
+            type : 'POST',
+            data :  $postDatas,
+
+            // html contains the buttons
+            success : function(html, statut){
+                $ajaxLoader.hide();                                 // Hide the ajax loader
+
+                if( $modal.data('keepopen') != 'yes' )
+                {
+                    $modal.modal('hide');
+                }
+                else
+                {
+                    // This depend on keepopen
+                    $modalBody.empty().html(html);                      // Inject the returned HTML in the modal body
+                    syncMassiveActionResultsTableCaption($modal, $modalBody);
+                }
+
+                if (html.ajaxHelper) {
+                    LS.AjaxHelper.onSuccess(html);
+                    return;
+                }
+
+                if (onSuccess) {
+                    var func = resolveActionCallback(onSuccess);
+                    if (func) { func(html); }
+                    return;
+                }
+            },
+            error: function(data, textStatus, jqXHR) {
+                $ajaxLoader.hide();
+                if (data
+                    && data.responseJSON
+                    && data.responseJSON.success === false
+                    && data.responseJSON.message)
+                {
+                    $modal.modal('hide');
+                    LS.LsGlobalNotifier.createAlert(data.responseJSON.message,  "danger", {showCloseButton: true});
+                } else {
+                    $modal.find('.modal-body-text').empty().html(data.responseText);
+                }
+            }
+        });
+    });
+
+    // Open the modal (focus moves into dialog for screen readers / keyboard)
+    const modalId = $that.data('modal-id');
+    console.log('modalId = ', modalId);
+    const modalEl = document.getElementById(modalId);
+    if (!modalEl) {
+        return;
+    }
+    $modal.find('.select-all-cap-note').toggle(isSelectAllMode);
+    modalEl.setAttribute('tabindex', '-1');
+    const bsModal = bootstrap.Modal.getOrCreateInstance(modalEl, {});
+    const focusModal = function () {
+        modalEl.focus({ preventScroll: true });
+    };
+    modalEl.addEventListener('shown.bs.modal', focusModal, { once: true });
+    bsModal.show();
+};
+
+function prepareBsDateTimePicker($gridid){
+    var dateTimeSettings = getDefaultDateTimePickerSettings();
+    if (dateTimeSettings) {
+        var dateTimeFormat = dateTimeSettings.dateformatsettings.jsdate+ ' HH:mm';
+        $('.date input').each(function(){
+            $(this).datetimepicker({
+                format: dateTimeFormat,
+                showClear: dateTimeSettings.showClear,
+                allowInputToggle: dateTimeSettings.allowInputToggle,
+            });
+    });
+    }
+}
+
+// get user session datetimesettings
+function getDefaultDateTimePickerSettings() {
+    // TODO: Code below can't handle if installation is in a subfolder (not web root).
+    // The correct solution is to fetch datetime format from an <input> element.
+    return null;
+
+    //Switch between path and get based routing
+    if(/\/index\.php(\/)?\?r=admin/.test(window.location.href)){
+        var url = "/index.php?r=surveyAdministration/datetimesettings";
+    } else {
+        var url = "/index.php/surveyAdministration/datetimesettings";
+    }
+    var mydata = [];
+    $.ajaxSetup({
+        async: false
+    });
+    $.getJSON( url, function( data ) {
+        mydata = data;
+    });
+    return mydata;
+}
+
+function bindListItemclick() {
+    let listActions = $('.listActions a');
+    let listActionsDisabled = $('.listActions .disabled a');
+    listActions.off('click.listactions').on('click.listactions', onClickListAction);
+    listActionsDisabled.off('click.listactions').on('click.listactions', function (e) {
+        e.preventDefault();
+    });
+}
+
+
+$(document).off('pjax:scriptcomplete.listActions').on('pjax:scriptcomplete.listActions, ready ', function() {
+    // Grid refresh: see point 3
+    $(document).on('actions-updated', function(){
+        prepareBsDateTimePicker(gridId);
+        bindListItemclick();
+    });
+    bindListItemclick();
+});
+
+
+function switchStatusOfListActions(e) {
+    var checkboxSelector = '.grid-view-ls input[type="checkbox"]';
+    // Attach an onchange event handler to all checkboxes
+    $(document).on('change', checkboxSelector, function () {
+        // This assumes there is only one massive and one grid in the page.
+        // @todo: 
+        // - Stamp the related grid-id in the massive action button (see massive action widget).
+        // - From checkbox traverse to grid. Fetch grid id.
+        // - Use grid-id to get a more robust link in between grid and massive actions.
+        var actionButton = $('.massiveAction');
+        if (isAnyCheckboxChecked()) {
+            actionButton.removeClass('disabled');
+            actionButton.removeAttr('disabled');
+        } else {
+            actionButton.addClass('disabled');
+            actionButton.attr('disabled', 'disabled');
+        }
+    });
+}
+
+// Function to check if at least one checkbox is checked
+function isAnyCheckboxChecked() {
+    // Use LS.gridSelection when available so that selections across all pages
+    // (not just the currently rendered ones) are taken into account.
+    // Without this, unchecking the last visible checkbox on page N would
+    // incorrectly disable the massive-action button even though rows on other
+    // pages are still selected in the LS.gridSelection store.
+    if (typeof LS !== 'undefined' && LS.gridSelection) {
+        var anySelected = false;
+        $('.grid-view-ls').each(function () {
+            var gridId = $(this).attr('id');
+            if (gridId && LS.gridSelection.count(gridId) > 0) {
+                anySelected = true;
+                return false; // break $.each
+            }
+        });
+        return anySelected;
+    }
+    // Fallback for grids that do not use LS.gridSelection
+    return $('.grid-view-ls table tbody input[type="checkbox"]:checked').length > 0;
+}
+
+['DOMContentLoaded','ready', 'pjax:scriptcomplete'].forEach(function (e) {
+    document.addEventListener(e, () => {
+        switchStatusOfListActions();
+    });
+});

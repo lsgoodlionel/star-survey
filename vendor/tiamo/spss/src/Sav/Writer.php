@@ -1,0 +1,389 @@
+<?php
+
+namespace SPSS\Sav;
+
+use SPSS\Buffer;
+use SPSS\Exception;
+use SPSS\Utils;
+
+class Writer
+{
+    /**
+     * @var Record\Header
+     */
+    public $header;
+
+    /**
+     * @var Record\Variable[]
+     */
+    public $variables = [];
+
+    /**
+     * @var Record\ValueLabel[]
+     */
+    public $valueLabels = [];
+
+    /**
+     * @var Record\Document
+     */
+    public $document;
+
+    /**
+     * @var Record\Info[]
+     */
+    public $info = [];
+
+    /**
+     * @var Record\Data
+     */
+    public $data;
+
+    /**
+     * @var int
+     */
+    public $lastCase = -1;
+
+    /**
+     * @var int
+     */
+    public $dataPosition = -1;
+
+    /**
+     * @var Buffer
+     */
+    protected $buffer;
+
+    /**
+     * Writer constructor.
+     *
+     * @param array $data
+     * @param Buffer $buffer
+     *
+     */
+    public function __construct($data = [], $buffer = null)
+    {
+        $this->buffer          = isset($buffer) ? $buffer : Buffer::factory();
+        $this->buffer->context = $this;
+
+        if (!empty($data)) {
+            $this->write($data);
+        }
+    }
+
+    /**
+     * @param array $data
+     * @param string $file
+     *
+     * @return Writer
+     */
+    public static function createInFile($data = [], $file)
+    {
+        return new self($data, Buffer::factory(fopen($file, 'wb+')));
+    }
+    
+    /**
+     * @param int $index
+     *
+     * @return string|null
+     */
+    public function getVariableName($index)
+    {
+        $subType = Record\Info\LongVariableNames::SUBTYPE;
+        if (isset($this->info) && isset($this->info[$subType])) {
+            $names = $this->info[$subType]->data;
+            $shortName = (isset($this->variables[$index])) ? $this->variables[$index]->name : "";
+            return (isset($names) && \is_array($names) && isset($names[$shortName])) ? $names[$shortName] : $shortName;
+        }
+        return null;
+    }
+
+    /**
+     * @param array $data
+     *
+     * @return void
+     */
+    public function write($data)
+    {
+        $this->header                  = new Record\Header($data['header']);
+        $this->header->nominalCaseSize = 0;
+        $this->header->casesCount      = 0;
+
+        $this->info[Record\Info\MachineInteger::SUBTYPE] = $this->prepareInfoRecord(
+            Record\Info\MachineInteger::class,
+            $data
+        );
+
+        $this->info[Record\Info\MachineFloatingPoint::SUBTYPE] = $this->prepareInfoRecord(
+            Record\Info\MachineFloatingPoint::class,
+            $data
+        );
+
+        $this->info[Record\Info\VariableDisplayParam::SUBTYPE]  = new Record\Info\VariableDisplayParam();
+        $this->info[Record\Info\LongVariableNames::SUBTYPE]     = new Record\Info\LongVariableNames();
+        $this->info[Record\Info\VeryLongString::SUBTYPE]        = new Record\Info\VeryLongString();
+        $this->info[Record\Info\ExtendedNumberOfCases::SUBTYPE] = $this->prepareInfoRecord(
+            Record\Info\ExtendedNumberOfCases::class,
+            $data
+        );
+        $this->info[Record\Info\VariableAttributes::SUBTYPE]      = new Record\Info\VariableAttributes();
+        $this->info[Record\Info\LongStringValueLabels::SUBTYPE]   = new Record\Info\LongStringValueLabels();
+        $this->info[Record\Info\LongStringMissingValues::SUBTYPE] = new Record\Info\LongStringMissingValues();
+
+        $encode = (isset($data['info']) && isset($data['info']['characterEncoding'])) ? $data['info']['characterEncoding'] : 'UTF-8';
+        $this->info[Record\Info\CharacterEncoding::SUBTYPE]       = new Record\Info\CharacterEncoding($encode);
+        $this->buffer->charset = $encode;
+
+        // FIXME: This means we can not set any other encode here?
+        // https://www.gnu.org/software/pspp/pspp-dev/html_node/Machine-Integer-Info-Record.html#character_002dcode
+        $charactersCode = array(
+            "utf-8" => 65001,
+            "iso 8859-1" => 28591,
+            "windows-1252" => 1252,
+            "windows-1250" => 1250,
+            "dec kanji" => 4,
+            "8-bit ascii" => 3,
+            "7-bit ascii" => 2,
+            "ebcdic" => 1
+        );
+
+        $chCode = isset($charactersCode[strtolower($encode)]) ? $charactersCode[strtolower($encode)] : 65001;
+        $this->info[Record\Info\MachineInteger::SUBTYPE]->characterCode = $chCode;
+        $this->data = new Record\Data();
+        $nominalIdx = 0;
+        $shortVarsPrefix = array();
+
+        /** @var Variable $var */
+        foreach (array_values($data['variables']) as $idx => $var) {
+            if (\is_array($var)) {
+                $var = new Variable($var);
+            }
+
+            // UTF-8 and '.' characters could pass here
+            if (!preg_match('/^(?!#|\$|\.)[\w0-9_.#@$\x{4e00}-\x{9fa5}]+(?<!\.|_)$/u', $var->name)) {
+                throw new \InvalidArgumentException(sprintf('Variable name `%s` contains an illegal character.', $var->name));
+            }
+
+            if (in_array($var->name, ['ALL', 'AND', 'BY', 'EQ', 'GE', 'GT', 'LE', 'LT', 'NE', 'NOT', 'OR', 'TO', 'WITH'])) {
+                $var->name = \uniqid($var->name);
+            }
+
+            if (empty($var->width)) {
+                throw new \InvalidArgumentException(sprintf('Invalid field width. Should be an integer number greater than zero.'));
+            }
+
+            $variable = new Record\Variable();
+
+            // TODO: refactory - keep 7 positions so we can add after that for 100 very long string segments
+            $prefix = mb_strtoupper(mb_substr($var->name, 0, min(mb_strlen($var->name), 5)));
+            $variable->name  = ((Record\Variable::isVeryLong($var->width) !== false) && (!in_array($prefix, $shortVarsPrefix))) ?
+                               $prefix : 'V' . str_pad($idx + 1, 5, 0, STR_PAD_LEFT);
+            array_push($shortVarsPrefix, $prefix);
+            $variable->width = Variable::FORMAT_TYPE_A === $var->format ? $var->width : 0;
+
+            $variable->label = $var->label;
+            $variable->print = [
+                0,
+                $var->format,
+                $var->width > 0 ? min($var->width, 255) : 8,
+                $var->decimals,
+            ];
+            $variable->write = [
+                0,
+                $var->format,
+                $var->width > 0 ? min($var->width, 255) : 8,
+                $var->decimals,
+            ];
+
+            // TODO: refactory
+            $shortName = $variable->name;
+            $longName  = $var->name;
+
+            if (\is_array($var->attributes) && (\count($var->attributes) !== 0)) {
+                $this->info[Record\Info\VariableAttributes::SUBTYPE][$longName] = $var->attributes;
+            }
+
+            if (\is_array($var->missing) && (\count($var->missing) !== 0)) {
+                if (Record\Variable::isVeryLong($var->width) !== false) {
+                    $this->info[Record\Info\LongStringMissingValues::SUBTYPE][$shortName] = $var->missing;
+                } else {
+                    if (\count($var->missing) >= 3) {
+                        $variable->missingValuesFormat = 3;
+                    } elseif (2 === \count($var->missing)) {
+                        $variable->missingValuesFormat = -2;
+                    } else {
+                        $variable->missingValuesFormat = 1;
+                    }
+                    $variable->missingValues = $var->missing;
+                }
+            }
+
+            $this->variables[$idx] = $variable;
+
+            if (\is_array($var->values) && (\count($var->values) !== 0)) {
+                if (Record\Variable::isVeryLong($variable->width) !== false) {
+                    $this->info[Record\Info\LongStringValueLabels::SUBTYPE][$longName] = [
+                        'width'  => $var->width,
+                        'values' => $var->values,
+                    ];
+                } else {
+                    $valueLabel = new Record\ValueLabel([
+                        'variables' => $this->variables,
+                    ]);
+                    foreach ($var->values as $key => $value) {
+                        $valueLabel->labels[] = [
+                            'value' => $key,
+                            'label' => $value,
+                        ];
+                    }
+                    $valueLabel->indexes = [$nominalIdx + 1];
+                    $this->valueLabels[] = $valueLabel;
+                }
+            }
+
+            $this->info[Record\Info\LongVariableNames::SUBTYPE][$shortName] = $var->name;
+
+            if (Record\Variable::isVeryLong($var->width) !== false) {
+                $this->info[Record\Info\VeryLongString::SUBTYPE][$shortName] = $var->width;
+            }
+
+            $segmentCount = Utils::widthToSegments($var->width);
+
+            for ($i = 0; $i < $segmentCount; $i++) {
+                $this->info[Record\Info\VariableDisplayParam::SUBTYPE][] = [
+                    $var->getMeasure(),
+                    $var->getColumns(),
+                    $var->getAlignment(),
+                ];
+            }
+
+            // TODO: refactory
+            $dataCount = \count($var->data);
+
+            if ($dataCount > $this->header->casesCount) {
+                $this->header->casesCount = $dataCount;
+            }
+
+            foreach ($var->data as $case => $value) {
+                $this->data->matrix[$case][$idx] = $value;
+            }
+
+            if (Variable::isNumberFormat($var->format)) {
+                $nominalIdx += 1;
+            } else {
+                $nominalIdx += Utils::widthToOcts($var->width);
+            }
+        }
+
+        $this->header->nominalCaseSize = $nominalIdx;
+
+        // write header
+        $this->header->write($this->buffer);
+
+        // write variables
+        foreach ($this->variables as $variable) {
+            $variable->write($this->buffer);
+        }
+
+        // write valueLabels
+        foreach ($this->valueLabels as $valueLabel) {
+            $valueLabel->write($this->buffer);
+        }
+
+        // write documents
+        if (!empty($data['documents'])) {
+            $this->document = new Record\Document([
+                    'lines' => $data['documents'],
+                ]
+            );
+            $this->document->write($this->buffer);
+        }
+
+        foreach ($this->info as $info) {
+            $info->write($this->buffer);
+        }
+
+        $this->dataPosition = $this->buffer->position();
+        $this->data->write($this->buffer);
+        $this->lastCase = $this->header->casesCount - 1;
+    }
+
+    /**
+     * @param $row
+     *
+     * @return void
+     */
+    public function writeCase($row)
+    {
+        if (!isset($this->data)) {
+            $this->data = new Record\Data();
+        }
+
+        // update the header info about number of cases
+        $this->header->increaseCasesCount($this->buffer);
+
+        // write data
+        $this->data->writeCase($this->buffer, $row);
+        $this->lastCase = $this->header->casesCount - 1;
+    }
+
+    /**
+     * @param $file
+     *
+     * @return false|int
+     */
+    public function save($file)
+    {
+        return $this->buffer->saveToFile($file);
+    }
+
+    /**
+     * @return bool
+     */
+    public function close()
+    {
+        if (isset($this->data)) {
+            $this->data->close();
+        }
+
+        return $this->buffer->close();
+    }
+
+    /**
+     * @return Buffer
+     */
+    public function getBuffer()
+    {
+        return $this->buffer;
+    }
+
+    /**
+     * @return int
+     */
+    public function getNumberOfCases()
+    {
+        return $this->header->casesCount;
+    }
+
+    /**
+     * @param string $className
+     * @param array  $data
+     * @param string $group
+     *
+     * @throws Exception
+     *
+     * @return array
+     */
+    private function prepareInfoRecord($className, $data, $group = 'info')
+    {
+        if (!class_exists($className)) {
+            throw new Exception('Unknown class');
+        }
+        $key = lcfirst(substr($className, strrpos($className, '\\') + 1));
+
+        return new $className(
+            isset($data[$group]) && isset($data[$group][$key]) ?
+                $data[$group][$key] :
+                []
+        );
+    }
+}

@@ -1,0 +1,22 @@
+{# 
+/**
+ * Multiple Choice question item Html
+ *
+ * @var $sRows      : the rows, generated with the views rows/answer_row*.php
+ *
+ * @var $name
+ * @var $anscount
+ * @var $othertext
+ */
+ #}
+<!-- Multiple Choice -->
+
+<!-- answer -->
+<input type="hidden" name="MULTI{{name}}" value="{{anscount}}" />
+<ul class="list-unstyled {{coreClass}} {% if iNbCols > 1 %} ls-column-count-{{iNbCols}}{% endif %}"{% if iNbCols > 1 %} data-column-count={{iNbCols}}{% endif %}>
+    {% for aRow in aRows %}
+        {% set rowTemplate = aRow.other ? './survey/questions/answer/multiplechoice/rows/answer_row_other.twig' : './survey/questions/answer/multiplechoice/rows/answer_row.twig' %}
+        <!-- Row {{loop.index}} -->
+        {% include rowTemplate with aRow %}
+    {% endfor %}
+</ul>
