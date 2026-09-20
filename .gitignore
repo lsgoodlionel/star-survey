@@ -274,3 +274,10 @@ docker/
 /vendor/khaled.alshamaa/ar-php/composer.lock
 /vendor/mk-j/php_xlsxwriter/composer.lock
 /vendor/mockery/mockery/composer.lock
+
+# 敏感文档只提交密文（platform/tools/secure-docs）
+/platform/docs/p0/tenancy-negative-matrix.md
+/platform/docs/p0/exam-quota-evidence.md
+/platform/docs/p0/private-deployment.md
+/platform/docs/p0/cost-model.md
+/platform/docs/p0/sbom/licence-analysis.md

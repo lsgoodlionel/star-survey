@@ -1,0 +1,7 @@
+# 不适合在公开仓库里明文保存的文档（每行一个仓库相对路径）。
+# 判定标准：包含自家系统的攻击面、绕过手法、成本与定价输入，或待法务确认的法律暴露。
+platform/docs/p0/tenancy-negative-matrix.md
+platform/docs/p0/exam-quota-evidence.md
+platform/docs/p0/private-deployment.md
+platform/docs/p0/cost-model.md
+platform/docs/p0/sbom/licence-analysis.md
