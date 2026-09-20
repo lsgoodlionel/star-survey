@@ -10,6 +10,7 @@
 |---|---|
 | `platform/deploy/dev/` | 开发镜像（PHP 8.3＋Apache，含 MySQL/PostgreSQL 驱动与 Xdebug） |
 | `platform/deploy/test/` | 与 CI 一致的测试配置与运行脚本 |
+| `platform/deploy/functional/` | functional/acceptance（Selenium＋Firefox）套件验证栈（8095 端口，自带库、tmp、upload、config 卷） |
 | `platform/docs/adr/` | 架构决策记录 |
 | `platform/docs/p0/` | P0 技术验证进度与证据 |
 | `platform/phpunit.xml` | 平台自有测试套件 |
@@ -36,6 +37,11 @@ platform/deploy/test/run-tests.sh --fresh
 
 # 平台自有测试
 platform/deploy/test/run-tests.sh -c platform/phpunit.xml
+
+# 引擎浏览器套件（独立的 survey-functional 栈，自动起栈；跑完用 teardown.sh 拆）
+platform/deploy/functional/run-functional.sh --fresh security api
+platform/deploy/functional/run-functional.sh --with-mjy-plugins security api  # 自研插件归因对照
+platform/deploy/functional/teardown.sh
 
 # 端到端故障注入（真实 HTTP 填写＋SIGKILL），加 TEST_DB=pgsql 切换数据库
 platform/deploy/test/run-fault-injection.sh

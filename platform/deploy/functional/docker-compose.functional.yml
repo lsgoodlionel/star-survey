@@ -1,0 +1,97 @@
+# P0-00.2 functional/acceptance（浏览器）套件验证栈。
+#
+# 引擎的 functional 套件通过 Selenium 驱动真实 Firefox，需要三个角色同时在场：
+#   1. phpunit 进程（跑在 web 容器里，既连数据库又连 WebDriver）
+#   2. Apache（被浏览器访问的被测站点）
+#   3. Firefox + WebDriver（selenium 容器）
+# CI 里三者同在一台 runner 上，所以 DOMAIN=localhost、WEBDRIVERHOST=localhost，
+# 而且 Apache 看到的 REMOTE_ADDR 是 127.0.0.1。
+#
+# 本地如果把 selenium 拆成独立网络上的容器，浏览器的来源地址会变成 172.x.x.x，
+# IpAddressAnonymizeTest 这类把 127.0.0.1 / 127.0.0.0 写死在断言里的用例就会假红。
+# 因此这里让 selenium 与 web 共享网络命名空间（network_mode: service:web），
+# 拓扑与 CI 的单机 runner 一致：三个角色互相都是 localhost。
+#
+# compose 项目名固定为 survey-functional，与 dev（survey-web/survey-db）、
+# test（survey-test-*）、tenancy、exam、private 各栈的容器名、端口、卷完全不重叠。
+#
+#   起栈并跑套件： platform/deploy/functional/run-functional.sh security api
+#   彻底拆除：     platform/deploy/functional/teardown.sh
+#
+# 这里的口令只用于本地验证栈，禁止出现在任何真实环境中。
+name: survey-functional
+
+services:
+  db:
+    image: mariadb:10.11
+    container_name: survey-functional-db
+    environment:
+      # 与 functional.yml 一致：root/root，库名 limesurvey。
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: limesurvey
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    # 每轮套件都从干净库开始，用 tmpfs 避免残留与磁盘占用（本机可用磁盘紧张）。
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 20
+
+  web:
+    image: survey-web
+    container_name: survey-functional-web
+    ports:
+      # 8090/8091/8092/8093/8094 已被 dev、tenancy、exam、private 占用。
+      - "${FUNCTIONAL_WEB_PORT:-8095}:80"
+    volumes:
+      - ../../..:/var/www/html
+      # 只读的第二份仓库挂载，用来向下面的 config 卷里灌初始内容。
+      - ../../..:/opt/engine-src:ro
+      # application/config 必须是可写、可 unlink 的真实目录：
+      # InstallationControllerTest 会 unlink(config.php) 再让安装向导重新写一份，
+      # 而被 bind mount 的单个文件在容器里删不掉（Device or resource busy）。
+      # 用命名卷覆盖这个目录，内容由 prepare_functional_stack 从 /opt/engine-src 复制。
+      - functional-config:/var/www/html/application/config
+      # upload/ 同理：ThemeControllerTest 会把 vanilla 扩展成 vanilla_version_1，
+      # 跑完不清理。它写在仓库的 upload/ 里就会留到下一轮，下一轮再扩展同名主题
+      # 就永远等不到「Theme editor: vanilla_version_1」这个页面标题。
+      # CI 每个 job 都是全新检出，所以碰不到；本地必须给它一份独立的 upload。
+      - functional-upload:/var/www/html/upload
+      - functional-tmp:/var/www/html/tmp
+    depends_on:
+      db:
+        condition: service_healthy
+
+  selenium:
+    image: selenium/standalone-firefox:latest
+    container_name: survey-functional-selenium
+    # 与 web 共享网络命名空间：浏览器访问 http://localhost/index.php，
+    # phpunit 访问 http://localhost:4444，Apache 记到的来源就是 127.0.0.1。
+    # 代价是 selenium 不能再声明自己的 ports，端口要挂在 web 上。
+    network_mode: "service:web"
+    # Firefox 的渲染进程用共享内存，默认 64MB 会让页面随机崩溃。
+    shm_size: 1gb
+    environment:
+      # 留 2 个槽位（用例本身是串行的，第二个槽位只用来吸收上一轮没退干净的会话）。
+      # 只留 1 个的话，一旦某个测试类的 quit() 抛了 marionette 错误，槽位会被占到
+      # 网格超时回收为止，下一个测试类的 POST /session 就排队排到 180s 超时。
+      SE_NODE_MAX_SESSIONS: 2
+      SE_NODE_OVERRIDE_MAX_SESSIONS: "true"
+      SE_SCREEN_WIDTH: 1280
+      SE_SCREEN_HEIGHT: 1024
+      # 本机内存有限，限制 Java 堆，避免 Firefox 被 OOM killer 带走。
+      SE_JAVA_OPTS: -Xmx512m
+    volumes:
+      # import-export 套件让浏览器把文件下载到 ROOT/tmp（引擎根目录下的 tmp），
+      # 再由 phpunit 在自己的文件系统里断言。两边必须是同一个卷，路径也必须一致。
+      - functional-tmp:/var/www/html/tmp
+    depends_on:
+      - web
+
+volumes:
+  functional-tmp:
+  functional-config:
+  functional-upload:
