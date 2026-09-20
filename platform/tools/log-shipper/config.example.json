@@ -1,0 +1,26 @@
+{
+  "app": "survey",
+  "instance": "tenant-a",
+  "environment": "prod",
+  "version": "7.1.2-mjy.1",
+  "repository": "lsgoodlionel/paper",
+  "branch": "main",
+  "tokenEnv": "MJY_LOGSHIP_TOKEN",
+  "stateDir": "/var/lib/logship",
+  "spoolDir": "/var/lib/logship/spool",
+  "sources": [
+    { "name": "engine.log", "kind": "file", "location": "/var/www/html/tmp/runtime/application.log", "lines": 500 },
+    { "name": "php-error.log", "kind": "file", "location": "/var/log/php/error.log", "lines": 300 },
+    { "name": "web-container.log", "kind": "docker", "location": "survey-web", "lines": 300 }
+  ],
+  "limits": {
+    "cooldownSeconds": 900,
+    "dailyLimit": 50,
+    "maxLinesPerSource": 2000,
+    "maxBundleBytes": 5242880
+  },
+  "redaction": {
+    "maskIp": true,
+    "extraPatterns": [["internal-host", "srv-\\d{4}\\.intra"]]
+  }
+}
