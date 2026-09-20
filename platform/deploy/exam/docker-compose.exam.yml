@@ -1,0 +1,54 @@
+# P0-00.7 考试与配额验证栈。
+#
+# 独立的一套引擎实例：自己的数据库容器、自己的数据库账号、自己的运行时 tmp 卷、
+# 自己的 config.php 与 allowed_hosts.php。compose 项目名固定为 survey-exam，与
+# dev（survey-web / survey-db）、test（survey-test-*）、tenancy（survey-tenancy-*）
+# 三套栈完全隔离——并发测试会打满 Apache worker，不能干扰别人的栈。
+#
+#   起栈并安装： platform/deploy/exam/setup.sh
+#   跑策略验证： platform/deploy/exam/run-exam-policy.sh
+#   彻底拆除：   platform/deploy/exam/teardown.sh
+#
+# 这里的口令只用于本地验证栈，禁止出现在任何真实环境中。
+name: survey-exam
+
+services:
+  db:
+    image: mariadb:10.11
+    container_name: survey-exam-db
+    environment:
+      MARIADB_ROOT_PASSWORD: exam-root
+      MARIADB_DATABASE: exam
+      MARIADB_USER: exam
+      MARIADB_PASSWORD: exam-db-pass
+    # 并发用例会同时打开几十个连接，默认 151 够用，这里留出余量。
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --max-connections=400
+    volumes:
+      - exam-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 20
+
+  web:
+    image: survey-web
+    container_name: survey-exam-web
+    ports:
+      - "8093:80"
+    volumes:
+      - ../../..:/var/www/html
+      - ./.runtime/config.php:/var/www/html/application/config/config.php
+      - ./.runtime/allowed_hosts.php:/var/www/html/application/config/allowed_hosts.php
+      - exam-tmp:/var/www/html/tmp
+      - exam-uploads:/var/www/html/upload/surveys
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  exam-db:
+  exam-tmp:
+  exam-uploads:

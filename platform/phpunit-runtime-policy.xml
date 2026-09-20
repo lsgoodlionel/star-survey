@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  P0-00.7 运行时策略插件（MjyRuntimePolicy）的测试套件。
+  独立于 platform/phpunit.xml，两个套件互不影响。
+
+  在仓库根目录执行（用 00.7 自己的 survey-exam 栈，不碰共享测试栈）：
+    platform/deploy/exam/setup.sh
+    docker exec survey-exam-web php -d memory_limit=2G vendor/bin/phpunit \
+      -c platform/phpunit-runtime-policy.xml
+-->
+<phpunit
+    bootstrap="tests/bootstrap.php"
+    stderr="true"
+    colors="true">
+    <testsuites>
+        <testsuite name="mjy-runtime-policy">
+            <directory>../plugins/MjyRuntimePolicy/tests</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>
