@@ -36,7 +36,8 @@ platform/deploy/test/run-fault-injection.sh
 docker exec survey-web vendor/bin/phpcs --standard=phpcs.ruleset.xml plugins/MjyPlatformBridge
 ```
 
-## 分支
+## 仓库与分支
 
-- `master`：fork 基线，保持可与上游合并。
-- `mjy/main`：交付分支＝基线＋平台目录＋自研插件/主题＋登记过的核心补丁。
+- 代码仓库：`lsgoodlionel/star-survey`（remote `origin`），唯一工作分支 `main`。
+- 上游 fork `lsgoodlionel/LimeSurvey` 保留为 remote `limesurvey-fork`，用于对比上游与合并升级。
+- `main` 的根提交是 LimeSurvey 7.1.2 快照（上游 `4c20c680`）：本地为浅克隆，无法推送浅历史，故以单个根提交导入；上游完整历史仍在 fork 仓库。

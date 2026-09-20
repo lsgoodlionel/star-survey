@@ -5,7 +5,9 @@
 
 ## 决定
 
-所有代码与文档放在当前仓库 `lsgoodlionel/LimeSurvey`，不另建平台仓库；网络访问不使用代理。
+所有代码与文档放在同一个仓库，不拆分平台仓库；网络访问不使用代理。
+
+2026-09-20 用户决定把仓库切换到 **`lsgoodlionel/star-survey`**（remote `origin`，唯一分支 `main`）。原 fork `lsgoodlionel/LimeSurvey` 保留为 remote `limesurvey-fork`，只用于对比上游和合并升级。由于本地是浅克隆、GitHub 拒绝推送浅历史，新仓库的根提交是 LimeSurvey 7.1.2 快照（注明上游提交 `4c20c680`），其后接平台提交；文件内容与切换前逐字节一致。
 
 ## 布局
 
@@ -19,7 +21,7 @@
 
 ## 影响
 
-- `mjy/main` 分支上的提交分两类：只动 `platform/`、`plugins/Mjy*` 的平台提交；动引擎源码的核心补丁（必须登记）。与上游合并时只需关注后者。
+- `main` 分支上的提交分两类：只动 `platform/`、`plugins/Mjy*` 的平台提交；动引擎源码的核心补丁（必须登记）。与上游合并时只需关注后者。
 - 平台后续的 Java/React/Python 服务放在 `platform/services`、`platform/apps`、`platform/workers`。若日后需要拆仓，`platform/` 可整体迁出。
 - 上游仓库 `.gitignore` 忽略 `docker/`，因此部署文件放在 `platform/deploy/`。
 - 上游 `.gitignore` 忽略 `plugins/*`（仅保留 Demo），已加一行例外 `!/plugins/Mjy*/`。这是对上游文件的唯一改动，合并上游时注意保留。
