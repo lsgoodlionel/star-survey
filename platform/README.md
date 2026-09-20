@@ -20,6 +20,7 @@
 | `platform/phpunit-questions.xml` | `MjyQuestionExtensions` 的测试套件 |
 | `plugins/MjyQuestionExtensions/` | 自增表格的服务端校验、结构化副表与上传会话（P0-00.3 原型） |
 | `themes/question/mjy-repeating-table/` | 自增表格题型主题（扩展长文本题 `T`） |
+| `platform/tools/publish-gateway/` | 发布网关：定义 → LSS → 导入 → 激活 → 回读校验 → 回滚（P0-00.8 原型） |
 | `platform/tests/e2e/` | 端到端测试脚本 |
 | `platform/tests/fixtures/surveys/` | 端到端用的问卷 fixture（`.lss`） |
 | `platform/tests/fixtures/plugins/FaultInjector/` | 仅测试用的故障注入插件，只挂载进测试容器 |
@@ -48,6 +49,10 @@ platform/deploy/exam/setup.sh
 EXAM_CONCURRENCY=100 platform/deploy/exam/run-exam-policy.sh
 docker exec survey-exam-web vendor/bin/phpunit -c platform/phpunit-runtime-policy.xml
 platform/deploy/exam/teardown.sh
+
+# 发布网关（校验 → 编译 → 导入 → 激活 → 回读 → 回滚 → 漂移检查）
+platform/deploy/test/run-publish-gateway.sh
+cd platform/tools/publish-gateway && python3 -m unittest discover -s tests -t .
 
 # 代码风格（仓库规则集）
 docker exec survey-web vendor/bin/phpcs --standard=phpcs.ruleset.xml plugins/MjyPlatformBridge
