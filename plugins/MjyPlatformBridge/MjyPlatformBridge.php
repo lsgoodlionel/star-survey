@@ -9,7 +9,8 @@
  *  - afterSurveyComplete: completion hint (not transactional with submitdate)
  *  - afterResponseDelete / afterSurveyDynamicDelete: per-record deletes
  *  - cron: compensation scan for completions and bulk deletes that bypass
- *    model events (submitdate via updateByPk, deleteByPk in admin bulk delete)
+ *    model events (submitdate via updateByPk, deleteByPk in admin bulk delete),
+ *    then relays undelivered events to the platform
  *  - beforeSurveyDeactivate: final scan before responses_<sid> is renamed away
  *  - afterSurveyActivate: rotates the responses table generation, because
  *    re-activation recreates responses_<sid> and restarts response ids
@@ -20,6 +21,9 @@ class MjyPlatformBridge extends \LimeSurvey\PluginManager\PluginBase
 {
     public const DEFAULT_ENGINE_INSTANCE_ID = 'local-dev';
     private const ENGINE_INSTANCE_ENV = 'MJY_ENGINE_INSTANCE_ID';
+    private const EVENTS_URL_ENV = 'MJY_PLATFORM_EVENTS_URL';
+    private const EVENTS_SECRET_ENV = 'MJY_PLATFORM_EVENTS_SECRET';
+    private const EVENTS_CLIENT_CERT_ENV = 'MJY_PLATFORM_CLIENT_CERT';
     private const LOG_CATEGORY = 'plugin.MjyPlatformBridge';
 
     protected $storage = 'DbStorage';
@@ -162,6 +166,27 @@ class MjyPlatformBridge extends \LimeSurvey\PluginManager\PluginBase
         $this->safely(function () {
             $this->runCompletionScan();
         });
+        // Relayed separately: a platform outage must not stop the scan that
+        // keeps the log complete.
+        $this->safely(function () {
+            $this->relayEvents();
+        });
+    }
+
+    /**
+     * Pushes undelivered events to the platform. Without an endpoint configured
+     * the events simply stay in the log (private deployments may pull instead).
+     *
+     * @return int number of events the platform confirmed
+     */
+    public function relayEvents(): int
+    {
+        $transport = $this->transport();
+        if ($transport === null) {
+            return 0;
+        }
+        $relay = new MjyEventRelay(App()->getDb(), $this->readyEventLog(), $transport);
+        return $relay->relay();
     }
 
     public function currentGeneration(int $surveyId): string
@@ -242,6 +267,17 @@ class MjyPlatformBridge extends \LimeSurvey\PluginManager\PluginBase
     {
         $this->ensureSchemaOnce();
         return $this->eventLog();
+    }
+
+    private function transport(): ?MjyEventTransport
+    {
+        $endpoint = (string) getenv(self::EVENTS_URL_ENV);
+        $secret = (string) getenv(self::EVENTS_SECRET_ENV);
+        if ($endpoint === '' || $secret === '') {
+            return null;
+        }
+        $clientCertificate = (string) getenv(self::EVENTS_CLIENT_CERT_ENV);
+        return new MjyHttpEventTransport($endpoint, $secret, $clientCertificate === '' ? null : $clientCertificate);
     }
 
     private function eventLog(): MjyEventLog

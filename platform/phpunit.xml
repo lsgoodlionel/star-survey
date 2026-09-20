@@ -5,7 +5,7 @@
     platform/deploy/test/run-tests.sh -c platform/phpunit.xml
 -->
 <phpunit
-    bootstrap="../tests/bootstrap.php"
+    bootstrap="tests/bootstrap.php"
     stderr="true"
     colors="true">
     <testsuites>

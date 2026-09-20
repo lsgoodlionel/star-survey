@@ -29,6 +29,11 @@ prepare_test_stack() {
     sleep 2
   done
 
+  # 引擎会在管理员首次登录时生成 application/config/allowed_hosts.php，
+  # 而该文件一旦存在就会按白名单校验主机名；CI 的全新检出里没有它，
+  # 留着会让 3 个 URL 相关用例失败。测试前移除，下次登录会自动重新生成。
+  rm -f "$REPO_ROOT/application/config/allowed_hosts.php"
+
   # phpunit refuses to run without this marker (guard against production runs).
   touch "$REPO_ROOT/enabletests"
 
