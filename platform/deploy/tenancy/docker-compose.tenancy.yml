@@ -1,0 +1,87 @@
+# P0-00.5 租户隔离验证栈。
+#
+# 两个互不相干的引擎实例：各自的数据库容器、各自的数据库账号、各自的运行时
+# tmp 目录与答卷上传目录。compose 项目名固定为 survey-tenancy，与 dev
+# （survey-web / survey-db）和 test（survey-test-*）两套栈完全隔离。
+#
+#   起栈并安装： platform/deploy/tenancy/setup.sh
+#   越权穷举：   platform/deploy/tenancy/run-isolation.sh
+#   彻底拆除：   platform/deploy/tenancy/teardown.sh
+#
+# 这里的口令只用于本地验证栈，禁止出现在任何真实环境中。
+name: survey-tenancy
+
+services:
+  # ---------------------------------------------------------------- 租户 A
+  db-a:
+    image: mariadb:10.11
+    container_name: survey-tenancy-db-a
+    environment:
+      MARIADB_ROOT_PASSWORD: tenancy-root-a
+      MARIADB_DATABASE: tenant_a
+      MARIADB_USER: tenant_a
+      MARIADB_PASSWORD: tenant-a-db-pass
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - ./init/db-a.sql:/docker-entrypoint-initdb.d/10-colocated-tenant.sql:ro
+      - tenant-a-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 20
+
+  web-a:
+    image: survey-web
+    container_name: survey-tenancy-web-a
+    ports:
+      - "8091:80"
+    volumes:
+      - ../../..:/var/www/html
+      - ./.runtime/config.tenant-a.php:/var/www/html/application/config/config.php
+      - ./.runtime/allowed_hosts.tenant-a.php:/var/www/html/application/config/allowed_hosts.php
+      - tenant-a-tmp:/var/www/html/tmp
+      - tenant-a-uploads:/var/www/html/upload/surveys
+    depends_on:
+      db-a:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------- 租户 B
+  db-b:
+    image: mariadb:10.11
+    container_name: survey-tenancy-db-b
+    environment:
+      MARIADB_ROOT_PASSWORD: tenancy-root-b
+      MARIADB_DATABASE: tenant_b
+      MARIADB_USER: tenant_b
+      MARIADB_PASSWORD: tenant-b-db-pass
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - ./init/db-b.sql:/docker-entrypoint-initdb.d/10-colocated-tenant.sql:ro
+      - tenant-b-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 20
+
+  web-b:
+    image: survey-web
+    container_name: survey-tenancy-web-b
+    ports:
+      - "8092:80"
+    volumes:
+      - ../../..:/var/www/html
+      - ./.runtime/config.tenant-b.php:/var/www/html/application/config/config.php
+      - ./.runtime/allowed_hosts.tenant-b.php:/var/www/html/application/config/allowed_hosts.php
+      - tenant-b-tmp:/var/www/html/tmp
+      - tenant-b-uploads:/var/www/html/upload/surveys
+    depends_on:
+      db-b:
+        condition: service_healthy
+
+volumes:
+  tenant-a-db:
+  tenant-a-tmp:
+  tenant-a-uploads:
+  tenant-b-db:
+  tenant-b-tmp:
+  tenant-b-uploads:
