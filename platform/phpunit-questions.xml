@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  P0-00.3 题型纵切的插件测试套件。
+  在仓库根目录执行：
+    platform/deploy/test/run-tests.sh -c platform/phpunit-questions.xml
+    TEST_DB=pgsql platform/deploy/test/run-tests.sh -c platform/phpunit-questions.xml
+-->
+<phpunit
+    bootstrap="tests/bootstrap-questions.php"
+    stderr="true"
+    colors="true">
+    <testsuites>
+        <testsuite name="mjy-question-extensions">
+            <directory>../plugins/MjyQuestionExtensions/tests</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>

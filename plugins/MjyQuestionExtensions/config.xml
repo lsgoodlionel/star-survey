@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+    <metadata>
+        <name>MjyQuestionExtensions</name>
+        <type>plugin</type>
+        <creationDate>2026-09-20</creationDate>
+        <last_update>2026-09-20</last_update>
+        <author>MJY Platform</author>
+        <license>GNU General Public License version 2 or later</license>
+        <version>0.1.0</version>
+        <description><![CDATA[MJY: 自增表格的题型属性、服务端校验、结构化副表与上传会话（P0 原型）]]></description>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <updaters disabled="disabled">
+    </updaters>
+</config>

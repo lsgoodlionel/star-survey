@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 自增表格题型主题。
+
+  引擎没有「自增表格」题型，本主题扩展长文本题（type T）：把一张可增删行的表格
+  序列化成 JSON 存进长文本列。列定义来自插件注册的 mjy_table_columns 属性。
+
+  answercolumndefinition 把答卷列从默认的 text 提升为 mediumtext
+  （application/models/QuestionTheme.php:775 getAnswerColumnDefinition()）。
+  注意：这个标签**不能**用 CDATA 包起来，否则 json_decode(json_encode($xml))
+  得到空数组，取 [0] 就拿不到值了。
+-->
+<config>
+    <metadata>
+        <name>mjy-repeating-table</name>
+        <type>question_theme</type>
+        <title>MJY 自增表格</title>
+        <creationDate>2026-09-20</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>p0@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>自增表格：作答者自行增删行，整张表以 JSON 存进长文本列</description>
+        <questionType>T</questionType>
+        <group>Text questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>0</assessable>
+        <class>text-long mjy-repeating-table</class>
+        <answercolumndefinition>mediumtext</answercolumndefinition>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-repeating-table.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-repeating-table.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_table_columns</name>
+            <category>MJY 自增表格</category>
+            <sortorder>10</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>列定义（JSON）</caption>
+            <help>形如 [{"code":"item","label":"名称","type":"text","required":true}]</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_min_rows</name>
+            <category>MJY 自增表格</category>
+            <sortorder>20</sortorder>
+            <inputtype>integer</inputtype>
+            <default>0</default>
+            <caption>最少行数</caption>
+            <help>0 表示允许不填</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_max_rows</name>
+            <category>MJY 自增表格</category>
+            <sortorder>30</sortorder>
+            <inputtype>integer</inputtype>
+            <default>20</default>
+            <caption>最多行数</caption>
+            <help>服务端强制，浏览器端只是提示</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

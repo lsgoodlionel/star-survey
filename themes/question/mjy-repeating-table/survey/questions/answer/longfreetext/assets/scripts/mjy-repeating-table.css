@@ -1,0 +1,14 @@
+/* MJY 自增表格：只做最小限度的排版，其余交给问卷主题。 */
+.mjy-repeating-table__grid {
+    width: 100%;
+    margin-bottom: 0.5rem;
+}
+
+.mjy-repeating-table__grid th,
+.mjy-repeating-table__grid td {
+    vertical-align: middle;
+}
+
+.mjy-repeating-table__remove {
+    white-space: nowrap;
+}
