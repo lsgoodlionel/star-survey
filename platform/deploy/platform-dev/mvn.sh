@@ -14,7 +14,7 @@ if [[ ! "$DB_NAME" =~ ^[a-z][a-z0-9_]{0,40}$ ]]; then
   echo "invalid PLATFORM_DB_NAME: $DB_NAME" >&2
   exit 2
 fi
-COMPOSE=(docker compose -f "$HERE/docker-compose.yml" -p platform-dev)
+COMPOSE=(docker compose -f "$HERE/docker-compose.platform.yml" -p platform-dev)
 
 "${COMPOSE[@]}" up -d platform-db >/dev/null
 until [[ "$(docker inspect -f '{{.State.Health.Status}}' platform-db)" == "healthy" ]]; do
