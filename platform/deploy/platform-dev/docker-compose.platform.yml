@@ -1,23 +1,23 @@
 # 平台业务服务的开发与测试环境（P1）。
 #   构建与测试：platform/deploy/platform-dev/mvn.sh test
 # 文件名刻意不用 docker-compose.yml：上游 .gitignore 忽略任何位置的同名文件。
-# 数据库账号分两级：platform_owner 执行迁移、拥有表；platform_app 供应用运行，
-# 不拥有表、没有 BYPASSRLS，因此行级安全策略对它强制生效。
+# 引导超级用户 postgres 只用于初始化；platform_owner（迁移、拥有表）与 platform_app（运行期）
+# 都不是超级用户，行级安全对两者都强制生效。账号定义见 init-db.sql。
 services:
   platform-db:
     image: postgres:16-alpine
     container_name: platform-db
     environment:
-      POSTGRES_USER: platform_owner
-      POSTGRES_PASSWORD: platform_owner
-      POSTGRES_DB: platform
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PLATFORM_DB_BOOTSTRAP_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
     ports:
       - "${PLATFORM_DB_PORT:-5433}:5432"
     volumes:
       - platform-db:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "platform_owner", "-d", "platform"]
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "platform"]
       interval: 5s
       retries: 20
 
