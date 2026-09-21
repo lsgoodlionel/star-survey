@@ -1,0 +1,54 @@
+# 契约：平台 → 发布网关（v1）
+
+平台业务服务（Java）通过这个内部 HTTP 接口，请发布网关（Python，`platform/tools/publish-gateway`）
+把一份问卷定义发布到某个引擎实例。两端各自以本文件为准实现与测试；改动须同步两端并升版本。
+
+## 部署与信任边界
+
+- 网关是内部服务，只接受平台调用，不对公网开放。
+- **引擎管理员口令只存在网关侧**：网关按配置把 `engineInstanceId` 解析为 RemoteControl 地址、账号与口令（口令来自环境变量）。平台只传实例 id，从不持有、也不转发引擎口令。
+- 请求用共享密钥做 HMAC 认证（与引擎事件同一风格，但**不同密钥**）：
+  - 平台侧环境变量 `PLATFORM_PUBGW_SECRET`，网关侧 `PUBGW_SHARED_SECRET`，值相同，至少 32 字节；
+  - 请求头 `X-Pubgw-Timestamp`（Unix 秒）与 `X-Pubgw-Signature` = `hex(HMAC-SHA256(secret, "<timestamp>.<原始请求体>"))`；
+  - 时间戳偏差超过 ±300 秒、签名不符、缺头一律 401，且不做任何引擎调用。
+
+## `POST /v1/publish`
+
+请求体（`Content-Type: application/json`，≤ 1 MiB）：
+
+```json
+{
+  "requestId": "0b0d3f2e-...",
+  "engineInstanceId": "hd-engine-01",
+  "definition": { "...": "网关现有的问卷定义格式，见 platform/tests/fixtures/surveys/publish-gateway.json" }
+}
+```
+
+- `requestId`：平台生成的幂等键（UUID）。同一 `requestId` 重复到达时，网关返回首次的结果，不再发布第二次。
+- 同一 `definition.uuid` 在同一实例上**同一时刻只允许一次发布**；并发的第二个请求得到 409 `publish_in_progress`。
+
+响应：
+
+| 状态 | 体 | 含义 |
+|---|---|---|
+| 200 | `{"status":"published","result":<PublishResult>}` | 已激活，`result.binding` 为绑定记录 |
+| 422 | `{"status":"rejected","result":<PublishResult>}` | 定义未通过前置校验（`failedStage` = `validate`），**引擎未被触碰** |
+| 502 | `{"status":"failed","result":<PublishResult>}` | 引擎侧失败；`rolledBack` 表明是否已回滚，`orphanSurveyId` 非空表示回滚也失败、需人工处理 |
+| 409 | `{"status":"conflict","error":"publish_in_progress"}` | 同一定义正在发布 |
+| 404 | `{"error":"unknown_engine_instance"}` | 网关没有这个实例的配置 |
+| 400 | `{"error":"invalid_request"}` | 请求体不合法 |
+| 401 | `{"error":"<原因>"}` | 认证失败 |
+
+`<PublishResult>` 即网关现有 `PublishResult.to_dict()` 的结构（`ok`、`surveyId`、`failedStage`、`failures`、`rolledBack`、`orphanSurveyId`、`steps`、`binding`、`verification`）。`binding` 即 `BindingRecord.to_dict()`：`engineInstance`、`surveyId`、`definitionUuid`、`compilerVersion`、`fingerprintVersion`、`fingerprint`、`language`、`publishedAt`、`questions[]`。
+
+## `GET /healthz`
+
+无需认证，200 `{"status":"ok"}`。不暴露实例列表或任何配置。
+
+## 平台侧必须做到
+
+- 发布前在平台侧完成权限判定（`publish` / 审批），网关不做业务授权；
+- 以数据库行锁保证同一问卷同一时刻只有一个发布在进行，并生成 `requestId`；
+- 200 时持久化绑定记录与指纹，并登记公开路由（公开 UUID ↔ 引擎实例 ↔ sid）；
+- 422 / 502 时记录失败阶段与原因，问卷状态回到可再次发布，**不登记路由**；
+- 超时或网络错误：结果未知，状态记为"待核对"，用同一 `requestId` 重试，依赖网关幂等拿到确定结果。
