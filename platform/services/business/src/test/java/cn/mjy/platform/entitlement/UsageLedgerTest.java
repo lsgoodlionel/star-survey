@@ -83,6 +83,15 @@ class UsageLedgerTest {
     }
 
     @Test
+    void reusingAKeyForAnotherSurveyIsAConflict() {
+        ledger.reserve(ctx, new ReservationRequest("resp-1", Capabilities.RESPONSE_COLLECT, "survey-1", 1, null, TTL));
+
+        assertThatThrownBy(() -> ledger.reserve(ctx,
+                new ReservationRequest("resp-1", Capabilities.RESPONSE_COLLECT, "survey-2", 1, null, TTL)))
+                .isInstanceOf(IdempotencyKeyConflictException.class);
+    }
+
+    @Test
     void retryingACaptureNeverCapturesTwice() {
         ledger.reserve(ctx, aiTokens("job-1", 4));
         ledger.capture(ctx, "job-1", 4);

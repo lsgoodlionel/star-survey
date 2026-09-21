@@ -79,6 +79,15 @@ class ValidResponseMeterTest {
     }
 
     @Test
+    void surveyAndResponseIdentifiersCannotBeSplicedIntoAnotherKey() {
+        meter.admit(tenant, "a:b", "c", TRACE);
+
+        assertThat(meter.admit(tenant, "a", "b:c", TRACE).replayed()).isFalse();
+        assertThat(billed("a:b")).isEqualTo(new UsageBalance(1, 0));
+        assertThat(billed("a")).isEqualTo(new UsageBalance(1, 0));
+    }
+
+    @Test
     void theCollectionTierIsEnforcedPerSurvey() {
         for (int i = 1; i <= 3; i++) {
             assertThat(meter.admit(tenant, "survey-1", "resp-" + i, TRACE).isGranted()).isTrue();

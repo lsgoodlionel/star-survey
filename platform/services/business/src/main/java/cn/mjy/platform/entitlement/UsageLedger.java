@@ -142,8 +142,10 @@ public class UsageLedger {
     }
 
     private static ReservationResult replayReservation(ReserveEntry existing, ReservationRequest request) {
+        String subject = existing.counterKey().subject();
+        boolean sameSubject = subject.equals(CounterKey.TENANT_SUBJECT) || subject.equals(request.subject());
         if (!existing.capability().equals(request.capability()) || existing.quantity() != request.quantity()
-                || !Objects.equals(existing.model(), request.model())) {
+                || !Objects.equals(existing.model(), request.model()) || !sameSubject) {
             throw new IdempotencyKeyConflictException(existing.key(),
                     "originally " + existing.capability() + " x " + existing.quantity());
         }
