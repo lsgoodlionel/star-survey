@@ -1,0 +1,51 @@
+# 业务平台开发约定（P1 起适用）
+
+## 构建与测试
+
+```bash
+PLATFORM_DB_NAME=<你的库名> platform/deploy/platform-dev/mvn.sh test
+```
+
+本机不需要 Java，Maven 在容器里运行，依赖走阿里云镜像并缓存在命名卷。每条并行车道用自己的数据库名，互不干扰。
+
+## 模块与包的归属
+
+| 包 | 职责 | Flyway 版本号段 |
+|---|---|---|
+| `cn.mjy.platform.shared` | 跨模块契约（`TenantId`、`TenantContext`、`Money`、`EngineInstanceDirectory` 等）与基础设施 | V1–V99 |
+| `cn.mjy.platform.tenant`、`identity` | 租户开通与状态、引擎实例登记与路由、身份 | V100–V199 |
+| `cn.mjy.platform.entitlement` | 套餐、订阅、额度判定、用量账本 | V200–V299 |
+| `cn.mjy.platform.engine` | 引擎事件接收、去重、答卷投影、发件箱 | V300–V399 |
+| `cn.mjy.platform.access` | 角色、资源范围、字段与导出权限、席位 | V400–V499 |
+| `cn.mjy.platform.audit` | 审计日志 | V1–V99（随 shared） |
+
+- 模块之间**只通过 `shared` 下的接口或公开的服务方法**交互，不直接读写别的模块的表。
+- 需要新的跨模块契约时，在 `shared` 下加接口并在报告里说明，由集成方审查。
+- **不要修改 `pom.xml`**。需要新依赖时在报告里说明理由，由集成方统一添加，避免并行冲突。
+
+## 租户隔离（硬性要求）
+
+每张租户数据表必须：
+
+1. 有 `tenant_id uuid NOT NULL` 列；
+2. 按下面四行启用行级安全（`FORCE` 让策略对表所有者同样生效）：
+
+```sql
+ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;
+ALTER TABLE <t> FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON <t>
+    USING (tenant_id = app_current_tenant()) WITH CHECK (tenant_id = app_current_tenant());
+```
+
+3. 业务访问一律包在 `TenantScope.call/run` 里；
+4. 至少一条**跨租户负面测试**：B 读不到 A 的数据、B 写 A 的数据被数据库拒绝。
+
+控制平面表（租户登记、引擎实例登记等）不做行级隔离，但运行期账号的权限要收到最小。只追加的表（审计、账本流水）要 `REVOKE UPDATE, DELETE`。
+
+## 其他
+
+- 金额一律用 `Money`（最小币种单位整数），不用浮点。
+- 写操作支持幂等键；资金、额度、权限、名额一律服务端判定。
+- 先写测试，确认失败，再实现（TDD）。测试名说明被测行为。
+- 注释与文档用中文，标识符用英文；单文件不超过 800 行，函数尽量不超过 50 行。
+- 密钥与口令只从环境变量读取，不进代码、不进日志。

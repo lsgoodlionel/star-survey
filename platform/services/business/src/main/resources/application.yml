@@ -1,0 +1,24 @@
+# 运行期以 platform_app 连接（受行级安全约束）；迁移以 platform_owner 执行。
+# 口令一律来自环境变量，这里的默认值只用于本地开发库。
+spring:
+  application:
+    name: mjy-platform-business
+  datasource:
+    url: ${PLATFORM_DB_URL:jdbc:postgresql://localhost:5433/platform}
+    username: ${PLATFORM_DB_APP_USER:platform_app}
+    password: ${PLATFORM_DB_APP_PASSWORD:platform_app}
+  flyway:
+    url: ${PLATFORM_DB_URL:jdbc:postgresql://localhost:5433/platform}
+    user: ${PLATFORM_DB_OWNER_USER:platform_owner}
+    password: ${PLATFORM_DB_OWNER_PASSWORD:platform_owner}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+platform:
+  security:
+    # 必须由环境变量提供，至少 32 字节；缺失时应用拒绝启动。
+    jwt-hmac-secret: ${PLATFORM_JWT_HMAC_SECRET:}
