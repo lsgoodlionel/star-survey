@@ -1,8 +1,10 @@
 package cn.mjy.platform.engine.support;
 
+import cn.mjy.platform.shared.tenant.TenantScope;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * 只在引擎事件测试里生效的替身。标 {@code @Primary}：租户车道合入真实目录后，
@@ -15,5 +17,10 @@ public class EngineEventsTestConfig {
     @Primary
     FakeEngineInstanceDirectory fakeEngineInstanceDirectory() {
         return new FakeEngineInstanceDirectory();
+    }
+
+    @Bean
+    EngineRows engineRows(TenantScope scope, JdbcClient jdbc) {
+        return new EngineRows(scope, jdbc);
     }
 }
