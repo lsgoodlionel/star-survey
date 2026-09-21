@@ -40,7 +40,7 @@ import org.springframework.test.web.servlet.MockMvc;
 class PhpCapturedRequestTest {
 
     /** 实例标识含 "/"（PHP 输出 {@code \/}），代次含非 ASCII，覆盖 JSON 编码的两类差异。 */
-    private static final String INSTANCE = "hd/engine-01";
+    private static final String INSTANCE = "hd-engine-01"; // 与租户登记的实例 id 规则一致：[a-z0-9-]
     private static final String GENERATION = "gen-华东/e2e";
 
     @Autowired

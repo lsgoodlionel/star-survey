@@ -20,7 +20,7 @@ docker run --rm --entrypoint sh \
   -v "$REPO_ROOT/plugins/MjyPlatformBridge:/plugins:ro" \
   -e ENDPOINT=http://127.0.0.1:8099/internal/engine-events \
   -e MASTER_SECRET=test-only-engine-events-secret-at-least-32-bytes \
-  -e INSTANCE=hd/engine-01 \
+  -e INSTANCE=hd-engine-01 \
   "$IMAGE" /h/run.sh
 
 cp "$OUT/body.bin" "$HERE/../php-relay-request.body"
