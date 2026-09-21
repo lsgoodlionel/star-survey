@@ -36,16 +36,20 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * MjyEventLog::insert()             → occurred_at = gmdate('Y-m-d H:i:s')（UTC，无时区）
  * MjyHttpEventTransport::send()     → $body = json_encode(['events' => $envelopes], JSON_UNESCAPED_UNICODE)
  *                                     $timestamp = (string) time()
- *                                     头：Content-Type: application/json / X-Mjy-Timestamp / X-Mjy-Signature
+ *                                     头：Content-Type: application/json / X-Mjy-Engine-Instance /
+ *                                         X-Mjy-Timestamp / X-Mjy-Signature
  * MjyHttpEventTransport::sign()     → hash_hmac('sha256', $timestamp . '.' . $body, $secret)
+ * MJY_PLATFORM_EVENTS_SECRET        → $secret = 运营签发的实例密钥
+ *                                     = hex(HMAC-SHA256(主密钥, "mjy-engine-events/v1/" . 实例标识))
  * </pre>
  */
 @EngineEventsIntegrationTest
 class EngineEventContractTest {
 
-    /** 含 "/" 与非 ASCII：PHP 会输出 {@code 华东\/engine-01}，任何按解析结果重算签名的实现都会失败。 */
-    private static final String INSTANCE = "华东/engine-" + UUID.randomUUID();
-    private static final String GENERATION = "gen-relay-test";
+    /** 含 "/"：PHP 会输出 {@code \/}；实例标识要放进请求头，只能是可见 ASCII。 */
+    private static final String INSTANCE = "hd/engine-" + UUID.randomUUID();
+    /** 含 "/" 与非 ASCII：PHP 会输出 {@code 华东\/relay}，任何按解析结果重算签名的实现都会失败。 */
+    private static final String GENERATION = "gen-华东/relay";
     private static final String ENGINE_OCCURRED_AT = "2026-09-21 07:15:42";
 
     @Autowired
@@ -83,7 +87,7 @@ class EngineEventContractTest {
                 .andExpect(jsonPath("$.received").value(2))
                 .andExpect(jsonPath("$.accepted").value(2));
 
-        assertThat(new String(body, StandardCharsets.UTF_8)).contains("华东\\/engine-");
+        assertThat(new String(body, StandardCharsets.UTF_8)).contains("gen-华东\\/relay").contains("hd\\/engine-");
         assertThat(rows.states(tenant, INSTANCE, 880001, GENERATION, 101)).containsExactly("engine_completed");
         assertThat(rows.outboxTypes(tenant)).containsExactly("response.engine_completed");
     }
@@ -134,8 +138,8 @@ class EngineEventContractTest {
                 .getBytes(StandardCharsets.UTF_8);
         String timestamp = Long.toString(Instant.now().getEpochSecond());
 
-        mvc.perform(SignedEventRequests.raw(phpBody, timestamp,
-                        PhpEventSigner.sign(SignedEventRequests.SECRET, timestamp, reSerialized)))
+        mvc.perform(SignedEventRequests.raw(phpBody, INSTANCE, timestamp,
+                        PhpEventSigner.sign(SignedEventRequests.secretFor(INSTANCE), timestamp, reSerialized)))
                 .andExpect(status().isUnauthorized());
         assertThat(rows.inbox(tenant)).isZero();
     }
@@ -181,12 +185,13 @@ class EngineEventContractTest {
         return phpSendAt(body, Instant.now().getEpochSecond());
     }
 
-    /** 照抄 {@code MjyHttpEventTransport::send()} 的请求行、请求头与签名。 */
+    /** 照抄 {@code MjyHttpEventTransport::send()} 的请求行、请求头与签名（用本实例的派生密钥）。 */
     private static MockHttpServletRequestBuilder phpSendAt(byte[] body, long time) {
         String timestamp = Long.toString(time);
-        String signature = PhpEventSigner.sign(SignedEventRequests.SECRET, timestamp, body);
+        String signature = PhpEventSigner.sign(SignedEventRequests.secretFor(INSTANCE), timestamp, body);
         return post("/internal/engine-events")
                 .header("Content-Type", "application/json")
+                .header("X-Mjy-Engine-Instance", INSTANCE)
                 .header("X-Mjy-Timestamp", timestamp)
                 .header("X-Mjy-Signature", signature)
                 .content(body);

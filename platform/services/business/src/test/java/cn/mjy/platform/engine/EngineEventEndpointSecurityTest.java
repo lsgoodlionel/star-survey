@@ -1,9 +1,10 @@
 package cn.mjy.platform.engine;
 
 import static cn.mjy.platform.engine.support.SignedEventRequests.PATH;
-import static cn.mjy.platform.engine.support.SignedEventRequests.SECRET;
+import static cn.mjy.platform.engine.support.SignedEventRequests.MASTER_SECRET;
 import static cn.mjy.platform.engine.support.SignedEventRequests.body;
 import static cn.mjy.platform.engine.support.SignedEventRequests.raw;
+import static cn.mjy.platform.engine.support.SignedEventRequests.secretFor;
 import static cn.mjy.platform.engine.support.SignedEventRequests.signed;
 import static cn.mjy.platform.engine.support.SignedEventRequests.signedAt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -22,13 +23,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
- * /internal/engine-events 是服务间接口：只认 HMAC 签名，不认用户 JWT；
- * 签名错误、请求体被改、时间戳超出重放窗口一律 401，且不进入业务处理。
+ * /internal/engine-events 是服务间接口：只认 HMAC 签名，不认用户 JWT。
+ * 每个引擎实例用自己的派生密钥签名，并在 X-Mjy-Engine-Instance 头里声明身份；
+ * 缺实例头、签名与声明的实例不符、直接用主密钥签名、请求体被改、时间戳超出重放窗口一律 401，且不进入业务处理。
  */
 @EngineEventsIntegrationTest
 class EngineEventEndpointSecurityTest {
 
     private static final byte[] EMPTY_BATCH = "{\"events\":[]}".getBytes(StandardCharsets.UTF_8);
+    private static final String INSTANCE_X = "engine-x-" + UUID.randomUUID();
+    private static final String INSTANCE_Y = "engine-y-" + UUID.randomUUID();
 
     @Autowired
     private MockMvc mvc;
@@ -36,38 +40,82 @@ class EngineEventEndpointSecurityTest {
     @Autowired
     private TestTokens tokens;
 
+    private static String now() {
+        return Long.toString(Instant.now().getEpochSecond());
+    }
+
     @Test
     void aCorrectlySignedBatchIsAccepted() throws Exception {
-        mvc.perform(signed(EMPTY_BATCH))
+        mvc.perform(signed(INSTANCE_X, EMPTY_BATCH))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.received").value(0));
     }
 
     @Test
     void anUnsignedRequestIsRejected() throws Exception {
-        mvc.perform(raw(EMPTY_BATCH, null, null))
+        mvc.perform(raw(EMPTY_BATCH, INSTANCE_X, null, null))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("missing_signature"));
     }
 
     @Test
+    void aRequestWithoutTheEngineInstanceHeaderIsRejected() throws Exception {
+        String timestamp = now();
+
+        mvc.perform(raw(EMPTY_BATCH, null, timestamp,
+                        PhpEventSigner.sign(secretFor(INSTANCE_X), timestamp, EMPTY_BATCH)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("missing_engine_instance"));
+    }
+
+    @Test
+    void anEngineInstanceHeaderThatIsNotAPlainAsciiTokenIsRejected() throws Exception {
+        String timestamp = now();
+        String instance = "engine x";
+
+        mvc.perform(raw(EMPTY_BATCH, instance, timestamp,
+                        PhpEventSigner.sign(secretFor(instance), timestamp, EMPTY_BATCH)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("invalid_engine_instance"));
+    }
+
+    @Test
+    void aRequestClaimingInstanceYButSignedWithTheKeyOfInstanceXIsRejected() throws Exception {
+        String timestamp = now();
+        String signedByX = PhpEventSigner.sign(secretFor(INSTANCE_X), timestamp, EMPTY_BATCH);
+
+        mvc.perform(raw(EMPTY_BATCH, INSTANCE_Y, timestamp, signedByX))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("invalid_signature"));
+    }
+
+    @Test
+    void aRequestSignedWithTheMasterSecretInsteadOfTheDerivedKeyIsRejected() throws Exception {
+        String timestamp = now();
+
+        mvc.perform(raw(EMPTY_BATCH, INSTANCE_X, timestamp, PhpEventSigner.sign(MASTER_SECRET, timestamp, EMPTY_BATCH)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("invalid_signature"));
+    }
+
+    @Test
     void aSignatureMadeWithTheWrongSecretIsRejected() throws Exception {
-        String timestamp = Long.toString(Instant.now().getEpochSecond());
+        String timestamp = now();
         String signature = PhpEventSigner.sign("wrong-secret-that-is-at-least-32-bytes-long", timestamp, EMPTY_BATCH);
 
-        mvc.perform(raw(EMPTY_BATCH, timestamp, signature))
+        mvc.perform(raw(EMPTY_BATCH, INSTANCE_X, timestamp, signature))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("invalid_signature"));
     }
 
     @Test
     void aBodyTamperedAfterSigningIsRejected() throws Exception {
-        String timestamp = Long.toString(Instant.now().getEpochSecond());
+        String timestamp = now();
         byte[] original = body();
-        String signature = PhpEventSigner.sign(SECRET, timestamp, original);
+        String signature = PhpEventSigner.sign(secretFor(INSTANCE_X), timestamp, original);
         byte[] tampered = "{\"events\":[{\"eventId\":\"x\"}]}".getBytes(StandardCharsets.UTF_8);
 
-        mvc.perform(raw(tampered, timestamp, signature))
+        mvc.perform(raw(tampered, INSTANCE_X, timestamp, signature))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("invalid_signature"));
     }
@@ -76,7 +124,7 @@ class EngineEventEndpointSecurityTest {
     void aStaleButOtherwiseValidRequestIsRejectedAsAReplay() throws Exception {
         long stale = Instant.now().getEpochSecond() - EventSignatureVerifier.REPLAY_WINDOW.toSeconds() - 60;
 
-        mvc.perform(signedAt(stale, EMPTY_BATCH))
+        mvc.perform(signedAt(INSTANCE_X, stale, EMPTY_BATCH))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("timestamp_out_of_window"));
     }
@@ -85,7 +133,7 @@ class EngineEventEndpointSecurityTest {
     void aTimestampFarInTheFutureIsRejected() throws Exception {
         long future = Instant.now().getEpochSecond() + EventSignatureVerifier.REPLAY_WINDOW.toSeconds() + 60;
 
-        mvc.perform(signedAt(future, EMPTY_BATCH))
+        mvc.perform(signedAt(INSTANCE_X, future, EMPTY_BATCH))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("timestamp_out_of_window"));
     }
@@ -103,15 +151,16 @@ class EngineEventEndpointSecurityTest {
     void anOversizedBodyIsRejectedBeforeItIsBuffered() throws Exception {
         byte[] huge = new byte[EngineEventSignatureFilter.MAX_BODY_BYTES + 1];
 
-        mvc.perform(signed(huge)).andExpect(status().isPayloadTooLarge());
+        mvc.perform(signed(INSTANCE_X, huge)).andExpect(status().isPayloadTooLarge());
     }
 
     @Test
     void theRestOfTheApiStillRequiresAJwt() throws Exception {
-        String timestamp = Long.toString(Instant.now().getEpochSecond());
+        String timestamp = now();
 
-        mvc.perform(post("/v1/me").header("X-Mjy-Timestamp", timestamp)
-                        .header("X-Mjy-Signature", PhpEventSigner.sign(SECRET, timestamp, new byte[0])))
+        mvc.perform(post("/v1/me").header("X-Mjy-Engine-Instance", INSTANCE_X)
+                        .header("X-Mjy-Timestamp", timestamp)
+                        .header("X-Mjy-Signature", PhpEventSigner.sign(secretFor(INSTANCE_X), timestamp, new byte[0])))
                 .andExpect(status().isUnauthorized());
     }
 }

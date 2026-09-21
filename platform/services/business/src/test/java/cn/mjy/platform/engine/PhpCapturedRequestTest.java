@@ -32,11 +32,16 @@ import org.springframework.test.web.servlet.MockMvc;
  *
  * <p>与 {@link EngineEventContractTest}（Java 重现 PHP 逻辑）互补：这里证明平台接受的是 PHP 实际发出的字节，
  * 也证明那份 Java 重现与真实 PHP 输出逐字节一致。
+ *
+ * <p>抓包时 PHP 端用 {@code hash_hmac} 从主密钥派生实例密钥，再交给真实的发送端签名；
+ * 这里用平台的 {@link EngineEventKeys} 从同一主密钥派生并验签，因而同时证明两端的派生算法一致。
  */
 @EngineEventsIntegrationTest
 class PhpCapturedRequestTest {
 
-    private static final String INSTANCE = "华东/engine-01";
+    /** 实例标识含 "/"（PHP 输出 {@code \/}），代次含非 ASCII，覆盖 JSON 编码的两类差异。 */
+    private static final String INSTANCE = "hd-engine-01"; // 与租户登记的实例 id 规则一致：[a-z0-9-]
+    private static final String GENERATION = "gen-华东/e2e";
 
     @Autowired
     private MockMvc mvc;
@@ -52,22 +57,25 @@ class PhpCapturedRequestTest {
         Map<String, String> headers = capturedHeaders();
         String timestamp = headers.get("X-Mjy-Timestamp");
         Clock atSendTime = Clock.fixed(Instant.ofEpochSecond(Long.parseLong(timestamp)), ZoneOffset.UTC);
-        EventSignatureVerifier verifier = new EventSignatureVerifier(SignedEventRequests.SECRET, atSendTime);
+        EventSignatureVerifier verifier = new EventSignatureVerifier(
+                new EngineEventKeys(SignedEventRequests.MASTER_SECRET), atSendTime);
 
-        Verdict verdict = verifier.verify(timestamp, headers.get("X-Mjy-Signature"), capturedBody());
+        Verdict verdict = verifier.verify(headers.get("X-Mjy-Engine-Instance"), timestamp,
+                headers.get("X-Mjy-Signature"), capturedBody());
 
         assertThat(verdict).isEqualTo(Verdict.VALID);
-        assertThat(headers).containsEntry("Content-Type", "application/json");
+        assertThat(headers).containsEntry("Content-Type", "application/json")
+                .containsEntry("X-Mjy-Engine-Instance", INSTANCE);
     }
 
     @Test
     void theJavaReimplementationOfThePhpSenderProducesTheSameBytes() throws IOException {
         byte[] reimplemented = SignedEventRequests.body(
                 PhpEnvelope.event(PhpEnvelope.SAVED).eventId("6f9a1c2e-3b4d-4e5f-8a6b-7c8d9e0f1a2b")
-                        .instance(INSTANCE).survey(880001).generation("gen-e2e").response(101)
+                        .instance(INSTANCE).survey(880001).generation(GENERATION).response(101)
                         .source("hook").occurredAt("2026-09-21 07:15:40"),
                 PhpEnvelope.event(PhpEnvelope.COMPLETED).eventId("0b1c2d3e-4f50-4a61-9b72-8c93d4e5f607")
-                        .instance(INSTANCE).survey(880001).generation("gen-e2e").response(101)
+                        .instance(INSTANCE).survey(880001).generation(GENERATION).response(101)
                         .source("scanner").occurredAt("2026-09-21 07:15:42"));
 
         assertThat(new String(reimplemented, StandardCharsets.UTF_8))
@@ -80,11 +88,11 @@ class PhpCapturedRequestTest {
         TenantId tenant = TenantId.random();
         directory.register(INSTANCE, tenant);
 
-        mvc.perform(signed(capturedBody()))
+        mvc.perform(signed(INSTANCE, capturedBody()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accepted").value(2));
 
-        assertThat(rows.states(tenant, INSTANCE, 880001, "gen-e2e", 101)).containsExactly("engine_completed");
+        assertThat(rows.states(tenant, INSTANCE, 880001, GENERATION, 101)).containsExactly("engine_completed");
         assertThat(rows.outboxTypes(tenant)).containsExactly("response.engine_completed");
     }
 

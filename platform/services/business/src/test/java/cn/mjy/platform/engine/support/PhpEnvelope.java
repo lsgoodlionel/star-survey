@@ -81,6 +81,10 @@ public final class PhpEnvelope {
         return eventId;
     }
 
+    public String instance() {
+        return engineInstanceId;
+    }
+
     public Map<String, Object> toMap() {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("eventId", eventId);

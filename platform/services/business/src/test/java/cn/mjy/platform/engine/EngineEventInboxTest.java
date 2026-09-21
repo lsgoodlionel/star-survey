@@ -53,12 +53,12 @@ class EngineEventInboxTest {
         PhpEnvelope completed = event(COMPLETED).instance(instance).generation(generation).response(7);
         byte[] batch = body(saved, completed);
 
-        mvc.perform(signed(batch))
+        mvc.perform(signed(instance, batch))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.received").value(2))
                 .andExpect(jsonPath("$.accepted").value(2))
                 .andExpect(jsonPath("$.duplicates").value(0));
-        mvc.perform(signed(batch))
+        mvc.perform(signed(instance, batch))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accepted").value(0))
                 .andExpect(jsonPath("$.duplicates").value(2));
