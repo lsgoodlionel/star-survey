@@ -11,6 +11,9 @@ spring:
     url: ${PLATFORM_DB_URL:jdbc:postgresql://localhost:5433/platform}
     user: ${PLATFORM_DB_OWNER_USER:platform_owner}
     password: ${PLATFORM_DB_OWNER_PASSWORD:platform_owner}
+    # 迁移按模块分号段（见 CONVENTIONS.md），各模块互相独立；某模块在低号段追加迁移时，
+    # 已跑过高号段的库需要能补跑它，因此允许乱序。
+    out-of-order: true
 
 management:
   endpoints:
