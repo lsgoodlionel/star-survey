@@ -1,5 +1,6 @@
 package cn.mjy.platform.shared.security;
 
+import jakarta.servlet.DispatcherType;
 import java.nio.charset.StandardCharsets;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,6 +28,10 @@ public class SecurityConfig {
     SecurityFilterChain api(HttpSecurity http) throws Exception {
         http
                 .authorizeHttpRequests(auth -> auth
+                        // 容器把框架层错误（如 415）转发到 /error 时，原请求已在自己的过滤链上完成认证；
+                        // 不放行这次内部转发，非 JWT 链（如 /internal/**）的真实错误会被掩盖成 401。
+                        // 直接请求 /error 属于普通请求，仍需令牌。
+                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .anyRequest().authenticated())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

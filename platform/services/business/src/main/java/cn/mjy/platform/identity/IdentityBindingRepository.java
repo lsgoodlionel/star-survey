@@ -25,7 +25,7 @@ public class IdentityBindingRepository {
         return jdbc.sql("""
                         INSERT INTO identity_binding (principal_id, tenant_id, provider, app_id, external_id)
                         VALUES (:id, :tenant, :provider, :app, :external)
-                        ON CONFLICT (provider, app_id, external_id) DO NOTHING
+                        ON CONFLICT (tenant_id, provider, app_id, external_id) DO NOTHING
                         RETURNING %s
                         """.formatted(COLUMNS))
                 .param("id", UUID.randomUUID())

@@ -114,13 +114,22 @@ class IdentityBindingApiTest {
                 .andExpect(jsonPath("$.principalId").value(principal));
     }
 
+    /**
+     * 同一个外部身份（如平台共用小程序下的同一 openid）可以分别加入两个租户，
+     * 成为两个互不相关的主体。若按全局唯一，B 会收到 409，这既拒绝了合法用户，
+     * 也泄露了"此人在别的租户存在"。
+     */
     @Test
-    void tenantBCannotBindAnIdentityAlreadyBoundInTenantA() throws Exception {
-        boundPrincipal(tenantA, "wecom", "corp-shared");
+    void theSameExternalIdentityJoinsTwoTenantsAsUnrelatedPrincipals() throws Exception {
+        String inA = boundPrincipal(tenantA, "wechat_miniapp", "shared-app");
 
-        bind(tenantB, "wecom", "corp-shared", externalId)
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.principalId").doesNotExist());
+        String inB = boundPrincipal(tenantB, "wechat_miniapp", "shared-app");
+
+        org.assertj.core.api.Assertions.assertThat(inB).isNotEqualTo(inA);
+        lookup(tenantA, "wechat_miniapp", "shared-app", externalId)
+                .andExpect(jsonPath("$.principalId").value(inA));
+        lookup(tenantB, "wechat_miniapp", "shared-app", externalId)
+                .andExpect(jsonPath("$.principalId").value(inB));
     }
 
     @Test

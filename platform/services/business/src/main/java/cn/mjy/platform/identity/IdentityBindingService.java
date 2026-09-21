@@ -3,15 +3,14 @@ package cn.mjy.platform.identity;
 import cn.mjy.platform.audit.AuditLogRepository;
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
-import cn.mjy.platform.tenant.api.ConflictException;
 import cn.mjy.platform.tenant.api.CreateResult;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 /**
- * 外部身份绑定（最小模型）。一个三元组全局只绑定一次：在本租户已绑定则幂等返回；
- * 已被别的租户绑定则 409，且不透露对方的任何信息。
+ * 外部身份绑定（最小模型）。同一外部身份在每个租户内只绑定一次，重复绑定幂等返回；
+ * 不同租户各自绑定、互不相关（见 V104），因此绑定结果不会透露此人是否存在于别的租户。
  */
 @Service
 public class IdentityBindingService {
@@ -37,10 +36,10 @@ public class IdentityBindingService {
                 audit.record(tenant, actorId, ACTION_BIND, "principal/" + binding.principalId(), traceId);
                 return new CreateResult<>(binding, true);
             }
-            // 冲突的既有行在本租户可见 = 本租户重复绑定；不可见 = 属于别的租户。
+            // 唯一键含租户，冲突只可能来自本租户的既有绑定，因此一定可见。
             return bindings.findByIdentity(identity)
                     .map(existing -> new CreateResult<>(existing, false))
-                    .orElseThrow(() -> new ConflictException("identity is already bound"));
+                    .orElseThrow(() -> new IllegalStateException("conflicting binding is not visible in its own tenant"));
         });
     }
 
