@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  *   <caption>错误码</caption>
  *   <tr><th>状态</th><th>error</th><th>含义（全部导致中继保留事件、下轮重投）</th></tr>
  *   <tr><td>400</td><td>invalid_batch / invalid_occurred_at</td><td>请求体不是合法的批次</td></tr>
+ *   <tr><td>403</td><td>engine_instance_mismatch</td><td>批次里有事件不属于验签确认的实例（配置错误或冒充），需人工处理</td></tr>
  *   <tr><td>422</td><td>unknown_engine_instance</td><td>实例未登记或已停用，登记后自动补投</td></tr>
  *   <tr><td>422</td><td>unsupported_schema_version / unsupported_event_type</td><td>平台尚不认识，升级后补投</td></tr>
  *   <tr><td>503</td><td>temporarily_unavailable</td><td>数据库或目录暂不可用</td></tr>
@@ -45,6 +46,13 @@ class EngineEventExceptionHandler {
                 ? HttpStatus.BAD_REQUEST
                 : HttpStatus.UNPROCESSABLE_CONTENT;
         return error(status, e.reason().code());
+    }
+
+    @ExceptionHandler(EngineInstanceMismatchException.class)
+    ResponseEntity<Map<String, String>> instanceMismatch(EngineInstanceMismatchException e) {
+        log.warn("rejected engine event batch: signed by instance {} but carries events of {}",
+                e.authenticated(), e.claimed());
+        return error(HttpStatus.FORBIDDEN, "engine_instance_mismatch");
     }
 
     @ExceptionHandler(UnknownEngineInstanceException.class)

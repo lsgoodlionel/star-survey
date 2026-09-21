@@ -269,6 +269,11 @@ class MjyPlatformBridge extends \LimeSurvey\PluginManager\PluginBase
         return $this->eventLog();
     }
 
+    /**
+     * MJY_PLATFORM_EVENTS_SECRET 是平台为本实例（MJY_ENGINE_INSTANCE_ID）签发的密钥，
+     * 由运营调用 POST /v1/platform/engine-instances/{instanceId}/event-secret 取得；
+     * 用别的实例的密钥签名会被平台拒收。
+     */
     private function transport(): ?MjyEventTransport
     {
         $endpoint = (string) getenv(self::EVENTS_URL_ENV);
@@ -277,7 +282,12 @@ class MjyPlatformBridge extends \LimeSurvey\PluginManager\PluginBase
             return null;
         }
         $clientCertificate = (string) getenv(self::EVENTS_CLIENT_CERT_ENV);
-        return new MjyHttpEventTransport($endpoint, $secret, $clientCertificate === '' ? null : $clientCertificate);
+        return new MjyHttpEventTransport(
+            $endpoint,
+            self::engineInstanceId(),
+            $secret,
+            $clientCertificate === '' ? null : $clientCertificate
+        );
     }
 
     private function eventLog(): MjyEventLog

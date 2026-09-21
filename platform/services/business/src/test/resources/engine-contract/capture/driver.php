@@ -26,21 +26,28 @@ require '/plugins/MjyHttpEventTransport.php';
 require '/plugins/MjyEventLog.php';
 require '/plugins/MjyEventRelay.php';
 
+// The engine instance id travels in the X-Mjy-Engine-Instance header, so it must be plain ASCII;
+// "/" still exercises PHP's slash escaping, the non-ASCII generation exercises JSON_UNESCAPED_UNICODE.
+$instance = getenv('INSTANCE');
+// The instance secret an operator would issue: hex(HMAC-SHA256(master, "mjy-engine-events/v1/" . instance)).
+// Deriving it here in PHP lets PhpCapturedRequestTest prove the Java derivation matches byte for byte.
+$instanceSecret = hash_hmac('sha256', 'mjy-engine-events/v1/' . $instance, getenv('MASTER_SECRET'));
+
 // PDO returns every column as a string, as SELECT * on the engine event log would.
 StubCommand::$batches[] = [
     ['id' => '41', 'event_id' => '6f9a1c2e-3b4d-4e5f-8a6b-7c8d9e0f1a2b', 'event_type' => 'response.saved',
-     'engine_instance_id' => '华东/engine-01', 'survey_id' => '880001', 'generation' => 'gen-e2e',
+     'engine_instance_id' => $instance, 'survey_id' => '880001', 'generation' => 'gen-华东/e2e',
      'response_id' => '101', 'source' => 'hook', 'dedupe_key' => null,
      'occurred_at' => '2026-09-21 07:15:40', 'delivered_at' => null],
     ['id' => '42', 'event_id' => '0b1c2d3e-4f50-4a61-9b72-8c93d4e5f607', 'event_type' => 'response.completed',
-     'engine_instance_id' => '华东/engine-01', 'survey_id' => '880001', 'generation' => 'gen-e2e',
+     'engine_instance_id' => $instance, 'survey_id' => '880001', 'generation' => 'gen-华东/e2e',
      'response_id' => '101', 'source' => 'scanner',
-     'dedupe_key' => 'response.completed:880001:gen-e2e:101',
+     'dedupe_key' => 'response.completed:880001:gen-华东/e2e:101',
      'occurred_at' => '2026-09-21 07:15:42', 'delivered_at' => null],
 ];
 
 $db = new CDbConnection();
-$transport = new MjyHttpEventTransport(getenv('ENDPOINT'), getenv('SECRET'));
+$transport = new MjyHttpEventTransport(getenv('ENDPOINT'), $instance, $instanceSecret);
 $relay = new MjyEventRelay($db, new MjyEventLog($db, 'ignored'), $transport);
 $sent = $relay->relay();
 echo "relayed=$sent marked=" . json_encode(StubCommand::$updates[0][2] ?? null) . PHP_EOL;

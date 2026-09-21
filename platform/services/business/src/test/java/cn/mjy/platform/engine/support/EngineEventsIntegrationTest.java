@@ -10,11 +10,11 @@ import org.springframework.context.annotation.Import;
 
 /**
  * 引擎事件集成测试的统一配置：同一组属性，Spring 测试上下文可在各测试类之间复用。
- * 共享密钥以环境变量同名的属性注入，与生产读取方式一致。
+ * 平台主密钥以环境变量同名的属性注入，与生产读取方式一致。
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
-@SpringBootTest(properties = "PLATFORM_ENGINE_EVENTS_SECRET=" + SignedEventRequests.SECRET)
+@SpringBootTest(properties = "PLATFORM_ENGINE_EVENTS_SECRET=" + SignedEventRequests.MASTER_SECRET)
 @AutoConfigureMockMvc
 @Import(EngineEventsTestConfig.class)
 public @interface EngineEventsIntegrationTest {

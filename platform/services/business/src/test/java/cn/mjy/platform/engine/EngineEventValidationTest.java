@@ -48,7 +48,7 @@ class EngineEventValidationTest {
     void anEnvelopeMissingRequiredFieldsRejectsTheBatch() throws Exception {
         String body = "{\"events\":[{\"eventType\":\"response.saved\",\"engineInstanceId\":\"" + instance + "\"}]}";
 
-        mvc.perform(signed(body.getBytes(StandardCharsets.UTF_8)))
+        mvc.perform(signed(instance, body.getBytes(StandardCharsets.UTF_8)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("invalid_batch"));
 
@@ -57,7 +57,7 @@ class EngineEventValidationTest {
 
     @Test
     void aBodyThatIsNotJsonIsRejected() throws Exception {
-        mvc.perform(signed("not json".getBytes(StandardCharsets.UTF_8)))
+        mvc.perform(signed(instance, "not json".getBytes(StandardCharsets.UTF_8)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("invalid_batch"));
     }
