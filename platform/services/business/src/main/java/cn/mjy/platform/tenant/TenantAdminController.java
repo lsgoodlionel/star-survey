@@ -48,16 +48,8 @@ public class TenantAdminController {
     @PostMapping("/{tenantId}/status")
     public TenantView changeStatus(@PathVariable UUID tenantId, @Valid @RequestBody ChangeStatus request) {
         String actor = guard.requireOperator();
-        TenantStatus target = parseStatus(request.status());
+        TenantStatus target = InvalidRequestException.parse(request.status(), TenantStatus::fromCode);
         return TenantView.of(tenants.changeStatus(new TenantId(tenantId), target, actor, newTraceId()));
-    }
-
-    private static TenantStatus parseStatus(String code) {
-        try {
-            return TenantStatus.fromCode(code);
-        } catch (IllegalArgumentException e) {
-            throw new InvalidRequestException(e.getMessage());
-        }
     }
 
     private static String newTraceId() {
