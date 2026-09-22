@@ -89,6 +89,21 @@ docker build -t survey-publish-gateway platform/tools/publish-gateway
 
 样例定义：[`platform/tests/fixtures/surveys/publish-gateway.json`](../../tests/fixtures/surveys/publish-gateway.json)。
 
+## 访问策略（`policy` 块）
+
+定义（v1、v2 均可）可带 `policy`：时间窗（本地时刻＋IANA 时区）、访问密码（只收平台生成的
+PBKDF2 哈希）、验证码、邀请码、按 token／设备／IP 限次、作答时长、IP 与地区规则。验证码与邀请码
+编成引擎原生设置；其余编成一行 `plugin_settings` 交给 `MjyRuntimePolicy` 执行，激活前经
+`policyStatus` 回读核对摘要，插件没激活或摘要不符即回滚。字段与问题代码见
+[`platform/contracts/survey-access-policy-v1.md`](../../contracts/survey-access-policy-v1.md)，
+设计见 [ADR 0016](../../docs/adr/0016-access-policy.md)。
+
+```bash
+# 端到端：真引擎上的时间窗、密码、限次、时长、验证码、IP（约两分钟，含两次服务端计时等待）
+platform/deploy/test/run-access-policy.sh
+TEST_DB=pgsql platform/deploy/test/run-access-policy.sh
+```
+
 ## 问卷逻辑（definitionVersion 2）
 
 v2 定义可以带显示条件（题目／题组 `condition`）、校验规则（`validation`）、计算值
@@ -131,6 +146,9 @@ v1 定义的校验与编译结果逐字节不变。
 | `logic/scope.py` · `logic/types.py` | 引用解析（代码／UUID → qcode 变量）与类型检查 |
 | `logic/graph.py` · `logic/check.py` | 前向／跨页引用、循环依赖；汇总成校验问题 |
 | `logic/emit.py` · `logic/lower.py` | 语法树 → ExpressionScript；v2 定义 → 引擎层定义 |
+| `policy/schema.py` · `policy/timewindow.py` · `policy/password.py` | 访问策略 `policy` 块的校验（422 `E_POLICY_*`）、本地时刻＋时区 → UTC、密码哈希格式（ADR 0016） |
+| `policy/compile.py` | 策略 → 原生设置（`usecaptcha`／`access_mode`／`startdate`／`expires`）＋ LSS `plugin_settings` 载荷与摘要 |
+| `policy/probe.py` | 激活前向 MjyRuntimePolicy 的 `policyStatus` 回读策略摘要，不符即回滚 |
 
 ## 测试
 
