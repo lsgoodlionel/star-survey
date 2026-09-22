@@ -24,12 +24,21 @@ esac
 prepare_test_stack() {
   # Fresh copy of the config template: tests may rewrite config.php.
   mkdir -p "$TEST_DIR/.runtime"
+  local config_changed=false
+  if ! cmp -s "$TEST_DIR/config.$TEST_DB.php" "$TEST_DIR/.runtime/config.php"; then
+    config_changed=true
+  fi
   cp "$TEST_DIR/config.$TEST_DB.php" "$TEST_DIR/.runtime/config.php"
 
   if $is_fresh; then
     "${COMPOSE[@]}" rm -sf "$DB_SERVICE" test-web >/dev/null
   fi
   "${COMPOSE[@]}" up -d "$DB_SERVICE" test-web >/dev/null
+  # 切换 TEST_DB 时 config.php 被原地替换，而 PHP opcache 按时间戳隔几秒才重新校验：
+  # 紧接着的请求可能仍用上一种数据库的配置（问卷发布到另一个库）。配置变了就重启 web 容器。
+  if $config_changed && ! $is_fresh; then
+    "${COMPOSE[@]}" restart test-web >/dev/null
+  fi
   # test-web does not depend on test-pg, so wait for the selected database explicitly.
   until [[ "$(docker inspect -f '{{.State.Health.Status}}' "$TEST_PREFIX-$DB_SERVICE")" == "healthy" ]]; do
     sleep 2
