@@ -12,6 +12,7 @@ import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
 import cn.mjy.platform.tenant.api.ConflictException;
 import cn.mjy.platform.tenant.api.CreateResult;
+import cn.mjy.platform.tenant.api.InvalidRequestException;
 import cn.mjy.platform.tenant.api.NotFoundException;
 import java.util.List;
 import java.util.Optional;
@@ -30,10 +31,12 @@ public class OrgConnectionService {
     static final String ACTION_PREAUTHORIZE = "identity.org_connection.preauthorize";
 
     record CreateCommand(OrgProvider provider, String corpId, String appId, String secretRef,
-            UnknownUserPolicy unknownUserPolicy) {
+            UnknownUserPolicy unknownUserPolicy, String eventTokenRef, String eventKeyRef) {
     }
 
-    record UpdateCommand(String secretRef, UnknownUserPolicy unknownUserPolicy, Boolean enabled) {
+    /** 为空的字段保持原值；事件订阅的两个密钥名须同时给出。 */
+    record UpdateCommand(String secretRef, UnknownUserPolicy unknownUserPolicy, Boolean enabled,
+            String eventTokenRef, String eventKeyRef) {
     }
 
     private final TenantScope tenantScope;
@@ -57,11 +60,12 @@ public class OrgConnectionService {
     }
 
     OrgConnection create(TenantContext ctx, CreateCommand command) {
+        requireEventRefsTogether(command.eventTokenRef(), command.eventKeyRef());
         return tenantScope.call(ctx.tenantId(), () -> {
             access.require(ctx, Permission.MANAGE_SETTINGS, null);
             OrgConnection created = connections.insert(new OrgConnection(UUID.randomUUID(), ctx.tenantId(),
                     command.provider(), command.corpId(), command.appId(), command.secretRef(),
-                    command.unknownUserPolicy(), true), ctx.actorId());
+                    command.unknownUserPolicy(), true, command.eventTokenRef(), command.eventKeyRef()), ctx.actorId());
             audit.record(ctx.tenantId(), ctx.actorId(), ACTION_CREATE, describe(created), ctx.traceId());
             return created;
         });
@@ -82,6 +86,8 @@ public class OrgConnectionService {
     }
 
     OrgConnection update(TenantContext ctx, UUID id, UpdateCommand command) {
+        requireEventRefsTogether(command.eventTokenRef(), command.eventKeyRef());
+        boolean eventsGiven = command.eventTokenRef() != null;
         return tenantScope.call(ctx.tenantId(), () -> {
             access.require(ctx, Permission.MANAGE_SETTINGS, null);
             OrgConnection current = connections.find(id).orElseThrow(OrgConnectionService::notFound);
@@ -89,7 +95,9 @@ public class OrgConnectionService {
                     current.provider(), current.corpId(), current.appId(),
                     Optional.ofNullable(command.secretRef()).orElse(current.secretRef()),
                     Optional.ofNullable(command.unknownUserPolicy()).orElse(current.unknownUserPolicy()),
-                    Optional.ofNullable(command.enabled()).orElse(current.enabled())));
+                    Optional.ofNullable(command.enabled()).orElse(current.enabled()),
+                    eventsGiven ? command.eventTokenRef() : current.eventTokenRef(),
+                    eventsGiven ? command.eventKeyRef() : current.eventKeyRef()));
             audit.record(ctx.tenantId(), ctx.actorId(), ACTION_UPDATE, describe(updated), ctx.traceId());
             return updated;
         });
@@ -120,10 +128,22 @@ public class OrgConnectionService {
         return tenantScope.call(tenant, () -> connections.find(id));
     }
 
+    /** 列出租户的全部连接（系统流程，如定时同步）；不做权限判定，只在租户作用域内读取。 */
+    List<OrgConnection> listForSystem(TenantId tenant) {
+        return tenantScope.call(tenant, connections::list);
+    }
+
+    private static void requireEventRefsTogether(String tokenRef, String keyRef) {
+        if ((tokenRef == null) != (keyRef == null)) {
+            throw new InvalidRequestException("eventTokenRef and eventKeyRef must be given together");
+        }
+    }
+
     private static String describe(OrgConnection c) {
         return "org_connection/" + c.id() + " provider=" + c.provider().code() + " corp=" + c.corpId()
                 + " app=" + c.appId() + " secret_ref=" + c.secretRef() + " policy=" + c.unknownUserPolicy().code()
-                + " enabled=" + c.enabled();
+                + " enabled=" + c.enabled() + " event_token_ref=" + c.eventTokenRef()
+                + " event_key_ref=" + c.eventKeyRef();
     }
 
     private static NotFoundException notFound() {

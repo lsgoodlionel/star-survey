@@ -33,13 +33,15 @@ public class OrgConnectionController {
     private final OrgConnectionService connections;
     private final OrgDirectorySyncService sync;
     private final OrgLoginService login;
+    private final OrgEventService events;
     private final CurrentTenant currentTenant;
 
     OrgConnectionController(OrgConnectionService connections, OrgDirectorySyncService sync, OrgLoginService login,
-            CurrentTenant currentTenant) {
+            OrgEventService events, CurrentTenant currentTenant) {
         this.connections = connections;
         this.sync = sync;
         this.login = login;
+        this.events = events;
         this.currentTenant = currentTenant;
     }
 
@@ -48,7 +50,8 @@ public class OrgConnectionController {
         TenantContext ctx = currentTenant.require();
         OrgConnection created = connections.create(ctx, new OrgConnectionService.CreateCommand(
                 OrgProvider.fromCode(request.provider()).orElseThrow(), request.corpId(), request.appId(),
-                request.secretRef(), policy(request.unknownUserPolicy(), UnknownUserPolicy.REQUIRE_PREAUTHORIZED)));
+                request.secretRef(), policy(request.unknownUserPolicy(), UnknownUserPolicy.REQUIRE_PREAUTHORIZED),
+                request.eventTokenRef(), request.eventKeyRef()));
         return ResponseEntity.status(HttpStatus.CREATED).body(view(created));
     }
 
@@ -65,7 +68,8 @@ public class OrgConnectionController {
     @PutMapping("/{id}")
     ConnectionView update(@PathVariable UUID id, @Valid @RequestBody UpdateRequest request) {
         OrgConnectionService.UpdateCommand command = new OrgConnectionService.UpdateCommand(request.secretRef(),
-                policy(request.unknownUserPolicy(), null), request.enabled());
+                policy(request.unknownUserPolicy(), null), request.enabled(), request.eventTokenRef(),
+                request.eventKeyRef());
         return view(connections.update(currentTenant.require(), id, command));
     }
 
@@ -83,7 +87,8 @@ public class OrgConnectionController {
 
     private ConnectionView view(OrgConnection c) {
         return new ConnectionView(c.id().toString(), c.provider().code(), c.corpId(), c.appId(), c.secretRef(),
-                c.unknownUserPolicy().code(), c.enabled(), login.redirectUri(c.tenantId(), c.id()));
+                c.unknownUserPolicy().code(), c.enabled(), login.redirectUri(c.tenantId(), c.id()),
+                c.eventTokenRef(), c.eventKeyRef(), c.receivesEvents() ? events.eventUrl(c.tenantId(), c.id()) : null);
     }
 
     private static UnknownUserPolicy policy(String code, UnknownUserPolicy fallback) {
@@ -95,21 +100,29 @@ public class OrgConnectionController {
             @NotBlank @Pattern(regexp = ID_REGEX) String corpId,
             @NotBlank @Pattern(regexp = ID_REGEX) String appId,
             @NotBlank @Pattern(regexp = SECRET_REF_REGEX) String secretRef,
-            @Pattern(regexp = UnknownUserPolicy.CODE_REGEX) String unknownUserPolicy) {
+            @Pattern(regexp = UnknownUserPolicy.CODE_REGEX) String unknownUserPolicy,
+            @Pattern(regexp = SECRET_REF_REGEX) String eventTokenRef,
+            @Pattern(regexp = SECRET_REF_REGEX) String eventKeyRef) {
     }
 
     record UpdateRequest(
             @Pattern(regexp = SECRET_REF_REGEX) String secretRef,
             @Pattern(regexp = UnknownUserPolicy.CODE_REGEX) String unknownUserPolicy,
-            Boolean enabled) {
+            Boolean enabled,
+            @Pattern(regexp = SECRET_REF_REGEX) String eventTokenRef,
+            @Pattern(regexp = SECRET_REF_REGEX) String eventKeyRef) {
     }
 
     record AuthorizeUserRequest(@NotBlank @Size(max = 256) @Pattern(regexp = "[^/\\s]+") String externalId) {
     }
 
-    /** redirectUri：须在开放平台登记的回调地址（未配置平台对外地址时为空）。 */
+    /**
+     * redirectUri：须在开放平台登记的免登回调地址；eventUrl：须登记的通讯录事件回调地址
+     * （未配置平台对外地址或未配置事件订阅时为空）。
+     */
     record ConnectionView(String id, String provider, String corpId, String appId, String secretRef,
-            String unknownUserPolicy, boolean enabled, String redirectUri) {
+            String unknownUserPolicy, boolean enabled, String redirectUri, String eventTokenRef,
+            String eventKeyRef, String eventUrl) {
     }
 
     record AuthorizedUserView(String principalId, String externalId) {

@@ -7,6 +7,7 @@ import cn.mjy.platform.identity.ExternalIdentity;
 import cn.mjy.platform.identity.IdentityBinding;
 import cn.mjy.platform.identity.IdentityBindingService;
 import cn.mjy.platform.shared.TenantId;
+import cn.mjy.platform.shared.tenant.TenantDirectory;
 import cn.mjy.platform.shared.tenant.TenantScope;
 import cn.mjy.platform.tenant.api.NotFoundException;
 import java.net.URI;
@@ -57,6 +58,7 @@ public class OrgLoginService {
 
     private final OrgLoginProperties properties;
     private final TenantScope tenantScope;
+    private final TenantDirectory tenants;
     private final OrgConnectionService connections;
     private final OrgLoginStateRepository states;
     private final OrgSessionRepository sessions;
@@ -70,12 +72,14 @@ public class OrgLoginService {
     private final SecureRandom random = new SecureRandom();
     private final Clock clock = Clock.systemUTC();
 
-    OrgLoginService(OrgLoginProperties properties, TenantScope tenantScope, OrgConnectionService connections,
+    OrgLoginService(OrgLoginProperties properties, TenantScope tenantScope, TenantDirectory tenants,
+            OrgConnectionService connections,
             OrgLoginStateRepository states, OrgSessionRepository sessions, OrgBindingRepository orgBindings,
             IdentityBindingService bindings, MemberService members, SecretResolver secrets,
             PlatformTokenIssuer tokens, AuditLogRepository audit, List<OrgPlatformClient> clients) {
         this.properties = properties;
         this.tenantScope = tenantScope;
+        this.tenants = tenants;
         this.connections = connections;
         this.states = states;
         this.sessions = sessions;
@@ -99,6 +103,7 @@ public class OrgLoginService {
     }
 
     Started start(TenantId tenant, UUID connectionId, boolean qr) {
+        requireActiveTenant(tenant);
         OrgConnection connection = enabledConnection(tenant, connectionId);
         if (!properties.isCallbackConfigured()) {
             throw OrgLoginException.notConfigured("platform.identity.org-login.callback-base-url");
@@ -116,6 +121,7 @@ public class OrgLoginService {
 
     SignedIn complete(TenantId tenant, UUID connectionId, String code, String state, String browserNonce) {
         String trace = UUID.randomUUID().toString();
+        requireActiveTenant(tenant);
         requireValidState(tenant, connectionId, state, browserNonce);
         OrgConnection connection = enabledConnection(tenant, connectionId);
         String secret = secrets.resolve(tenant, connection.secretRef())
@@ -230,6 +236,13 @@ public class OrgLoginService {
         tenantScope.run(connection.tenantId(), () -> audit.record(connection.tenantId(), SYSTEM_ACTOR,
                 ACTION_LOGIN_DENIED, "connection/" + connection.id() + " external=" + userId + " reason=" + reason,
                 trace));
+    }
+
+    /** 停用（suspended）、关闭或仍在开通中的租户一律不能免登；state 与授权码都不会被消耗。 */
+    private void requireActiveTenant(TenantId tenant) {
+        if (!tenants.isActive(tenant)) {
+            throw OrgLoginException.tenantUnavailable();
+        }
     }
 
     private OrgConnection enabledConnection(TenantId tenant, UUID connectionId) {

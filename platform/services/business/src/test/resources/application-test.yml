@@ -9,6 +9,10 @@ spring:
 platform:
   security:
     jwt-hmac-secret: test-only-secret-that-is-at-least-32-bytes-long
+  identity:
+    # 测试里不启动定时组织同步，由测试直接调用 OrgDirectorySyncService.runScheduledRound()。
+    org-sync:
+      enabled: false
   survey:
     reconcile:
       # 测试里不启动定时调度，由测试直接调用 PublishReconciler.runOnce()。

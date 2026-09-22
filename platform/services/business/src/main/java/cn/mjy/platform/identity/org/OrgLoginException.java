@@ -16,6 +16,7 @@ class OrgLoginException extends RuntimeException {
     static final String NOT_AUTHORIZED = "not_authorized";
     static final String SEAT_LIMIT = "seat_limit";
     static final String NOT_CONFIGURED = "not_configured";
+    static final String TENANT_UNAVAILABLE = "tenant_unavailable";
 
     private final HttpStatus status;
     private final String error;
@@ -38,6 +39,10 @@ class OrgLoginException extends RuntimeException {
     static OrgLoginException notAuthorized() {
         return new OrgLoginException(HttpStatus.FORBIDDEN, NOT_AUTHORIZED,
                 "this organisation member is not authorised for the tenant");
+    }
+
+    static OrgLoginException tenantUnavailable() {
+        return new OrgLoginException(HttpStatus.FORBIDDEN, TENANT_UNAVAILABLE, "the tenant is not active");
     }
 
     static OrgLoginException notConfigured(String what) {

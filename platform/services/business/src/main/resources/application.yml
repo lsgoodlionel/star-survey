@@ -33,6 +33,17 @@ platform:
       callback-base-url: ${PLATFORM_PUBLIC_BASE_URL:}
       token-ttl: ${PLATFORM_ORG_LOGIN_TOKEN_TTL:PT10M}
       state-ttl: PT5M
+    # 通讯录事件回调 /v1/org-events/{租户}/{连接}（ADR 0014 增补二）：Token 与加密密钥按连接的 eventTokenRef /
+    # eventKeyRef 从 PLATFORM_ORG_SECRET_<租户>_<密钥名> 解析。请求体上限与时间戳窗口如下。
+    org-events:
+      max-body-bytes: ${PLATFORM_ORG_EVENTS_MAX_BODY_BYTES:65536}
+      max-clock-skew: ${PLATFORM_ORG_EVENTS_MAX_CLOCK_SKEW:PT5M}
+    # 定时全量组织同步：默认关闭。只在开放平台明确答复"离职 / 禁用 / 不存在"时撤权。
+    org-sync:
+      enabled: ${PLATFORM_ORG_SYNC_ENABLED:false}
+      interval: ${PLATFORM_ORG_SYNC_INTERVAL:PT6H}
+      initial-delay: PT10M
+      batch-size: ${PLATFORM_ORG_SYNC_BATCH_SIZE:200}
   # 发布网关（契约 platform/contracts/publish-gateway-v1.md 及 v1.2 增补）。密钥至少 32 字节，与网关侧 PUBGW_SHARED_SECRET 相同；
   # 缺失时应用照常启动，但问卷发布一律 503（失败即关闭）。
   pubgw:

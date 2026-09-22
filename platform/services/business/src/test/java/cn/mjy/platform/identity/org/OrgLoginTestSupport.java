@@ -53,7 +53,11 @@ abstract class OrgLoginTestSupport {
         registry.add("platform.identity.org-login.dingtalk-api-base-url", () -> base + "/dingtalk");
         registry.add("platform.identity.org-login.dingtalk-oapi-base-url", () -> base + "/dingtalk-oapi");
         registry.add("platform.identity.org-login.feishu-api-base-url", () -> base + "/feishu");
+        // 小页，让同步测试真正跨页。
+        registry.add("platform.identity.org-sync.batch-size", () -> SYNC_BATCH_SIZE);
     }
+
+    static final int SYNC_BATCH_SIZE = 2;
 
     @Autowired
     MockMvc mvc;
@@ -183,6 +187,33 @@ abstract class OrgLoginTestSupport {
         tenantScope.run(tenant, () -> jdbc.sql(
                         "UPDATE org_login_state SET expires_at = now() - interval '1 second' WHERE state = :s")
                 .param("s", state).update());
+    }
+
+    /** 连接的事件订阅密钥：token 与加密密钥（企业微信 / 钉钉为 43 位 EncodingAESKey，飞书为任意 Encrypt Key）。 */
+    record EventSecrets(String token, String key) {
+    }
+
+    /** 给连接配置事件订阅：在密钥库里放 Token 与加密密钥，经 API 登记两个密钥名。 */
+    EventSecrets subscribeEvents(Org org) throws Exception {
+        byte[] raw = new byte[32];
+        new java.security.SecureRandom().nextBytes(raw);
+        String key = "feishu".equals(org.provider()) ? "ek-" + UUID.randomUUID()
+                : java.util.Base64.getEncoder().encodeToString(raw).substring(0, 43);
+        EventSecrets secretsOfOrg = new EventSecrets("tk" + UUID.randomUUID().toString().replace("-", ""), key);
+        String tokenRef = unique("EVT_TOKEN_").toUpperCase();
+        String keyRef = unique("EVT_KEY_").toUpperCase();
+        secrets.put(org.tenant(), tokenRef, secretsOfOrg.token());
+        secrets.put(org.tenant(), keyRef, secretsOfOrg.key());
+        mvc.perform(put("/v1/org-connections/" + org.connectionId())
+                        .header("Authorization", ownerBearer(org.tenant()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"eventTokenRef\":\"%s\",\"eventKeyRef\":\"%s\"}".formatted(tokenRef, keyRef)))
+                .andExpect(status().isOk());
+        return secretsOfOrg;
+    }
+
+    static String eventPath(Org org) {
+        return "/v1/org-events/" + org.tenant() + "/" + org.connectionId();
     }
 
     void disable(Org org) throws Exception {
