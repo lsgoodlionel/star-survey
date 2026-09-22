@@ -44,6 +44,17 @@ public class ResponseProjectionQuery {
      */
     public List<ResponseProjection> page(String engineInstanceId, long engineSid, ResponseState state,
             Position after, int limit) {
+        return page(engineInstanceId, engineSid, state, after, limit, null);
+    }
+
+    /**
+     * 同 {@link #page(String, long, ResponseState, Position, int)}，另加水位线：只要平台首次写入投影的时刻
+     * （{@code created_at}）不晚于 createdAtOrBefore 的行。答卷导出用它把快照固定在作业创建那一刻（ADR 0015）。
+     *
+     * @param createdAtOrBefore 水位线；{@code null} 表示不限
+     */
+    public List<ResponseProjection> page(String engineInstanceId, long engineSid, ResponseState state,
+            Position after, int limit, OffsetDateTime createdAtOrBefore) {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be positive");
         }
@@ -52,6 +63,7 @@ public class ResponseProjectionQuery {
                 + " WHERE engine_instance_id = :instance AND survey_id = :sid"
                 + (state != null ? " AND state = :state" : "")
                 + (after != null ? " AND (generation, response_id) > (:generation, :responseId)" : "")
+                + (createdAtOrBefore != null ? " AND created_at <= :watermark" : "")
                 + " ORDER BY generation, response_id LIMIT :limit";
         JdbcClient.StatementSpec statement = jdbc.sql(sql)
                 .param("instance", engineInstanceId)
@@ -62,6 +74,9 @@ public class ResponseProjectionQuery {
         }
         if (after != null) {
             statement = statement.param("generation", after.generation()).param("responseId", after.responseId());
+        }
+        if (createdAtOrBefore != null) {
+            statement = statement.param("watermark", createdAtOrBefore);
         }
         return statement.query(ResponseProjectionQuery::mapRow).list();
     }
