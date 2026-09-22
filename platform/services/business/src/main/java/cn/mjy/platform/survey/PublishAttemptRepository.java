@@ -3,6 +3,7 @@ package cn.mjy.platform.survey;
 import cn.mjy.platform.shared.TenantId;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -23,7 +24,8 @@ class PublishAttemptRepository {
 
     private static final String COLUMNS = """
             request_id, survey_id, draft_version, engine_instance_id, definition::text AS definition, outcome,
-            gateway_status, failed_stage, failures::text AS failures, orphan_engine_sid, tries""";
+            gateway_status, failed_stage, failures::text AS failures, orphan_engine_sid, tries, next_reconcile_at,
+            manual_review_at""";
 
     private final JdbcClient jdbc;
     private final JsonMapper json;
@@ -35,11 +37,11 @@ class PublishAttemptRepository {
 
     record AttemptRow(UUID requestId, UUID surveyId, int draftVersion, String engineInstanceId, String definition,
             String outcome, Integer gatewayStatus, String failedStage, List<String> failures,
-            Integer orphanEngineSid, int tries) {
+            Integer orphanEngineSid, int tries, OffsetDateTime nextReconcileAt, OffsetDateTime manualReviewAt) {
 
         PublishAttemptView view() {
             return new PublishAttemptView(requestId, engineInstanceId, draftVersion, outcome, gatewayStatus,
-                    failedStage, failures, orphanEngineSid, tries);
+                    failedStage, failures, orphanEngineSid, tries, nextReconcileAt, manualReviewAt);
         }
     }
 
@@ -108,7 +110,9 @@ class PublishAttemptRepository {
                 rs.getString("failed_stage"),
                 texts(rs.getString("failures")),
                 (Integer) rs.getObject("orphan_engine_sid"),
-                rs.getInt("tries"));
+                rs.getInt("tries"),
+                rs.getObject("next_reconcile_at", OffsetDateTime.class),
+                rs.getObject("manual_review_at", OffsetDateTime.class));
     }
 
     private List<String> texts(String array) {
