@@ -1,3 +1,11 @@
+spring:
+  datasource:
+    hikari:
+      # Spring 测试会缓存多个应用上下文，每个都有自己的连接池；默认 10 个连接乘以上下文数，
+      # 再加上并行车道共用同一个 PostgreSQL，会耗尽 max_connections。测试里用小池并及时回收空闲连接。
+      maximum-pool-size: 4
+      minimum-idle: 0
+      idle-timeout: 10000
 platform:
   security:
     jwt-hmac-secret: test-only-secret-that-is-at-least-32-bytes-long
