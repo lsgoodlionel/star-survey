@@ -1,4 +1,4 @@
-"""引擎的代码合法性规则（镜像自 application/models/Question.php 与 Answer.php）。
+r"""引擎的代码合法性规则（镜像自 application/models/Question.php 与 Answer.php）。
 
 为什么要在平台侧复制一遍：导入端在代码非法或冲突时会**自动改名**
 （import_helper.php:2646-2668、:2798-2822），改名之后平台的
