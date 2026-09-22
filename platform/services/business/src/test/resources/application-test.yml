@@ -15,3 +15,6 @@ platform:
       enabled: false
       max-attempts: 3
       batch-size: 1000
+    drift-check:
+      # 测试里不启动定时巡检，由测试直接调用 SurveyDriftService。
+      enabled: false

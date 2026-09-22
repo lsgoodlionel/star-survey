@@ -21,7 +21,10 @@ import org.springframework.stereotype.Component;
  * 否则说明同一 requestId 的另一次调用已经收尾（陈旧核对与原调用都返回时），直接返回当前状态，不重复记录。
  * <ul>
  *   <li>成功：写不可变的已发布版本与三段映射，经租户模块登记公开路由（公开 UUID → 实例 → sid），审计——同一事务；
- *       绑定与请求对不上、或路由登记失败时，整笔回滚并转为待核对（绝不留下"有版本没路由"的半成品）；</li>
+ *       已有在线版本时（重新发布，ADR 0012）不是登记而是<b>切换</b>路由：旧路由标记为被取代、新路由成为当前，
+ *       旧版本记入待收口——仍是同一事务，所以路由要么还指向旧版、要么已指向完整落库的新版。
+ *       绑定与请求对不上、或路由登记 / 切换失败时，整笔回滚并转为待核对（绝不留下"有版本没路由"的半成品，
+ *       旧版照旧在线）；事务提交之后才收口旧的引擎问卷（{@link SupersededVersionCloser}），收口失败不影响结论；</li>
  *   <li>失败（422/502）与拒收（400/401/404）：记录失败阶段与原因，问卷回到可再次发布，不登记路由；
  *       网关报告孤儿问卷时大声记日志并存档；</li>
  *   <li>未知：待核对，下次发布用同一 requestId 重试。</li>
@@ -42,10 +45,13 @@ class PublishSettlement {
     private final SurveyViews views;
     private final SurveyAudit audit;
     private final PublishApprovalGate approvalGate;
+    private final VersionRetirementRepository retirements;
+    private final SupersededVersionCloser closer;
 
     PublishSettlement(TenantScope tenantScope, SurveyRepository surveys, PublishAttemptRepository attempts,
             PublishedVersionRepository versions, SurveyRouteService routes, SurveyViews views, SurveyAudit audit,
-            PublishApprovalGate approvalGate) {
+            PublishApprovalGate approvalGate, VersionRetirementRepository retirements,
+            SupersededVersionCloser closer) {
         this.tenantScope = tenantScope;
         this.surveys = surveys;
         this.attempts = attempts;
@@ -54,6 +60,8 @@ class PublishSettlement {
         this.views = views;
         this.audit = audit;
         this.approvalGate = approvalGate;
+        this.retirements = retirements;
+        this.closer = closer;
     }
 
     /** 成功结局无法落地（绑定不符、路由登记失败）：整笔回滚后改记为待核对。 */
@@ -65,6 +73,14 @@ class PublishSettlement {
     }
 
     PublishOutcome settle(TenantContext ctx, Ticket ticket, GatewayOutcome outcome) {
+        PublishOutcome settled = settleOrPend(ctx, ticket, outcome);
+        if (settled.survey().status() == SurveyStatus.PUBLISHED) {
+            closer.closeRetired(ctx.tenantId(), ticket.surveyId());
+        }
+        return settled;
+    }
+
+    private PublishOutcome settleOrPend(TenantContext ctx, Ticket ticket, GatewayOutcome outcome) {
         try {
             return tenantScope.call(ctx.tenantId(), () -> settleLocked(ctx, ticket, outcome));
         } catch (UnrecordablePublishException e) {
@@ -83,7 +99,7 @@ class PublishSettlement {
             return current(row);
         }
         return switch (outcome) {
-            case GatewayOutcome.Published published -> recordPublished(ctx, ticket, published.result());
+            case GatewayOutcome.Published published -> recordPublished(ctx, ticket, published.result(), row);
             case GatewayOutcome.Failed failed -> recordFailed(ctx, ticket, failed.httpStatus(),
                     failed.result().failedStage(), failed.result().failures(), failed.result().orphanSurveyId());
             case GatewayOutcome.Refused refused -> recordFailed(ctx, ticket, refused.httpStatus(),
@@ -92,11 +108,15 @@ class PublishSettlement {
         };
     }
 
-    private PublishOutcome recordPublished(TenantContext ctx, Ticket ticket, GatewayResult result) {
+    private PublishOutcome recordPublished(TenantContext ctx, Ticket ticket, GatewayResult result, SurveyRow row) {
         GatewayBinding binding = requireMatchingBinding(ticket, result.binding());
         int versionNo = versions.insert(ctx.tenantId(), ticket.surveyId(), ticket.requestId(), ticket.draftVersion(),
                 ticket.definition(), binding, ctx.actorId());
-        registerRoute(ctx, ticket, binding);
+        if (row.publishedVersion() == null) {
+            registerRoute(ctx, ticket, binding);
+        } else {
+            switchRoute(ctx, ticket, binding, row.publishedVersion(), versionNo);
+        }
         attempts.complete(ticket.requestId(), PublishAttemptRepository.PUBLISHED, 200, null, List.of(), null);
         surveys.markSettled(ticket.surveyId(), SurveyStatus.PUBLISHED, versionNo);
         approvalGate.onPublished(ctx, ticket.surveyId(), ticket.draftVersion(), ticket.requestId());
@@ -114,6 +134,26 @@ class PublishSettlement {
         } catch (ConflictException | NotFoundException e) {
             throw new UnrecordablePublishException("route registration failed: " + e.getMessage());
         }
+    }
+
+    /** 重新发布：公开路由从在线版本切到新版本，在线版本记入待收口（同一事务）。 */
+    private void switchRoute(TenantContext ctx, Ticket ticket, GatewayBinding binding, int liveVersion,
+            int newVersion) {
+        PublishedVersionView live = versions.find(ticket.surveyId(), liveVersion)
+                .orElseThrow(() -> new UnrecordablePublishException("live version " + liveVersion + " is missing"));
+        if (live.engineInstanceId().equals(binding.engineInstance()) && live.engineSid() == binding.surveyId()) {
+            throw new UnrecordablePublishException("new version reuses the live engine survey sid=" + live.engineSid());
+        }
+        try {
+            routes.switchPublished(ctx.tenantId(), ticket.surveyId(), live.engineInstanceId(), live.engineSid(),
+                    binding.engineInstance(), binding.surveyId(), ctx.actorId(), ctx.traceId());
+        } catch (ConflictException | NotFoundException e) {
+            throw new UnrecordablePublishException("route switch failed: " + e.getMessage());
+        }
+        retirements.insert(ctx.tenantId(), ticket.surveyId(), liveVersion, newVersion, live.engineInstanceId(),
+                live.engineSid());
+        audit.record(ctx, SurveyAudit.ROUTE_SWITCH, ticket.surveyId(), "from=" + liveVersion + " sid="
+                + live.engineSid() + " to=" + newVersion + " sid=" + binding.surveyId());
     }
 
     /** 绑定必须对应本次请求：同一实例、同一定义 UUID、有效 sid、题目 UUID 合法。 */

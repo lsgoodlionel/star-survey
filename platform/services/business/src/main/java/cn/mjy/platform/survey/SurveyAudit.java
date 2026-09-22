@@ -17,6 +17,7 @@ class SurveyAudit {
     static final String PUBLISH = "survey.publish";
     static final String PUBLISH_FAILED = "survey.publish.failed";
     static final String PUBLISH_PENDING = "survey.publish.pending";
+    static final String ROUTE_SWITCH = "survey.publish.route_switch";
 
     private final AuditLogRepository auditLog;
 

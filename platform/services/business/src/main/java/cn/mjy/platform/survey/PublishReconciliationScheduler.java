@@ -8,7 +8,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
 /**
- * 定时触发发布核对。{@code platform.survey.reconcile.enabled=false} 时本类整个不装配（连同调度设施），
+ * 定时触发发布核对，以及被取代版本的收口重试（{@link SupersededVersionCloser}，ADR 0012）。{@code platform.survey.reconcile.enabled=false} 时本类整个不装配（连同调度设施），
  * 任务只能手动调用 {@link PublishReconciler#runOnce()}——测试配置即如此，避免后台线程与测试抢数据。
  * fixedDelay：上一轮结束后才开始计时，同一进程内不会重叠；多副本之间靠行锁（SKIP LOCKED）与收尾时的
  * requestId 校验保证只记录一次结局。
@@ -22,9 +22,11 @@ class PublishReconciliationScheduler {
     private static final Logger log = LoggerFactory.getLogger(PublishReconciliationScheduler.class);
 
     private final PublishReconciler reconciler;
+    private final SupersededVersionCloser closer;
 
-    PublishReconciliationScheduler(PublishReconciler reconciler) {
+    PublishReconciliationScheduler(PublishReconciler reconciler, SupersededVersionCloser closer) {
         this.reconciler = reconciler;
+        this.closer = closer;
     }
 
     @Scheduled(fixedDelayString = "${platform.survey.reconcile.interval:PT1M}",
@@ -34,6 +36,11 @@ class PublishReconciliationScheduler {
             reconciler.runOnce();
         } catch (RuntimeException e) {
             log.error("publish reconciliation round failed", e);
+        }
+        try {
+            closer.runOnce();
+        } catch (RuntimeException e) {
+            log.error("superseded version closing round failed", e);
         }
     }
 }

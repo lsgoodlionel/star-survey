@@ -1,6 +1,10 @@
 package cn.mjy.platform.survey;
 
+import cn.mjy.platform.survey.gateway.CloseOutcome;
+import cn.mjy.platform.survey.gateway.DriftOutcome;
 import cn.mjy.platform.survey.gateway.GatewayBinding;
+import cn.mjy.platform.survey.gateway.GatewayCloseRequest;
+import cn.mjy.platform.survey.gateway.GatewayDriftRequest;
 import cn.mjy.platform.survey.gateway.GatewayOutcome;
 import cn.mjy.platform.survey.gateway.GatewayRequest;
 import cn.mjy.platform.survey.gateway.GatewayResult;
@@ -8,6 +12,7 @@ import cn.mjy.platform.survey.gateway.PublishGatewayClient;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -40,6 +45,10 @@ public class FakePublishGateway implements PublishGatewayClient {
     private final Map<UUID, GatewayOutcome> resultsByRequestId = new ConcurrentHashMap<>();
     private final Map<UUID, CountDownLatch> holds = new ConcurrentHashMap<>();
     private final Map<UUID, CountDownLatch> entered = new ConcurrentHashMap<>();
+    private final List<GatewayCloseRequest> closeCalls = new CopyOnWriteArrayList<>();
+    private final Set<Integer> failingCloses = ConcurrentHashMap.newKeySet();
+    private final List<GatewayDriftRequest> driftCalls = new CopyOnWriteArrayList<>();
+    private final Map<Integer, Function<GatewayDriftRequest, DriftOutcome>> driftScripts = new ConcurrentHashMap<>();
 
     public FakePublishGateway(JsonMapper json) {
         this.json = json;
@@ -70,6 +79,47 @@ public class FakePublishGateway implements PublishGatewayClient {
             resultsByRequestId.put(request.requestId(), outcome);
         }
         return outcome;
+    }
+
+    /** 收口：按 sid 记录调用；被 {@link #failClose} 标记的 sid 返回失败，其余一律已收口。 */
+    @Override
+    public CloseOutcome close(GatewayCloseRequest request) {
+        closeCalls.add(request);
+        if (failingCloses.contains(request.surveyId())) {
+            return new CloseOutcome.NotClosed("http 502 engine_error");
+        }
+        return new CloseOutcome.Closed("2026-09-21 08:00:00", false);
+    }
+
+    /** 漂移检查：按 sid 记录调用；未编排时一律 match（当前指纹即期望指纹）。 */
+    @Override
+    public DriftOutcome driftCheck(GatewayDriftRequest request) {
+        driftCalls.add(request);
+        Function<GatewayDriftRequest, DriftOutcome> script = driftScripts.get(request.surveyId());
+        if (script != null) {
+            return script.apply(request);
+        }
+        return new DriftOutcome.Checked(false, request.expectedFingerprint(), "Y", List.of(), List.of());
+    }
+
+    public void failClose(int sid) {
+        failingCloses.add(sid);
+    }
+
+    public void allowClose(int sid) {
+        failingCloses.remove(sid);
+    }
+
+    public List<GatewayCloseRequest> closeCallsFor(int sid) {
+        return closeCalls.stream().filter(call -> call.surveyId() == sid).toList();
+    }
+
+    public void scriptDrift(int sid, Function<GatewayDriftRequest, DriftOutcome> behaviour) {
+        driftScripts.put(sid, behaviour);
+    }
+
+    public List<GatewayDriftRequest> driftCallsFor(int sid) {
+        return driftCalls.stream().filter(call -> call.surveyId() == sid).toList();
     }
 
     /** 为某份问卷指定应答；未指定时一律成功。 */

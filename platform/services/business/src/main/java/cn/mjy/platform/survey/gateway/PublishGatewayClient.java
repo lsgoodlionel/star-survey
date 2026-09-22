@@ -10,4 +10,10 @@ public interface PublishGatewayClient {
     boolean isConfigured();
 
     GatewayOutcome publish(GatewayRequest request);
+
+    /** 收口被取代的引擎问卷（v1.2）。同样不抛异常，拿不准一律 {@link CloseOutcome.NotClosed}。 */
+    CloseOutcome close(GatewayCloseRequest request);
+
+    /** 只读漂移检查（v1.2）。同样不抛异常，拿不准一律 {@link DriftOutcome.Unavailable}。 */
+    DriftOutcome driftCheck(GatewayDriftRequest request);
 }

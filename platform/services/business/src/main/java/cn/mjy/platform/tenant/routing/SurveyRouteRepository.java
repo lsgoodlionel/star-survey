@@ -8,7 +8,10 @@ import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
-/** survey_route 表的读写。必须在 {@code TenantScope} 内调用，可见范围由行级安全决定。 */
+/**
+ * survey_route 表的读写。必须在 {@code TenantScope} 内调用，可见范围由行级安全决定。
+ * 一个公开 UUID 可以有多条路由（每次重新发布一条），其中 superseded_at 为空的一条是当前路由（ADR 0012）。
+ */
 @Repository
 public class SurveyRouteRepository {
 
@@ -58,13 +61,37 @@ public class SurveyRouteRepository {
                 .optional();
     }
 
+    /** 公开 UUID 的当前路由（被重新发布取代的旧路由不算，ADR 0012）。 */
     public Optional<SurveyRoute> findByPublicId(UUID publicId) {
-        return jdbc.sql("SELECT " + COLUMNS + " FROM survey_route WHERE public_id = :id")
+        return jdbc.sql("SELECT " + COLUMNS + " FROM survey_route WHERE public_id = :id AND superseded_at IS NULL")
                 .param("id", publicId)
                 .query(SurveyRouteRepository::map)
                 .optional();
     }
 
+    /** 同上，但对这一行加锁：切换路由时与并发的切换串行化。 */
+    public Optional<SurveyRoute> lockCurrent(UUID publicId) {
+        return jdbc.sql("SELECT " + COLUMNS
+                        + " FROM survey_route WHERE public_id = :id AND superseded_at IS NULL FOR UPDATE")
+                .param("id", publicId)
+                .query(SurveyRouteRepository::map)
+                .optional();
+    }
+
+    /** 把 (实例, sid) 这条当前路由标记为被取代；返回是否确实标记了一行。 */
+    public boolean supersede(UUID publicId, String instanceId, int sid) {
+        return jdbc.sql("""
+                        UPDATE survey_route SET superseded_at = now()
+                         WHERE public_id = :id AND engine_instance_id = :instance AND engine_sid = :sid
+                           AND superseded_at IS NULL
+                        """)
+                .param("id", publicId)
+                .param("instance", instanceId)
+                .param("sid", sid)
+                .update() == 1;
+    }
+
+    /** 按 (实例, sid) 反查，包括已被取代的路由：旧版本的答卷仍属于同一个公开 UUID。 */
     public Optional<SurveyRoute> findByEngine(String instanceId, int sid) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM survey_route WHERE engine_instance_id = :instance AND engine_sid = :sid")
                 .param("instance", instanceId)

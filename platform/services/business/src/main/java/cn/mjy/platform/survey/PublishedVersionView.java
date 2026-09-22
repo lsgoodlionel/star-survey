@@ -8,6 +8,10 @@ import tools.jackson.databind.JsonNode;
 /**
  * 不可变的已发布版本：当时发给网关的定义快照、绑定（实例、sid、指纹、编译器版本）
  * 以及"题目 UUID → 题目代码 → 答卷列名"映射。
+ *
+ * <p>另附三项随时间变化的状态（ADR 0012）：live——公开路由此刻是否指向本版本；supersededAt——被哪次重新发布
+ * 取代的时刻（在线版本为空）；engineClosedAt——引擎里的旧问卷确认已收口（过期）的时刻，为空表示旧 sid
+ * 仍能直接作答。
  */
 public record PublishedVersionView(
         UUID surveyId,
@@ -24,7 +28,10 @@ public record PublishedVersionView(
         String publishedBy,
         OffsetDateTime publishedAt,
         List<QuestionFieldView> fields,
-        JsonNode definition) {
+        JsonNode definition,
+        boolean live,
+        OffsetDateTime supersededAt,
+        OffsetDateTime engineClosedAt) {
 
     public PublishedVersionView {
         fields = List.copyOf(fields);

@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 public class SurveyRouteService {
 
     private static final String ACTION_CREATE = "survey_route.create";
+    private static final String ACTION_SWITCH = "survey_route.switch";
 
     private final TenantScope tenantScope;
     private final SurveyRouteRepository routes;
@@ -67,6 +68,34 @@ public class SurveyRouteService {
                     .filter(existing -> existing.engineInstanceId().equals(instanceId) && existing.engineSid() == sid)
                     .orElseThrow(() -> new ConflictException(
                             "public id or engine survey is already routed elsewhere: " + publicId));
+        });
+    }
+
+    /**
+     * 重新发布专用：把公开 UUID 的当前路由从 (fromInstance, fromSid) 原子地换到 (toInstance, toSid)（ADR 0012）。
+     * 旧路由只标记为被取代、不删除，旧 sid 仍能反查到公开 UUID。幂等：当前路由已经是目标时原样返回。
+     * 当前路由不是 from（别人已经切过或从未登记）、或目标 (实例, sid) 已挂在别处时 409。
+     * 在调用方事务内执行时与之同成同败。
+     */
+    public SurveyRoute switchPublished(TenantId tenant, UUID publicId, String fromInstance, int fromSid,
+                                       String toInstance, int toSid, String actorId, String traceId) {
+        return tenantScope.call(tenant, () -> {
+            requireActiveInstance(toInstance);
+            SurveyRoute current = routes.lockCurrent(publicId)
+                    .orElseThrow(() -> new ConflictException("survey has no current route: " + publicId));
+            if (current.engineInstanceId().equals(toInstance) && current.engineSid() == toSid) {
+                return current;
+            }
+            if (!current.engineInstanceId().equals(fromInstance) || current.engineSid() != fromSid
+                    || !routes.supersede(publicId, fromInstance, fromSid)) {
+                throw new ConflictException("current route of " + publicId + " is not " + fromInstance + "/" + fromSid);
+            }
+            SurveyRoute switched = routes.insertWithPublicIdIfAbsent(tenant, publicId, toInstance, toSid)
+                    .orElseThrow(() -> new ConflictException(
+                            "engine survey " + toInstance + "/" + toSid + " is already routed elsewhere"));
+            audit.record(tenant, actorId, ACTION_SWITCH, "survey_route/" + publicId + " from=" + fromInstance + "/"
+                    + fromSid + " to=" + toInstance + "/" + toSid, traceId);
+            return switched;
         });
     }
 

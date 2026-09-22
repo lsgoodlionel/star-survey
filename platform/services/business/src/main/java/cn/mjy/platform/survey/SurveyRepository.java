@@ -18,7 +18,9 @@ class SurveyRepository {
 
     private static final String COLUMNS = """
             id, title, status, draft_version, draft_definition::text AS draft_definition,
-            current_request_id, published_version""";
+            current_request_id, published_version,
+            (SELECT v.draft_version FROM survey_published_version v
+              WHERE v.survey_id = survey.id AND v.version_no = survey.published_version) AS live_draft_version""";
 
     private final JdbcClient jdbc;
 
@@ -26,9 +28,18 @@ class SurveyRepository {
         this.jdbc = jdbc;
     }
 
-    /** 一行问卷。stale 仅在 {@link #lock} 时计算：publishing 已超过给定时长仍未收尾。 */
+    /**
+     * 一行问卷。stale 仅在 {@link #lock} 时计算：publishing 已超过给定时长仍未收尾。
+     * publishedVersion 是当前在线（被公开路由指向）的版本，liveDraftVersion 是它发布自哪个草稿版本；
+     * 从未发布过时两者都为空。
+     */
     record SurveyRow(UUID id, String title, SurveyStatus status, int draftVersion, String draftDefinition,
-            UUID currentRequestId, Integer publishedVersion, boolean stale) {
+            UUID currentRequestId, Integer publishedVersion, Integer liveDraftVersion, boolean stale) {
+
+        /** 已有在线版本，且草稿就是它发布时的那一版：没有可以重新发布的改动。 */
+        boolean liveVersionIsCurrentDraft() {
+            return liveDraftVersion != null && liveDraftVersion == draftVersion;
+        }
     }
 
     void insert(TenantId tenant, UUID id, String title, String definition, String createdBy) {
@@ -116,6 +127,7 @@ class SurveyRepository {
                 rs.getString("draft_definition"),
                 rs.getObject("current_request_id", UUID.class),
                 (Integer) rs.getObject("published_version"),
+                (Integer) rs.getObject("live_draft_version"),
                 rs.getBoolean("stale"));
     }
 }
