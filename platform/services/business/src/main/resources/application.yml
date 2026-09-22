@@ -32,3 +32,13 @@ platform:
     secret: ${PLATFORM_PUBGW_SECRET:}
     # 须大于网关跑完七个阶段所需的时间；超时只代表"结果未知"，之后以同一 requestId 核对。
     timeout-seconds: ${PLATFORM_PUBGW_TIMEOUT_SECONDS:120}
+  # 待核对发布的后台核对（PublishReconciler）：用同一 requestId 原样重发，靠网关幂等拿到确定结局。
+  survey:
+    reconcile:
+      enabled: ${PLATFORM_SURVEY_RECONCILE_ENABLED:true}
+      interval: ${PLATFORM_SURVEY_RECONCILE_INTERVAL:PT1M}
+      initial-delay: PT30S
+      batch-size: ${PLATFORM_SURVEY_RECONCILE_BATCH_SIZE:50}
+      max-attempts: ${PLATFORM_SURVEY_RECONCILE_MAX_ATTEMPTS:8}
+      backoff-initial: PT1M
+      backoff-max: PT30M

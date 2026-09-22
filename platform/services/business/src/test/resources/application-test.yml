@@ -1,3 +1,9 @@
 platform:
   security:
     jwt-hmac-secret: test-only-secret-that-is-at-least-32-bytes-long
+  survey:
+    reconcile:
+      # 测试里不启动定时调度，由测试直接调用 PublishReconciler.runOnce()。
+      enabled: false
+      max-attempts: 3
+      batch-size: 1000
