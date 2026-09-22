@@ -3,6 +3,8 @@
 平台业务服务（Java）通过这个内部 HTTP 接口，请发布网关（Python，`platform/tools/publish-gateway`）
 把一份问卷定义发布到某个引擎实例。两端各自以本文件为准实现与测试；改动须同步两端并升版本。
 
+> 向后兼容增补 [v1.2](publish-gateway-v1.2.md)：`POST /v1/close`（收口被取代的版本）与 `POST /v1/drift-check`（漂移检查）。
+
 ## 部署与信任边界
 
 - 网关是内部服务，只接受平台调用，不对公网开放。

@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 
 from pubgw import server
 from pubgw.server import MAX_BODY_BYTES, build_server, load_settings
@@ -168,6 +169,43 @@ class PublishOverHttpTest(ServerTestCase):
         ]
         for status, _, body in responses:
             self.assertNotIn(ENGINE_PASSWORD, json.dumps(body))
+
+
+class OperationsOverHttpTest(ServerTestCase):
+    """契约 v1.2 的两个接口走同一个 HTTP 外壳（同样的大小限制、同样的认证）。"""
+
+    def post(self, path, payload):
+        body = encode(payload)
+        status, _, raw = self.server.request("POST", path, body, now_headers(body))
+        return status, json.loads(raw)
+
+    def test_close_and_drift_check_are_routed(self):
+        _, _, published = self.server.publish()
+        binding = published["result"]["binding"]
+
+        status, closed = self.post("/v1/close", {"requestId": str(uuid.uuid4()),
+                                                 "engineInstanceId": binding["engineInstance"],
+                                                 "surveyId": binding["surveyId"]})
+        self.assertEqual((200, "closed"), (status, closed["status"]))
+
+        status, checked = self.post("/v1/drift-check", {"engineInstanceId": binding["engineInstance"],
+                                                        "surveyId": binding["surveyId"],
+                                                        "expectedFingerprint": binding["fingerprint"],
+                                                        "binding": binding})
+        self.assertEqual((200, "match"), (status, checked["status"]))
+
+    def test_get_on_the_new_paths_is_405(self):
+        for path in ("/v1/close", "/v1/drift-check"):
+            with self.subTest(path=path):
+                status, _, _ = self.server.request("GET", path)
+                self.assertEqual(405, status)
+
+    def test_unsigned_close_is_401(self):
+        body = encode({"requestId": str(uuid.uuid4()), "engineInstanceId": "hd-engine-01", "surveyId": 1})
+        status, _, _ = self.server.request("POST", "/v1/close", body, {"Content-Type": "application/json"})
+
+        self.assertEqual(401, status)
+        self.assertEqual([], self.engine.calls)
 
 
 class ConcurrentOverHttpTest(ServerTestCase):

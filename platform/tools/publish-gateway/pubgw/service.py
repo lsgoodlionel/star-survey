@@ -16,20 +16,27 @@
 
 口令防线：响应体在出门前把所有已配置的引擎口令（原文、repr 与 JSON 转义形式）替换成
 ``***``，即使引擎把口令写进了错误信息也不会外泄。
+
+契约 v1.2 增补的 ``POST /v1/close`` 与 ``POST /v1/drift-check`` 走同样的认证、实例解析与口令防线；
+两者天然幂等（收口重复无害、漂移检查只读），不进 requestId 结果存档。
 """
 
 import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from .auth import SIGNATURE_HEADER, TIMESTAMP_HEADER, AuthError, verify
+from .close import CloseError, close_survey
+from .drift_check import check_published_survey
 from .engines import EngineConfig
 from .model import DefinitionError, SurveyDefinition
+from .ops_request import parse_close_request, parse_drift_request
 from .publish import PublishResult, Publisher
 from .request import InvalidRequest, PublishRequest, parse_request
-from .rpc import HttpTransport, RemoteControlClient, Transport
+from .rpc import HttpTransport, RemoteControlClient, RpcError, Transport
 from .store import InFlight, ResultStore, StoredResult
 
 log = logging.getLogger("pubgw.service")
@@ -85,6 +92,69 @@ class PublishService:
     # ------------------------------------------------------------ 入口
 
     def publish(self, headers: Mapping[str, str], body: bytes) -> Response:
+        rejected = self._authenticate("publish", headers, body)
+        if rejected is not None:
+            return rejected
+        try:
+            request = parse_request(body)
+        except InvalidRequest as error:
+            log.info("rejected publish request: %s", error)
+            return self._invalid()
+        return self._publish(request)
+
+    def close(self, headers: Mapping[str, str], body: bytes) -> Response:
+        """``POST /v1/close``：让一份被取代的已发布问卷不再接收新答卷（设过期，不停用、不删除）。"""
+        rejected = self._authenticate("close", headers, body)
+        if rejected is not None:
+            return rejected
+        try:
+            request = parse_close_request(body)
+        except InvalidRequest as error:
+            log.info("rejected close request: %s", error)
+            return self._invalid()
+        engine = self._engines.get(request.engine_instance_id)
+        if engine is None:
+            return self._json(404, {"error": "unknown_engine_instance"})
+
+        key = ("close", engine.instance_id, request.survey_id)
+        if not self._locks.try_acquire(key):
+            return self._json(409, {"status": "conflict", "error": "close_in_progress"})
+        try:
+            return self._with_engine(engine, request.request_id, "close sid={}".format(request.survey_id),
+                                     lambda client: self._close(client, request.survey_id))
+        finally:
+            self._locks.release(key)
+
+    def drift_check(self, headers: Mapping[str, str], body: bytes) -> Response:
+        """``POST /v1/drift-check``：只读回引擎，报告与期望指纹是否一致。"""
+        rejected = self._authenticate("drift-check", headers, body)
+        if rejected is not None:
+            return rejected
+        try:
+            request = parse_drift_request(body)
+        except InvalidRequest as error:
+            log.info("rejected drift-check request: %s", error)
+            return self._invalid()
+        engine = self._engines.get(request.engine_instance_id)
+        if engine is None:
+            return self._json(404, {"error": "unknown_engine_instance"})
+
+        def run(client: RemoteControlClient) -> Response:
+            result = check_published_survey(
+                client, request.survey_id, request.expected_fingerprint, request.binding)
+            level = logging.WARNING if result.drifted else logging.INFO
+            log.log(level, "drift-check %s sid=%s: %s -> %s (%d issue(s))", engine.instance_id,
+                    request.survey_id, request.expected_fingerprint, result.current_fingerprint,
+                    len(result.issues))
+            status = "drift" if result.drifted else "match"
+            return self._json(200, {"status": status, "result": result.to_dict()})
+
+        return self._with_engine(engine, "-", "drift-check sid={}".format(request.survey_id), run)
+
+    # ------------------------------------------------------------ 公共零件
+
+    def _authenticate(self, operation: str, headers: Mapping[str, str], body: bytes) -> Optional[Response]:
+        """HMAC 与 Content-Type；不通过时返回应答（401 / 400），通过时返回 None。"""
         lowered = {str(name).lower(): value for name, value in headers.items()}
         try:
             verify(
@@ -95,18 +165,38 @@ class PublishService:
                 self._now(),
             )
         except AuthError as error:
-            log.warning("rejected unauthenticated publish request: %s", error.reason)
+            log.warning("rejected unauthenticated %s request: %s", operation, error.reason)
             return self._json(401, {"error": error.reason})
-
         if not _is_json_media_type(lowered.get("content-type", "")):
-            log.info("rejected publish request: content type %r", lowered.get("content-type"))
+            log.info("rejected %s request: content type %r", operation, lowered.get("content-type"))
             return self._invalid()
+        return None
+
+    def _with_engine(self, engine: EngineConfig, request_id: str, label: str,
+                     action: Callable[[RemoteControlClient], Response]) -> Response:
+        """在一次引擎会话里执行 action：引擎失败 502（脱敏），网关自身缺陷 500，会话总会释放。"""
+        client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
         try:
-            request = parse_request(body)
-        except InvalidRequest as error:
-            log.info("rejected publish request: %s", error)
-            return self._invalid()
-        return self._publish(request)
+            return action(client)
+        except CloseError as error:
+            log.warning("request %s: %s on %s failed: %s", request_id, label, engine.instance_id,
+                        self._redact(str(error)))
+            return self._json(502, {"status": "failed", "error": error.code, "detail": error.detail})
+        except RpcError as error:
+            log.warning("request %s: %s on %s failed: %s", request_id, label, engine.instance_id,
+                        self._redact(str(error)))
+            return self._json(502, {"status": "failed", "error": "engine_error", "detail": str(error)})
+        except Exception:  # noqa: BLE001 — 网关自身缺陷：记日志，对外只说 internal_error
+            log.exception("request %s: unexpected error during %s on %s", request_id, label, engine.instance_id)
+            return self._json(500, {"error": "internal_error"})
+        finally:
+            _logout(client, request_id)
+
+    def _close(self, client: RemoteControlClient, survey_id: int) -> Response:
+        now = datetime.fromtimestamp(self._now(), tz=timezone.utc)
+        result = close_survey(client, survey_id, now)
+        log.info("closed sid=%s (expires=%s, alreadyClosed=%s)", survey_id, result.expires, result.already_closed)
+        return self._json(200, {"status": "closed", "result": result.to_dict()})
 
     # ------------------------------------------------------------ 流程
 
