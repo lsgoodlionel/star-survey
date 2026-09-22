@@ -82,3 +82,18 @@
 - 租户停用（suspended）时拒绝免登需要租户模块提供状态查询契约。
 - 企业微信"扫码登录"`mode=qr` 只生成了登录页地址，未在替身里单独覆盖。
 - 飞书 v2 token 接口已提示迁移到 accounts.feishu.cn/oauth/v3/token，真实接入前复核。
+
+## 增补一（第三波）：身份绑定接口的权限
+
+`/v1/identity-bindings`（P1 起没有权限判定）收紧如下，判定在 `IdentityBindingService` 的带上下文方法里，由 access 模块按成员与授权数据判定（令牌 `roles` 声明不参与）：
+
+| 操作 | 要求 |
+|---|---|
+| `POST /v1/identity-bindings` 建绑定 | 租户级 `manage-members`（只在项目上有该权限的项目管理者不算） |
+| `GET /v1/identity-bindings?provider&appId&externalId` 按身份反查 | 租户级 `manage-members`（反查即枚举，不对本人开放） |
+| `GET /v1/identity-bindings/{principalId}` | 本人，或租户级 `manage-members` |
+
+- **"本人"的判定**：已验签令牌的 `sub` 与路径中主体标识的规范（小写）字符串逐字相等。组织免登签发的令牌 `sub` 即主体标识，且带 `sid`、每个请求另有会话撤销检查；外部签发方若也以主体标识作 `sub` 则同样适用。不做大小写归一，避免同一主体的多种写法。
+- 判定先于查询：无权者对存在与不存在的主体一律 403，不给出存在性线索；跨租户仍由行级安全表现为 404。
+- 只带租户标识的服务方法保留给系统流程（免登、同步、预授权），不做判定，由调用方负责。
+- `GET /v1/me` 只回显调用者自己令牌里的租户、主体与声明，不读任何租户数据，不需要额外判定；组织连接各端点此前已按 `manage-settings` / `manage-members` 判定。

@@ -314,7 +314,12 @@ class OrgLoginFlowTest extends OrgLoginTestSupport {
         String tokenB = login(inB, userId);
 
         assertThat(subject(tokenA)).isNotEqualTo(subject(tokenB));
+        // B 的主体只能读自己的绑定；读别人的需要管理成员权限——即使 B 的管理员也看不到 A 的主体。
+        mvc.perform(get("/v1/identity-bindings/" + subject(tokenB)).header("Authorization", "Bearer " + tokenB))
+                .andExpect(status().isOk());
         mvc.perform(get("/v1/identity-bindings/" + subject(tokenA)).header("Authorization", "Bearer " + tokenB))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/v1/identity-bindings/" + subject(tokenA)).header("Authorization", ownerBearer(tenantB)))
                 .andExpect(status().isNotFound());
     }
 
