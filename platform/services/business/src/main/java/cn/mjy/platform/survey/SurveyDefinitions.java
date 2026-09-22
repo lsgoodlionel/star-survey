@@ -25,7 +25,8 @@ public class SurveyDefinitions {
 
     /** 网关请求体上限 1 MiB（契约），给信封（requestId、实例标识）留出余量。 */
     static final int MAX_DEFINITION_BYTES = 1024 * 1024 - 4096;
-    static final int DEFINITION_VERSION = 1;
+    /** 网关支持的定义版本：1 为基础格式，2 在其上加入逻辑 DSL（契约 survey-logic-dsl-v1）。 */
+    static final Set<Integer> DEFINITION_VERSIONS = Set.of(1, 2);
 
     private final JsonMapper json;
 
@@ -66,8 +67,8 @@ public class SurveyDefinitions {
 
     private static void checkTopLevel(JsonNode definition, List<String> problems) {
         JsonNode version = definition.get("definitionVersion");
-        if (version == null || !version.isIntegralNumber() || version.intValue() != DEFINITION_VERSION) {
-            problems.add("definitionVersion must be " + DEFINITION_VERSION);
+        if (version == null || !version.isIntegralNumber() || !DEFINITION_VERSIONS.contains(version.intValue())) {
+            problems.add("definitionVersion must be 1 or 2");
         }
         requireText(definition, "title", "definition", problems);
         requireText(definition, "language", "definition", problems);

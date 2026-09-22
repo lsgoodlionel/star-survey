@@ -114,9 +114,20 @@ class SurveyDraftTest {
     }
 
     @Test
-    void aMalformedDefinitionIsRejectedWithEveryProblemListed() {
+    void aVersionTwoDefinitionWithLogicIsAccepted() {
+        // v2 加入了逻辑 DSL（契约 survey-logic-dsl-v1）；逻辑本身由网关在发布时校验，平台只放行版本号。
         ObjectNode definition = fixture.definition();
         definition.put("definitionVersion", 2);
+
+        DraftView saved = surveys.saveDraft(ws.owner(), created.id(), 1, definition);
+
+        assertThat(saved.definition().get("definitionVersion").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void aMalformedDefinitionIsRejectedWithEveryProblemListed() {
+        ObjectNode definition = fixture.definition();
+        definition.put("definitionVersion", 3);
         definition.remove("title");
         definition.putArray("groups");
 
