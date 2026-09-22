@@ -19,6 +19,9 @@ class AccessAudit {
     static final String MEMBER_REMOVE = "access.member.remove";
     static final String OWNER_BOOTSTRAP = "access.owner.bootstrap";
     static final String SETTINGS_PUBLISH_APPROVAL = "access.settings.publish_approval";
+    static final String RESOURCE_CREATE = "access.resource.create";
+    static final String RESOURCE_RENAME = "access.resource.rename";
+    static final String RESOURCE_MOVE = "access.resource.move";
 
     private final AuditLogRepository auditLog;
 

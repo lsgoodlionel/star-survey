@@ -9,7 +9,8 @@
 
 * ``operator``：运营开通租户、发布含 ``member.seats`` 的套餐、开通订阅与所有者、启用租户、
   登记引擎实例，并签发该实例的事件密钥（只写入权限 0600 的文件，从不打印）；
-* ``owner-publish``：所有者建问卷、存草稿、发布，并核对状态、已发布版本与公开路由；
+* ``owner-project``：所有者经资源树接口建项目（创建者获得项目授权），并在可见列表里找到它；
+* ``owner-publish``：所有者在该项目下建问卷、存草稿、发布，并核对状态、已发布版本与公开路由；
 * ``republish``：再次发布同一问卷必须 409 already_published。
 
 密钥只从环境变量 ``PLATFORM_JWT_HMAC_SECRET`` 读取。
@@ -177,6 +178,29 @@ def cmd_operator(args: argparse.Namespace) -> None:
     save_state(Path(args.state), {"tenantId": tenant_id, "ownerActor": OWNER_ACTOR, "instance": args.instance})
 
 
+def cmd_owner_project(args: argparse.Namespace) -> None:
+    state_path = Path(args.state)
+    state = load_state(state_path)
+    owner = owner_api(args, state)
+
+    status, project = owner.call("POST", "/v1/projects", {"name": "P1 e2e project"})
+    expect(status == 201 and isinstance(project, dict) and project.get("kind") == "project"
+           and project.get("parentId") is None and project.get("name") == "P1 e2e project",
+           "owner creates project via POST /v1/projects -> 201", "{} {}".format(status, _brief(project)))
+    project_id = project["id"]
+
+    status, fetched = owner.call("GET", "/v1/resources/{}".format(project_id))
+    expect(status == 200 and isinstance(fetched, dict) and fetched.get("id") == project_id,
+           "GET /v1/resources/{id} -> 200 the project", "{} {}".format(status, _brief(fetched)))
+
+    status, page = owner.call("GET", "/v1/resources")
+    items = page.get("items") if isinstance(page, dict) else None
+    expect(status == 200 and isinstance(items, list) and [i.get("id") for i in items] == [project_id],
+           "GET /v1/resources -> exactly the new project", "{} {}".format(status, _brief(page)))
+
+    save_state(state_path, dict(state, projectId=project_id))
+
+
 def cmd_owner_publish(args: argparse.Namespace) -> None:
     state_path = Path(args.state)
     state = load_state(state_path)
@@ -185,7 +209,7 @@ def cmd_owner_publish(args: argparse.Namespace) -> None:
         definition = json.load(handle)
 
     placeholder = dict(definition, title="P1 e2e placeholder")
-    status, created = owner.call("POST", "/v1/surveys", {"parentId": args.project, "definition": placeholder})
+    status, created = owner.call("POST", "/v1/surveys", {"parentId": state["projectId"], "definition": placeholder})
     expect(status == 201 and isinstance(created, dict) and created.get("status") == "draft",
            "owner creates survey under project -> 201 draft", "{} {}".format(status, _brief(created)))
     survey_id = created["id"]
@@ -251,8 +275,10 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     operator.add_argument("--secret-file", required=True, help="written with mode 0600; never printed")
     operator.set_defaults(handler=cmd_operator)
 
+    project = commands.add_parser("owner-project")
+    project.set_defaults(handler=cmd_owner_project)
+
     publish = commands.add_parser("owner-publish")
-    publish.add_argument("--project", required=True)
     publish.add_argument("--definition", required=True)
     publish.set_defaults(handler=cmd_owner_publish)
 
