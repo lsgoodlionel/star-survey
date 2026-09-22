@@ -14,8 +14,8 @@
 #   operator: tenant -> plan (member.seats) -> onboarding -> active -> engine instance
 #             hd-engine-01 -> per-instance event secret (never printed)
 #   engine:   fresh test stack with MjyPlatformBridge on, configured with that secret
-#   owner:    survey under a project -> draft = fixture -> publish 200 -> versions,
-#             public route, survey active in the engine
+#   owner:    project via POST /v1/projects -> survey under it -> draft = fixture ->
+#             publish 200 -> versions, public route, survey active in the engine
 #   respondent: completes the survey over HTTP; engine cron relays the events and the
 #             platform projects the response as engine_completed
 #   idempotency: publish again -> 409 already_published, gateway not called again
@@ -254,15 +254,11 @@ wait_healthy gateway "$GATEWAY_URL/healthz" "$GATEWAY_HEALTH_ATTEMPTS" "$GATEWAY
 ok "gateway healthy"
 
 step "owner: create, draft, publish, verify"
-# There is no project API yet (P1 gap): seed the project node of the access tree
-# the same way the tests do (AccessResources.register), inside the tenant's scope.
-PROJECT_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-platform_tenant_sql "$TENANT_ID" "INSERT INTO access_resource (tenant_id, id, kind, parent_id, name)
-  VALUES ('$TENANT_ID', '$PROJECT_ID', 'project', NULL, 'P1 e2e project');"
-ok "project $PROJECT_ID seeded in the access resource tree"
+python3 "$DRIVER" --base-url "$PLATFORM_URL" --state "$STATE" owner-project
+PROJECT_ID="$(state_field projectId)"
+ok "project $PROJECT_ID created through POST /v1/projects"
 engine_surveys_before="$(db_query "SELECT COUNT(*) FROM lime_surveys" | tr -d '[:space:]')"
-python3 "$DRIVER" --base-url "$PLATFORM_URL" --state "$STATE" owner-publish \
-  --project "$PROJECT_ID" --definition "$DEFINITION"
+python3 "$DRIVER" --base-url "$PLATFORM_URL" --state "$STATE" owner-publish --definition "$DEFINITION"
 SURVEY_ID="$(state_field surveyId)"
 SID="$(state_field engineSid)"
 [[ "$SID" =~ ^[0-9]+$ ]] || fail "engine sid is not a number: $SID"
