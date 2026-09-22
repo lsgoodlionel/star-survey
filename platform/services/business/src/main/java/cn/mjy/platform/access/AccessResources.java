@@ -13,7 +13,8 @@ import org.springframework.stereotype.Service;
  *
  * <p>这是给其他模块调用的内部接口：调用方负责先判定"能否在父节点下创建"
  * （例如 {@code can(ctx, EDIT, parent)}），本方法只保证树结构合法且不跨租户。
- * 节点只能挂在已存在的父节点下、不支持移动，因此树不会成环，继承计算总是确定的。
+ * 节点只能挂在已存在的父节点下；改名与移动由 {@link ResourceTreeService} 负责（移动时锁根行并拒绝成环，
+ * V402 的触发器兜底），因此树不会成环，继承计算总是确定的。
  */
 @Service
 public class AccessResources {
