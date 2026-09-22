@@ -38,6 +38,15 @@
 | 404 | `{"error":"unknown_engine_instance"}` | 网关没有这个实例的配置 |
 | 400 | `{"error":"invalid_request"}` | 请求体不合法 |
 | 401 | `{"error":"<原因>"}` | 认证失败 |
+| 500 | `{"error":"internal_error"}` | 网关意外异常；不含堆栈。结果也会按 `requestId` 存档，同一 `requestId` 重试不会再发布一次，平台应按"待核对"处理 |
+
+### 实现澄清（v1.1，2026-09-22，网关实现时确定，平台端须一致）
+
+- **400 `invalid_request`** 涵盖：请求体超过 1 MiB（在读取正文之前拒绝）、无长度的分块请求、结构性错误的定义（缺 `uuid`、`definitionVersion` 不符）、`requestId` 不是规范 UUID、顶层出现三个字段之外的键、`Content-Type` 不是 `application/json`、**同一 `requestId` 但请求体不同**（不发布）。
+- **422** 仅用于"能解析、但未通过校验"的定义；`failedStage` 为 `validate` 或 `compile` 时都属此类，此时引擎都未被触碰。其余引擎侧失败（包括引擎登录被拒）一律 502。
+- **409** 同时覆盖两种情况：同一 `requestId` 的首个请求仍在进行中；同一实例上同一 `definition.uuid` 正在发布。
+- 网关的并发锁在进程内，**只能单副本运行**；多副本需要共享锁（留待生产化）。
+- 网关会把所有已配置的引擎口令在响应体与日志中替换为 `***`，即使引擎在错误信息里回显了口令。
 
 `<PublishResult>` 即网关现有 `PublishResult.to_dict()` 的结构（`ok`、`surveyId`、`failedStage`、`failures`、`rolledBack`、`orphanSurveyId`、`steps`、`binding`、`verification`）。`binding` 即 `BindingRecord.to_dict()`：`engineInstance`、`surveyId`、`definitionUuid`、`compilerVersion`、`fingerprintVersion`、`fingerprint`、`language`、`publishedAt`、`questions[]`。
 
@@ -52,3 +61,4 @@
 - 200 时持久化绑定记录与指纹，并登记公开路由（公开 UUID ↔ 引擎实例 ↔ sid）；
 - 422 / 502 时记录失败阶段与原因，问卷状态回到可再次发布，**不登记路由**；
 - 超时或网络错误：结果未知，状态记为"待核对"，用同一 `requestId` 重试，依赖网关幂等拿到确定结果。
+- 409、500 及无法解析的响应同样按"结果未知"处理（v1.1）；400 / 401 / 404 记为发布失败，重试时换新的 `requestId`。
