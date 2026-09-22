@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 
 from .auth import check_secret
 from .engines import ConfigError, EngineConfig, load_engines
+from .responses import READ_PATH, ResponseReadService
 from .service import PublishService, Response
 from .store import ResultStore
 
@@ -100,18 +101,25 @@ def build_service(settings: Settings) -> PublishService:
     return PublishService(engines=settings.engines, store=store, secret=settings.secret)
 
 
+def build_response_service(settings: Settings) -> ResponseReadService:
+    return ResponseReadService(engines=settings.engines, secret=settings.secret)
+
+
 class GatewayServer(ThreadingHTTPServer):
     # 非守护线程 + server_close 时等待：停机时让在途发布做完。
     daemon_threads = False
     block_on_close = True
 
-    def __init__(self, address, service: PublishService):
+    def __init__(self, address, service: PublishService, responses: Optional[ResponseReadService] = None):
         super().__init__(address, GatewayHandler)
         self.service = service
+        self.responses = responses
 
 
-def build_server(service: PublishService, host: str, port: int) -> GatewayServer:
-    return GatewayServer((host, port), service)
+def build_server(
+    service: PublishService, host: str, port: int, responses: Optional[ResponseReadService] = None
+) -> GatewayServer:
+    return GatewayServer((host, port), service, responses)
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
@@ -123,7 +131,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = self._path()
         if path == HEALTH_PATH:
             self._send(Response(200, _json({"status": "ok"})))
-        elif path == PUBLISH_PATH:
+        elif path in (PUBLISH_PATH, READ_PATH):
             self._method_not_allowed("POST")
         else:
             self._not_found()
@@ -133,7 +141,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if path == HEALTH_PATH:
             self._method_not_allowed("GET")
             return
-        if path != PUBLISH_PATH:
+        handler = self._post_handler(path)
+        if handler is None:
             self._not_found()
             return
         body = self._read_body()
@@ -142,11 +151,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._send(Response(400, _json({"error": "invalid_request"})))
             return
         try:
-            response = self.server.service.publish(dict(self.headers.items()), body)
+            response = handler(dict(self.headers.items()), body)
         except Exception:  # noqa: BLE001 — 兜底：对外绝不带堆栈
-            log.exception("unhandled error in publish handler")
+            log.exception("unhandled error in %s handler", path)
             response = Response(500, _json({"error": "internal_error"}))
         self._send(response)
+
+    def _post_handler(self, path: str):
+        if path == PUBLISH_PATH:
+            return self.server.service.publish
+        if path == READ_PATH and self.server.responses is not None:
+            return self.server.responses.read
+        return None
 
     # ------------------------------------------------------------ 零件
 
@@ -216,7 +232,7 @@ def main(env: Optional[Mapping[str, str]] = None) -> int:
     try:
         settings = load_settings(os.environ if env is None else env)
         service = build_service(settings)
-        httpd = build_server(service, settings.host, settings.port)
+        httpd = build_server(service, settings.host, settings.port, build_response_service(settings))
     except (StartupError, OSError) as error:
         log.error("refusing to start: %s", error)
         return EXIT_CONFIG
