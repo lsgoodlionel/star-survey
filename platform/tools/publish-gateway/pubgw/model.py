@@ -43,6 +43,8 @@ class SubQuestion:
     code: str
     text: str
     scale: int = 0
+    #: WP-02：多选的互斥项（选中它时其余选项必须为空），编译成 exclude_all_others ＋ 服务端规则。
+    exclusive: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,10 @@ class Question:
     condition: str = ""
     calculation: str = ""
     validation: Optional[ValidationRule] = None
+    #: WP-02 题型扩展（v1、v2 通用，缺省即不生效）：输入格式与按字符计的长度上限，
+    #: 均编译成服务端校验（platform/docs/p2/question-type-map.md 第三节）。
+    format: str = ""
+    max_length: Optional[int] = None
 
     def answers_on_scale(self, scale: int) -> Tuple[AnswerOption, ...]:
         return tuple(answer for answer in self.answers if answer.scale == scale)
@@ -195,6 +201,8 @@ def _question(payload: Any, where: str, is_logic: bool) -> Question:
         condition=_optional_text(payload, "condition"),
         calculation=_optional_text(payload, "calculation"),
         validation=_validation(payload.get("validation"), where),
+        format=_optional_text(payload, "format"),
+        max_length=_optional_integer(payload.get("maxLength"), where, "maxLength"),
     )
 
 
@@ -235,6 +243,7 @@ def _subquestion(payload: Any, where: str) -> SubQuestion:
         code=_text(payload, "code", where),
         text=_text(payload, "text", where),
         scale=_integer(payload.get("scale", 0), where, "scale"),
+        exclusive=_flag(payload.get("exclusive"), where, "exclusive"),
     )
 
 
@@ -297,6 +306,10 @@ def _flag(value: Any, where: str, key: str) -> bool:
     if not isinstance(value, bool):
         raise DefinitionError("{}.{} must be a boolean".format(where, key))
     return value
+
+
+def _optional_integer(value: Any, where: str, key: str) -> Optional[int]:
+    return None if value is None else _integer(value, where, key)
 
 
 def _integer(value: Any, where: str, key: str) -> int:

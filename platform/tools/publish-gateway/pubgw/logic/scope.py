@@ -11,6 +11,7 @@ from typing import Callable, Dict, FrozenSet, Optional, Tuple
 
 from . import ast
 from ..model import Question, SurveyDefinition
+from ..qtypes import shape_of
 
 NUMBER = "number"
 TEXT = "text"
@@ -27,6 +28,12 @@ _TEXT_TYPES = frozenset({"S", "T", "U", "D"})
 _CHOICE_TYPES = frozenset({"L", "!"})
 _SET_TYPES = frozenset({"M", "P"})
 _DUAL_SCALES = (0, 1)
+#: WP-02 新题型的引用形态。单列固定选项题按单选处理；逐行题必须带 .ROW；
+#: 矩阵（: ;）、排序（R）、上传（|）在逻辑 DSL v1 里还不能引用。
+_FIXED_CHOICE_TYPES = frozenset({"5", "Y", "G"})
+_ROW_CHOICE_TYPES = frozenset({"H", "A", "B", "C", "E"})
+_ROW_VALUE_TYPES = {"K": NUMBER, "Q": TEXT}
+_UNREFERENCEABLE_TYPES = frozenset({":", ";", "R", "|"})
 
 #: 引擎每页一组（G）、每页一题（Q）、全部一页（A）。
 FORMAT_BY_GROUP = "G"
@@ -147,6 +154,16 @@ def _resolve_member(
         return _set(question, member)
     if kind in ("F", "1"):
         return _array(question, member, scale)
+    if kind in _UNREFERENCEABLE_TYPES:
+        raise ResolutionError(
+            "E_EXPR_NOT_A_VALUE", "question {} (type {}) cannot be referenced in logic yet".format(question.code, kind)
+        )
+    if kind in _ROW_CHOICE_TYPES or kind in _ROW_VALUE_TYPES:
+        return _row(question, member)
+    if kind == "O" and member is None:
+        return Resolved(question, question.code, _answer_domain(question, 0), is_label_capable=True)
+    if kind in _FIXED_CHOICE_TYPES and member is None:
+        return Resolved(question, question.code, Type(CHOICE, frozenset(shape_of(kind).fixed_options)))
     if member is not None:
         raise _unknown_member(question, member)
     if kind in _TEXT_TYPES:
@@ -200,6 +217,23 @@ def _array(question: Question, member: Optional[str], scale: Optional[int]) -> R
         )
     variable = "{}_{}_{}".format(question.code, member, scale)
     return Resolved(question, variable, _answer_domain(question, scale), is_label_capable=True)
+
+
+def _row(question: Question, member: Optional[str]) -> Resolved:
+    """逐行（逐子题）取值：H 取选项域，A/B/C/E 取引擎固定刻度，K 为数值，Q 为文本。"""
+    if member is None:
+        raise ResolutionError(
+            "E_EXPR_MEMBER_REQUIRED", "question {} must be referenced by row, e.g. {}.ROW".format(question.code, question.code)
+        )
+    if member not in {subquestion.code for subquestion in question.subquestions}:
+        raise _unknown_member(question, member)
+    variable = "{}_{}".format(question.code, member)
+    kind = question.type
+    if kind in _ROW_VALUE_TYPES:
+        return Resolved(question, variable, TYPE_NUMBER if _ROW_VALUE_TYPES[kind] == NUMBER else TYPE_TEXT)
+    if kind == "H":
+        return Resolved(question, variable, _answer_domain(question, 0), is_label_capable=True)
+    return Resolved(question, variable, Type(CHOICE, frozenset(shape_of(kind).fixed_options)))
 
 
 def _answer_domain(question: Question, scale: int) -> Type:

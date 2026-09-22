@@ -22,7 +22,7 @@ from .model import LogicModel
 from .parser import parse_expression, parse_template
 from .scope import NUMBER
 from .types import CALCULATION, CONDITION, GROUP_CONDITION, VALIDATION
-from ..model import AnswerOption, Group, Question, SubQuestion, SurveyDefinition
+from ..model import Group, Question, SurveyDefinition
 
 ALWAYS_RELEVANT = "1"
 
@@ -95,14 +95,8 @@ def _lower_question(compiler: LogicCompiler, question: Question) -> Question:
         help=compiler.template(question.help, owner),
         relevance=relevance,
         attributes=_attributes(compiler, question),
-        answers=tuple(
-            AnswerOption(answer.code, compiler.template(answer.text, owner), answer.scale, answer.assessment_value)
-            for answer in question.answers
-        ),
-        subquestions=tuple(
-            SubQuestion(sub.uuid, sub.code, compiler.template(sub.text, owner), sub.scale)
-            for sub in question.subquestions
-        ),
+        answers=tuple(replace(answer, text=compiler.template(answer.text, owner)) for answer in question.answers),
+        subquestions=tuple(replace(sub, text=compiler.template(sub.text, owner)) for sub in question.subquestions),
         condition="",
         calculation="",
         validation=None,

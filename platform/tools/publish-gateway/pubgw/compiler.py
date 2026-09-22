@@ -16,6 +16,8 @@ from typing import Dict, List, Sequence, Tuple
 from .fieldmap import definition_signature, fingerprint
 from .logic.lower import lower_definition
 from .model import SurveyDefinition
+from .qtypes import DEFAULT_THEMES
+from .questions.lower import lower_question_types
 from .validate import ValidationReport, validate_definition
 
 COMPILER_VERSION = "pubgw-lss-1"
@@ -98,13 +100,8 @@ _LANGUAGE_SETTINGS_FIELDS = (
     "surveyls_dateformat", "surveyls_numberformat",
 )
 
-#: 引擎默认的题型主题名，题目没有指定主题时使用。
-_DEFAULT_THEMES = {
-    "L": "listradio", "!": "list_dropdown", "M": "multiplechoice",
-    "P": "multiplechoice_with_comments", "F": "arrays/array", "1": "arrays/dualscale",
-    "S": "shortfreetext", "T": "longfreetext", "U": "hugefreetext",
-    "N": "numerical", "D": "date", "X": "boilerplate", "*": "equation",
-}
+#: 引擎默认的题型主题名，题目没有指定主题时使用（按题型形状表生成）。
+_DEFAULT_THEMES = DEFAULT_THEMES
 
 
 class CompileError(ValueError):
@@ -142,7 +139,8 @@ class LssCompiler:
         signature = definition_signature(definition)
         return CompiledSurvey(
             # v2 的逻辑先降到引擎层（relevance／属性／转义文本）；v1 原样通过。
-            lss=self._document(lower_definition(definition)),
+            # 题型扩展键（format／maxLength／exclusive）再降成属性与服务端规则；没有就原样通过。
+            lss=self._document(lower_question_types(lower_definition(definition))),
             compiler_version=self.version,
             signature=signature,
             fingerprint=fingerprint(signature),
