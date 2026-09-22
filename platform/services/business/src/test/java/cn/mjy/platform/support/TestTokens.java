@@ -29,6 +29,13 @@ public class TestTokens {
         return encode(claims(subject).claim("tenant_id", tenant.toString()).claim("roles", roles).build());
     }
 
+    /** 带额外声明的令牌（如 sid），用于模拟篡改或伪造。 */
+    public String issueWithClaims(String subject, UUID tenant, java.util.Map<String, Object> extra) {
+        JwtClaimsSet.Builder builder = claims(subject).claim("tenant_id", tenant.toString());
+        extra.forEach(builder::claim);
+        return encode(builder.build());
+    }
+
     public String issueWithoutTenant(String subject) {
         return encode(claims(subject).build());
     }

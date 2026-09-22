@@ -17,6 +17,7 @@ class AccessAudit {
     static final String MEMBER_INVITE = "access.member.invite";
     static final String MEMBER_ACCEPT = "access.member.accept";
     static final String MEMBER_REMOVE = "access.member.remove";
+    static final String MEMBER_PROVISION = "access.member.provision";
     static final String OWNER_BOOTSTRAP = "access.owner.bootstrap";
     static final String SETTINGS_PUBLISH_APPROVAL = "access.settings.publish_approval";
     static final String RESOURCE_CREATE = "access.resource.create";

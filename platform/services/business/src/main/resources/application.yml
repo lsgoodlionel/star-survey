@@ -25,6 +25,14 @@ platform:
   security:
     # 必须由环境变量提供，至少 32 字节；缺失时应用拒绝启动。
     jwt-hmac-secret: ${PLATFORM_JWT_HMAC_SECRET:}
+  # 组织免登（企业微信 / 钉钉 / 飞书，ADR 0014）。平台对外 HTTPS 地址为空时免登一律 503。
+  # 各租户应用密钥不在这里：按 PLATFORM_ORG_SECRET_<租户标识去横线大写>_<密钥名> 由环境或密钥库注入。
+  # 开放平台地址默认即官方正式环境（*-api-base-url、*-authorize-url），一般无需配置。
+  identity:
+    org-login:
+      callback-base-url: ${PLATFORM_PUBLIC_BASE_URL:}
+      token-ttl: ${PLATFORM_ORG_LOGIN_TOKEN_TTL:PT10M}
+      state-ttl: PT5M
   # 发布网关（契约 platform/contracts/publish-gateway-v1.md 及 v1.2 增补）。密钥至少 32 字节，与网关侧 PUBGW_SHARED_SECRET 相同；
   # 缺失时应用照常启动，但问卷发布一律 503（失败即关闭）。
   pubgw:
