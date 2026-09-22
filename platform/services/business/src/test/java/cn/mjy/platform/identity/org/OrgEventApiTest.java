@@ -20,6 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import cn.mjy.platform.shared.TenantId;
 import com.jayway.jsonpath.JsonPath;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -132,7 +133,7 @@ class OrgEventApiTest extends OrgLoginTestSupport {
 
         mvc.perform(post(eventPath(m.org()) + "?msg_signature=a&timestamp=1&nonce=n")
                         .contentType(MediaType.TEXT_XML).content(xxe))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnauthorized());
     }
 
     // ---- 钉钉 ----
@@ -201,15 +202,49 @@ class OrgEventApiTest extends OrgLoginTestSupport {
         Member m = member("feishu");
 
         mvc.perform(feishuPost(eventPath(m.org()), m.secrets().key(), feishuChallenge(m.secrets().token(), "ch-1"),
-                        false, nowSeconds()))
+                        true, nowSeconds()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.challenge").value("ch-1"));
-        mvc.perform(feishuPost(eventPath(m.org()), m.secrets().key(), feishuChallenge("wrong", "ch-2"), false,
+        mvc.perform(feishuPost(eventPath(m.org()), m.secrets().key(), feishuChallenge("wrong", "ch-2"), true,
                         nowSeconds()))
                 .andExpect(status().isUnauthorized());
-        mvc.perform(feishuPost(eventPath(m.org()), "another-key", feishuChallenge(m.secrets().token(), "ch-3"), false,
+        mvc.perform(feishuPost(eventPath(m.org()), "another-key", feishuChallenge(m.secrets().token(), "ch-3"), true,
                         nowSeconds()))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void anUnsignedFeishuRequestIsRejectedBeforeAnyDecryption() throws Exception {
+        // 未签名即解密会把端点变成 CBC 填充预言机：匿名方可逐字节解密并伪造事件。
+        Member m = member("feishu");
+
+        mvc.perform(feishuPost(eventPath(m.org()), m.secrets().key(), feishuChallenge(m.secrets().token(), "ch-u"),
+                        false, nowSeconds()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void everyRejectionLooksTheSameToAnAnonymousCaller() throws Exception {
+        Member feishu = member("feishu");
+        Member wecom = member("wecom");
+        // 32 字节任意"密文"（前 16 字节当作 IV）：填充几乎必然非法。
+        String garbage = "{\"encrypt\":\"" + java.util.Base64.getEncoder().encodeToString(new byte[32]) + "\"}";
+        String doctype = "<?xml version=\"1.0\"?><!DOCTYPE x [<!ENTITY e \"x\">]><xml><Encrypt>&e;</Encrypt></xml>";
+
+        List<String> bodies = List.of(
+                mvc.perform(post(eventPath(feishu.org())).contentType(MediaType.APPLICATION_JSON).content(garbage))
+                        .andExpect(status().isUnauthorized()).andReturn().getResponse().getContentAsString(),
+                mvc.perform(post(eventPath(feishu.org())).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                        .andExpect(status().isUnauthorized()).andReturn().getResponse().getContentAsString(),
+                mvc.perform(feishuPost(eventPath(feishu.org()), "another-key",
+                                feishuChallenge(feishu.secrets().token(), "c"), true, nowSeconds()))
+                        .andExpect(status().isUnauthorized()).andReturn().getResponse().getContentAsString(),
+                mvc.perform(post(eventPath(wecom.org()) + "?msg_signature=a&timestamp=1&nonce=n")
+                                .contentType(MediaType.TEXT_XML).content(doctype))
+                        .andExpect(status().isUnauthorized()).andReturn().getResponse().getContentAsString());
+
+        assertThat(bodies).allMatch(body -> body.equals(bodies.getFirst()));
+        assertThat(bodies.getFirst()).doesNotContain("decrypt", "padding", "signature is", "token", "DOCTYPE");
     }
 
     @Test

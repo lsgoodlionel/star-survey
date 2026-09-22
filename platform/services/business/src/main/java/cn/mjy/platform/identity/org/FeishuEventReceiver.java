@@ -56,10 +56,9 @@ class FeishuEventReceiver implements OrgEventReceiver {
         if (encrypted == null) {
             throw OrgEventException.unauthenticated("event body is not encrypted");
         }
-        boolean signed = request.header(SIGNATURE_HEADER) != null;
-        if (signed) {
-            requireSignature(secrets, request, maxSkew);
-        }
+        // 任何解密之前先验签（包括 url_verification 握手）：未签名就解密会让匿名方拿到 CBC 填充预言机，
+        // 从而不知密钥也能逐字节解密、伪造"成员离职"事件。启用加密的事件订阅，飞书总会带签名头。
+        requireSignature(secrets, request, maxSkew);
         JsonNode payload = readJson(OrgEventCrypto.openFeishu(secrets.key(), encrypted)
                 .getBytes(StandardCharsets.UTF_8));
         if ("url_verification".equals(payload.path("type").asString(null))) {
@@ -67,9 +66,6 @@ class FeishuEventReceiver implements OrgEventReceiver {
             String challenge = payload.path("challenge").asString("");
             return Verified.handshake(new Reply(MediaType.APPLICATION_JSON,
                     json.writeValueAsString(Map.of("challenge", challenge))));
-        }
-        if (!signed) {
-            throw OrgEventException.unauthenticated("event signature is missing");
         }
         return parseEvent(connection, secrets, payload);
     }
