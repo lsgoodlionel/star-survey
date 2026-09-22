@@ -33,6 +33,7 @@ from .close import CloseError, close_survey
 from .drift_check import check_published_survey
 from .engines import EngineConfig
 from .model import DefinitionError, SurveyDefinition
+from .policy.probe import HttpPolicyProbe, PolicyProbe
 from .ops_request import parse_close_request, parse_drift_request
 from .publish import PublishResult, Publisher
 from .request import InvalidRequest, PublishRequest, parse_request
@@ -42,6 +43,7 @@ from .store import InFlight, ResultStore, StoredResult
 log = logging.getLogger("pubgw.service")
 
 TransportFactory = Callable[[EngineConfig], Transport]
+PolicyProbeFactory = Callable[[EngineConfig], Optional[PolicyProbe]]
 
 REDACTED = "***"
 _REJECTED_STAGES = frozenset({"validate", "compile"})
@@ -71,6 +73,11 @@ def http_transport(engine: EngineConfig) -> Transport:
     return HttpTransport(engine.rpc_url, rpc_path="")
 
 
+def http_policy_probe(engine: EngineConfig) -> Optional[PolicyProbe]:
+    """访问策略的回读通道，从 RemoteControl 端点推出（ADR 0016 决定 4）。"""
+    return HttpPolicyProbe.from_rpc_url(engine.rpc_url)
+
+
 class PublishService:
     def __init__(
         self,
@@ -80,6 +87,7 @@ class PublishService:
         transport_factory: TransportFactory = http_transport,
         now: Callable[[], float] = time.time,
         locks: Optional[InFlight] = None,
+        policy_probe_factory: PolicyProbeFactory = http_policy_probe,
     ):
         self._engines = engines
         self._store = store
@@ -87,6 +95,7 @@ class PublishService:
         self._transport_factory = transport_factory
         self._now = now
         self._locks = locks or InFlight()
+        self._policy_probe_factory = policy_probe_factory
         self._redactions = _redaction_forms(engine.password for engine in engines.values())
 
     # ------------------------------------------------------------ 入口
@@ -238,7 +247,9 @@ class PublishService:
         started = time.monotonic()
         client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
         try:
-            result = Publisher(client, engine_instance=engine.instance_id).publish(definition)
+            result = Publisher(
+                client, engine_instance=engine.instance_id, policy_probe=self._policy_probe_factory(engine)
+            ).publish(definition)
         except Exception:  # noqa: BLE001 — 网关自身缺陷：记日志，对外只说 internal_error
             log.exception(
                 "request %s: unexpected error publishing %s on %s; engine state unknown",

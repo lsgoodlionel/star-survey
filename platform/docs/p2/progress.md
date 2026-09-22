@@ -46,3 +46,24 @@
 - 改版切换时正在作答旧版的人在下一页被截断（无宽限期）；手工清除旧版到期会重新开放且漂移检查不报。
 - 逻辑：清值依赖引擎 `deletenonvalues=1`（部署要求）；续答后的清值、计分与随机组（03.3）、日期类型未做。
 - 答卷：手工停用再激活引擎问卷时的短暂编号窗口；06.2 导出作业未做。
+
+## 第三波车道：WP-04.1 / 04.2 访问与作答规则（ADR 0016）
+
+定义可带 `policy` 块（契约 survey-access-policy-v1，定义版本不变）。覆盖 R04-01（统一访问密码，
+平台 PBKDF2 哈希、明文不落库）、R04-02 部分（邀请码＝参与者 token＋`access_mode=C`）、
+R04-03 部分（token／设备／IP 组合限次）、R04-04（时区窗口、作答时长，服务端时钟）、
+R04-05 部分（IP 规则；地区为可插拔数据源，无数据按 `regionUnknown` 拒绝或放行）。
+
+| 层 | 内容 |
+|---|---|
+| 平台 | 草稿保存时 `access.password` → `passwordHash`，时间窗缺时区填 `Asia/Shanghai` |
+| 网关 | `pubgw/policy/`：422 校验、本地时刻→UTC（夏令时缺口／重叠拒绝）、原生设置＋LSS `plugin_settings`、激活前回读摘要 |
+| 插件 | `MjyRuntimePolicy`：`beforeSurveyPage` 闸门（时间窗→IP→地区→密码→限次→时长），fail closed；`policyStatus` 回读端点 |
+
+测试：网关 448（新增 69）；插件 70（新增 46，MariaDB／PostgreSQL）；平台 644（新增 9）；
+真引擎端到端 `run-access-policy.sh` 38 项，MariaDB／PostgreSQL 全过（含"改客户端时间不延期"、
+"同一 token 换浏览器不能重新计时"、"解锁只对本 sid 有效"）。
+
+遗留：地区数据集未交付；租户级时区；平台未校验网关回执 `policyDigest`；网关 `add_participants`
+总是替换定义里的 token；同一身份两个会话同一瞬间交卷会落两份；密码错误次数只按会话计。
+

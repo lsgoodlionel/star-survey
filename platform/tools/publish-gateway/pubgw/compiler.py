@@ -11,11 +11,12 @@
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .fieldmap import definition_signature, fingerprint
 from .logic.lower import lower_definition
 from .model import SurveyDefinition
+from .policy.compile import PLUGIN_NAME, POLICY_KEY, CompiledPolicy, compile_policy
 from .qtypes import DEFAULT_THEMES
 from .questions.lower import lower_question_types
 from .validate import ValidationReport, validate_definition
@@ -93,6 +94,10 @@ _SUBQUESTION_FIELDS = tuple(name for name in _QUESTION_FIELDS if name != "questi
 _QUESTION_L10N_FIELDS = ("id", "qid", "question", "help", "language")
 _ANSWER_FIELDS = ("aid", "qid", "code", "sortorder", "assessment_value", "scale_id")
 _ANSWER_L10N_FIELDS = ("id", "aid", "answer", "language")
+#: 引擎导入只读 name/key/value（import_helper.php:3447），写进 lime_plugin_settings（model=Survey）。
+_PLUGIN_SETTING_FIELDS = ("name", "key", "value")
+#: 只有访问策略带时间窗时才出现的问卷列：没有策略的定义编译结果逐字节不变。
+_POLICY_SURVEY_FIELDS = ("startdate", "expires", "access_mode")
 _QUESTION_ATTRIBUTE_FIELDS = ("qid", "attribute", "value", "language")
 _LANGUAGE_SETTINGS_FIELDS = (
     "surveyls_survey_id", "surveyls_language", "surveyls_title", "surveyls_description",
@@ -121,6 +126,8 @@ class CompiledSurvey:
     signature: Tuple[str, ...]
     fingerprint: str
     definition_uuid: str
+    #: 访问策略的编译产物（ADR 0016）；定义没有策略时为 None。
+    policy: Optional[CompiledPolicy] = None
 
 
 class LssCompiler:
@@ -137,19 +144,22 @@ class LssCompiler:
                 report,
             )
         signature = definition_signature(definition)
+        policy = compile_policy(definition)
         return CompiledSurvey(
             # v2 的逻辑先降到引擎层（relevance／属性／转义文本）；v1 原样通过。
             # 题型扩展键（format／maxLength／exclusive）再降成属性与服务端规则；没有就原样通过。
-            lss=self._document(lower_question_types(lower_definition(definition))),
+            # 访问策略（ADR 0016）另行编译为原生设置与插件设置行。
+            lss=self._document(lower_question_types(lower_definition(definition)), policy),
             compiler_version=self.version,
             signature=signature,
             fingerprint=fingerprint(signature),
             definition_uuid=definition.uuid,
+            policy=policy,
         )
 
     # ------------------------------------------------------------- 文档
 
-    def _document(self, definition: SurveyDefinition) -> str:
+    def _document(self, definition: SurveyDefinition, policy: Optional[CompiledPolicy] = None) -> str:
         layout = _Layout(definition)
         parts = [
             '<?xml version="1.0" encoding="UTF-8"?>',
@@ -165,8 +175,9 @@ class LssCompiler:
             _section("answers", _ANSWER_FIELDS, layout.answer_rows()),
             _section("answer_l10ns", _ANSWER_L10N_FIELDS, layout.answer_l10n_rows()),
             _section("question_attributes", _QUESTION_ATTRIBUTE_FIELDS, layout.attribute_rows()),
-            _section("surveys", _SURVEY_FIELDS, [_survey_row(definition)]),
+            _section("surveys", _survey_fields(policy), [_survey_row(definition, policy)]),
             _section("surveys_languagesettings", _LANGUAGE_SETTINGS_FIELDS, _language_rows(definition)),
+            _section("plugin_settings", _PLUGIN_SETTING_FIELDS, _plugin_setting_rows(policy)),
             "</document>",
         ]
         return "\n".join(part for part in parts if part)
@@ -332,9 +343,21 @@ class _Layout:
 # ------------------------------------------------------------------ 问卷行
 
 
-def _survey_row(definition: SurveyDefinition) -> Dict[str, str]:
+def _survey_fields(policy: Optional[CompiledPolicy]) -> Tuple[str, ...]:
+    native = policy.native_settings if policy else {}
+    return _SURVEY_FIELDS + tuple(name for name in _POLICY_SURVEY_FIELDS if name in native)
+
+
+def _plugin_setting_rows(policy: Optional[CompiledPolicy]) -> List[Dict[str, str]]:
+    if policy is None or policy.payload is None:
+        return []
+    return [{"name": PLUGIN_NAME, "key": POLICY_KEY, "value": policy.payload}]
+
+
+def _survey_row(definition: SurveyDefinition, policy: Optional[CompiledPolicy] = None) -> Dict[str, str]:
     values = dict(DEFAULT_SETTINGS)
     values.update(definition.settings)
+    values.update(policy.native_settings if policy else {})
     values.update(
         {
             "sid": str(_SID),
@@ -344,7 +367,7 @@ def _survey_row(definition: SurveyDefinition) -> Dict[str, str]:
             "additional_languages": " ".join(definition.additional_languages),
         }
     )
-    return {name: values.get(name, "") for name in _SURVEY_FIELDS}
+    return {name: values.get(name, "") for name in _survey_fields(policy)}
 
 
 def _language_rows(definition: SurveyDefinition) -> List[Dict[str, str]]:

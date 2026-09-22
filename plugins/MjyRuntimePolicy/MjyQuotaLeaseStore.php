@@ -175,6 +175,30 @@ class MjyQuotaLeaseStore
     }
 
     /**
+     * 已确认（交卷）的租约数：访问规则用它算"这是第几次作答"。
+     */
+    public function confirmedCount(string $quotaKey): int
+    {
+        return (int) $this->db->createCommand()
+            ->select('COUNT(*)')
+            ->from($this->tableName())
+            ->where('quota_key = :key AND state = :confirmed', [':key' => $quotaKey, ':confirmed' => self::STATE_CONFIRMED])
+            ->queryScalar();
+    }
+
+    /**
+     * 配额行不存在或上限不同就（重新）定义；已存在且一致时不写。
+     */
+    public function ensureQuota(string $quotaKey, int $surveyId, int $slotLimit): void
+    {
+        $existing = $this->findQuota($quotaKey);
+        if ($existing !== null && (int) $existing['slot_limit'] === $slotLimit) {
+            return;
+        }
+        $this->defineQuota($quotaKey, $surveyId, $slotLimit);
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public function findLease(string $leaseId): ?array

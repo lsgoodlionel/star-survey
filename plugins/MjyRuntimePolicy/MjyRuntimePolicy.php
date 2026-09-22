@@ -24,6 +24,10 @@
  *
  * 商业逻辑（考多久、几个名额、谁能进场）一律由平台下发，插件只执行
  * （许可分析结论 7：插件按衍生作品处理，不放商业逻辑）。
+ *
+ * WP-04（ADR 0016）在同一个闸门上加了访问规则：时间窗、IP／地区、访问密码、
+ * 按身份限次、作答时长。规则由发布网关编进 LSS 的 plugin_settings，按 sid 各存一份；
+ * `newDirectRequest` 的 policyStatus 让网关在激活前回读核对。
  */
 class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
 {
@@ -32,6 +36,15 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     private const LOG_CATEGORY = 'plugin.MjyRuntimePolicy';
     private const DENY_TEMPLATE_TYPE = 'survey-notstart';
     private const ADMISSION_SESSION_KEY = 'mjyruntimepolicy_admission';
+    private const UNLOCK_SESSION_KEY = 'mjyruntimepolicy_unlocked';
+    private const PASSWORD_FAILURES_SESSION_KEY = 'mjyruntimepolicy_password_failures';
+    /** 同一会话连续输错这么多次就锁住（清 Cookie 可重置，见 ADR 0016 绕过清单 4）。 */
+    private const MAX_PASSWORD_FAILURES = 5;
+    private const DEVICE_COOKIE = 'mjy_device';
+    private const DEVICE_COOKIE_SECONDS = 31536000;
+    private const DEVICE_PATTERN = '/\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/';
+    private const STATUS_FUNCTION = 'policyStatus';
+    private const CLOSED_ACCESS = 'C';
 
     protected $storage = 'DbStorage';
     protected static $description = 'MJY: server-side exam deadline and hard quota lease';
@@ -46,12 +59,19 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     /** @var bool */
     private $isSchemaReady = false;
 
+    /** @var MjyAccessGate|null */
+    private $accessGate;
+
+    /** @var string|null 本次请求的设备号（首次访问时新发） */
+    private $deviceId;
+
     public function init()
     {
         $this->subscribe('beforeActivate');
         $this->subscribe('beforeSurveyPage');
         $this->subscribe('afterSurveyComplete');
         $this->subscribe('cron');
+        $this->subscribe('newDirectRequest');
     }
 
     public static function engineInstanceId(): string
@@ -108,11 +128,44 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
         if ($surveyId <= 0) {
             return;
         }
+        $access = $this->decideAccess($surveyId);
+        if ($access !== null && $access[1]->reason() === MjyPolicyDecision::REASON_PASSWORD) {
+            $this->askForPassword($surveyId, $access[0]);
+            return;
+        }
+        if ($access !== null && !$access[1]->isAllowed()) {
+            $this->deny($surveyId, $access[1]);
+            return;
+        }
         $decision = $this->decide($surveyId);
         if ($decision->isAllowed()) {
             return;
         }
         $this->deny($surveyId, $decision);
+    }
+
+    /**
+     * 发布网关回读：`GET index.php/plugins/direct?plugin=MjyRuntimePolicy&function=policyStatus&sid=N`。
+     * 只回份数、能否解析与摘要，不回策略内容（密码哈希不出引擎）。
+     */
+    public function newDirectRequest()
+    {
+        $event = $this->getEvent();
+        if ($event->get('target') !== self::$name || $event->get('function') !== self::STATUS_FUNCTION) {
+            return;
+        }
+        $surveyId = (int) App()->getRequest()->getParam('sid');
+        try {
+            $status = ['plugin' => self::$name, 'active' => true]
+                + $this->accessPolicies()->status($surveyId);
+        } catch (\Throwable $exception) {
+            $this->logFailure($exception);
+            $status = ['plugin' => self::$name, 'active' => true, 'surveyId' => $surveyId, 'error' => 'unavailable'];
+        }
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo json_encode($status);
+        App()->end();
     }
 
     /**
@@ -126,6 +179,11 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
                 return;
             }
             $this->readyEngine()->confirmEntry($surveyId, $this->sessionKey($surveyId));
+            $policy = $this->accessPolicies()->find($surveyId);
+            if ($policy !== null) {
+                $now = $this->engine()->clock()->nowUtc();
+                $this->accessGate()->confirm($policy, $this->accessRequest($surveyId, $policy), $now);
+            }
         });
     }
 
@@ -192,6 +250,133 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
         return $ticket;
     }
 
+    /**
+     * 访问规则判定。没有策略返回 null；策略读不出或判定出错一律拒绝（fail closed）。
+     *
+     * @return array{0: MjyAccessPolicy|null, 1: MjyPolicyDecision}|null
+     */
+    private function decideAccess(int $surveyId): ?array
+    {
+        try {
+            $policy = $this->accessPolicies()->find($surveyId);
+            if ($policy === null) {
+                return null;
+            }
+            $this->readyEngine();
+            $request = $this->accessRequest($surveyId, $policy);
+            return [$policy, $this->accessGate()->evaluate($policy, $request, $this->engine()->clock()->nowUtc())];
+        } catch (\Throwable $exception) {
+            $this->logFailure($exception);
+            return [null, MjyPolicyDecision::denyUnavailable()];
+        }
+    }
+
+    private function accessPolicies(): MjyAccessPolicyStore
+    {
+        return new MjyAccessPolicyStore(App()->getDb(), (int) $this->id);
+    }
+
+    private function accessGate(): MjyAccessGate
+    {
+        if ($this->accessGate === null) {
+            $this->accessGate = new MjyAccessGate(
+                App()->getDb(),
+                self::engineInstanceId(),
+                MjyCsvRegionResolver::fromEnvironment()
+            );
+        }
+        return $this->accessGate;
+    }
+
+    private function accessRequest(int $surveyId, MjyAccessPolicy $policy): MjyAccessRequest
+    {
+        $survey = Survey::model()->findByPk($surveyId);
+        $hasTokenTable = $survey !== null && $survey->hasTokensTable;
+        // 引擎 7.x：access_mode=C 时没有有效 token 进不了问卷；O 时 token 可有可无。
+        $isClosedAccess = $hasTokenTable && $survey->access_mode === self::CLOSED_ACCESS;
+        return new MjyAccessRequest(
+            $surveyId,
+            MjyIpRules::clientIp($_SERVER, MjyIpRules::trustedProxiesFromEnvironment()),
+            $hasTokenTable ? $this->validToken($surveyId) : null,
+            $policy->tracksAttempts() ? $this->deviceId() : '',
+            ($_SESSION[self::UNLOCK_SESSION_KEY][$surveyId] ?? null) === $policy->digest(),
+            $isClosedAccess
+        );
+    }
+
+    /**
+     * 只认参与者表里真实存在的 token：随手编一个 token 参数不能换来一个新身份。
+     */
+    private function validToken(int $surveyId): ?string
+    {
+        $token = $_SESSION['responses_' . $surveyId]['token'] ?? App()->getRequest()->getParam('token');
+        if (!is_string($token) || $token === '') {
+            return null;
+        }
+        return Token::model($surveyId)->findByToken($token) === null ? null : $token;
+    }
+
+    /**
+     * 设备号：插件自己发的长效 HttpOnly Cookie。只是风险信号——清 Cookie 就是新设备。
+     */
+    private function deviceId(): string
+    {
+        if ($this->deviceId !== null) {
+            return $this->deviceId;
+        }
+        $existing = $_COOKIE[self::DEVICE_COOKIE] ?? null;
+        if (is_string($existing) && preg_match(self::DEVICE_PATTERN, $existing) === 1) {
+            return $this->deviceId = $existing;
+        }
+        $this->deviceId = MjyQuotaLeaseStore::uuidV4();
+        if (!headers_sent()) {
+            setcookie(self::DEVICE_COOKIE, $this->deviceId, [
+                'expires' => time() + self::DEVICE_COOKIE_SECONDS,
+                'path' => '/',
+                'secure' => App()->getRequest()->getIsSecureConnection(),
+                'httponly' => true,
+                'samesite' => 'Lax',
+            ]);
+        }
+        return $this->deviceId;
+    }
+
+    /**
+     * 密码页：校验 POST 过来的密码；通过则记"本 sid 本策略已解锁"并重定向回原地址（GET），
+     * 否则渲染密码页。密码只在内存里比对，从不写日志。
+     */
+    private function askForPassword(int $surveyId, MjyAccessPolicy $policy): void
+    {
+        $request = App()->getRequest();
+        $submitted = $request->getIsPostRequest() ? $request->getPost(MjyAccessPage::PASSWORD_FIELD) : null;
+        $failures = (int) ($_SESSION[self::PASSWORD_FAILURES_SESSION_KEY][$surveyId] ?? 0);
+        if ($failures >= self::MAX_PASSWORD_FAILURES) {
+            $this->deny(
+                $surveyId,
+                MjyPolicyDecision::denyUnavailable(),
+                '密码错误次数过多',
+                '访问密码错误次数过多，请稍后再试或联系问卷发布方。'
+            );
+            return;
+        }
+        $error = null;
+        if (is_string($submitted)) {
+            if (MjyPasswordHash::verify($submitted, (string) $policy->passwordHash())) {
+                $_SESSION[self::UNLOCK_SESSION_KEY][$surveyId] = $policy->digest();
+                unset($_SESSION[self::PASSWORD_FAILURES_SESSION_KEY][$surveyId]);
+                App()->getController()->redirect($request->getUrl());
+                return;
+            }
+            $_SESSION[self::PASSWORD_FAILURES_SESSION_KEY][$surveyId] = $failures + 1;
+            $error = '访问密码不正确，请重试。';
+            Yii::log(sprintf('survey %d: wrong access password', $surveyId), CLogger::LEVEL_INFO, self::LOG_CATEGORY);
+        }
+        header('Content-Type: text/html; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo MjyAccessPage::render($request->getUrl(), $request->csrfTokenName, $request->getCsrfToken(), $error);
+        App()->end();
+    }
+
     private function decide(int $surveyId): MjyPolicyDecision
     {
         try {
@@ -207,8 +392,10 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
      * （SurveyController.php:193），而 `beforeSurveyPage` 早于 POST 处理，
      * 所以被拒绝的提交连答案都不会落库。
      */
-    private function deny(int $surveyId, MjyPolicyDecision $decision): void
+    private function deny(int $surveyId, MjyPolicyDecision $decision, ?string $title = null, ?string $message = null): void
     {
+        $title = $title ?? $this->denyTitle($decision);
+        $message = $message ?? $decision->message();
         Yii::log(
             sprintf('denied survey %d: %s', $surveyId, $decision->reason()),
             CLogger::LEVEL_INFO,
@@ -219,26 +406,32 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
             $controller->renderExitMessage(
                 $surveyId,
                 self::DENY_TEMPLATE_TYPE,
-                [$decision->message()],
+                [$message],
                 null,
-                [$this->denyTitle($decision)]
+                [$title]
             );
             return;
         }
         // 文件上传等入口用的不是 SurveyController（UploaderController.php:389
         // 同样派发 beforeSurveyPage），那里只能用 HTTP 状态码拒绝。
-        throw new CHttpException(403, $decision->message());
+        throw new CHttpException(403, $message);
     }
 
     private function denyTitle(MjyPolicyDecision $decision): string
     {
-        if ($decision->reason() === MjyPolicyDecision::REASON_DEADLINE) {
-            return '考试时间已结束';
-        }
-        if ($decision->reason() === MjyPolicyDecision::REASON_QUOTA) {
-            return '名额已满';
-        }
-        return '暂时无法作答';
+        $titles = [
+            MjyPolicyDecision::REASON_DEADLINE => '考试时间已结束',
+            MjyPolicyDecision::REASON_QUOTA => '名额已满',
+            MjyPolicyDecision::REASON_NOT_OPEN => '问卷尚未开放',
+            MjyPolicyDecision::REASON_CLOSED => '问卷已截止',
+            MjyPolicyDecision::REASON_NETWORK => '当前网络不可作答',
+            MjyPolicyDecision::REASON_REGION => '当前地区不可作答',
+            MjyPolicyDecision::REASON_REGION_UNKNOWN => '无法确认所在地区',
+            MjyPolicyDecision::REASON_TOKEN_REQUIRED => '需要邀请码',
+            MjyPolicyDecision::REASON_ATTEMPTS => '已达作答次数上限',
+            MjyPolicyDecision::REASON_DURATION => '作答时间已到',
+        ];
+        return $titles[$decision->reason()] ?? '暂时无法作答';
     }
 
     private function readyEngine(): MjyPolicyEngine

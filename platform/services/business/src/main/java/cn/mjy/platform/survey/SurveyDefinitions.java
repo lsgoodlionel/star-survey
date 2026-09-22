@@ -44,6 +44,8 @@ public class SurveyDefinitions {
         List<String> problems = new ArrayList<>();
         checkTopLevel(definition, problems);
         checkGroups(definition.get("groups"), problems);
+        // 访问策略：明文密码换哈希、默认时区（ADR 0016）；其余语义由网关校验。
+        SurveyAccessPolicies.normalize(definition, problems);
         if (problems.isEmpty() && serialize(definition).getBytes(StandardCharsets.UTF_8).length > MAX_DEFINITION_BYTES) {
             problems.add("definition exceeds " + MAX_DEFINITION_BYTES + " bytes");
         }
