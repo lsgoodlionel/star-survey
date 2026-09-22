@@ -39,6 +39,25 @@ public class SurveyRouteRepository {
                 .optional();
     }
 
+    /**
+     * 以调用方给定的公开 UUID 插入路由；公开 UUID 或 (实例, sid) 任一已存在时什么都不做并返回空，
+     * 由调用方判断既有行是否就是同一条路由。
+     */
+    public Optional<SurveyRoute> insertWithPublicIdIfAbsent(TenantId tenant, UUID publicId, String instanceId, int sid) {
+        return jdbc.sql("""
+                        INSERT INTO survey_route (public_id, tenant_id, engine_instance_id, engine_sid)
+                        VALUES (:id, :tenant, :instance, :sid)
+                        ON CONFLICT DO NOTHING
+                        RETURNING %s
+                        """.formatted(COLUMNS))
+                .param("id", publicId)
+                .param("tenant", tenant.value())
+                .param("instance", instanceId)
+                .param("sid", sid)
+                .query(SurveyRouteRepository::map)
+                .optional();
+    }
+
     public Optional<SurveyRoute> findByPublicId(UUID publicId) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM survey_route WHERE public_id = :id")
                 .param("id", publicId)

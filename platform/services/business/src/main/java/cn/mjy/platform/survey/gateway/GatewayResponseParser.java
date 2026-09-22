@@ -1,0 +1,147 @@
+package cn.mjy.platform.survey.gateway;
+
+import java.util.ArrayList;
+import java.util.List;
+import tools.jackson.databind.JsonNode;
+
+/**
+ * 把网关应答体解析成值对象。网关是外部系统：缺字段、类型不对一律抛 {@link MalformedResponseException}，
+ * 由调用方归为"结果未知"，绝不带着半成品往下走。
+ */
+final class GatewayResponseParser {
+
+    private GatewayResponseParser() {
+    }
+
+    static final class MalformedResponseException extends RuntimeException {
+
+        MalformedResponseException(String message) {
+            super(message);
+        }
+    }
+
+    /** 200/422/502 应答体里的 {@code result}；requireBinding 为真时（200）binding 必须完整。 */
+    static GatewayResult result(JsonNode body, boolean requireBinding) {
+        JsonNode result = object(body, "result");
+        JsonNode binding = result.get("binding");
+        boolean hasBinding = binding != null && !binding.isNull();
+        if (requireBinding && !hasBinding) {
+            throw new MalformedResponseException("published response carries no binding");
+        }
+        return new GatewayResult(
+                bool(result, "ok"),
+                optionalInt(result, "surveyId"),
+                optionalText(result, "failedStage"),
+                texts(result, "failures"),
+                bool(result, "rolledBack"),
+                optionalInt(result, "orphanSurveyId"),
+                hasBinding ? binding(binding) : null);
+    }
+
+    /** 400/401/404 应答体里的 {@code error}；缺失时退回 HTTP 状态说明。 */
+    static String error(JsonNode body, int status) {
+        JsonNode error = body == null ? null : body.get("error");
+        return error != null && error.isString() ? error.asString() : "http_" + status;
+    }
+
+    private static GatewayBinding binding(JsonNode node) {
+        List<GatewayBinding.QuestionBinding> questions = new ArrayList<>();
+        for (JsonNode question : array(node, "questions")) {
+            questions.add(new GatewayBinding.QuestionBinding(
+                    text(question, "uuid"), text(question, "code"), text(question, "type"), fields(question)));
+        }
+        return new GatewayBinding(
+                text(node, "engineInstance"),
+                requiredInt(node, "surveyId"),
+                text(node, "definitionUuid"),
+                text(node, "compilerVersion"),
+                text(node, "fingerprintVersion"),
+                text(node, "fingerprint"),
+                text(node, "language"),
+                text(node, "publishedAt"),
+                questions);
+    }
+
+    private static List<GatewayBinding.FieldBinding> fields(JsonNode question) {
+        List<GatewayBinding.FieldBinding> fields = new ArrayList<>();
+        for (JsonNode field : array(question, "fields")) {
+            JsonNode aid = field.get("aid");
+            fields.add(new GatewayBinding.FieldBinding(
+                    text(field, "fieldname"),
+                    aid == null || aid.isNull() ? "" : aid.asString(),
+                    requiredInt(field, "scale")));
+        }
+        return fields;
+    }
+
+    private static JsonNode object(JsonNode node, String name) {
+        JsonNode value = node == null ? null : node.get(name);
+        if (value == null || !value.isObject()) {
+            throw new MalformedResponseException("missing object: " + name);
+        }
+        return value;
+    }
+
+    private static JsonNode array(JsonNode node, String name) {
+        JsonNode value = node.get(name);
+        if (value == null || !value.isArray()) {
+            throw new MalformedResponseException("missing array: " + name);
+        }
+        return value;
+    }
+
+    private static String text(JsonNode node, String name) {
+        JsonNode value = node.get(name);
+        if (value == null || !value.isString() || value.asString().isBlank()) {
+            throw new MalformedResponseException("missing text: " + name);
+        }
+        return value.asString();
+    }
+
+    private static String optionalText(JsonNode node, String name) {
+        JsonNode value = node.get(name);
+        return value == null || value.isNull() ? null : value.asString();
+    }
+
+    private static int requiredInt(JsonNode node, String name) {
+        Integer value = optionalInt(node, name);
+        if (value == null) {
+            throw new MalformedResponseException("missing integer: " + name);
+        }
+        return value;
+    }
+
+    private static Integer optionalInt(JsonNode node, String name) {
+        JsonNode value = node.get(name);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (!value.isIntegralNumber() || !value.canConvertToInt()) {
+            throw new MalformedResponseException("not an integer: " + name);
+        }
+        return value.intValue();
+    }
+
+    private static boolean bool(JsonNode node, String name) {
+        JsonNode value = node.get(name);
+        if (value == null || !value.isBoolean()) {
+            throw new MalformedResponseException("missing boolean: " + name);
+        }
+        return value.booleanValue();
+    }
+
+    private static List<String> texts(JsonNode node, String name) {
+        List<String> values = new ArrayList<>();
+        JsonNode array = node.get(name);
+        if (array == null || array.isNull()) {
+            return values;
+        }
+        if (!array.isArray()) {
+            throw new MalformedResponseException("not an array: " + name);
+        }
+        for (JsonNode item : array) {
+            values.add(item.asString());
+        }
+        return values;
+    }
+}

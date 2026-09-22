@@ -38,11 +38,7 @@ public class SurveyRouteService {
     /** 幂等：同一 (实例, sid) 重复创建返回既有路由。实例必须是本租户的且处于 active。 */
     public CreateResult<SurveyRoute> create(TenantId tenant, String instanceId, int sid, String actorId, String traceId) {
         return tenantScope.call(tenant, () -> {
-            EngineInstance instance = instances.find(instanceId)
-                    .orElseThrow(() -> EngineInstanceService.notFound(instanceId));
-            if (instance.status() != EngineInstanceStatus.ACTIVE) {
-                throw new ConflictException("engine instance is not active: " + instanceId);
-            }
+            requireActiveInstance(instanceId);
             Optional<SurveyRoute> inserted = routes.insertIfAbsent(tenant, instanceId, sid);
             if (inserted.isEmpty()) {
                 return new CreateResult<>(routes.findByEngine(instanceId, sid).orElseThrow(), false);
@@ -51,6 +47,35 @@ public class SurveyRouteService {
             audit.record(tenant, actorId, ACTION_CREATE, "survey_route/" + route.publicId(), traceId);
             return new CreateResult<>(route, true);
         });
+    }
+
+    /**
+     * 发布流程专用：以问卷自己的公开 UUID 登记路由，使对外 UUID 在发布前后保持不变。
+     * 幂等：同一 (公开 UUID, 实例, sid) 重复登记返回既有路由；公开 UUID 已指向别处、
+     * 或该 (实例, sid) 已挂在别的公开 UUID 下时 409。在调用方事务内执行时与之同成同败。
+     */
+    public SurveyRoute registerPublished(TenantId tenant, UUID publicId, String instanceId, int sid,
+                                         String actorId, String traceId) {
+        return tenantScope.call(tenant, () -> {
+            requireActiveInstance(instanceId);
+            Optional<SurveyRoute> inserted = routes.insertWithPublicIdIfAbsent(tenant, publicId, instanceId, sid);
+            if (inserted.isPresent()) {
+                audit.record(tenant, actorId, ACTION_CREATE, "survey_route/" + publicId, traceId);
+                return inserted.get();
+            }
+            return routes.findByPublicId(publicId)
+                    .filter(existing -> existing.engineInstanceId().equals(instanceId) && existing.engineSid() == sid)
+                    .orElseThrow(() -> new ConflictException(
+                            "public id or engine survey is already routed elsewhere: " + publicId));
+        });
+    }
+
+    private void requireActiveInstance(String instanceId) {
+        EngineInstance instance = instances.find(instanceId)
+                .orElseThrow(() -> EngineInstanceService.notFound(instanceId));
+        if (instance.status() != EngineInstanceStatus.ACTIVE) {
+            throw new ConflictException("engine instance is not active: " + instanceId);
+        }
     }
 
     public Optional<SurveyRoute> findByPublicId(TenantId tenant, UUID publicId) {
