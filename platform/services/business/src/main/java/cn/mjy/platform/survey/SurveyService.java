@@ -28,10 +28,11 @@ public class SurveyService {
     private final PublishedVersionRepository versions;
     private final SurveyViews views;
     private final SurveyAudit audit;
+    private final PublishApprovalGate approvalGate;
 
     SurveyService(TenantScope tenantScope, SurveyAccess access, AccessResources resources,
             SurveyDefinitions definitions, SurveyRepository surveys, PublishedVersionRepository versions,
-            SurveyViews views, SurveyAudit audit) {
+            SurveyViews views, SurveyAudit audit, PublishApprovalGate approvalGate) {
         this.tenantScope = tenantScope;
         this.access = access;
         this.resources = resources;
@@ -40,6 +41,7 @@ public class SurveyService {
         this.versions = versions;
         this.views = views;
         this.audit = audit;
+        this.approvalGate = approvalGate;
     }
 
     /**
@@ -63,7 +65,10 @@ public class SurveyService {
         });
     }
 
-    /** 保存草稿：expectedVersion 必须等于当前草稿版本，否则 409（并发编辑冲突）。 */
+    /**
+     * 保存草稿：expectedVersion 必须等于当前草稿版本，否则 409（并发编辑冲突）。
+     * 保存成功即作废该问卷的未结发布申请（ADR 0011：批准绑定草稿版本），与保存同一事务、同一把行锁。
+     */
     public DraftView saveDraft(TenantContext ctx, UUID surveyId, int expectedVersion, JsonNode definition) {
         return tenantScope.call(ctx.tenantId(), () -> {
             access.require(ctx, Permission.EDIT, surveyId);
@@ -72,6 +77,7 @@ public class SurveyService {
                             definitions.serialize(normalized))
                     .orElseThrow(() -> versionConflict(surveyId, expectedVersion));
             audit.record(ctx, SurveyAudit.DRAFT_SAVE, surveyId, "version=" + saved);
+            approvalGate.voidOnDraftSave(ctx, surveyId, saved);
             return new DraftView(surveyId, saved, normalized);
         });
     }

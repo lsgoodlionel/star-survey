@@ -41,9 +41,11 @@ class PublishSettlement {
     private final SurveyRouteService routes;
     private final SurveyViews views;
     private final SurveyAudit audit;
+    private final PublishApprovalGate approvalGate;
 
     PublishSettlement(TenantScope tenantScope, SurveyRepository surveys, PublishAttemptRepository attempts,
-            PublishedVersionRepository versions, SurveyRouteService routes, SurveyViews views, SurveyAudit audit) {
+            PublishedVersionRepository versions, SurveyRouteService routes, SurveyViews views, SurveyAudit audit,
+            PublishApprovalGate approvalGate) {
         this.tenantScope = tenantScope;
         this.surveys = surveys;
         this.attempts = attempts;
@@ -51,6 +53,7 @@ class PublishSettlement {
         this.routes = routes;
         this.views = views;
         this.audit = audit;
+        this.approvalGate = approvalGate;
     }
 
     /** 成功结局无法落地（绑定不符、路由登记失败）：整笔回滚后改记为待核对。 */
@@ -96,6 +99,7 @@ class PublishSettlement {
         registerRoute(ctx, ticket, binding);
         attempts.complete(ticket.requestId(), PublishAttemptRepository.PUBLISHED, 200, null, List.of(), null);
         surveys.markSettled(ticket.surveyId(), SurveyStatus.PUBLISHED, versionNo);
+        approvalGate.onPublished(ctx, ticket.surveyId(), ticket.draftVersion(), ticket.requestId());
         audit.record(ctx, SurveyAudit.PUBLISH, ticket.surveyId(), "version=" + versionNo
                 + " engine=" + binding.engineInstance() + " sid=" + binding.surveyId()
                 + " fingerprint=" + binding.fingerprint() + " request=" + ticket.requestId());

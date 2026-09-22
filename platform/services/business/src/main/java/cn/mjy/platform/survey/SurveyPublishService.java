@@ -1,6 +1,5 @@
 package cn.mjy.platform.survey;
 
-import cn.mjy.platform.access.Permission;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
@@ -21,7 +20,8 @@ import org.springframework.stereotype.Service;
 /**
  * 发布流程（契约 publish-gateway-v1 的平台侧）。分三步，网关调用不在任何数据库事务里：
  * <ol>
- *   <li><b>开始</b>（事务 1，持问卷行锁）：经 access 模块判定 PUBLISH（需要审核时 403 APPROVAL_REQUIRED，绝不绕过）；
+ *   <li><b>开始</b>（事务 1，持问卷行锁）：经 access 模块判定 PUBLISH；需要审核且不能免审时，新发起的尝试必须凭
+ *       对当前草稿版本的有效批准（{@link PublishApprovalGate}），否则 403 APPROVAL_REQUIRED，绝不绕过；
  *       按状态决定是新发起（新 requestId、选本租户的 active 引擎实例、固化定义快照）还是核对（沿用上次的
  *       requestId、实例与快照）；先把尝试落库、问卷置为 publishing，再提交。并发的第二个请求在行锁后看到
  *       publishing，得到 409 publish_in_progress——同一问卷同一时刻只有一个请求到达网关。</li>
@@ -42,25 +42,25 @@ public class SurveyPublishService {
     private static final Logger log = LoggerFactory.getLogger(SurveyPublishService.class);
 
     private final TenantScope tenantScope;
-    private final SurveyAccess access;
     private final SurveyRepository surveys;
     private final PublishAttemptRepository attempts;
     private final SurveyDefinitions definitions;
     private final EngineInstanceService engines;
     private final PublishGatewayClient gateway;
     private final PublishSettlement settlement;
+    private final PublishApprovalGate approvalGate;
 
-    SurveyPublishService(TenantScope tenantScope, SurveyAccess access, SurveyRepository surveys,
+    SurveyPublishService(TenantScope tenantScope, SurveyRepository surveys,
             PublishAttemptRepository attempts, SurveyDefinitions definitions, EngineInstanceService engines,
-            PublishGatewayClient gateway, PublishSettlement settlement) {
+            PublishGatewayClient gateway, PublishSettlement settlement, PublishApprovalGate approvalGate) {
         this.tenantScope = tenantScope;
-        this.access = access;
         this.surveys = surveys;
         this.attempts = attempts;
         this.definitions = definitions;
         this.engines = engines;
         this.gateway = gateway;
         this.settlement = settlement;
+        this.approvalGate = approvalGate;
     }
 
     /** 已固化、即将发给网关的一次尝试。 */
@@ -79,7 +79,7 @@ public class SurveyPublishService {
 
     private Ticket begin(TenantContext ctx, UUID surveyId) {
         return tenantScope.call(ctx.tenantId(), () -> {
-            access.require(ctx, Permission.PUBLISH, surveyId);
+            PublishApprovalGate.Clearance clearance = approvalGate.clear(ctx, surveyId);
             if (!gateway.isConfigured()) {
                 throw new PublishUnavailableException("publish gateway is not configured");
             }
@@ -96,17 +96,21 @@ public class SurveyPublishService {
                     yield reconcile(row);
                 }
                 case PENDING_RECONCILIATION -> reconcile(row);
-                case DRAFT, PUBLISH_FAILED -> freshAttempt(ctx, row);
+                case DRAFT, PUBLISH_FAILED -> freshAttempt(ctx, clearance, row);
             };
         });
     }
 
-    /** 新发起：新 requestId，定义以当前草稿为准并再校验一次，requestId 先于网关调用落库。 */
-    private Ticket freshAttempt(TenantContext ctx, SurveyRow row) {
+    /**
+     * 新发起：新 requestId，定义以当前草稿为准并再校验一次，requestId 先于网关调用落库。
+     * 须凭批准时，批准核对与快照在同一把行锁下完成，快照因此正是被批准的草稿版本。
+     */
+    private Ticket freshAttempt(TenantContext ctx, PublishApprovalGate.Clearance clearance, SurveyRow row) {
+        UUID requestId = UUID.randomUUID();
+        approvalGate.authorizeFreshAttempt(ctx, clearance, row, requestId);
         String instance = activeEngineInstance(ctx.tenantId());
         String definition = definitions.serialize(
                 definitions.normalize(definitions.parse(row.draftDefinition()), row.id()));
-        UUID requestId = UUID.randomUUID();
         attempts.insert(ctx.tenantId(), requestId, row.id(), row.draftVersion(), instance, definition, ctx.actorId());
         surveys.markPublishing(row.id(), requestId);
         return new Ticket(row.id(), requestId, instance, row.draftVersion(), definition);
