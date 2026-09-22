@@ -25,4 +25,4 @@ enable_remote_control
 (cd "$REPO_ROOT/platform/tools/publish-gateway" && python3 -m unittest discover -s tests -t .)
 
 python3 "$REPO_ROOT/platform/tests/e2e/publish_gateway.py" \
-  --container "$CONTAINER" --db "$TEST_DB"
+  --container "$CONTAINER" --db "$TEST_DB" --db-container "$TEST_PREFIX-$DB_SERVICE"

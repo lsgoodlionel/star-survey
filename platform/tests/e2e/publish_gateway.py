@@ -70,15 +70,16 @@ class DockerCurlTransport:
 class Database:
     """只读 SQL 探针：网关自己不碰数据库，验证脚本需要看库里的事实。"""
 
-    def __init__(self, driver: str):
+    def __init__(self, driver: str, container: str):
         self._driver = driver
+        self._container = container
 
     def rows(self, sql: str) -> List[List[str]]:
         if self._driver == "pgsql":
-            command = ["docker", "exec", "survey-test-pg", "psql", "-U", "postgres",
+            command = ["docker", "exec", self._container, "psql", "-U", "postgres",
                        "-d", "limesurvey", "-tA", "-F", "\t", "-c", sql]
         else:
-            command = ["docker", "exec", "survey-test-db", "mariadb", "-uroot", "-proot",
+            command = ["docker", "exec", self._container, "mariadb", "-uroot", "-proot",
                        "-N", "-B", "limesurvey", "-e", sql]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if completed.returncode != 0:
@@ -353,10 +354,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="P0-00.8 发布网关端到端验证")
     parser.add_argument("--container", default="survey-test-web")
     parser.add_argument("--db", default="mysql", choices=("mysql", "pgsql"))
+    parser.add_argument("--db-container", default=None,
+                        help="database container (default survey-test-db / survey-test-pg)")
     args = parser.parse_args()
+    db_container = args.db_container or ("survey-test-pg" if args.db == "pgsql" else "survey-test-db")
 
     definition = SurveyDefinition.from_json(DEFINITION.read_text(encoding="utf-8"))
-    db = Database(args.db)
+    db = Database(args.db, db_container)
     client = RemoteControlClient(DockerCurlTransport(args.container))
     client.login(ADMIN_USER, ADMIN_PASSWORD)
 

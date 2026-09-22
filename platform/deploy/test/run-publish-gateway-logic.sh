@@ -6,7 +6,7 @@
 # HTTP respondents check hiding, clearing, validation and stored calculations.
 #
 # Driver: platform/tests/e2e/publish_gateway_logic.py (host; RemoteControl is
-# tunnelled through `docker exec survey-test-web curl`, like run-publish-gateway.sh).
+# tunnelled through `docker exec <prefix>-test-web curl`, like run-publish-gateway.sh).
 #
 # Usage: [TEST_DB=mysql|pgsql] platform/deploy/test/run-publish-gateway-logic.sh [--fresh]
 set -euo pipefail
@@ -27,5 +27,5 @@ enable_remote_control
 (cd "$REPO_ROOT/platform/tools/publish-gateway" && python3 -m unittest discover -s tests -t .)
 
 python3 "$REPO_ROOT/platform/tests/e2e/publish_gateway_logic.py" \
-  --container "$CONTAINER" --db "$TEST_DB"
+  --container "$CONTAINER" --db "$TEST_DB" --db-container "$TEST_PREFIX-$DB_SERVICE"
 echo "publish gateway logic e2e passed ($TEST_DB)"
