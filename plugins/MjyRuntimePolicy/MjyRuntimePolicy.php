@@ -44,6 +44,7 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     private const DEVICE_COOKIE_SECONDS = 31536000;
     private const DEVICE_PATTERN = '/\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/';
     private const STATUS_FUNCTION = 'policyStatus';
+    private const CLOSED_ACCESS = 'C';
 
     protected $storage = 'DbStorage';
     protected static $description = 'MJY: server-side exam deadline and hard quota lease';
@@ -291,13 +292,15 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     {
         $survey = Survey::model()->findByPk($surveyId);
         $hasTokenTable = $survey !== null && $survey->hasTokensTable;
+        // 引擎 7.x：access_mode=C 时没有有效 token 进不了问卷；O 时 token 可有可无。
+        $isClosedAccess = $hasTokenTable && $survey->access_mode === self::CLOSED_ACCESS;
         return new MjyAccessRequest(
             $surveyId,
             MjyIpRules::clientIp($_SERVER, MjyIpRules::trustedProxiesFromEnvironment()),
             $hasTokenTable ? $this->validToken($surveyId) : null,
             $policy->tracksAttempts() ? $this->deviceId() : '',
             ($_SESSION[self::UNLOCK_SESSION_KEY][$surveyId] ?? null) === $policy->digest(),
-            $hasTokenTable
+            $isClosedAccess
         );
     }
 

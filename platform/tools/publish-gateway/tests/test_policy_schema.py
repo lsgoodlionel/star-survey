@@ -128,6 +128,10 @@ class AccessTest(unittest.TestCase):
     def test_captcha_conflicts_with_raw_setting(self):
         self.assertIn("E_POLICY_SETTING_CONFLICT", issues_for(minimal(access={"captcha": True}), usecaptcha="A"))
 
+    def test_invitation_conflicts_with_raw_access_mode(self):
+        self.assertIn("E_POLICY_SETTING_CONFLICT", issues_for(
+            minimal(access={"invitationRequired": True}), with_participants(), access_mode="O"))
+
     def test_invitation_requires_participants(self):
         self.assertIn("E_POLICY_INVITATION", issues_for(minimal(access={"invitationRequired": True})))
         self.assertEqual([], issues_for(minimal(access={"invitationRequired": True}), with_participants()))
@@ -143,6 +147,14 @@ class LimitsTest(unittest.TestCase):
 
     def test_token_identity_requires_participants(self):
         self.assertIn("E_POLICY_IDENTITY", issues_for(minimal(limits={"responses": [{"by": "token", "max": 1}]})))
+
+    def test_token_identity_requires_closed_access(self):
+        # 开放访问（access_mode=O）的问卷没有 token 也能答，按 token 限次就形同虚设。
+        codes = issues_for(minimal(limits={"responses": [{"by": "token", "max": 1}]}), with_participants())
+        self.assertIn("E_POLICY_IDENTITY", codes)
+        self.assertEqual([], issues_for(minimal(
+            access={"invitationRequired": True}, limits={"responses": [{"by": "token", "max": 1}]}),
+            with_participants()))
 
     def test_limit_bounds(self):
         for bad in (0, -1, 10001, 1.5, True, "1"):

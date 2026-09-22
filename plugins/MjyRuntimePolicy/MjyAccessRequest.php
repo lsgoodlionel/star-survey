@@ -23,7 +23,7 @@ class MjyAccessRequest
     private $isUnlocked;
 
     /** @var bool */
-    private $hasTokenTable;
+    private $isClosedAccess;
 
     public function __construct(
         int $surveyId,
@@ -31,14 +31,14 @@ class MjyAccessRequest
         ?string $token,
         string $deviceId,
         bool $isUnlocked,
-        bool $hasTokenTable
+        bool $isClosedAccess
     ) {
         $this->surveyId = $surveyId;
         $this->clientIp = $clientIp;
         $this->token = ($token === null || $token === '') ? null : $token;
         $this->deviceId = $deviceId;
         $this->isUnlocked = $isUnlocked;
-        $this->hasTokenTable = $hasTokenTable;
+        $this->isClosedAccess = $isClosedAccess;
     }
 
     public function surveyId(): int
@@ -61,9 +61,9 @@ class MjyAccessRequest
         return $this->isUnlocked;
     }
 
-    public function hasTokenTable(): bool
+    public function isClosedAccess(): bool
     {
-        return $this->hasTokenTable;
+        return $this->isClosedAccess;
     }
 
     /**

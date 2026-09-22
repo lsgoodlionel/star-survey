@@ -75,6 +75,8 @@ class NativeAndPluginSplitTest(unittest.TestCase):
         compiled = compile_policy(policy_definition(minimal(access={"invitationRequired": True}),
                                                     with_participants()))
         self.assertIsNone(compiled.payload)
+        # 引擎 7.x 的 access_mode：C＝必须凭参与者 token 进入，O＝token 可有可无。
+        self.assertEqual({"access_mode": "C"}, compiled.native_settings)
 
     def test_definition_without_policy_compiles_to_nothing(self):
         self.assertIsNone(compile_policy(sample_definition()))
@@ -120,6 +122,7 @@ class LssOutputTest(unittest.TestCase):
         compiled = LssCompiler().compile(policy_definition(full_policy(), with_participants()))
         row = survey_row(compiled.lss)
         self.assertEqual("X", row["usecaptcha"])
+        self.assertEqual("C", row["access_mode"])
         self.assertEqual("2026-10-01 01:00:00", row["startdate"])
         self.assertEqual("2026-10-07 10:30:00", row["expires"])
 

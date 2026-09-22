@@ -88,6 +88,7 @@ class _Reader:
         self._definition = definition
         self._issues: List[ValidationIssue] = []
         self._identities: List[str] = []
+        self._invitation_required = False
 
     def read(self) -> Tuple[Optional[AccessPolicy], List[ValidationIssue]]:
         raw = self._definition.policy
@@ -103,13 +104,15 @@ class _Reader:
         if not (_TOP_KEYS - {"policyVersion"}) & set(raw):
             self._issue("E_POLICY_EMPTY", "policy", "策略里没有任何规则")
         access = self._block(raw, "access", "policy.access", _ACCESS_KEYS)
+        invitation_required = self._invitation(access)
+        self._invitation_required = invitation_required
         limits = self._block(raw, "limits", "policy.limits", _LIMIT_KEYS)
         responses, duration = self._limits(limits)
         policy = AccessPolicy(
             window=self._window(self._block(raw, "window", "policy.window", _WINDOW_KEYS)),
             password_hash=self._password(access),
             captcha=self._flag(access, "captcha", "policy.access"),
-            invitation_required=self._invitation(access),
+            invitation_required=invitation_required,
             responses=responses,
             max_duration_seconds=duration,
             network=self._network(self._block(raw, "network", "policy.network", _NETWORK_KEYS)),
@@ -216,8 +219,9 @@ class _Reader:
             self._issue("E_POLICY_IDENTITY", where + ".by", "身份维度 {} 重复出现".format(by))
             return None
         self._identities.append(by)
-        if by == "token" and not self._definition.participants:
-            self._issue("E_POLICY_IDENTITY", where + ".by", "按 token 限次的问卷必须带参与者（participants）")
+        if by == "token" and not self._invitation_required:
+            self._issue("E_POLICY_IDENTITY", where + ".by",
+                        "按 token 限次要求 access.invitationRequired=true：开放访问的问卷没有 token 也能作答")
         return ResponseLimit(by=by, max=maximum) if maximum is not None else None
 
     # ------------------------------------------------------------ 网络
@@ -266,6 +270,8 @@ class _Reader:
         clashes = []
         if policy.captcha and "usecaptcha" in settings:
             clashes.append("usecaptcha")
+        if policy.invitation_required and "access_mode" in settings:
+            clashes.append("access_mode")
         if policy.window is not None:
             clashes.extend(name for name in ("startdate", "expires") if name in settings)
         for name in clashes:

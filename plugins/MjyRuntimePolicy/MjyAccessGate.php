@@ -140,8 +140,9 @@ class MjyAccessGate
     private function checkAttempts(MjyAccessPolicy $policy, MjyAccessRequest $request, string $nowUtc): MjyPolicyDecision
     {
         if ($this->needsToken($policy) && $request->token() === null) {
-            // 问卷有参与者表时，引擎自己的 token 入口页会拦住没有 token 的人。
-            return $request->hasTokenTable() ? MjyPolicyDecision::allow() : MjyPolicyDecision::denyTokenRequired();
+            // 闭合访问（access_mode=C）时，引擎自己的 token 入口页会拦住没有有效 token 的人；
+            // 开放访问时没有 token 就无从按 token 限次，只能拒绝。
+            return $request->isClosedAccess() ? MjyPolicyDecision::allow() : MjyPolicyDecision::denyTokenRequired();
         }
         $holder = $this->holder($request);
         $ttl = $this->leaseTtl($policy);

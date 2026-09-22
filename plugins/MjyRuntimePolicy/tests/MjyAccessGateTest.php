@@ -206,10 +206,10 @@ class MjyAccessGateTest extends TestBaseClass
     {
         $policy = $this->policy(['responses' => [['by' => 'token', 'max' => 1]]]);
 
-        $this->assertTrue($this->evaluate($policy, $this->request(['hasTokenTable' => true]))->isAllowed());
+        $this->assertTrue($this->evaluate($policy, $this->request(['isClosedAccess' => true]))->isAllowed());
         $this->assertSame(
             \MjyPolicyDecision::REASON_TOKEN_REQUIRED,
-            $this->evaluate($policy, $this->request(['hasTokenTable' => false]))->reason()
+            $this->evaluate($policy, $this->request(['isClosedAccess' => false]))->reason()
         );
     }
 
@@ -320,7 +320,7 @@ class MjyAccessGateTest extends TestBaseClass
             'token' => null,
             'device' => 'device-default',
             'unlocked' => false,
-            'hasTokenTable' => false,
+            'isClosedAccess' => false,
         ], $overrides);
         return new \MjyAccessRequest(
             $values['surveyId'],
@@ -328,7 +328,7 @@ class MjyAccessGateTest extends TestBaseClass
             $values['token'],
             $values['device'],
             $values['unlocked'],
-            $values['hasTokenTable']
+            $values['isClosedAccess']
         );
     }
 }

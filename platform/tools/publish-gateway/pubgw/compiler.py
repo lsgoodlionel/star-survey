@@ -95,7 +95,7 @@ _ANSWER_L10N_FIELDS = ("id", "aid", "answer", "language")
 #: 引擎导入只读 name/key/value（import_helper.php:3447），写进 lime_plugin_settings（model=Survey）。
 _PLUGIN_SETTING_FIELDS = ("name", "key", "value")
 #: 只有访问策略带时间窗时才出现的问卷列：没有策略的定义编译结果逐字节不变。
-_POLICY_SURVEY_FIELDS = ("startdate", "expires")
+_POLICY_SURVEY_FIELDS = ("startdate", "expires", "access_mode")
 _QUESTION_ATTRIBUTE_FIELDS = ("qid", "attribute", "value", "language")
 _LANGUAGE_SETTINGS_FIELDS = (
     "surveyls_survey_id", "surveyls_language", "surveyls_title", "surveyls_description",

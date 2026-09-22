@@ -24,6 +24,8 @@ PAYLOAD_SCHEMA = "mjy-access-policy/1"
 
 #: 引擎"只在进入问卷时"要验证码（common_helper.php isCaptchaEnabled 'surveyaccessscreen'）。
 CAPTCHA_ON_ACCESS = "X"
+#: 引擎 7.x 的访问模式（Survey.php access_mode）：C＝必须凭参与者 token 进入。
+CLOSED_ACCESS = "C"
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,8 @@ def _native(policy: AccessPolicy) -> Dict[str, str]:
     settings: Dict[str, str] = {}
     if policy.captcha:
         settings["usecaptcha"] = CAPTCHA_ON_ACCESS
+    if policy.invitation_required:
+        settings["access_mode"] = CLOSED_ACCESS
     if policy.window is not None:
         if policy.window.opens_utc:
             settings["startdate"] = policy.window.opens_utc
