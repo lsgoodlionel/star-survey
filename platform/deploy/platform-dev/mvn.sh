@@ -16,7 +16,11 @@ if [[ ! "$DB_NAME" =~ ^[a-z][a-z0-9_]{0,40}$ ]]; then
 fi
 COMPOSE=(docker compose -f "$HERE/docker-compose.platform.yml" -p platform-dev)
 
-"${COMPOSE[@]}" up -d platform-db >/dev/null
+# 已在运行且健康就直接复用：compose 会把另一个工作树里的挂载路径视为配置变化而重建容器，
+# 重建会断开所有并行车道的连接，并让挂在该网络上的其他容器（如端到端的平台容器）解析不到 platform-db。
+if [[ "$(docker inspect -f '{{.State.Health.Status}}' platform-db 2>/dev/null)" != "healthy" ]]; then
+  "${COMPOSE[@]}" up -d platform-db >/dev/null
+fi
 until [[ "$(docker inspect -f '{{.State.Health.Status}}' platform-db)" == "healthy" ]]; do
   sleep 2
 done

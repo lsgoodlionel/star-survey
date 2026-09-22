@@ -71,7 +71,6 @@ random_secret() { python3 -c 'import secrets; print(secrets.token_urlsafe(48))';
 # ------------------------------------------------------------------ teardown
 
 is_engine_started=false
-was_platform_db_running=false
 WORK_DIR=""
 
 dump_diagnostics() {
@@ -109,9 +108,7 @@ cleanup() {
   remove_network
   docker exec "$PLATFORM_DB_CONTAINER" psql -U platform_owner -d platform -qc \
     "DROP DATABASE IF EXISTS $PLATFORM_DB_NAME WITH (FORCE)" >/dev/null 2>&1
-  if ! $was_platform_db_running; then
-    docker compose -f "$PLATFORM_DEV_DIR/docker-compose.platform.yml" -p platform-dev stop platform-db >/dev/null 2>&1
-  fi
+  # platform-db 是并行车道共用的开发服务：只删自己的库，不停容器（启动时是否在运行无法代表别的车道此刻是否在用）。
   if [[ -n "$WORK_DIR" ]]; then
     rm -rf "$WORK_DIR"
   fi
@@ -180,9 +177,6 @@ ADMIN_PASSWORD="$(random_secret)"
 export PUBGW_ENGINE_HD01_PASSWORD="$ADMIN_PASSWORD"
 
 step "platform: build, fresh database, start"
-if [[ "$(docker inspect -f '{{.State.Running}}' "$PLATFORM_DB_CONTAINER" 2>/dev/null)" == "true" ]]; then
-  was_platform_db_running=true
-fi
 # Leftovers of an interrupted run hold connections that would block the drop below.
 docker rm -fv "$PLATFORM_CONTAINER" "$GATEWAY_CONTAINER" >/dev/null 2>&1 || true
 remove_network
