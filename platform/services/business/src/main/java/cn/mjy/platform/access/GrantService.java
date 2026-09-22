@@ -100,7 +100,11 @@ public class GrantService {
         audit.record(ctx, AccessAudit.GRANT_REVOKE, AccessAudit.describeGrant(grant));
     }
 
-    private boolean isLastActiveOwner(TenantId tenant, GrantView grant) {
+    /**
+     * 这条授权是否是租户最后一名在职所有者的有效所有者授权。手工撤权与组织同步移除成员共用这一个判定，
+     * 口径必须一致：过期授权、非在职成员都不算所有者。调用方须已在租户作用域内。
+     */
+    boolean isLastActiveOwner(TenantId tenant, GrantView grant) {
         boolean ownerGrant = GrantRepository.OWNER_ROLE.equals(grant.roleCode()) && grant.resourceId() == null;
         boolean live = grant.expiresAt() == null || grant.expiresAt().isAfter(clock.instant());
         boolean activeMember = members.find(tenant, grant.actorId())

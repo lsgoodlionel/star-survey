@@ -66,6 +66,27 @@ class OrgTablesIsolationTest extends OrgLoginTestSupport {
     }
 
     @Test
+    void aTenantBRowCannotPointAtTenantAsConnectionOrPrincipal() {
+        // 行级安全只校验子行自身的 tenant_id；外键校验绕过行级安全，所以引用必须带上 tenant_id。
+        assertThatThrownBy(() -> tenantScope.run(tenantB, () -> jdbc.sql("""
+                        INSERT INTO org_login_state (state, tenant_id, connection_id, browser_hash, expires_at)
+                        VALUES (:s, :t, :c, :h, now() + interval '5 minutes')
+                        """)
+                .param("s", UUID.randomUUID().toString().replace("-", "")).param("t", tenantB.value()).param("c", orgA.connectionId())
+                .param("h", "0".repeat(64)).update()))
+                .rootCause().hasMessageContaining("foreign key");
+        UUID principalOfA = tenantScope.call(tenantA, () -> jdbc
+                .sql("SELECT principal_id FROM identity_binding_revocation").query(UUID.class).list().getFirst());
+        assertThatThrownBy(() -> tenantScope.run(tenantB, () -> jdbc.sql("""
+                        INSERT INTO org_login_session (id, tenant_id, principal_id, connection_id, expires_at)
+                        VALUES (:id, :t, :p, :c, now() + interval '5 minutes')
+                        """)
+                .param("id", UUID.randomUUID()).param("t", tenantB.value()).param("p", principalOfA)
+                .param("c", orgA.connectionId()).update()))
+                .rootCause().hasMessageContaining("foreign key");
+    }
+
+    @Test
     void tenantBCannotReviveOrDisableTenantAsRows() {
         int sessions = tenantScope.call(tenantB, () -> jdbc
                 .sql("UPDATE org_login_session SET revoked_at = NULL, revoke_reason = NULL").update());

@@ -153,9 +153,7 @@ public class MemberService {
                 return true;
             }
             List<GrantView> held = grants.listForActor(tenant, actorId);
-            boolean soleOwner = member.get().isActive() && held.stream().anyMatch(g ->
-                    GrantRepository.OWNER_ROLE.equals(g.roleCode()) && g.resourceId() == null)
-                    && grants.activeOwners(tenant) <= 1;
+            boolean soleOwner = held.stream().anyMatch(g -> grantService.isLastActiveOwner(tenant, g));
             if (soleOwner) {
                 return false;
             }
