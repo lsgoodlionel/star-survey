@@ -11,7 +11,9 @@
   登记引擎实例，并签发该实例的事件密钥（只写入权限 0600 的文件，从不打印）；
 * ``owner-project``：所有者经资源树接口建项目（创建者获得项目授权），并在可见列表里找到它；
 * ``owner-publish``：所有者在该项目下建问卷、存草稿、发布，并核对状态、已发布版本与公开路由；
-* ``republish``：再次发布同一问卷必须 409 already_published。
+* ``republish``：草稿未改动时再次发布同一问卷必须 409 already_published；
+* ``republish-changed``：改稿后重新发布（ADR 0012）→ 第 2 版、新 sid、公开路由切到新 sid、旧 sid 反查仍归属
+  本问卷、第 1 版标记为已被取代且引擎已收口；随后对第 2 版做一次漂移检查必须 match。
 
 密钥只从环境变量 ``PLATFORM_JWT_HMAC_SECRET`` 读取。
 """
@@ -263,6 +265,51 @@ def cmd_republish(args: argparse.Namespace) -> None:
            "re-publish -> 409 already_published", "{} {}".format(status, _brief(body)))
 
 
+def cmd_republish_changed(args: argparse.Namespace) -> None:
+    state_path = Path(args.state)
+    state = load_state(state_path)
+    owner = owner_api(args, state)
+    survey_id, old_sid = state["surveyId"], state["engineSid"]
+    with open(args.definition, encoding="utf-8") as handle:
+        definition = dict(json.load(handle), title="P1 e2e second version")
+
+    status, draft = owner.call("GET", "/v1/surveys/{}/draft".format(survey_id))
+    expect(status == 200, "GET draft -> 200", "{} {}".format(status, _brief(draft)))
+    status, saved = owner.call("PUT", "/v1/surveys/{}/draft".format(survey_id),
+                               {"expectedVersion": draft["version"], "definition": definition})
+    expect(status == 200 and saved.get("version") == draft["version"] + 1,
+           "owner saves a changed draft of the published survey -> 200", "{} {}".format(status, _brief(saved)))
+
+    status, outcome = owner.call("POST", "/v1/surveys/{}/publish".format(survey_id))
+    version = (outcome or {}).get("version") if isinstance(outcome, dict) else None
+    version = version or {}
+    new_sid = version.get("engineSid")
+    expect(status == 200 and version.get("version") == 2 and version.get("live") is True,
+           "republish -> 200 version 2 (live)", "{} {}".format(status, _brief(outcome)))
+    expect(isinstance(new_sid, int) and new_sid != old_sid,
+           "version 2 is a new engine survey (sid {} -> {})".format(old_sid, new_sid), _brief(version))
+
+    status, versions = owner.call("GET", "/v1/surveys/{}/versions".format(survey_id))
+    first = versions[0] if isinstance(versions, list) and len(versions) == 2 else {}
+    expect(status == 200 and first.get("engineSid") == old_sid and first.get("live") is False
+           and first.get("supersededAt") and first.get("engineClosedAt"),
+           "version 1 is kept, superseded, and closed in the engine", "{} {}".format(status, _brief(versions)))
+
+    status, route = owner.call("GET", "/v1/survey-routes/{}".format(survey_id))
+    expect(status == 200 and route.get("engineSid") == new_sid,
+           "public route {} now -> sid {}".format(survey_id, new_sid), "{} {}".format(status, _brief(route)))
+    status, reverse = owner.call("GET", "/v1/survey-routes?engineInstanceId={}&engineSid={}".format(
+        state["instance"], old_sid))
+    expect(status == 200 and reverse.get("publicId") == survey_id,
+           "old sid {} still resolves to the survey".format(old_sid), "{} {}".format(status, _brief(reverse)))
+
+    status, check = owner.call("POST", "/v1/surveys/{}/versions/2/drift-checks".format(survey_id))
+    expect(status == 200 and check.get("outcome") == "match" and check.get("engineSid") == new_sid,
+           "drift check of version 2 against the real engine -> match", "{} {}".format(status, _brief(check)))
+
+    save_state(state_path, dict(state, oldSid=old_sid, engineSid=new_sid))
+
+
 def parse_args(argv: List[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", required=True, help="platform base URL reachable from this host")
@@ -284,6 +331,10 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 
     republish = commands.add_parser("republish")
     republish.set_defaults(handler=cmd_republish)
+
+    changed = commands.add_parser("republish-changed")
+    changed.add_argument("--definition", required=True)
+    changed.set_defaults(handler=cmd_republish_changed)
     return parser.parse_args(argv)
 
 

@@ -126,9 +126,15 @@ draft ──> publishing ──> published ──（草稿改动后重新发布�
 - 平台测试：`SurveyRepublishTest`（切换、旧版不可变且可查、只收口旧版、无改动 409、激活失败保留旧路由、
   发布中旧版仍被路由且并发只有一个赢、未知结果核对后才切换、收口失败后台重试、审批与改稿作废）、
   `SurveyRouteSwitchTest`、`SurveyDriftCheckTest`、`SurveyRepublishApiTest`、`HttpGatewayOperationsTest`。
-- 真引擎端到端：`platform/deploy/test/run-publish-gateway-service.sh` 增加重新发布、收口（作答入口拒绝旧 sid）
-  与改代码后的漂移检出；`platform/deploy/test/run-p1-e2e.sh` 增加重新发布一步（新 sid、路由切换、旧 sid 过期且
-  旧答卷仍归属原问卷、新版可作答、漂移检查 match）。
+- 真引擎端到端（MariaDB 10.11 与 PostgreSQL 16 均通过，2026-09-22）：
+  `platform/deploy/test/run-publish-gateway-service.sh` 增加重新发布（新 sid）、收口（旧 sid 仍 `active='Y'`、
+  `expires` 已写、作答入口显示"no longer available"、新 sid 可作答、重复收口 alreadyClosed、缺失 sid 502）、
+  新版 match、已收口旧 sid 不算漂移，以及直接改库 `lime_questions.title` 后检出 `QSINGLE → QDRIFTED`；
+  `platform/deploy/test/run-p1-e2e.sh` 增加重新发布一步：第 2 版新 sid、公开路由切换、旧 sid 反查仍归属原问卷、
+  第 1 版 superseded 且已收口、网关恰一次 close、旧答卷留在旧表、第 2 版作答后答卷 id 从 1 开始并被平台投影、
+  第 1 版投影不变、对真引擎的漂移检查 match。
+- 并行车道隔离：测试栈容器名改为可由 `SURVEY_TEST_PREFIX` 前缀（缺省仍是 `survey-test-*`），
+  P1 脚本的网络、平台 / 网关容器、平台库名与网关镜像标签随之带前缀，互不冲突。
 
 ## 限制与后续
 

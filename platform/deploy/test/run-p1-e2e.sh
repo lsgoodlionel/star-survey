@@ -19,6 +19,10 @@
 #   respondent: completes the survey over HTTP; engine cron relays the events and the
 #             platform projects the response as engine_completed
 #   idempotency: publish again -> 409 already_published, gateway not called again
+#   republish (ADR 0012): changed draft -> version 2 on a new sid, public route
+#             switched, old sid expired (not deactivated) and still owning its
+#             response, respondent completes version 2 (response ids restart),
+#             platform projects it, drift check of version 2 -> match
 #
 # Secrets (JWT, engine-events master, gateway shared secret, engine admin password)
 # are random per run and travel only through environment variables.
@@ -34,24 +38,26 @@ TEST_DB="${TEST_DB:-mysql}"
 is_fresh=true
 # The test stack's container names are fixed; share the compose project of the
 # main checkout so a run from any worktree reuses them instead of colliding.
-export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-survey}"
+# SURVEY_TEST_PREFIX (see lib.sh) isolates a parallel lane: its own engine stack,
+# network, platform/gateway containers and platform database.
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-${SURVEY_TEST_PREFIX:-survey}}"
 # shellcheck source=lib.sh
 source "$REPO_ROOT/platform/deploy/test/lib.sh"
 COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.dev.yml" -f "$TEST_DIR/p1-e2e.compose.yml" --profile test)
 
 INSTANCE_ID=hd-engine-01
-NETWORK=p1e2e-net
-PLATFORM_CONTAINER=p1e2e-platform
-GATEWAY_CONTAINER=p1e2e-pubgw
+NETWORK="${SURVEY_TEST_PREFIX:+$SURVEY_TEST_PREFIX-}p1e2e-net"
+PLATFORM_CONTAINER="${SURVEY_TEST_PREFIX:+$SURVEY_TEST_PREFIX-}p1e2e-platform"
+GATEWAY_CONTAINER="${SURVEY_TEST_PREFIX:+$SURVEY_TEST_PREFIX-}p1e2e-pubgw"
 PLATFORM_DEV_DIR="$REPO_ROOT/platform/deploy/platform-dev"
 PLATFORM_DB_CONTAINER=platform-db
 PLATFORM_DB_NETWORK=platform-dev_default
-export PLATFORM_DB_NAME=platform_p1_e2e
+export PLATFORM_DB_NAME="platform_p1_e2e${SURVEY_TEST_PREFIX:+_${SURVEY_TEST_PREFIX//-/_}}"
 PLATFORM_JAR="$REPO_ROOT/platform/services/business/target/business-0.1.0-SNAPSHOT.jar"
 # The maven image mvn.sh already uses ships a Java 21 runtime: no extra image to pull.
 JAVA_IMAGE=maven:3.9-eclipse-temurin-21
 GATEWAY_DIR="$REPO_ROOT/platform/tools/publish-gateway"
-GATEWAY_IMAGE=survey-publish-gateway:test
+GATEWAY_IMAGE="survey-publish-gateway:${SURVEY_TEST_PREFIX:-test}"
 DRIVER="$REPO_ROOT/platform/tests/e2e/p1_gate.py"
 DEFINITION="$REPO_ROOT/platform/tests/fixtures/surveys/publish-gateway.json"
 PLATFORM_HEALTH_ATTEMPTS=90
@@ -153,6 +159,25 @@ wait_healthy() {
 
 gateway_publish_calls() {
   docker logs "$GATEWAY_CONTAINER" 2>&1 | grep -c '"POST /v1/publish' || true
+}
+
+gateway_close_calls() {
+  docker logs "$GATEWAY_CONTAINER" 2>&1 | grep -c '"POST /v1/close' || true
+}
+
+# Waits until the platform projects (instance, sid, response) as engine_completed.
+await_projection() {
+  local sid="$1" response="$2" projection=""
+  for ((attempt = 1; attempt <= INGESTION_ATTEMPTS; attempt++)); do
+    run_engine_cron || true
+    projection="$(platform_tenant_sql "$TENANT_ID" "SELECT state FROM response_projection
+      WHERE engine_instance_id = '$INSTANCE_ID' AND survey_id = $sid AND response_id = $response;" | tr -d '[:space:]')"
+    if [[ "$projection" == "engine_completed" ]]; then
+      return 0
+    fi
+    sleep "$INGESTION_INTERVAL_SECONDS"
+  done
+  fail "platform projection of sid $sid response $response is '$projection', expected engine_completed"
 }
 
 run_engine_cron() {
@@ -312,4 +337,36 @@ engine_surveys_final="$(db_query "SELECT COUNT(*) FROM lime_surveys" | tr -d '[:
 ((engine_surveys_final == engine_surveys_after_publish)) || fail "engine survey count changed on re-publish"
 ok "engine survey count unchanged"
 
-echo "P1 e2e passed ($TEST_DB): survey $SURVEY_ID -> $INSTANCE_ID sid $SID, response $RESPONSE_ID ingested"
+step "republish: changed draft -> version 2 on a new engine survey"
+python3 "$DRIVER" --base-url "$PLATFORM_URL" --state "$STATE" republish-changed --definition "$DEFINITION"
+NEW_SID="$(state_field engineSid)"
+[[ "$NEW_SID" =~ ^[0-9]+$ && "$NEW_SID" != "$SID" ]] || fail "republish did not produce a new engine sid: $NEW_SID"
+(("$(gateway_publish_calls)" == 2)) || fail "gateway saw $(gateway_publish_calls) publish calls, expected 2"
+(("$(gateway_close_calls)" == 1)) || fail "gateway saw $(gateway_close_calls) close calls, expected 1"
+ok "gateway: one more publish, one close"
+engine_surveys_republished="$(db_query "SELECT COUNT(*) FROM lime_surveys" | tr -d '[:space:]')"
+((engine_surveys_republished == engine_surveys_final + 1)) || fail "republish should add exactly one engine survey"
+old_state="$(db_query "SELECT COUNT(*) FROM lime_surveys WHERE sid = $SID AND active = 'Y' AND expires IS NOT NULL" | tr -d '[:space:]')"
+[[ "$old_state" == "1" ]] || fail "old sid $SID is not both active and expired"
+ok "old engine survey $SID is expired but still active (response table kept)"
+old_page="$(docker exec "$CONTAINER" curl -s "http://localhost/index.php/$SID?lang=en")"
+[[ "$old_page" == *"no longer available"* ]] || fail "old sid $SID still admits respondents"
+ok "old sid $SID refuses new respondents"
+old_responses="$(db_query "SELECT COUNT(*) FROM lime_responses_$SID" | tr -d '[:space:]')"
+((old_responses == 1)) || fail "old response table lime_responses_$SID holds $old_responses rows, expected 1"
+ok "old response $RESPONSE_ID stays in lime_responses_$SID"
+
+step "respondent: complete version 2"
+docker exec "$CONTAINER" php platform/tests/e2e/p1_respond.php "$NEW_SID" >/dev/null \
+  || fail "respondent could not complete survey $NEW_SID"
+NEW_RESPONSE_ID="$(db_query "SELECT id FROM lime_responses_$NEW_SID WHERE submitdate IS NOT NULL" | tr -d '[:space:]')"
+[[ "$NEW_RESPONSE_ID" =~ ^[0-9]+$ ]] || fail "expected one submitted response in lime_responses_$NEW_SID"
+ok "response $NEW_RESPONSE_ID submitted on sid $NEW_SID (ids restart per engine survey)"
+await_projection "$NEW_SID" "$NEW_RESPONSE_ID"
+ok "platform projection: sid $NEW_SID response $NEW_RESPONSE_ID -> engine_completed"
+old_projection="$(platform_tenant_sql "$TENANT_ID" "SELECT state FROM response_projection
+  WHERE engine_instance_id = '$INSTANCE_ID' AND survey_id = $SID AND response_id = $RESPONSE_ID;" | tr -d '[:space:]')"
+[[ "$old_projection" == "engine_completed" ]] || fail "old projection changed to '$old_projection'"
+ok "version 1 projection untouched: sid $SID response $RESPONSE_ID -> engine_completed"
+
+echo "P1 e2e passed ($TEST_DB): survey $SURVEY_ID -> $INSTANCE_ID sid $SID then sid $NEW_SID, responses $RESPONSE_ID and $NEW_RESPONSE_ID ingested"

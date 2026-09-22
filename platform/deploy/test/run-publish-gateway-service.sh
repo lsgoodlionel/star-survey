@@ -10,7 +10,9 @@
 #
 # Asserts: /healthz, 401 unsigned, 404 unknown instance, 200 published with an
 # active survey in the database, idempotent replay by requestId (no second survey),
-# and that no response contains the engine password.
+# and that no response contains the engine password. Contract v1.2 (ADR 0012):
+# republish -> new sid, close the old sid (expired, still active, runtime refuses
+# it), drift-check match, then an engine-side edit of the new sid -> drift.
 #
 # Usage: [TEST_DB=mysql|pgsql] platform/deploy/test/run-publish-gateway-service.sh [--fresh]
 set -euo pipefail
@@ -25,8 +27,8 @@ fi
 source "$REPO_ROOT/platform/deploy/test/lib.sh"
 
 GATEWAY_DIR="$REPO_ROOT/platform/tools/publish-gateway"
-GATEWAY_IMAGE=survey-publish-gateway:test
-GATEWAY_CONTAINER=survey-test-pubgw
+GATEWAY_IMAGE="survey-publish-gateway:${SURVEY_TEST_PREFIX:-test}"
+GATEWAY_CONTAINER="$TEST_PREFIX-test-pubgw"
 INSTANCE_ID=survey-test-web
 ENGINE_PASSWORD_ENV=PUBGW_ENGINE_TEST_PASSWORD
 DEFINITION="$REPO_ROOT/platform/tests/fixtures/surveys/publish-gateway.json"
@@ -203,10 +205,70 @@ else
   fi
 fi
 
-if ((driver_status != 0 || db_failures != 0)); then
+fail_run() {
   echo "--- gateway log ---" >&2
   docker logs "$GATEWAY_CONTAINER" >&2
   echo "publish gateway service e2e FAILED ($TEST_DB)" >&2
   exit 1
+}
+
+if ((driver_status != 0 || db_failures != 0)); then
+  fail_run
 fi
+
+# ---------------------------------------------------------------------------
+# Contract v1.2 (ADR 0012): republish as a new engine survey, close the old one
+# (expiry, never deactivate or delete), drift detection after an engine-side edit.
+OPS_DRIVER="$REPO_ROOT/platform/tests/e2e/publish_gateway_ops.py"
+OPS_STATE="$WORK_DIR/ops-state.json"
+run_ops() {
+  PUBGW_SHARED_SECRET="$SHARED_SECRET" ENGINE_PASSWORD="$ADMIN_PASSWORD" \
+    python3 "$OPS_DRIVER" --url "$GATEWAY_URL" --gateway-dir "$GATEWAY_DIR" --state "$OPS_STATE" "$@"
+}
+check_engine() {
+  local label="$1" actual="$2" expected="$3"
+  if [[ "$actual" == "$expected" ]]; then
+    echo "  [ok] $label" >&2
+  else
+    echo "  [FAIL] $label: got '$actual', expected '$expected'" >&2
+    fail_run
+  fi
+}
+survey_page() {
+  docker exec "$CONTAINER" curl -s "http://localhost/index.php/$1?lang=en"
+}
+count_where() {
+  db_query "SELECT COUNT(*) FROM lime_surveys WHERE $1" | tr -d '[:space:]'
+}
+EXPIRED_MARKER="no longer available"
+
+echo "== republish, close the superseded engine survey" >&2
+ops_summary="$(run_ops republish --instance "$INSTANCE_ID" --definition "$DEFINITION" --old-sid "$survey_id")" \
+  || fail_run
+echo "$ops_summary"
+new_sid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["newSid"])' "$ops_summary")"
+[[ "$new_sid" =~ ^[0-9]+$ ]] || fail_run
+check_engine "old sid $survey_id carries an expiry" "$(count_where "sid = $survey_id AND expires IS NOT NULL")" 1
+check_engine "old sid $survey_id is still active (not deactivated)" "$(count_where "sid = $survey_id AND active = 'Y'")" 1
+check_engine "new sid $new_sid is active without an expiry" \
+  "$(count_where "sid = $new_sid AND active = 'Y' AND expires IS NULL")" 1
+check_engine "republish added exactly one engine survey" "$(count_surveys)" "$((surveys_before + 2))"
+if survey_page "$survey_id" | grep -q "$EXPIRED_MARKER"; then
+  echo "  [ok] the runtime refuses new respondents on old sid $survey_id" >&2
+else
+  echo "  [FAIL] old sid $survey_id still admits respondents" >&2
+  fail_run
+fi
+if survey_page "$new_sid" | grep -q "$EXPIRED_MARKER"; then
+  echo "  [FAIL] new sid $new_sid is reported as expired" >&2
+  fail_run
+fi
+echo "  [ok] new sid $new_sid admits respondents" >&2
+
+echo "== edit the published survey behind the platform's back, then drift-check" >&2
+db_query "UPDATE lime_questions SET title = 'QDRIFTED'
+          WHERE sid = $new_sid AND parent_qid = 0 AND title = 'QSINGLE'" >/dev/null
+docker exec "$CONTAINER" rm -rf tmp/runtime/cache
+run_ops drift || fail_run
+
 echo "publish gateway service e2e passed ($TEST_DB)"
