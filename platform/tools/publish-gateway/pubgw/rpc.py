@@ -33,21 +33,27 @@ class RpcError(RuntimeError):
 
 
 class HttpTransport:
-    """标准库 urllib 传输，生产部署用这个。"""
+    """标准库 urllib 传输，生产部署用这个。
 
-    def __init__(self, base_url: str, timeout: int = 180):
-        self._url = base_url.rstrip("/") + _RPC_PATH
+    ``base_url`` 默认是引擎根地址，后面自动拼上 RemoteControl 路径；
+    传 ``rpc_path=""`` 时它本身就是完整的 RemoteControl 端点。
+    """
+
+    def __init__(self, base_url: str, timeout: float = 180, rpc_path: str = _RPC_PATH):
+        self._url = base_url.rstrip("/") + rpc_path if rpc_path else base_url
         self._timeout = timeout
 
     def __call__(self, payload: bytes) -> bytes:
-        from urllib.error import URLError
+        from http.client import HTTPException
         from urllib.request import Request, urlopen
 
         request = Request(self._url, data=payload, headers={"Content-Type": "application/json"})
         try:
             with urlopen(request, timeout=self._timeout) as response:
                 return response.read()
-        except URLError as error:
+        except (OSError, HTTPException) as error:
+            # URLError、读超时（socket.timeout）、连接被重置、响应截断都必须变成
+            # RpcError：发布编排只认 RpcError，别的异常会绕过回滚。
             raise RpcError("transport", "{} ({})".format(error, self._url)) from None
 
 

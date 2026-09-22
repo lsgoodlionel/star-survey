@@ -1,9 +1,11 @@
 """RemoteControl 客户端：错误形状不统一，客户端必须逐种识别。"""
 
+import http.server
 import json
+import threading
 import unittest
 
-from pubgw.rpc import RemoteControlClient, RpcError
+from pubgw.rpc import HttpTransport, RemoteControlClient, RpcError
 
 from .fakes import FakeEngine
 from .fixtures import sample_definition
@@ -160,6 +162,59 @@ class HelperMethodTest(unittest.TestCase):
         self.client.delete_survey(sid)
 
         self.assertIn(sid, self.engine.deleted)
+
+
+class _QuietHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+
+class HttpTransportTest(unittest.TestCase):
+    """真实套接字上的传输层：任何网络异常都必须变成 RpcError，发布编排才会回滚。"""
+
+    def serve(self, handler_class):
+        httpd = http.server.HTTPServer(("127.0.0.1", 0), handler_class)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        return "http://127.0.0.1:{}".format(httpd.server_address[1])
+
+    def test_posts_to_the_full_endpoint_when_no_path_is_appended(self):
+        seen = []
+
+        class Handler(_QuietHandler):
+            def do_POST(self):
+                seen.append(self.path)
+                self.rfile.read(int(self.headers["Content-Length"]))
+                body = b'{"id":1,"result":"OK","error":null}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        transport = HttpTransport(self.serve(Handler) + "/custom/rpc", rpc_path="")
+
+        self.assertEqual("OK", RemoteControlClient(transport).call("x", []))
+        self.assertEqual(["/custom/rpc"], seen)
+
+    def test_a_read_timeout_becomes_an_rpc_error(self):
+        release = threading.Event()
+
+        class Handler(_QuietHandler):
+            def do_POST(self):
+                release.wait(timeout=5)
+
+        transport = HttpTransport(self.serve(Handler), timeout=0.2)
+        self.addCleanup(release.set)  # 后注册先执行：先放行处理器，再关服务器
+
+        with self.assertRaises(RpcError):
+            transport(b"{}")
+
+    def test_a_refused_connection_becomes_an_rpc_error(self):
+        with self.assertRaises(RpcError):
+            HttpTransport("http://127.0.0.1:9", timeout=2)(b"{}")
 
 
 if __name__ == "__main__":

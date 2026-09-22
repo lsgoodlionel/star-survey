@@ -5,6 +5,11 @@
 platform/docs/adr/0009-publish-gateway.md 与 platform/docs/adr/0005-publishing.md。
 """
 
+import logging
+
 __all__ = ["GATEWAY_VERSION"]
+
+# 库本身不配置日志输出；服务入口（server.main）负责配置根日志。
+logging.getLogger("pubgw").addHandler(logging.NullHandler())
 
 GATEWAY_VERSION = "0.1.0"
