@@ -45,7 +45,7 @@
 | R02-20 | 轮播图 | P | | 媒体版本留存依赖资产服务 | — | 后续 |
 | R02-21 | 视频题 | P | | 授权播放依赖资产服务 | — | 后续 |
 | R02-22 | 文字点睛 | P | | 原文版本＋偏移 | — | 后续 |
-| R02-23 | 文件上传 | N | ✔（基础） | `|`；`allowed_filetypes`（拒绝可执行扩展名）、`max_filesize`、`max_num_of_files`／`min_num_of_files` | 文件清单 JSON；计数 | `""`＋`filecount`；病毒扫描、私有下载、平台资产 id 见 ADR 0006 |
+| R02-23 | 文件上传 | N | ✔（基础） | `|`；`allowed_filetypes` 必填（拒绝可执行／可渲染扩展名）、`max_filesize`、`max_num_of_files`／`min_num_of_files` | 文件清单 JSON；计数 | `""`＋`filecount`；病毒扫描、私有下载、平台资产 id 见 ADR 0006 |
 | R02-24 | 语音录入 | B | | 需 ASR 供应商 | — | — |
 | R02-25 | 答题录音 | P | | 录音主题＋上传会话（P0 已有会话表） | — | 后续 |
 | R02-26 | 答题摄像 | P | | 视频上传完整性与留存 | — | 后续 |
@@ -93,28 +93,50 @@
 | `cn_uscc` | 18 位，字符集 `0-9A-HJ-NPQRTUWXY`；GB 32100 加权模 31 校验码 |
 
 规则里的正则一律不含 `{` `}` `\`（引擎把答案先做实体编码、把模式塞进双引号字符串，见 ADR 0006 限制 2），
-重复次数展开成字符组。原生 `maximum_chars` 仍原样透传（只在浏览器端生效，旧定义行为不变）。
+重复次数展开成字符组；正则作用在 `html_entity_decode(X.NAOK)` 上（原文而非实体编码后的值）。原生 `maximum_chars` 仍原样透传（只在浏览器端生效，旧定义行为不变）。
 
 **为什么是 `em_validation_q` 而不是 `preg`**：两者都在服务端 `_ValidateQuestion` 里重算（相关性也在服务端重算，
 不信任表单里的 `relevance<qid>`），但 `preg` 只能做正则，身份证与信用代码的校验码必须用表达式。
 
-## 四、缺失值
+## 四、缺失值（实测，MariaDB 10.11 与 PostgreSQL 16 完全一致）
 
-引擎对同一列有三种「没有值」，平台字段字典与导出按下表解释（e2e 逐列断言，见 `run-question-types.sh`）：
+引擎对同一列有三种「没有值」，平台字段字典与导出按下表解释。「显示了、没作答」一行来自
+`run-question-types.sh` 场景 B（只答必答题后提交）逐列读库：
 
 | 状态 | 答卷列 | 含义 |
 |---|---|---|
-| 显示了、没作答 | 文本/选择列 `""`；数值（`N` `K` `:` 的 decimal/text 列）与日期列 `NULL` | 作答者跳过 |
-| 被条件隐藏 | `NULL`（`deletenonvalues=1`，引擎缺省） | 不适用 |
+| 显示了、没作答 | 文本、选择、矩阵（含 `:` 数值矩阵，它是 text 列）、多选未勾选、`X`：`""`；`N` `K`（decimal 列）与 `D`：`NULL`；排序：`"[]"`；上传：清单 `""`、计数 `0` | 作答者跳过 |
+| 被条件隐藏、或被互斥项排除的子题 | `NULL`（`deletenonvalues=1`，引擎缺省） | 不适用 |
 | 未到达该页／答卷未提交 | `NULL`，且 `submitdate IS NULL` | 未完成 |
 
-多选未勾选的选项列是 `""`（勾选为 `Y`）；排序未排的名次不进 JSON 数组；上传题未上传时清单列为 `""` 或 `[]`、计数列 `0`/`NULL`（以 e2e 实测为准，见 e2e 输出）。
+多选勾选为 `Y`；排序的 JSON 数组只含已排的项。
 
-## 五、本批实现与延后
+**排序名次列是虚列。** 7.x 的排序题在答卷表里只有主列（JSON），fieldmap 里的名次列 `1…n`
+没有物理列：经网关读端点（`export_responses`）读名次列得到 `null`，名次必须从主列 JSON 解析。
+绑定映射与指纹照实包含名次列（引擎的 `get_fieldmap` 就是这样），字段字典把主列与名次列都标上排序项选项。
+
+## 五、服务端校验与篡改（「篡改影子字段不能跳过校验」）
+
+`run-question-types.sh`（`TEST_DB=mysql|pgsql`）的场景 C，每条一个新会话、真实 HTTP 表单提交，
+两种数据库各 30 条全部通过：
+
+| 类别 | 篡改 | 结果 |
+|---|---|---|
+| 选项代码 | 单选 `A9`、是否 `X`、NPS `11`、五分 `6`、性别 `Z`、矩阵 `A9`、五分矩阵 `7`、`C` 矩阵 `Z`、双尺度串尺度、排序未知项 | 留在本页（`checkValidityAnswer`） |
+| 数量与范围 | 多选超 `max_answers`、数值超上限、整数题填小数、比重和 ≠ 100、负数分配、日期早于 `date_min`、不存在的日期、数值矩阵填非数字、排序同一项排两次 | 留在本页 |
+| 中国本地化格式 | 手机号第二位 2、身份证校验码错（同时把 `java<字段>` 写成合法号码）、出生日期不存在、信用代码校验码错、邮编 5 位、邮箱无点、邮箱超 v2 规则长度、昵称超 `maxLength` | 留在本页（`em_validation_q` 服务端重算） |
+| 影子字段 | 必答手机号填非法值并把 `relevance<qid>` 写 0（假装被隐藏） | 留在本页：相关性在服务端重算，必答照查 |
+| 影子字段 | 互斥项＋其他项，并把所有 `relevance*` 写 1 | 放行但**入库前纠正**：服务端重算子题相关性，被互斥的选项置 `NULL` |
+| 越级提交 | 第 1 页直接 `movesubmit` | 不收卷（后页必答题未答） |
+
+未覆盖：上传题伪造文件清单 JSON（引擎只在临时目录找到同名文件时才搬移，找不到时清单原样入库），
+平台不得信任清单里的文件名，文件与资产的绑定以 `MjyQuestionExtensions` 上传会话为准（ADR 0006 限制 3）。
+
+## 六、本批实现与延后
 
 本批：`L ! M P O 5 Y G F H A B C E 1 : ; S T U Q N K D R | X`（`*` 计算值沿用 WP-03），
 以及引擎自带题型主题 `bootstrap_buttons`、`bootstrap_buttons_multi`、`bootstrap_dropdown`、`image_select-listradio`、
-`image_select-multiplechoice`、`ranking_advanced`（发布后回读 `question_theme_name` 防静默降级，ADR 0006 决定 6）。
+`image_select-multiplechoice`、`ranking_advanced`（发布后回读 `question_theme_name` 防静默降级，ADR 0006 决定 6；e2e 实际发布并作答了 `bootstrap_buttons` 与 `image_select-listradio`，其余同类主题未单独跑）。
 不收：`I`（语言切换，非采集题型）。
 
 延后原因：
