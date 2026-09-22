@@ -44,7 +44,9 @@ python3 -m pubgw.cli drift-check --binding binding.json --engine-url http://loca
 
 平台通过内部 HTTP 接口调用网关，契约见
 [`platform/contracts/publish-gateway-v1.md`](../../contracts/publish-gateway-v1.md)：
-`POST /v1/publish`（HMAC 认证）与 `GET /healthz`。
+`POST /v1/publish`（HMAC 认证）与 `GET /healthz`；向后兼容增补
+[v1.2](../../contracts/publish-gateway-v1.2.md) 加了 `POST /v1/close`（收口被取代的版本）与
+`POST /v1/drift-check`（只读漂移检查）。
 
 ```bash
 python3 -m pubgw.server                      # 或者用本目录的 Dockerfile
@@ -119,6 +121,9 @@ v1 定义的校验与编译结果逐字节不变。
 | `auth.py` | 平台请求的 HMAC 认证 |
 | `engines.py` | 引擎实例配置（口令只来自环境变量） |
 | `request.py` | `POST /v1/publish` 请求体解析 |
+| `ops_request.py` | `POST /v1/close`、`POST /v1/drift-check` 请求体解析（v1.2） |
+| `close.py` | 收口旧版本：设过期时间，不停用、不删除（v1.2） |
+| `drift_check.py` | 按需漂移检查：回读并对照期望指纹与绑定记录（v1.2） |
 | `store.py` | 幂等结果存储（SQLite）与在途锁 |
 | `service.py` | 发布接口的业务语义（认证、幂等、并发、状态码映射） |
 | `server.py` | HTTP 外壳与服务入口 |

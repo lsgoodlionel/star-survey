@@ -25,7 +25,7 @@ platform:
   security:
     # 必须由环境变量提供，至少 32 字节；缺失时应用拒绝启动。
     jwt-hmac-secret: ${PLATFORM_JWT_HMAC_SECRET:}
-  # 发布网关（契约 platform/contracts/publish-gateway-v1.md）。密钥至少 32 字节，与网关侧 PUBGW_SHARED_SECRET 相同；
+  # 发布网关（契约 platform/contracts/publish-gateway-v1.md 及 v1.2 增补）。密钥至少 32 字节，与网关侧 PUBGW_SHARED_SECRET 相同；
   # 缺失时应用照常启动，但问卷发布一律 503（失败即关闭）。
   pubgw:
     url: ${PLATFORM_PUBGW_URL:}
@@ -42,3 +42,10 @@ platform:
       max-attempts: ${PLATFORM_SURVEY_RECONCILE_MAX_ATTEMPTS:8}
       backoff-initial: PT1M
       backoff-max: PT30M
+    # 在线版本的定时漂移巡检（ADR 0012）：只读引擎、只记录与告警，绝不自动覆盖。默认关闭；按需检查不受影响。
+    drift-check:
+      enabled: ${PLATFORM_SURVEY_DRIFT_CHECK_ENABLED:false}
+      interval: ${PLATFORM_SURVEY_DRIFT_CHECK_INTERVAL:PT15M}
+      initial-delay: PT2M
+      recheck-after: ${PLATFORM_SURVEY_DRIFT_CHECK_RECHECK_AFTER:PT6H}
+      batch-size: ${PLATFORM_SURVEY_DRIFT_CHECK_BATCH_SIZE:100}

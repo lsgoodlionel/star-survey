@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Shared setup for the isolated test stack. Source it after setting:
 #   REPO_ROOT, TEST_DB (mysql|pgsql), is_fresh (true|false)
-# Provides: TEST_DIR, COMPOSE, CONTAINER, DB_SERVICE; prepare_test_stack,
+# Provides: TEST_DIR, COMPOSE, CONTAINER, DB_SERVICE, TEST_PREFIX; prepare_test_stack,
 #           enable_remote_control, db_query
+#
+# SURVEY_TEST_PREFIX (default "survey") names the stack's containers
+# (<prefix>-test-web, <prefix>-test-db, <prefix>-test-pg), so parallel lanes can
+# run isolated stacks. Set COMPOSE_PROJECT_NAME to a matching value as well.
 
 TEST_DIR="$REPO_ROOT/platform/deploy/test"
 COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.dev.yml" --profile test)
-CONTAINER=survey-test-web
+TEST_PREFIX="${SURVEY_TEST_PREFIX:-survey}"
+CONTAINER="$TEST_PREFIX-test-web"
 ADMIN_USER=admin
 ADMIN_PASSWORD=password
 
@@ -26,7 +31,7 @@ prepare_test_stack() {
   fi
   "${COMPOSE[@]}" up -d "$DB_SERVICE" test-web >/dev/null
   # test-web does not depend on test-pg, so wait for the selected database explicitly.
-  until [[ "$(docker inspect -f '{{.State.Health.Status}}' "survey-$DB_SERVICE")" == "healthy" ]]; do
+  until [[ "$(docker inspect -f '{{.State.Health.Status}}' "$TEST_PREFIX-$DB_SERVICE")" == "healthy" ]]; do
     sleep 2
   done
 
@@ -49,9 +54,9 @@ prepare_test_stack() {
 
   USERS_TABLE_QUERY="SELECT COUNT(*) FROM information_schema.tables WHERE table_name='lime_users'"
   if [[ "$TEST_DB" == "pgsql" ]]; then
-    is_installed=$(docker exec survey-test-pg psql -U postgres -d limesurvey -tAc "$USERS_TABLE_QUERY")
+    is_installed=$(docker exec "$TEST_PREFIX-test-pg" psql -U postgres -d limesurvey -tAc "$USERS_TABLE_QUERY")
   else
-    is_installed=$(docker exec survey-test-db mariadb -uroot -proot -N -e \
+    is_installed=$(docker exec "$TEST_PREFIX-test-db" mariadb -uroot -proot -N -e \
       "$USERS_TABLE_QUERY AND table_schema='limesurvey'")
   fi
   if [[ "$is_installed" == "0" ]]; then
@@ -64,9 +69,9 @@ prepare_test_stack() {
 # Run one SQL statement against the selected test database; prints bare rows.
 db_query() {
   if [[ "$TEST_DB" == "pgsql" ]]; then
-    docker exec survey-test-pg psql -U postgres -d limesurvey -tAq -c "$1"
+    docker exec "$TEST_PREFIX-test-pg" psql -U postgres -d limesurvey -tAq -c "$1"
   else
-    docker exec survey-test-db mariadb -uroot -proot limesurvey -N -e "$1"
+    docker exec "$TEST_PREFIX-test-db" mariadb -uroot -proot limesurvey -N -e "$1"
   fi
 }
 

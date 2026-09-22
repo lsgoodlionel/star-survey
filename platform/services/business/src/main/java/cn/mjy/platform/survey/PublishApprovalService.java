@@ -174,13 +174,18 @@ public class PublishApprovalService {
                 .orElseThrow(() -> new SurveyNotFoundException("survey not found: " + surveyId));
     }
 
-    /** 只有尚未发布、也没有发布在途的问卷可以提交申请。 */
+    /**
+     * 没有发布在途、且草稿不是当前在线版本的问卷可以提交申请——已上线的问卷改稿之后照样要走审批
+     * 才能重新发布（ADR 0012）。
+     */
     private static void requireSubmittable(SurveyRow survey) {
+        if (survey.liveVersionIsCurrentDraft()) {
+            throw new SurveyConflictException(SurveyConflictException.ALREADY_PUBLISHED,
+                    "draft version " + survey.draftVersion() + " is already published");
+        }
         switch (survey.status()) {
-            case DRAFT, PUBLISH_FAILED -> {
+            case DRAFT, PUBLISH_FAILED, PUBLISHED -> {
             }
-            case PUBLISHED -> throw new SurveyConflictException(SurveyConflictException.ALREADY_PUBLISHED,
-                    "survey is already published");
             case PUBLISHING, PENDING_RECONCILIATION -> throw new SurveyConflictException(
                     SurveyConflictException.PUBLISH_IN_PROGRESS, "a publish of this survey is still unresolved");
         }

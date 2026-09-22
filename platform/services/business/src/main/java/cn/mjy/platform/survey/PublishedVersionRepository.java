@@ -20,10 +20,17 @@ import tools.jackson.databind.json.JsonMapper;
 @Repository
 class PublishedVersionRepository {
 
+    /** 版本行本身不可改；在线与否、何时被取代、引擎何时收口来自 survey 与 survey_version_retirement（V530）。 */
     private static final String COLUMNS = """
-            survey_id, version_no, request_id, draft_version, engine_instance_id, engine_sid, compiler_version,
-            fingerprint_version, fingerprint, language, engine_published_at, published_by, published_at,
-            definition::text AS definition""";
+            v.survey_id, v.version_no, v.request_id, v.draft_version, v.engine_instance_id, v.engine_sid,
+            v.compiler_version, v.fingerprint_version, v.fingerprint, v.language, v.engine_published_at,
+            v.published_by, v.published_at, v.definition::text AS definition,
+            (s.published_version IS NOT DISTINCT FROM v.version_no) AS live,
+            r.superseded_at, r.engine_closed_at
+            FROM survey_published_version v
+            JOIN survey s ON s.tenant_id = v.tenant_id AND s.id = v.survey_id
+            LEFT JOIN survey_version_retirement r
+              ON r.tenant_id = v.tenant_id AND r.survey_id = v.survey_id AND r.version_no = v.version_no""";
 
     private final JdbcClient jdbc;
     private final JsonMapper json;
@@ -95,15 +102,14 @@ class PublishedVersionRepository {
     }
 
     List<PublishedVersionView> list(UUID surveyId) {
-        return jdbc.sql("SELECT " + COLUMNS + " FROM survey_published_version WHERE survey_id = :survey ORDER BY version_no")
+        return jdbc.sql("SELECT " + COLUMNS + " WHERE v.survey_id = :survey ORDER BY v.version_no")
                 .param("survey", surveyId)
                 .query((rs, n) -> map(rs))
                 .list();
     }
 
     Optional<PublishedVersionView> find(UUID surveyId, int versionNo) {
-        return jdbc.sql("SELECT " + COLUMNS
-                        + " FROM survey_published_version WHERE survey_id = :survey AND version_no = :version")
+        return jdbc.sql("SELECT " + COLUMNS + " WHERE v.survey_id = :survey AND v.version_no = :version")
                 .param("survey", surveyId)
                 .param("version", versionNo)
                 .query((rs, n) -> map(rs))
@@ -128,7 +134,22 @@ class PublishedVersionRepository {
                 rs.getString("published_by"),
                 rs.getObject("published_at", OffsetDateTime.class),
                 fields(surveyId, versionNo),
-                json.readTree(rs.getString("definition")));
+                json.readTree(rs.getString("definition")),
+                rs.getBoolean("live"),
+                rs.getObject("superseded_at", OffsetDateTime.class),
+                rs.getObject("engine_closed_at", OffsetDateTime.class));
+    }
+
+    /** 网关当时返回的绑定记录原文（漂移检查时原样交回网关）。 */
+    Optional<String> bindingJson(UUID surveyId, int versionNo) {
+        return jdbc.sql("""
+                        SELECT binding::text FROM survey_published_version
+                         WHERE survey_id = :survey AND version_no = :version
+                        """)
+                .param("survey", surveyId)
+                .param("version", versionNo)
+                .query(String.class)
+                .optional();
     }
 
     private List<QuestionFieldView> fields(UUID surveyId, int versionNo) {

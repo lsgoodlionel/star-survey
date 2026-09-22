@@ -18,7 +18,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
- * 发布流程（契约 publish-gateway-v1 的平台侧）。分三步，网关调用不在任何数据库事务里：
+ * 发布流程（契约 publish-gateway-v1 的平台侧）。首次发布与重新发布（ADR 0012）走同一条路：已上线的问卷在草稿
+ * 改动之后再次发布，就是一次新的发起，网关新建一份引擎问卷；草稿未改动时 409 already_published。
+ * 分三步，网关调用不在任何数据库事务里：
  * <ol>
  *   <li><b>开始</b>（事务 1，持问卷行锁）：经 access 模块判定 PUBLISH；需要审核且不能免审时，新发起的尝试必须凭
  *       对当前草稿版本的有效批准（{@link PublishApprovalGate}），否则 403 APPROVAL_REQUIRED，绝不绕过；
@@ -86,8 +88,6 @@ public class SurveyPublishService {
             SurveyRow row = surveys.lock(surveyId, STALE_PUBLISHING)
                     .orElseThrow(() -> new SurveyNotFoundException("survey not found: " + surveyId));
             return switch (row.status()) {
-                case PUBLISHED -> throw new SurveyConflictException(SurveyConflictException.ALREADY_PUBLISHED,
-                        "survey is already published; republishing is not supported yet (ADR 0009)");
                 case PUBLISHING -> {
                     if (!row.stale()) {
                         throw new SurveyConflictException(SurveyConflictException.PUBLISH_IN_PROGRESS,
@@ -96,7 +96,7 @@ public class SurveyPublishService {
                     yield reconcile(row);
                 }
                 case PENDING_RECONCILIATION -> reconcile(row);
-                case DRAFT, PUBLISH_FAILED -> freshAttempt(ctx, clearance, row);
+                case DRAFT, PUBLISH_FAILED, PUBLISHED -> freshAttempt(ctx, clearance, row);
             };
         });
     }
@@ -106,6 +106,11 @@ public class SurveyPublishService {
      * 须凭批准时，批准核对与快照在同一把行锁下完成，快照因此正是被批准的草稿版本。
      */
     private Ticket freshAttempt(TenantContext ctx, PublishApprovalGate.Clearance clearance, SurveyRow row) {
+        if (row.liveVersionIsCurrentDraft()) {
+            throw new SurveyConflictException(SurveyConflictException.ALREADY_PUBLISHED,
+                    "draft version " + row.draftVersion() + " is already the live published version; "
+                            + "save a changed draft to publish a new version");
+        }
         UUID requestId = UUID.randomUUID();
         approvalGate.authorizeFreshAttempt(ctx, clearance, row, requestId);
         String instance = activeEngineInstance(ctx.tenantId());

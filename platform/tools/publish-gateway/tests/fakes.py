@@ -109,6 +109,8 @@ class FakeEngine:
         values = dict(self.definition.settings)
         values["template"] = self.definition.theme
         values.update(self.inherited_settings)
+        if sid in self.surveys:
+            values["active"] = self.surveys[sid]["active"]
         for name in self.sticky_settings:
             values[name] = "STICKY"
         values.update({k: v for k, v in self.applied_settings.get(sid, {}).items()

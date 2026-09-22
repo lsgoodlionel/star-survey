@@ -1,6 +1,6 @@
 """发布网关的 HTTP 入口：``python3 -m pubgw.server``。
 
-契约见 platform/contracts/publish-gateway-v1.md。本模块只做 HTTP 外壳：
+契约见 platform/contracts/publish-gateway-v1.md（及 v1.2 增补）。本模块只做 HTTP 外壳：
 路由、请求体大小限制、读配置；业务语义全部在 service.py。
 
 环境变量：
@@ -45,7 +45,11 @@ RESULTS_FILE = "publish-results.sqlite3"
 EXIT_CONFIG = 2
 
 PUBLISH_PATH = "/v1/publish"
+CLOSE_PATH = "/v1/close"
+DRIFT_CHECK_PATH = "/v1/drift-check"
 HEALTH_PATH = "/healthz"
+#: POST 路径 → PublishService 上的处理方法名（契约 v1 与 v1.2）。
+POST_ROUTES = {PUBLISH_PATH: "publish", CLOSE_PATH: "close", DRIFT_CHECK_PATH: "drift_check"}
 
 
 class StartupError(Exception):
@@ -131,7 +135,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = self._path()
         if path == HEALTH_PATH:
             self._send(Response(200, _json({"status": "ok"})))
-        elif path in (PUBLISH_PATH, READ_PATH):
+        elif path in POST_ROUTES or path == READ_PATH:
             self._method_not_allowed("POST")
         else:
             self._not_found()
@@ -158,8 +162,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self._send(response)
 
     def _post_handler(self, path: str):
-        if path == PUBLISH_PATH:
-            return self.server.service.publish
+        operation = POST_ROUTES.get(path)
+        if operation is not None:
+            return getattr(self.server.service, operation)
         if path == READ_PATH and self.server.responses is not None:
             return self.server.responses.read
         return None

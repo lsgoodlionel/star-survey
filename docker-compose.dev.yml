@@ -40,7 +40,7 @@ services:
   test-db:
     profiles: ["test"]
     image: mariadb:10.11
-    container_name: survey-test-db
+    container_name: ${SURVEY_TEST_PREFIX:-survey}-test-db
     environment:
       MARIADB_ROOT_PASSWORD: root
       MARIADB_DATABASE: limesurvey
@@ -55,7 +55,7 @@ services:
   test-pg:
     profiles: ["test"]
     image: postgres:16-alpine
-    container_name: survey-test-pg
+    container_name: ${SURVEY_TEST_PREFIX:-survey}-test-pg
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: limesurvey
@@ -69,7 +69,7 @@ services:
   test-web:
     profiles: ["test"]
     image: survey-web
-    container_name: survey-test-web
+    container_name: ${SURVEY_TEST_PREFIX:-survey}-test-web
     volumes:
       - ./:/var/www/html
       - ./platform/deploy/test/.runtime/config.php:/var/www/html/application/config/config.php
