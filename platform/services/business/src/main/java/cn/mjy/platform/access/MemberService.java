@@ -3,6 +3,7 @@ package cn.mjy.platform.access;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
 
@@ -98,6 +99,73 @@ public class MemberService {
             grantService.revokeAllForLocked(ctx, actorId);
             members.markRemoved(tenant, actorId);
             audit.record(ctx, AccessAudit.MEMBER_REMOVE, "member/" + actorId);
+        });
+    }
+
+    /**
+     * 组织免登的即时开通（JIT）：由系统把从未出现过的主体开通为在职员工，占一个席位，不授予任何角色。
+     * 已有成员记录（含已移除）时什么都不做并返回其当前是否在职——管理员移除的人不会因再次登录被自动恢复。
+     *
+     * @throws SeatLimitExceededException 没有空闲席位
+     */
+    public boolean provisionStaffBySystem(TenantId tenant, String actorId, String traceId) {
+        requireActorId(actorId);
+        return tenantScope.call(tenant, () -> {
+            lock.lock(tenant);
+            Optional<MemberRepository.Member> existing = members.find(tenant, actorId);
+            if (existing.isPresent()) {
+                return existing.get().isActive();
+            }
+            seats.requireFreeSeat(tenant, members.seatsInUse(tenant));
+            members.upsert(tenant, actorId, MemberRepository.ACTIVE, true, SYSTEM_ACTOR);
+            audit.record(tenant, SYSTEM_ACTOR, traceId, AccessAudit.MEMBER_PROVISION,
+                    "member/" + actorId + " kind=" + MemberKind.STAFF);
+            return true;
+        });
+    }
+
+    /**
+     * 组织免登时确认成员资格：待接受的邀请（管理员预授权）在本人首次登录时生效。
+     * 返回登录后是否为在职成员；不是成员或已被移除时为假。
+     */
+    public boolean activateOnSignIn(TenantId tenant, String actorId, String traceId) {
+        requireActorId(actorId);
+        return tenantScope.call(tenant, () -> {
+            int accepted = members.changeStatus(tenant, actorId, MemberRepository.INVITED, MemberRepository.ACTIVE);
+            if (accepted > 0) {
+                audit.record(tenant, actorId, traceId, AccessAudit.MEMBER_ACCEPT, "member/" + actorId + " via=org_login");
+                return true;
+            }
+            return members.find(tenant, actorId).map(MemberRepository.Member::isActive).orElse(false);
+        });
+    }
+
+    /**
+     * 组织同步报告离职或禁用时由系统移除成员：删除其全部授权（逐条审计）并释放席位。
+     * 最后一名在职所有者不移除（租户不能没有所有者），返回假，由调用方另行告警——其会话照样被身份模块撤销。
+     */
+    public boolean removeBySystem(TenantId tenant, String actorId, String traceId) {
+        requireActorId(actorId);
+        return tenantScope.call(tenant, () -> {
+            lock.lock(tenant);
+            Optional<MemberRepository.Member> member = members.find(tenant, actorId).filter(m -> !m.isRemoved());
+            if (member.isEmpty()) {
+                return true;
+            }
+            List<GrantView> held = grants.listForActor(tenant, actorId);
+            boolean soleOwner = member.get().isActive() && held.stream().anyMatch(g ->
+                    GrantRepository.OWNER_ROLE.equals(g.roleCode()) && g.resourceId() == null)
+                    && grants.activeOwners(tenant) <= 1;
+            if (soleOwner) {
+                return false;
+            }
+            held.forEach(grant -> {
+                grants.delete(tenant, grant.id());
+                audit.record(tenant, SYSTEM_ACTOR, traceId, AccessAudit.GRANT_REVOKE, AccessAudit.describeGrant(grant));
+            });
+            members.markRemoved(tenant, actorId);
+            audit.record(tenant, SYSTEM_ACTOR, traceId, AccessAudit.MEMBER_REMOVE, "member/" + actorId + " via=org_sync");
+            return true;
         });
     }
 

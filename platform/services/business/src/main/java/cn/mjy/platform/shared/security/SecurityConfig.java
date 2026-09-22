@@ -2,14 +2,21 @@ package cn.mjy.platform.shared.security;
 
 import jakarta.servlet.DispatcherType;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import javax.crypto.spec.SecretKeySpec;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 
@@ -40,15 +47,25 @@ public class SecurityConfig {
         return http.build();
     }
 
+    /**
+     * 除签名与时效外，其他模块可以提供额外的令牌校验（如身份模块的会话撤销检查），任一不通过即 401。
+     * 没有额外校验器时行为与原先完全一致。
+     */
     @Bean
-    JwtDecoder jwtDecoder(@Value("${platform.security.jwt-hmac-secret:}") String secret) {
+    JwtDecoder jwtDecoder(@Value("${platform.security.jwt-hmac-secret:}") String secret,
+                          ObjectProvider<OAuth2TokenValidator<Jwt>> extraValidators) {
         byte[] key = secret.getBytes(StandardCharsets.UTF_8);
         if (key.length < MIN_SECRET_BYTES) {
             throw new IllegalStateException(
                     "platform.security.jwt-hmac-secret must be at least " + MIN_SECRET_BYTES + " bytes");
         }
-        return NimbusJwtDecoder.withSecretKey(new SecretKeySpec(key, "HmacSHA256"))
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(new SecretKeySpec(key, "HmacSHA256"))
                 .macAlgorithm(MacAlgorithm.HS256)
                 .build();
+        List<OAuth2TokenValidator<Jwt>> validators = new ArrayList<>();
+        validators.add(JwtValidators.createDefault());
+        extraValidators.orderedStream().forEach(validators::add);
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(validators));
+        return decoder;
     }
 }
