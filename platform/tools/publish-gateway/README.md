@@ -40,6 +40,51 @@ python3 -m pubgw.cli drift-check --binding binding.json --engine-url http://loca
 
 退出码：`0` 通过；`1` 发布失败／校验不通过／检出漂移；`2` 配置或定义本身有问题。
 
+## 作为服务运行
+
+平台通过内部 HTTP 接口调用网关，契约见
+[`platform/contracts/publish-gateway-v1.md`](../../contracts/publish-gateway-v1.md)：
+`POST /v1/publish`（HMAC 认证）与 `GET /healthz`。
+
+```bash
+python3 -m pubgw.server                      # 或者用本目录的 Dockerfile
+docker build -t survey-publish-gateway platform/tools/publish-gateway
+```
+
+| 环境变量 | 说明 |
+|---|---|
+| `PUBGW_SHARED_SECRET` | 与平台 `PLATFORM_PUBGW_SECRET` 相同，至少 32 字节；缺失或过短拒绝启动 |
+| `PUBGW_ENGINES_CONFIG` | 引擎实例配置 JSON 的路径（必填） |
+| `PUBGW_STATE_DIR` | 幂等结果 SQLite（`publish-results.sqlite3`）所在目录（必填；镜像里是 `/var/lib/pubgw`，应挂持久卷） |
+| `PUBGW_HOST` / `PUBGW_PORT` | 监听地址与端口，缺省 `127.0.0.1:8080`（镜像里是 `0.0.0.0:8080`） |
+| 配置里 `passwordEnv` 指名的变量 | 各实例的引擎管理员口令 |
+
+引擎实例配置（口令**只**走环境变量，文件里出现口令字段直接拒绝启动）：
+
+```json
+{
+  "hd-engine-01": {
+    "rpcUrl": "http://engine-01/index.php/admin/remotecontrol",
+    "user": "admin",
+    "passwordEnv": "PUBGW_ENGINE_HD01_PASSWORD"
+  }
+}
+```
+
+`rpcUrl` 是完整的 RemoteControl 端点。任何配置错误都以退出码 `2` 拒绝启动。
+
+行为要点：
+
+- 状态码映射：`ok` → 200；`failedStage` 为 `validate`／`compile`（引擎未被触碰）→ 422；
+  其余失败 → 502（带 `rolledBack`／`orphanSurveyId`）。引擎登录是惰性的，
+  前置校验不通过的定义一次引擎调用都没有。
+- 幂等：200／422／502／500 都按 `requestId` 落库，重复请求原样重放、不再发布；
+  同一 `requestId` 带着不同内容重放 → 400。
+- 并发：同一 `requestId` 或同一 `(实例, definition.uuid)` 正在发布 → 409，
+  锁覆盖整个发布过程。锁在进程内，**只支持单副本部署**。
+- 响应里的引擎口令（原文、repr、JSON 转义）一律替换为 `***`；堆栈只进服务端日志。
+- SIGTERM 时等在途发布做完再退出，编排里的停止宽限期要长于单次发布。
+
 样例定义：[`platform/tests/fixtures/surveys/publish-gateway.json`](../../tests/fixtures/surveys/publish-gateway.json)。
 
 ## 模块
@@ -58,6 +103,12 @@ python3 -m pubgw.cli drift-check --binding binding.json --engine-url http://loca
 | `binding.py` | 绑定记录 |
 | `drift.py` | 发布后的漂移检查 |
 | `cli.py` | 命令行入口 |
+| `auth.py` | 平台请求的 HMAC 认证 |
+| `engines.py` | 引擎实例配置（口令只来自环境变量） |
+| `request.py` | `POST /v1/publish` 请求体解析 |
+| `store.py` | 幂等结果存储（SQLite）与在途锁 |
+| `service.py` | 发布接口的业务语义（认证、幂等、并发、状态码映射） |
+| `server.py` | HTTP 外壳与服务入口 |
 
 ## 测试
 
@@ -68,6 +119,10 @@ cd platform/tools/publish-gateway && python3 -m unittest discover -s tests -t .
 # 端到端：真引擎、两种数据库
 platform/deploy/test/run-publish-gateway.sh
 TEST_DB=pgsql platform/deploy/test/run-publish-gateway.sh
+
+# 端到端：网关作为服务容器，经 HTTP 发布到真引擎
+platform/deploy/test/run-publish-gateway-service.sh
+TEST_DB=pgsql platform/deploy/test/run-publish-gateway-service.sh
 ```
 
 ## 当前边界
