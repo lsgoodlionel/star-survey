@@ -100,6 +100,8 @@ public class SurveyService {
     public List<PublishedVersionView> versions(TenantContext ctx, UUID surveyId) {
         return tenantScope.call(ctx.tenantId(), () -> {
             access.require(ctx, Permission.VIEW, surveyId);
+            // 资源树里的项目 / 文件夹也能通过 VIEW 判定，必须确认它确实是问卷，否则会返回空列表而不是 404。
+            requireSurvey(surveyId);
             return versions.list(surveyId);
         });
     }

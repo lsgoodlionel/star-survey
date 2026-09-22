@@ -110,6 +110,16 @@ class ResponseQueryApiTest {
     }
 
     @Test
+    void aProjectIdIsNotASurveyAndIs404OnEveryEndpoint() throws Exception {
+        String project = p.ws().project().toString();
+
+        getAs(p.owner(), "/v1/surveys/" + project + "/responses").andExpect(status().isNotFound());
+        getAs(p.owner(), "/v1/surveys/" + project + "/responses/summary").andExpect(status().isNotFound());
+        getAs(p.owner(), "/v1/surveys/" + project + "/fields").andExpect(status().isNotFound());
+        getAs(p.owner(), "/v1/surveys/" + project + "/versions").andExpect(status().isNotFound());
+    }
+
+    @Test
     void anotherTenantsSurveyIs404OnEveryEndpoint() throws Exception {
         Published other = fixture.publishedSurvey();
 
