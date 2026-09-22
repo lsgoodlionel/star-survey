@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Shared setup for the isolated test stack. Source it after setting:
 #   REPO_ROOT, TEST_DB (mysql|pgsql), is_fresh (true|false)
-# Provides: TEST_DIR, COMPOSE, CONTAINER, DB_SERVICE; prepare_test_stack
+# Provides: TEST_DIR, COMPOSE, CONTAINER, DB_SERVICE; prepare_test_stack,
+#           enable_remote_control, db_query
 
 TEST_DIR="$REPO_ROOT/platform/deploy/test"
 COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.dev.yml" --profile test)
@@ -58,4 +59,22 @@ prepare_test_stack() {
     docker exec "$CONTAINER" php application/commands/console.php install \
       "$ADMIN_USER" "$ADMIN_PASSWORD" TravisLS no@email.com
   fi
+}
+
+# Run one SQL statement against the selected test database; prints bare rows.
+db_query() {
+  if [[ "$TEST_DB" == "pgsql" ]]; then
+    docker exec survey-test-pg psql -U postgres -d limesurvey -tAq -c "$1"
+  else
+    docker exec survey-test-db mariadb -uroot -proot limesurvey -N -e "$1"
+  fi
+}
+
+# Turn on the JSON-RPC RemoteControl interface (off by default after install).
+enable_remote_control() {
+  db_query "DELETE FROM lime_settings_global WHERE stg_name = 'RPCInterface'" >/dev/null
+  db_query "INSERT INTO lime_settings_global (stg_name, stg_value) VALUES ('RPCInterface', 'json')" >/dev/null
+  # settings_global is cached per request; drop the cache so the very first
+  # RPC call already sees the interface enabled.
+  docker exec "$CONTAINER" rm -rf tmp/runtime/cache
 }

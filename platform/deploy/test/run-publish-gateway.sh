@@ -18,19 +18,6 @@ fi
 # shellcheck source=lib.sh
 source "$REPO_ROOT/platform/deploy/test/lib.sh"
 
-enable_remote_control() {
-  local sql="DELETE FROM lime_settings_global WHERE stg_name = 'RPCInterface';
-             INSERT INTO lime_settings_global (stg_name, stg_value) VALUES ('RPCInterface', 'json');"
-  if [[ "$TEST_DB" == "pgsql" ]]; then
-    docker exec survey-test-pg psql -U postgres -d limesurvey -q -c "$sql" >/dev/null
-  else
-    docker exec survey-test-db mariadb -uroot -proot limesurvey -e "$sql"
-  fi
-  # settings_global is cached per request; drop the cache so the very first
-  # RPC call already sees the interface enabled.
-  docker exec "$CONTAINER" rm -rf tmp/runtime/cache
-}
-
 prepare_test_stack
 enable_remote_control
 
