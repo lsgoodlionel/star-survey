@@ -1,0 +1,9 @@
+# Overlay for run-p1-e2e.sh only: hands the MjyPlatformBridge settings to the
+# engine test container. Names only, no values: compose passes each variable
+# through from the invoking shell, so the event secret never lands in a file.
+services:
+  test-web:
+    environment:
+      - MJY_ENGINE_INSTANCE_ID
+      - MJY_PLATFORM_EVENTS_URL
+      - MJY_PLATFORM_EVENTS_SECRET
