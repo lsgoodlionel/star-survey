@@ -18,3 +18,9 @@ platform:
     drift-check:
       # 测试里不启动定时巡检，由测试直接调用 SurveyDriftService。
       enabled: false
+  response:
+    export:
+      # 测试里不启动定时调度，由测试直接调用 ResponseExportWorker；失败立即可重试。
+      enabled: false
+      backoff: PT0S
+      storage-dir: target/test-exports

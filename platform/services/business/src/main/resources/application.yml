@@ -57,3 +57,15 @@ platform:
       initial-delay: PT2M
       recheck-after: ${PLATFORM_SURVEY_DRIFT_CHECK_RECHECK_AFTER:PT6H}
       batch-size: ${PLATFORM_SURVEY_DRIFT_CHECK_BATCH_SIZE:100}
+  # 答卷导出作业（ADR 0015）。文件先落本地目录（多副本需共享卷，生产换对象存储实现），到期即删。
+  response:
+    export:
+      enabled: ${PLATFORM_RESPONSE_EXPORT_ENABLED:true}
+      interval: ${PLATFORM_RESPONSE_EXPORT_INTERVAL:PT10S}
+      initial-delay: PT20S
+      storage-dir: ${PLATFORM_RESPONSE_EXPORT_DIR:}
+      retention: ${PLATFORM_RESPONSE_EXPORT_RETENTION:PT72H}
+      batch-size: 500
+      lease: PT5M
+      max-attempts: 5
+      backoff: PT1M
