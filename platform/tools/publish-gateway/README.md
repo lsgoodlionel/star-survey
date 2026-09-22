@@ -87,6 +87,19 @@ docker build -t survey-publish-gateway platform/tools/publish-gateway
 
 样例定义：[`platform/tests/fixtures/surveys/publish-gateway.json`](../../tests/fixtures/surveys/publish-gateway.json)。
 
+## 问卷逻辑（definitionVersion 2）
+
+v2 定义可以带显示条件（题目／题组 `condition`）、校验规则（`validation`）、计算值
+（`type: "*"` ＋ `calculation`）与文本里的答案引用（`{{ 表达式 }}`）。表达式用平台自己的
+小型 DSL 书写，按题目代码或 `q("uuid")` 引用，由 `pubgw/logic/` 解析、做类型／引用／顺序／
+循环检查（不通过即 422 `validate`），再编译成 ExpressionScript 的受限子集写进 LSS。
+**v2 定义里不允许直写引擎表达式**（`relevance`、`em_validation_q`、`equation` 等）。
+v1 定义的校验与编译结果逐字节不变。
+
+文法、类型、函数、编译产物与错误码见
+[`platform/contracts/survey-logic-dsl-v1.md`](../../contracts/survey-logic-dsl-v1.md)；
+样例：[`platform/tests/fixtures/surveys/publish-gateway-logic.json`](../../tests/fixtures/surveys/publish-gateway-logic.json)。
+
 ## 模块
 
 | 模块 | 职责 |
@@ -109,6 +122,10 @@ docker build -t survey-publish-gateway platform/tools/publish-gateway
 | `store.py` | 幂等结果存储（SQLite）与在途锁 |
 | `service.py` | 发布接口的业务语义（认证、幂等、并发、状态码映射） |
 | `server.py` | HTTP 外壳与服务入口 |
+| `logic/parser.py` | 逻辑 DSL 词法与递归下降解析（不 eval） |
+| `logic/scope.py` · `logic/types.py` | 引用解析（代码／UUID → qcode 变量）与类型检查 |
+| `logic/graph.py` · `logic/check.py` | 前向／跨页引用、循环依赖；汇总成校验问题 |
+| `logic/emit.py` · `logic/lower.py` | 语法树 → ExpressionScript；v2 定义 → 引擎层定义 |
 
 ## 测试
 
@@ -120,6 +137,10 @@ cd platform/tools/publish-gateway && python3 -m unittest discover -s tests -t .
 platform/deploy/test/run-publish-gateway.sh
 TEST_DB=pgsql platform/deploy/test/run-publish-gateway.sh
 
+# 端到端：逻辑（条件、隐藏必答清值、校验、计算值、引用转义）在真引擎上的行为
+platform/deploy/test/run-publish-gateway-logic.sh
+TEST_DB=pgsql platform/deploy/test/run-publish-gateway-logic.sh
+
 # 端到端：网关作为服务容器，经 HTTP 发布到真引擎
 platform/deploy/test/run-publish-gateway-service.sh
 TEST_DB=pgsql platform/deploy/test/run-publish-gateway-service.sh
@@ -127,7 +148,7 @@ TEST_DB=pgsql platform/deploy/test/run-publish-gateway-service.sh
 
 ## 当前边界
 
-- 只支持 `L ! M P F 1 S T U N D X` 这些题型；其余一律在校验阶段拒绝，
+- 只支持 `L ! M P F 1 S T U N D X *` 这些题型（`*` 计算值只能来自 v2 的 `calculation`）；其余一律在校验阶段拒绝，
   而不是「放过去再说」。
 - 回滚动作是 `delete_survey`，它连答卷一起删，因此**只适用于从未接收过答卷的
   新发布**。已上线问卷的结构升级不能走这条路。

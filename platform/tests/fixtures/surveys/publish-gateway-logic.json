@@ -1,0 +1,114 @@
+{
+  "definitionVersion": 2,
+  "uuid": "55555555-5555-4555-8555-555555555555",
+  "title": "WP-03 logic sample {not an expression}",
+  "description": "Display conditions, a hidden-and-required question, validation, calculated values and piping.",
+  "language": "en",
+  "theme": "fruity_twentythree",
+  "settings": {
+    "anonymized": "N",
+    "datestamp": "Y",
+    "savetimings": "N",
+    "ipaddr": "N",
+    "refurl": "N",
+    "allowsave": "Y",
+    "allowprev": "Y",
+    "alloweditaftercompletion": "Y",
+    "format": "G",
+    "questionindex": "0",
+    "usecaptcha": "N",
+    "shownoanswer": "N"
+  },
+  "groups": [
+    {
+      "uuid": "66666666-0001-4555-8555-000000000001",
+      "title": "About you",
+      "questions": [
+        {
+          "uuid": "77777777-0001-4555-8555-000000000001",
+          "code": "QAGE",
+          "type": "N",
+          "text": "How old are you?",
+          "mandatory": true
+        },
+        {
+          "uuid": "77777777-0002-4555-8555-000000000002",
+          "code": "QPET",
+          "type": "L",
+          "text": "Which pet do you have?",
+          "mandatory": true,
+          "answers": [
+            { "code": "A1", "text": "Cat" },
+            { "code": "A2", "text": "Dog" },
+            { "code": "A3", "text": "None" }
+          ]
+        },
+        {
+          "uuid": "77777777-0003-4555-8555-000000000003",
+          "code": "QNAME",
+          "type": "S",
+          "text": "Your nickname (braces like {this} stay literal)"
+        }
+      ]
+    },
+    {
+      "uuid": "66666666-0002-4555-8555-000000000002",
+      "title": "Your pet",
+      "condition": "QPET != \"A3\"",
+      "questions": [
+        {
+          "uuid": "77777777-0004-4555-8555-000000000004",
+          "code": "QDOGNAME",
+          "type": "S",
+          "text": "What is your dog's name, {{ QNAME }}?",
+          "mandatory": true,
+          "condition": "QPET == \"A2\""
+        },
+        {
+          "uuid": "77777777-0005-4555-8555-000000000005",
+          "code": "QYEARS",
+          "type": "N",
+          "text": "How many years have you had your {{ label(q(\"77777777-0002-4555-8555-000000000002\")) }}?",
+          "condition": "QPET in [\"A1\", \"A2\"]",
+          "validation": {
+            "rule": "self <= QAGE",
+            "message": "Cannot be more than your age ({{ QAGE }})."
+          }
+        },
+        {
+          "uuid": "77777777-0006-4555-8555-000000000006",
+          "code": "QSCORE",
+          "type": "*",
+          "text": "Score",
+          "calculation": "QAGE + coalesce(QYEARS, 0) * 2"
+        },
+        {
+          "uuid": "77777777-0007-4555-8555-000000000007",
+          "code": "QGREET",
+          "type": "*",
+          "text": "Greeting",
+          "calculation": "join(\"Hi \", QNAME)"
+        },
+        {
+          "uuid": "77777777-0008-4555-8555-000000000008",
+          "code": "QSUMMARY",
+          "type": "X",
+          "text": "Hello {{ QNAME }}: score {{ QSCORE }}, pet {{ label(QPET) }}."
+        }
+      ]
+    },
+    {
+      "uuid": "66666666-0003-4555-8555-000000000003",
+      "title": "Wrap-up",
+      "questions": [
+        {
+          "uuid": "77777777-0009-4555-8555-000000000009",
+          "code": "QFEED",
+          "type": "T",
+          "text": "Anything else?",
+          "condition": "answered(QNAME) and QSCORE > 40"
+        }
+      ]
+    }
+  ]
+}

@@ -7,9 +7,16 @@ validate.py。解析失败一律抛 DefinitionError，绝不带着半成品往�
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 DEFINITION_VERSION = 1
+
+#: 带逻辑 DSL 的定义版本（WP-03）：条件、校验、计算值、答案引用。
+LOGIC_DEFINITION_VERSION = 2
+SUPPORTED_DEFINITION_VERSIONS = (DEFINITION_VERSION, LOGIC_DEFINITION_VERSION)
+
+#: 只有 v2 才认识的键。v1 定义里出现它们直接拒绝，绝不静默丢掉一条显示条件。
+_LOGIC_KEYS = ("condition", "calculation", "validation")
 
 _INHERIT_THEME = "inherit"
 
@@ -39,6 +46,14 @@ class SubQuestion:
 
 
 @dataclass(frozen=True)
+class ValidationRule:
+    """v2 的题目校验：rule 是逻辑 DSL 表达式，message 是可含引用的提示文本。"""
+
+    rule: str
+    message: str = ""
+
+
+@dataclass(frozen=True)
 class Question:
     """一道题。uuid 是平台侧的稳定标识，code 是引擎侧的映射键。"""
 
@@ -54,6 +69,9 @@ class Question:
     answers: Tuple[AnswerOption, ...] = ()
     subquestions: Tuple[SubQuestion, ...] = ()
     attributes: Dict[str, str] = field(default_factory=dict)
+    condition: str = ""
+    calculation: str = ""
+    validation: Optional[ValidationRule] = None
 
     def answers_on_scale(self, scale: int) -> Tuple[AnswerOption, ...]:
         return tuple(answer for answer in self.answers if answer.scale == scale)
@@ -68,6 +86,7 @@ class Group:
     questions: Tuple[Question, ...]
     description: str = ""
     relevance: str = "1"
+    condition: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,6 +102,11 @@ class SurveyDefinition:
     theme: str = "fruity_twentythree"
     additional_languages: Tuple[str, ...] = ()
     participants: Tuple[Dict[str, str], ...] = ()
+    definition_version: int = DEFINITION_VERSION
+
+    @property
+    def has_logic(self) -> bool:
+        return self.definition_version == LOGIC_DEFINITION_VERSION
 
     def questions(self) -> Iterator[Question]:
         """按文档顺序遍历所有题目。"""
@@ -106,10 +130,13 @@ class SurveyDefinition:
     def from_dict(cls, payload: Mapping[str, Any]) -> "SurveyDefinition":
         _require_mapping(payload, "definition")
         version = payload.get("definitionVersion")
-        if version != DEFINITION_VERSION:
+        if isinstance(version, bool) or version not in SUPPORTED_DEFINITION_VERSIONS:
             raise DefinitionError(
-                "unsupported definitionVersion {!r}, expected {}".format(version, DEFINITION_VERSION)
+                "unsupported definitionVersion {!r}, expected one of {}".format(
+                    version, ", ".join(str(item) for item in SUPPORTED_DEFINITION_VERSIONS)
+                )
             )
+        is_logic = version == LOGIC_DEFINITION_VERSION
         return cls(
             uuid=_text(payload, "uuid", "definition"),
             title=_text(payload, "title", "definition"),
@@ -118,28 +145,34 @@ class SurveyDefinition:
             theme=_optional_text(payload, "theme") or "fruity_twentythree",
             settings=_settings(payload.get("settings")),
             additional_languages=tuple(_string_list(payload.get("additionalLanguages"), "additionalLanguages")),
-            groups=tuple(_group(entry, index) for index, entry in enumerate(_list(payload, "groups"))),
+            groups=tuple(
+                _group(entry, index, is_logic) for index, entry in enumerate(_list(payload, "groups"))
+            ),
             participants=tuple(_participant(entry) for entry in payload.get("participants") or []),
+            definition_version=version,
         )
 
 
-def _group(payload: Any, index: int) -> Group:
+def _group(payload: Any, index: int, is_logic: bool) -> Group:
     where = "groups[{}]".format(index)
     _require_mapping(payload, where)
+    _check_logic_keys(payload, where, is_logic)
     return Group(
         uuid=_text(payload, "uuid", where),
         title=_text(payload, "title", where),
         description=_optional_text(payload, "description"),
         relevance=_optional_text(payload, "relevance") or "1",
+        condition=_optional_text(payload, "condition"),
         questions=tuple(
-            _question(entry, "{}.questions[{}]".format(where, position))
+            _question(entry, "{}.questions[{}]".format(where, position), is_logic)
             for position, entry in enumerate(_list(payload, "questions", allow_empty=True))
         ),
     )
 
 
-def _question(payload: Any, where: str) -> Question:
+def _question(payload: Any, where: str, is_logic: bool) -> Question:
     _require_mapping(payload, where)
+    _check_logic_keys(payload, where, is_logic)
     return Question(
         uuid=_text(payload, "uuid", where),
         code=_text(payload, "code", where),
@@ -159,6 +192,29 @@ def _question(payload: Any, where: str) -> Question:
             _subquestion(entry, "{}.subquestions[{}]".format(where, position))
             for position, entry in enumerate(payload.get("subquestions") or [])
         ),
+        condition=_optional_text(payload, "condition"),
+        calculation=_optional_text(payload, "calculation"),
+        validation=_validation(payload.get("validation"), where),
+    )
+
+
+def _check_logic_keys(payload: Mapping[str, Any], where: str, is_logic: bool) -> None:
+    if is_logic:
+        return
+    for key in _LOGIC_KEYS:
+        if key in payload:
+            raise DefinitionError(
+                "{}.{} requires definitionVersion {}".format(where, key, LOGIC_DEFINITION_VERSION)
+            )
+
+
+def _validation(payload: Any, where: str) -> Optional[ValidationRule]:
+    if payload is None:
+        return None
+    _require_mapping(payload, where + ".validation")
+    return ValidationRule(
+        rule=_text(payload, "rule", where + ".validation"),
+        message=_optional_text(payload, "message"),
     )
 
 

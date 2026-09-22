@@ -50,6 +50,9 @@ _SHAPES = (
     # 「无子题」分支把 X 和普通文本题一视同仁（common_helper.php:1759），
     # 所以 get_fieldmap 里有它，答卷表里也有它。实测确认，不是推测。
     QuestionShape("X", "说明文字"),
+    # 计算值（引擎的 Equation 题）：同样走「无子题」分支，答卷里一列，
+    # 值由引擎按 equation 属性算出后写入。只能由 v2 定义的 calculation 产生。
+    QuestionShape("*", "计算值"),
 )
 
 SHAPES = {shape.type: shape for shape in _SHAPES}
