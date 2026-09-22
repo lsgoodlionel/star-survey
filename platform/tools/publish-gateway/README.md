@@ -108,6 +108,7 @@ v1 定义的校验与编译结果逐字节不变。
 |---|---|
 | `model.py` | 定义的解析与不可变数据模型（系统边界） |
 | `qtypes.py` | 题型形状表：一道题该产生哪些答卷列 |
+| `questions/` | WP-02 题型扩展：题型专属校验、`format`／`maxLength`／`exclusive` 编译成服务端规则 |
 | `codes.py` | 引擎的代码合法性规则（镜像自 `Question.php` / `Answer.php`） |
 | `validate.py` | 发布前校验，一次性列出全部问题 |
 | `compiler.py` | 定义 → `.lss`，并算出编译期结构指纹 |
@@ -153,8 +154,10 @@ TEST_DB=pgsql platform/deploy/test/run-publish-gateway-service.sh
 
 ## 当前边界
 
-- 只支持 `L ! M P F 1 S T U N D X *` 这些题型（`*` 计算值只能来自 v2 的 `calculation`）；其余一律在校验阶段拒绝，
-  而不是「放过去再说」。
+- 只支持 `L ! M P O 5 Y G F H A B C E 1 : ; S T U Q N K D R | X *` 这些题型（`*` 计算值只能来自 v2 的
+  `calculation`）；其余一律在校验阶段拒绝，而不是「放过去再说」。题型映射、扩展键与缺失值见
+  [`platform/docs/p2/question-type-map.md`](../../docs/p2/question-type-map.md)，真引擎验证
+  `platform/deploy/test/run-question-types.sh`（`TEST_DB=mysql|pgsql`）。
 - 回滚动作是 `delete_survey`，它连答卷一起删，因此**只适用于从未接收过答卷的
   新发布**。已上线问卷的结构升级不能走这条路。
 - 指纹只覆盖 `get_fieldmap` 暴露的维度：答案选项的 `code` 变更不在其中。

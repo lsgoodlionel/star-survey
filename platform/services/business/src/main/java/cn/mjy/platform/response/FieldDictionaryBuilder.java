@@ -15,6 +15,7 @@ import tools.jackson.databind.JsonNode;
  *
  * <p>aid 的形状与网关 {@code qtypes.expected_rows} 一致：单列题为空串，子题列为子题代码，
  * 评论列为"子题代码＋comment"，"其他"为 {@code other} / {@code othercomment}。
+ * 各题型的特殊列（内置刻度、矩阵、排序、评论、文件计数）先交给 {@link QuestionTypeColumns}。
  * 快照里找不到对应题目时（理论上不会发生）退回用题目代码作标签，且不当作敏感——
  * 敏感标记只来自定义本身，不做猜测。
  */
@@ -40,15 +41,20 @@ final class FieldDictionaryBuilder {
     }
 
     private static FieldEntry entry(QuestionFieldView field, Optional<JsonNode> question) {
-        String label = question.map(q -> label(q, field.aid())).orElse(field.code());
+        String label = question.map(q -> label(q, field)).orElse(field.code());
         boolean sensitive = question.map(q -> q.path("sensitive").asBoolean(false)).orElse(false);
         List<OptionLabel> options = question.map(q -> options(q, field)).orElse(List.of());
         return new FieldEntry(field.fieldname(), field.questionUuid(), field.code(), field.type(), field.aid(),
                 field.scale(), label, sensitive, options);
     }
 
-    private static String label(JsonNode question, String aid) {
+    private static String label(JsonNode question, QuestionFieldView field) {
+        String aid = field.aid();
         String text = question.path("text").asString(question.path("code").asString(""));
+        Optional<String> special = QuestionTypeColumns.label(question, field.type(), aid, text);
+        if (special.isPresent()) {
+            return special.get();
+        }
         if (aid.isEmpty()) {
             return text;
         }
@@ -73,6 +79,10 @@ final class FieldDictionaryBuilder {
     private static List<OptionLabel> options(JsonNode question, QuestionFieldView field) {
         String aid = field.aid();
         boolean choiceColumn = aid.isEmpty() || subquestionText(question, aid).isPresent();
+        Optional<List<OptionLabel>> special = QuestionTypeColumns.options(question, field.type(), aid, choiceColumn);
+        if (special.isPresent()) {
+            return special.get();
+        }
         if (!choiceColumn) {
             return List.of();
         }
