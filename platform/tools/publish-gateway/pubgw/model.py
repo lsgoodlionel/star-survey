@@ -5,6 +5,7 @@
 validate.py。解析失败一律抛 DefinitionError，绝不带着半成品往下走。
 """
 
+import copy
 import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
@@ -103,6 +104,8 @@ class SurveyDefinition:
     additional_languages: Tuple[str, ...] = ()
     participants: Tuple[Dict[str, str], ...] = ()
     definition_version: int = DEFINITION_VERSION
+    #: 访问策略原文（WP-04，ADR 0016）。结构与语义都在 pubgw/policy/ 里校验（422），这里只保存副本。
+    policy: Any = None
 
     @property
     def has_logic(self) -> bool:
@@ -150,6 +153,7 @@ class SurveyDefinition:
             ),
             participants=tuple(_participant(entry) for entry in payload.get("participants") or []),
             definition_version=version,
+            policy=copy.deepcopy(payload.get("policy")),
         )
 
 

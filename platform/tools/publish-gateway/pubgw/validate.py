@@ -85,6 +85,7 @@ class ValidationReport:
 def validate_definition(definition: SurveyDefinition) -> ValidationReport:
     # 逻辑检查依赖本模块的 ValidationIssue，延迟导入以免循环引用。
     from .logic.check import check_logic, check_question_shape
+    from .policy.schema import check_policy
 
     issues: List[ValidationIssue] = []
     issues.extend(_check_settings(definition))
@@ -96,6 +97,7 @@ def validate_definition(definition: SurveyDefinition) -> ValidationReport:
             issues.extend(_check_question(question, where))
             issues.extend(check_question_shape(question, where))
     issues.extend(check_logic(definition))
+    issues.extend(check_policy(definition))
     return ValidationReport(tuple(issues))
 
 

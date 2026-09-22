@@ -18,6 +18,7 @@ from .binding import BindingRecord
 from .compiler import CompiledSurvey, CompileError, LssCompiler
 from .fieldmap import FINGERPRINT_VERSION, parse_fieldmap
 from .model import SurveyDefinition
+from .policy.probe import PolicyProbe, enforcement_failures
 from .rpc import RemoteControlClient, RpcError
 from .validate import validate_definition
 from .verify import VerificationReport, verify_publication
@@ -49,9 +50,11 @@ class PublishResult:
     verification: Optional[VerificationReport] = None
     rolled_back: bool = False
     orphan_survey_id: Optional[int] = None
+    #: 插件回读核对过的访问策略摘要（ADR 0016）；没有插件策略时为 None。
+    policy_digest: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "ok": self.ok,
             "surveyId": self.survey_id,
             "failedStage": self.failed_stage,
@@ -64,6 +67,10 @@ class PublishResult:
             "binding": self.binding.to_dict() if self.binding else None,
             "verification": self.verification.to_dict() if self.verification else None,
         }
+        if self.policy_digest is not None:
+            # 只有带插件策略的发布才多这一个键：没有策略的应答与契约 v1 逐字节一致。
+            payload["policyDigest"] = self.policy_digest
+        return payload
 
 
 class Publisher:
@@ -75,11 +82,13 @@ class Publisher:
         engine_instance: str = "",
         compiler: Optional[LssCompiler] = None,
         clock: Callable[[], str] = None,
+        policy_probe: Optional[PolicyProbe] = None,
     ):
         self._client = client
         self._engine_instance = engine_instance
         self._compiler = compiler or LssCompiler()
         self._clock = clock or (lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        self._policy_probe = policy_probe
 
     def publish(self, definition: SurveyDefinition) -> PublishResult:
         result = PublishResult()
@@ -149,8 +158,9 @@ class Publisher:
     ) -> Optional[VerificationReport]:
         """补发 LSS 带不动的东西，并在建答卷表之前先把结构核对一遍。"""
         try:
-            failures = self._reconcile_settings(definition, result.survey_id)
+            failures = self._reconcile_settings(definition, result.survey_id, compiled)
             failures.extend(self._check_question_themes(definition, result.survey_id))
+            failures.extend(self._check_policy(compiled, result))
             verification = self._read_and_verify(definition, compiled, result.survey_id)
         except RpcError as error:
             self._fail_and_roll_back(result, "apply", [str(error)])
@@ -200,10 +210,14 @@ class Publisher:
         rows = parse_fieldmap(self._client.get_fieldmap(survey_id))
         return verify_publication(definition, compiled, rows)
 
-    def _reconcile_settings(self, definition: SurveyDefinition, survey_id: int) -> List[str]:
+    def _reconcile_settings(
+        self, definition: SurveyDefinition, survey_id: int, compiled: Optional[CompiledSurvey] = None
+    ) -> List[str]:
         """回读问卷设置：出现继承标记直接失败，只是取值不同则重新下发一次。"""
         wanted = dict(definition.settings)
         wanted["template"] = definition.theme
+        if compiled is not None and compiled.policy is not None:
+            wanted.update(compiled.policy.native_settings)
         actual = self._client.get_survey_properties(survey_id)
 
         failures = []
@@ -237,6 +251,19 @@ class Publisher:
             for name, value in sorted(drifted.items())
             if str(recheck.get(name, "")) != str(value)
         ]
+
+    def _check_policy(self, compiled: CompiledSurvey, result: PublishResult) -> List[str]:
+        """插件必须回读到同一份策略，否则策略会静默失效（ADR 0016 决定 4）。"""
+        if compiled.policy is None or compiled.policy.digest is None:
+            return []
+        if self._policy_probe is None:
+            return ["E_POLICY_UNVERIFIED: 没有配置插件回读通道，带访问策略的问卷不能发布"]
+        failures = enforcement_failures(
+            self._policy_probe(result.survey_id), result.survey_id, compiled.policy.digest
+        )
+        if not failures:
+            result.policy_digest = compiled.policy.digest
+        return failures
 
     def _check_question_themes(self, definition: SurveyDefinition, survey_id: int) -> List[str]:
         """题型主题不随 LSS 走，缺失时引擎静默降级（ADR 0006 决定 6）。"""

@@ -23,6 +23,7 @@ from .compiler import CompileError, LssCompiler
 from .drift import check_drift
 from .fieldmap import parse_fieldmap
 from .model import DefinitionError, SurveyDefinition
+from .policy.probe import HttpPolicyProbe
 from .publish import Publisher
 from .rpc import HttpTransport, RemoteControlClient, RpcError
 from .validate import validate_definition
@@ -117,7 +118,8 @@ def _publish(args, env, transport_factory) -> int:
         return failure
 
     try:
-        result = Publisher(client, engine_instance=args.engine_instance).publish(definition)
+        probe = HttpPolicyProbe.from_engine_url(args.engine_url)
+        result = Publisher(client, engine_instance=args.engine_instance, policy_probe=probe).publish(definition)
     finally:
         client.logout()
 
