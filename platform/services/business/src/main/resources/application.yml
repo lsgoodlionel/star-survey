@@ -25,3 +25,10 @@ platform:
   security:
     # 必须由环境变量提供，至少 32 字节；缺失时应用拒绝启动。
     jwt-hmac-secret: ${PLATFORM_JWT_HMAC_SECRET:}
+  # 发布网关（契约 platform/contracts/publish-gateway-v1.md）。密钥至少 32 字节，与网关侧 PUBGW_SHARED_SECRET 相同；
+  # 缺失时应用照常启动，但问卷发布一律 503（失败即关闭）。
+  pubgw:
+    url: ${PLATFORM_PUBGW_URL:}
+    secret: ${PLATFORM_PUBGW_SECRET:}
+    # 须大于网关跑完七个阶段所需的时间；超时只代表"结果未知"，之后以同一 requestId 核对。
+    timeout-seconds: ${PLATFORM_PUBGW_TIMEOUT_SECONDS:120}
