@@ -23,7 +23,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Optional, Any, Dict, List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "platform" / "tools" / "publish-gateway"))
@@ -70,9 +70,9 @@ class DockerCurlTransport:
 class Database:
     """只读 SQL 探针：网关自己不碰数据库，验证脚本需要看库里的事实。"""
 
-    def __init__(self, driver: str, container: str):
+    def __init__(self, driver: str, container: Optional[str] = None):
         self._driver = driver
-        self._container = container
+        self._container = container or ("survey-test-pg" if driver == "pgsql" else "survey-test-db")
 
     def rows(self, sql: str) -> List[List[str]]:
         if self._driver == "pgsql":

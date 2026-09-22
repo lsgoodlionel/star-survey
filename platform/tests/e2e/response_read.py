@@ -74,10 +74,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="06.1 网关读端点端到端验证")
     parser.add_argument("--container", default="survey-test-web")
     parser.add_argument("--db", default="mysql", choices=("mysql", "pgsql"))
+    parser.add_argument("--db-container", default=None,
+                        help="database container (default survey-test-db / survey-test-pg)")
     args = parser.parse_args()
 
     definition = SurveyDefinition.from_json(DEFINITION.read_text(encoding="utf-8"))
-    db = Database(args.db)
+    db = Database(args.db, args.db_container)
     client = RemoteControlClient(DockerCurlTransport(args.container))
     client.login(ADMIN_USER, ADMIN_PASSWORD)
     survey_id = None
