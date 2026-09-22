@@ -59,6 +59,14 @@ class ExtraCheckTest(unittest.TestCase):
         )
         self.assertEqual((), validate_definition(definition).issues)
 
+    def test_validation_message_may_pipe_its_own_answer_but_the_text_may_not(self):
+        allowed = with_changes(
+            lambda p: question(p, "QTWO").__setitem__("validation", {"rule": "true", "message": "Got {{ QTWO }}"})
+        )
+        self.assertEqual((), validate_definition(allowed).issues)
+        refused = with_changes(lambda p: question(p, "QTWO").__setitem__("text", "Got {{ QTWO }}"))
+        self.assertEqual(["E_EXPR_FORWARD_REFERENCE"], [i.code for i in validate_definition(refused).issues])
+
     def test_every_issue_names_a_path(self):
         definition = with_condition("QTWO", 'QNOPE == 1 or QPET == "A9" or answered(QTHREE)')
         found = validate_definition(definition).issues

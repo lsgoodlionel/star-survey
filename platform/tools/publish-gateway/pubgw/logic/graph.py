@@ -16,6 +16,8 @@ from .types import CALCULATION, CONDITION, GROUP_CONDITION, VALIDATION
 from ..model import SurveyDefinition
 
 _VALUE_KINDS = frozenset({CONDITION, CALCULATION, GROUP_CONDITION})
+#: 校验提示显示在题目自己下方，可以引用这道题自己的答案。
+_VALIDATION_MESSAGE = ".validation.message"
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,7 @@ class DependencyGraph:
             return self._late(reference, name, self._page[target] > source_page, "its own group")
         source = reference.source_uuid
         if target == source:
-            if reference.kind == VALIDATION:
+            if reference.kind == VALIDATION or reference.path.endswith(_VALIDATION_MESSAGE):
                 return None
             return Problem("E_EXPR_FORWARD_REFERENCE", reference.path, "{} refers to itself".format(name), reference.pos)
         if self._order[target] < self._order[source]:
