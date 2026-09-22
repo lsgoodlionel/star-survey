@@ -24,4 +24,13 @@ public class JdbcTenantDirectory implements TenantDirectory {
                 .query((rs, row) -> new TenantId(rs.getObject("id", UUID.class)))
                 .list();
     }
+
+    @Override
+    public boolean isActive(TenantId tenant) {
+        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM tenant WHERE id = :id AND status = :active)")
+                .param("id", tenant.value())
+                .param("active", TenantStatus.ACTIVE.code())
+                .query(Boolean.class)
+                .single();
+    }
 }

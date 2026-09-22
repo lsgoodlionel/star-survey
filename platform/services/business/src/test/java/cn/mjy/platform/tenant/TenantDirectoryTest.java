@@ -32,4 +32,20 @@ class TenantDirectoryTest {
 
         assertThat(directory.openTenants()).contains(active, provisioning, suspended).doesNotContain(closed);
     }
+
+    @Test
+    void onlyActiveTenantsAreActive() {
+        TenantId active = fixtures.activeTenant();
+        TenantId provisioning = fixtures.provisionedTenant().id();
+        TenantId suspended = fixtures.activeTenant();
+        tenants.changeStatus(suspended, TenantStatus.SUSPENDED, TenantFixtures.OPERATOR_ACTOR, "trace");
+        TenantId closed = fixtures.activeTenant();
+        tenants.changeStatus(closed, TenantStatus.CLOSED, TenantFixtures.OPERATOR_ACTOR, "trace");
+
+        assertThat(directory.isActive(active)).isTrue();
+        assertThat(directory.isActive(provisioning)).isFalse();
+        assertThat(directory.isActive(suspended)).isFalse();
+        assertThat(directory.isActive(closed)).isFalse();
+        assertThat(directory.isActive(TenantId.random())).isFalse();
+    }
 }

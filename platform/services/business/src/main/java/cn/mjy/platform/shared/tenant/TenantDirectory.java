@@ -12,4 +12,10 @@ public interface TenantDirectory {
 
     /** 尚未关闭（provisioning / active / suspended）的租户，按登记顺序。 */
     List<TenantId> openTenants();
+
+    /**
+     * 租户是否处于可正常使用的 active 状态（开通中、已停用、已关闭、不存在均为假）。
+     * 只给出这一个布尔结论，供登录等入口拒绝停用租户，不暴露租户的其他信息。
+     */
+    boolean isActive(TenantId tenant);
 }

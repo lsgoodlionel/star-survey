@@ -42,7 +42,8 @@ class OrgSessionRepository {
                             WHERE s.id = :id AND s.principal_id = :principal
                               AND s.revoked_at IS NULL AND s.expires_at > now()
                               AND NOT EXISTS (SELECT 1 FROM identity_binding_revocation r
-                                              WHERE r.principal_id = s.principal_id))
+                                              WHERE r.principal_id = s.principal_id
+                                                AND r.reinstated_at IS NULL))
                         """)
                 .param("id", sessionId)
                 .param("principal", principalId)

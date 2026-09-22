@@ -28,4 +28,16 @@ class OrgLoginErrorHandler {
         return ResponseEntity.status(e.status()).cacheControl(CacheControl.noStore())
                 .body(new ApiError(e.error(), e.getMessage()));
     }
+
+    /** 事件回调被拒：只记录错误码与消息（不含密钥、明文、密文），不回显任何请求内容。 */
+    @ExceptionHandler(OrgEventException.class)
+    ResponseEntity<ApiError> eventRejected(OrgEventException e) {
+        if (e.status().is5xxServerError()) {
+            log.warn("organisation event rejected: {} {}", e.error(), e.getMessage());
+        } else {
+            log.info("organisation event rejected: {} {}", e.error(), e.getMessage());
+        }
+        return ResponseEntity.status(e.status()).cacheControl(CacheControl.noStore())
+                .body(new ApiError(e.error(), e.getMessage()));
+    }
 }

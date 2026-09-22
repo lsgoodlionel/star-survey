@@ -14,7 +14,8 @@ import org.springframework.stereotype.Repository;
 class OrgConnectionRepository {
 
     private static final String COLUMNS =
-            "id, tenant_id, provider, corp_id, app_id, secret_ref, unknown_user_policy, enabled";
+            "id, tenant_id, provider, corp_id, app_id, secret_ref, unknown_user_policy, enabled, event_token_ref, "
+            + "event_key_ref";
 
     private final JdbcClient jdbc;
 
@@ -25,8 +26,10 @@ class OrgConnectionRepository {
     OrgConnection insert(OrgConnection connection, String createdBy) {
         return jdbc.sql("""
                         INSERT INTO org_connection (id, tenant_id, provider, corp_id, app_id, secret_ref,
-                                                    unknown_user_policy, enabled, created_by)
-                        VALUES (:id, :tenant, :provider, :corp, :app, :ref, :policy, :enabled, :by)
+                                                    unknown_user_policy, enabled, created_by, event_token_ref,
+                                                    event_key_ref)
+                        VALUES (:id, :tenant, :provider, :corp, :app, :ref, :policy, :enabled, :by, :eventToken,
+                                :eventKey)
                         RETURNING %s
                         """.formatted(COLUMNS))
                 .param("id", connection.id())
@@ -38,6 +41,8 @@ class OrgConnectionRepository {
                 .param("policy", connection.unknownUserPolicy().code())
                 .param("enabled", connection.enabled())
                 .param("by", createdBy)
+                .param("eventToken", connection.eventTokenRef(), java.sql.Types.VARCHAR)
+                .param("eventKey", connection.eventKeyRef(), java.sql.Types.VARCHAR)
                 .query(OrgConnectionRepository::map)
                 .single();
     }
@@ -58,7 +63,8 @@ class OrgConnectionRepository {
     OrgConnection update(OrgConnection connection) {
         return jdbc.sql("""
                         UPDATE org_connection
-                        SET secret_ref = :ref, unknown_user_policy = :policy, enabled = :enabled, updated_at = now()
+                        SET secret_ref = :ref, unknown_user_policy = :policy, enabled = :enabled,
+                            event_token_ref = :eventToken, event_key_ref = :eventKey, updated_at = now()
                         WHERE id = :id
                         RETURNING %s
                         """.formatted(COLUMNS))
@@ -66,6 +72,8 @@ class OrgConnectionRepository {
                 .param("ref", connection.secretRef())
                 .param("policy", connection.unknownUserPolicy().code())
                 .param("enabled", connection.enabled())
+                .param("eventToken", connection.eventTokenRef(), java.sql.Types.VARCHAR)
+                .param("eventKey", connection.eventKeyRef(), java.sql.Types.VARCHAR)
                 .query(OrgConnectionRepository::map)
                 .single();
     }
@@ -79,6 +87,8 @@ class OrgConnectionRepository {
                 rs.getString("app_id"),
                 rs.getString("secret_ref"),
                 UnknownUserPolicy.fromCode(rs.getString("unknown_user_policy")).orElseThrow(),
-                rs.getBoolean("enabled"));
+                rs.getBoolean("enabled"),
+                rs.getString("event_token_ref"),
+                rs.getString("event_key_ref"));
     }
 }

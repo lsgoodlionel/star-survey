@@ -97,3 +97,72 @@
 - 判定先于查询：无权者对存在与不存在的主体一律 403，不给出存在性线索；跨租户仍由行级安全表现为 404。
 - 只带租户标识的服务方法保留给系统流程（免登、同步、预授权），不做判定，由调用方负责。
 - `GET /v1/me` 只回显调用者自己令牌里的租户、主体与声明，不读任何租户数据，不需要额外判定；组织连接各端点此前已按 `manage-settings` / `manage-members` 判定。
+
+## 增补二（第三波）：通讯录事件回调、分页 / 定时同步、恢复、停用租户
+
+### 事件回调
+
+- 端点：`GET|POST /v1/org-events/{租户}/{连接}`，独立过滤链（顺序 3，匿名、不认 Authorization、无 CSRF），开放平台由连接决定。
+  连接新增两个**密钥名**（V109）：`eventTokenRef`（企业微信 Token / 钉钉 token / 飞书 Verification Token）与
+  `eventKeyRef`（企业微信 EncodingAESKey / 钉钉 aes_key / 飞书 Encrypt Key），须同时配置，按 `PLATFORM_ORG_SECRET_<租户>_<名字>` 解析；
+  未配置的连接对该端点 404。连接视图给出须在开放平台登记的 `eventUrl`。
+- 请求体上限 `platform.identity.org-events.max-body-bytes`（默认 64 KiB，超限 413、不解析）；时间戳窗口 `max-clock-skew`（默认 5 分钟）。
+- **验签失败、时间戳越界、无法解密、接收方 / 应用 / 组织 / 令牌不符一律 401，且在任何写入之前**；XML 解析禁用 DTD 与外部实体（XXE → 400）。
+
+| | 企业微信 | 钉钉 | 飞书 |
+|---|---|---|---|
+| 请求 | `GET ?msg_signature&timestamp&nonce&echostr`（URL 校验）；`POST` 同参数 + XML `<Encrypt>` | `POST ?msg_signature(signature)&timeStamp(timestamp，毫秒)&nonce` + `{"encrypt"}` | `POST {"encrypt"}` + `X-Lark-Request-Timestamp/Nonce`、`X-Lark-Signature` |
+| 签名 | SHA-1(字典序拼接 token、timestamp、nonce、密文) | 同左 | SHA-256(timestamp + nonce + Encrypt Key + 原始体) |
+| 解密 | AES-256-CBC，key = Base64(EncodingAESKey+"=")，IV = key 前 16 字节，PKCS#7 补位到 32 字节；明文 = 16B 随机 + 4B 长度 + 消息 + receiveid | 同左；receiveid = 应用 AppKey（或旧接口的 corpId） | key = SHA-256(Encrypt Key)，IV = 密文前 16 字节，AES-256-CBC + PKCS#7 |
+| 额外核对 | receiveid 与内层 ToUserName = corpid | 内层 CorpId = 连接 corpId | header.token = Verification Token，header.app_id = App ID，header.tenant_key = tenant_key |
+| 握手 | 返回解密后的 echostr 明文 | `check_url` → 加密签名的 "success" | `url_verification`（可不带签名头，但须能用 Encrypt Key 解开且 token 相符）→ `{"challenge"}` |
+| 离职 | `change_contact` 的 `delete_user`，或 `update_user` 且 `Status` ∈ {2 禁用, 5 退出} | `user_leave_org` 的 `UserId[]` | `contact.user.deleted_v3`，或 `updated_v3` 且 `status.is_resigned / is_frozen`；取 `object.user_id` |
+| 去重键 | 解密后整条消息的 SHA-256 | 同左 | `header.event_id` 的 SHA-256 |
+
+- 去重与副作用：已有回执（`org_event_receipt`，V109，行级安全、复合外键、只追加）则只应答；否则逐个调用
+  `OrgDirectorySyncService.memberDeparted`（撤绑定、撤会话、移出成员），**成功后**才写回执——处理失败时开放平台重试会重新处理，撤权本身幂等。
+- 飞书只接受加密体（连接必须配置 Encrypt Key），不接受明文推送。飞书 1.0 结构事件只核对令牌后确认，不处理。
+
+### 分页与定时同步
+
+- 拉取同步按 `(created_at, principal_id)` 键集分页（`platform.identity.org-sync.batch-size`，默认 200），管理员触发与定时共用；
+  判定规则不变：只有开放平台明确答复"离职 / 禁用 / 不存在"才撤，查询失败计入 unknown。
+- 定时全量同步 `OrgDirectorySyncScheduler`：`platform.identity.org-sync.enabled`（**默认关闭，测试关闭**）、`interval` 默认 6 小时。
+  每轮逐个未关闭租户（`TenantDirectory.openTenants`）的**启用**连接；单个连接失败（密钥缺失、平台不可用）只记日志。
+- 未使用开放平台的"部门成员列表"全量接口：逐个核对已绑定的人即可发现离职，且不会因列表接口分页 / 权限问题误判"不存在"。
+
+### 恢复（复职）
+
+- `POST /v1/identity-bindings/{principalId}/reinstatement`，租户级 `manage-members`，审计 `identity.binding.reinstate`。
+  先按员工重新邀请（占席位；无空闲席位 409 且什么都不改），再在撤销上盖恢复戳；此人下次免登时邀请生效。旧会话不复活。
+- V110：撤销行改为自有 `id`，同一主体可多次"撤销 → 恢复 → 再撤销"；运行期账号只能改 `reinstated_at / reinstated_by` 两列，
+  触发器保证只能由空改为非空、只改一次、其余列不可变；部分唯一索引保证同一主体同时至多一条未恢复的撤销。
+  "已撤销" = 存在未恢复的撤销（会话检查、免登、同步、预授权同一口径）。未撤销 409，别的租户 404。
+
+### 停用租户
+
+- `shared` 的 `TenantDirectory` 新增 `isActive(TenantId)`（只给布尔结论）。免登 `start` 与 `callback` 在任何状态变更之前核对：
+  非 active（开通中、停用、关闭）一律 403 `tenant_unavailable`，state 不被消耗。已签发的免登令牌不在此列（见"仍未做"）。
+
+### 依据的官方文档（本次查阅）
+
+- 企业微信：加解密方案 https://developer.work.weixin.qq.com/document/path/90968 ；成员变更事件
+  https://developer.work.weixin.qq.com/document/path/90970 ；官方 PHP 库示例向量 https://github.com/sbzhu/weworkapi_php （callback/Sample.php）
+- 钉钉：官方加解密库与示例 https://github.com/open-dingtalk/DingTalk-Callback-Crypto （含 DingCallbackCrypto3.py 的解密向量）；
+  事件订阅 https://open.dingtalk.com/document/development/event-subscription-and-data-push ；通讯录事件
+  https://open.dingtalk.com/document/orgapp/address-book-events （后两页为前端渲染，未能抓取正文；`user_leave_org` 的
+  `UserId` / `CorpId` 字段按官方示例与接口惯例，真实接入前须核对）
+- 飞书：将事件发送至开发者服务器（url_verification）
+  https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-/choose-a-subscription-mode/send-notifications-to-developers-server ；
+  Encrypt Key 解密与签名（含 "test key" 向量）
+  https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/encrypt-key-encryption-configuration-case ；
+  员工离职 https://open.feishu.cn/document/server-docs/contact-v3/user/events/deleted ；员工信息变化
+  https://open.feishu.cn/document/server-docs/contact-v3/user/events/updated
+- 三份官方向量（企业微信 URL 校验与消息、钉钉 check_url、飞书 "hello world"）都在 `OrgEventCryptoTest` 里逐字验证通过。
+
+### 仍未做
+
+- 停用租户已签发的免登令牌仍可用到过期（≤10 分钟）；平台级"停用租户拒绝一切请求"应在主链统一做，不只在身份模块。
+- 事件回执没有保留期清理（只追加）；量大时需要按 `received_at` 归档。
+- 部门与标签映射（R18-02）；钉钉 Stream 模式、飞书长连接模式未接；`start` 与事件端点的网关限流。
+- 企业微信"成员变更"之外的通讯录事件（部门删除等）与飞书 `contact.user.created_v3` 只确认、不处理。
