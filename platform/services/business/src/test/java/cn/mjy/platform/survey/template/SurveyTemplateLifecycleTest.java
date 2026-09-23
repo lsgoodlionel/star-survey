@@ -67,9 +67,11 @@ class SurveyTemplateLifecycleTest {
         settings.put("admin", "运维小组");
         settings.put("emailnotificationto", "ops@tenant.example");
         SurveyView survey = surveys.create(ws.owner(), ws.project(), production);
-        // 草稿里确实有这些东西——否则下面的断言证明不了任何事。
+        // 草稿里确实有这些东西——否则下面的断言证明不了任何事。参与者是例外：它由发布时按问卷受众物化
+        // （WP-18），客户端写进草稿的那一份在保存时就被丢掉，模板剥离因此是第二道防线而不是唯一一道。
         String draft = surveys.draft(ws.owner(), survey.id()).definition().toString();
-        assertThat(draft).contains("tok-secret-1").contains("passwordHash").contains("ops@tenant.example");
+        assertThat(draft).contains("passwordHash").contains("ops@tenant.example");
+        assertThat(draft).as("草稿不收客户端自带的参与者").doesNotContain("tok-secret-1");
 
         UUID templateId = templates.createFromSurvey(ws.owner(), survey.id(), "带生产数据的问卷", null).id();
         JsonNode definition = templates.definition(ws.owner(), templateId, 1);

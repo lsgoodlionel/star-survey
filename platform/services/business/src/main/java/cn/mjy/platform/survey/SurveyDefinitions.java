@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
@@ -27,6 +28,10 @@ public class SurveyDefinitions {
     static final int MAX_DEFINITION_BYTES = 1024 * 1024 - 4096;
     /** 网关支持的定义版本：1 为基础格式，2 在其上加入逻辑 DSL（契约 survey-logic-dsl-v1）。 */
     static final Set<Integer> DEFINITION_VERSIONS = Set.of(1, 2);
+    /** 发布时物化的参与者（ADR 0016）；草稿里不存在这个键。 */
+    static final String PARTICIPANTS = "participants";
+    /** 平台自选的不透明引用，网关摘掉它、只在回执里回显（契约 publish-gateway-v1 v1.2）。 */
+    static final String PARTICIPANT_REF = "ref";
 
     private final JsonMapper json;
 
@@ -41,6 +46,9 @@ public class SurveyDefinitions {
         }
         ObjectNode definition = (ObjectNode) raw.deepCopy();
         definition.put("uuid", surveyId.toString());
+        // participants 由发布时按问卷受众物化（见 withParticipants），草稿里写什么都不算数：
+        // 客户端不能自己塞一批收件人，从旧版本恢复来的那一份也要按新受众重新算。
+        definition.remove(PARTICIPANTS);
         List<String> problems = new ArrayList<>();
         checkTopLevel(definition, problems);
         checkGroups(definition.get("groups"), problems);
@@ -53,6 +61,31 @@ public class SurveyDefinitions {
             throw new InvalidDefinitionException(problems);
         }
         return definition;
+    }
+
+    /**
+     * 返回一份写上了 {@code participants} 的副本（原件不动）：每条只有 {@code ref}＝联系人 id，
+     * 姓名邮箱一概不发给引擎。定义快照是不可变的，个人信息写进去就再也删不掉；平台自己按联系人
+     * 地址发邀请，引擎不需要知道收件人是谁。
+     *
+     * <p>{@code refs} 为空时抛 {@link InvalidDefinitionException}：要求邀请码却一个人都没选，
+     * 网关也会 422，宁可在平台侧就说清楚缺的是受众。
+     */
+    public ObjectNode withParticipants(ObjectNode definition, List<UUID> refs) {
+        if (refs.isEmpty()) {
+            throw new InvalidDefinitionException(List.of(
+                    "policy.access.invitationRequired needs an audience: pick the contacts to invite first"));
+        }
+        ObjectNode copy = definition.deepCopy();
+        ArrayNode participants = copy.putArray(PARTICIPANTS);
+        for (UUID ref : refs) {
+            participants.addObject().put(PARTICIPANT_REF, ref.toString());
+        }
+        if (serialize(copy).getBytes(StandardCharsets.UTF_8).length > MAX_DEFINITION_BYTES) {
+            throw new InvalidDefinitionException(List.of("definition with " + refs.size()
+                    + " participants exceeds " + MAX_DEFINITION_BYTES + " bytes"));
+        }
+        return copy;
     }
 
     public String title(JsonNode definition) {

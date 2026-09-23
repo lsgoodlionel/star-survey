@@ -12,10 +12,13 @@ import cn.mjy.platform.tenant.engine.EngineInstance;
 import cn.mjy.platform.tenant.engine.EngineInstanceService;
 import cn.mjy.platform.tenant.engine.EngineInstanceStatus;
 import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * 发布流程（契约 publish-gateway-v1 的平台侧）。首次发布与重新发布（ADR 0012）走同一条路：已上线的问卷在草稿
@@ -51,10 +54,12 @@ public class SurveyPublishService {
     private final PublishGatewayClient gateway;
     private final PublishSettlement settlement;
     private final PublishApprovalGate approvalGate;
+    private final Optional<SurveyParticipantSource> participants;
 
     SurveyPublishService(TenantScope tenantScope, SurveyRepository surveys,
             PublishAttemptRepository attempts, SurveyDefinitions definitions, EngineInstanceService engines,
-            PublishGatewayClient gateway, PublishSettlement settlement, PublishApprovalGate approvalGate) {
+            PublishGatewayClient gateway, PublishSettlement settlement, PublishApprovalGate approvalGate,
+            Optional<SurveyParticipantSource> participants) {
         this.tenantScope = tenantScope;
         this.surveys = surveys;
         this.attempts = attempts;
@@ -63,6 +68,7 @@ public class SurveyPublishService {
         this.gateway = gateway;
         this.settlement = settlement;
         this.approvalGate = approvalGate;
+        this.participants = participants;
     }
 
     /** 已固化、即将发给网关的一次尝试。 */
@@ -114,11 +120,27 @@ public class SurveyPublishService {
         UUID requestId = UUID.randomUUID();
         approvalGate.authorizeFreshAttempt(ctx, clearance, row, requestId);
         String instance = activeEngineInstance(ctx.tenantId());
-        String definition = definitions.serialize(
-                definitions.normalize(definitions.parse(row.draftDefinition()), row.id()));
+        ObjectNode normalized = definitions.normalize(definitions.parse(row.draftDefinition()), row.id());
+        String definition = definitions.serialize(materializeParticipants(ctx, row.id(), normalized));
         attempts.insert(ctx.tenantId(), requestId, row.id(), row.draftVersion(), instance, definition, ctx.actorId());
         surveys.markPublishing(row.id(), requestId);
         return new Ticket(row.id(), requestId, instance, row.draftVersion(), definition);
+    }
+
+    /**
+     * 需要邀请码的问卷（{@code policy.access.invitationRequired}）把受众物化成 {@code participants}，
+     * 每条只带 {@code ref}＝联系人 id（ADR 0016 缺口 (a) 的上游）。不需要邀请码时定义里连这个键都不出现，
+     * 回执形状因此与本车道之前逐字节一致。
+     *
+     * <p>每次发布都是一次新的物化：改版再发布（ADR 0012）＝新的引擎问卷＝一批全新的邀请码，
+     * 受众按当下的名单现算，发布者看不见的联系人不会被邀请。
+     */
+    private ObjectNode materializeParticipants(TenantContext ctx, UUID surveyId, ObjectNode definition) {
+        if (!SurveyAccessPolicies.invitationRequired(definition)) {
+            return definition;
+        }
+        List<UUID> refs = participants.map(source -> source.audienceOf(ctx, surveyId)).orElseGet(List::of);
+        return definitions.withParticipants(definition, refs);
     }
 
     /** 核对：结果未知时只能原样重发（同一 requestId、同一实例、同一份定义），由网关幂等给出确定结局。 */
