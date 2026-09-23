@@ -20,7 +20,8 @@
 以及走副表的 R02-13（自增表格的 DSL 映射）与 R02-19（选点）。副表的「结构版本」列先行落地
 （[副表契约 v1](../../contracts/question-extension-tables-v1.md)），其余 14 条 P 类由此解除阻塞。
 
-切片 02.4（✔3）收口 R02-04 的**多选**分组（接管选项行模板），并新交付 P 类的 R02-11 循环评价，见第三之四节。
+切片 02.4（✔3）收口 R02-04 的**多选**分组（接管选项行模板），并新交付 P 类的
+R02-11 循环评价与 R02-17 图片 PK，见第三之四节。
 
 ## 二、逐条映射
 
@@ -45,7 +46,7 @@
 | R02-14 | 矩阵单题作答 | T | ✔2 | `F`＋新主题 `mjy-matrix-stepper`（只接管非下拉布局）；隐藏的行照样提交，必答在服务端重算 | 同 R02-12 | 子题代码 |
 | R02-15 | 排序 | N | ✔ | `R`（7.x 起排序项是**子题**）；`max_subquestions` 限制名次数 | 引擎存一列 JSON 数组（按名次排列的子题代码） | `""`＝JSON 列；名次 `1`…`n` 是 fieldmap 里的虚列（无物理列） |
 | R02-16 | 比重分配 | N | ✔ | `K`＋`equals_num_value`（和为定值）＋`min_num_value_n=0`＋`num_value_int_only`；滑块＝`slider_layout=1` | 数值 | 子题代码 |
-| R02-17 | 图片 PK | P | | 配对随机要可追溯 | — | 后续 |
+| R02-17 | 图片 PK | P | ✔3 | `T`＋新主题 `mjy-image-pk`＋副表；一对一列，列的取值恰好是这一对的两张图，另一列记录当时哪张在左 | JSON 信封，整题一行 | `""`；每对的选择在副表 |
 | R02-18 | 货架题 | P | | 商品/坐标与货架版本 | — | 后续 |
 | R02-19 | 热力图与选区 | P | ✔2（选点） | `T`＋新主题 `mjy-heatmap`＋副表；坐标归一化到 `[0,1]`，由插件逐格校验 | JSON 信封，两列 `x`/`y` | `""`；坐标在副表 |
 | R02-20 | 轮播图 | P | | 媒体版本留存依赖资产服务 | — | 后续 |
@@ -119,6 +120,7 @@
 | `mjy-repeating-table` | R02-13 | `T` | `structureVersion`、`columns`（均必填）、`minRows`、`maxRows` | `mjy_table_columns`、`mjy_table_min_rows`、`mjy_table_max_rows`、`mjy_structure_version` |
 | `mjy-heatmap` | R02-19 | `T` | `structureVersion`、`image`（均必填）、`minPoints`、`maxPoints` | 同上（列定义由平台生成：`x`/`y` decimal，范围 `[0,1]`） |
 | `mjy-loop-rating` | R02-11 | `T` | `structureVersion`、`objects`、`dimensions`、`scale`（均必填） | `mjy_table_columns`（列定义由平台生成）、`mjy_loop_objects`、`mjy_structure_version`，行数上下限钉死成对象个数 |
+| `mjy-image-pk` | R02-17 | `T` | `structureVersion`、`items`、`pairs`（均必填） | `mjy_table_columns`（一对两列）、`mjy_pk_items`、`mjy_pk_pairs`、`mjy_structure_version`，行数上下限钉死成 1 |
 
 422 错误码：`E_THEME_UNKNOWN`（`mjy-` 前缀却没注册＝拼错，目标实例上会静默降级）、
 `E_THEME_TYPE_MISMATCH`、`E_THEME_OPTIONS_UNSUPPORTED`、`E_THEME_OPTION_UNKNOWN`、
@@ -133,7 +135,7 @@
 | `mjy-scan-input` | 提交任意字符串 | 编译出的 `em_validation_q` 长度规则（所以 `maxLength` 必填） |
 | `mjy-inline-blank` | 没勾选却填了填空、填空超长 | 原生 `commented_checkbox=checked`＋编译出的长度规则 |
 | `mjy-matrix-stepper` | 跳过没走到的行 | 引擎必答在服务端重算（隐藏的行照样提交） |
-| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
+| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
 
 ## 三之三、副表的存储契约（给读端）
 
@@ -221,6 +223,32 @@
 
 **仍未做**：评价对象是**静态声明**的。需求里的「对象动态」（由前面某道题的作答决定评谁）
 要等逻辑 DSL 的引用能力，本片不做，也不假装做了。
+
+### R02-17 图片 PK
+
+成对比较：每次给两张图，挑一张。**整题一行，一对一列**，这一列的可选值恰好是
+这一对的两张图：
+
+```
+[{"code":"P1","label":"包装甲 / 包装乙","type":"enum","required":true,
+  "options":[{"code":"A","label":"包装甲"},{"code":"B","label":"包装乙"}]},
+ {"code":"P1_shown","label":"包装甲 / 包装乙（先展示）","type":"enum","required":false,
+  "options":[…同上…]},
+ …每对两列]
+```
+
+这样「选了别的一对里的图」根本不需要跨列规则——枚举列自己就挡住了。
+本类**没动插件一行校验代码**，用的全是 R02-11 引入的枚举列；这也是把那两条约束
+做成通用列约束（而不是给循环评价特制）的回报。
+
+**「配对随机要可追溯」怎么落**：配对由平台声明、固定不变（随结构版本留痕），
+随机的是**每一对里两张图的左右位置**——位置偏好是成对比较公认的偏倚来源。
+随机的那一半连同选择一起写进 `<配对代码>_shown`，事后能还原「这个人是在哪种摆法下
+做的选择」。位置在首次渲染时掷一次就记住，作答者返回上一页时看到的摆法不会变。
+
+`_shown` 列**不必填**：关掉 JavaScript 直接填信封的那条路径给不出展示顺序，
+为它硬性必填等于把没有 JS 的人挡在外面。端到端的「只答必答题」场景就是这么提交的
+（两列留空，照样收卷）。
 
 ## 四、缺失值（实测，MariaDB 10.11 与 PostgreSQL 16 完全一致）
 

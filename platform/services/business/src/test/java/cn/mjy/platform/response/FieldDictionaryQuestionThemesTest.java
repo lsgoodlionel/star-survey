@@ -29,6 +29,7 @@ class FieldDictionaryQuestionThemesTest {
     private static final UUID SECTION = UUID.fromString("45454545-0006-4111-8111-000000000006");
     private static final UUID GROUPED_MULTI = UUID.fromString("45454545-0007-4111-8111-000000000007");
     private static final UUID LOOP = UUID.fromString("45454545-0008-4111-8111-000000000008");
+    private static final UUID PK = UUID.fromString("45454545-0009-4111-8111-000000000009");
 
     private final JsonMapper json = JsonMapper.builder().build();
 
@@ -56,7 +57,13 @@ class FieldDictionaryQuestionThemesTest {
                "theme":"mjy-loop-rating",
                "themeOptions":{"structureVersion":"lr1","objects":[{"code":"B1","label":"甲品牌"}],
                                "dimensions":[{"code":"price","label":"价格"}],
-                               "scale":[{"code":"1","label":"差"}]}}
+                               "scale":[{"code":"1","label":"差"}]}},
+              {"uuid":"45454545-0009-4111-8111-000000000009","code":"QPK","type":"T","text":"哪个包装更好",
+               "theme":"mjy-image-pk",
+               "themeOptions":{"structureVersion":"pk1",
+                               "items":[{"code":"A","label":"甲","image":"a.png"},
+                                        {"code":"B","label":"乙","image":"b.png"}],
+                               "pairs":[{"code":"P1","left":"A","right":"B"}]}}
             ]}]}
             """);
 
@@ -71,7 +78,8 @@ class FieldDictionaryQuestionThemesTest {
             new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_S71", "M1", 0),
             new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_S72", "M2", 0),
             new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_other", "other", 0),
-            new QuestionFieldView(LOOP, "QLOOP", "T", "Q8", "", 0));
+            new QuestionFieldView(LOOP, "QLOOP", "T", "Q8", "", 0),
+            new QuestionFieldView(PK, "QPK", "T", "Q9", "", 0));
 
     private FieldDictionary.FieldEntry field(String fieldname) {
         return FieldDictionaryBuilder.fields(definition, binding).stream()
@@ -91,6 +99,9 @@ class FieldDictionaryQuestionThemesTest {
         // R02-11 循环评价：对象与维度都在副表里，引擎那一列同样是整块信封。
         assertThat(field("Q8").label()).isEqualTo("逐个品牌评价 [结构化作答]");
         assertThat(field("Q8").options()).isEmpty();
+        // R02-17 图片 PK：每一对的选择都在副表里。
+        assertThat(field("Q9").label()).isEqualTo("哪个包装更好 [结构化作答]");
+        assertThat(field("Q9").options()).isEmpty();
     }
 
     @Test

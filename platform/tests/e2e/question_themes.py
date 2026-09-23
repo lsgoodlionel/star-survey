@@ -157,10 +157,11 @@ def scenario_render(run: Run) -> None:
 def scenario_values(run: Run, response_id: str) -> None:
     """逐列断言答卷表，再逐格断言副表（含结构版本）。"""
     print("scenario B: every stored column and every projected cell", file=sys.stderr)
-    from question_themes_plan import HEAT_ROWS, LOOP_ROWS, TABLE_ROWS
+    from question_themes_plan import HEAT_ROWS, LOOP_ROWS, PK_ROWS, TABLE_ROWS
 
     #: 走副表的题：(题目代码, 归一化后的行, 结构版本)。
-    side = (("QTABLE", TABLE_ROWS, "rt1"), ("QLOOP", LOOP_ROWS, "lr1"), ("QHEAT", HEAT_ROWS, "hm1"))
+    side = (("QTABLE", TABLE_ROWS, "rt1"), ("QLOOP", LOOP_ROWS, "lr1"),
+            ("QPK", PK_ROWS, "pk1"), ("QHEAT", HEAT_ROWS, "hm1"))
     row = run.last_row()
     run.check("B: response submitted", row[("_submitted", "", 0)] == "1", row)
     expected = {column: value for answers in valid_pages() for column, value in answers.items()}
@@ -209,6 +210,16 @@ def scenario_values(run: Run, response_id: str) -> None:
               [column["code"] for column in loop_columns[1:]] == ["price", "service"]
               and all([item["code"] for item in column["options"]] == ["1", "2", "3"]
                       for column in loop_columns[1:]), loop_columns[1:])
+    # 图片 PK：一对一列，这一列的可选值恰好是这一对的两张图——「选了别对的图」
+    # 由枚举列自己挡住，不需要任何跨列规则。
+    pk_columns = {column["code"]: column for column in run.side_tables.get("QPK", {}).get("columns", [])}
+    run.check("B: QPK binding declares one column per pair plus its shown column",
+              sorted(pk_columns) == ["P1", "P1_shown", "P2", "P2_shown"], sorted(pk_columns))
+    run.check("B: each QPK choice column only allows its own two pictures",
+              [item["code"] for item in pk_columns["P1"]["options"]] == ["A", "B"]
+              and [item["code"] for item in pk_columns["P2"]["options"]] == ["B", "C"], pk_columns)
+    run.check("B: the QPK shown column is not mandatory",
+              pk_columns["P1_shown"]["required"] is False, pk_columns["P1_shown"])
     run.report["complete"] = {"{}[{}#{}]".format(*column): value for column, value in row.items()}
 
 
@@ -340,7 +351,7 @@ def main() -> int:
         run.check("publish: every compiled column bound",
                   all(question["fields"] for question in published["binding"]["questions"]))
         run.check("publish: every side-table question declares a side table",
-                  sorted(run.side_tables) == ["QHEAT", "QLOOP", "QTABLE"], sorted(run.side_tables))
+                  sorted(run.side_tables) == ["QHEAT", "QLOOP", "QPK", "QTABLE"], sorted(run.side_tables))
 
         response_id = scenario_render(run)
         scenario_values(run, response_id)

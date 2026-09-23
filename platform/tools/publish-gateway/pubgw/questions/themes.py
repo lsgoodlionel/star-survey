@@ -59,6 +59,9 @@ MAX_ROWS_ATTRIBUTE = "mjy_table_max_rows"
 STRUCTURE_VERSION_ATTRIBUTE = "mjy_structure_version"
 #: 循环评价的评价对象（R02-11）：一行一个对象，标签由主题渲染成行首。
 LOOP_OBJECTS_ATTRIBUTE = "mjy_loop_objects"
+#: 图片 PK（R02-17）：参赛图片与配对，主题据此渲染成对的图。
+PK_ITEMS_ATTRIBUTE = "mjy_pk_items"
+PK_PAIRS_ATTRIBUTE = "mjy_pk_pairs"
 
 #: 题型字母 → 引擎存放该题型视图的目录名（``QuestionTemplate::getFolderName``）。
 #: 主题必须在 ``themes/question/<名字>/survey/questions/answer/<这里的值>/`` 下放 config.xml
@@ -483,6 +486,108 @@ def _lower_loop_rating(question: Question, values: Dict[str, Any]) -> Lowering:
     })
 
 
+# ---------------------------------------------------------------- 图片 PK（R02-17）
+
+#: 记录「这一对里哪张图先展示」的列名后缀。
+PK_SHOWN_SUFFIX = "_shown"
+#: 一对占两列（选了谁＋谁先展示），所以对数上限是列数上限的一半。
+MAX_PK_PAIRS = MAX_COLUMNS // 2
+#: 留出 ``_shown`` 后缀的余地，配对代码比普通列代码短一截。
+MAX_PK_PAIR_CODE = 32 - len(PK_SHOWN_SUFFIX)
+MAX_IMAGE_LENGTH = 500
+
+
+def _pk_items(values: Dict[str, Any]) -> Tuple[List[Dict[str, str]], List[Issue]]:
+    """参赛图片：代码＋标签＋图片地址。图片地址必填——没有图就没有 PK。"""
+    items, issues = _code_list(values.get("items"), "themeOptions.items", MAX_COLUMN_OPTIONS)
+    if issues:
+        return [], issues
+    declared = values.get("items") or []
+    for index, (item, raw) in enumerate(zip(items, declared)):
+        image = raw.get("image") if isinstance(raw, dict) else None
+        if not isinstance(image, str) or not image.strip() or len(image) > MAX_IMAGE_LENGTH:
+            issues.append((OPTION_VALUE, "themeOptions.items[{}].image".format(index),
+                           "每张图都要有图片地址，最长 {} 个字符".format(MAX_IMAGE_LENGTH)))
+            continue
+        item["image"] = image
+    return ([], issues) if issues else (items, [])
+
+
+def _pk_pairs(values: Dict[str, Any], item_codes: List[str]) -> Tuple[List[Dict[str, str]], List[Issue]]:
+    """配对：两张**不同的**、都已声明的图。配对本身由平台声明，随结构版本一起留痕。"""
+    raw_pairs = values.get("pairs")
+    if not isinstance(raw_pairs, list) or not raw_pairs:
+        return [], [(OPTION_VALUE, "themeOptions.pairs", "必须是非空数组")]
+    if len(raw_pairs) > MAX_PK_PAIRS:
+        return [], [(OPTION_VALUE, "themeOptions.pairs", "最多 {} 对".format(MAX_PK_PAIRS))]
+    pairs: List[Dict[str, str]] = []
+    issues: List[Issue] = []
+    seen = set()
+    for index, raw in enumerate(raw_pairs):
+        path = "themeOptions.pairs[{}]".format(index)
+        code = raw.get("code") if isinstance(raw, dict) else None
+        if not isinstance(code, str) or not _COLUMN_CODE_PATTERN.match(code) or len(code) > MAX_PK_PAIR_CODE:
+            issues.append((OPTION_VALUE, path + ".code",
+                           "配对代码必须以字母开头、只含字母数字与下划线，最长 {} 位".format(MAX_PK_PAIR_CODE)))
+            continue
+        if code in seen:
+            issues.append((OPTION_VALUE, path + ".code", "配对代码重复：{}".format(code)))
+            continue
+        seen.add(code)
+        left, right = raw.get("left"), raw.get("right")
+        if left not in item_codes or right not in item_codes or left == right:
+            issues.append((OPTION_VALUE, path, "一对必须是两张不同的、已声明的图"))
+            continue
+        pairs.append({"code": code, "left": left, "right": right})
+    return ([], issues) if issues else (pairs, [])
+
+
+def _pk_lists(values: Dict[str, Any]) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], List[Issue]]:
+    items, issues = _pk_items(values)
+    if issues:
+        return [], [], issues
+    pairs, found = _pk_pairs(values, [item["code"] for item in items])
+    return items, pairs, found
+
+
+def _check_image_pk(question: Question, values: Dict[str, Any]) -> List[Issue]:
+    _items, _pairs, issues = _pk_lists(values)
+    return issues
+
+
+def _image_pk_columns(values: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """**一对一列**，这一列的可选值恰好是这一对的两张图。
+
+    于是「选了不在这一对里的东西」不需要任何跨列规则，枚举列自己就挡住了；
+    另有一列记录哪张图先展示——配对固定、展示顺序随机，随机的那部分要留痕
+    才谈得上可追溯（R02-17）。
+    """
+    items, pairs, _issues = _pk_lists(values)
+    labels = {item["code"]: item["label"] for item in items}
+    columns: List[Dict[str, Any]] = []
+    for pair in pairs:
+        options = [{"code": pair[side], "label": labels[pair[side]]} for side in ("left", "right")]
+        title = "{} / {}".format(options[0]["label"], options[1]["label"])
+        columns.append({"code": pair["code"], "label": title, "type": "enum",
+                        "required": True, "options": options})
+        # 关掉 JavaScript 直接填信封的那条路径给不出展示顺序，所以这一列不必填。
+        columns.append({"code": pair["code"] + PK_SHOWN_SUFFIX, "label": title + "（先展示）",
+                        "type": "enum", "required": False, "options": options})
+    return columns
+
+
+def _lower_image_pk(question: Question, values: Dict[str, Any]) -> Lowering:
+    items, pairs, _issues = _pk_lists(values)
+    return Lowering(attributes={
+        COLUMNS_ATTRIBUTE: _canonical_json(_image_pk_columns(values)),
+        PK_ITEMS_ATTRIBUTE: _canonical_json(items),
+        PK_PAIRS_ATTRIBUTE: _canonical_json(pairs),
+        # 整题就是一行：每一对是这一行里的一列。
+        MIN_ROWS_ATTRIBUTE: "1",
+        MAX_ROWS_ATTRIBUTE: "1",
+    })
+
+
 def _heatmap_columns(values: Dict[str, Any]) -> List[Dict[str, Any]]:
     """归一化坐标：两列 decimal，范围写死在 0…1，服务端由插件逐格校验。"""
     return [
@@ -682,6 +787,22 @@ _THEMES = (
         lower=_lower_loop_rating,
         side_columns=_loop_rating_columns,
     ),
+    ThemeSpec(
+        name="mjy-image-pk",
+        label="图片 PK",
+        requirement="R02-17",
+        types=("T",),
+        options=(
+            OptionSpec("structureVersion", "text", attribute=STRUCTURE_VERSION_ATTRIBUTE, required=True,
+                       max_length=32, pattern=STRUCTURE_VERSION_PATTERN,
+                       pattern_hint="必须以字母或数字开头，只含字母数字与 . _ -（副表契约 v1）"),
+            OptionSpec("items", "list", required=True),
+            OptionSpec("pairs", "list", required=True),
+        ),
+        check=_check_image_pk,
+        lower=_lower_image_pk,
+        side_columns=_image_pk_columns,
+    ),
 )
 
 THEMES: Dict[str, ThemeSpec] = {theme.name: theme for theme in _THEMES}
@@ -695,5 +816,6 @@ STRUCTURE_VERSION_ATTRIBUTE_NAME = STRUCTURE_VERSION_ATTRIBUTE
 #: 校验时拒绝作者直写的属性：它们由 themeOptions 生成，两边都写等于埋一个冲突。
 MANAGED_ATTRIBUTES = frozenset(
     {COLUMNS_ATTRIBUTE, MIN_ROWS_ATTRIBUTE, MAX_ROWS_ATTRIBUTE, STRUCTURE_VERSION_ATTRIBUTE,
-     LOOP_OBJECTS_ATTRIBUTE, "mjy_option_groups", "commented_checkbox"}
+     LOOP_OBJECTS_ATTRIBUTE, PK_ITEMS_ATTRIBUTE, PK_PAIRS_ATTRIBUTE,
+     "mjy_option_groups", "commented_checkbox"}
 )

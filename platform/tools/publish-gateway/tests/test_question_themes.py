@@ -115,8 +115,22 @@ def loop_rating(**options):
     return question("T", code="QLOOP", theme="mjy-loop-rating", themeOptions=payload)
 
 
+PK_ITEMS = [
+    {"code": "A", "label": "包装甲", "image": "https://assets.example.invalid/a.png"},
+    {"code": "B", "label": "包装乙", "image": "https://assets.example.invalid/b.png"},
+    {"code": "C", "label": "包装丙", "image": "https://assets.example.invalid/c.png"},
+]
+PK_PAIRS = [{"code": "P1", "left": "A", "right": "B"}, {"code": "P2", "left": "B", "right": "C"}]
+
+
+def image_pk(**options):
+    payload = {"structureVersion": "pk1", "items": PK_ITEMS, "pairs": PK_PAIRS}
+    payload.update(options)
+    return question("T", code="QPK", theme="mjy-image-pk", themeOptions=payload)
+
+
 ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap(),
-              loop_rating())
+              loop_rating(), image_pk())
 
 
 # ------------------------------------------------------------------ 注册表
@@ -582,6 +596,82 @@ class LoopRatingTest(unittest.TestCase):
         self.assertEqual(["E_THEME_TYPE_MISMATCH"], codes(payload))
 
 
+class ImagePkTest(unittest.TestCase):
+    """R02-17 图片 PK：成对比较，配对由平台声明，展示位置随作答一并留痕。
+
+    **一对一列**，这一列的可选值恰好是这一对的两张图——所以「选了不在这一对里的东西」
+    根本不需要跨列规则，枚举列自己就挡住了。
+    """
+
+    def columns(self, **options):
+        return json.loads(compile_attributes(image_pk(**options), code="QPK")["mjy_table_columns"])
+
+    def test_each_pair_becomes_a_choice_column_over_its_own_two_items(self):
+        chosen = [column for column in self.columns() if not column["code"].endswith("_shown")]
+        self.assertEqual(["P1", "P2"], [column["code"] for column in chosen])
+        self.assertEqual([["A", "B"], ["B", "C"]],
+                         [[option["code"] for option in column["options"]] for column in chosen])
+        for column in chosen:
+            self.assertEqual(("enum", True), (column["type"], column["required"]))
+
+    def test_each_pair_also_records_which_image_was_shown_first(self):
+        """配对随机要可追溯：随机的是展示顺序，那就把它一起记下来。
+        这一列不必填——关掉 JavaScript 直接填信封的那条路径给不出展示顺序。"""
+        shown = [column for column in self.columns() if column["code"].endswith("_shown")]
+        self.assertEqual(["P1_shown", "P2_shown"], [column["code"] for column in shown])
+        self.assertEqual([["A", "B"], ["B", "C"]],
+                         [[option["code"] for option in column["options"]] for column in shown])
+        self.assertEqual([False, False], [column["required"] for column in shown])
+
+    def test_the_answer_is_exactly_one_row(self):
+        attributes = compile_attributes(image_pk(), code="QPK")
+        self.assertEqual(("1", "1"), (attributes["mjy_table_min_rows"], attributes["mjy_table_max_rows"]))
+
+    def test_the_images_reach_the_theme(self):
+        value = compile_attributes(image_pk(), code="QPK")["mjy_pk_items"]
+        self.assertEqual(PK_ITEMS, json.loads(value))
+        self.assertNotIn(" ", value)
+
+    def test_the_pairs_reach_the_theme(self):
+        self.assertEqual(PK_PAIRS, json.loads(compile_attributes(image_pk(), code="QPK")["mjy_pk_pairs"]))
+
+    def test_items_pairs_and_structure_version_are_required(self):
+        for name in ("structureVersion", "items", "pairs"):
+            with self.subTest(option=name):
+                payload = image_pk()
+                del payload["themeOptions"][name]
+                self.assertEqual(["E_THEME_OPTION_REQUIRED"], codes(payload))
+
+    def test_every_item_needs_an_image(self):
+        for items in ([{"code": "A", "label": "甲"}],
+                      [{"code": "A", "label": "甲", "image": ""}],
+                      [{"code": "A", "label": "甲", "image": 7}]):
+            with self.subTest(items=items):
+                self.assertIn("E_THEME_OPTION_VALUE", codes(image_pk(items=items)))
+
+    def test_a_pair_must_name_two_different_declared_items(self):
+        for pairs in ([{"code": "P1", "left": "A", "right": "Z"}],
+                      [{"code": "P1", "left": "A", "right": "A"}],
+                      [{"code": "P1", "left": "A"}],
+                      [{"left": "A", "right": "B"}],
+                      [{"code": "P1", "left": "A", "right": "B"}, {"code": "P1", "left": "B", "right": "C"}]):
+            with self.subTest(pairs=pairs):
+                self.assertEqual(["E_THEME_OPTION_VALUE"], codes(image_pk(pairs=pairs)))
+
+    def test_a_pair_code_leaves_room_for_the_shown_suffix(self):
+        long_code = "P" * 30
+        self.assertEqual(["E_THEME_OPTION_VALUE"],
+                         codes(image_pk(pairs=[{"code": long_code, "left": "A", "right": "B"}])))
+
+    def test_too_many_pairs(self):
+        # 一对占两列，列数上限 40，所以最多 20 对。
+        many = [{"code": "P{}".format(index), "left": "A", "right": "B"} for index in range(21)]
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(image_pk(pairs=many)))
+
+    def test_the_answer_is_still_one_engine_column(self):
+        self.assertEqual((("QPK", "", 0),), expected_rows(first_question(image_pk())))
+
+
 class SideTableBindingTest(unittest.TestCase):
     """绑定记录里的副表声明：读端据此解释单元格（contracts/question-extension-tables-v1.md）。"""
 
@@ -608,6 +698,12 @@ class SideTableBindingTest(unittest.TestCase):
         declared = self.binding(heatmap(), code="QHEAT").to_dict()["sideTable"]
         self.assertEqual(["x", "y"], [column["code"] for column in declared["columns"]])
         self.assertEqual("hm1", declared["structureVersion"])
+
+    def test_an_image_pk_declares_one_column_per_pair_plus_its_shown_column(self):
+        declared = self.binding(image_pk(), code="QPK").to_dict()["sideTable"]
+        self.assertEqual(["P1", "P1_shown", "P2", "P2_shown"],
+                         [column["code"] for column in declared["columns"]])
+        self.assertEqual("pk1", declared["structureVersion"])
 
     def test_a_loop_rating_declares_the_object_column_and_every_dimension(self):
         declared = self.binding(loop_rating(), code="QLOOP").to_dict()["sideTable"]

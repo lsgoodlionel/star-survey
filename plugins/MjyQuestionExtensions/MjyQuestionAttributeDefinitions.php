@@ -24,6 +24,9 @@ class MjyQuestionAttributeDefinitions
     public const OPTION_GROUPS = 'mjy_option_groups';
     /** 循环评价的评价对象（R02-11，JSON）：一行一个对象，标签由主题渲染成行首。 */
     public const LOOP_OBJECTS = 'mjy_loop_objects';
+    /** 图片 PK 的参赛图片与配对（R02-17，JSON）。 */
+    public const PK_ITEMS = 'mjy_pk_items';
+    public const PK_PAIRS = 'mjy_pk_pairs';
 
     private const CATEGORY = 'MJY 结构化题型';
     private const CATEGORY_GROUPS = 'MJY 选项分类';
@@ -54,6 +57,12 @@ class MjyQuestionAttributeDefinitions
             ]),
             self::LOOP_OBJECTS => self::definition($structured, 60, 'textarea', '', '评价对象（JSON）', [
                 'help' => '形如 [{"code":"B1","label":"甲品牌"}]，一个对象一行',
+            ]),
+            self::PK_ITEMS => self::definition($structured, 70, 'textarea', '', '参赛图片（JSON）', [
+                'help' => '形如 [{"code":"A","label":"包装甲","image":"https://…/a.png"}]',
+            ]),
+            self::PK_PAIRS => self::definition($structured, 80, 'textarea', '', '配对（JSON）', [
+                'help' => '形如 [{"code":"P1","left":"A","right":"B"}]',
             ]),
             // R02-04 的两支：单选按答案选项分组，多选按子题分组，共用同一份 JSON。
             // 少写一个题型字母，引擎导入那种题时会把这个属性丢掉，主题拿到空分组静默平铺。

@@ -165,6 +165,27 @@
           }
         },
         {
+          "uuid": "99999999-1010-4555-8555-000000001010",
+          "code": "QPK",
+          "type": "T",
+          "text": "每一对里选更喜欢的一张",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交（展示顺序那一列可以留空）。",
+          "mandatory": true,
+          "theme": "mjy-image-pk",
+          "themeOptions": {
+            "structureVersion": "pk1",
+            "items": [
+              { "code": "A", "label": "包装甲 & <老版>", "image": "/themes/survey/fruity_twentythree/files/logo.png" },
+              { "code": "B", "label": "包装乙", "image": "/themes/survey/fruity_twentythree/files/logo.png" },
+              { "code": "C", "label": "包装丙", "image": "/themes/survey/fruity_twentythree/files/logo.png" }
+            ],
+            "pairs": [
+              { "code": "P1", "left": "A", "right": "B" },
+              { "code": "P2", "left": "B", "right": "C" }
+            ]
+          }
+        },
+        {
           "uuid": "99999999-1007-4555-8555-000000001007",
           "code": "QHEAT",
           "type": "T",

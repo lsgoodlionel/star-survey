@@ -18,6 +18,9 @@ class MjyThemedQuestionMap
     /** 循环评价（R02-11）：一行一个评价对象，列定义由平台按维度与量表生成。 */
     public const LOOP_RATING_THEME = 'mjy-loop-rating';
 
+    /** 图片 PK（R02-17）：整题一行，一对一列，列的取值恰好是这一对的两张图。 */
+    public const IMAGE_PK_THEME = 'mjy-image-pk';
+
     /**
      * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
      * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应。
@@ -26,6 +29,7 @@ class MjyThemedQuestionMap
         self::REPEATING_TABLE_THEME,
         self::HEATMAP_THEME,
         self::LOOP_RATING_THEME,
+        self::IMAGE_PK_THEME,
     ];
 
     /** @var array<string, array<string, mixed>> */
