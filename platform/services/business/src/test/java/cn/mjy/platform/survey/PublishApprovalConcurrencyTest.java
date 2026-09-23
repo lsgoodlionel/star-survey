@@ -26,6 +26,27 @@ class PublishApprovalConcurrencyTest {
 
     private static final int RACE_ROUNDS = 8;
     private static final String APPROVED_TITLE = "已批准的版本";
+    private static final long LOCK_WAIT_TIMEOUT_SECONDS = 10;
+    private static final long LOCK_WAIT_POLL_MILLIS = 10;
+
+    /**
+     * 有别的会话正卡在“本连接这笔事务”持有的问卷行锁上吗？
+     *
+     * <p>行锁的等待体现为：等待者要本事务 xid 上的 ShareLock（transactionid 锁），而本连接正持有它；
+     * 再要求等待者同时持有 survey 表的锁，把范围钉死在问卷行上。
+     */
+    private static final String BLOCKED_ON_MY_TRANSACTION = """
+            SELECT COUNT(*)
+              FROM pg_locks waiting
+              JOIN pg_locks held ON held.locktype = 'transactionid' AND held.granted
+                                AND held.transactionid = waiting.transactionid
+                                AND held.pid = pg_backend_pid()
+              JOIN pg_locks on_survey ON on_survey.pid = waiting.pid AND on_survey.granted
+                                AND on_survey.locktype = 'relation'
+                                AND on_survey.relation = 'survey'::regclass
+             WHERE NOT waiting.granted AND waiting.locktype = 'transactionid'
+               AND waiting.pid <> pg_backend_pid()
+            """;
 
     @Autowired
     private SurveyFixture fixture;
@@ -68,16 +89,23 @@ class PublishApprovalConcurrencyTest {
         surveys.saveDraft(editor, survey, currentDraftVersion(survey), fixture.definitionTitled(title));
     }
 
-    /** 等到有会话在等锁（被测线程已经卡在行锁上）。 */
-    private void awaitSomeoneWaitingForALock() throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (jdbc.sql("""
-                SELECT COUNT(*) FROM pg_stat_activity
-                 WHERE datname = current_database() AND wait_event_type = 'Lock'
-                """).query(Long.class).single() == 0) {
+    /**
+     * 等到批准者那条会话真的卡在本事务持有的问卷行锁上。
+     *
+     * <p>不能用 pg_stat_activity 数“有谁在等锁”：后端状态快照按事务缓存，本方法在一笔长事务里轮询，
+     * 第一次读到什么就一直是什么——之后才连上来阻塞的批准者永远不会出现（本地必然超时），
+     * 而整套测试一起跑时，第一次就可能读到别的测试的等待会话，凭空满足条件（假阳性）。
+     * pg_locks 每次都直读锁管理器，并且能钉死“等的就是本连接这笔事务”，不可能被无关会话满足。
+     */
+    private void awaitAnotherSessionBlockedOnThisTransaction(CompletableFuture<?> approver)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(LOCK_WAIT_TIMEOUT_SECONDS);
+        while (jdbc.sql(BLOCKED_ON_MY_TRANSACTION).query(Long.class).single() == 0) {
+            assertThat(approver).as("the approver must block on the survey row lock, not decide without it")
+                    .isNotDone();
             assertThat(System.nanoTime()).as("a session should be waiting for the survey row lock")
                     .isLessThan(deadline);
-            TimeUnit.MILLISECONDS.sleep(10);
+            TimeUnit.MILLISECONDS.sleep(LOCK_WAIT_POLL_MILLIS);
         }
     }
 
@@ -89,9 +117,16 @@ class PublishApprovalConcurrencyTest {
 
         tenantScope.run(ws.tenant(), () -> {
             jdbc.sql("SELECT id FROM survey WHERE id = :id FOR UPDATE").param("id", survey).query(UUID.class).single();
-            Thread.ofVirtual().start(() -> approval.complete(tryApprove(request)));
+            Thread.ofVirtual().start(() -> {
+                try {
+                    approval.complete(tryApprove(request));
+                } catch (RuntimeException | Error e) {
+                    // 否则批准者线程静默死掉，等待循环只会超时，看不出真正的原因。
+                    approval.completeExceptionally(e);
+                }
+            });
             try {
-                awaitSomeoneWaitingForALock();
+                awaitAnotherSessionBlockedOnThisTransaction(approval);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException(e);
