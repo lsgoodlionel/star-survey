@@ -1,0 +1,138 @@
+{
+  "definitionVersion": 1,
+  "uuid": "55555555-0003-4555-8555-000000000003",
+  "title": "WP-02 题型批次 02.3（题型主题与副表）",
+  "description": "需要新题型主题的题（R02-04/07/14/28/43）与走副表的题（R02-13/19）各一道。",
+  "language": "zh-Hans",
+  "theme": "fruity_twentythree",
+  "settings": {
+    "anonymized": "N",
+    "datestamp": "Y",
+    "savetimings": "N",
+    "ipaddr": "N",
+    "refurl": "N",
+    "allowsave": "Y",
+    "allowprev": "Y",
+    "alloweditaftercompletion": "N",
+    "format": "G",
+    "questionindex": "0",
+    "usecaptcha": "N",
+    "shownoanswer": "N"
+  },
+  "groups": [
+    {
+      "uuid": "99999999-0001-4555-8555-000000000001",
+      "title": "展示型主题",
+      "questions": [
+        {
+          "uuid": "99999999-1001-4555-8555-000000001001",
+          "code": "QSEC",
+          "type": "X",
+          "text": "以下是关于购物习惯的问题。",
+          "theme": "mjy-collapsible",
+          "themeOptions": { "summary": "第一部分：购物习惯", "collapsed": false }
+        },
+        {
+          "uuid": "99999999-1002-4555-8555-000000001002",
+          "code": "QGRP",
+          "type": "L",
+          "text": "最常买的一类",
+          "mandatory": true,
+          "theme": "mjy-grouped-options",
+          "answers": [
+            { "code": "A1", "text": "苹果" },
+            { "code": "A2", "text": "香蕉" },
+            { "code": "A3", "text": "白菜" },
+            { "code": "A4", "text": "土豆" }
+          ],
+          "themeOptions": {
+            "collapsible": true,
+            "groups": [
+              { "label": "水果", "codes": ["A1", "A2"] },
+              { "label": "蔬菜", "codes": ["A3", "A4"] }
+            ]
+          }
+        },
+        {
+          "uuid": "99999999-1003-4555-8555-000000001003",
+          "code": "QSCAN",
+          "type": "S",
+          "text": "扫描商品条码",
+          "maxLength": 12,
+          "theme": "mjy-scan-input",
+          "themeOptions": { "scanFormat": "barcode" }
+        },
+        {
+          "uuid": "99999999-1004-4555-8555-000000001004",
+          "code": "QSTEP",
+          "type": "F",
+          "text": "逐项评价",
+          "mandatory": true,
+          "theme": "mjy-matrix-stepper",
+          "themeOptions": { "rowsPerStep": 2 },
+          "answers": [
+            { "code": "L1", "text": "不满意" },
+            { "code": "L2", "text": "一般" },
+            { "code": "L3", "text": "满意" }
+          ],
+          "subquestions": [
+            { "uuid": "99999999-2001-4555-8555-000000002001", "code": "R1", "text": "价格" },
+            { "uuid": "99999999-2002-4555-8555-000000002002", "code": "R2", "text": "品质" },
+            { "uuid": "99999999-2003-4555-8555-000000002003", "code": "R3", "text": "配送" },
+            { "uuid": "99999999-2004-4555-8555-000000002004", "code": "R4", "text": "客服" }
+          ]
+        },
+        {
+          "uuid": "99999999-1005-4555-8555-000000001005",
+          "code": "QBLANK",
+          "type": "P",
+          "text": "用过下面哪些，并写出型号",
+          "theme": "mjy-inline-blank",
+          "themeOptions": { "blankLabel": "型号", "blankMaxLength": 8 },
+          "subquestions": [
+            { "uuid": "99999999-2005-4555-8555-000000002005", "code": "S1", "text": "手机" },
+            { "uuid": "99999999-2006-4555-8555-000000002006", "code": "S2", "text": "平板" }
+          ]
+        }
+      ]
+    },
+    {
+      "uuid": "99999999-0002-4555-8555-000000000002",
+      "title": "副表题型",
+      "questions": [
+        {
+          "uuid": "99999999-1006-4555-8555-000000001006",
+          "code": "QTABLE",
+          "type": "T",
+          "text": "最近三次购买记录",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-repeating-table",
+          "themeOptions": {
+            "structureVersion": "rt1",
+            "minRows": 1,
+            "maxRows": 3,
+            "columns": [
+              { "code": "item", "label": "商品", "type": "text", "required": true, "maxLength": 20 },
+              { "code": "qty", "label": "数量", "type": "integer", "required": true, "min": 1, "max": 99 }
+            ]
+          }
+        },
+        {
+          "uuid": "99999999-1007-4555-8555-000000001007",
+          "code": "QHEAT",
+          "type": "T",
+          "text": "在货架图上标出你先看的位置",
+          "mandatory": true,
+          "theme": "mjy-heatmap",
+          "themeOptions": {
+            "structureVersion": "hm1",
+            "image": "/themes/survey/fruity_twentythree/files/logo.png",
+            "minPoints": 1,
+            "maxPoints": 3
+          }
+        }
+      ]
+    }
+  ]
+}
