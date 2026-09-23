@@ -30,6 +30,14 @@ class MjyQuestionAttributeDefinitions
     /** 货架题的货架图与商品热区（R02-18）。 */
     public const SHELF_IMAGE = 'mjy_shelf_image';
     public const SHELF_PRODUCTS = 'mjy_shelf_products';
+    /** 文字点睛的原文与可标记片段（R02-22，JSON）。 */
+    public const HIGHLIGHT_TEXT = 'mjy_highlight_text';
+    public const HIGHLIGHT_SEGMENTS = 'mjy_highlight_segments';
+    /** 心理实验的试次（R02-46，JSON）：刺激与**正确按键**；正确率由平台按它推导。 */
+    public const PSYCH_TRIALS = 'mjy_psych_trials';
+    /** 专业模型（R02-47）：模型名与该模型的采集对象；读端按模型名取分析口径。 */
+    public const MODEL_NAME = 'mjy_model_name';
+    public const MODEL_FEATURES = 'mjy_model_features';
 
     private const CATEGORY = 'MJY 结构化题型';
     private const CATEGORY_GROUPS = 'MJY 选项分类';
@@ -72,6 +80,22 @@ class MjyQuestionAttributeDefinitions
             ]),
             self::SHELF_PRODUCTS => self::definition($structured, 100, 'textarea', '', '商品与热区（JSON）', [
                 'help' => '形如 [{"code":"S1","label":"牛奶","x":0.1,"y":0.2,"w":0.2,"h":0.3}]，坐标归一化到 [0,1]',
+            ]),
+            self::HIGHLIGHT_TEXT => self::definition($structured, 110, 'textarea', '', '文字点睛的原文', [
+                'help' => '片段偏移按这段原文的字符计；改了原文就必须换结构版本',
+            ]),
+            self::HIGHLIGHT_SEGMENTS => self::definition($structured, 120, 'textarea', '', '可标记的片段（JSON）', [
+                'help' => '形如 [{"code":"s0_4_9f8c2a","start":0,"length":4}]，按偏移升序且互不重叠',
+            ]),
+            self::PSYCH_TRIALS => self::definition($structured, 130, 'textarea', '', '试次（JSON）', [
+                'help' => '形如 [{"code":"T1","label":"第一试次","stimulus":"红","correct":"left"}]；'
+                    . 'correct 只用于平台推导正确率，浏览器判出来的对错不作数',
+            ]),
+            self::MODEL_NAME => self::definition($structured, 140, 'text', '', '专业模型名', [
+                'help' => '读端按它取对应的分析口径，例如 kano',
+            ]),
+            self::MODEL_FEATURES => self::definition($structured, 150, 'textarea', '', '模型采集对象（JSON）', [
+                'help' => '形如 [{"code":"F1","label":"夜间模式"}]，一个对象一行；量表由模型固定，不在这里',
             ]),
             // R02-04 的两支：单选按答案选项分组，多选按子题分组，共用同一份 JSON。
             // 少写一个题型字母，引擎导入那种题时会把这个属性丢掉，主题拿到空分组静默平铺。

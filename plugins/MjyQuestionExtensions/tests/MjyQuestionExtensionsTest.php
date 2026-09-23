@@ -205,6 +205,8 @@ class MjyQuestionExtensionsTest extends TestBaseClass
             'mjy_structure_version', 'mjy_heatmap_image', 'mjy_option_groups',
             'mjy_loop_objects', 'mjy_pk_items', 'mjy_pk_pairs',
             'mjy_shelf_image', 'mjy_shelf_products',
+            'mjy_highlight_text', 'mjy_highlight_segments', 'mjy_psych_trials',
+            'mjy_model_name', 'mjy_model_features',
         ];
         foreach ($jsonBearing as $name) {
             $this->assertArrayHasKey($name, $definitions);

@@ -207,6 +207,67 @@
           }
         },
         {
+          "uuid": "99999999-1012-4555-8555-000000001012",
+          "code": "QMARK",
+          "type": "T",
+          "text": "在下面这段话里标出你的感受",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-text-highlight",
+          "themeOptions": {
+            "structureVersion": "th1",
+            "text": "苹果很甜，香蕉太软，梨子刚好。",
+            "segments": [
+              { "start": 0, "length": 4 },
+              { "start": 5, "length": 4 },
+              { "start": 10, "length": 4 }
+            ],
+            "tags": [
+              { "code": "like", "label": "喜欢 & <很喜欢>" },
+              { "code": "dislike", "label": "不喜欢" }
+            ],
+            "minMarks": 1,
+            "maxMarks": 2
+          }
+        },
+        {
+          "uuid": "99999999-1013-4555-8555-000000001013",
+          "code": "QPSY",
+          "type": "T",
+          "text": "看到颜色后尽快按键",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-psych-trial",
+          "themeOptions": {
+            "structureVersion": "ps1",
+            "maxReactionMs": 5000,
+            "trials": [
+              { "code": "T1", "label": "第一试次 & <练习>", "stimulus": "红", "correct": "left" },
+              { "code": "T2", "label": "第二试次", "stimulus": "蓝", "correct": "right" }
+            ],
+            "keys": [
+              { "code": "left", "label": "左键 F" },
+              { "code": "right", "label": "右键 J" }
+            ]
+          }
+        },
+        {
+          "uuid": "99999999-1014-4555-8555-000000001014",
+          "code": "QKANO",
+          "type": "T",
+          "text": "每个功能点正反各答一遍",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-model-kano",
+          "themeOptions": {
+            "structureVersion": "kn1",
+            "features": [
+              { "code": "F1", "label": "夜间模式 & <深色>" },
+              { "code": "F2", "label": "离线缓存" }
+            ]
+          }
+        },
+        {
           "uuid": "99999999-1007-4555-8555-000000001007",
           "code": "QHEAT",
           "type": "T",

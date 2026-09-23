@@ -31,6 +31,9 @@ class FieldDictionaryQuestionThemesTest {
     private static final UUID LOOP = UUID.fromString("45454545-0008-4111-8111-000000000008");
     private static final UUID PK = UUID.fromString("45454545-0009-4111-8111-000000000009");
     private static final UUID SHELF = UUID.fromString("45454545-0010-4111-8111-000000000010");
+    private static final UUID MARK = UUID.fromString("45454545-0011-4111-8111-000000000011");
+    private static final UUID PSYCH = UUID.fromString("45454545-0012-4111-8111-000000000012");
+    private static final UUID KANO = UUID.fromString("45454545-0013-4111-8111-000000000013");
 
     private final JsonMapper json = JsonMapper.builder().build();
 
@@ -68,7 +71,21 @@ class FieldDictionaryQuestionThemesTest {
               {"uuid":"45454545-0010-4111-8111-000000000010","code":"QSHELF","type":"T","text":"从货架上取货",
                "theme":"mjy-shelf",
                "themeOptions":{"structureVersion":"sh1","image":"shelf.png",
-                               "products":[{"code":"S1","label":"牛奶","x":0.1,"y":0.2,"w":0.2,"h":0.3}]}}
+                               "products":[{"code":"S1","label":"牛奶","x":0.1,"y":0.2,"w":0.2,"h":0.3}]}},
+              {"uuid":"45454545-0011-4111-8111-000000000011","code":"QMARK","type":"T","text":"在原文上标记",
+               "theme":"mjy-text-highlight",
+               "themeOptions":{"structureVersion":"th1","text":"苹果很甜。",
+                               "segments":[{"start":0,"length":4}],
+                               "tags":[{"code":"like","label":"喜欢"}]}},
+              {"uuid":"45454545-0012-4111-8111-000000000012","code":"QPSY","type":"T","text":"颜色判断实验",
+               "theme":"mjy-psych-trial",
+               "themeOptions":{"structureVersion":"ps1",
+                               "trials":[{"code":"T1","label":"第一试次","stimulus":"红","correct":"left"}],
+                               "keys":[{"code":"left","label":"左键 F"}]}},
+              {"uuid":"45454545-0013-4111-8111-000000000013","code":"QKANO","type":"T","text":"功能点评价",
+               "theme":"mjy-model-kano",
+               "themeOptions":{"structureVersion":"kn1",
+                               "features":[{"code":"F1","label":"夜间模式"}]}}
             ]}]}
             """);
 
@@ -85,7 +102,10 @@ class FieldDictionaryQuestionThemesTest {
             new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_other", "other", 0),
             new QuestionFieldView(LOOP, "QLOOP", "T", "Q8", "", 0),
             new QuestionFieldView(PK, "QPK", "T", "Q9", "", 0),
-            new QuestionFieldView(SHELF, "QSHELF", "T", "Q10", "", 0));
+            new QuestionFieldView(SHELF, "QSHELF", "T", "Q10", "", 0),
+            new QuestionFieldView(MARK, "QMARK", "T", "Q11", "", 0),
+            new QuestionFieldView(PSYCH, "QPSY", "T", "Q12", "", 0),
+            new QuestionFieldView(KANO, "QKANO", "T", "Q13", "", 0));
 
     private FieldDictionary.FieldEntry field(String fieldname) {
         return FieldDictionaryBuilder.fields(definition, binding).stream()
@@ -111,6 +131,16 @@ class FieldDictionaryQuestionThemesTest {
         // R02-18 货架题：取了什么、取了几件都在副表里。
         assertThat(field("Q10").label()).isEqualTo("从货架上取货 [结构化作答]");
         assertThat(field("Q10").options()).isEmpty();
+        // R02-22 文字点睛：标了哪几段、各标成什么都在副表里。
+        assertThat(field("Q11").label()).isEqualTo("在原文上标记 [结构化作答]");
+        assertThat(field("Q11").options()).isEmpty();
+        // R02-46 心理实验：试次、按键与反应时都在副表里；正确率由平台按定义里的
+        // trials[].correct 推导，引擎那一列不含对错。
+        assertThat(field("Q12").label()).isEqualTo("颜色判断实验 [结构化作答]");
+        assertThat(field("Q12").options()).isEmpty();
+        // R02-47 专业模型 KANO：正反两问都在副表里，引擎那一列是整块信封。
+        assertThat(field("Q13").label()).isEqualTo("功能点评价 [结构化作答]");
+        assertThat(field("Q13").options()).isEmpty();
     }
 
     @Test

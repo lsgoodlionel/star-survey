@@ -139,8 +139,51 @@ def shelf(**options):
     return question("T", code="QSHELF", theme="mjy-shelf", themeOptions=payload)
 
 
+# ------------------------------------------------------------------ 切片 02.5 的三类
+
+
+#: 原文（R02-22）。段落偏移按**字符**计，与下面的 segments 一一对应。
+HIGHLIGHT_TEXT = "苹果很甜，香蕉太软，梨子刚好。"
+#: 「苹果很甜」「香蕉太软」「梨子刚好」：互不重叠、按偏移升序。
+HIGHLIGHT_SEGMENTS = [{"start": 0, "length": 4}, {"start": 5, "length": 4}, {"start": 10, "length": 4}]
+HIGHLIGHT_TAGS = [{"code": "like", "label": "喜欢"}, {"code": "dislike", "label": "不喜欢"}]
+
+
+def text_highlight(**options):
+    payload = {"structureVersion": "th1", "text": HIGHLIGHT_TEXT,
+               "segments": HIGHLIGHT_SEGMENTS, "tags": HIGHLIGHT_TAGS, "maxMarks": 3}
+    payload.update(options)
+    return question("T", code="QMARK", theme="mjy-text-highlight", themeOptions=payload)
+
+
+#: 试次（R02-46）。``correct`` 是**正确按键**，随定义留痕，不进列定义：
+#: 正确与否由平台按声明推导，作答者提交不了「我答对了」。
+PSYCH_TRIALS = [
+    {"code": "T1", "label": "第一试次", "stimulus": "红", "correct": "left"},
+    {"code": "T2", "label": "第二试次", "stimulus": "蓝", "correct": "right"},
+]
+PSYCH_KEYS = [{"code": "left", "label": "左键 F"}, {"code": "right", "label": "右键 J"}]
+
+
+def psych_trial(**options):
+    payload = {"structureVersion": "ps1", "trials": PSYCH_TRIALS, "keys": PSYCH_KEYS,
+               "maxReactionMs": 5000}
+    payload.update(options)
+    return question("T", code="QPSY", theme="mjy-psych-trial", themeOptions=payload)
+
+
+#: KANO 的功能点（R02-47）。量表不在这里——它由模型固定，作者写不了。
+KANO_FEATURES = [{"code": "F1", "label": "夜间模式"}, {"code": "F2", "label": "离线缓存"}]
+
+
+def kano(**options):
+    payload = {"structureVersion": "kn1", "features": KANO_FEATURES}
+    payload.update(options)
+    return question("T", code="QKANO", theme="mjy-model-kano", themeOptions=payload)
+
+
 ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap(),
-              loop_rating(), image_pk(), shelf())
+              loop_rating(), image_pk(), shelf(), text_highlight(), psych_trial(), kano())
 
 
 # ------------------------------------------------------------------ 注册表
