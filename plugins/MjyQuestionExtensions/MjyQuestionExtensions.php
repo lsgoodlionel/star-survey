@@ -20,6 +20,10 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
 
     private const ENGINE_INSTANCE_ENV = 'MJY_ENGINE_INSTANCE_ID';
     private const LOG_CATEGORY = 'plugin.MjyQuestionExtensions';
+    /** 平台为本实例签发的密钥（与 MjyPlatformBridge 同一个变量，ADR 0003）。 */
+    private const EVENTS_SECRET_ENV = 'MJY_PLATFORM_EVENTS_SECRET';
+    /** 轮换期的上一代实例密钥；轮换结束后删除（ADR 0018 决定 3）。 */
+    private const EVENTS_SECRET_PREVIOUS_ENV = 'MJY_PLATFORM_EVENTS_SECRET_PREVIOUS';
 
     protected $storage = 'DbStorage';
     protected static $description = 'MJY: 自增表格与上传会话的题型扩展';
@@ -60,6 +64,81 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         $this->subscribe('afterSurveyDynamicSave');
         $this->subscribe('afterResponseDelete');
         $this->subscribe('afterSurveyDynamicDelete');
+        $this->subscribe('newDirectRequest');
+    }
+
+    /**
+     * 网关↔插件鉴权通道（ADR 0018，契约 plugin-channel-v1）：
+     * `GET index.php/plugins/direct?plugin=MjyQuestionExtensions&function=extensionAnswers&…&sig=…`
+     *
+     * 副表作答是个人数据，所以这条端点与 MjyRuntimePolicy 的 policyStatus 不同——
+     * 它**必须验签**。验签之前不碰数据库，验签之前的一切拒绝共用同一个 401 与同一段
+     * 响应体，原因只进日志。
+     */
+    public function newDirectRequest()
+    {
+        $event = $this->getEvent();
+        if ($event->get('target') !== self::$name
+            || $event->get('function') !== MjyExtensionAnswerEndpoint::FUNCTION_NAME) {
+            return;
+        }
+        $response = $this->answerChannel()->handle($this->channelQuery(), time());
+        if ($response->reason() !== '') {
+            // 稳定原因码；绝不带密钥、签名或作答值。
+            Yii::log(
+                sprintf('extension answer channel refused a request: %s', $response->reason()),
+                CLogger::LEVEL_WARNING,
+                self::LOG_CATEGORY
+            );
+        }
+        header('Content-Type: application/json; charset=utf-8', true, $response->status());
+        header('Cache-Control: no-store');
+        echo $response->body();
+        App()->end();
+    }
+
+    /**
+     * 本次请求的查询参数原样交给端点判定。刻意读 $_GET 而不是逐个 getParam()：
+     * 端点要能看见**多余的参数**并据此拒绝（封闭白名单）。
+     *
+     * @return array<string, mixed>
+     */
+    private function channelQuery(): array
+    {
+        return is_array($_GET) ? $_GET : [];
+    }
+
+    public function answerChannel(): MjyExtensionAnswerEndpoint
+    {
+        $instanceId = self::engineInstanceId();
+        $rateLimit = new MjyChannelRateLimit(App()->getDb(), $instanceId);
+        $rateLimit->ensureSchema();
+
+        return new MjyExtensionAnswerEndpoint(
+            new MjyChannelAuth(self::instanceSecrets(), $instanceId),
+            new MjyExtensionAnswerReader(App()->getDb(), $this->structuredAnswers()),
+            $rateLimit,
+            $instanceId
+        );
+    }
+
+    /**
+     * 当前实例密钥，以及轮换期可选的上一代（ADR 0018 决定 3）。
+     * 通道密钥由 MjyChannelAuth 再派生一层，所以引擎侧不需要新的环境变量。
+     *
+     * @return string[]
+     */
+    private static function instanceSecrets(): array
+    {
+        $secrets = [];
+        foreach ([self::EVENTS_SECRET_ENV, self::EVENTS_SECRET_PREVIOUS_ENV] as $name) {
+            $value = getenv($name);
+            if ($value !== false && $value !== '') {
+                $secrets[] = (string) $value;
+            }
+        }
+
+        return $secrets;
     }
 
     public static function engineInstanceId(): string

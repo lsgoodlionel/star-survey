@@ -48,6 +48,12 @@ class MjyStructuredAnswerStore
         $this->engineInstanceId = $engineInstanceId;
     }
 
+    /** 本实例标识，是两张表自然键的第一段（ADR 0003）。批量读取器按它过滤。 */
+    public function engineInstanceId(): string
+    {
+        return $this->engineInstanceId;
+    }
+
     public function tableName(): string
     {
         return $this->db->tablePrefix . self::CELL_TABLE;
