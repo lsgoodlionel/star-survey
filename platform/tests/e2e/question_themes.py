@@ -157,15 +157,17 @@ def scenario_render(run: Run) -> None:
 def scenario_values(run: Run, response_id: str) -> None:
     """逐列断言答卷表，再逐格断言副表（含结构版本）。"""
     print("scenario B: every stored column and every projected cell", file=sys.stderr)
-    from question_themes_plan import HEAT_ROWS, TABLE_ROWS
+    from question_themes_plan import HEAT_ROWS, LOOP_ROWS, TABLE_ROWS
 
+    #: 走副表的题：(题目代码, 归一化后的行, 结构版本)。
+    side = (("QTABLE", TABLE_ROWS, "rt1"), ("QLOOP", LOOP_ROWS, "lr1"), ("QHEAT", HEAT_ROWS, "hm1"))
     row = run.last_row()
     run.check("B: response submitted", row[("_submitted", "", 0)] == "1", row)
     expected = {column: value for answers in valid_pages() for column, value in answers.items()}
     for column, value in sorted(expected.items()):
         if run.fields[column] not in run.physical:
             continue
-        if column[0] in ("QTABLE", "QHEAT"):
+        if column[0] in {code for code, _rows, _version in side}:
             continue  # 信封另行按 JSON 比对：插件会重新编码它
         run.check("B: {}[{}#{}] stored {!r}".format(*column, value), row.get(column) == value, row.get(column))
     run.check("B: the boilerplate column stays empty", row[("QSEC", "", 0)] == "", row[("QSEC", "", 0)])
@@ -176,15 +178,13 @@ def scenario_values(run: Run, response_id: str) -> None:
     run.check("B: the blank of an unchecked option stays empty",
               row[("QBLANK", "S2comment", 0)] == "", row[("QBLANK", "S2comment", 0)])
 
-    stored_table = json.loads(row[("QTABLE", "", 0)] or "null")
-    run.check("B: the repeating table envelope is re-normalised by the plugin",
-              stored_table == {"v": 1, "rows": TABLE_ROWS}, stored_table)
-    stored_heat = json.loads(row[("QHEAT", "", 0)] or "null")
-    run.check("B: the heatmap envelope is re-normalised by the plugin",
-              stored_heat == {"v": 1, "rows": HEAT_ROWS}, stored_heat)
+    for code, rows, _version in side:
+        stored = json.loads(row[(code, "", 0)] or "null")
+        run.check("B: the {} envelope is re-normalised by the plugin".format(code),
+                  stored == {"v": 1, "rows": rows}, stored)
 
     identifier = int(response_id)
-    for code, rows, version in (("QTABLE", TABLE_ROWS, "rt1"), ("QHEAT", HEAT_ROWS, "hm1")):
+    for code, rows, version in side:
         run.check("B: {} projected into the side table".format(code), run.side_rows(identifier, code) == rows,
                   run.side_rows(identifier, code))
         state = run.side_state(identifier, code)
@@ -198,6 +198,17 @@ def scenario_values(run: Run, response_id: str) -> None:
         run.check("B: {} binding declares the side table contract".format(code),
                   declared.get("contract") == "question-extension-tables-v1"
                   and str(declared.get("structureDigest", "")).startswith("sd1:"), declared)
+    # 循环评价的列字典必须带上取值集合：读端靠它把 "1" 翻回「差」，
+    # 插件靠同一份集合拒收不在里面的评分（枚举列）。
+    loop_columns = run.side_tables.get("QLOOP", {}).get("columns", [])
+    run.check("B: QLOOP binding declares the object column as a unique enum",
+              loop_columns[:1] and loop_columns[0]["code"] == "target"
+              and loop_columns[0]["type"] == "enum" and loop_columns[0].get("distinct") is True
+              and [item["code"] for item in loop_columns[0]["options"]] == ["B1", "B2"], loop_columns[:1])
+    run.check("B: QLOOP binding declares every dimension over the declared scale",
+              [column["code"] for column in loop_columns[1:]] == ["price", "service"]
+              and all([item["code"] for item in column["options"]] == ["1", "2", "3"]
+                      for column in loop_columns[1:]), loop_columns[1:])
     run.report["complete"] = {"{}[{}#{}]".format(*column): value for column, value in row.items()}
 
 
@@ -328,8 +339,8 @@ def main() -> int:
         run = Run(args.container, Database(args.db, args.db_container), args.db, survey_id, published["binding"])
         run.check("publish: every compiled column bound",
                   all(question["fields"] for question in published["binding"]["questions"]))
-        run.check("publish: the two side-table questions declare a side table",
-                  sorted(run.side_tables) == ["QHEAT", "QTABLE"], sorted(run.side_tables))
+        run.check("publish: every side-table question declares a side table",
+                  sorted(run.side_tables) == ["QHEAT", "QLOOP", "QTABLE"], sorted(run.side_tables))
 
         response_id = scenario_render(run)
         scenario_values(run, response_id)

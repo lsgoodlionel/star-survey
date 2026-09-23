@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 循环评价（需求 R02-11）。
+
+  引擎没有「循环」：同一套评价维度要对每个对象各问一遍时，作者只能手工复制 N 份题目，
+  对象一变就全盘重来，而且答卷列名里没有稳定的对象标识。本主题扩展长文本题（type T），
+  把「每个对象一行、每个维度一列」的评分表序列化成 JSON 信封存进长文本列，
+  真正的结构投影进插件副表（platform/contracts/question-extension-tables-v1.md）。
+
+  列定义（含每一列的可选取值）来自插件注册的 mjy_table_columns；
+  评价对象的标签另放 mjy_loop_objects，由本主题渲染成行首。
+  两者都由发布网关按 themeOptions 生成，作者不能直写。
+
+  行数由平台钉死成对象个数（mjy_table_min_rows = mjy_table_max_rows），
+  对象列是枚举＋唯一——三者合起来逼出「每个对象恰好评一次」。
+
+  answercolumndefinition 把答卷列从默认的 text 提升为 mediumtext
+  （application/models/QuestionTheme.php:775）。这个标签**不能**用 CDATA 包起来。
+-->
+<config>
+    <metadata>
+        <name>mjy-loop-rating</name>
+        <type>question_theme</type>
+        <title>MJY 循环评价</title>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>循环评价：同一套维度对每个对象各评一次，结构投影进副表</description>
+        <questionType>T</questionType>
+        <group>Text questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>0</assessable>
+        <class>text-long mjy-loop-rating</class>
+        <answercolumndefinition>mediumtext</answercolumndefinition>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-loop-rating.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-loop-rating.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_table_columns</name>
+            <category>MJY 循环评价</category>
+            <sortorder>10</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>列定义（JSON）</caption>
+            <help>第一列是评价对象（枚举＋唯一），其余每个维度一列</help>
+        </attribute>
+        <attribute>
+            <name>mjy_loop_objects</name>
+            <category>MJY 循环评价</category>
+            <sortorder>20</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>评价对象（JSON）</caption>
+            <help>形如 [{"code":"B1","label":"甲品牌"}]，一个对象一行</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_min_rows</name>
+            <category>MJY 循环评价</category>
+            <sortorder>30</sortorder>
+            <inputtype>integer</inputtype>
+            <default>0</default>
+            <caption>最少行数</caption>
+            <help>由平台钉死成对象个数</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_max_rows</name>
+            <category>MJY 循环评价</category>
+            <sortorder>40</sortorder>
+            <inputtype>integer</inputtype>
+            <default>20</default>
+            <caption>最多行数</caption>
+            <help>由平台钉死成对象个数；服务端强制</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

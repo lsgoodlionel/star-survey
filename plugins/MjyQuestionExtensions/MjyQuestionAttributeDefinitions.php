@@ -22,6 +22,8 @@ class MjyQuestionAttributeDefinitions
     public const HEATMAP_IMAGE = 'mjy_heatmap_image';
     /** 选项分组定义（R02-04，JSON）。 */
     public const OPTION_GROUPS = 'mjy_option_groups';
+    /** 循环评价的评价对象（R02-11，JSON）：一行一个对象，标签由主题渲染成行首。 */
+    public const LOOP_OBJECTS = 'mjy_loop_objects';
 
     private const CATEGORY = 'MJY 结构化题型';
     private const CATEGORY_GROUPS = 'MJY 选项分类';
@@ -49,6 +51,9 @@ class MjyQuestionAttributeDefinitions
             ]),
             self::HEATMAP_IMAGE => self::definition($structured, 50, 'text', '', '热力图底图地址', [
                 'help' => '作答者在这张图上点选；净化会改写 URL 里的 & ，所以不过滤',
+            ]),
+            self::LOOP_OBJECTS => self::definition($structured, 60, 'textarea', '', '评价对象（JSON）', [
+                'help' => '形如 [{"code":"B1","label":"甲品牌"}]，一个对象一行',
             ]),
             // R02-04 的两支：单选按答案选项分组，多选按子题分组，共用同一份 JSON。
             // 少写一个题型字母，引擎导入那种题时会把这个属性丢掉，主题拿到空分组静默平铺。

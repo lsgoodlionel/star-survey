@@ -1,0 +1,32 @@
+/* MJY 循环评价（R02-11） */
+.mjy-loop-rating__grid {
+    margin-bottom: 0.5rem;
+    width: 100%;
+}
+
+.mjy-loop-rating__grid th {
+    font-weight: 600;
+    vertical-align: middle;
+}
+
+/* 行首是评价对象，靠左读起来像一份清单；评分列居中。 */
+.mjy-loop-rating__row > th {
+    text-align: left;
+    white-space: normal;
+    width: 30%;
+}
+
+.mjy-loop-rating__grid td {
+    text-align: center;
+    vertical-align: middle;
+}
+
+.mjy-loop-rating__cell {
+    min-width: 6rem;
+}
+
+/* 关掉 JavaScript 时直接露出 textarea，作答者照样能提交合法的 JSON 信封。 */
+.mjy-loop-rating__raw {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.875rem;
+}

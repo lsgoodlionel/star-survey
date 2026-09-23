@@ -20,7 +20,7 @@
 以及走副表的 R02-13（自增表格的 DSL 映射）与 R02-19（选点）。副表的「结构版本」列先行落地
 （[副表契约 v1](../../contracts/question-extension-tables-v1.md)），其余 14 条 P 类由此解除阻塞。
 
-切片 02.4（✔3）收口 R02-04 的**多选**分组（接管选项行模板），见第三之四节。
+切片 02.4（✔3）收口 R02-04 的**多选**分组（接管选项行模板），并新交付 P 类的 R02-11 循环评价，见第三之四节。
 
 ## 二、逐条映射
 
@@ -39,7 +39,7 @@
 | R02-08 | 超长文本 | N | ✔ | `T`／`U`；`maxLength`（≤16000 字）编译成按字符计数的服务端规则，超限留在本页并提示 | 原文 | `""` |
 | R02-09 | 评分与量表 | N | ✔ | `5` 五分制、`A` 五分矩阵、`B` 十分矩阵、`F`＋自定义刻度；正反向用选项 `assessmentValue` | `5`/`A`：`1`–`5`；`B`：`1`–`10`；`F`：选项代码 | `""`；矩阵为子题代码 |
 | R02-10 | NPS 与评价组件 | T | ✔ | NPS＝`L`＋选项 `0`…`10`＋引擎自带主题 `bootstrap_buttons`；星级＝`5`＋`slider_rating=1` | `0`–`10`；`1`–`5` | `""` |
-| R02-11 | 循环评价 | P | | 评价对象动态、要稳定对象 ID；引擎无循环 | — | 后续 |
+| R02-11 | 循环评价 | P | ✔3 | `T`＋新主题 `mjy-loop-rating`＋副表；一行一个评价对象，一列一个维度，对象列是枚举＋唯一 | JSON 信封，行序＝对象声明序 | `""`；评分在副表，按结构版本解释 |
 | R02-12 | 矩阵与表格 | N | ✔ | `F`、`H`（按列）、`A`/`B`/`C`/`E`（固定刻度）、`1` 双尺度、`:` 数值矩阵、`;` 文本矩阵 | 选项代码；`C`：`Y`/`U`/`N`；`E`：`I`/`S`/`D`；`:`/`;` 原值 | 子题代码；`1` 为子题代码＋尺度 0/1；`:`/`;` 为 `行_列` |
 | R02-13 | 自增表格 | P | ✔2 | `T`＋`mjy-repeating-table`＋副表；列定义、行数上下限与结构版本走 `themeOptions` | JSON 信封 `{"v":1,"rows":[…]}` | `""`；单元格在副表，按结构版本解释 |
 | R02-14 | 矩阵单题作答 | T | ✔2 | `F`＋新主题 `mjy-matrix-stepper`（只接管非下拉布局）；隐藏的行照样提交，必答在服务端重算 | 同 R02-12 | 子题代码 |
@@ -118,6 +118,7 @@
 | `mjy-inline-blank` | R02-07 | `P` | `blankLabel`、`blankMaxLength`（必填） | `commented_checkbox=checked`＋每处填空一条长度规则 |
 | `mjy-repeating-table` | R02-13 | `T` | `structureVersion`、`columns`（均必填）、`minRows`、`maxRows` | `mjy_table_columns`、`mjy_table_min_rows`、`mjy_table_max_rows`、`mjy_structure_version` |
 | `mjy-heatmap` | R02-19 | `T` | `structureVersion`、`image`（均必填）、`minPoints`、`maxPoints` | 同上（列定义由平台生成：`x`/`y` decimal，范围 `[0,1]`） |
+| `mjy-loop-rating` | R02-11 | `T` | `structureVersion`、`objects`、`dimensions`、`scale`（均必填） | `mjy_table_columns`（列定义由平台生成）、`mjy_loop_objects`、`mjy_structure_version`，行数上下限钉死成对象个数 |
 
 422 错误码：`E_THEME_UNKNOWN`（`mjy-` 前缀却没注册＝拼错，目标实例上会静默降级）、
 `E_THEME_TYPE_MISMATCH`、`E_THEME_OPTIONS_UNSUPPORTED`、`E_THEME_OPTION_UNKNOWN`、
@@ -132,7 +133,7 @@
 | `mjy-scan-input` | 提交任意字符串 | 编译出的 `em_validation_q` 长度规则（所以 `maxLength` 必填） |
 | `mjy-inline-blank` | 没勾选却填了填空、填空超长 | 原生 `commented_checkbox=checked`＋编译出的长度规则 |
 | `mjy-matrix-stepper` | 跳过没走到的行 | 引擎必答在服务端重算（隐藏的行照样提交） |
-| `mjy-repeating-table`／`mjy-heatmap` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这两类题必须设为必答） |
+| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
 
 ## 三之三、副表的存储契约（给读端）
 
@@ -186,6 +187,40 @@
 一并新增的注册表检查：`VIEW_FOLDERS`（题型字母 → 引擎视图目录名）＋
 `test_every_registered_type_has_its_own_view_folder`——注册了某个题型却没建对应目录，
 在引擎上表现为静默降级，发布前是看不出来的。
+
+### R02-11 循环评价
+
+同一套评价维度要对每个对象各问一遍。引擎没有循环，作者只能手工复制 N 份题目——
+对象一变就全盘重来，而且答卷列名里没有稳定的对象标识。本主题走副表：
+**一行一个评价对象，一列一个维度**，整块 JSON 信封存进长文本列。
+
+列定义由平台按 `themeOptions` 生成，作者写不了：
+
+```
+[{"code":"target","label":"评价对象","type":"enum","required":true,
+  "options":[{"code":"B1","label":"甲品牌"},…],"distinct":true},
+ {"code":"price","label":"价格","type":"enum","required":true,"options":<量表>},
+ …每个维度一列]
+```
+
+**「每个对象恰好评一次」不是靠按行下标比对，而是三条约束合起来逼出来的**：
+对象列是枚举（只能是声明过的对象）、唯一（不能评两次），行数被钉死成对象个数
+（`mjy_table_min_rows = mjy_table_max_rows = len(objects)`，作答者改不了）。
+三者同时成立就只剩一一对应，不必再写一套依赖行序的规则——行序是浏览器端的事，
+而浏览器端的任何结论都不作数。
+
+为此给列定义加了两条**通用**约束（自增表格也能用）：
+
+| 约束 | 含义 | 服务端在哪儿判 |
+|---|---|---|
+| `type: "enum"` ＋ `options` | 取值集合由平台在发布时声明 | `MjyRepeatingTableValidator::checkColumn()` |
+| `distinct: true` | 同一列的**非空**取值在一次作答里不得重复（空值不算重复） | `MjyRepeatingTableValidator::checkDistinct()` |
+
+两条都进 `structureDigest`：改了可选项等于换了一本字典，早先的答卷必须按它自己那一版读回。
+取值代码的字符集比列代码宽一位（可以数字打头，量表常写成 1…5）。
+
+**仍未做**：评价对象是**静态声明**的。需求里的「对象动态」（由前面某道题的作答决定评谁）
+要等逻辑 DSL 的引用能力，本片不做，也不假装做了。
 
 ## 四、缺失值（实测，MariaDB 10.11 与 PostgreSQL 16 完全一致）
 

@@ -201,7 +201,7 @@ class MjyQuestionExtensionsTest extends TestBaseClass
         // 题型主题 config.xml 里的 <xssfilter>false</xssfilter> 只是字符串，起不到作用。
         $definitions = \QuestionAttribute::getOwnQuestionAttributesViaPlugin();
 
-        foreach (['mjy_structure_version', 'mjy_heatmap_image', 'mjy_option_groups'] as $name) {
+        foreach (['mjy_structure_version', 'mjy_heatmap_image', 'mjy_option_groups', 'mjy_loop_objects'] as $name) {
             $this->assertArrayHasKey($name, $definitions);
             $this->assertFalse($definitions[$name]['xssfilter'], $name . ' 存的不是 HTML');
         }

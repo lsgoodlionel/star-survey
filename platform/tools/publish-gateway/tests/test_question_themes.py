@@ -103,7 +103,20 @@ def heatmap(**options):
     return question("T", code="QHEAT", theme="mjy-heatmap", themeOptions=payload)
 
 
-ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap())
+LOOP_OBJECTS = [{"code": "B1", "label": "甲品牌"}, {"code": "B2", "label": "乙品牌"}]
+LOOP_DIMENSIONS = [{"code": "price", "label": "价格"}, {"code": "service", "label": "服务"}]
+LOOP_SCALE = [{"code": "1", "label": "差"}, {"code": "2", "label": "一般"}, {"code": "3", "label": "好"}]
+
+
+def loop_rating(**options):
+    payload = {"structureVersion": "lr1", "objects": LOOP_OBJECTS,
+               "dimensions": LOOP_DIMENSIONS, "scale": LOOP_SCALE}
+    payload.update(options)
+    return question("T", code="QLOOP", theme="mjy-loop-rating", themeOptions=payload)
+
+
+ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap(),
+              loop_rating())
 
 
 # ------------------------------------------------------------------ 注册表
@@ -437,6 +450,138 @@ class HeatmapTest(unittest.TestCase):
         self.assertEqual(["E_THEME_OPTION_REQUIRED"], codes(payload))
 
 
+class EnumColumnTest(unittest.TestCase):
+    """枚举列与唯一列：给自增表格与循环评价共用的两条列约束。
+
+    两条都必须在服务端成立——浏览器端渲染成下拉还是按钮都不作数，
+    提交上来的永远是一个字符串。
+    """
+
+    def enum_table(self, column, **options):
+        return table(columns=[column], **options)
+
+    def test_an_enum_column_compiles_its_options_canonically(self):
+        value = compile_attributes(self.enum_table(
+            {"code": "grade", "type": "enum", "required": True,
+             "options": [{"code": "A", "label": "优"}, {"code": "B", "label": "良"}]}), code="QTABLE")
+        self.assertEqual(
+            [{"code": "grade", "label": "grade", "type": "enum", "required": True,
+              "options": [{"code": "A", "label": "优"}, {"code": "B", "label": "良"}]}],
+            json.loads(value["mjy_table_columns"]),
+        )
+
+    def test_a_bare_code_list_is_accepted_and_labelled_by_its_code(self):
+        value = compile_attributes(self.enum_table(
+            {"code": "grade", "type": "enum", "options": ["A", "B"]}), code="QTABLE")
+        self.assertEqual([{"code": "A", "label": "A"}, {"code": "B", "label": "B"}],
+                         json.loads(value["mjy_table_columns"])[0]["options"])
+
+    def test_an_enum_column_without_options_is_rejected(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"],
+                         codes(self.enum_table({"code": "grade", "type": "enum"})))
+
+    def test_options_on_a_non_enum_column_are_rejected(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"],
+                         codes(self.enum_table({"code": "grade", "type": "text", "options": ["A"]})))
+
+    def test_bad_option_shapes(self):
+        # 取值代码可以数字打头（量表常写成 1…5），但不能带空格、也不能是中文。
+        for opts in ([], [{"label": "没有代码"}], ["A", "A"], [{"code": "bad code"}], "A,B"):
+            with self.subTest(options=opts):
+                self.assertEqual(["E_THEME_OPTION_VALUE"], codes(
+                    self.enum_table({"code": "grade", "type": "enum", "options": opts})))
+
+    def test_a_distinct_column_is_carried_through(self):
+        value = compile_attributes(self.enum_table(
+            {"code": "grade", "type": "enum", "options": ["A"], "distinct": True}), code="QTABLE")
+        self.assertTrue(json.loads(value["mjy_table_columns"])[0]["distinct"])
+
+    def test_the_digest_follows_the_options_and_the_distinct_flag(self):
+        plain = [{"code": "g", "type": "enum", "options": [{"code": "A", "label": "优"}]}]
+        relabelled = [{"code": "g", "type": "enum", "options": [{"code": "A", "label": "改了标签"}]}]
+        widened = [{"code": "g", "type": "enum", "options": [{"code": "A", "label": "优"},
+                                                             {"code": "B", "label": "良"}]}]
+        unique = [dict(plain[0], distinct=True)]
+        # 标签不进摘要（改标签不影响读回），取值集合与唯一约束要进。
+        self.assertEqual(structure_digest(plain), structure_digest(relabelled))
+        self.assertNotEqual(structure_digest(plain), structure_digest(widened))
+        self.assertNotEqual(structure_digest(plain), structure_digest(unique))
+
+
+class LoopRatingTest(unittest.TestCase):
+    """R02-11 循环评价：同一套评价维度对每个对象各问一遍，引擎没有循环。
+
+    一行＝一个评价对象，一列＝一个维度；对象列是枚举＋唯一，行数被钉死成对象个数，
+    三者合起来逼出「每个对象恰好评一次」，不必另写一套按行下标的规则。
+    """
+
+    def columns(self, **options):
+        return json.loads(compile_attributes(loop_rating(**options), code="QLOOP")["mjy_table_columns"])
+
+    def test_the_object_column_comes_first_and_is_unique(self):
+        first = self.columns()[0]
+        self.assertEqual(("target", "enum", True, True), (first["code"], first["type"],
+                                                          first["required"], first["distinct"]))
+        self.assertEqual(["B1", "B2"], [option["code"] for option in first["options"]])
+        self.assertEqual(["甲品牌", "乙品牌"], [option["label"] for option in first["options"]])
+
+    def test_one_enum_column_per_dimension_over_the_declared_scale(self):
+        dimensions = self.columns()[1:]
+        self.assertEqual(["price", "service"], [column["code"] for column in dimensions])
+        for column in dimensions:
+            self.assertEqual(("enum", True), (column["type"], column["required"]))
+            self.assertEqual(["1", "2", "3"], [option["code"] for option in column["options"]])
+
+    def test_the_row_count_is_pinned_to_the_number_of_objects(self):
+        attributes = compile_attributes(loop_rating(), code="QLOOP")
+        self.assertEqual(("2", "2"), (attributes["mjy_table_min_rows"], attributes["mjy_table_max_rows"]))
+
+    def test_the_object_labels_reach_the_theme(self):
+        value = compile_attributes(loop_rating(), code="QLOOP")["mjy_loop_objects"]
+        self.assertEqual(LOOP_OBJECTS, json.loads(value))
+        self.assertNotIn(" ", value)
+
+    def test_structure_version_is_required(self):
+        payload = loop_rating()
+        del payload["themeOptions"]["structureVersion"]
+        self.assertEqual(["E_THEME_OPTION_REQUIRED"], codes(payload))
+
+    def test_objects_dimensions_and_scale_are_all_required(self):
+        for name in ("objects", "dimensions", "scale"):
+            with self.subTest(option=name):
+                payload = loop_rating()
+                del payload["themeOptions"][name]
+                self.assertEqual(["E_THEME_OPTION_REQUIRED"], codes(payload))
+
+    def test_bad_object_lists(self):
+        for objects in ([{"label": "没有代码"}],
+                        [{"code": "B1"}, {"code": "B1"}],
+                        [{"code": "bad code"}],
+                        [{"code": "B1", "label": 7}]):
+            with self.subTest(objects=objects):
+                self.assertEqual(["E_THEME_OPTION_VALUE"], codes(loop_rating(objects=objects)))
+
+    def test_a_dimension_may_not_collide_with_the_object_column(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"],
+                         codes(loop_rating(dimensions=[{"code": "target", "label": "撞车"}])))
+
+    def test_too_many_objects(self):
+        many = [{"code": "B{}".format(index), "label": str(index)} for index in range(501)]
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(loop_rating(objects=many)))
+
+    def test_too_many_dimensions(self):
+        # 对象列占掉一列，所以维度最多 39 个。
+        many = [{"code": "d{}".format(index), "label": str(index)} for index in range(40)]
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(loop_rating(dimensions=many)))
+
+    def test_the_answer_is_still_one_engine_column(self):
+        self.assertEqual((("QLOOP", "", 0),), expected_rows(first_question(loop_rating())))
+
+    def test_the_theme_is_only_for_long_free_text(self):
+        payload = dict(loop_rating(), type="S")
+        self.assertEqual(["E_THEME_TYPE_MISMATCH"], codes(payload))
+
+
 class SideTableBindingTest(unittest.TestCase):
     """绑定记录里的副表声明：读端据此解释单元格（contracts/question-extension-tables-v1.md）。"""
 
@@ -463,6 +608,12 @@ class SideTableBindingTest(unittest.TestCase):
         declared = self.binding(heatmap(), code="QHEAT").to_dict()["sideTable"]
         self.assertEqual(["x", "y"], [column["code"] for column in declared["columns"]])
         self.assertEqual("hm1", declared["structureVersion"])
+
+    def test_a_loop_rating_declares_the_object_column_and_every_dimension(self):
+        declared = self.binding(loop_rating(), code="QLOOP").to_dict()["sideTable"]
+        self.assertEqual(["target", "price", "service"], [column["code"] for column in declared["columns"]])
+        self.assertEqual("lr1", declared["structureVersion"])
+        self.assertTrue(declared["structureDigest"].startswith("sd1:"))
 
     def test_the_digest_follows_the_structure_and_ignores_labels(self):
         relabelled = [dict(column, label="改了标签") for column in TABLE_COLUMNS]

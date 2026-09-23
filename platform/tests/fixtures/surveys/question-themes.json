@@ -140,6 +140,31 @@
           }
         },
         {
+          "uuid": "99999999-1009-4555-8555-000000001009",
+          "code": "QLOOP",
+          "type": "T",
+          "text": "逐个品牌打分",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-loop-rating",
+          "themeOptions": {
+            "structureVersion": "lr1",
+            "objects": [
+              { "code": "B1", "label": "甲品牌 & <老字号>" },
+              { "code": "B2", "label": "乙品牌" }
+            ],
+            "dimensions": [
+              { "code": "price", "label": "价格" },
+              { "code": "service", "label": "服务" }
+            ],
+            "scale": [
+              { "code": "1", "label": "差" },
+              { "code": "2", "label": "一般" },
+              { "code": "3", "label": "好" }
+            ]
+          }
+        },
+        {
           "uuid": "99999999-1007-4555-8555-000000001007",
           "code": "QHEAT",
           "type": "T",

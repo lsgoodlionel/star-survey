@@ -4,7 +4,8 @@
 本文是**读端**的依据：平台的答卷读取、导出与对账都按这里描述的列与语义解释副表，
 不再去看插件源码。
 
-状态：v1（WP-02 切片 02.3 引入 `structure_version`，补上 ADR 0006 限制 9 与 10 的一半）。
+状态：v1（WP-02 切片 02.3 引入 `structure_version`，补上 ADR 0006 限制 9 与 10 的一半；
+切片 02.4 给列字典加了 `options` 与 `distinct`，表结构不变）。
 
 ## 一、两张表
 
@@ -104,6 +105,21 @@ version = state.structure_version
 columns = 平台侧按 (题目, version) 取到的列字典     # version == '0' 时没有字典
 rows = fetchRows(sid, generation, responseId, questionCode)
 ```
+
+### 列字典里有什么
+
+绑定记录的 `sideTables[].columns` 就是这一版的列字典，每一列至少有
+`code`、`label`、`type`、`required`，按类型另有：
+
+| 键 | 出现在 | 含义 |
+|---|---|---|
+| `maxLength` | 文本列 | 按字符计的长度上限 |
+| `min` / `max` | 数值列 | 闭区间 |
+| `options` | `type: "enum"` | **取值集合**，形如 `[{"code":"1","label":"差"}]`；读端按它把单元格里的代码翻成标签 |
+| `distinct` | 任意列 | `true` ＝ 同一列的非空取值在一次作答里不重复（WP-02 切片 02.4 起） |
+
+`options` 与 `distinct` 都算**结构**：改了可选项或唯一约束就必须换结构版本，
+`structureDigest` 把两者都算进去（标签不算，改标签不影响读回）。
 
 `fetchStructureVersions()` 返回这条答卷这道题在单元格表里出现过的全部版本。
 正常只有一个；返回多个说明有人绕过 `replaceRows()` 直接写库，读端应当报警而不是合并。

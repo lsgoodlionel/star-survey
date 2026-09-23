@@ -35,6 +35,8 @@ THEME_MARKERS = (
     (
         "data-mjy-repeating-table",
         "mjy-repeating-table.js",
+        "data-mjy-loop-rating",
+        "mjy-loop-rating.js",
         "data-mjy-heatmap",
         "mjy-heatmap.js",
     ),
@@ -58,6 +60,12 @@ TABLE_ROWS = [
 #: 坐标取两端：0 与 1 都在允许范围内，闭区间不能被写成开区间。
 HEAT_ROWS = [{"x": "0.0000", "y": "1.0000"}, {"x": "0.5000", "y": "0.5000"}]
 
+#: 循环评价：一行一个评价对象，行序与 themeOptions.objects 一致，取值取量表两端。
+LOOP_ROWS = [
+    {"target": "B1", "price": "1", "service": "3"},
+    {"target": "B2", "price": "3", "service": "2"},
+]
+
 
 def valid_pages() -> List[Dict[Column, str]]:
     return [
@@ -73,6 +81,7 @@ def valid_pages() -> List[Dict[Column, str]]:
         },
         {
             ("QTABLE", "", 0): envelope(TABLE_ROWS),
+            ("QLOOP", "", 0): envelope(LOOP_ROWS),
             ("QHEAT", "", 0): envelope(HEAT_ROWS),
         },
     ]
@@ -88,6 +97,8 @@ def blank_pages() -> List[Dict[Column, str]]:
         },
         {
             ("QTABLE", "", 0): envelope([{"item": "米", "qty": "1"}]),
+            # 循环评价的行数被钉死成对象个数，没有「取下限」这回事。
+            ("QLOOP", "", 0): envelope(LOOP_ROWS),
             ("QHEAT", "", 0): envelope([{"x": "0.2500", "y": "0.7500"}]),
         },
     ]
@@ -134,6 +145,17 @@ TAMPERS = (
             {("QHEAT", "", 0): envelope(HEAT_ROWS + [{"x": "0.1", "y": "0.1"}, {"x": "0.2", "y": "0.2"}])}),
     _tamper("heatmap: a coordinate that is not a number", 1,
             {("QHEAT", "", 0): envelope([{"x": "left", "y": "0.5000"}])}),
+    # 循环评价（R02-11）：对象列是枚举＋唯一，行数被钉死成对象个数。
+    _tamper("loop rating: a score outside the declared scale", 1,
+            {("QLOOP", "", 0): envelope([dict(LOOP_ROWS[0], price="9"), LOOP_ROWS[1]])}),
+    _tamper("loop rating: an object nobody declared", 1,
+            {("QLOOP", "", 0): envelope([dict(LOOP_ROWS[0], target="B9"), LOOP_ROWS[1]])}),
+    _tamper("loop rating: the same object rated twice", 1,
+            {("QLOOP", "", 0): envelope([LOOP_ROWS[0], dict(LOOP_ROWS[1], target="B1")])}),
+    _tamper("loop rating: one object dropped", 1,
+            {("QLOOP", "", 0): envelope([LOOP_ROWS[0]])}),
+    _tamper("loop rating: a dimension left empty", 1,
+            {("QLOOP", "", 0): envelope([dict(LOOP_ROWS[0], service=""), LOOP_ROWS[1]])}),
     # 影子字段：浏览器端算出的相关性全写 1，服务端照样重算。
     _tamper("repeating table: bad payload with every relevance* shadow forced to 1", 1,
             {("QTABLE", "", 0): envelope([{"item": "米", "qty": "0"}])}, shadow="all-relevant"),

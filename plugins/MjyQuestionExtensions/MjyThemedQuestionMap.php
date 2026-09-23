@@ -15,11 +15,18 @@ class MjyThemedQuestionMap
     /** 热力图选区（R02-19）：同一套 JSON 信封与副表，列定义由平台生成。 */
     public const HEATMAP_THEME = 'mjy-heatmap';
 
+    /** 循环评价（R02-11）：一行一个评价对象，列定义由平台按维度与量表生成。 */
+    public const LOOP_RATING_THEME = 'mjy-loop-rating';
+
     /**
      * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
      * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应。
      */
-    public const STRUCTURED_THEMES = [self::REPEATING_TABLE_THEME, self::HEATMAP_THEME];
+    public const STRUCTURED_THEMES = [
+        self::REPEATING_TABLE_THEME,
+        self::HEATMAP_THEME,
+        self::LOOP_RATING_THEME,
+    ];
 
     /** @var array<string, array<string, mixed>> */
     private $structuredQuestions;

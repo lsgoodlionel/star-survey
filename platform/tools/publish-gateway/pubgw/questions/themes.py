@@ -39,7 +39,11 @@ CELL_MAX_LENGTH = 2000
 #: 与 MjyStructuredAnswerStore::normaliseStructureVersion 的字符集一致。
 STRUCTURE_VERSION_PATTERN = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,31}\Z")
 _COLUMN_CODE_PATTERN = re.compile(r"\A[A-Za-z][A-Za-z0-9_]{0,31}\Z")
-_COLUMN_TYPES = ("text", "integer", "decimal")
+#: 枚举列**取值**的字符集：比列代码宽一位——量表常写成 1…5，引擎的选项代码也允许数字打头。
+_VALUE_CODE_PATTERN = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,31}\Z")
+_COLUMN_TYPES = ("text", "integer", "decimal", "enum")
+#: 枚举列一列最多多少个取值：取值集合随 .lss 下发，不是给人塞字典用的。
+MAX_COLUMN_OPTIONS = 200
 
 #: 副表契约与两张表的名字（不带引擎表前缀）。
 SIDE_TABLE_CONTRACT = "question-extension-tables-v1"
@@ -53,6 +57,8 @@ COLUMNS_ATTRIBUTE = "mjy_table_columns"
 MIN_ROWS_ATTRIBUTE = "mjy_table_min_rows"
 MAX_ROWS_ATTRIBUTE = "mjy_table_max_rows"
 STRUCTURE_VERSION_ATTRIBUTE = "mjy_structure_version"
+#: 循环评价的评价对象（R02-11）：一行一个对象，标签由主题渲染成行首。
+LOOP_OBJECTS_ATTRIBUTE = "mjy_loop_objects"
 
 #: 题型字母 → 引擎存放该题型视图的目录名（``QuestionTemplate::getFolderName``）。
 #: 主题必须在 ``themes/question/<名字>/survey/questions/answer/<这里的值>/`` 下放 config.xml
@@ -268,11 +274,17 @@ def side_table_binding(question: Question) -> Optional[Dict[str, Any]]:
 
 
 def structure_digest(columns: List[Dict[str, Any]]) -> str:
-    """列定义的摘要：列序、列代码、类型与约束全进去，标签不进去（改标签不影响读回）。"""
+    """列定义的摘要：列序、列代码、类型与约束全进去，标签不进去（改标签不影响读回）。
+
+    枚举列的**取值集合**与唯一约束也算结构：改了可选项等于换了一本字典，
+    早先的答卷必须按它自己那一版读回（副表契约 v1 第二节）。
+    """
     lines = [
-        "{}|{}|{}|{}|{}|{}".format(
+        "{}|{}|{}|{}|{}|{}|{}|{}".format(
             column["code"], column["type"], "1" if column.get("required") else "0",
             column.get("maxLength", ""), column.get("min", ""), column.get("max", ""),
+            ",".join(option["code"] for option in column.get("options", ())),
+            "1" if column.get("distinct") else "0",
         )
         for column in columns
     ]
@@ -281,6 +293,57 @@ def structure_digest(columns: List[Dict[str, Any]]) -> str:
 
 
 # ------------------------------------------------------------------ 各主题
+
+
+def _code_list(raw: Any, path: str, limit: int, pattern: Any = None) -> Tuple[List[Dict[str, str]], List[Issue]]:
+    """一串「代码＋标签」的取值，写成 ``["A","B"]`` 或 ``[{"code":"A","label":"优"}]`` 都可以。
+
+    返回规范形式（键序固定，缺省标签取代码本身）。给枚举列的取值集合与循环评价的
+    对象／维度／量表共用：它们的形状与约束完全一样，两份实现迟早会漂。
+
+    ``pattern`` 缺省是**取值**的字符集（可以数字打头，量表常写成 1…5）；
+    要当列代码用的那几处（循环评价的维度）自己传列代码的字符集。
+    """
+    shape = pattern if pattern is not None else _VALUE_CODE_PATTERN
+    if not isinstance(raw, list) or not raw:
+        return [], [(OPTION_VALUE, path, "必须是非空数组")]
+    if len(raw) > limit:
+        return [], [(OPTION_VALUE, path, "最多 {} 项".format(limit))]
+    items: List[Dict[str, str]] = []
+    issues: List[Issue] = []
+    seen = set()
+    for index, entry in enumerate(raw):
+        where = "{}[{}]".format(path, index)
+        code = entry if isinstance(entry, str) else (entry.get("code") if isinstance(entry, dict) else None)
+        if not isinstance(code, str) or not shape.match(code):
+            issues.append((OPTION_VALUE, where + ".code", "代码不合法：{!r}".format(code)))
+            continue
+        label = entry.get("label") if isinstance(entry, dict) else None
+        if label is not None and not isinstance(label, str):
+            issues.append((OPTION_VALUE, where + ".label", "label 必须是字符串"))
+            continue
+        if code in seen:
+            issues.append((OPTION_VALUE, where + ".code", "代码重复：{}".format(code)))
+            continue
+        seen.add(code)
+        items.append({"code": code, "label": label or code})
+    return (([], issues) if issues else (items, []))
+
+
+def _enum_issues(raw: Dict[str, Any], column: Dict[str, Any], path: str) -> List[Issue]:
+    """枚举列的取值集合：枚举列必须有，别的列不许有。"""
+    declared = raw.get("options")
+    if column["type"] != "enum":
+        if declared is not None:
+            return [(OPTION_VALUE, path + ".options", "只有 enum 列可以声明 options")]
+        return []
+    if declared is None:
+        return [(OPTION_VALUE, path + ".options", "enum 列必须声明 options")]
+    options, issues = _code_list(declared, path + ".options", MAX_COLUMN_OPTIONS)
+    if issues:
+        return issues
+    column["options"] = options
+    return []
 
 
 def _column_issues(raw: Any, index: int) -> Tuple[Optional[Dict[str, Any]], List[Issue]]:
@@ -300,7 +363,10 @@ def _column_issues(raw: Any, index: int) -> Tuple[Optional[Dict[str, Any]], List
         "type": column_type,
         "required": bool(raw.get("required")),
     }
-    issues: List[Issue] = []
+    issues: List[Issue] = _enum_issues(raw, column, path)
+    if raw.get("distinct"):
+        # 唯一约束：同一列的非空取值在一次作答里不得重复（插件逐行判）。
+        column["distinct"] = True
     length = raw.get("maxLength")
     if length is not None:
         if not _int(length) or not 1 <= length <= CELL_MAX_LENGTH:
@@ -314,8 +380,8 @@ def _column_issues(raw: Any, index: int) -> Tuple[Optional[Dict[str, Any]], List
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             issues.append((OPTION_VALUE, "{}.{}".format(path, bound), "{} 必须是数字".format(bound)))
             continue
-        if column_type == "text":
-            issues.append((OPTION_VALUE, "{}.{}".format(path, bound), "文本列不能设数值上下限"))
+        if column_type in ("text", "enum"):
+            issues.append((OPTION_VALUE, "{}.{}".format(path, bound), "非数值列不能设数值上下限"))
             continue
         column[bound] = value
     if "min" in column and "max" in column and column["min"] > column["max"]:
@@ -357,6 +423,64 @@ def _check_rows(values: Dict[str, Any]) -> List[Issue]:
 
 def _lower_table(question: Question, values: Dict[str, Any]) -> Lowering:
     return Lowering(attributes={COLUMNS_ATTRIBUTE: _canonical_json(_parse_columns(values["columns"]))})
+
+
+# ---------------------------------------------------------------- 循环评价（R02-11）
+
+#: 评价对象那一列的代码。维度不许叫这个名字，否则对象列会被顶掉。
+LOOP_OBJECT_COLUMN = "target"
+
+
+def _loop_lists(values: Dict[str, Any]) -> Tuple[List[Dict[str, str]], List[Dict[str, str]],
+                                                 List[Dict[str, str]], List[Issue]]:
+    """解析三份清单，顺带把三处 422 合在一起报出去。"""
+    objects, issues = _code_list(values.get("objects"), "themeOptions.objects", HARD_MAX_ROWS)
+    # 维度直接当列代码用，所以按列代码的字符集判（不能数字打头）。
+    dimensions, found = _code_list(values.get("dimensions"), "themeOptions.dimensions",
+                                   MAX_COLUMNS - 1, _COLUMN_CODE_PATTERN)
+    issues.extend(found)
+    scale, found = _code_list(values.get("scale"), "themeOptions.scale", MAX_COLUMN_OPTIONS)
+    issues.extend(found)
+    return objects, dimensions, scale, issues
+
+
+def _check_loop_rating(question: Question, values: Dict[str, Any]) -> List[Issue]:
+    objects, dimensions, _scale, issues = _loop_lists(values)
+    if issues:
+        return issues
+    collision = [item["code"] for item in dimensions if item["code"] == LOOP_OBJECT_COLUMN]
+    if collision:
+        issues.append((OPTION_VALUE, "themeOptions.dimensions",
+                       "维度代码不能叫 {}：那是评价对象列".format(LOOP_OBJECT_COLUMN)))
+    if not objects:
+        issues.append((OPTION_VALUE, "themeOptions.objects", "至少要有一个评价对象"))
+    return issues
+
+
+def _loop_rating_columns(values: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """一行一个评价对象：第一列认对象（枚举＋唯一），其余每个维度一列（枚举到量表）。
+
+    行数在 ``_lower_loop_rating`` 里被钉死成对象个数，「枚举＋唯一＋行数」三者
+    合起来就逼出「每个对象恰好评一次」，不必再写一套按行下标的规则。
+    """
+    objects, dimensions, scale, _issues = _loop_lists(values)
+    columns = [{"code": LOOP_OBJECT_COLUMN, "label": "评价对象", "type": "enum",
+                "required": True, "options": objects, "distinct": True}]
+    columns.extend({"code": item["code"], "label": item["label"], "type": "enum",
+                    "required": True, "options": scale} for item in dimensions)
+    return columns
+
+
+def _lower_loop_rating(question: Question, values: Dict[str, Any]) -> Lowering:
+    objects, _dimensions, _scale, _issues = _loop_lists(values)
+    count = str(len(objects))
+    return Lowering(attributes={
+        COLUMNS_ATTRIBUTE: _canonical_json(_loop_rating_columns(values)),
+        LOOP_OBJECTS_ATTRIBUTE: _canonical_json(objects),
+        # 每个对象各一行，不多不少：行数不是作答者能改的东西。
+        MIN_ROWS_ATTRIBUTE: count,
+        MAX_ROWS_ATTRIBUTE: count,
+    })
 
 
 def _heatmap_columns(values: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -539,6 +663,25 @@ _THEMES = (
         lower=_lower_heatmap,
         side_columns=_heatmap_columns,
     ),
+    ThemeSpec(
+        name="mjy-loop-rating",
+        label="循环评价",
+        requirement="R02-11",
+        types=("T",),
+        options=(
+            OptionSpec("structureVersion", "text", attribute=STRUCTURE_VERSION_ATTRIBUTE, required=True,
+                       max_length=32, pattern=STRUCTURE_VERSION_PATTERN,
+                       pattern_hint="必须以字母或数字开头，只含字母数字与 . _ -（副表契约 v1）"),
+            # 三份清单都不落成各自的属性：对象进 mjy_loop_objects，
+            # 维度与量表已经在生成的列定义里，再存一份等于埋一个会漂的副本。
+            OptionSpec("objects", "list", required=True),
+            OptionSpec("dimensions", "list", required=True),
+            OptionSpec("scale", "list", required=True),
+        ),
+        check=_check_loop_rating,
+        lower=_lower_loop_rating,
+        side_columns=_loop_rating_columns,
+    ),
 )
 
 THEMES: Dict[str, ThemeSpec] = {theme.name: theme for theme in _THEMES}
@@ -552,5 +695,5 @@ STRUCTURE_VERSION_ATTRIBUTE_NAME = STRUCTURE_VERSION_ATTRIBUTE
 #: 校验时拒绝作者直写的属性：它们由 themeOptions 生成，两边都写等于埋一个冲突。
 MANAGED_ATTRIBUTES = frozenset(
     {COLUMNS_ATTRIBUTE, MIN_ROWS_ATTRIBUTE, MAX_ROWS_ATTRIBUTE, STRUCTURE_VERSION_ATTRIBUTE,
-     "mjy_option_groups", "commented_checkbox"}
+     LOOP_OBJECTS_ATTRIBUTE, "mjy_option_groups", "commented_checkbox"}
 )
