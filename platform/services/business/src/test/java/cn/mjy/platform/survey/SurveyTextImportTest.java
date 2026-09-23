@@ -323,6 +323,22 @@ class SurveyTextImportTest {
     }
 
     @Test
+    void onlyTheBracketBlockAtTheEndOfTheStemIsReadAsTags() {
+        SurveyImportPreview preview = preview("""
+                1. 题干里也有[方括号][单选]
+                A. 甲
+                B. 乙
+                """);
+
+        assertThat(preview.questions()).singleElement().satisfies(question -> {
+            assertThat(question.text()).isEqualTo("题干里也有[方括号]");
+            assertThat(question.type()).isEqualTo("L");
+            assertThat(question.typeInferred()).isFalse();
+            assertThat(question.problems()).isEmpty();
+        });
+    }
+
+    @Test
     void anAbsurdlyLongSingleLineIsReportedInsteadOfBeingParsed() {
         // 极长的行会让"结尾方括号"这类回溯型正则退化成平方复杂度，先按长度挡掉。
         String bomb = "[".repeat(200_000);

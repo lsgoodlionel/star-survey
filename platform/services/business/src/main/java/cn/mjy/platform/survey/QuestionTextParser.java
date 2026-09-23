@@ -44,9 +44,8 @@ final class QuestionTextParser {
     static final int MAX_OPTIONS = 200;
     static final int MAX_QUESTION_TEXT = 2_000;
     /**
-     * 单行长度上限。既是形状上的合理值，也是安全下限：下面几个正则都带回溯
-     * （尤其是"找结尾的方括号"那个），拿一行几十万个 {@code [} 去跑会退化成平方复杂度。
-     * 超长的行在跑任何正则之前就被挡掉，并记一条问题。
+     * 单行长度上限：形状上的合理值，同时把逐行解析的最坏开销钉死在常数量级
+     * （标签块已改为一次反向扫描，不再有回溯型正则）。超长的行原样记一条问题，不中断整批。
      */
     static final int MAX_LINE_CHARS = 4_000;
     static final int MAX_OPTION_TEXT = 500;
@@ -56,7 +55,6 @@ final class QuestionTextParser {
     private static final Pattern QUESTION_START = Pattern.compile("^\\d{1,4}\\s*[.、)）:：]\\s*(.*)$");
     private static final Pattern OPTION_START =
             Pattern.compile("^(?:[A-Za-z]\\s*[.、)）]|[-*•·]\\s)\\s*(.*)$");
-    private static final Pattern TAG_BLOCK = Pattern.compile("[\\[【]([^\\]】]*)[\\]】]\\s*$");
     private static final Pattern TAG_SEPARATOR = Pattern.compile("[,，、/\\s]+");
     private static final List<String> MANDATORY_TAGS = List.of("必答", "必填", "required");
 
@@ -201,15 +199,15 @@ final class QuestionTextParser {
             List<ImportProblem> problems) {
 
         static Header of(int line, String rest) {
-            Matcher tags = TAG_BLOCK.matcher(rest);
-            if (!tags.find()) {
+            int open = tagBlockStart(rest);
+            if (open < 0) {
                 return new Header(line, rest, null, false, List.of());
             }
-            String body = rest.substring(0, tags.start()).strip();
+            String body = rest.substring(0, open).strip();
             List<ImportProblem> problems = new ArrayList<>();
             QuestionType type = null;
             boolean mandatory = false;
-            for (String tag : TAG_SEPARATOR.split(tags.group(1).strip())) {
+            for (String tag : TAG_SEPARATOR.split(rest.substring(open + 1, rest.length() - 1).strip())) {
                 if (tag.isEmpty()) {
                     continue;
                 }
@@ -226,6 +224,27 @@ final class QuestionTextParser {
                 }
             }
             return new Header(line, body, type, mandatory, problems);
+        }
+
+        /**
+         * 题干行结尾那个标签块（{@code […]} 或 {@code 【…】}）左括号的下标，没有时返回 -1。
+         * 手写一次反向扫描而不是"结尾方括号"正则：那种写法带回溯，一行里很多 {@code [} 会退化成平方复杂度。
+         */
+        private static int tagBlockStart(String rest) {
+            int last = rest.length() - 1;
+            if (last < 1 || (rest.charAt(last) != ']' && rest.charAt(last) != '】')) {
+                return -1;
+            }
+            for (int i = last - 1; i >= 0; i--) {
+                char c = rest.charAt(i);
+                if (c == ']' || c == '】') {
+                    return -1;
+                }
+                if (c == '[' || c == '【') {
+                    return i;
+                }
+            }
+            return -1;
         }
     }
 

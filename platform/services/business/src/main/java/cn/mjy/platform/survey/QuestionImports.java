@@ -29,8 +29,8 @@ class QuestionImports {
 
     /** 没有指定分组时新建的分组标题。 */
     static final String DEFAULT_GROUP_TITLE = "导入的题目";
-    /** 自动分配的题目代码形如 Q1、Q2；只按这个形状避让，其它形状的代码不可能与之相同。 */
-    private static final Pattern GENERATED_CODE = Pattern.compile("^Q(\\d{1,6})$");
+    /** 自动分配的题目代码形如 Q1、Q2；只按这个形状避让（大小写都算），其它形状的代码不可能与之相同。 */
+    private static final Pattern GENERATED_CODE = Pattern.compile("^[Qq](\\d{1,6})$");
     /** 排序题的选项在引擎里是子题（见 question-type-map R02-15）。 */
     private static final String RANKING = "R";
 

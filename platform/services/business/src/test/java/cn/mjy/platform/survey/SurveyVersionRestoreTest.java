@@ -33,6 +33,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 class SurveyVersionRestoreTest {
 
     private static final int WRITERS = 5;
+    private static final long GATEWAY_WAIT_SECONDS = 10;
 
     @Autowired
     private SurveyFixture fixture;
@@ -191,6 +192,27 @@ class SurveyVersionRestoreTest {
         assertThat(restored.version()).isEqualTo(4);
         assertThat(restored.definition()).isEqualTo(v2.definition());
         assertThat(currentRouteSid()).isEqualTo(v2.engineSid());
+    }
+
+    @Test
+    void restoringWhileAPublishIsInFlightDoesNotChangeWhatThatPublishPutsOnline() throws Exception {
+        surveys.saveDraft(ws.owner(), survey, 2, fixture.definitionTitled("第三版"));
+        gateway.hold(survey);
+        CompletableFuture<PublishOutcome> publishing =
+                CompletableFuture.supplyAsync(() -> publisher.publish(ws.owner(), survey));
+        assertThat(gateway.awaitEntered(survey, GATEWAY_WAIT_SECONDS)).isTrue();
+
+        // 发布已经把定义固化成快照，此刻恢复第 1 版只改草稿，改不了在途的那一版。
+        surveys.restore(ws.owner(), survey, 1, 3);
+        gateway.release(survey);
+
+        PublishedVersionView v3 = publishing.join().version();
+        assertThat(v3.version()).isEqualTo(3);
+        assertThat(v3.definition().get("title").asString()).isEqualTo("第三版");
+        assertThat(v3.draftVersion()).isEqualTo(3);
+        assertThat(currentRouteSid()).isEqualTo(v3.engineSid());
+        assertThat(draftTitle()).isEqualTo("P0-00.8 发布网关样例问卷");
+        assertThat(draftVersion()).isEqualTo(4);
     }
 
     @Test

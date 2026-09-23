@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -52,16 +53,21 @@ public class SurveyController {
     public record RestoreVersion(@NotNull @Positive Integer expectedVersion) {
     }
 
-    /** 批量文本导入的预览请求：只有原文，不写库。 */
-    public record PreviewImport(@NotBlank String text) {
+    /**
+     * 批量文本导入的预览请求：只有原文，不写库。
+     * 长度在反序列化之后立刻挡一道（解析器里还有按字节与按行数的精确上限）。
+     */
+    public record PreviewImport(@NotBlank @Size(max = QuestionTextParser.MAX_TEXT_BYTES) String text) {
     }
 
     /**
      * 确认导入：accept 是预览里要保留的题目序号；groupUuid 为空时新建一个分组。
      * expectedVersion 与保存草稿同一把乐观锁。
      */
-    public record ImportQuestions(@NotNull @Positive Integer expectedVersion, @NotBlank String text,
-            @NotEmpty List<@NotNull Integer> accept, String groupUuid) {
+    public record ImportQuestions(@NotNull @Positive Integer expectedVersion,
+            @NotBlank @Size(max = QuestionTextParser.MAX_TEXT_BYTES) String text,
+            @NotEmpty @Size(max = QuestionTextParser.MAX_QUESTIONS) List<@NotNull Integer> accept,
+            String groupUuid) {
     }
 
     @PostMapping
