@@ -57,6 +57,9 @@ SHELF_PRODUCTS_ATTRIBUTE = "mjy_shelf_products"
 #: 文字点睛（R02-22）：原文与可标记的片段（偏移＋长度），主题据此把原文切成可点的片段。
 HIGHLIGHT_TEXT_ATTRIBUTE = "mjy_highlight_text"
 HIGHLIGHT_SEGMENTS_ATTRIBUTE = "mjy_highlight_segments"
+#: 心理实验（R02-46）：试次（刺激＋正确按键）。**正确按键不进列定义**——
+#: 正确与否由平台按声明推导，作答者提交不了「我答对了」。
+PSYCH_TRIALS_ATTRIBUTE = "mjy_psych_trials"
 
 #: 题型字母 → 引擎存放该题型视图的目录名（``QuestionTemplate::getFolderName``）。
 #: 主题必须在 ``themes/question/<名字>/survey/questions/answer/<这里的值>/`` 下放 config.xml

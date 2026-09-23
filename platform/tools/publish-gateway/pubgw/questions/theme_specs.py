@@ -13,11 +13,12 @@ from .theme_kit import (
     CELL_MAX_LENGTH, COLUMNS_ATTRIBUTE, HARD_MAX_ROWS, HIGHLIGHT_SEGMENTS_ATTRIBUTE,
     HIGHLIGHT_TEXT_ATTRIBUTE, Issue, LOOP_OBJECTS_ATTRIBUTE, Lowering, MAX_ROWS_ATTRIBUTE,
     MIN_ROWS_ATTRIBUTE, OPTION_REQUIRED, OPTION_VALUE, OptionSpec, PK_ITEMS_ATTRIBUTE,
-    PK_PAIRS_ATTRIBUTE, SHELF_IMAGE_ATTRIBUTE, SHELF_PRODUCTS_ATTRIBUTE,
+    PK_PAIRS_ATTRIBUTE, PSYCH_TRIALS_ATTRIBUTE, SHELF_IMAGE_ATTRIBUTE, SHELF_PRODUCTS_ATTRIBUTE,
     STRUCTURE_VERSION_ATTRIBUTE, STRUCTURE_VERSION_PATTERN, ThemeSpec, canonical_json,
 )
 from .theme_research import (
-    MAX_HIGHLIGHT_TEXT, check_text_highlight, lower_text_highlight, text_highlight_columns,
+    MAX_HIGHLIGHT_TEXT, MAX_REACTION_MS, check_psych_trial, check_text_highlight,
+    lower_psych_trial, lower_text_highlight, psych_trial_columns, text_highlight_columns,
 )
 from .theme_structured import (
     MAX_IMAGE_LENGTH, MAX_SHELF_QUANTITY, check_image_pk, check_loop_rating, check_shelf,
@@ -274,6 +275,24 @@ _THEMES = (
         lower=lower_text_highlight,
         side_columns=text_highlight_columns,
     ),
+    ThemeSpec(
+        name="mjy-psych-trial",
+        label="心理实验",
+        requirement="R02-46",
+        types=("T",),
+        options=(
+            _structure_version(),
+            # 试次带着刺激与**正确按键**进 mjy_psych_trials；正确按键刻意不进列定义，
+            # 正确率由平台推导，作答者提交不了「我答对了」。
+            OptionSpec("trials", "list", required=True),
+            OptionSpec("keys", "list", required=True),
+            OptionSpec("maxReactionMs", "integer", default=MAX_REACTION_MS,
+                       minimum=1, maximum=MAX_REACTION_MS),
+        ),
+        check=check_psych_trial,
+        lower=lower_psych_trial,
+        side_columns=psych_trial_columns,
+    ),
 )
 
 THEMES: Dict[str, ThemeSpec] = {theme.name: theme for theme in _THEMES}
@@ -289,6 +308,6 @@ MANAGED_ATTRIBUTES = frozenset(
     {COLUMNS_ATTRIBUTE, MIN_ROWS_ATTRIBUTE, MAX_ROWS_ATTRIBUTE, STRUCTURE_VERSION_ATTRIBUTE,
      LOOP_OBJECTS_ATTRIBUTE, PK_ITEMS_ATTRIBUTE, PK_PAIRS_ATTRIBUTE,
      SHELF_IMAGE_ATTRIBUTE, SHELF_PRODUCTS_ATTRIBUTE,
-     HIGHLIGHT_TEXT_ATTRIBUTE, HIGHLIGHT_SEGMENTS_ATTRIBUTE,
+     HIGHLIGHT_TEXT_ATTRIBUTE, HIGHLIGHT_SEGMENTS_ATTRIBUTE, PSYCH_TRIALS_ATTRIBUTE,
      "mjy_option_groups", "commented_checkbox"}
 )

@@ -77,7 +77,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | R02-43 | 折叠栏目 | T | ✔2 | `X`＋新主题 `mjy-collapsible`：说明题作分段标题，把随后的题目折进 `<details>` | `X` 不存值 | `""`（引擎照样建一列） |
 | R02-44 | Vlookup 问卷关联 | L | | 平台关联查询 | — | 后续 |
 | R02-45 | CATI 组件 | L | | 访员工作台 | — | 后续 |
-| R02-46 | 心理实验组件 | P | | 试次/反应时副表 | — | 后续 |
+| R02-46 | 心理实验组件 | P | ✔4（部分） | `T`＋新主题 `mjy-psych-trial`＋副表；一行一个试次，记按键与反应时；正确率由平台按声明推导，设备元数据未做 | JSON 信封，一行一个试次 | `""`；试次明细在副表 |
 | R02-47 | 专业模型组件 | P | | 按模型生成结构 | — | 后续 |
 
 ## 三、DSL 扩展（兼容 definitionVersion 1 与 2）
@@ -125,6 +125,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | `mjy-image-pk` | R02-17 | `T` | `structureVersion`、`items`、`pairs`（均必填） | `mjy_table_columns`（一对两列）、`mjy_pk_items`、`mjy_pk_pairs`、`mjy_structure_version`，行数上下限钉死成 1 |
 | `mjy-shelf` | R02-18 | `T` | `structureVersion`、`image`、`products`（均必填）、`minPicks`、`maxPicks`、`maxQuantity` | `mjy_table_columns`（`product` 枚举＋唯一、`qty` 整数）、`mjy_shelf_image`、`mjy_shelf_products`、`mjy_structure_version`、行数上下限 |
 | `mjy-text-highlight` | R02-22 | `T` | `structureVersion`、`text`、`segments`、`tags`（均必填）、`minMarks`、`maxMarks` | `mjy_table_columns`（`segment` 枚举＋唯一、`tag` 枚举）、`mjy_highlight_text`、`mjy_highlight_segments`、`mjy_structure_version`、行数上下限 |
+| `mjy-psych-trial` | R02-46 | `T` | `structureVersion`、`trials`、`keys`（均必填）、`maxReactionMs` | `mjy_table_columns`（`trial` 枚举＋唯一、`key` 枚举、`rt` 有界整数）、`mjy_psych_trials`、`mjy_structure_version`，行数上下限钉死成试次个数 |
 
 422 错误码：`E_THEME_UNKNOWN`（`mjy-` 前缀却没注册＝拼错，目标实例上会静默降级）、
 `E_THEME_TYPE_MISMATCH`、`E_THEME_OPTIONS_UNSUPPORTED`、`E_THEME_OPTION_UNKNOWN`、
@@ -139,7 +140,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | `mjy-scan-input` | 提交任意字符串 | 编译出的 `em_validation_q` 长度规则（所以 `maxLength` 必填） |
 | `mjy-inline-blank` | 没勾选却填了填空、填空超长 | 原生 `commented_checkbox=checked`＋编译出的长度规则 |
 | `mjy-matrix-stepper` | 跳过没走到的行 | 引擎必答在服务端重算（隐藏的行照样提交） |
-| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk`／`mjy-shelf`／`mjy-text-highlight` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
+| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk`／`mjy-shelf`／`mjy-text-highlight`／`mjy-psych-trial` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
 
 ## 三之三、副表的存储契约（给读端）
 
@@ -320,6 +321,40 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 
 本类**没动插件一行校验代码**：枚举、唯一、行数上下限全是切片 02.4 的通用列约束。
 
+### R02-46 心理实验
+
+逐个试次呈现刺激、记按了哪个键、用了多少毫秒。走副表：**一行一个试次**，三列。
+
+```
+[{"code":"trial","label":"试次","type":"enum","required":true,
+  "options":[{"code":"T1","label":"第一试次"},…],"distinct":true},
+ {"code":"key","label":"按键","type":"enum","required":true,"options":<声明的按键>},
+ {"code":"rt","label":"反应时（毫秒）","type":"integer","required":true,
+  "min":0,"max":<maxReactionMs>}]
+```
+
+行数被钉死成试次个数（与循环评价同一套办法：枚举＋唯一＋行数），
+所以「漏做一个试次」不是「没答」，是这次实验不完整，服务端直接拒收。
+
+**正确率不是提交上来的。** 需求要的是「试次/按键/反应时/正确率…完整导出」，
+但如果让浏览器端提交一列 `correct`，那等于让作答者自己宣布答对了，这样的正确率
+没有任何证据力。所以：每个试次的正确按键写在 `mjy_psych_trials` 里随定义留痕，
+**列定义里根本没有可以放对错的列**；正确率由平台按「试次的正确按键 vs 作答的 `key` 列」
+推导。e2e 场景 D 有一条就是提交 `correct` 列——它作为未知列被拒收。
+
+一处口径要说清：正确按键属于**题目定义**而不是结构版本。列定义没变，换正确按键
+不会改 `structureDigest`。这是对的——单元格的含义没变，变的是分析口径；
+一条答卷属于哪一版已发布定义是确定的，正确率按那一版算。
+
+**计时精度不承诺等同实验室硬件。** `rt` 由浏览器的 `performance.now()` 测量
+（单调时钟，不受系统时间调整影响），主题在刺激真正上屏的那一帧起表；
+但它仍受渲染节奏、页面隐藏与输入延迟影响。平台只保证这个毫秒数被原样、有界地记下来。
+
+**未做：设备元数据。** 需求里的「设备元数据完整导出」是**一次作答一份**
+（浏览器、屏幕、计时精度），不是一个试次一份，塞不进这张一行一试次的副表；
+硬塞成每行重复一遍既冗余又同样由客户端提供、同样不可信。它归运行时（R08-14
+「心理实验运行时…计时精度与浏览器元信息可查」），本切片不做，也不假装做了。
+
 ## 四、缺失值（实测，MariaDB 10.11 与 PostgreSQL 16 完全一致）
 
 引擎对同一列有三种「没有值」，平台字段字典与导出按下表解释。「显示了、没作答」一行来自
@@ -383,8 +418,8 @@ Java 744 条（含字段字典的主题映射 3 条）。
 
 ## 五之三、切片 02.5 的实测结果
 
-`run-question-themes.sh`（`TEST_DB=mysql|pgsql`，真实 HTTP，两种数据库**各 194 条断言全部通过**，
-切片 02.4 是 169）。篡改场景 D 共 40 条，其中文字点睛 7 条：
+`run-question-themes.sh`（`TEST_DB=mysql|pgsql`，真实 HTTP，两种数据库**各 222 条断言全部通过**，
+切片 02.4 是 169）。篡改场景 D 共 48 条，其中文字点睛 7 条：
 
 | 篡改 | 挡住它的约束 |
 |---|---|
@@ -397,6 +432,21 @@ Java 744 条（含字段字典的主题映射 3 条）。
 | 夹带一个自由偏移列 `start` | 未知列一律拒收（不静默丢弃） |
 
 七条全部留在本页，且没有任何已提交答卷带着这些值。
+
+心理实验 8 条：
+
+| 篡改 | 挡住它的约束 |
+|---|---|
+| **夹带一列 `correct` 自称答对了** | 未知列一律拒收——列定义里根本没有放对错的地方 |
+| 提交一个没声明过的试次 | `trial` 是枚举列 |
+| 同一试次记两次 | `trial` 是唯一列 |
+| 按了键盘图之外的键 | `key` 是枚举列 |
+| 反应时为负 | `rt` 的下限 0 |
+| 反应时超过 `maxReactionMs` | `rt` 的上限 |
+| 反应时填小数 | `rt` 是整数列 |
+| 少做一个试次 | 行数下限＝试次个数 |
+
+八条全部留在本页，且没有任何已提交答卷带着这些值。
 
 ## 六、本批实现与延后
 

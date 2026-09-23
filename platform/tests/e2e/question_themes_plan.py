@@ -43,6 +43,8 @@ THEME_MARKERS = (
         "mjy-shelf.js",
         "data-mjy-text-highlight",
         "mjy-text-highlight.js",
+        "data-mjy-psych-trial",
+        "mjy-psych-trial.js",
         "data-mjy-heatmap",
         "mjy-heatmap.js",
     ),
@@ -86,6 +88,12 @@ MARK_SEGMENTS = ("s0_4_2e6ace", "s5_4_be8dc2", "s10_4_e8d18e")
 MARK_ROWS = [{"segment": MARK_SEGMENTS[0], "tag": "like"},
              {"segment": MARK_SEGMENTS[2], "tag": "dislike"}]
 
+#: 心理实验：一行一个试次。反应时取两端——0 毫秒与上限（fixture 的 maxReactionMs 是 5000）。
+#: T1 按对（正确按键 left），T2 按错（正确按键 right）：正确率由平台按定义推导，
+#: 信封里没有任何一列说得出「对错」。
+PSYCH_ROWS = [{"trial": "T1", "key": "left", "rt": "0"},
+              {"trial": "T2", "key": "left", "rt": "5000"}]
+
 
 def valid_pages() -> List[Dict[Column, str]]:
     return [
@@ -105,6 +113,7 @@ def valid_pages() -> List[Dict[Column, str]]:
             ("QPK", "", 0): envelope(PK_ROWS),
             ("QSHELF", "", 0): envelope(SHELF_ROWS),
             ("QMARK", "", 0): envelope(MARK_ROWS),
+            ("QPSY", "", 0): envelope(PSYCH_ROWS),
             ("QHEAT", "", 0): envelope(HEAT_ROWS),
         },
     ]
@@ -126,6 +135,8 @@ def blank_pages() -> List[Dict[Column, str]]:
             ("QPK", "", 0): envelope([{"P1": "A", "P2": "B"}]),
             ("QSHELF", "", 0): envelope([{"product": "S2", "qty": "1"}]),
             ("QMARK", "", 0): envelope([{"segment": MARK_SEGMENTS[1], "tag": "like"}]),
+            # 心理实验的行数被平台钉死成试次个数，没有「取下限」这回事。
+            ("QPSY", "", 0): envelope(PSYCH_ROWS),
             ("QHEAT", "", 0): envelope([{"x": "0.2500", "y": "0.7500"}]),
         },
     ]
@@ -223,6 +234,24 @@ TAMPERS = (
             {("QMARK", "", 0): envelope(MARK_ROWS + [{"segment": MARK_SEGMENTS[1], "tag": "like"}])}),
     _tamper("text highlight: a free-form offset column smuggled in", 1,
             {("QMARK", "", 0): envelope([{"segment": MARK_SEGMENTS[0], "tag": "like", "start": "0"}])}),
+    # 心理实验（R02-46）：试次列枚举＋唯一，按键列枚举，反应时是 [0,5000] 的整数。
+    # 最要紧的一条是「自称答对了」——信封里根本没有可以放对错的列。
+    _tamper("psych trial: a self-declared correctness column", 1,
+            {("QPSY", "", 0): envelope([dict(PSYCH_ROWS[0], correct="1"), PSYCH_ROWS[1]])}),
+    _tamper("psych trial: a trial nobody declared", 1,
+            {("QPSY", "", 0): envelope([dict(PSYCH_ROWS[0], trial="T9"), PSYCH_ROWS[1]])}),
+    _tamper("psych trial: the same trial recorded twice", 1,
+            {("QPSY", "", 0): envelope([PSYCH_ROWS[0], dict(PSYCH_ROWS[1], trial="T1")])}),
+    _tamper("psych trial: a key that is not on the keyboard map", 1,
+            {("QPSY", "", 0): envelope([dict(PSYCH_ROWS[0], key="middle"), PSYCH_ROWS[1]])}),
+    _tamper("psych trial: a negative reaction time", 1,
+            {("QPSY", "", 0): envelope([dict(PSYCH_ROWS[0], rt="-1"), PSYCH_ROWS[1]])}),
+    _tamper("psych trial: a reaction time over the cap", 1,
+            {("QPSY", "", 0): envelope([dict(PSYCH_ROWS[0], rt="5001"), PSYCH_ROWS[1]])}),
+    _tamper("psych trial: a fractional reaction time", 1,
+            {("QPSY", "", 0): envelope([dict(PSYCH_ROWS[0], rt="12.5"), PSYCH_ROWS[1]])}),
+    _tamper("psych trial: one trial skipped", 1,
+            {("QPSY", "", 0): envelope([PSYCH_ROWS[0]])}),
     # 影子字段：浏览器端算出的相关性全写 1，服务端照样重算。
     _tamper("repeating table: bad payload with every relevance* shadow forced to 1", 1,
             {("QTABLE", "", 0): envelope([{"item": "米", "qty": "0"}])}, shadow="all-relevant"),

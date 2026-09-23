@@ -158,13 +158,14 @@ def scenario_values(run: Run, response_id: str) -> None:
     """逐列断言答卷表，再逐格断言副表（含结构版本）。"""
     print("scenario B: every stored column and every projected cell", file=sys.stderr)
     from question_themes_plan import (
-        HEAT_ROWS, LOOP_ROWS, MARK_ROWS, MARK_SEGMENTS, PK_ROWS, SHELF_ROWS, TABLE_ROWS,
+        HEAT_ROWS, LOOP_ROWS, MARK_ROWS, MARK_SEGMENTS, PK_ROWS, PSYCH_ROWS, SHELF_ROWS, TABLE_ROWS,
     )
 
     #: 走副表的题：(题目代码, 归一化后的行, 结构版本)。
     side = (("QTABLE", TABLE_ROWS, "rt1"), ("QLOOP", LOOP_ROWS, "lr1"),
             ("QPK", PK_ROWS, "pk1"), ("QSHELF", SHELF_ROWS, "sh1"),
-            ("QMARK", MARK_ROWS, "th1"), ("QHEAT", HEAT_ROWS, "hm1"))
+            ("QMARK", MARK_ROWS, "th1"), ("QPSY", PSYCH_ROWS, "ps1"),
+            ("QHEAT", HEAT_ROWS, "hm1"))
     row = run.last_row()
     run.check("B: response submitted", row[("_submitted", "", 0)] == "1", row)
     expected = {column: value for answers in valid_pages() for column, value in answers.items()}
@@ -242,6 +243,17 @@ def scenario_values(run: Run, response_id: str) -> None:
     run.check("B: every QMARK span is labelled with the source text it points at",
               [option["label"] for option in mark_columns["segment"]["options"]]
               == ["苹果很甜", "香蕉太软", "梨子刚好"], mark_columns.get("segment"))
+    # 心理实验：试次列枚举＋唯一、按键列枚举、反应时是有界整数，**没有任何一列能放对错**——
+    # 正确率由平台按定义里的 trials[].correct 推导，作答者提交不了「我答对了」。
+    psych_columns = {column["code"]: column for column in run.side_tables.get("QPSY", {}).get("columns", [])}
+    run.check("B: QPSY binding declares trial, key and reaction time and nothing else",
+              list(psych_columns) == ["trial", "key", "rt"], list(psych_columns))
+    run.check("B: QPSY pins the trial column to the declared trials and forbids repeats",
+              [option["code"] for option in psych_columns.get("trial", {}).get("options", [])] == ["T1", "T2"]
+              and psych_columns["trial"].get("distinct") is True, psych_columns.get("trial"))
+    run.check("B: QPSY bounds the reaction time in milliseconds",
+              (psych_columns["rt"]["type"], psych_columns["rt"]["min"],
+               psych_columns["rt"]["max"]) == ("integer", 0, 5000), psych_columns.get("rt"))
     run.report["complete"] = {"{}[{}#{}]".format(*column): value for column, value in row.items()}
 
 
@@ -373,7 +385,8 @@ def main() -> int:
         run.check("publish: every compiled column bound",
                   all(question["fields"] for question in published["binding"]["questions"]))
         run.check("publish: every side-table question declares a side table",
-                  sorted(run.side_tables) == ["QHEAT", "QLOOP", "QMARK", "QPK", "QSHELF", "QTABLE"],
+                  sorted(run.side_tables) == ["QHEAT", "QLOOP", "QMARK", "QPK", "QPSY",
+                                              "QSHELF", "QTABLE"],
                   sorted(run.side_tables))
 
         response_id = scenario_render(run)

@@ -1,0 +1,41 @@
+{#
+/**
+ * MJY 心理实验：逐试次呈现刺激，按键作答，记下反应时；整场实验序列化成 JSON 信封。
+ *
+ * 真正被提交的永远是下面那个 textarea（name = 引擎字段名），实验台只是它的编辑器。
+ * 关掉 JavaScript 时 textarea 直接可见，作答者仍能提交合法的 JSON —— 服务端校验
+ * （MjyQuestionExtensions::beforeSurveyPage）对两条路径一视同仁。
+ *
+ * 试次里的 correct（正确按键）**不下发给浏览器判分**：它随 mjy_psych_trials 一起在
+ * 页面上（属性本来就会渲染进 data-），但浏览器判出来的对错不作数——正确率由平台按
+ * 「试次的正确按键 vs 作答的按键」推导。
+ *
+ * @var name  引擎字段名（Q<qid>）
+ * @var dispVal  已存的 JSON 信封
+ * @var question_template_attribute  mjy_psych_trials / 列定义 / min / max
+ */
+#}
+<!-- MJY psych trial -->
+<div class="{{ coreClass }} {{ extraclass }} mjy-psych-trial"
+     data-mjy-psych-trial="1"
+     data-mjy-field="{{ name }}"
+     {# 只能用沙箱白名单里的过滤器，别名 e 不在其中（application/config/internal.php:331） #}
+     data-mjy-trials="{{ question_template_attribute.mjy_psych_trials|escape('html_attr') }}"
+     data-mjy-columns="{{ question_template_attribute.mjy_table_columns|escape('html_attr') }}">
+
+    <div class="mjy-psych-trial__editor" hidden>
+        <p class="mjy-psych-trial__progress" aria-live="polite"></p>
+        <p class="mjy-psych-trial__stimulus"></p>
+        <div class="mjy-psych-trial__keys"></div>
+        <ol class="mjy-psych-trial__log"></ol>
+    </div>
+
+    <textarea
+        class="form-control mjy-psych-trial__raw"
+        name="{{ name }}"
+        id="answer{{ name }}"
+        rows="{{ drows }}"
+        aria-labelledby="ls-question-text-{{ basename }}"
+    >{{ dispVal }}</textarea>
+</div>
+<!-- end of answer -->

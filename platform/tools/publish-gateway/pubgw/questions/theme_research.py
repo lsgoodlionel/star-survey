@@ -1,4 +1,4 @@
-"""切片 02.5 的副表题型：文字点睛（R02-22）。
+"""切片 02.5 的副表题型：文字点睛（R02-22）、心理实验（R02-46）。
 
 三类都**没有新增任何插件校验**：列全部落在切片 02.4 引入的通用列约束上
 （``type: "enum"`` ＋ ``options``、``distinct``、整数上下限）。这正是当初
@@ -13,8 +13,9 @@ from typing import Any, Dict, List, Tuple
 from ..model import Question
 from .theme_columns import _code_list, bounded_rows_issues
 from .theme_kit import (
-    COLUMNS_ATTRIBUTE, HIGHLIGHT_SEGMENTS_ATTRIBUTE, HIGHLIGHT_TEXT_ATTRIBUTE, Issue, Lowering,
-    MAX_COLUMN_OPTIONS, OPTION_VALUE, _int, canonical_json,
+    COLUMNS_ATTRIBUTE, HARD_MAX_ROWS, HIGHLIGHT_SEGMENTS_ATTRIBUTE, HIGHLIGHT_TEXT_ATTRIBUTE, Issue,
+    Lowering, MAX_COLUMN_OPTIONS, MAX_ROWS_ATTRIBUTE, MIN_ROWS_ATTRIBUTE, OPTION_VALUE,
+    PSYCH_TRIALS_ATTRIBUTE, _int, canonical_json,
 )
 
 # ---------------------------------------------------------------- 文字点睛（R02-22）
@@ -119,4 +120,82 @@ def lower_text_highlight(question: Question, values: Dict[str, Any]) -> Lowering
         COLUMNS_ATTRIBUTE: canonical_json(text_highlight_columns(values)),
         HIGHLIGHT_TEXT_ATTRIBUTE: values["text"],
         HIGHLIGHT_SEGMENTS_ATTRIBUTE: canonical_json(spans),
+    })
+
+
+# ---------------------------------------------------------------- 心理实验（R02-46）
+
+#: 反应时的上限（毫秒）。十分钟以上的「反应」不是反应时，是这道题出了别的问题。
+MAX_REACTION_MS = 600000
+#: 刺激的描述（文字或素材地址）的长度上限。
+MAX_STIMULUS_LENGTH = 500
+
+
+def _psych_trials(values: Dict[str, Any]) -> Tuple[List[Dict[str, str]], List[Issue]]:
+    """试次：代码＋标签＋刺激，可选的正确按键。
+
+    **正确按键留在这里，不进列定义**：正确与否由平台按「试次的正确按键 vs 作答的按键」
+    推导，让浏览器端提交一列 ``correct`` 等于让作答者自己宣布答对了。
+    练习试次与没有对错的试次（偏好判断之类）可以不写正确按键。
+    """
+    trials, issues = _code_list(values.get("trials"), "themeOptions.trials", HARD_MAX_ROWS)
+    if issues:
+        return [], issues
+    keys = {item["code"] for item in _code_list(values.get("keys"), "themeOptions.keys",
+                                                MAX_COLUMN_OPTIONS)[0]}
+    declared = values.get("trials") or []
+    for index, (trial, raw) in enumerate(zip(trials, declared)):
+        path = "themeOptions.trials[{}]".format(index)
+        stimulus = raw.get("stimulus") if isinstance(raw, dict) else None
+        if not isinstance(stimulus, str) or not stimulus.strip() or len(stimulus) > MAX_STIMULUS_LENGTH:
+            issues.append((OPTION_VALUE, path + ".stimulus",
+                           "每个试次都要有刺激，最长 {} 个字符".format(MAX_STIMULUS_LENGTH)))
+            continue
+        trial["stimulus"] = stimulus
+        correct = raw.get("correct") if isinstance(raw, dict) else None
+        if correct is None:
+            continue
+        if correct not in keys:
+            issues.append((OPTION_VALUE, path + ".correct", "正确按键必须是声明过的按键之一"))
+            continue
+        trial["correct"] = correct
+    return ([], issues) if issues else (trials, [])
+
+
+def check_psych_trial(question: Question, values: Dict[str, Any]) -> List[Issue]:
+    # 按键先单独判一次：试次的正确按键要对着它校验，按键列表坏掉时那一步没有依据。
+    _keys, issues = _code_list(values.get("keys"), "themeOptions.keys", MAX_COLUMN_OPTIONS)
+    if issues:
+        return issues
+    _trials, found = _psych_trials(values)
+    return found
+
+
+def psych_trial_columns(values: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """一行一个试次：哪一试次（枚举＋唯一）、按了哪个键（枚举）、用了多少毫秒（有界整数）。
+
+    行数在 ``lower_psych_trial`` 里被钉死成试次个数，与循环评价同一套办法：
+    枚举＋唯一＋行数三者合起来就是「每个试次恰好一行」。
+    """
+    trials, _issues = _psych_trials(values)
+    keys, _found = _code_list(values.get("keys"), "themeOptions.keys", MAX_COLUMN_OPTIONS)
+    return [
+        {"code": "trial", "label": "试次", "type": "enum", "required": True, "distinct": True,
+         "options": [{"code": item["code"], "label": item["label"]} for item in trials]},
+        {"code": "key", "label": "按键", "type": "enum", "required": True,
+         "options": [{"code": item["code"], "label": item["label"]} for item in keys]},
+        {"code": "rt", "label": "反应时（毫秒）", "type": "integer", "required": True,
+         "min": 0, "max": values.get("maxReactionMs", MAX_REACTION_MS)},
+    ]
+
+
+def lower_psych_trial(question: Question, values: Dict[str, Any]) -> Lowering:
+    trials, _issues = _psych_trials(values)
+    count = str(len(trials))
+    return Lowering(attributes={
+        COLUMNS_ATTRIBUTE: canonical_json(psych_trial_columns(values)),
+        PSYCH_TRIALS_ATTRIBUTE: canonical_json(trials),
+        # 每个试次各一行，不多不少：漏做一个试次不是「没答」，是这次实验不完整。
+        MIN_ROWS_ATTRIBUTE: count,
+        MAX_ROWS_ATTRIBUTE: count,
     })

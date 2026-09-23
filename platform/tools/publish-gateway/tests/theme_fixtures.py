@@ -156,8 +156,24 @@ def text_highlight(**options):
     return question("T", code="QMARK", theme="mjy-text-highlight", themeOptions=payload)
 
 
+#: 试次（R02-46）。``correct`` 是**正确按键**，随定义留痕，不进列定义：
+#: 正确与否由平台按声明推导，作答者提交不了「我答对了」。
+PSYCH_TRIALS = [
+    {"code": "T1", "label": "第一试次", "stimulus": "红", "correct": "left"},
+    {"code": "T2", "label": "第二试次", "stimulus": "蓝", "correct": "right"},
+]
+PSYCH_KEYS = [{"code": "left", "label": "左键 F"}, {"code": "right", "label": "右键 J"}]
+
+
+def psych_trial(**options):
+    payload = {"structureVersion": "ps1", "trials": PSYCH_TRIALS, "keys": PSYCH_KEYS,
+               "maxReactionMs": 5000}
+    payload.update(options)
+    return question("T", code="QPSY", theme="mjy-psych-trial", themeOptions=payload)
+
+
 ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap(),
-              loop_rating(), image_pk(), shelf(), text_highlight())
+              loop_rating(), image_pk(), shelf(), text_highlight(), psych_trial())
 
 
 # ------------------------------------------------------------------ 注册表

@@ -231,6 +231,27 @@
           }
         },
         {
+          "uuid": "99999999-1013-4555-8555-000000001013",
+          "code": "QPSY",
+          "type": "T",
+          "text": "看到颜色后尽快按键",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-psych-trial",
+          "themeOptions": {
+            "structureVersion": "ps1",
+            "maxReactionMs": 5000,
+            "trials": [
+              { "code": "T1", "label": "第一试次 & <练习>", "stimulus": "红", "correct": "left" },
+              { "code": "T2", "label": "第二试次", "stimulus": "蓝", "correct": "right" }
+            ],
+            "keys": [
+              { "code": "left", "label": "左键 F" },
+              { "code": "right", "label": "右键 J" }
+            ]
+          }
+        },
+        {
           "uuid": "99999999-1007-4555-8555-000000001007",
           "code": "QHEAT",
           "type": "T",

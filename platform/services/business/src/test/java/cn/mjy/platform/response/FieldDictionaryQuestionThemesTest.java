@@ -32,6 +32,7 @@ class FieldDictionaryQuestionThemesTest {
     private static final UUID PK = UUID.fromString("45454545-0009-4111-8111-000000000009");
     private static final UUID SHELF = UUID.fromString("45454545-0010-4111-8111-000000000010");
     private static final UUID MARK = UUID.fromString("45454545-0011-4111-8111-000000000011");
+    private static final UUID PSYCH = UUID.fromString("45454545-0012-4111-8111-000000000012");
 
     private final JsonMapper json = JsonMapper.builder().build();
 
@@ -74,7 +75,12 @@ class FieldDictionaryQuestionThemesTest {
                "theme":"mjy-text-highlight",
                "themeOptions":{"structureVersion":"th1","text":"苹果很甜。",
                                "segments":[{"start":0,"length":4}],
-                               "tags":[{"code":"like","label":"喜欢"}]}}
+                               "tags":[{"code":"like","label":"喜欢"}]}},
+              {"uuid":"45454545-0012-4111-8111-000000000012","code":"QPSY","type":"T","text":"颜色判断实验",
+               "theme":"mjy-psych-trial",
+               "themeOptions":{"structureVersion":"ps1",
+                               "trials":[{"code":"T1","label":"第一试次","stimulus":"红","correct":"left"}],
+                               "keys":[{"code":"left","label":"左键 F"}]}}
             ]}]}
             """);
 
@@ -92,7 +98,8 @@ class FieldDictionaryQuestionThemesTest {
             new QuestionFieldView(LOOP, "QLOOP", "T", "Q8", "", 0),
             new QuestionFieldView(PK, "QPK", "T", "Q9", "", 0),
             new QuestionFieldView(SHELF, "QSHELF", "T", "Q10", "", 0),
-            new QuestionFieldView(MARK, "QMARK", "T", "Q11", "", 0));
+            new QuestionFieldView(MARK, "QMARK", "T", "Q11", "", 0),
+            new QuestionFieldView(PSYCH, "QPSY", "T", "Q12", "", 0));
 
     private FieldDictionary.FieldEntry field(String fieldname) {
         return FieldDictionaryBuilder.fields(definition, binding).stream()
@@ -121,6 +128,10 @@ class FieldDictionaryQuestionThemesTest {
         // R02-22 文字点睛：标了哪几段、各标成什么都在副表里。
         assertThat(field("Q11").label()).isEqualTo("在原文上标记 [结构化作答]");
         assertThat(field("Q11").options()).isEmpty();
+        // R02-46 心理实验：试次、按键与反应时都在副表里；正确率由平台按定义里的
+        // trials[].correct 推导，引擎那一列不含对错。
+        assertThat(field("Q12").label()).isEqualTo("颜色判断实验 [结构化作答]");
+        assertThat(field("Q12").options()).isEmpty();
     }
 
     @Test

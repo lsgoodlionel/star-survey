@@ -19,7 +19,8 @@ from pubgw.questions.themes import structure_digest
 from .fixtures import fieldmap_for
 from .qtype_fixtures import definition_with, first_question
 from .theme_fixtures import (
-    HIGHLIGHT_SEGMENTS, HIGHLIGHT_TAGS, HIGHLIGHT_TEXT, codes, compile_attributes, text_highlight,
+    HIGHLIGHT_SEGMENTS, HIGHLIGHT_TAGS, HIGHLIGHT_TEXT, PSYCH_KEYS, PSYCH_TRIALS, codes,
+    compile_attributes, psych_trial, text_highlight,
 )
 
 
@@ -147,6 +148,118 @@ class TextHighlightTest(unittest.TestCase):
                 binding_map(definition, parse_fieldmap(fieldmap_for(definition)))}["QMARK"]
         record = BindingRecord("e1", 1, "d", "c", "fm1", "fm1:x", "en", "now", (item,))
         self.assertEqual(item.side_table, BindingRecord.from_dict(record.to_dict()).questions[0].side_table)
+
+
+# ------------------------------------------------------------------ R02-46 心理实验
+
+
+class PsychTrialTest(unittest.TestCase):
+    """R02-46 心理实验：一行一个试次，记按了哪个键、用了多少毫秒。
+
+    **正确率不是提交上来的**：正确按键随题目定义留痕，正确与否由平台按
+    「试次的正确按键 vs 作答的按键」推导。让浏览器端提交 ``correct`` 等于让
+    作答者自己宣布答对了。
+    """
+
+    def columns(self, **options):
+        return json.loads(compile_attributes(psych_trial(**options), code="QPSY")["mjy_table_columns"])
+
+    def test_the_trial_column_is_a_unique_enum_over_the_declared_trials(self):
+        trial = self.columns()[0]
+        self.assertEqual(("trial", "enum", True, True),
+                         (trial["code"], trial["type"], trial["required"], trial["distinct"]))
+        self.assertEqual(["T1", "T2"], [option["code"] for option in trial["options"]])
+
+    def test_the_key_column_is_an_enum_over_the_declared_keys(self):
+        key = self.columns()[1]
+        self.assertEqual(("key", "enum", True), (key["code"], key["type"], key["required"]))
+        self.assertEqual(["left", "right"], [option["code"] for option in key["options"]])
+
+    def test_the_reaction_time_is_a_bounded_integer_in_milliseconds(self):
+        reaction = self.columns()[2]
+        self.assertEqual(("rt", "integer", True, 0, 5000),
+                         (reaction["code"], reaction["type"], reaction["required"],
+                          reaction["min"], reaction["max"]))
+
+    def test_there_is_no_column_the_respondent_could_claim_correctness_in(self):
+        """正确率只能由平台推导，不能由作答者宣布。"""
+        self.assertEqual(["trial", "key", "rt"], [column["code"] for column in self.columns()])
+
+    def test_the_row_count_is_pinned_to_the_number_of_trials(self):
+        attributes = compile_attributes(psych_trial(), code="QPSY")
+        self.assertEqual(("2", "2"), (attributes["mjy_table_min_rows"], attributes["mjy_table_max_rows"]))
+
+    def test_the_trials_reach_the_theme_with_their_stimulus_and_correct_key(self):
+        value = compile_attributes(psych_trial(), code="QPSY")["mjy_psych_trials"]
+        self.assertEqual(PSYCH_TRIALS, json.loads(value))
+        self.assertNotIn(" ", value)
+
+    def test_a_trial_without_a_correct_key_is_allowed(self):
+        """练习试次与无正确答案的试次（如偏好判断）没有「对错」可言。"""
+        trials = [{"code": "T1", "label": "练习", "stimulus": "红"}]
+        value = compile_attributes(psych_trial(trials=trials), code="QPSY")["mjy_psych_trials"]
+        self.assertEqual([{"code": "T1", "label": "练习", "stimulus": "红"}], json.loads(value))
+
+    def test_structure_version_trials_and_keys_are_required(self):
+        for name in ("structureVersion", "trials", "keys"):
+            with self.subTest(option=name):
+                payload = psych_trial()
+                del payload["themeOptions"][name]
+                self.assertEqual(["E_THEME_OPTION_REQUIRED"], codes(payload))
+
+    def test_every_trial_needs_a_stimulus(self):
+        for trials in ([{"code": "T1", "label": "第一试次"}],
+                       [{"code": "T1", "label": "第一试次", "stimulus": ""}],
+                       [{"code": "T1", "label": "第一试次", "stimulus": 7}]):
+            with self.subTest(trials=trials):
+                self.assertEqual(["E_THEME_OPTION_VALUE"], codes(psych_trial(trials=trials)))
+
+    def test_a_correct_key_must_be_one_of_the_declared_keys(self):
+        trials = [dict(PSYCH_TRIALS[0], correct="middle")]
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(psych_trial(trials=trials)))
+
+    def test_bad_trial_and_key_lists(self):
+        for options in ({"trials": [{"label": "没有代码", "stimulus": "红"}]},
+                        {"trials": [dict(PSYCH_TRIALS[0]), dict(PSYCH_TRIALS[0])]},
+                        {"keys": [{"code": "bad key"}]},
+                        {"keys": [{"code": "left"}, {"code": "left"}]}):
+            with self.subTest(options=options):
+                self.assertEqual(["E_THEME_OPTION_VALUE"], codes(psych_trial(**options)))
+
+    def test_too_many_trials(self):
+        # 试次数就是行数，上限与插件的行数硬上限一致。
+        many = [{"code": "T{}".format(index), "stimulus": "红"} for index in range(501)]
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(psych_trial(trials=many)))
+
+    def test_the_reaction_time_cap_is_bounded(self):
+        for cap in (0, 600001):
+            with self.subTest(cap=cap):
+                self.assertEqual(["E_THEME_OPTION_VALUE"], codes(psych_trial(maxReactionMs=cap)))
+
+    def test_the_answer_is_still_one_engine_column(self):
+        self.assertEqual((("QPSY", "", 0),), expected_rows(first_question(psych_trial())))
+
+    def test_the_theme_is_only_for_long_free_text(self):
+        self.assertEqual(["E_THEME_TYPE_MISMATCH"], codes(dict(psych_trial(), type="S")))
+
+    def test_the_binding_declares_the_trial_key_and_reaction_time_columns(self):
+        declared = side_table(psych_trial(), code="QPSY")
+        self.assertEqual(["trial", "key", "rt"], [column["code"] for column in declared["columns"]])
+        self.assertEqual("ps1", declared["structureVersion"])
+        self.assertTrue(declared["structureDigest"].startswith("sd1:"))
+
+    def test_changing_the_reaction_time_cap_changes_the_structure_digest(self):
+        self.assertNotEqual(structure_digest(self.columns()),
+                            structure_digest(self.columns(maxReactionMs=9000)))
+
+
+class PsychTrialFixtureTest(unittest.TestCase):
+    """样例本身的自洽：每个试次的正确按键都在声明过的按键里。"""
+
+    def test_every_sample_correct_key_is_a_declared_key(self):
+        declared = {key["code"] for key in PSYCH_KEYS}
+        for trial in PSYCH_TRIALS:
+            self.assertIn(trial["correct"], declared)
 
 
 class TextHighlightSegmentsFixtureTest(unittest.TestCase):

@@ -27,6 +27,9 @@ class MjyThemedQuestionMap
     /** 文字点睛（R02-22）：一行一处标记，片段列枚举＋唯一，标记列枚举。 */
     public const TEXT_HIGHLIGHT_THEME = 'mjy-text-highlight';
 
+    /** 心理实验（R02-46）：一行一个试次，试次列枚举＋唯一，按键列枚举，反应时是有界整数。 */
+    public const PSYCH_TRIAL_THEME = 'mjy-psych-trial';
+
     /**
      * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
      * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应
@@ -40,6 +43,7 @@ class MjyThemedQuestionMap
         self::IMAGE_PK_THEME,
         self::SHELF_THEME,
         self::TEXT_HIGHLIGHT_THEME,
+        self::PSYCH_TRIAL_THEME,
     ];
 
     /** @var array<string, array<string, mixed>> */
