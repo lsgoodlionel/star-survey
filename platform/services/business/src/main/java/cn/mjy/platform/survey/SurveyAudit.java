@@ -14,6 +14,8 @@ class SurveyAudit {
 
     static final String CREATE = "survey.create";
     static final String DRAFT_SAVE = "survey.draft.save";
+    static final String DRAFT_RESTORE = "survey.draft.restore";
+    static final String DRAFT_IMPORT = "survey.draft.import";
     static final String PUBLISH = "survey.publish";
     static final String PUBLISH_FAILED = "survey.publish.failed";
     static final String PUBLISH_PENDING = "survey.publish.pending";
