@@ -101,7 +101,8 @@ def parse_read_request(body: bytes) -> ReadRequest:
         engine_instance_id=instance,
         survey_id=survey_id,
         response_ids=_response_ids(payload["responseIds"]),
-        fields=_fields(payload["fields"]),
+        # 只要"这份答卷是谁交的"时不必多请求一列无关作答。
+        fields=_fields(payload["fields"], allow_empty=include_respondent),
         include_respondent=include_respondent,
     )
 
@@ -114,9 +115,10 @@ def _response_ids(value: Any) -> Tuple[int, ...]:
     return tuple(sorted(value))
 
 
-def _fields(value: Any) -> Tuple[str, ...]:
-    if not isinstance(value, list) or not 0 < len(value) <= MAX_FIELDS:
-        raise InvalidReadRequest("fields must hold 1..{} names".format(MAX_FIELDS))
+def _fields(value: Any, allow_empty: bool = False) -> Tuple[str, ...]:
+    low = 0 if allow_empty else 1
+    if not isinstance(value, list) or not low <= len(value) <= MAX_FIELDS:
+        raise InvalidReadRequest("fields must hold {}..{} names".format(low, MAX_FIELDS))
     if not all(isinstance(item, str) and _FIELDNAME.match(item) for item in value):
         raise InvalidReadRequest("fields must be engine column names")
     if _ID_COLUMN in value or len(set(value)) != len(value):

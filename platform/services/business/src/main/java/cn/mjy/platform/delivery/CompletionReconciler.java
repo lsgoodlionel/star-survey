@@ -8,6 +8,7 @@ import cn.mjy.platform.shared.tenant.TenantScope;
 import cn.mjy.platform.tenant.routing.SurveyRoute;
 import cn.mjy.platform.tenant.routing.SurveyRouteService;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -21,9 +22,9 @@ import org.springframework.stereotype.Component;
  * <p>只读引擎模块的公开查询 {@link ResponseProjectionQuery}，不直接读它的表（CONVENTIONS）。
  * 按 (代次, 答卷号) 键集分页，游标存在 delivery_completion_cursor 里，每轮只看新增的部分。
  *
- * <p>投影里没有参与者 token，所以"这份答卷是谁交的"要问 {@link RespondentIdentityResolver}。
- * 没有注册实现时本对账什么也不做（只在第一次提示一句），催答改为只依据显式登记的完成记录——
- * 这是 ADR 0016 已经记在案的缺口，不在这里假装解决。
+ * <p>投影里没有参与者 token，所以"这份答卷是谁交的"要问 {@link RespondentIdentityResolver}（按批问）。
+ * 没有注册实现时本对账什么也不做（只在第一次提示一句），催答改为只依据显式登记的完成记录。
+ * {@link GatewayRespondentIdentityResolver} 在网关配置好时提供实现（ADR 0016 缺口 (b) 已补上）。
  */
 @Component
 class CompletionReconciler {
@@ -79,12 +80,16 @@ class CompletionReconciler {
             ResponseProjectionQuery.Position after = cursors.find(surveyId).orElse(null);
             List<ResponseProjection> page = projections.page(route.get().engineInstanceId(),
                     route.get().engineSid(), ResponseState.ENGINE_COMPLETED, after, PAGE);
+            // 一页最多 PAGE 份答卷，按批问一次；逐条问会把一次对账放大成两百次 HTTP。
+            Map<Long, String> keys = resolver.respondentKeysOf(tenant, page);
             int recorded = 0;
             ResponseProjection last = null;
             for (ResponseProjection response : page) {
                 last = response;
-                Optional<String> key = resolver.respondentKeyOf(tenant, response);
-                if (key.isPresent() && completions.recordFromProjection(tenant, surveyId, key.get(),
+                // 认不出是谁的答卷（匿名、没用邀请码进场、或这一轮读不到）直接跳过，
+                // 绝不算作某个人答的。
+                String key = keys.get(response.key().responseId());
+                if (key != null && completions.recordFromProjection(tenant, surveyId, key,
                         response.completedAt() == null ? response.firstEventAt() : response.completedAt())) {
                     recorded++;
                 }

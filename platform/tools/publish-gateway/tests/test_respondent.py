@@ -117,3 +117,26 @@ class TheTokenColumnIsNotAnOrdinaryFieldTest(ReadTestCase):
         status, payload = self.read(engine, request_body(ids=(1,), fields=(F1,), includeRespondent="yes"))
 
         self.assertEqual(400, status, payload)
+
+
+class TokensAloneTest(ReadTestCase):
+    """平台对账只要"这份答卷是谁交的"，不该被迫多请求一列无关作答。"""
+
+    def test_fields_may_be_empty_when_only_the_respondent_is_wanted(self):
+        engine = PropertiesEngine(rows={
+            1: {F1: "a", TOKEN_COLUMN: "tok-zhang"},
+            2: {F1: "b", TOKEN_COLUMN: "tok-li"},
+        }, anonymized="N")
+
+        status, payload = self.read(engine, request_body(ids=(1, 2), fields=(), includeRespondent=True))
+
+        self.assertEqual(200, status, payload)
+        self.assertEqual(["tok-zhang", "tok-li"], [item["token"] for item in payload["responses"]])
+        self.assertEqual([{}, {}], [item["values"] for item in payload["responses"]])
+
+    def test_empty_fields_without_the_flag_is_still_rejected(self):
+        engine = PropertiesEngine(rows={1: {F1: "a"}})
+
+        status, payload = self.read(engine, request_body(ids=(1,), fields=()))
+
+        self.assertEqual(400, status, payload)
