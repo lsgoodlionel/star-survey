@@ -157,13 +157,25 @@ class SurveyAudienceTest {
                 .isInstanceOf(ContactNotFoundException.class);
     }
 
-    /** 读受众也要问"这是一份我看得见的问卷吗"：不然就能按 surveyId 枚举出"谁被邀请了"。 */
+    /**
+     * 读受众也要问"这是一份我看得见的问卷吗"：不然就能按 surveyId 枚举出"谁被邀请了"。
+     *
+     * <p>这条同时是<b>防重构腐烂</b>的钉子：把 {@code find}／{@code recipients} 里的
+     * {@code requireSurvey} 去掉，两个方法会退回"查不到就当空"，本用例立刻转红。
+     * 真正的"有通讯录权限、却对该问卷无 VIEW"那一支现行角色目录构造不出来，见 ADR 0017 诚实清单。
+     */
     @Test
     void readingTheAudienceOfSomethingThatIsNotAVisibleSurveyIsRefused() {
-        assertThatThrownBy(() -> audiences.find(ws.owner(), ws.project()))
-                .isInstanceOf(ContactNotFoundException.class);
-        assertThatThrownBy(() -> audiences.recipients(ws.owner(), UUID.randomUUID()))
-                .isInstanceOf(ContactNotFoundException.class);
+        UUID notASurvey = ws.project();
+        UUID nowhere = UUID.randomUUID();
+        UUID anotherTenantsSurvey = surveys.newSurvey(surveys.workspace()).id();
+
+        for (UUID unreachable : List.of(notASurvey, nowhere, anotherTenantsSurvey)) {
+            assertThatThrownBy(() -> audiences.find(ws.owner(), unreachable))
+                    .as("find %s", unreachable).isInstanceOf(ContactNotFoundException.class);
+            assertThatThrownBy(() -> audiences.recipients(ws.owner(), unreachable))
+                    .as("recipients %s", unreachable).isInstanceOf(ContactNotFoundException.class);
+        }
     }
 
     /** 新表的跨租户负面测试（CONVENTIONS.md 硬性要求）：由数据库拒绝，不靠服务层判断。 */

@@ -132,6 +132,24 @@ class SurveyAudienceApiTest {
                 .andExpect(status().isNotFound());
     }
 
+    /**
+     * 不存在的、以及别的租户的 surveyId 都拿不到受众。
+     *
+     * <p>注意这一条在 HTTP 层<b>两种实现都返回 404</b>（控制器把"没有受众"也映射成 404，跨租户另有行级安全），
+     * 所以它证明的是接口对外的形状，不是守卫本身——守卫的红在 {@code SurveyAudienceTest} 那条里。
+     */
+    @Test
+    void noAudienceComesBackForASurveyTheCallerCannotSee() throws Exception {
+        UUID theirSurvey = surveys.newSurvey(surveys.workspace()).id();
+
+        mvc.perform(get("/v1/surveys/" + UUID.randomUUID() + "/audience")
+                        .header("Authorization", bearer(ws.owner())))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/v1/surveys/" + theirSurvey + "/audience")
+                        .header("Authorization", bearer(ws.owner())))
+                .andExpect(status().isNotFound());
+    }
+
     private String bearer(TenantContext ctx) {
         return "Bearer " + tokens.issue(ctx.actorId(), ctx.tenantId().value(), List.of());
     }
