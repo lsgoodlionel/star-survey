@@ -13,6 +13,12 @@ platform:
     # 测试里不启动定时组织同步，由测试直接调用 OrgDirectorySyncService.runScheduledRound()。
     org-sync:
       enabled: false
+    # 共用上下文的测试都从 127.0.0.1 打，几秒内的请求数远超生产限额：这里放宽，
+    # 限流本身由 OrgAnonymousRateLimitTest（自己的上下文、很小的限额）与过滤器单测覆盖。
+    rate-limit:
+      per-connection-per-minute: 100000
+      per-source-per-minute: 100000
+      verified-per-connection-per-minute: 100000
   survey:
     reconcile:
       # 测试里不启动定时调度，由测试直接调用 PublishReconciler.runOnce()。

@@ -7,6 +7,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 
 /**
  * 通讯录事件回调 /v1/org-events/** 的独立过滤链：开放平台不带平台令牌，端点匿名可达、不认 Authorization 头。
@@ -14,7 +15,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * 服务器对服务器调用、无 Cookie，因此关闭 CSRF。主链行为不变。
  */
 @Configuration
-@EnableConfigurationProperties({OrgEventProperties.class, OrgSyncProperties.class})
+@EnableConfigurationProperties({OrgEventProperties.class, OrgSyncProperties.class, OrgRateLimitProperties.class})
 class OrgEventSecurityConfig {
 
     /** 排在免登链（2）之后、主链（最低优先级）之前。 */
@@ -22,7 +23,7 @@ class OrgEventSecurityConfig {
 
     @Bean
     @Order(ORG_EVENT_CHAIN_ORDER)
-    SecurityFilterChain orgEvents(HttpSecurity http) throws Exception {
+    SecurityFilterChain orgEvents(HttpSecurity http, OrgRateLimitProperties limits) throws Exception {
         http
                 .securityMatcher(OrgEventService.EVENT_PATH + "/**")
                 .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
@@ -30,6 +31,12 @@ class OrgEventSecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .requestCache(cache -> cache.disable())
                 .anonymous(anonymous -> { });
+        if (limits.enabled()) {
+            // 限流排在最前：洪水在验签、解密与任何数据库查询之前就被挡掉。
+            http.addFilterBefore(
+                    AnonymousRateLimitFilter.forEvents(OrgEventService.EVENT_PATH, limits),
+                    AuthorizationFilter.class);
+        }
         return http.build();
     }
 }
