@@ -17,7 +17,8 @@ PLATFORM_DB_NAME=<你的库名> platform/deploy/platform-dev/mvn.sh test
 | `cn.mjy.platform.entitlement` | 套餐、订阅、额度判定、用量账本 | V200–V299 |
 | `cn.mjy.platform.engine` | 引擎事件接收、去重、答卷投影、发件箱 | V300–V399 |
 | `cn.mjy.platform.access` | 角色、资源范围、字段与导出权限、席位 | V400–V499 |
-| `cn.mjy.platform.survey` | 问卷草稿、发布状态机、发布审批、待核对核对、版本与题目绑定 | V500–V599（V500–V509 发布，V510–V519 审批，V520–V529 核对，V530–V539 重新发布与漂移） |
+| `cn.mjy.platform.survey` | 问卷草稿、发布状态机、发布审批、待核对核对、版本与题目绑定 | V500–V599（V500–V509 发布，V510–V519 审批，V520–V529 核对，V530–V539 重新发布与漂移，V540–V559 模板库） |
+| `cn.mjy.platform.survey.template` | 企业模板库：租户私有模板与平台（运营）模板、版本、审核、复制、下架 | V540–V559（V540 租户模板，V541 平台模板） |
 | `cn.mjy.platform.response` | 答卷查询（投影分页、按需经网关取作答、字段字典、数据权限）、导出作业（ADR 0015） | V600–V609（V600 导出作业与快照） |
 | `cn.mjy.platform.audit` | 审计日志 | V1–V99（随 shared） |
 

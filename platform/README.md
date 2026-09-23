@@ -60,6 +60,13 @@ platform/deploy/exam/teardown.sh
 platform/deploy/test/run-publish-gateway.sh
 cd platform/tools/publish-gateway && python3 -m unittest discover -s tests -t .
 
+# 品牌主题与多语言（zh-business 主题、作答页去广告、语言切换与回退）
+platform/deploy/test/run-brand-theme.sh
+TEST_DB=pgsql platform/deploy/test/run-brand-theme.sh
+
+# 把随镜像发布的作答主题装进引擎库（部署时执行一次；上面的端到端会自己跑）
+docker exec survey-web php platform/tools/engine-theme/install-survey-theme.php zh-business
+
 # 代码风格（仓库规则集）
 docker exec survey-web vendor/bin/phpcs --standard=phpcs.ruleset.xml plugins/MjyPlatformBridge
 ```

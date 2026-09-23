@@ -1,0 +1,55 @@
+{#
+    MJY 业务主题的导航条（覆盖 vanilla 的同名文件）。
+
+    与 vanilla 的差别只有 logo 一块：先看租户品牌 logo（mjybrandlogo /
+    mjybrandlogofile / mjybrandlogoalt），没有再退回主题自带的 brandlogo，
+    再没有就显示问卷名。其余（菜单显隐、语言切换入口）原样保留。
+
+    替代文本由租户提供，image() 会把它放进 alt 属性——CHtml::image 自己会
+    编码属性值，这里再显式 |escape 一次，别依赖调用链上的某一环。
+#}
+{% if not aSurveyInfo.popupPreview %}
+    {% set navClass = "navbar-light bg-light" %}
+    <!-- Bootstrap Navigation Bar -->
+    {% set ShowMenu = (aSurveyInfo.aNavigator.load.show == "Y" or aSurveyInfo.aNavigator.save.show == "Y")
+        or ((aSurveyInfo.bShowClearAll == true or aSurveyInfo.bShowClearAll == null) and aSurveyInfo.options.showclearall == 'on')
+        or (aSurveyInfo.aQuestionIndex.bShow == true and aSurveyInfo.format != 'A')
+        or (aSurveyInfo.alanguageChanger.show)
+    %}
+    {% set mjyBrandLogoFile = aSurveyInfo.options.mjybrandlogofile|default('') %}
+    {% set mjyBrandLogoOn = aSurveyInfo.options.mjybrandlogo|default('off') == 'on' and mjyBrandLogoFile %}
+    <div id="survey-nav" class="navbar {{ navClass }} navbar-expand-md fixed-top border-bottom pt-0 pb-0">
+        <div class="container-fluid">
+            {% if ShowMenu %}
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar"
+                        aria-controls="small-screens-menus" aria-expanded="false">
+                    <span class="visually-hidden-focusable">{{ gT("Tools") }}</span>
+                    <span class="navbar-toggler-icon" aria-hidden="true"></span>
+                </button>
+            {% endif %}
+            {% if mjyBrandLogoOn %}
+                <div class="navbar-brand logo-container mjy-brand-logo d-none d-md-block">
+                    {{ image(mjyBrandLogoFile, aSurveyInfo.options.mjybrandlogoalt|default('')|escape, {"class": "logo img-fluid"}) }}
+                </div>
+            {% elseif aSurveyInfo.options.brandlogo == "on" %}
+                <div class="navbar-brand logo-container d-none d-md-block">
+                    {{ image(aSurveyInfo.options.brandlogofile, '', {"class": "logo img-fluid"}) }}
+                </div>
+            {% else %}
+                <div class="navbar-brand">
+                    {{ aSurveyInfo.name }}
+                </div>
+            {% endif %}
+            {% if ShowMenu %}
+                <div id="navbar" class="collapse navbar-collapse navbar-nav-scroll pt-2">
+                    <ul class="nav navbar-nav navbar-action-link navbar-right ms-auto">
+                        {{ include('./subviews/navigation/save_links.twig') }}
+                        {{ include('./subviews/navigation/clearall_links.twig') }}
+                        {{ include('./subviews/navigation/question_index_menu.twig') }}
+                        {{ include('./subviews/navigation/language_changer_top_menu.twig') }}
+                    </ul>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+{% endif %}
