@@ -1,0 +1,62 @@
+{#
+    MJY 业务主题的 <head>（覆盖 vanilla 的同名文件）。
+
+    与 vanilla 的差别只有四处，每一处都对应一条需求：
+
+    1. 去掉 <meta name="generator" content="LimeSurvey http://www.limesurvey.org">
+       —— 作答页不得出现上游标识（R19-10 去广告）。
+    2. 不再 include google_analytics.twig —— 它是作答页唯一会向第三方
+       （googletagmanager.com / google-analytics.com）发请求的地方。
+    3. favicon 与 <title> 改读品牌选项（R19-06）。
+    4. 主色注入成 CSS 变量 --mjy-brand-primary，供 css/mjy-brand.css 使用。
+
+    转义：Twig 的自动转义在本引擎里是关闭的（ETwigViewRenderer 'autoescape' => false），
+    主题选项值又只是被强转成字符串、没有任何过滤，所以**每一个租户来源的值都必须
+    显式 |escape**。主色额外再加一道形状判断：即使有人绕过网关写进库里，
+    也只有 `#` 开头、不超过 7 个字符的值会被写进样式表，且已转义，关不掉 <style>。
+#}
+
+{% if(aSurveyInfo.jYesNo) %}
+    {{ registerScript('activateConfirmLanguage',"$.extend(LSvar.lang," ~ aSurveyInfo.jYesNo ~ ")", "POS_BEGIN") }}
+{% endif %}
+{{ registerScript('activateActionLink',"activateActionLink();", "POS_POSTSCRIPT") }}
+{{ registerScript('activateConfirmButton',"activateConfirmButton();", "POS_POSTSCRIPT") }}
+
+{% set mjyLanguageSuffix = '__' ~ aSurveyInfo.languagecode %}
+{% set mjyBrandTitle = aSurveyInfo.options['mjybrandtitle' ~ mjyLanguageSuffix]|default(aSurveyInfo.options.mjybrandtitle|default('')) %}
+{% set mjyBrandFavicon = aSurveyInfo.options.mjybrandfavicon|default('') %}
+{% set mjyBrandPrimary = aSurveyInfo.options.mjybrandprimary|default('') %}
+
+<head>
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    {{ aSurveyInfo.metas }}
+
+    <title>
+        {% if mjyBrandTitle %}{{ mjyBrandTitle|escape }}{% else %}{{ processString(aSurveyInfo.surveyls_title,1) }}{% endif %}
+    </title>
+
+    {% if mjyBrandFavicon and imageSrc(mjyBrandFavicon) %}
+        <link rel="shortcut icon" href="{{ imageSrc(mjyBrandFavicon) }}" />
+    {% elseif imageSrc('./files/favicon.ico') %}
+        <link rel="shortcut icon" href="{{ imageSrc('./files/favicon.ico') }}" />
+    {% endif %}
+
+    {% if mjyBrandPrimary starts with '#' and mjyBrandPrimary|length <= 7 %}
+        <style id="mjy-brand-tokens">:root{--mjy-brand-primary: {{ mjyBrandPrimary|escape }};}</style>
+    {% endif %}
+
+    <script type="text/javascript">
+        if(window.basicThemeScripts === undefined){
+            window.basicThemeScripts = new ThemeScripts();
+        }
+    </script>
+    {{ registerScript("LSvarTemplateInit","LSvar= LSvar || {};","POS_HEAD") }}
+    {% if(aSurveyInfo.options.fixnumauto and aSurveyInfo.options.fixnumauto != "off") %}
+        {{ registerScript("LSvarTemplateRealFixNumAuto","LSvar.bFixNumAuto = "~(aSurveyInfo.options.fixnumauto == "enable" ? 1 : 0)~";","POS_HEAD") }}
+        {{ registerScript("LSvarTemplateRealNumRealValue","LSvar.bNumRealValue = "~(aSurveyInfo.options.fixnumauto == "disable" ? 1 : 0)~";","POS_HEAD") }}
+    {% endif %}
+    {{ include('./subviews/header/custom_header.twig') }}
+</head>

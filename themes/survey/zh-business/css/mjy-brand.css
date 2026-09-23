@@ -1,0 +1,37 @@
+/*
+ * MJY 业务主题的品牌样式。
+ *
+ * 唯一的租户输入是 --mjy-brand-primary，由 head.twig 注入（形状已在网关校验，
+ * 主题里再判一次）。没有注入时 var() 的回退值生效，页面仍然正常。
+ *
+ * 这里不引用任何外部地址：作答页不得向非租户来源发请求（R19-10 去广告）。
+ */
+
+:root {
+    --mjy-brand-primary: #1f6feb;
+    --mjy-brand-footer-fg: #6c757d;
+}
+
+#survey-nav.navbar {
+    border-bottom: 3px solid var(--mjy-brand-primary);
+}
+
+.mjy-brand-logo .logo {
+    max-height: 40px;
+}
+
+.mjy-brand-footer {
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    color: var(--mjy-brand-footer-fg);
+}
+
+/* 主按钮与进度条跟随主色，让品牌不只是一个 logo。 */
+.ls-move-next-btn,
+.ls-move-submit-btn {
+    background-color: var(--mjy-brand-primary);
+    border-color: var(--mjy-brand-primary);
+}
+
+.progress .progress-bar {
+    background-color: var(--mjy-brand-primary);
+}

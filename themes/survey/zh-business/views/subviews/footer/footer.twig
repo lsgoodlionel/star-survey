@@ -1,0 +1,15 @@
+{#
+    MJY 业务主题的页脚（覆盖 vanilla 的空文件）。
+
+    只渲染租户的一段**纯文本**，按当前语言取，取不到用默认值；没有配置就什么都不输出。
+    这里不接受也不渲染任何 HTML：|escape 之后 <script> 只会是字面量文本
+    （契约 survey-branding-v1 §2.1——租户不能提供 CSS/JS/HTML）。
+#}
+{% set mjyFooter = aSurveyInfo.options['mjybrandfooter__' ~ aSurveyInfo.languagecode]|default(aSurveyInfo.options.mjybrandfooter|default('')) %}
+{% if mjyFooter %}
+    <footer class="mjy-brand-footer" id="mjy-brand-footer">
+        <div class="container-fluid text-center py-3">
+            <small>{{ mjyFooter|escape }}</small>
+        </div>
+    </footer>
+{% endif %}

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    MJY 业务主题（WP-19 切片 19.3，契约 platform/contracts/survey-branding-v1.md）。
+
+    继承 vanilla，只覆盖三个视图与一份样式表，别的全部跟随上游：
+    上游修的作答页缺陷继续生效，我们只改品牌位与"去广告"这两件事。
+
+    mjybrand* 选项由发布网关按问卷下发（LSS 的 <themes> 小节 →
+    lime_template_configuration）。值一律是扁平字符串：引擎渲染前把每个选项
+    强转成字符串，嵌套对象会变成字面量 'N/A'，所以按语言的文本用
+    `<键>__<语言>` 这样的平铺键表示。
+
+    这里声明的 vanilla 选项不是多余的：安装时 aOptions 取的是本清单的
+    <options> 节点，漏掉一个键，作答页上读它的地方就会拿到空值。
+-->
+<config>
+    <metadata>
+        <name>zh-business</name>
+        <title>MJY Business</title>
+        <type>theme</type>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail/>
+        <authorUrl/>
+        <copyright/>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0.0</version>
+        <apiVersion>3</apiVersion>
+        <description><![CDATA[MJY 租户品牌主题：页眉 logo、主色、页脚文本、多语言，作答页不含任何第三方标识或外部资源。]]></description>
+        <extends>vanilla</extends>
+        <lastUpdate>2026-09-23 00:00:00</lastUpdate>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+        <version>6.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <add>css/mjy-brand.css</add>
+        </css>
+    </files>
+
+    <options>
+        <!-- vanilla 的选项，原样保留 -->
+        <animatebody type="buttons" category="Simple options" width="4" title="Animate body" options="on|off" optionlabels="Yes|No">off</animatebody>
+        <hideprivacyinfo type="buttons" category="Simple options" width="4" title="Hide privacy info" options="on|off" optionlabels="Yes|No">off</hideprivacyinfo>
+        <container type="buttons" category="Simple options" width="4" title="Survey container" options="on|off" optionlabels="Yes|No">on</container>
+        <showpopups type="buttons" category="Simple options" width="4" title="Show popups" options="1|0|-1" optionlabels="Popup|On page|No">1</showpopups>
+        <showclearall type="buttons" category="Simple options" width="4" title="Show 'Clear all' button" options="on|off" optionlabels="Yes|No">off</showclearall>
+        <questionhelptextposition type="buttons" category="Simple options" width="4" title="Question help text position" options="top|bottom" optionlabels="Top|Bottom">top</questionhelptextposition>
+        <fixnumauto type="buttons" category="Simple options" width="4" title="Fix automatically numeric value" options="enable|partial|disable" optionlabels="Yes|For expression|No">enable</fixnumauto>
+        <brandlogo type="buttons" category="Images" width="4" title="Logo" options="on|off" optionlabels="Yes|No">off</brandlogo>
+        <brandlogofile type="dropdown" category="Images" width="6" title="Logo file" parent="brandlogo">./files/logo-demo.png</brandlogofile>
+        <font type="dropdown" category="Fonts" width="12" title="Fonts">noto</font>
+
+        <!-- MJY 品牌位：全部由平台下发，缺省一律"不生效" -->
+        <mjybrandprimary type="color" category="MJY brand" width="4" title="Brand colour"/>
+        <mjybrandlogo type="buttons" category="MJY brand" width="4" title="Brand logo" options="on|off" optionlabels="Yes|No">off</mjybrandlogo>
+        <mjybrandlogofile type="dropdown" category="MJY brand" width="6" title="Brand logo file" parent="mjybrandlogo"/>
+        <mjybrandlogoalt type="text" category="MJY brand" width="6" title="Brand logo alt text"/>
+        <mjybrandfavicon type="dropdown" category="MJY brand" width="6" title="Brand favicon"/>
+        <mjybrandtitle type="text" category="MJY brand" width="12" title="Browser title"/>
+        <mjybrandfooter type="text" category="MJY brand" width="12" title="Footer text"/>
+    </options>
+
+    <updaters disabled="disabled"/>
+</config>
