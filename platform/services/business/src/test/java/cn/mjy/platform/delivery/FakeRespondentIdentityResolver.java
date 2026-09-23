@@ -2,8 +2,9 @@ package cn.mjy.platform.delivery;
 
 import cn.mjy.platform.engine.ResponseProjection;
 import cn.mjy.platform.shared.TenantId;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 
@@ -17,9 +18,17 @@ class FakeRespondentIdentityResolver implements RespondentIdentityResolver {
     private final Map<String, String> keys = new ConcurrentHashMap<>();
 
     @Override
-    public Optional<String> respondentKeyOf(TenantId tenant, ResponseProjection response) {
-        return Optional.ofNullable(keys.get(key(tenant, response.key().engineInstanceId(),
-                response.key().surveyId(), response.key().generation(), response.key().responseId())));
+    public Map<Long, String> respondentKeysOf(TenantId tenant, List<ResponseProjection> responses) {
+        Map<Long, String> found = new LinkedHashMap<>();
+        for (ResponseProjection response : responses) {
+            // 认不出的答卷不进结果（与真实实现一致），而不是映射到 null。
+            String key = keys.get(key(tenant, response.key().engineInstanceId(), response.key().surveyId(),
+                    response.key().generation(), response.key().responseId()));
+            if (key != null) {
+                found.put(response.key().responseId(), key);
+            }
+        }
+        return found;
     }
 
     void map(TenantId tenant, String instance, long sid, String generation, long responseId,

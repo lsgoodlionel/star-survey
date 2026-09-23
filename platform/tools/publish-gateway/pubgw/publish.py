@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from .binding import BindingRecord
 from .compiler import CompiledSurvey, CompileError, LssCompiler
 from .fieldmap import FINGERPRINT_VERSION, parse_fieldmap
+from .invitations import InvitationError, collect
 from .model import SurveyDefinition
 from .policy.probe import PolicyProbe, enforcement_failures
 from .rpc import RemoteControlClient, RpcError
@@ -52,6 +53,8 @@ class PublishResult:
     orphan_survey_id: Optional[int] = None
     #: 插件回读核对过的访问策略摘要（ADR 0016）；没有插件策略时为 None。
     policy_digest: Optional[str] = None
+    #: 引擎生成的邀请码，按定义顺序（ADR 0016）；定义没有参与者时为 None。
+    invitations: Optional[List[Dict[str, Any]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload = {
@@ -70,6 +73,9 @@ class PublishResult:
         if self.policy_digest is not None:
             # 只有带插件策略的发布才多这一个键：没有策略的应答与契约 v1 逐字节一致。
             payload["policyDigest"] = self.policy_digest
+        if self.invitations is not None:
+            # 同理：没有参与者的发布不多这个键。
+            payload["invitations"] = [dict(item) for item in self.invitations]
         return payload
 
 
@@ -179,8 +185,15 @@ class Publisher:
             self._client.activate_survey(result.survey_id)
             if definition.participants:
                 self._client.activate_tokens(result.survey_id)
-                self._client.add_participants(result.survey_id, definition.participants)
+                rows = self._client.add_participants(result.survey_id, definition.participants)
+                result.invitations = collect(rows, definition.participant_refs)
         except RpcError as error:
+            self._fail_and_roll_back(result, "activate", [str(error)])
+            return False
+        except InvitationError as error:
+            # 平台拿不到邀请码却以为发布成功，比发布失败更糟：路由会登记，
+            # 邀请会发出去，而没有一个能打开问卷。
+            result.invitations = None
             self._fail_and_roll_back(result, "activate", [str(error)])
             return False
         result.steps.append(StageStep("activate", True))

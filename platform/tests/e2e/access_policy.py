@@ -54,6 +54,8 @@ class Context:
         self.db = db
         self.failures: List[str] = []
         self.jars = 0
+        #: sid → 发布回执里的 invitations（ADR 0016）。平台就是这样拿到邀请码的。
+        self.invitations: Dict[int, List[Dict[str, Any]]] = {}
 
     def check(self, label: str, condition: bool, detail: Any = "") -> None:
         print("  [{}] {}{}".format("ok" if condition else "FAIL", label, "" if condition else ": {}".format(detail)),
@@ -130,6 +132,7 @@ def publish_ok(context: Context, payload: Dict[str, Any]) -> int:
     context.check("回执的 policyDigest 就是编译出来的摘要",
                   result.get("policyDigest") == expected,
                   {"reported": result.get("policyDigest"), "expected": expected})
+    context.invitations[result["surveyId"]] = result.get("invitations") or []
     return result["surveyId"]
 
 
@@ -161,9 +164,24 @@ def local(zone_name: str, moment: datetime) -> str:
 
 
 def tokens(context: Context, survey_id: int) -> Dict[str, str]:
-    """引擎生成的真实 token（网关的 add_participants 让引擎生成 token，见 ADR 0016 缺口）。"""
-    return {first: token for first, token in context.db.rows(
+    """邀请码，按平台自选的 ref 取（ADR 0016）。
+
+    网关的 add_participants 固定让引擎生成 token，平台只能从发布回执里拿——这里走的就是
+    那条路，不再直接查参与者表。顺带把回执与参与者表逐条比对：回执错了平台会发出一批
+    打不开的邀请，而这是唯一能当场发现的地方。
+    """
+    invitations = context.invitations.get(survey_id) or []
+    by_ref = {item["ref"]: item["token"] for item in invitations}
+    context.check("回执给出了每个参与者的邀请码",
+                  len(by_ref) == len(invitations) and all(by_ref),
+                  invitations)
+
+    # 参与者表里的 firstname 与本套用例的 ref 取同一个字母，可以逐条对上。
+    in_engine = {first: token for first, token in context.db.rows(
         "SELECT firstname, token FROM lime_tokens_{}".format(survey_id))}
+    context.check("回执里的邀请码与参与者表逐条一致", by_ref == in_engine,
+                  {"receipt": by_ref, "engine": in_engine})
+    return by_ref
 
 
 def start_url(survey_id: int, token: Optional[str] = None) -> str:
@@ -301,7 +319,7 @@ def scenario_device_limit(context: Context) -> None:
 
 def scenario_token_limit(context: Context) -> None:
     print("L2: one response per token", file=sys.stderr)
-    participants = [{"firstname": "A"}, {"firstname": "B"}]
+    participants = [{"ref": "A", "firstname": "A"}, {"ref": "B", "firstname": "B"}]
     sid = publish_ok(context, definition("L2 token", {
         "policyVersion": 1, "access": {"invitationRequired": True},
         "limits": {"responses": [{"by": "token", "max": 1}]}}, participants))
@@ -323,7 +341,7 @@ def start_duration(context: Context) -> Dict[str, Any]:
     print("D: {}s time limit, token identity".format(DURATION_SECONDS), file=sys.stderr)
     sid = publish_ok(context, definition("D timed", {
         "policyVersion": 1, "access": {"invitationRequired": True},
-        "limits": {"maxDurationSeconds": DURATION_SECONDS}}, [{"firstname": "D"}]))
+        "limits": {"maxDurationSeconds": DURATION_SECONDS}}, [{"ref": "D", "firstname": "D"}]))
     token = tokens(context, sid)["D"]
     jar = context.new_jar()
     form = "/tmp/access-e2e-d-{}.json".format(sid)

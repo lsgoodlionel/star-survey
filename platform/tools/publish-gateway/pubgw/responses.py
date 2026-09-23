@@ -43,8 +43,12 @@ MAX_FIELDS = 5000
 MAX_ID_SPAN = 200
 
 _FIELDS = frozenset({"engineInstanceId", "surveyId", "responseIds", "fields"})
+_OPTIONAL_FIELDS = frozenset({"includeRespondent"})
+#: 答卷表里的参与者令牌列。只能经 includeRespondent 走匿名判定后拿，不能当普通列请求
+#: （否则匿名闸门一绕就过）。
 _FIELDNAME = re.compile(r"\A[A-Za-z0-9_#]{1,64}\Z")
 _ID_COLUMN = "id"
+_TOKEN_COLUMN = "token"
 #: 表里没有任何答卷（或答卷表不存在）：不是错误，请求的答卷全都不在。
 _EMPTY_ERRORS = frozenset({"ERR_NO_DATA", "ERR_NO_RESPONSE_TABLE"})
 
@@ -65,6 +69,15 @@ class ReadRequest:
     survey_id: int
     response_ids: Tuple[int, ...]
     fields: Tuple[str, ...]
+    #: 是否要回答"这份答卷是用哪个邀请码答的"（ADR 0016 缺口 (b)）。
+    include_respondent: bool = False
+
+
+@dataclass(frozen=True)
+class AnsweredResponse:
+    values: Dict[str, Optional[str]]
+    #: 参与者令牌；没要、问卷匿名、或该答卷没有令牌时为 None。
+    token: Optional[str] = None
 
 
 def parse_read_request(body: bytes) -> ReadRequest:
@@ -72,8 +85,12 @@ def parse_read_request(body: bytes) -> ReadRequest:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         raise InvalidReadRequest("body is not UTF-8 JSON") from None
-    if not isinstance(payload, dict) or set(payload) != _FIELDS:
-        raise InvalidReadRequest("body must be an object with exactly {}".format(sorted(_FIELDS)))
+    if not isinstance(payload, dict) or not _FIELDS <= set(payload) <= (_FIELDS | _OPTIONAL_FIELDS):
+        raise InvalidReadRequest("body must be an object with {} and optionally {}".format(
+            sorted(_FIELDS), sorted(_OPTIONAL_FIELDS)))
+    include_respondent = payload.get("includeRespondent", False)
+    if not isinstance(include_respondent, bool):
+        raise InvalidReadRequest("includeRespondent must be a boolean")
     instance = payload["engineInstanceId"]
     if not is_valid_instance_id(instance):
         raise InvalidReadRequest("engineInstanceId is not a valid instance id")
@@ -84,7 +101,9 @@ def parse_read_request(body: bytes) -> ReadRequest:
         engine_instance_id=instance,
         survey_id=survey_id,
         response_ids=_response_ids(payload["responseIds"]),
-        fields=_fields(payload["fields"]),
+        # 只要"这份答卷是谁交的"时不必多请求一列无关作答。
+        fields=_fields(payload["fields"], allow_empty=include_respondent),
+        include_respondent=include_respondent,
     )
 
 
@@ -96,13 +115,17 @@ def _response_ids(value: Any) -> Tuple[int, ...]:
     return tuple(sorted(value))
 
 
-def _fields(value: Any) -> Tuple[str, ...]:
-    if not isinstance(value, list) or not 0 < len(value) <= MAX_FIELDS:
-        raise InvalidReadRequest("fields must hold 1..{} names".format(MAX_FIELDS))
+def _fields(value: Any, allow_empty: bool = False) -> Tuple[str, ...]:
+    low = 0 if allow_empty else 1
+    if not isinstance(value, list) or not low <= len(value) <= MAX_FIELDS:
+        raise InvalidReadRequest("fields must hold {}..{} names".format(low, MAX_FIELDS))
     if not all(isinstance(item, str) and _FIELDNAME.match(item) for item in value):
         raise InvalidReadRequest("fields must be engine column names")
     if _ID_COLUMN in value or len(set(value)) != len(value):
         raise InvalidReadRequest("fields must be distinct and must not include id")
+    if _TOKEN_COLUMN in value:
+        # 当普通列拿就绕过了匿名判定。要令牌只能走 includeRespondent。
+        raise InvalidReadRequest("the token column must be requested with includeRespondent")
     return tuple(value)
 
 
@@ -122,7 +145,21 @@ def id_ranges(ids: Sequence[int], max_span: int = MAX_ID_SPAN) -> List[Tuple[int
 
 
 class ExportClient(LazyLoginClient):
-    """只读用的 RemoteControl 会话：只加一个 export_responses 调用。"""
+    """只读用的 RemoteControl 会话：export_responses，外加一次匿名判定。"""
+
+    def is_anonymized(self, survey_id: int) -> bool:
+        """问卷是否匿名。判定不出来就当匿名（fail closed，不发令牌）。"""
+        try:
+            properties = self.get_survey_properties(survey_id)
+        except RpcError:
+            log.warning("could not read the anonymity setting of sid %s; withholding tokens", survey_id)
+            return True
+        value = properties.get("anonymized")
+        if not isinstance(value, str):
+            log.warning("sid %s reports no anonymity setting; withholding tokens", survey_id)
+            return True
+        # 引擎认 Y/N/I，只有 Y 算匿名（Survey::isAnonymized 也是 === 'Y'）。
+        return value.strip().upper() == "Y"
 
     def export_json(self, survey_id: int, lo: int, hi: int, columns: Sequence[str]) -> Optional[bytes]:
         """区间内的导出文档（JSON 字节）；表里没有任何答卷时返回 None。"""
@@ -146,17 +183,19 @@ def read_answers(
     client: ExportClient,
     request: ReadRequest,
     layouts: Sequence[RankingColumns] = (),
-) -> Dict[int, Dict[str, Optional[str]]]:
+    with_token: bool = False,
+) -> Dict[int, AnsweredResponse]:
     """按区间调用导出，按位置把每条记录还原为 列名 → 值，只保留请求的答卷号。
 
     ``layouts`` 是这份问卷的排序题列形状：它们的名次列没有物理列，值由主列 JSON 摊出来。
+    ``with_token`` 时多读一列参与者令牌；它不属于作答值，不进 ``values``。
     """
     wanted = set(request.response_ids)
     ranking = requested_columns(layouts, request.fields)
     # 名次要从主列算，主列没被请求时多读一列，应答时再投影掉。
     read_fields = request.fields + missing_main_columns(ranking, request.fields)
-    columns = (_ID_COLUMN,) + read_fields
-    found: Dict[int, Dict[str, Optional[str]]] = {}
+    columns = (_ID_COLUMN,) + read_fields + ((_TOKEN_COLUMN,) if with_token else ())
+    found: Dict[int, AnsweredResponse] = {}
     for lo, hi in id_ranges(request.response_ids):
         document = client.export_json(request.survey_id, lo, hi, columns)
         if document is None:
@@ -166,8 +205,11 @@ def read_answers(
             rid = _as_response_id(values[0])
             if rid not in wanted:
                 continue
-            row = {name: _text(value) for name, value in zip(read_fields, values[1:])}
-            found[rid] = _project(row, ranking, request.fields)
+            answers = values[1:1 + len(read_fields)]
+            row = {name: _text(value) for name, value in zip(read_fields, answers)}
+            # 没用令牌进场的答卷在这一列是空串（非匿名卷也可能有匿名作答），当作没有。
+            token = (_text(values[-1]) or None) if with_token else None
+            found[rid] = AnsweredResponse(_project(row, ranking, request.fields), token)
     return found
 
 
@@ -270,7 +312,11 @@ class ResponseReadService:
                 (engine.instance_id, request.survey_id),
                 lambda: ranking_columns(client.get_fieldmap(request.survey_id)),
             )
-            found = read_answers(client, request, layouts)
+            # 匿名卷永不给令牌：引擎只在非匿名时给答卷表建 token 列
+            # （SurveyActivator.php:253），但问卷可以先以非匿名激活、写好列与值，
+            # 之后再把 anonymized 改成 Y——列和数据都还在，所以按当前设置判定。
+            named = request.include_respondent and not client.is_anonymized(request.survey_id)
+            found = read_answers(client, request, layouts, with_token=named)
         except RpcError as error:
             log.warning("response read on %s sid %s: RemoteControl %s failed",
                         engine.instance_id, request.survey_id, error.method)
@@ -286,7 +332,15 @@ class ResponseReadService:
         missing = [rid for rid in request.response_ids if rid not in found]
         log.info("response read on %s sid %s: %d found, %d missing",
                  engine.instance_id, request.survey_id, len(found), len(missing))
-        responses = [{"id": rid, "values": found[rid]} for rid in request.response_ids if rid in found]
+        responses = []
+        for rid in request.response_ids:
+            if rid not in found:
+                continue
+            item = {"id": rid, "values": found[rid].values}
+            if request.include_respondent:
+                # 要了就一定有这个键；匿名、无令牌、判定不出来都是 null。
+                item["token"] = found[rid].token
+            responses.append(item)
         return _json(200, {"responses": responses, "missing": missing})
 
 

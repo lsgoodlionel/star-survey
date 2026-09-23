@@ -16,6 +16,9 @@ DEFINITION_VERSION = 1
 LOGIC_DEFINITION_VERSION = 2
 SUPPORTED_DEFINITION_VERSIONS = (DEFINITION_VERSION, LOGIC_DEFINITION_VERSION)
 
+#: 参与者条目里平台自选的引用键（ADR 0016）。网关摘掉它，只用来回指邀请码。
+PARTICIPANT_REF = "ref"
+
 #: 只有 v2 才认识的键。v1 定义里出现它们直接拒绝，绝不静默丢掉一条显示条件。
 _LOGIC_KEYS = ("condition", "calculation", "validation")
 
@@ -112,6 +115,9 @@ class SurveyDefinition:
     theme: str = "fruity_twentythree"
     additional_languages: Tuple[str, ...] = ()
     participants: Tuple[Dict[str, str], ...] = ()
+    #: 每个参与者的平台自选引用（ADR 0016）。与 ``participants`` 同序、同长；没写的是 None。
+    #: 网关自己留着回显邀请码，不转发给引擎——引擎只认 token 表的列，别的键本来也会被丢掉。
+    participant_refs: Tuple[Optional[str], ...] = ()
     definition_version: int = DEFINITION_VERSION
     #: 访问策略原文（WP-04，ADR 0016）。结构与语义都在 pubgw/policy/ 里校验（422），这里只保存副本。
     policy: Any = None
@@ -153,6 +159,7 @@ class SurveyDefinition:
                 )
             )
         is_logic = version == LOGIC_DEFINITION_VERSION
+        participants, participant_refs = _participants(payload.get("participants"))
         return cls(
             uuid=_text(payload, "uuid", "definition"),
             title=_text(payload, "title", "definition"),
@@ -164,7 +171,8 @@ class SurveyDefinition:
             groups=tuple(
                 _group(entry, index, is_logic) for index, entry in enumerate(_list(payload, "groups"))
             ),
-            participants=tuple(_participant(entry) for entry in payload.get("participants") or []),
+            participants=tuple(participants),
+            participant_refs=tuple(participant_refs),
             definition_version=version,
             policy=copy.deepcopy(payload.get("policy")),
             branding=copy.deepcopy(payload.get("branding")),
@@ -272,9 +280,30 @@ def _subquestion(payload: Any, where: str) -> SubQuestion:
     )
 
 
-def _participant(payload: Any) -> Dict[str, str]:
-    _require_mapping(payload, "participants[]")
-    return {str(key): str(value) for key, value in payload.items()}
+def _participants(payload: Any) -> Tuple[List[Dict[str, str]], List[Optional[str]]]:
+    """拆出平台引用，剩下的原样交给引擎。引用重复就没法回指，当场拒绝。"""
+    entries: List[Dict[str, str]] = []
+    refs: List[Optional[str]] = []
+    seen: Dict[str, int] = {}
+    for index, item in enumerate(payload or []):
+        _require_mapping(item, "participants[]")
+        fields = {str(key): str(value) for key, value in item.items()}
+        ref = fields.pop(PARTICIPANT_REF, None)
+        if ref is not None:
+            if not ref.strip():
+                raise DefinitionError(
+                    "participants[{}].{} must not be empty".format(index, PARTICIPANT_REF)
+                )
+            if ref in seen:
+                raise DefinitionError(
+                    "participants[{}].{} {!r} repeats participants[{}]".format(
+                        index, PARTICIPANT_REF, ref, seen[ref]
+                    )
+                )
+            seen[ref] = index
+        entries.append(fields)
+        refs.append(ref)
+    return entries, refs
 
 
 def _settings(payload: Any) -> Dict[str, str]:
