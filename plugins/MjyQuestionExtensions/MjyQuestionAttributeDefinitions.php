@@ -14,6 +14,8 @@ class MjyQuestionAttributeDefinitions
     public const COLUMNS = 'mjy_table_columns';
     public const MIN_ROWS = 'mjy_table_min_rows';
     public const MAX_ROWS = 'mjy_table_max_rows';
+    /** 副表结构版本：发布时由平台声明，副表按它给每个单元格打标（见 platform/contracts/question-extension-tables-v1.md）。 */
+    public const STRUCTURE_VERSION = 'mjy_structure_version';
 
     private const CATEGORY = 'MJY 自增表格';
 
@@ -51,6 +53,16 @@ class MjyQuestionAttributeDefinitions
                 'default' => '20',
                 'caption' => '最多行数',
                 'help' => '服务端强制，浏览器端只是提示',
+            ],
+            self::STRUCTURE_VERSION => [
+                'types' => $types,
+                'category' => self::CATEGORY,
+                'sortorder' => 40,
+                'inputtype' => 'text',
+                'default' => '',
+                'xssfilter' => false,
+                'caption' => '副表结构版本',
+                'help' => '平台发布时声明；改了列定义就要换一个版本，否则旧答卷读不回来',
             ],
         ];
     }

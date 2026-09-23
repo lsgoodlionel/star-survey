@@ -233,7 +233,14 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         $results = [];
         foreach ($map->repeatingTables() as $code => $question) {
             $result = $this->validatorFor($question)->validate($row[$question['fieldName']] ?? null);
-            $this->structuredAnswers()->recordAnswer($surveyId, $generation, $responseId, $code, $result);
+            $this->structuredAnswers()->recordAnswer(
+                $surveyId,
+                $generation,
+                $responseId,
+                $code,
+                $this->structureVersionFor($question),
+                $result
+            );
             $results[$code] = $result;
         }
         foreach ($map->uploads() as $code => $question) {
@@ -346,6 +353,20 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
             sprintf('survey %d %s rejected: %s', $surveyId, $fieldName, $result->errorText()),
             CLogger::LEVEL_INFO,
             self::LOG_CATEGORY
+        );
+    }
+
+    /**
+     * 副表结构版本：平台在 .lss 里声明的那一个，消毒后使用。
+     * 属性缺失或被改坏时回落到「不知道是哪一版」，而不是假装是第 1 版。
+     *
+     * @param array<string, mixed> $question
+     */
+    public function structureVersionFor(array $question): string
+    {
+        $attributes = $this->questionAttributes((int) $question['qid']);
+        return MjyStructuredAnswerStore::normaliseStructureVersion(
+            $attributes[MjyQuestionAttributeDefinitions::STRUCTURE_VERSION] ?? null
         );
     }
 
