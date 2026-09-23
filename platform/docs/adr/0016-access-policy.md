@@ -205,6 +205,10 @@
   平台要发的邀请码现在随发布回执一并返回（`invitations[]`，按定义顺序，平台可给每条一个不透明
   `ref`），见契约 publish-gateway-v1「邀请码回读」。配不齐就发布失败并回滚。
   遗留：回执按 `requestId` 永久存档，**邀请码明文留在网关状态目录里**，存储没有保留期。
+- ✅ 上游也通了：平台现在会在发布时把问卷受众物化成 `participants`（每条只带 `ref`＝联系人 id，
+  个人信息不出平台），发布成功后按 `ref` 自动登记"哪个码发给了谁"（ADR 0017 决定 8）。
+  只有 `access.invitationRequired` 为真才发这个键。邀请码在平台侧只落
+  `contact_participation.participant_token` 一处，不进审计、日志与定义快照——网关的存档遗留不再多一处。
 - ✅ 「一份答卷属于哪个邀请码」：读端点新增 `includeRespondent`（契约 response-read-v1「参与者令牌」），
   平台 `GatewayRespondentIdentityResolver` 据此实现 `RespondentIdentityResolver`，催答对账按人生效。
   **匿名问卷永不给令牌**（按问卷当前 `anonymized` 判定，不按列在不在；判定不出来也不给）；

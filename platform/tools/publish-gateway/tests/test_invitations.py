@@ -63,6 +63,22 @@ class ReceiptCarriesTheCodesTest(unittest.TestCase):
         self.assertTrue(result.ok, result.failures)
         self.assertNotIn("invitations", result.to_dict())
 
+    def test_a_participant_carrying_only_a_reference_still_gets_a_code(self):
+        """平台发的就是这个形状：条目上只有 ref，个人信息一概不出引擎（WP-18）。
+
+        摘掉 ref 之后交给引擎的是空条目——引擎只需要生成 token，姓名邮箱由平台自己留着发邀请。
+        """
+        definition = definition_with([{"ref": "contact-7"}, {"ref": "contact-9"}])
+        engine = FakeEngine(definition)
+
+        result = publisher_for(engine).publish(definition)
+
+        self.assertTrue(result.ok, result.failures)
+        invitations = result.to_dict()["invitations"]
+        self.assertEqual(["contact-7", "contact-9"], [item["ref"] for item in invitations])
+        self.assertEqual(2, len({item["token"] for item in invitations}))
+        self.assertEqual([{}, {}], engine.participants[definition_survey_id(engine)])
+
     def test_the_reference_is_the_platforms_own_and_never_reaches_the_engine(self):
         definition = definition_with(TWO)
         engine = FakeEngine(definition)
