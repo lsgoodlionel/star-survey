@@ -28,3 +28,8 @@ platform:
       enabled: false
       backoff: PT0S
       storage-dir: target/test-exports
+  contacts:
+    import:
+      # 测试里不启动定时调度，由测试直接调用 ContactImportWorker；失败立即可重试。
+      enabled: false
+      backoff: PT0S

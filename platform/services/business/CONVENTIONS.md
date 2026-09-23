@@ -19,6 +19,7 @@ PLATFORM_DB_NAME=<你的库名> platform/deploy/platform-dev/mvn.sh test
 | `cn.mjy.platform.access` | 角色、资源范围、字段与导出权限、席位 | V400–V499 |
 | `cn.mjy.platform.survey` | 问卷草稿、发布状态机、发布审批、待核对核对、版本与题目绑定 | V500–V599（V500–V509 发布，V510–V519 审批，V520–V529 核对，V530–V539 重新发布与漂移） |
 | `cn.mjy.platform.response` | 答卷查询（投影分页、按需经网关取作答、字段字典、数据权限）、导出作业（ADR 0015） | V600–V609（V600 导出作业与快照） |
+| `cn.mjy.platform.contacts` | 通讯录：三类身份的联系人与显式关联、名单与导入作业、部门树与标签、部门级数据范围、参与者令牌映射（ADR 0017） | V800–V899（V800 目录，V801 部门范围，V802 导入作业，V803 参与者映射） |
 | `cn.mjy.platform.audit` | 审计日志 | V1–V99（随 shared） |
 
 - 迁移号段互相独立，已开启 Flyway `out-of-order`：某模块在自己的低号段追加迁移时，已跑过更高号段的库会补跑它。因此**迁移不得依赖其他模块号段里的迁移顺序**；跨模块的依赖只能指向已发布的旧迁移。
