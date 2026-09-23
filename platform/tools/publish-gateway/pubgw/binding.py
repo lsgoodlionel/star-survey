@@ -78,4 +78,5 @@ def _question(payload: Dict[str, Any]) -> QuestionBinding:
             )
             for field in payload.get("fields") or []
         ),
+        side_table=payload.get("sideTable"),
     )

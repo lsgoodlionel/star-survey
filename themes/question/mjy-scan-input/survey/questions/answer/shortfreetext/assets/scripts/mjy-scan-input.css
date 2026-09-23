@@ -1,0 +1,19 @@
+/* MJY 扫码录入（R02-28） */
+.mjy-scan-input .ls-input-group {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.mjy-scan-input__preview {
+    display: block;
+    margin-top: 0.5rem;
+    max-width: 100%;
+    width: 320px;
+}
+
+.mjy-scan-input__note {
+    color: #6c757d;
+    font-size: 0.875rem;
+    margin: 0.25rem 0 0;
+    min-height: 1.25rem;
+}

@@ -1,0 +1,51 @@
+{#
+/**
+ * MJY 矩阵单题作答：与 core 的 arrays/array/no_dropdown/answer.twig 逐行一致
+ * （行模板仍由 aRow.template 指向引擎的视图），只在外面多包一层带步进配置的 div。
+ *
+ * @var aColumns / sHeaders / aRows  同 core
+ * @var question_template_attribute  mjy_stepper_rows / mjy_stepper_progress
+ */
+#}
+<!-- MJY matrix stepper -->
+
+<!-- answer -->
+<div class="ls-table-wrapper mjy-matrix-stepper"
+     role="group"
+     aria-labelledby="ls-question-text-{{ basename }}"
+     data-mjy-stepper="1"
+     data-mjy-rows-per-step="{{ question_template_attribute.mjy_stepper_rows|default(1) }}"
+     data-mjy-progress="{{ question_template_attribute.mjy_stepper_progress|default(1) }}">
+    <table class="{{ coreClass }} table table-bordered table-hover table-array-radio" >
+        <colgroup class="col-responses">
+            <col class="col-answers"  style='width: {{ answerwidth }}%;' />
+            {# columns/col.php #}
+            {% for aColumn in aColumns %}
+                <col class="{{ aColumn.class }}" style='width: {{ aColumn.cellwidth }}%'/>
+            {% endfor %}
+        </colgroup>
+        <thead>
+            <tr class="ls-heading ls-header">
+                {{sHeaders}}
+            </tr>
+        </thead>
+        <tbody>
+             {% if anscount==0 %}
+                <tr>
+                    <th class="answertext">
+                         {{ gT('Error: This question has no answers.') }}
+                    </th>
+                </tr>
+             {% endif %}
+                {% for aRow in aRows %}
+                    {% include aRow.template with aRow.content %}
+                {% endfor %}
+        </tbody>
+    </table>
+    <div class="mjy-matrix-stepper__bar" hidden>
+        <button type="button" class="btn btn-outline-secondary mjy-matrix-stepper__prev">{{ gT('Previous') }}</button>
+        <span class="mjy-matrix-stepper__progress" role="status"></span>
+        <button type="button" class="btn btn-outline-primary mjy-matrix-stepper__next">{{ gT('Next') }}</button>
+    </div>
+</div>
+<!-- end of answer -->

@@ -1,0 +1,31 @@
+/* MJY 折叠栏目（R02-43） */
+.mjy-collapsible__section {
+    border: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.375rem;
+    margin-bottom: 1rem;
+}
+
+.mjy-collapsible__summary {
+    cursor: pointer;
+    font-weight: 600;
+    list-style: none;
+    padding: 0.75rem 1rem;
+}
+
+.mjy-collapsible__summary::after {
+    content: '\25BE';
+    float: right;
+}
+
+.mjy-collapsible__section[open] > .mjy-collapsible__summary::after {
+    content: '\25B4';
+}
+
+.mjy-collapsible__body {
+    padding: 0 1rem 0.5rem;
+}
+
+/* 折叠条已经显示了标题，标题题本身的答案区不再占位。 */
+.mjy-collapsible__head .mjy-collapsible {
+    display: none;
+}

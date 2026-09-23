@@ -6,64 +6,83 @@
  * 引擎不认识这些属性，但**照样会把它们随 .lss 导出与导入**
  * （`application/helpers/admin/import_helper.php:3053` 起没有白名单）。
  * 唯一的坑是 `QuestionAttribute::filterXss()`：只有当属性定义里写了
- * `xssfilter => false` 时才跳过 HTML 净化，而属性定义来自本插件 ——
- * 插件没启用时导入这份 .lss，列定义 JSON 会被 HTMLPurifier 改写。
+ * `xssfilter => false` 时才跳过 HTML 净化，而 `xssfilter` 必须是真正的布尔值——
+ * 题型主题 config.xml 里的 `<xssfilter>false</xssfilter>` 会变成字符串 'false'，
+ * `== false` 不成立，起不到作用。所以**凡是存 JSON 的属性都必须在这里注册**，
+ * 哪怕它属于一个纯展示的 B 档主题（ADR 0006 限制 8：插件停用时导入会改写这些值）。
  */
 class MjyQuestionAttributeDefinitions
 {
     public const COLUMNS = 'mjy_table_columns';
     public const MIN_ROWS = 'mjy_table_min_rows';
     public const MAX_ROWS = 'mjy_table_max_rows';
-    /** 副表结构版本：发布时由平台声明，副表按它给每个单元格打标（见 platform/contracts/question-extension-tables-v1.md）。 */
+    /** 副表结构版本：发布时由平台声明，副表按它给每个单元格打标（platform/contracts/question-extension-tables-v1.md）。 */
     public const STRUCTURE_VERSION = 'mjy_structure_version';
+    /** 热力图底图地址（R02-19）。 */
+    public const HEATMAP_IMAGE = 'mjy_heatmap_image';
+    /** 选项分组定义（R02-04，JSON）。 */
+    public const OPTION_GROUPS = 'mjy_option_groups';
 
-    private const CATEGORY = 'MJY 自增表格';
+    private const CATEGORY = 'MJY 结构化题型';
+    private const CATEGORY_GROUPS = 'MJY 选项分类';
 
     /**
      * @return array<string, array<string, mixed>>
      */
     public static function all(): array
     {
-        $types = Question::QT_T_LONG_FREE_TEXT;
+        $structured = Question::QT_T_LONG_FREE_TEXT;
         return [
-            self::COLUMNS => [
-                'types' => $types,
-                'category' => self::CATEGORY,
-                'sortorder' => 10,
-                'inputtype' => 'textarea',
-                'default' => '',
-                'xssfilter' => false,
-                'caption' => '列定义（JSON）',
+            self::COLUMNS => self::definition($structured, 10, 'textarea', '', '列定义（JSON）', [
                 'help' => '形如 [{"code":"item","label":"名称","type":"text","required":true}]',
-            ],
-            self::MIN_ROWS => [
-                'types' => $types,
-                'category' => self::CATEGORY,
-                'sortorder' => 20,
-                'inputtype' => 'integer',
-                'default' => '0',
-                'caption' => '最少行数',
+            ]),
+            self::MIN_ROWS => self::definition($structured, 20, 'integer', '0', '最少行数', [
                 'help' => '0 表示允许不填',
-            ],
-            self::MAX_ROWS => [
-                'types' => $types,
-                'category' => self::CATEGORY,
-                'sortorder' => 30,
-                'inputtype' => 'integer',
-                'default' => '20',
-                'caption' => '最多行数',
+                'xssfilter' => true,
+            ]),
+            self::MAX_ROWS => self::definition($structured, 30, 'integer', '20', '最多行数', [
                 'help' => '服务端强制，浏览器端只是提示',
-            ],
-            self::STRUCTURE_VERSION => [
-                'types' => $types,
-                'category' => self::CATEGORY,
-                'sortorder' => 40,
-                'inputtype' => 'text',
-                'default' => '',
-                'xssfilter' => false,
-                'caption' => '副表结构版本',
+                'xssfilter' => true,
+            ]),
+            self::STRUCTURE_VERSION => self::definition($structured, 40, 'text', '', '副表结构版本', [
                 'help' => '平台发布时声明；改了列定义就要换一个版本，否则旧答卷读不回来',
-            ],
+            ]),
+            self::HEATMAP_IMAGE => self::definition($structured, 50, 'text', '', '热力图底图地址', [
+                'help' => '作答者在这张图上点选；净化会改写 URL 里的 & ，所以不过滤',
+            ]),
+            self::OPTION_GROUPS => self::definition(
+                Question::QT_L_LIST,
+                10,
+                'textarea',
+                '',
+                '选项分组定义（JSON）',
+                ['help' => '形如 [{"label":"水果","codes":["A1","A2"]}]', 'category' => self::CATEGORY_GROUPS]
+            ),
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $extra
+     * @return array<string, mixed>
+     */
+    private static function definition(
+        string $types,
+        int $sortorder,
+        string $inputtype,
+        string $default,
+        string $caption,
+        array $extra = []
+    ): array {
+        return array_merge([
+            'types' => $types,
+            'category' => self::CATEGORY,
+            'sortorder' => $sortorder,
+            'inputtype' => $inputtype,
+            'default' => $default,
+            // 缺省不过滤：这些属性存的是 JSON 与 URL，HTMLPurifier 会把引号与 & 改写掉。
+            'xssfilter' => false,
+            'caption' => $caption,
+            'help' => '',
+        ], $extra);
     }
 }

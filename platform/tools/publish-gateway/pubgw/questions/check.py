@@ -11,6 +11,7 @@ from ..qtypes import MATRIX, shape_of
 from ..validate import ValidationIssue
 from .attributes import MAX_CHARS_LIMIT, check_attributes
 from .formats import FORMAT_TYPES, FORMATS
+from .themes import MANAGED_ATTRIBUTES, read_theme_options
 
 #: 允许 maxLength 的题型：单列自由文本。
 MAX_LENGTH_TYPES = frozenset({"S", "T", "U"})
@@ -31,9 +32,27 @@ def check_question_type(question: Question, where: str) -> List[ValidationIssue]
     issues.extend(_format(question, where))
     issues.extend(_max_length(question, where))
     issues.extend(_exclusive(question, where))
+    issues.extend(_theme(question, where))
     issues.extend(
         ValidationIssue(code, "{}.attributes.{}".format(where, name), message)
         for code, name, message in check_attributes(question)
+    )
+    return issues
+
+
+def _theme(question: Question, where: str) -> List[ValidationIssue]:
+    """平台题型主题与它的 themeOptions；作者直写主题管理的属性一律拒绝。"""
+    _, found = read_theme_options(question)
+    issues = [
+        ValidationIssue(code, "{}.{}".format(where, path), message) for code, path, message in found
+    ]
+    issues.extend(
+        ValidationIssue(
+            "E_THEME_ATTRIBUTE_MANAGED",
+            "{}.attributes.{}".format(where, name),
+            "属性 {} 由题型主题的 themeOptions 生成，不能在定义里直写".format(name),
+        )
+        for name in sorted(set(question.attributes) & MANAGED_ATTRIBUTES)
     )
     return issues
 

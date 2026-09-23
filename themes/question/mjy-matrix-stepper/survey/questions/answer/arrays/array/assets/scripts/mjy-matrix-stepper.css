@@ -1,0 +1,17 @@
+/* MJY 矩阵单题作答（R02-14） */
+.mjy-matrix-stepper__row--hidden {
+    display: none;
+}
+
+.mjy-matrix-stepper__bar {
+    align-items: center;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+    margin-top: 0.5rem;
+}
+
+.mjy-matrix-stepper__progress {
+    color: #6c757d;
+    font-size: 0.875rem;
+}

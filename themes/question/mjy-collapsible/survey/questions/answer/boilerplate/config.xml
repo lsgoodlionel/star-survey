@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 折叠栏目（需求 R02-43）。
+
+  说明文字题（type X）不收集任何作答，引擎照样给它一列（恒为空）。本主题把这道题
+  之后、下一个折叠标题之前的题目收进一个 <details> 里，让长问卷可以分段折叠。
+  关掉 JavaScript 时所有题目照常显示，只是不折叠——不会有人因此填不了问卷。
+-->
+<config>
+    <metadata>
+        <name>mjy-collapsible</name>
+        <type>question_theme</type>
+        <title>MJY 折叠栏目</title>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>折叠栏目：说明题作为分段标题，把随后的题目折进可展开的区块</description>
+        <questionType>X</questionType>
+        <group>Mask questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>0</assessable>
+        <class>boilerplate mjy-collapsible</class>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-collapsible.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-collapsible.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_collapse_summary</name>
+            <category>MJY 折叠栏目</category>
+            <sortorder>10</sortorder>
+            <inputtype>text</inputtype>
+            <default></default>
+            <caption>折叠标题</caption>
+            <help>折叠条上显示的文字</help>
+        </attribute>
+        <attribute>
+            <name>mjy_collapse_default</name>
+            <category>MJY 折叠栏目</category>
+            <sortorder>20</sortorder>
+            <inputtype>integer</inputtype>
+            <default>1</default>
+            <caption>默认折叠</caption>
+            <help>1＝默认收起，0＝默认展开</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

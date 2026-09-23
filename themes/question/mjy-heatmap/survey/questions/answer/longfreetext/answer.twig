@@ -1,0 +1,42 @@
+{#
+/**
+ * MJY 热力图选区：在底图上点选若干位置，整组归一化坐标写回 textarea。
+ *
+ * 真正被提交的永远是下面那个 textarea（name = 引擎字段名），图片只是它的编辑器。
+ * 关掉 JavaScript 时 textarea 直接可见，作答者仍能提交合法的 JSON —— 服务端校验
+ * （MjyQuestionExtensions::beforeSurveyPage）对两条路径一视同仁。
+ *
+ * @var name  引擎字段名（Q<qid>）
+ * @var dispVal  已存的 JSON
+ * @var question_template_attribute  mjy_heatmap_image / mjy_table_min_rows / mjy_table_max_rows
+ */
+#}
+<!-- MJY heatmap -->
+<div class="{{ coreClass }} {{ extraclass }} mjy-heatmap"
+     data-mjy-heatmap="1"
+     data-mjy-field="{{ name }}"
+     {# 沙箱白名单里有 escape，没有别名 e（application/config/internal.php:331） #}
+     data-mjy-image="{{ question_template_attribute.mjy_heatmap_image|escape('html_attr') }}"
+     data-mjy-min-points="{{ question_template_attribute.mjy_table_min_rows|default(0) }}"
+     data-mjy-max-points="{{ question_template_attribute.mjy_table_max_rows|default(10) }}">
+
+    <div class="mjy-heatmap__editor" hidden>
+        <div class="mjy-heatmap__stage">
+            <img class="mjy-heatmap__image" alt="" />
+            <div class="mjy-heatmap__points"></div>
+        </div>
+        <div class="mjy-heatmap__bar">
+            <span class="mjy-heatmap__count" role="status"></span>
+            <button type="button" class="btn btn-outline-secondary mjy-heatmap__clear">清除</button>
+        </div>
+    </div>
+
+    <textarea
+        class="form-control mjy-heatmap__raw"
+        name="{{ name }}"
+        id="answer{{ name }}"
+        rows="{{ drows }}"
+        aria-labelledby="ls-question-text-{{ basename }}"
+    >{{ dispVal }}</textarea>
+</div>
+<!-- end of answer -->

@@ -173,7 +173,8 @@ class RollbackTest(unittest.TestCase):
     def test_a_swapped_question_theme_rolls_back(self):
         """题型主题缺失时引擎静默降级，只有回读能发现。"""
         payload = sample_payload()
-        payload["groups"][0]["questions"][0]["theme"] = "mjy-special"
+        # 引擎自带主题：名字本身合法，装没装只有回读才知道（mjy- 前缀的拼错在校验阶段就被挡下）。
+        payload["groups"][0]["questions"][0]["theme"] = "bootstrap_buttons"
         definition = SurveyDefinition.from_dict(payload)
         engine = FakeEngine(definition, theme_override={"QSINGLE": "listradio"})
 

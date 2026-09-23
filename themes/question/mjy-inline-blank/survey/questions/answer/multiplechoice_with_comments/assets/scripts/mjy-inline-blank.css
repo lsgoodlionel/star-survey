@@ -1,0 +1,17 @@
+/* MJY 选项内嵌填空（R02-07） */
+.mjy-inline-blank__row {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.35rem;
+}
+
+.mjy-inline-blank__blank {
+    flex: 1 1 12rem;
+    max-width: 24rem;
+}
+
+.mjy-inline-blank__blank:disabled {
+    background-color: #f1f3f5;
+}

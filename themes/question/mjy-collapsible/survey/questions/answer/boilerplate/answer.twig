@@ -1,0 +1,21 @@
+{#
+/**
+ * MJY 折叠栏目：说明题本身不存值，主题只提供折叠条的文案与初始状态。
+ *
+ * 答案区里那个隐藏 input 必须保留（core 的 boilerplate 也是这么做的），
+ * 否则这一列不会随表单提交，答卷表里会是 NULL 而不是 ""。
+ *
+ * @var name  引擎字段名
+ * @var question_template_attribute  mjy_collapse_summary / mjy_collapse_default
+ */
+#}
+<!-- MJY collapsible section -->
+{{ sTimer }}
+<div class="mjy-collapsible"
+     data-mjy-collapsible="1"
+     {# 沙箱白名单里有 escape，没有别名 e（application/config/internal.php:331） #}
+     data-mjy-summary="{{ question_template_attribute.mjy_collapse_summary|escape('html_attr') }}"
+     data-mjy-collapsed="{{ question_template_attribute.mjy_collapse_default|default(1) }}">
+</div>
+<input class="{{ coreClass }} boilerplate d-none" type="hidden" name="{{ name }}" id="answer{{ name }}" value="" />
+<!-- end of answer -->
