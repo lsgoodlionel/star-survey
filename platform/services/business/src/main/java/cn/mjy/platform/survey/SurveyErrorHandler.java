@@ -44,6 +44,15 @@ public class SurveyErrorHandler {
                 .body(new SurveyError("invalid_definition", "survey definition is invalid", e.problems()));
     }
 
+    @ExceptionHandler(InvalidImportException.class)
+    ResponseEntity<SurveyError> invalidImport(InvalidImportException e) {
+        List<String> problems = e.problems().stream()
+                .map(p -> "line " + p.line() + " " + p.code() + ": " + p.message())
+                .toList();
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
+                .body(new SurveyError("invalid_import", "selected questions cannot be imported", problems));
+    }
+
     @ExceptionHandler(PublishUnavailableException.class)
     ResponseEntity<SurveyError> unavailable(PublishUnavailableException e) {
         return respond(HttpStatus.SERVICE_UNAVAILABLE, "publish_unavailable", e.getMessage());
