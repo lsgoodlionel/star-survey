@@ -79,6 +79,13 @@ public class SurveyFixture {
         return surveys.create(ws.owner(), ws.project(), definition());
     }
 
+    /** 样例定义加上一段 {@code policy}（契约 survey-access-policy-v1）。 */
+    public SurveyView newSurveyWithPolicy(Workspace ws, String policyJson) {
+        ObjectNode definition = definition();
+        definition.set("policy", json.readTree(policyJson));
+        return surveys.create(ws.owner(), ws.project(), definition);
+    }
+
     /** 网关现有格式的样例定义（platform/tests/fixtures/surveys/publish-gateway.json 的副本）。 */
     public ObjectNode definition() {
         try (InputStream in = SurveyFixture.class.getResourceAsStream(DEFINITION_RESOURCE)) {

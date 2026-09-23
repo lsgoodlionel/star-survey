@@ -35,7 +35,8 @@ final class GatewayResponseParser {
                 texts(result, "failures"),
                 bool(result, "rolledBack"),
                 optionalInt(result, "orphanSurveyId"),
-                hasBinding ? binding(binding) : null);
+                hasBinding ? binding(binding) : null,
+                optionalText(result, "policyDigest"));
     }
 
     /** 400/401/404 应答体里的 {@code error}；缺失时退回 HTTP 状态说明。 */

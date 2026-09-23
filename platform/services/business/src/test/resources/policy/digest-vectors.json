@@ -1,0 +1,183 @@
+{
+  "captchaOnly": {
+    "digest": null,
+    "payload": null,
+    "policy": {
+      "access": {
+        "captcha": true
+      },
+      "policyVersion": 1
+    }
+  },
+  "durationOnly": {
+    "digest": "908042bd79c0786d9fe08939b06c3b4d0aae16b58f53418b0ccccd206af31793",
+    "payload": "{\"maxDurationSeconds\":1800,\"network\":null,\"passwordHash\":null,\"responses\":[],\"schema\":\"mjy-access-policy/1\",\"window\":null}",
+    "policy": {
+      "limits": {
+        "maxDurationSeconds": 1800
+      },
+      "policyVersion": 1
+    }
+  },
+  "everything": {
+    "digest": "365488841e0970c223bae724707a2befc61cc902591525cd66ad8d42d9e6ae13",
+    "payload": "{\"maxDurationSeconds\":3600,\"network\":{\"allowIps\":[\"10.0.0.0/8\"],\"allowRegions\":[\"CN\"],\"denyIps\":[\"10.1.2.3/32\"],\"denyRegions\":[\"RU\"],\"regionUnknown\":\"deny\"},\"passwordHash\":\"pbkdf2-sha256$600000$c2FsdHNhbHRzYWx0c2E=$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g=\",\"responses\":[{\"by\":\"token\",\"max\":1},{\"by\":\"device\",\"max\":2},{\"by\":\"ip\",\"max\":3}],\"schema\":\"mjy-access-policy/1\",\"window\":{\"closesAt\":\"2026-10-31 17:00:00\",\"closesAtLocal\":\"2026-10-31T18:00\",\"opensAt\":\"2026-10-01 07:00:30\",\"opensAtLocal\":\"2026-10-01T09:00:30\",\"timezone\":\"Europe/Berlin\"}}",
+    "policy": {
+      "access": {
+        "captcha": true,
+        "invitationRequired": true,
+        "passwordHash": "pbkdf2-sha256$600000$c2FsdHNhbHRzYWx0c2E=$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g="
+      },
+      "limits": {
+        "maxDurationSeconds": 3600,
+        "responses": [
+          {
+            "by": "ip",
+            "max": 3
+          },
+          {
+            "by": "token",
+            "max": 1
+          },
+          {
+            "by": "device",
+            "max": 2
+          }
+        ]
+      },
+      "network": {
+        "allowIps": [
+          "10.0.0.0/8"
+        ],
+        "allowRegions": [
+          "CN"
+        ],
+        "denyIps": [
+          "10.1.2.3"
+        ],
+        "denyRegions": [
+          "RU"
+        ],
+        "regionUnknown": "deny"
+      },
+      "policyVersion": 1,
+      "window": {
+        "closesAt": "2026-10-31T18:00",
+        "opensAt": "2026-10-01T09:00:30",
+        "timezone": "Europe/Berlin"
+      }
+    }
+  },
+  "limitsOutOfOrder": {
+    "digest": "5df6512386e0964561ae8b6a5f574fe7cb9d640d2e2e003f0cfe7d4c453493ca",
+    "payload": "{\"maxDurationSeconds\":null,\"network\":null,\"passwordHash\":null,\"responses\":[{\"by\":\"device\",\"max\":2},{\"by\":\"ip\",\"max\":3}],\"schema\":\"mjy-access-policy/1\",\"window\":null}",
+    "policy": {
+      "limits": {
+        "responses": [
+          {
+            "by": "ip",
+            "max": 3
+          },
+          {
+            "by": "device",
+            "max": 2
+          }
+        ]
+      },
+      "policyVersion": 1
+    }
+  },
+  "networkIpv4": {
+    "digest": "d6c2884a105324805f39bd7fdcd0b78dd8c6d294225c5a320c37c1592caafaa0",
+    "payload": "{\"maxDurationSeconds\":null,\"network\":{\"allowIps\":[],\"allowRegions\":[],\"denyIps\":[\"10.0.0.0/8\",\"192.168.1.1/32\"],\"denyRegions\":[],\"regionUnknown\":\"deny\"},\"passwordHash\":null,\"responses\":[],\"schema\":\"mjy-access-policy/1\",\"window\":null}",
+    "policy": {
+      "network": {
+        "denyIps": [
+          "10.0.0.5/8",
+          "192.168.1.1"
+        ],
+        "regionUnknown": "deny"
+      },
+      "policyVersion": 1
+    }
+  },
+  "networkIpv6": {
+    "digest": "a46c5ef151b83ca945f58172d81ba9806fdf0f5680bf5cbd5e800c9a83472947",
+    "payload": "{\"maxDurationSeconds\":null,\"network\":{\"allowIps\":[\"2001:db8::1/128\",\"2001:db8:abcd::/48\",\"::1/128\",\"::ffff:102:304/128\",\"2001:db8::8a2e:370:7334/128\"],\"allowRegions\":[],\"denyIps\":[],\"denyRegions\":[],\"regionUnknown\":\"allow\"},\"passwordHash\":null,\"responses\":[],\"schema\":\"mjy-access-policy/1\",\"window\":null}",
+    "policy": {
+      "network": {
+        "allowIps": [
+          "2001:0db8:0000:0000:0000:0000:0000:0001",
+          "2001:db8:abcd::/48",
+          "::1",
+          "0:0:0:0:0:ffff:1.2.3.4/128",
+          "2001:db8::8a2e:370:7334"
+        ],
+        "regionUnknown": "allow"
+      },
+      "policyVersion": 1
+    }
+  },
+  "networkRegions": {
+    "digest": "1bba18f39e419a722ce83ee0ba7d1362c46a183ff625c26cacee10b8fb9d89d1",
+    "payload": "{\"maxDurationSeconds\":null,\"network\":{\"allowIps\":[],\"allowRegions\":[\"CN\",\"CN-BJ\"],\"denyIps\":[],\"denyRegions\":[\"US\"],\"regionUnknown\":\"allow\"},\"passwordHash\":null,\"responses\":[],\"schema\":\"mjy-access-policy/1\",\"window\":null}",
+    "policy": {
+      "network": {
+        "allowRegions": [
+          "CN",
+          "CN-BJ"
+        ],
+        "denyRegions": [
+          "US"
+        ],
+        "regionUnknown": "allow"
+      },
+      "policyVersion": 1
+    }
+  },
+  "passwordOnly": {
+    "digest": "6fce52cbeb0a61b0f53ce99f98d01f8c7bf3c22049f9c37d1044231a3c480758",
+    "payload": "{\"maxDurationSeconds\":null,\"network\":null,\"passwordHash\":\"pbkdf2-sha256$600000$c2FsdHNhbHRzYWx0c2E=$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g=\",\"responses\":[],\"schema\":\"mjy-access-policy/1\",\"window\":null}",
+    "policy": {
+      "access": {
+        "passwordHash": "pbkdf2-sha256$600000$c2FsdHNhbHRzYWx0c2E=$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g="
+      },
+      "policyVersion": 1
+    }
+  },
+  "window": {
+    "digest": "ab5e7238fe3f0b71c3279b881a577ee252934fcaf2485f45005d0320ca24bc1c",
+    "payload": "{\"maxDurationSeconds\":null,\"network\":null,\"passwordHash\":null,\"responses\":[],\"schema\":\"mjy-access-policy/1\",\"window\":{\"closesAt\":\"2026-10-31 10:00:00\",\"closesAtLocal\":\"2026-10-31T18:00\",\"opensAt\":\"2026-10-01 01:00:00\",\"opensAtLocal\":\"2026-10-01T09:00\",\"timezone\":\"Asia/Shanghai\"}}",
+    "policy": {
+      "policyVersion": 1,
+      "window": {
+        "closesAt": "2026-10-31T18:00",
+        "opensAt": "2026-10-01T09:00",
+        "timezone": "Asia/Shanghai"
+      }
+    }
+  },
+  "windowAcrossDst": {
+    "digest": "b061d688247c00fcabb58f4b0a7433923bf326efbe12833fcbf826e709ed157d",
+    "payload": "{\"maxDurationSeconds\":null,\"network\":null,\"passwordHash\":null,\"responses\":[],\"schema\":\"mjy-access-policy/1\",\"window\":{\"closesAt\":\"2026-11-02 08:30:00\",\"closesAtLocal\":\"2026-11-02T03:30:00\",\"opensAt\":\"2026-03-08 08:30:15\",\"opensAtLocal\":\"2026-03-08T04:30:15\",\"timezone\":\"America/New_York\"}}",
+    "policy": {
+      "policyVersion": 1,
+      "window": {
+        "closesAt": "2026-11-02T03:30:00",
+        "opensAt": "2026-03-08T04:30:15",
+        "timezone": "America/New_York"
+      }
+    }
+  },
+  "windowOpenEnded": {
+    "digest": "f873cd4c96f1319533c3e696d19eb8a2c164be562e69a95c1ec5bf3fcc71d5cd",
+    "payload": "{\"maxDurationSeconds\":null,\"network\":null,\"passwordHash\":null,\"responses\":[],\"schema\":\"mjy-access-policy/1\",\"window\":{\"closesAt\":\"2027-01-01 00:00:00\",\"closesAtLocal\":\"2027-01-01T00:00\",\"opensAt\":null,\"opensAtLocal\":null,\"timezone\":\"UTC\"}}",
+    "policy": {
+      "policyVersion": 1,
+      "window": {
+        "closesAt": "2027-01-01T00:00",
+        "timezone": "UTC"
+      }
+    }
+  }
+}
