@@ -14,6 +14,8 @@
 * ``republish``：草稿未改动时再次发布同一问卷必须 409 already_published；
 * ``republish-changed``：改稿后重新发布（ADR 0012）→ 第 2 版、新 sid、公开路由切到新 sid、旧 sid 反查仍归属
   本问卷、第 1 版标记为已被取代且引擎已收口；随后对第 2 版做一次漂移检查必须 match。
+* ``restore-v1``：旧版恢复（ADR 0012 决定 7）→ 把第 1 版恢复为草稿，恢复本身不得改动在线版本与公开路由；
+  再发布一次得到第 3 版（又一个新 sid），第 1、2 版仍可查、仍能反查，路由切到第 3 版。
 
 密钥只从环境变量 ``PLATFORM_JWT_HMAC_SECRET`` 读取。
 """
@@ -310,6 +312,51 @@ def cmd_republish_changed(args: argparse.Namespace) -> None:
     save_state(state_path, dict(state, oldSid=old_sid, engineSid=new_sid))
 
 
+def cmd_restore_v1(args: argparse.Namespace) -> None:
+    """旧版恢复：恢复只写草稿，在线版本与公开路由必须原地不动；随后发布才产生新的一版。"""
+    state_path = Path(args.state)
+    state = load_state(state_path)
+    owner = owner_api(args, state)
+    survey_id, live_sid = state["surveyId"], state["engineSid"]
+
+    status, draft = owner.call("GET", "/v1/surveys/{}/draft".format(survey_id))
+    expect(status == 200, "GET draft -> 200", "{} {}".format(status, _brief(draft)))
+    status, restored = owner.call("POST", "/v1/surveys/{}/versions/1/restore".format(survey_id),
+                                  {"expectedVersion": draft["version"]})
+    expect(status == 200 and restored.get("version") == draft["version"] + 1,
+           "restore version 1 into the draft -> 200", "{} {}".format(status, _brief(restored)))
+
+    status, survey = owner.call("GET", "/v1/surveys/{}".format(survey_id))
+    expect(status == 200 and survey.get("publishedVersion") == 2,
+           "restore left the live version at 2", "{} {}".format(status, _brief(survey)))
+    status, route = owner.call("GET", "/v1/survey-routes/{}".format(survey_id))
+    expect(status == 200 and route.get("engineSid") == live_sid,
+           "restore left the public route on sid {}".format(live_sid), "{} {}".format(status, _brief(route)))
+    status, versions = owner.call("GET", "/v1/surveys/{}/versions".format(survey_id))
+    expect(status == 200 and isinstance(versions, list) and len(versions) == 2
+           and versions[1].get("live") is True,
+           "restore added no version and version 2 is still live", "{} {}".format(status, _brief(versions)))
+
+    status, outcome = owner.call("POST", "/v1/surveys/{}/publish".format(survey_id))
+    version = ((outcome or {}).get("version") if isinstance(outcome, dict) else None) or {}
+    third_sid = version.get("engineSid")
+    expect(status == 200 and version.get("version") == 3 and version.get("live") is True,
+           "publishing the restored draft -> 200 version 3 (live)", "{} {}".format(status, _brief(outcome)))
+    expect(isinstance(third_sid, int) and third_sid not in (live_sid, state["oldSid"]),
+           "version 3 is yet another engine survey (sid {})".format(third_sid), _brief(version))
+
+    status, route = owner.call("GET", "/v1/survey-routes/{}".format(survey_id))
+    expect(status == 200 and route.get("engineSid") == third_sid,
+           "public route now -> sid {}".format(third_sid), "{} {}".format(status, _brief(route)))
+    for label, sid in (("version 1", state["oldSid"]), ("version 2", live_sid)):
+        status, reverse = owner.call("GET", "/v1/survey-routes?engineInstanceId={}&engineSid={}".format(
+            state["instance"], sid))
+        expect(status == 200 and reverse.get("publicId") == survey_id,
+               "{} sid {} still resolves to the survey".format(label, sid), "{} {}".format(status, _brief(reverse)))
+
+    save_state(state_path, dict(state, supersededSid=live_sid, engineSid=third_sid))
+
+
 def parse_args(argv: List[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", required=True, help="platform base URL reachable from this host")
@@ -335,6 +382,9 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     changed = commands.add_parser("republish-changed")
     changed.add_argument("--definition", required=True)
     changed.set_defaults(handler=cmd_republish_changed)
+
+    restore = commands.add_parser("restore-v1")
+    restore.set_defaults(handler=cmd_restore_v1)
     return parser.parse_args(argv)
 
 

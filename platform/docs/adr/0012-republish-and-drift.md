@@ -152,6 +152,10 @@ draft ──> publishing ──> published ──（草稿改动后重新发布�
   网关零调用；恢复后再发布是新 sid 的第 3 版而旧版仍可反查；乐观锁冲突与并发只有一个赢；
   不存在的版本 404；恢复在线版本＝丢弃草稿改动；无编辑权 403；恢复作废未结申请）、
   `SurveyVersionRestoreApiTest`。以"把乐观锁换成读当前版本"故意改坏实现，两类冲突与并发用例即转红。
+- 旧版恢复的真引擎端到端（MariaDB 10.11 与 PostgreSQL 16 均通过，2026-09-23）：
+  `run-p1-e2e.sh` 新增一步 `restore-v1`——恢复第 1 版之后在线版本仍是第 2 版、公开路由仍指向第 2 版的 sid、
+  版本列表不增不改、网关零调用；随后发布得到第 3 版（第三个 sid），路由切到它，第 1、2 版的答卷表各仍是 1 行、
+  两个被取代的 sid 仍 `active='Y'` 且已过期、两者反查仍归属本问卷，第 1 版的平台投影不变。
 - 真引擎端到端（MariaDB 10.11 与 PostgreSQL 16 均通过，2026-09-22）：
   `platform/deploy/test/run-publish-gateway-service.sh` 增加重新发布（新 sid）、收口（旧 sid 仍 `active='Y'`、
   `expires` 已写、作答入口显示"no longer available"、新 sid 可作答、重复收口 alreadyClosed、缺失 sid 502）、
