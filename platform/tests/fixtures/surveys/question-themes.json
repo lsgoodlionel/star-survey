@@ -207,6 +207,30 @@
           }
         },
         {
+          "uuid": "99999999-1012-4555-8555-000000001012",
+          "code": "QMARK",
+          "type": "T",
+          "text": "在下面这段话里标出你的感受",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-text-highlight",
+          "themeOptions": {
+            "structureVersion": "th1",
+            "text": "苹果很甜，香蕉太软，梨子刚好。",
+            "segments": [
+              { "start": 0, "length": 4 },
+              { "start": 5, "length": 4 },
+              { "start": 10, "length": 4 }
+            ],
+            "tags": [
+              { "code": "like", "label": "喜欢 & <很喜欢>" },
+              { "code": "dislike", "label": "不喜欢" }
+            ],
+            "minMarks": 1,
+            "maxMarks": 2
+          }
+        },
+        {
           "uuid": "99999999-1007-4555-8555-000000001007",
           "code": "QHEAT",
           "type": "T",

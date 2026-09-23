@@ -24,9 +24,14 @@ class MjyThemedQuestionMap
     /** 货架题（R02-18）：一行一件商品，商品列枚举＋唯一，件数列整数。 */
     public const SHELF_THEME = 'mjy-shelf';
 
+    /** 文字点睛（R02-22）：一行一处标记，片段列枚举＋唯一，标记列枚举。 */
+    public const TEXT_HIGHLIGHT_THEME = 'mjy-text-highlight';
+
     /**
      * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
-     * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应。
+     * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应
+     * （网关侧 tests/test_plugin_registry_parity.py 按源码文本对一遍：
+     * 少列一个在引擎上表现为「这道题的作答无人校验」，是静默故障）。
      */
     public const STRUCTURED_THEMES = [
         self::REPEATING_TABLE_THEME,
@@ -34,6 +39,7 @@ class MjyThemedQuestionMap
         self::LOOP_RATING_THEME,
         self::IMAGE_PK_THEME,
         self::SHELF_THEME,
+        self::TEXT_HIGHLIGHT_THEME,
     ];
 
     /** @var array<string, array<string, mixed>> */

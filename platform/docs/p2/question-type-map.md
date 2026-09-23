@@ -23,6 +23,8 @@
 切片 02.4（✔3）收口 R02-04 的**多选**分组（接管选项行模板），并新交付 P 类的
 R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节。
 
+切片 02.5（✔4）交付 P 类里**没有外部阻塞**的几条，见第三之五节。
+
 ## 二、逐条映射
 
 列说明：**引擎承载**＝题型字母＋关键属性；**答案代码**＝答卷列里存的值；**缺失值**见第四节的三种状态；
@@ -51,7 +53,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | R02-19 | 热力图与选区 | P | ✔2（选点） | `T`＋新主题 `mjy-heatmap`＋副表；坐标归一化到 `[0,1]`，由插件逐格校验 | JSON 信封，两列 `x`/`y` | `""`；坐标在副表 |
 | R02-20 | 轮播图 | P | | 媒体版本留存依赖资产服务 | — | 后续 |
 | R02-21 | 视频题 | P | | 授权播放依赖资产服务 | — | 后续 |
-| R02-22 | 文字点睛 | P | | 原文版本＋偏移 | — | 后续 |
+| R02-22 | 文字点睛 | P | ✔4 | `T`＋新主题 `mjy-text-highlight`＋副表；可标的片段由平台声明，片段代码＝偏移＋该段原文的指纹 | JSON 信封，一行一处标记 | `""`；标记明细在副表 |
 | R02-23 | 文件上传 | N | ✔（基础） | `|`；`allowed_filetypes` 必填（拒绝可执行／可渲染扩展名）、`max_filesize`、`max_num_of_files`／`min_num_of_files` | 文件清单 JSON；计数 | `""`＋`filecount`；病毒扫描、私有下载、平台资产 id 见 ADR 0006 |
 | R02-24 | 语音录入 | B | | 需 ASR 供应商 | — | — |
 | R02-25 | 答题录音 | P | | 录音主题＋上传会话（P0 已有会话表） | — | 后续 |
@@ -122,6 +124,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | `mjy-loop-rating` | R02-11 | `T` | `structureVersion`、`objects`、`dimensions`、`scale`（均必填） | `mjy_table_columns`（列定义由平台生成）、`mjy_loop_objects`、`mjy_structure_version`，行数上下限钉死成对象个数 |
 | `mjy-image-pk` | R02-17 | `T` | `structureVersion`、`items`、`pairs`（均必填） | `mjy_table_columns`（一对两列）、`mjy_pk_items`、`mjy_pk_pairs`、`mjy_structure_version`，行数上下限钉死成 1 |
 | `mjy-shelf` | R02-18 | `T` | `structureVersion`、`image`、`products`（均必填）、`minPicks`、`maxPicks`、`maxQuantity` | `mjy_table_columns`（`product` 枚举＋唯一、`qty` 整数）、`mjy_shelf_image`、`mjy_shelf_products`、`mjy_structure_version`、行数上下限 |
+| `mjy-text-highlight` | R02-22 | `T` | `structureVersion`、`text`、`segments`、`tags`（均必填）、`minMarks`、`maxMarks` | `mjy_table_columns`（`segment` 枚举＋唯一、`tag` 枚举）、`mjy_highlight_text`、`mjy_highlight_segments`、`mjy_structure_version`、行数上下限 |
 
 422 错误码：`E_THEME_UNKNOWN`（`mjy-` 前缀却没注册＝拼错，目标实例上会静默降级）、
 `E_THEME_TYPE_MISMATCH`、`E_THEME_OPTIONS_UNSUPPORTED`、`E_THEME_OPTION_UNKNOWN`、
@@ -136,7 +139,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | `mjy-scan-input` | 提交任意字符串 | 编译出的 `em_validation_q` 长度规则（所以 `maxLength` 必填） |
 | `mjy-inline-blank` | 没勾选却填了填空、填空超长 | 原生 `commented_checkbox=checked`＋编译出的长度规则 |
 | `mjy-matrix-stepper` | 跳过没走到的行 | 引擎必答在服务端重算（隐藏的行照样提交） |
-| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk`／`mjy-shelf` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
+| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk`／`mjy-shelf`／`mjy-text-highlight` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
 
 ## 三之三、副表的存储契约（给读端）
 
@@ -272,6 +275,51 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 
 本类同样**没动插件一行校验代码**：枚举、唯一、整数上下限都是现成的列约束。
 
+## 三之五、切片 02.5（✔4）
+
+本切片只做**没有外部阻塞**的那几条。剩下的 P 类要么等平台字典服务（R02-03 的省市区树），
+要么等平台资产服务（R02-20/21/25/26/32/39/41 的媒体版本留存、授权播放、录音录像上传、
+图片合成、画布快照），本切片不碰，也不做占位实现。
+
+### R02-22 文字点睛
+
+在一段原文上标出若干处，每处给一个标记（喜欢／不喜欢／看不懂……）。走副表：
+**一行一处标记**，两列——标的是哪一段（`segment`）、标成什么（`tag`）。
+
+**可标的片段由平台声明，不是作答者随手拉选区。** 这是本类唯一需要想清楚的取舍：
+自由选区意味着作答者可以提交任意一对偏移，服务端除了「落在原文长度内」以外没有别的依据，
+两个人标的「同一处」也对不齐；声明过的片段则让「标了原文以外的东西」由枚举列自己挡住，
+读端拿到的标记天然可聚合。
+
+```
+[{"code":"segment","label":"标记的文字","type":"enum","required":true,"distinct":true,
+  "options":[{"code":"s0_4_2e6ace","label":"苹果很甜"},
+             {"code":"s5_4_be8dc2","label":"香蕉太软"},…]},
+ {"code":"tag","label":"标记","type":"enum","required":true,"options":<声明的标记>}]
+```
+
+**「中文标记偏移和原文版本一致」落在片段的取值代码上**：`s<起点>_<长度>_<该段原文的指纹>`
+（指纹＝该段原文 SHA-256 的前 6 位十六进制）。于是
+
+1. 改了这一段的字、或挪动了它的位置，代码就变，`structureDigest` 跟着变，
+   重新发布时能发现「改了原文却没换结构版本」（副表契约 v1 §四之一的机制）；
+2. 副表里存下来的单元格**自己就说明**「指向原文第几个字起的几个字、那几个字当时是什么」，
+   读端不必回查当时的原文；
+3. 篡改「偏移对、指纹是旧版」的代码进不来——它不在枚举列的取值集合里
+   （e2e 场景 D 有这一条）。
+
+已知缺口，如实记着：**改动最后一个片段之后的文字不会改变任何代码**。那种改动不会让
+已有的标记指错地方（每条标记指的字与内容都没变），所以不强制换版；要求作者为此换版
+等于制造一条没人遵守的规矩。
+
+片段必须**按偏移升序且互不重叠**（发布期检查）：重叠会让两个片段共用一段原文，
+「标了哪几个字」不再唯一。`minMarks` 也不得超过片段数——片段列是唯一列，
+一个片段最多占一行，要求标的处数多过片段数，作答者永远交不了卷。
+这条与货架题的 `minPicks ≤ 商品数` 逐字相同，所以提到了 `theme_columns.bounded_rows_issues`，
+不在两个主题里各写一遍。
+
+本类**没动插件一行校验代码**：枚举、唯一、行数上下限全是切片 02.4 的通用列约束。
+
 ## 四、缺失值（实测，MariaDB 10.11 与 PostgreSQL 16 完全一致）
 
 引擎对同一列有三种「没有值」，平台字段字典与导出按下表解释。「显示了、没作答」一行来自
@@ -332,6 +380,23 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 单元测试：网关 `python3 -m unittest discover -s tests -t .` 580 条（切片 02.2 时是 535），
 插件 PHPUnit 45 条（原 35 条）在 MariaDB 10.11 与 PostgreSQL 16 上全通过，
 Java 744 条（含字段字典的主题映射 3 条）。
+
+## 五之三、切片 02.5 的实测结果
+
+`run-question-themes.sh`（`TEST_DB=mysql|pgsql`，真实 HTTP，两种数据库**各 194 条断言全部通过**，
+切片 02.4 是 169）。篡改场景 D 共 40 条，其中文字点睛 7 条：
+
+| 篡改 | 挡住它的约束 |
+|---|---|
+| 提交一个没声明过的片段代码 | `segment` 是枚举列 |
+| 偏移对、但原文指纹是旧版（`s0_4_000000`） | 同上——**换了原文就是换了一套取值** |
+| 同一段标两次 | `segment` 是唯一列 |
+| 提交没声明过的标记 | `tag` 是枚举列 |
+| 标记留空 | `tag` 必填 |
+| 标的处数超过 `maxMarks` | 行数上限（`mjy_table_max_rows`） |
+| 夹带一个自由偏移列 `start` | 未知列一律拒收（不静默丢弃） |
+
+七条全部留在本页，且没有任何已提交答卷带着这些值。
 
 ## 六、本批实现与延后
 

@@ -41,6 +41,8 @@ THEME_MARKERS = (
         "mjy-image-pk.js",
         "data-mjy-shelf",
         "mjy-shelf.js",
+        "data-mjy-text-highlight",
+        "mjy-text-highlight.js",
         "data-mjy-heatmap",
         "mjy-heatmap.js",
     ),
@@ -76,6 +78,14 @@ PK_ROWS = [{"P1": "A", "P1_shown": "B", "P2": "C", "P2_shown": "B"}]
 #: 货架题：一行一件商品，件数取上限（fixture 的 maxQuantity 是 9）。
 SHELF_ROWS = [{"product": "S1", "qty": "9"}, {"product": "S3", "qty": "1"}]
 
+#: 文字点睛的片段代码：``s<起点>_<长度>_<该段原文的指纹>``。
+#: 这里**刻意写死**——它同时钉住偏移与原文版本，算法或原文一变，这几条就红
+#: （fixture 的原文是「苹果很甜，香蕉太软，梨子刚好。」）。
+MARK_SEGMENTS = ("s0_4_2e6ace", "s5_4_be8dc2", "s10_4_e8d18e")
+#: 一行一处标记：标了哪一段、标成什么。
+MARK_ROWS = [{"segment": MARK_SEGMENTS[0], "tag": "like"},
+             {"segment": MARK_SEGMENTS[2], "tag": "dislike"}]
+
 
 def valid_pages() -> List[Dict[Column, str]]:
     return [
@@ -94,6 +104,7 @@ def valid_pages() -> List[Dict[Column, str]]:
             ("QLOOP", "", 0): envelope(LOOP_ROWS),
             ("QPK", "", 0): envelope(PK_ROWS),
             ("QSHELF", "", 0): envelope(SHELF_ROWS),
+            ("QMARK", "", 0): envelope(MARK_ROWS),
             ("QHEAT", "", 0): envelope(HEAT_ROWS),
         },
     ]
@@ -114,6 +125,7 @@ def blank_pages() -> List[Dict[Column, str]]:
             ("QLOOP", "", 0): envelope(LOOP_ROWS),
             ("QPK", "", 0): envelope([{"P1": "A", "P2": "B"}]),
             ("QSHELF", "", 0): envelope([{"product": "S2", "qty": "1"}]),
+            ("QMARK", "", 0): envelope([{"segment": MARK_SEGMENTS[1], "tag": "like"}]),
             ("QHEAT", "", 0): envelope([{"x": "0.2500", "y": "0.7500"}]),
         },
     ]
@@ -194,6 +206,23 @@ TAMPERS = (
             {("QSHELF", "", 0): envelope([{"product": "S1", "qty": "0"}])}),
     _tamper("shelf: one product over maxPicks", 1,
             {("QSHELF", "", 0): envelope(SHELF_ROWS + [{"product": "S2", "qty": "1"}])}),
+    # 文字点睛（R02-22）：片段列是枚举＋唯一，标记列是枚举。片段代码里带着偏移
+    # 与那一段原文的指纹，所以「偏移对、原文换了一版」也进不来。
+    _tamper("text highlight: a span nobody declared", 1,
+            {("QMARK", "", 0): envelope([{"segment": "s2_3_000000", "tag": "like"}])}),
+    _tamper("text highlight: the right offset but a stale source-text fingerprint", 1,
+            {("QMARK", "", 0): envelope([{"segment": "s0_4_000000", "tag": "like"}])}),
+    _tamper("text highlight: the same span marked twice", 1,
+            {("QMARK", "", 0): envelope([{"segment": MARK_SEGMENTS[0], "tag": "like"},
+                                         {"segment": MARK_SEGMENTS[0], "tag": "dislike"}])}),
+    _tamper("text highlight: a tag nobody declared", 1,
+            {("QMARK", "", 0): envelope([{"segment": MARK_SEGMENTS[0], "tag": "hate"}])}),
+    _tamper("text highlight: the tag left empty", 1,
+            {("QMARK", "", 0): envelope([{"segment": MARK_SEGMENTS[0], "tag": ""}])}),
+    _tamper("text highlight: one mark over maxMarks", 1,
+            {("QMARK", "", 0): envelope(MARK_ROWS + [{"segment": MARK_SEGMENTS[1], "tag": "like"}])}),
+    _tamper("text highlight: a free-form offset column smuggled in", 1,
+            {("QMARK", "", 0): envelope([{"segment": MARK_SEGMENTS[0], "tag": "like", "start": "0"}])}),
     # 影子字段：浏览器端算出的相关性全写 1，服务端照样重算。
     _tamper("repeating table: bad payload with every relevance* shadow forced to 1", 1,
             {("QTABLE", "", 0): envelope([{"item": "米", "qty": "0"}])}, shadow="all-relevant"),

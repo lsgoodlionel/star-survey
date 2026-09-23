@@ -139,8 +139,25 @@ def shelf(**options):
     return question("T", code="QSHELF", theme="mjy-shelf", themeOptions=payload)
 
 
+# ------------------------------------------------------------------ 切片 02.5 的三类
+
+
+#: 原文（R02-22）。段落偏移按**字符**计，与下面的 segments 一一对应。
+HIGHLIGHT_TEXT = "苹果很甜，香蕉太软，梨子刚好。"
+#: 「苹果很甜」「香蕉太软」「梨子刚好」：互不重叠、按偏移升序。
+HIGHLIGHT_SEGMENTS = [{"start": 0, "length": 4}, {"start": 5, "length": 4}, {"start": 10, "length": 4}]
+HIGHLIGHT_TAGS = [{"code": "like", "label": "喜欢"}, {"code": "dislike", "label": "不喜欢"}]
+
+
+def text_highlight(**options):
+    payload = {"structureVersion": "th1", "text": HIGHLIGHT_TEXT,
+               "segments": HIGHLIGHT_SEGMENTS, "tags": HIGHLIGHT_TAGS, "maxMarks": 3}
+    payload.update(options)
+    return question("T", code="QMARK", theme="mjy-text-highlight", themeOptions=payload)
+
+
 ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap(),
-              loop_rating(), image_pk(), shelf())
+              loop_rating(), image_pk(), shelf(), text_highlight())
 
 
 # ------------------------------------------------------------------ 注册表

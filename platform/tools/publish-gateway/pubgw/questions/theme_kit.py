@@ -54,6 +54,9 @@ PK_PAIRS_ATTRIBUTE = "mjy_pk_pairs"
 #: 货架题（R02-18）：货架图与商品热区，主题据此在图上画可点区域。
 SHELF_IMAGE_ATTRIBUTE = "mjy_shelf_image"
 SHELF_PRODUCTS_ATTRIBUTE = "mjy_shelf_products"
+#: 文字点睛（R02-22）：原文与可标记的片段（偏移＋长度），主题据此把原文切成可点的片段。
+HIGHLIGHT_TEXT_ATTRIBUTE = "mjy_highlight_text"
+HIGHLIGHT_SEGMENTS_ATTRIBUTE = "mjy_highlight_segments"
 
 #: 题型字母 → 引擎存放该题型视图的目录名（``QuestionTemplate::getFolderName``）。
 #: 主题必须在 ``themes/question/<名字>/survey/questions/answer/<这里的值>/`` 下放 config.xml

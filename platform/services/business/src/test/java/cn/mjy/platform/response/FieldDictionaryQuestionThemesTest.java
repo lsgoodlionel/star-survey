@@ -31,6 +31,7 @@ class FieldDictionaryQuestionThemesTest {
     private static final UUID LOOP = UUID.fromString("45454545-0008-4111-8111-000000000008");
     private static final UUID PK = UUID.fromString("45454545-0009-4111-8111-000000000009");
     private static final UUID SHELF = UUID.fromString("45454545-0010-4111-8111-000000000010");
+    private static final UUID MARK = UUID.fromString("45454545-0011-4111-8111-000000000011");
 
     private final JsonMapper json = JsonMapper.builder().build();
 
@@ -68,7 +69,12 @@ class FieldDictionaryQuestionThemesTest {
               {"uuid":"45454545-0010-4111-8111-000000000010","code":"QSHELF","type":"T","text":"从货架上取货",
                "theme":"mjy-shelf",
                "themeOptions":{"structureVersion":"sh1","image":"shelf.png",
-                               "products":[{"code":"S1","label":"牛奶","x":0.1,"y":0.2,"w":0.2,"h":0.3}]}}
+                               "products":[{"code":"S1","label":"牛奶","x":0.1,"y":0.2,"w":0.2,"h":0.3}]}},
+              {"uuid":"45454545-0011-4111-8111-000000000011","code":"QMARK","type":"T","text":"在原文上标记",
+               "theme":"mjy-text-highlight",
+               "themeOptions":{"structureVersion":"th1","text":"苹果很甜。",
+                               "segments":[{"start":0,"length":4}],
+                               "tags":[{"code":"like","label":"喜欢"}]}}
             ]}]}
             """);
 
@@ -85,7 +91,8 @@ class FieldDictionaryQuestionThemesTest {
             new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_other", "other", 0),
             new QuestionFieldView(LOOP, "QLOOP", "T", "Q8", "", 0),
             new QuestionFieldView(PK, "QPK", "T", "Q9", "", 0),
-            new QuestionFieldView(SHELF, "QSHELF", "T", "Q10", "", 0));
+            new QuestionFieldView(SHELF, "QSHELF", "T", "Q10", "", 0),
+            new QuestionFieldView(MARK, "QMARK", "T", "Q11", "", 0));
 
     private FieldDictionary.FieldEntry field(String fieldname) {
         return FieldDictionaryBuilder.fields(definition, binding).stream()
@@ -111,6 +118,9 @@ class FieldDictionaryQuestionThemesTest {
         // R02-18 货架题：取了什么、取了几件都在副表里。
         assertThat(field("Q10").label()).isEqualTo("从货架上取货 [结构化作答]");
         assertThat(field("Q10").options()).isEmpty();
+        // R02-22 文字点睛：标了哪几段、各标成什么都在副表里。
+        assertThat(field("Q11").label()).isEqualTo("在原文上标记 [结构化作答]");
+        assertThat(field("Q11").options()).isEmpty();
     }
 
     @Test

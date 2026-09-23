@@ -1,0 +1,41 @@
+{#
+/**
+ * MJY 文字点睛：在原文上点选平台声明过的片段并给一个标记；整题序列化成 JSON 信封。
+ *
+ * 真正被提交的永远是下面那个 textarea（name = 引擎字段名），点选界面只是它的编辑器。
+ * 关掉 JavaScript 时 textarea 直接可见，作答者仍能提交合法的 JSON —— 服务端校验
+ * （MjyQuestionExtensions::beforeSurveyPage）对两条路径一视同仁。
+ *
+ * 原文放在 data- 属性里而不是直接写进正文：脚本要按偏移把它切成可点的片段，
+ * 切之前先经 escape('html_attr')，正文里出现 < 与 & 也不会变成标签。
+ *
+ * @var name  引擎字段名（Q<qid>）
+ * @var dispVal  已存的 JSON 信封
+ * @var question_template_attribute  mjy_highlight_text / mjy_highlight_segments / 列定义 / min / max
+ */
+#}
+<!-- MJY text highlight -->
+<div class="{{ coreClass }} {{ extraclass }} mjy-text-highlight"
+     data-mjy-text-highlight="1"
+     data-mjy-field="{{ name }}"
+     {# 只能用沙箱白名单里的过滤器，别名 e 不在其中（application/config/internal.php:331） #}
+     data-mjy-text="{{ question_template_attribute.mjy_highlight_text|escape('html_attr') }}"
+     data-mjy-segments="{{ question_template_attribute.mjy_highlight_segments|escape('html_attr') }}"
+     data-mjy-columns="{{ question_template_attribute.mjy_table_columns|escape('html_attr') }}"
+     data-mjy-min-rows="{{ question_template_attribute.mjy_table_min_rows|default(0) }}"
+     data-mjy-max-rows="{{ question_template_attribute.mjy_table_max_rows|default(10) }}">
+
+    <div class="mjy-text-highlight__editor" hidden>
+        <p class="mjy-text-highlight__passage"></p>
+        <ul class="mjy-text-highlight__marks list-unstyled"></ul>
+    </div>
+
+    <textarea
+        class="form-control mjy-text-highlight__raw"
+        name="{{ name }}"
+        id="answer{{ name }}"
+        rows="{{ drows }}"
+        aria-labelledby="ls-question-text-{{ basename }}"
+    >{{ dispVal }}</textarea>
+</div>
+<!-- end of answer -->

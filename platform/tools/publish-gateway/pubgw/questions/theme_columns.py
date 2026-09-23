@@ -152,9 +152,24 @@ def _parse_columns(raw_columns: Any) -> List[Dict[str, Any]]:
 
 
 def _check_rows(values: Dict[str, Any]) -> List[Issue]:
-    least, most = values.get("minRows", 0), values.get("maxRows", 0)
+    return bounded_rows_issues(values, "minRows", "maxRows")
+
+
+def bounded_rows_issues(values: Dict[str, Any], least_name: str, most_name: str,
+                        choices: Optional[int] = None, noun: str = "") -> List[Issue]:
+    """行数上下限：次序要对，且**唯一列**的题目还不能要求超过取值个数的行数。
+
+    唯一列的一个取值最多占一行，要求的行数多过取值个数，作答者永远交不了卷——
+    这种题不该发得出去。货架题（取货件数 vs 商品数）与文字点睛（标记处数 vs 片段数）
+    的规则逐字相同，所以放在这里，不在各自的主题里各写一遍。
+    """
+    least, most = values.get(least_name, 0), values.get(most_name, 0)
     if least > most:
-        return [(OPTION_VALUE, "themeOptions.minRows", "minRows 不能大于 maxRows")]
+        return [(OPTION_VALUE, "themeOptions." + least_name,
+                 "{} 不能大于 {}".format(least_name, most_name))]
+    if choices is not None and least > choices:
+        return [(OPTION_VALUE, "themeOptions." + least_name,
+                 "{} 超过了{} {}".format(least_name, noun, choices))]
     return []
 
 
