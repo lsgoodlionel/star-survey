@@ -18,6 +18,7 @@ from .binding import BindingRecord
 from .compiler import CompiledSurvey, CompileError, LssCompiler
 from .fieldmap import FINGERPRINT_VERSION, parse_fieldmap
 from .invitations import InvitationError, collect
+from .logic.scoring import expand_scoring
 from .model import SurveyDefinition
 from .policy.probe import PolicyProbe, enforcement_failures
 from .rpc import RemoteControlClient, RpcError
@@ -101,6 +102,10 @@ class Publisher:
         compiled = self._stage_validate_and_compile(definition, result)
         if compiled is None:
             return result
+        # 计分表在校验阶段已经查过（check_scoring）。从这里起一律用展开后的定义：
+        # 编译进 LSS 的是展开后的题，回读校验、字段映射、主题检查也必须按它来对，
+        # 否则引擎里的分数题会被当成「定义里没有的代码」。
+        definition = expand_scoring(definition)
 
         try:
             survey_id = self._client.import_survey(compiled.lss, definition.title)
