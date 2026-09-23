@@ -20,6 +20,7 @@ PLATFORM_DB_NAME=<你的库名> platform/deploy/platform-dev/mvn.sh test
 | `cn.mjy.platform.survey` | 问卷草稿、发布状态机、发布审批、待核对核对、版本与题目绑定 | V500–V599（V500–V509 发布，V510–V519 审批，V520–V529 核对，V530–V539 重新发布与漂移，V540–V559 模板库） |
 | `cn.mjy.platform.survey.template` | 企业模板库：租户私有模板与平台（运营）模板、版本、审核、复制、下架 | V540–V559（V540 租户模板，V541 平台模板） |
 | `cn.mjy.platform.response` | 答卷查询（投影分页、按需经网关取作答、字段字典、数据权限）、导出作业（ADR 0015） | V600–V609（V600 导出作业与快照） |
+| `cn.mjy.platform.delivery` | 投放触达（链接／二维码／短链／内嵌、签名渠道参数、短信邮件批量任务、回执与退订、催答与新答卷通知） | V700–V799（V700 链接与短链，V710 任务与收件人，V720 回执与退订，V730 催答与通知） |
 | `cn.mjy.platform.contacts` | 通讯录：三类身份的联系人与显式关联、名单与导入作业、部门树与标签、部门级数据范围、参与者令牌映射（ADR 0017） | V800–V899（V800 目录，V801 部门范围，V802 导入作业，V803 参与者映射） |
 | `cn.mjy.platform.audit` | 审计日志 | V1–V99（随 shared） |
 

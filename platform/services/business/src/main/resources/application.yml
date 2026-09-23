@@ -79,6 +79,26 @@ platform:
       initial-delay: PT2M
       recheck-after: ${PLATFORM_SURVEY_DRIFT_CHECK_RECHECK_AFTER:PT6H}
       batch-size: ${PLATFORM_SURVEY_DRIFT_CHECK_BATCH_SIZE:100}
+  # 投放触达（WP-05）。默认**不启用**定时发送：没有真实渠道商凭据时不该有后台线程在发东西，
+  # 接入渠道商（实现 DeliveryProvider 并注册为 bean）后把 enabled 打开即可，其余代码不改。
+  # 链接签名、退订令牌、回执验签的密钥都从 PLATFORM_DELIVERY_SECRET（至少 32 字节）按用途与租户派生；
+  # 缺失时应用照常启动，但建链接、发任务、验回执一律 503（失败即关闭）。
+  delivery:
+    enabled: ${PLATFORM_DELIVERY_ENABLED:false}
+    interval: ${PLATFORM_DELIVERY_INTERVAL:PT10S}
+    initial-delay: PT30S
+    batch-size: ${PLATFORM_DELIVERY_BATCH_SIZE:200}
+    # 每租户每窗口的发送上限；窗口边界处可能出现两倍瞬时速率，够用来"别把渠道商打爆"。
+    rate-per-window: ${PLATFORM_DELIVERY_RATE_PER_WINDOW:100}
+    rate-window: ${PLATFORM_DELIVERY_RATE_WINDOW:PT1M}
+    max-attempts: ${PLATFORM_DELIVERY_MAX_ATTEMPTS:3}
+    # 认领之后多久没有结果才重新认领。必须明显长于渠道商调用的超时，
+    # 否则多副本会对同一个收件人同时发送——那已经不是"崩溃后恢复"，是每次正常发送都可能重复投递。
+    send-lease: ${PLATFORM_DELIVERY_SEND_LEASE:PT5M}
+    backoff: PT1M
+    link-ttl: ${PLATFORM_DELIVERY_LINK_TTL:P30D}
+    # 短链 /d/s/{code}、退订 /d/u/{token}、回执 /d/receipts/{租户}/{渠道商} 都挂在它下面。
+    public-base-url: ${PLATFORM_PUBLIC_BASE_URL:}
   # 答卷导出作业（ADR 0015）。文件先落本地目录（多副本需共享卷，生产换对象存储实现），到期即删。
   response:
     export:
