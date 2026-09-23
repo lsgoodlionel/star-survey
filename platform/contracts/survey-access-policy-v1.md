@@ -68,3 +68,9 @@ WP-04 切片 04.1／04.2。设计与取舍见 [ADR 0016](../docs/adr/0016-access
 
 `POST /v1/publish` 成功且带插件策略时，`result` 多一个键 `policyDigest`（64 位十六进制）；
 没有插件策略时应答与契约 v1 完全一致。
+
+**平台必须核对这个键**（ADR 0016 决定 5）：把自己发出去的那份策略按 §4 重新编译、算 SHA-256，
+与回执逐字比对。定义需要插件却没有摘要、摘要不一致、或定义不需要插件却带了摘要，都判发布失败
+（不登记路由、不写已发布版本）。旧网关会忽略不认识的 `policy` 块，这一条正是为了挡住它。
+两端的规范化规则由同一张向量表钉住：`platform/services/business/src/test/resources/policy/digest-vectors.json`，
+网关 `tests/test_policy_digest_vectors.py` 与平台 `AccessPolicyDigestTest` 各读一次。

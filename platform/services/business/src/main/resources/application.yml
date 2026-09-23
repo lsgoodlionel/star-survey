@@ -38,6 +38,17 @@ platform:
     org-events:
       max-body-bytes: ${PLATFORM_ORG_EVENTS_MAX_BODY_BYTES:65536}
       max-clock-skew: ${PLATFORM_ORG_EVENTS_MAX_CLOCK_SKEW:PT5M}
+    # 匿名端点（事件回调、免登 start / callback）的进程内限流：在验签与读请求体之前判定，超限即 429。
+    # 两层桶都按来源地址分，因此一个来源的噪声挤不掉另一个来源的额度；验签通过的回调把令牌退回
+    # 未验签的桶，改记在「已验签」额度上，攻击者锁不死租户的真实回调。来源地址取直连对端，
+    # 不认 X-Forwarded-For：部署在反向代理后面时须由代理或入口层提供真实地址。
+    rate-limit:
+      enabled: ${PLATFORM_ORG_RATE_LIMIT_ENABLED:true}
+      per-connection-per-minute: ${PLATFORM_ORG_RATE_LIMIT_PER_CONNECTION:60}
+      per-source-per-minute: ${PLATFORM_ORG_RATE_LIMIT_PER_SOURCE:300}
+      verified-per-connection-per-minute: ${PLATFORM_ORG_RATE_LIMIT_VERIFIED:600}
+      max-buckets: ${PLATFORM_ORG_RATE_LIMIT_MAX_BUCKETS:20000}
+      retry-after-seconds: ${PLATFORM_ORG_RATE_LIMIT_RETRY_AFTER:60}
     # 定时全量组织同步：默认关闭。只在开放平台明确答复"离职 / 禁用 / 不存在"时撤权。
     org-sync:
       enabled: ${PLATFORM_ORG_SYNC_ENABLED:false}

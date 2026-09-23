@@ -174,8 +174,24 @@ public class FakePublishGateway implements PublishGatewayClient {
         return result;
     }
 
+    /** 当前网关：带插件策略的定义，回执里带上编译出来的 policyDigest。 */
     public GatewayOutcome success(GatewayRequest request) {
         JsonNode definition = json.readTree(request.definitionJson());
+        return published(request, definition,
+                AccessPolicyDigest.expected(definition).orElse(null));
+    }
+
+    /** 老网关：不认识 policy 块，回执里没有 policyDigest。 */
+    public GatewayOutcome publishedWithoutPolicyDigest(GatewayRequest request) {
+        return published(request, json.readTree(request.definitionJson()), null);
+    }
+
+    /** 回执里带上指定的 policyDigest（用来模拟摘要对不上的网关）。 */
+    public GatewayOutcome publishedWithPolicyDigest(GatewayRequest request, String digest) {
+        return published(request, json.readTree(request.definitionJson()), digest);
+    }
+
+    private GatewayOutcome published(GatewayRequest request, JsonNode definition, String policyDigest) {
         int sid = NEXT_SID.incrementAndGet();
         List<GatewayBinding.QuestionBinding> questions = new ArrayList<>();
         int column = 100;
@@ -184,27 +200,43 @@ public class FakePublishGateway implements PublishGatewayClient {
                 String field = "Q" + (column++);
                 questions.add(new GatewayBinding.QuestionBinding(
                         question.get("uuid").asString(), question.get("code").asString(),
-                        question.get("type").asString(),
-                        List.of(new GatewayBinding.FieldBinding(field, "", 0))));
+                        question.get("type").asString(), fields(question, field)));
             }
         }
         GatewayBinding binding = new GatewayBinding(request.engineInstanceId(), sid,
                 definition.get("uuid").asString(), COMPILER_VERSION, "fm1", FINGERPRINT,
                 definition.get("language").asString(), "2026-09-22T08:00:00Z", questions);
         return new GatewayOutcome.Published(
-                new GatewayResult(true, sid, null, List.of(), false, null, binding));
+                new GatewayResult(true, sid, null, List.of(), false, null, binding, policyDigest));
+    }
+
+    /**
+     * 每道题一列，排序题（{@code R}）除外：它像真网关那样多出「名次」虚列
+     * （JSON 主列 ＋ aid 为 1…n 的名次列，见 {@code pubgw/qtypes.py} 的 _ranking_rows）。
+     */
+    private static List<GatewayBinding.FieldBinding> fields(JsonNode question, String field) {
+        List<GatewayBinding.FieldBinding> fields = new ArrayList<>();
+        fields.add(new GatewayBinding.FieldBinding(field, "", 0));
+        if ("R".equals(question.get("type").asString())) {
+            int rank = 0;
+            for (JsonNode ignored : question.path("subquestions")) {
+                rank++;
+                fields.add(new GatewayBinding.FieldBinding(field + "_S" + rank, Integer.toString(rank), 0));
+            }
+        }
+        return List.copyOf(fields);
     }
 
     public static GatewayOutcome rejected(String... failures) {
         return new GatewayOutcome.Failed(422,
-                new GatewayResult(false, null, "validate", List.of(failures), false, null, null));
+                new GatewayResult(false, null, "validate", List.of(failures), false, null, null, null));
     }
 
     public static GatewayOutcome engineFailed(int orphanSid, String... failures) {
         Integer orphan = orphanSid > 0 ? orphanSid : null;
         return new GatewayOutcome.Failed(502,
                 new GatewayResult(false, orphanSid > 0 ? orphanSid : 1234, "activate", List.of(failures),
-                        orphan == null, orphan, null));
+                        orphan == null, orphan, null, null));
     }
 
     private UUID surveyOf(GatewayRequest request) {

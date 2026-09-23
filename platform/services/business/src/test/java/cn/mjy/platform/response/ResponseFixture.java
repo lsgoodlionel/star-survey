@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
@@ -74,10 +75,26 @@ public class ResponseFixture {
     }
 
     public Published publishedSurvey() {
+        return publishedSurvey(sensitiveDefinition());
+    }
+
+    public Published publishedSurvey(ObjectNode definition) {
         Workspace ws = surveys.workspace();
-        UUID id = surveyService.create(ws.owner(), ws.project(), sensitiveDefinition()).id();
+        UUID id = surveyService.create(ws.owner(), ws.project(), definition).id();
         PublishedVersionView v1 = publisher.publish(ws.owner(), id).version();
         return new Published(ws, id, v1);
+    }
+
+    /** 样例定义再加一道三项排序题（网关替身给它 JSON 主列 ＋ 三条名次虚列）。 */
+    public ObjectNode rankingDefinition() {
+        ObjectNode definition = surveys.definition();
+        ArrayNode questions = (ArrayNode) definition.get("groups").get(0).get("questions");
+        questions.add(json.readTree("""
+                {"uuid":"33333333-0010-4111-8111-000000000010","code":"QRANK","type":"R","text":"排序",
+                 "subquestions":[{"code":"I1","text":"价格"},{"code":"I2","text":"品牌"},
+                                 {"code":"I3","text":"口碑"}]}
+                """));
+        return definition;
     }
 
     public ObjectNode sensitiveDefinition() {

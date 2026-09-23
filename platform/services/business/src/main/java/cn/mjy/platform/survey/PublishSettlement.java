@@ -11,6 +11,7 @@ import cn.mjy.platform.tenant.api.ConflictException;
 import cn.mjy.platform.tenant.api.NotFoundException;
 import cn.mjy.platform.tenant.routing.SurveyRouteService;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +26,8 @@ import org.springframework.stereotype.Component;
  *       旧版本记入待收口——仍是同一事务，所以路由要么还指向旧版、要么已指向完整落库的新版。
  *       绑定与请求对不上、或路由登记 / 切换失败时，整笔回滚并转为待核对（绝不留下"有版本没路由"的半成品，
  *       旧版照旧在线）；事务提交之后才收口旧的引擎问卷（{@link SupersededVersionCloser}），收口失败不影响结论；</li>
+ *   <li>成功但网关没按访问策略办事（回执缺 {@code policyDigest} 或摘要对不上，见
+ *       {@link #requireEnforcedPolicy}）：按失败处理——不登记路由、不写版本，引擎里那份按孤儿记录；</li>
  *   <li>失败（422/502）与拒收（400/401/404）：记录失败阶段与原因，问卷回到可再次发布，不登记路由；
  *       网关报告孤儿问卷时大声记日志并存档；</li>
  *   <li>未知：待核对，下次发布用同一 requestId 重试。</li>
@@ -34,6 +37,8 @@ import org.springframework.stereotype.Component;
 class PublishSettlement {
 
     static final String GATEWAY_STAGE = "gateway";
+    /** 收尾阶段判定"网关没按策略办事"时记录的阶段名（网关自己的阶段名见契约 v1）。 */
+    static final String POLICY_STAGE = "policy";
 
     private static final Logger log = LoggerFactory.getLogger(PublishSettlement.class);
 
@@ -72,6 +77,20 @@ class PublishSettlement {
         }
     }
 
+    /**
+     * 网关没有按平台发去的访问策略办事（回执没有 policyDigest、或摘要对不上）：
+     * 引擎里那份问卷不能当作已发布，否则问卷看着受保护、实际毫不设防（ADR 0016）。
+     */
+    private static final class UnenforcedPolicyException extends RuntimeException {
+
+        private final Integer engineSurveyId;
+
+        UnenforcedPolicyException(String message, Integer engineSurveyId) {
+            super(message);
+            this.engineSurveyId = engineSurveyId;
+        }
+    }
+
     PublishOutcome settle(TenantContext ctx, Ticket ticket, GatewayOutcome outcome) {
         PublishOutcome settled = settleOrPend(ctx, ticket, outcome);
         if (settled.survey().status() == SurveyStatus.PUBLISHED) {
@@ -83,6 +102,14 @@ class PublishSettlement {
     private PublishOutcome settleOrPend(TenantContext ctx, Ticket ticket, GatewayOutcome outcome) {
         try {
             return tenantScope.call(ctx.tenantId(), () -> settleLocked(ctx, ticket, outcome));
+        } catch (UnenforcedPolicyException e) {
+            // 不是"结果未知"：重发只会再得到同一份不设防的问卷，所以直接判失败，不登记路由、不写版本。
+            log.error("survey {} (request {}) came back published but the gateway did not report the access "
+                    + "policy the platform sent: {}; publish failed", ticket.surveyId(), ticket.requestId(),
+                    e.getMessage());
+            GatewayOutcome refused = new GatewayOutcome.Failed(200, new GatewayResult(
+                    false, null, POLICY_STAGE, List.of(e.getMessage()), false, e.engineSurveyId, null, null));
+            return tenantScope.call(ctx.tenantId(), () -> settleLocked(ctx, ticket, refused));
         } catch (UnrecordablePublishException e) {
             log.error("survey {} was published by the gateway (request {}) but could not be recorded: {}; "
                     + "marked pending_reconciliation", ticket.surveyId(), ticket.requestId(), e.getMessage());
@@ -109,6 +136,7 @@ class PublishSettlement {
     }
 
     private PublishOutcome recordPublished(TenantContext ctx, Ticket ticket, GatewayResult result, SurveyRow row) {
+        requireEnforcedPolicy(ticket, result);
         GatewayBinding binding = requireMatchingBinding(ticket, result.binding());
         int versionNo = versions.insert(ctx.tenantId(), ticket.surveyId(), ticket.requestId(), ticket.draftVersion(),
                 ticket.definition(), binding, ctx.actorId());
@@ -154,6 +182,39 @@ class PublishSettlement {
                 live.engineSid());
         audit.record(ctx, SurveyAudit.ROUTE_SWITCH, ticket.surveyId(), "from=" + liveVersion + " sid="
                 + live.engineSid() + " to=" + newVersion + " sid=" + binding.surveyId());
+    }
+
+    /**
+     * 网关必须证明访问策略确实到了引擎插件（ADR 0016）：平台把自己发出去的那份策略重新编译一遍摘要，
+     * 和回执里的 {@code policyDigest} 逐字比对。缺摘要、摘要不符、或平台算不出摘要，都判发布失败——
+     * 老网关会忽略不认识的顶层键，不核对就等于让"看着受保护、实际毫不设防"的问卷上线。
+     * 定义本来就不需要插件（无策略，或只有验证码／邀请码这类引擎自己执行的规则）时不该有摘要，多出来也不收。
+     */
+    private static void requireEnforcedPolicy(Ticket ticket, GatewayResult result) {
+        Integer sid = result.surveyId();
+        Optional<String> expected;
+        try {
+            expected = AccessPolicyDigest.expected(ticket.definition());
+        } catch (RuntimeException e) {
+            throw new UnenforcedPolicyException(
+                    "the platform cannot recompute the expected policyDigest: " + e.getMessage(), sid);
+        }
+        String reported = result.policyDigest();
+        if (expected.isEmpty()) {
+            if (reported != null) {
+                throw new UnenforcedPolicyException(
+                        "the gateway reported a policyDigest for a definition that carries no plugin policy", sid);
+            }
+            return;
+        }
+        if (reported == null) {
+            throw new UnenforcedPolicyException("the gateway returned no policyDigest for a definition that "
+                    + "carries an access policy; it may be an old gateway that dropped the policy", sid);
+        }
+        if (!expected.get().equalsIgnoreCase(reported)) {
+            throw new UnenforcedPolicyException(
+                    "policyDigest mismatch: the gateway enforced a different access policy", sid);
+        }
     }
 
     /** 绑定必须对应本次请求：同一实例、同一定义 UUID、有效 sid、题目 UUID 合法。 */

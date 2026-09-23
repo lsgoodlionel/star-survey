@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from publish_gateway import ADMIN_PASSWORD, ADMIN_USER, Database, DockerCurlTransport  # noqa: E402
 from pubgw.model import SurveyDefinition  # noqa: E402
+from pubgw.policy.compile import compile_policy  # noqa: E402
 from pubgw.policy.password import hash_password  # noqa: E402
 from pubgw.policy.probe import HttpPolicyProbe  # noqa: E402
 from pubgw.policy.timewindow import load_zone  # noqa: E402
@@ -122,6 +123,13 @@ def publish_ok(context: Context, payload: Dict[str, Any]) -> int:
                                                                    result["failures"]))
     print("published {} as sid {} (policy {})".format(payload["title"], result["surveyId"],
                                                      result.get("policyDigest")), file=sys.stderr)
+    # 平台在发布收尾时自己重算一遍这个摘要再比对（ADR 0016）：回执里的摘要必须正是编译出来的那一个，
+    # 否则平台会判发布失败。跨语言的一致性另由 digest-vectors.json 钉住（网关与平台各读一次）。
+    compiled = compile_policy(SurveyDefinition.from_dict(payload))
+    expected = None if compiled is None else compiled.digest
+    context.check("回执的 policyDigest 就是编译出来的摘要",
+                  result.get("policyDigest") == expected,
+                  {"reported": result.get("policyDigest"), "expected": expected})
     return result["surveyId"]
 
 

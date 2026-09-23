@@ -26,6 +26,10 @@
 - `responseIds`：1–500 个互不相同的正整数。
 - `fields`：1–5000 个互不相同的引擎答卷列名（`[A-Za-z0-9_#]{1,64}`），不得包含 `id`。
 
+**排序题（`R`）的名次列**在引擎答卷表里没有物理列，值由网关解析主列 JSON 得到（`pubgw/ranking.py`）：
+名次列 *n* 的值是排在第 *n* 位的项代码，没排到的位置是空串 `""`，整题不适用时（未到达、被条件隐藏）仍为 `null`。
+平台照常按列名请求，不必知道哪些列是名次列；网关为此每份问卷读一次 `get_fieldmap`（按 `(实例, sid)` 缓存）。
+
 网关按答卷号升序切成间距 < 200 的区间，逐段调用 RemoteControl
 `export_responses(sid, "json", 默认语言, "all", "code", "short", 区间下界, 区间上界, ["id", ...fields])`，
 按请求列的顺序做位置对应（列数不符即判引擎应答不可信）。
@@ -53,6 +57,8 @@
 
 ## 验证
 
-- 网关单测：`platform/tools/publish-gateway/tests/test_responses.py`（假引擎按 7.1.2 导出形状作答）。
-- 真引擎：`TEST_DB=mysql|pgsql platform/deploy/test/run-response-read.sh`（多列题、"其他"、评论、双尺度逐列核对）。
+- 网关单测：`platform/tools/publish-gateway/tests/test_responses.py`（假引擎按 7.1.2 导出形状作答）、
+  `tests/test_ranking.py`（名次解析、投影与列结构缓存）。
+- 真引擎：`TEST_DB=mysql|pgsql platform/deploy/test/run-response-read.sh`（多列题、"其他"、评论、双尺度逐列核对）；
+  排序题的名次在 `run-question-types.sh` 场景 D2（HTTP 真实作答后逐名次核对）。
 - 平台：`HttpResponseAnswerSourceTest`（签名逐字节、应答解析、失败即关闭）。
