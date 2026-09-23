@@ -148,6 +148,32 @@ class MjyExtensionAnswerEndpointTest extends TestBaseClass
         $this->assertStringContainsString('"answers":{}', $response->body());
     }
 
+    /**
+     * 读取路径对列类型是**不可知**的：它只按 column_code 取 cell_value，
+     * 不解释列定义。切片新增的 enum＋distinct 约束属于写入侧（校验器），
+     * 这条用例走真正的校验器产出行，再经端点读回来，把这个接缝钉住。
+     */
+    public function testRowsFromEnumAndDistinctColumnsRoundTrip(): void
+    {
+        $spec = \MjyTableColumnSpec::fromJson(
+            '[{"code":"tag","type":"enum","options":[{"code":"a"},{"code":"b"}],"distinct":true},'
+            . '{"code":"note","type":"text"}]'
+        );
+        $result = (new \MjyRepeatingTableValidator($spec, 1, 5))->validate(
+            '{"v":1,"rows":[{"tag":"a","note":"甲"},{"tag":"b","note":"乙"}]}'
+        );
+        $this->assertTrue($result->isValid(), '校验器应当接受这份作答：' . $result->errorText());
+        self::$store->recordAnswer(
+            self::SURVEY_ID, self::GENERATION, 7, self::QUESTION_CODE, self::STRUCTURE, $result);
+
+        $body = $this->decode($this->endpoint()->handle($this->signed($this->params()), self::NOW));
+
+        $this->assertSame(
+            [['tag' => 'a', 'note' => '甲'], ['tag' => 'b', 'note' => '乙']],
+            $body['answers'][7][self::QUESTION_CODE]['rows']
+        );
+    }
+
     public function testAnEmptyResultIsNotAnError(): void
     {
         $response = $this->endpoint()->handle($this->signed($this->params()), self::NOW);

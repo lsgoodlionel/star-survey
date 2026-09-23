@@ -13,6 +13,7 @@ from pubgw.channel import ChannelError
 from pubgw.engines import EngineConfig
 from pubgw.responses import ResponseReadService
 from tests.gateway_support import ENGINE_PASSWORD, INSTANCE, NOW, SECRET, signed_headers
+from tests.test_respondent import PropertiesEngine
 from tests.test_responses import FakeExportEngine
 
 CHANNEL_SECRET = "204745a72bcb796d18bf2df097af7efea324f61077971e41b50189196036ff31"
@@ -130,6 +131,80 @@ class ExtensionAnswersTest(ExtensionReadTestCase):
 
         self.assertEqual(400, status)
         self.assertEqual([], self.channel.calls)
+
+
+class CrossLaneTest(ExtensionReadTestCase):
+    """两条车道在同一个端点上的真实交叉：邀请码回读（ADR 0016 缺口 b）与扩展表作答（ADR 0018）。
+
+    两组可选字段互相正交，同时出现时各自照常给出，谁也不吞掉谁。
+    """
+
+    def engine_with_token(self):
+        # 复用邀请码车道自己的假引擎：它会应答 get_survey_properties 的匿名判定。
+        return PropertiesEngine(
+            rows={1: {"Q1": "a", "token": "tok-1"}, 2: {"Q1": "b", "token": "tok-2"}},
+            codes={"Q1": "Q1", "token": "token"},
+            anonymized="N")
+
+    def test_tokens_and_extension_answers_both_come_back(self):
+        channel = FakeChannel({1: {"TABLE1": _answer([{"item": "甲"}])}})
+        service = self.service(engine=self.engine_with_token(), channel=channel)
+
+        status, payload = self.read(service, body(
+            includeRespondent=True, generation=GENERATION, extensionQuestions=["TABLE1"]))
+
+        self.assertEqual(200, status)
+        self.assertEqual("tok-1", payload["responses"][0]["token"])
+        self.assertEqual([{"item": "甲"}], payload["extensionAnswers"]["1"]["TABLE1"]["rows"])
+
+    def test_the_channel_is_still_asked_for_the_same_page(self):
+        service = self.service(engine=self.engine_with_token())
+
+        self.read(service, body(includeRespondent=True, generation=GENERATION,
+                                extensionQuestions=["TABLE1"]))
+
+        self.assertEqual([(SURVEY_ID, GENERATION, (1, 2), ("TABLE1",))], self.channel.calls)
+
+    def test_extension_answers_alone_still_omit_the_token_key(self):
+        # 没要邀请码就一个 token 键都不该多出来（该车道的既有约定）。
+        service = self.service(engine=self.engine_with_token())
+
+        _, payload = self.read(service, body(generation=GENERATION, extensionQuestions=["TABLE1"]))
+
+        self.assertNotIn("token", payload["responses"][0])
+
+    def test_a_channel_failure_fails_the_page_even_when_tokens_were_asked_for(self):
+        # 失败关闭优先于「至少把令牌给出去」：半份应答比没有应答更危险。
+        service = self.service(engine=self.engine_with_token(),
+                               channel=FakeChannel(error=ChannelError("unreachable")))
+
+        status, payload = self.read(service, body(
+            includeRespondent=True, generation=GENERATION, extensionQuestions=["TABLE1"]))
+
+        self.assertEqual(502, status)
+        self.assertNotIn("responses", payload)
+
+    def test_the_token_column_is_still_refused_as_a_plain_field(self):
+        # 另一条车道修掉过的匿名判定绕过：token 只能经 includeRespondent 拿。
+        # 加了扩展表字段也不能把这条放松掉。
+        service = self.service(engine=self.engine_with_token())
+        request_body = body(fields=["Q1", "token"], generation=GENERATION,
+                            extensionQuestions=["TABLE1"])
+
+        status, payload = self.read(service, request_body)
+
+        self.assertEqual(400, status)
+        self.assertEqual({"error": "invalid_request"}, payload)
+
+    def test_fields_may_be_empty_when_only_extension_answers_are_wanted(self):
+        channel = FakeChannel({1: {"TABLE1": _answer([{"item": "甲"}])}})
+        service = self.service(channel=channel)
+
+        status, payload = self.read(service, body(
+            fields=[], generation=GENERATION, extensionQuestions=["TABLE1"]))
+
+        self.assertEqual(200, status)
+        self.assertEqual([{"item": "甲"}], payload["extensionAnswers"]["1"]["TABLE1"]["rows"])
 
 
 class FailClosedTest(ExtensionReadTestCase):
