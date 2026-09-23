@@ -170,6 +170,9 @@ def scenario_values(run: Run, response_id: str) -> None:
         run.check("B: {}[{}#{}] stored {!r}".format(*column, value), row.get(column) == value, row.get(column))
     run.check("B: the boilerplate column stays empty", row[("QSEC", "", 0)] == "", row[("QSEC", "", 0)])
     run.check("B: an unchecked option stores ''", row[("QBLANK", "S2", 0)] == "", row[("QBLANK", "S2", 0)])
+    # 分组只换展示：没勾的那个子题照样是自己的一列，值是 ""，不受分组重排影响。
+    run.check("B: an unchecked grouped multiple-choice option stores ''",
+              row[("QGRPM", "M2", 0)] == "", row[("QGRPM", "M2", 0)])
     run.check("B: the blank of an unchecked option stays empty",
               row[("QBLANK", "S2comment", 0)] == "", row[("QBLANK", "S2comment", 0)])
 
@@ -208,7 +211,7 @@ def scenario_blank(run: Run) -> None:
     row = run.last_row()
     run.report["blank"] = {"{}[{}#{}]".format(*column): ("NULL" if value is None else repr(value))
                            for column, value in row.items() if not column[0].startswith("_")}
-    for code in ("QSCAN", "QSEC"):
+    for code in ("QSCAN", "QSEC", "QGRPM"):
         cells = [value for (qcode, _, _), value in row.items() if qcode == code]
         run.check("C: unanswered {} stored as ''".format(code), cells and all(v == "" for v in cells), cells)
     blanks = [value for (qcode, aid, _), value in row.items() if qcode == "QBLANK"]

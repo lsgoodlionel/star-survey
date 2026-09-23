@@ -27,6 +27,7 @@ class FieldDictionaryQuestionThemesTest {
     private static final UUID GROUPED = UUID.fromString("45454545-0004-4111-8111-000000000004");
     private static final UUID SCAN = UUID.fromString("45454545-0005-4111-8111-000000000005");
     private static final UUID SECTION = UUID.fromString("45454545-0006-4111-8111-000000000006");
+    private static final UUID GROUPED_MULTI = UUID.fromString("45454545-0007-4111-8111-000000000007");
 
     private final JsonMapper json = JsonMapper.builder().build();
 
@@ -46,7 +47,10 @@ class FieldDictionaryQuestionThemesTest {
               {"uuid":"45454545-0005-4111-8111-000000000005","code":"QSCAN","type":"S","text":"扫码",
                "theme":"mjy-scan-input","themeOptions":{"scanFormat":"qr"}},
               {"uuid":"45454545-0006-4111-8111-000000000006","code":"QSEC","type":"X","text":"家庭情况",
-               "theme":"mjy-collapsible","themeOptions":{"summary":"家庭情况"}}
+               "theme":"mjy-collapsible","themeOptions":{"summary":"家庭情况"}},
+              {"uuid":"45454545-0007-4111-8111-000000000007","code":"QGRPM","type":"M","text":"买过哪些",
+               "theme":"mjy-grouped-options","other":true,
+               "subquestions":[{"code":"M1","text":"苹果"},{"code":"M2","text":"白菜"}]}
             ]}]}
             """);
 
@@ -57,7 +61,10 @@ class FieldDictionaryQuestionThemesTest {
             new QuestionFieldView(BLANK, "QBLANK", "P", "Q3_S31_Ccomment", "S1comment", 0),
             new QuestionFieldView(GROUPED, "QGRP", "L", "Q4", "", 0),
             new QuestionFieldView(SCAN, "QSCAN", "S", "Q5", "", 0),
-            new QuestionFieldView(SECTION, "QSEC", "X", "Q6", "", 0));
+            new QuestionFieldView(SECTION, "QSEC", "X", "Q6", "", 0),
+            new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_S71", "M1", 0),
+            new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_S72", "M2", 0),
+            new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_other", "other", 0));
 
     private FieldDictionary.FieldEntry field(String fieldname) {
         return FieldDictionaryBuilder.fields(definition, binding).stream()
@@ -91,5 +98,18 @@ class FieldDictionaryQuestionThemesTest {
         assertThat(field("Q5").options()).isEmpty();
         assertThat(field("Q6").label()).isEqualTo("家庭情况");
         assertThat(field("Q6").options()).isEmpty();
+    }
+
+    /**
+     * R02-04 的多选分支（第四波遗留）：分组只换展示，每个子题仍然是自己的一列、
+     * 选中仍然是 {@code Y}，「其他」列仍然是自由文本。字段字典不因为带了分组主题而改形状。
+     */
+    @Test
+    void groupedMultipleChoiceKeepsOneColumnPerSubquestion() {
+        assertThat(field("Q7_S71").label()).isEqualTo("买过哪些 [苹果]");
+        assertThat(codes(field("Q7_S71"))).containsExactly("Y");
+        assertThat(field("Q7_S72").label()).isEqualTo("买过哪些 [白菜]");
+        assertThat(codes(field("Q7_S72"))).containsExactly("Y");
+        assertThat(field("Q7_other").options()).isEmpty();
     }
 }

@@ -1,4 +1,4 @@
-# WP-02 题型映射表（切片 02.1–02.3）
+# WP-02 题型映射表（切片 02.1–02.4）
 
 引擎 LimeSurvey 7.1.2。承载方式三档见 [ADR 0006](../adr/0006-question-types.md)（A 原生、B 原生＋题型主题、C 副表＋插件）；
 本文把需求矩阵 WP-02 的 47 条（R02-01…R02-47）逐条落到五类之一，并给出答案代码、缺失值与导出列映射。
@@ -20,6 +20,8 @@
 以及走副表的 R02-13（自增表格的 DSL 映射）与 R02-19（选点）。副表的「结构版本」列先行落地
 （[副表契约 v1](../../contracts/question-extension-tables-v1.md)），其余 14 条 P 类由此解除阻塞。
 
+切片 02.4（✔3）收口 R02-04 的**多选**分组（接管选项行模板），见第三之四节。
+
 ## 二、逐条映射
 
 列说明：**引擎承载**＝题型字母＋关键属性；**答案代码**＝答卷列里存的值；**缺失值**见第四节的三种状态；
@@ -30,7 +32,7 @@
 | R02-01 | 单选 | N | ✔ | `L` 单选按钮、`!` 下拉；`other` 开「其他」 | 选项代码（≤5 位字母数字）；其他＝`-oth-` | `""`；其他文本 `other` |
 | R02-02 | 多选 | N | ✔ | `M`／`P`（带评论）；`min_answers`／`max_answers`；子题 `exclusive:true`→`exclude_all_others`＋服务端互斥规则 | 每个选项一列，选中＝`Y`，未选＝`""` | 子题代码；`P` 另有 `代码comment`；其他 `other`（`P` 再加 `othercomment`） |
 | R02-03 | 多级下拉 | P | | 字典版本＝副表的结构版本（已落地）；级联清值与字典服务仍缺，放 02.4 | — | 后续 |
-| R02-04 | 选项分类 | T | ✔2（单选） | `L`＋新主题 `mjy-grouped-options`：分组必须**恰好覆盖**全部选项，否则 422 | 同 R02-01 | `""` |
+| R02-04 | 选项分类 | T | ✔3 | `L`／`M`＋新主题 `mjy-grouped-options`：分组必须**恰好覆盖**全部选项（单选按答案选项、多选按子题），否则 422 | 同 R02-01／R02-02 | `""`；多选为子题代码 |
 | R02-05 | 漏斗选项 | L | | 原生 `array_filter`，但它是表达式属性，v2 禁止直写；归逻辑 DSL 的 `filter` 切片（WP-03） | — | 后续 |
 | R02-06 | 填空与多项填空 | N | ✔ | `S` 短文本、`Q` 多项填空、`K` 多项数值；`maxLength`、`format`（见第三节）编译成服务端校验 | 原文 | `""`；`Q`/`K` 子题代码 |
 | R02-07 | 填空选择组合 | T | ✔2 | 原生子集：`L`＋其他、`O` 单选带评论；内嵌填空＝`P`＋新主题 `mjy-inline-blank`，清值用原生 `commented_checkbox=checked`，长度上限编译成服务端规则 | 选中＝`Y`；填空＝原文 | 子题代码＋`代码comment` |
@@ -111,7 +113,7 @@
 |---|---|---|---|---|
 | `mjy-collapsible` | R02-43 | `X` | `summary`（必填）、`collapsed` | `mjy_collapse_summary`、`mjy_collapse_default` |
 | `mjy-scan-input` | R02-28 | `S` | `scanFormat`（qr/barcode/any）、`manualEntry` | `mjy_scan_format`、`mjy_scan_manual`；**题目必须另设 `maxLength`** |
-| `mjy-grouped-options` | R02-04 | `L` | `groups`（必填）、`collapsible` | `mjy_option_groups`（JSON）、`mjy_option_groups_collapsible` |
+| `mjy-grouped-options` | R02-04 | `L` `M` | `groups`（必填）、`collapsible` | `mjy_option_groups`（JSON）、`mjy_option_groups_collapsible` |
 | `mjy-matrix-stepper` | R02-14 | `F` | `rowsPerStep`、`showProgress` | `mjy_stepper_rows`、`mjy_stepper_progress` |
 | `mjy-inline-blank` | R02-07 | `P` | `blankLabel`、`blankMaxLength`（必填） | `commented_checkbox=checked`＋每处填空一条长度规则 |
 | `mjy-repeating-table` | R02-13 | `T` | `structureVersion`、`columns`（均必填）、`minRows`、`maxRows` | `mjy_table_columns`、`mjy_table_min_rows`、`mjy_table_max_rows`、`mjy_structure_version` |
@@ -126,7 +128,7 @@
 
 | 主题 | 客户端能改什么 | 谁拦住它 |
 |---|---|---|
-| `mjy-grouped-options` | 提交任意选项代码 | 引擎 `checkValidityAnswer` |
+| `mjy-grouped-options` | 提交任意选项代码；多选多勾几项 | 引擎 `checkValidityAnswer`；多选另有 `min_answers`／`max_answers` |
 | `mjy-scan-input` | 提交任意字符串 | 编译出的 `em_validation_q` 长度规则（所以 `maxLength` 必填） |
 | `mjy-inline-blank` | 没勾选却填了填空、填空超长 | 原生 `commented_checkbox=checked`＋编译出的长度规则 |
 | `mjy-matrix-stepper` | 跳过没走到的行 | 引擎必答在服务端重算（隐藏的行照样提交） |
@@ -158,6 +160,32 @@
 
 导出与答案读取都应当**从主列解析名次**，不要去读名次列；字段字典把主列与名次列都标上
 排序项选项（`QuestionTypeColumns` 的 `R` 分支），供读端做标签。本切片不动 `responses.py`。
+
+## 三之四、切片 02.4（✔3）
+
+### R02-04 的多选分组
+
+单选那一支（02.3 已交付）靠的是 radio 的 `value` 就是选项代码，脚本照着 `value` 找行即可。
+**多选没有这个便利**：checkbox 的 `value` 恒为 `Y`，代码只在字段名 `{SGQA}_S{sqid}` 里，
+而分组定义写的是子题代码。所以多选这一支必须**连 `rows/*.twig` 一起接管**，
+由行模板把子题代码打成 `data-mjy-code`，脚本才认得出哪一行属于哪一组。
+
+| 面 | 多选这一支多做了什么 |
+|---|---|
+| 主题目录 | `themes/question/mjy-grouped-options/survey/questions/answer/multiplechoice/`：`config.xml`（`questionType` 为 `M`）、`answer.twig`、`rows/answer_row.twig`（多 `data-mjy-code`）、`rows/answer_row_other.twig`（照抄 core，刻意不带标记） |
+| 资产 | 引擎按 `<主题>/survey/questions/answer/<基础题型>/assets` 发布，**一个基础题型一份**；两份脚本逐字节一致，由 `GroupedOptionsTemplateTest` 钉住 |
+| 网关 | `mjy-grouped-options` 的 `types` 改为 `("L", "M")`；`_grouped_option_codes()` 按题型决定「选项」是答案选项还是子题 |
+| 插件 | `mjy_option_groups` 的 `types` 改为 `LM`——少一个字母，引擎导入多选题时会把这个属性整个丢掉，主题拿到空分组后静默平铺 |
+
+「其他」项没有子题代码，**不参与分组也不算漏**：认不出代码的行（其他项、不作答项）
+由脚本留在原来的 `ul` 里，跟在各分组区块后面显示。
+
+服务端把关没有任何新东西：数据形状与原生多选完全一致，越界代码由引擎 `checkValidityAnswer` 挡，
+勾多了由 `max_answers` 挡（e2e 场景 D 各一条）。分组纯属展示，改不动答卷列。
+
+一并新增的注册表检查：`VIEW_FOLDERS`（题型字母 → 引擎视图目录名）＋
+`test_every_registered_type_has_its_own_view_folder`——注册了某个题型却没建对应目录，
+在引擎上表现为静默降级，发布前是看不出来的。
 
 ## 四、缺失值（实测，MariaDB 10.11 与 PostgreSQL 16 完全一致）
 
@@ -233,8 +261,8 @@ Java 744 条（含字段字典的主题映射 3 条）。
 
 延后原因：
 
-- **需要新题型主题**：R02-04 的**多选**分组仍未做——多选的选项行由 `rows/*.twig` 包含进来，
-  换主题要连行模板一起接管（02.4）。R02-07 的「选项内嵌填空」已交付，`Q` 多项填空型组合仍在原生子集。
+- **需要新题型主题**：R02-04 的多选分组已在切片 02.4 交付（见第三之四节）。
+  R02-07 的「选项内嵌填空」已交付，`Q` 多项填空型组合仍在原生子集。
 - **插件扩展**（P 类余下 14 条）：副表的「结构版本」列已落地（ADR 0006 限制 9 解除），
   余下各条缺的是各自的编辑器主题与列定义生成器，不再缺公共设施。
   R02-03 另需字典服务与级联清值策略；R02-17/20/21/25/26/32/39/41 需资产服务。

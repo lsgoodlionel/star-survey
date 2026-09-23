@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 选项分类的多选分支（需求 R02-04，第四波遗留）。
+
+  数据形状与多选题（type M）完全一致：每个子题一列，选中＝Y，未选＝""，
+  引擎的 checkValidityAnswer 与 min_answers／max_answers 照常生效。
+  主题只把已经渲染好的选项行按分组重排，并可选地折叠每一组。
+
+  与单选分支（listradio）的区别只有一处：多选行的 checkbox value 恒为 "Y"，
+  选项代码只在字段名里，所以这一支**连 rows/*.twig 一起接管**，
+  由行模板把子题代码打成 data-mjy-code，浏览器端才认得出哪一行属于哪一组。
+
+  分组定义放题目属性 mjy_option_groups（JSON，由发布网关按 themeOptions.groups 生成，
+  并在发布前校验「恰好覆盖全部子题」）。关掉 JavaScript 时选项按原顺序平铺显示。
+-->
+<config>
+    <metadata>
+        <name>mjy-grouped-options</name>
+        <type>question_theme</type>
+        <title>MJY 选项分类（多选）</title>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>选项分类：多选的选项按组显示，可折叠</description>
+        <questionType>M</questionType>
+        <group>Multiple choice questions</group>
+        <subquestions>1</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>1</assessable>
+        <class>checkbox-list mjy-grouped-options</class>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-grouped-options.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-grouped-options.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_option_groups</name>
+            <category>MJY 选项分类</category>
+            <sortorder>10</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>分组定义（JSON）</caption>
+            <help>形如 [{"label":"水果","codes":["A1","A2"]}]，codes 写子题代码</help>
+        </attribute>
+        <attribute>
+            <name>mjy_option_groups_collapsible</name>
+            <category>MJY 选项分类</category>
+            <sortorder>20</sortorder>
+            <inputtype>integer</inputtype>
+            <default>0</default>
+            <caption>分组可折叠</caption>
+            <help>1＝每组是一个可展开的区块</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

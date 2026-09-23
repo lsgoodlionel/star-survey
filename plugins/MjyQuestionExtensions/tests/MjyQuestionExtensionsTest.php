@@ -208,6 +208,18 @@ class MjyQuestionExtensionsTest extends TestBaseClass
         $this->assertStringContainsString(\Question::QT_L_LIST, $definitions['mjy_option_groups']['types']);
     }
 
+    public function testOptionGroupsAreDeclaredForBothSingleAndMultipleChoice()
+    {
+        // R02-04 的多选分支：分组定义走同一个属性，但引擎按 types 决定这道题
+        // 认不认识它——漏掉 M 的话，导入多选题时 mjy_option_groups 会被丢掉，
+        // 主题拿到空分组，页面静默退回平铺（ADR 0006 决定 6 的同类故障）。
+        $definitions = \QuestionAttribute::getOwnQuestionAttributesViaPlugin();
+
+        $types = $definitions['mjy_option_groups']['types'];
+        $this->assertStringContainsString(\Question::QT_L_LIST, $types);
+        $this->assertStringContainsString(\Question::QT_M_MULTIPLE_CHOICE, $types);
+    }
+
     public function testEveryStructuredThemeIsRecognisedAsAStructuredQuestion()
     {
         // 热力图（R02-19）与自增表格（R02-13）共用同一套信封、校验器与副表，

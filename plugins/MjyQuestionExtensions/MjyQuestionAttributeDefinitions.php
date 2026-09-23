@@ -50,8 +50,10 @@ class MjyQuestionAttributeDefinitions
             self::HEATMAP_IMAGE => self::definition($structured, 50, 'text', '', '热力图底图地址', [
                 'help' => '作答者在这张图上点选；净化会改写 URL 里的 & ，所以不过滤',
             ]),
+            // R02-04 的两支：单选按答案选项分组，多选按子题分组，共用同一份 JSON。
+            // 少写一个题型字母，引擎导入那种题时会把这个属性丢掉，主题拿到空分组静默平铺。
             self::OPTION_GROUPS => self::definition(
-                Question::QT_L_LIST,
+                Question::QT_L_LIST . Question::QT_M_MULTIPLE_CHOICE,
                 10,
                 'textarea',
                 '',

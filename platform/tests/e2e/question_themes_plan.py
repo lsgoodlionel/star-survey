@@ -22,6 +22,9 @@ THEME_MARKERS = (
         "mjy-collapsible.js",
         "data-mjy-option-groups",
         "mjy-grouped-options.js",
+        # 多选分支接管了 rows/*.twig：行标记只可能来自本主题的行模板，
+        # 它出现就说明模板真的被用上了，而不是静默退回 core 的行。
+        "data-mjy-code=",
         "data-mjy-scan",
         "mjy-scan-input.js",
         "data-mjy-stepper",
@@ -60,6 +63,9 @@ def valid_pages() -> List[Dict[Column, str]]:
     return [
         {
             ("QGRP", "", 0): "A3",
+            # 多选分组：勾两个（分属两组），「其他」填字，不勾的那一项留空。
+            ("QGRPM", "M1", 0): "Y", ("QGRPM", "M3", 0): "Y",
+            ("QGRPM", "other", 0): "枇杷 & <梨>",
             ("QSCAN", "", 0): "6" * SCAN_MAX_LENGTH,
             ("QSTEP", "R1", 0): "L1", ("QSTEP", "R2", 0): "L2",
             ("QSTEP", "R3", 0): "L3", ("QSTEP", "R4", 0): "L1",
@@ -96,6 +102,8 @@ def _tamper(label: str, page: int, answers: Dict[Column, str], **extra: Any) -> 
 TAMPERS = (
     # 第 1 页：展示型主题的数据形状与原生题一致，闸门是引擎自己的。
     _tamper("grouped options: a code outside the answer list", 0, {("QGRP", "", 0): "A9"}),
+    _tamper("grouped options (multiple choice): one selection over max_answers", 0,
+            {("QGRPM", "M2", 0): "Y"}),
     _tamper("scan input: one character over maxLength", 0,
             {("QSCAN", "", 0): "6" * (SCAN_MAX_LENGTH + 1)}),
     _tamper("inline blank: comment filled while its option is unchecked", 0,

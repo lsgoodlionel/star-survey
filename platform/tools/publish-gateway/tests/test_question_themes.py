@@ -7,11 +7,12 @@
 import json
 import unittest
 import xml.etree.ElementTree as ElementTree
+from pathlib import Path
 
 from pubgw.compiler import LssCompiler
 from pubgw.fieldmap import binding_map, definition_signature, parse_fieldmap
 from pubgw.qtypes import expected_rows
-from pubgw.questions.themes import THEMES, structure_digest
+from pubgw.questions.themes import THEMES, VIEW_FOLDERS, structure_digest
 from pubgw.validate import validate_definition
 
 from .fixtures import fieldmap_for
@@ -108,14 +109,31 @@ ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table
 # ------------------------------------------------------------------ 注册表
 
 
+THEME_ROOT = Path(__file__).resolve().parents[4] / "themes/question"
+
+
+def view_folder(theme, qtype):
+    return THEME_ROOT / theme / "survey/questions/answer" / VIEW_FOLDERS[qtype]
+
+
 class RegistryTest(unittest.TestCase):
     def test_every_registered_theme_has_a_real_theme_directory(self):
-        from pathlib import Path
-
-        root = Path(__file__).resolve().parents[4] / "themes/question"
         for name in THEMES:
             with self.subTest(theme=name):
-                self.assertTrue((root / name).is_dir(), "{} 没有对应的题型主题目录".format(name))
+                self.assertTrue((THEME_ROOT / name).is_dir(), "{} 没有对应的题型主题目录".format(name))
+
+    def test_every_registered_type_has_its_own_view_folder(self):
+        """一个主题目录可以覆盖多个基础题型，但**每个题型都要有自己的 config.xml**：
+
+        引擎按 ``survey/questions/answer/<基础题型目录>`` 找视图与资产
+        （``QuestionTemplate::getTemplatePath``），少一个目录就是静默降级。
+        """
+        for name, spec in THEMES.items():
+            for qtype in spec.types:
+                with self.subTest(theme=name, type=qtype):
+                    folder = view_folder(name, qtype)
+                    self.assertTrue((folder / "config.xml").is_file(),
+                                    "{} 缺少 {} 的 config.xml".format(name, qtype))
 
     def test_every_registered_theme_is_accepted_on_its_own_type(self):
         for sample in ALL_THEMED:
@@ -224,10 +242,6 @@ class GroupedOptionsTest(unittest.TestCase):
         )
         self.assertNotIn(" ", value)
 
-    def test_multiple_choice_is_deliberately_out_of_this_batch(self):
-        # 多选的选项行走 rows/*.twig，换主题要连行模板一起接管（02.4）。
-        self.assertEqual(["E_THEME_TYPE_MISMATCH"], codes(grouped("M")))
-
     def test_an_option_outside_the_question_is_rejected(self):
         self.assertEqual(["E_THEME_OPTION_VALUE"], codes(grouped(
             groups=[{"label": "水果", "codes": ["A1", "A2", "A3", "A9"]}])))
@@ -242,6 +256,89 @@ class GroupedOptionsTest(unittest.TestCase):
 
     def test_column_shape_is_unchanged(self):
         self.assertEqual((("QGRP", "", 0),), expected_rows(first_question(grouped())))
+
+
+class GroupedOptionsMultipleChoiceTest(unittest.TestCase):
+    """R02-04 的多选分支（第四波遗留）：多选的「选项」是子题，分组按子题代码写。
+
+    多选行的 checkbox value 恒为 ``Y``，代码只在字段名里，所以这一支必须连
+    ``rows/*.twig`` 一起接管，把选项代码打进行标记（见 themes/question/mjy-grouped-options）。
+    """
+
+    def test_multiple_choice_is_accepted(self):
+        self.assertEqual([], codes(grouped("M")))
+
+    def test_groups_are_compiled_canonically(self):
+        value = compile_attributes(grouped("M"), code="QGRP")["mjy_option_groups"]
+        self.assertEqual(
+            [{"label": "水果", "codes": ["A1", "A2"]}, {"label": "蔬菜", "codes": ["A3"]}], json.loads(value)
+        )
+        self.assertNotIn(" ", value)
+
+    def test_the_theme_name_reaches_the_question_row(self):
+        self.assertEqual("mjy-grouped-options", theme_row(grouped("M"), code="QGRP"))
+
+    def test_a_subquestion_outside_the_question_is_rejected(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(grouped(
+            "M", groups=[{"label": "水果", "codes": ["A1", "A2", "A3", "A9"]}])))
+
+    def test_a_subquestion_left_out_of_every_group_is_rejected(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(grouped(
+            "M", groups=[{"label": "水果", "codes": ["A1", "A2"]}])))
+
+    def test_a_subquestion_in_two_groups_is_rejected(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(grouped(
+            "M", groups=[{"label": "甲", "codes": ["A1", "A2", "A3"]}, {"label": "乙", "codes": ["A2"]}])))
+
+    def test_the_other_option_does_not_need_a_group(self):
+        """「其他」不是子题，没有代码可写进分组；它留在原来的列表里，不能因此判 422。"""
+        with_other = dict(grouped("M"), other=True)
+        self.assertEqual([], codes(with_other))
+
+    def test_column_shape_is_unchanged(self):
+        self.assertEqual(
+            (("QGRP", "A1", 0), ("QGRP", "A2", 0), ("QGRP", "A3", 0)),
+            expected_rows(first_question(grouped("M"))),
+        )
+
+    def test_single_choice_still_reads_the_answer_options(self):
+        """单选那一支照旧按 answers 判定：两种题型的「选项」来源不同，不能混用。"""
+        self.assertEqual([], codes(grouped("L")))
+
+
+class GroupedOptionsTemplateTest(unittest.TestCase):
+    """多选分支的行模板接管：目录、行标记与两份资产的一致性。"""
+
+    FOLDER = "multiplechoice"
+    VIEWS = ("answer.twig", "rows/answer_row.twig", "rows/answer_row_other.twig")
+    SCRIPT = "assets/scripts/mjy-grouped-options.js"
+
+    def folder(self, name=FOLDER):
+        return THEME_ROOT / "mjy-grouped-options/survey/questions/answer" / name
+
+    def test_the_option_rows_are_taken_over(self):
+        for view in self.VIEWS:
+            with self.subTest(view=view):
+                self.assertTrue((self.folder() / view).is_file(), "缺少 " + view)
+
+    def test_every_option_row_carries_its_own_code(self):
+        """多选行的 checkbox value 恒为 Y，代码只在字段名里——必须由行模板打上去，
+        否则浏览器端按代码分组时只能靠猜。"""
+        rows = (self.folder() / "rows/answer_row.twig").read_text(encoding="utf-8")
+        # 行标记的取值必须来自子题代码 title，并且经过属性转义后再输出。
+        self.assertRegex(rows, r"""data-mjy-code=['"]\{\{\s*title\|escape\('html_attr'\)\s*\}\}['"]""")
+
+    def test_the_other_row_is_not_claimed_by_any_group(self):
+        """「其他」行没有子题代码，必须留空标记，让脚本把它留在原列表里。"""
+        other = (self.folder() / "rows/answer_row_other.twig").read_text(encoding="utf-8")
+        self.assertNotIn("data-mjy-code=", other)
+
+    def test_the_two_view_folders_ship_the_same_script(self):
+        """资产按 ``<主题>/survey/questions/answer/<基础题型>/assets`` 发布，一个题型一份；
+        两份必须逐字节一致，否则单选与多选的分组行为会悄悄分叉。"""
+        single = (self.folder("listradio") / self.SCRIPT).read_bytes()
+        multi = (self.folder() / self.SCRIPT).read_bytes()
+        self.assertEqual(single, multi, "两个基础题型下的分组脚本不一致")
 
 
 class MatrixStepperTest(unittest.TestCase):

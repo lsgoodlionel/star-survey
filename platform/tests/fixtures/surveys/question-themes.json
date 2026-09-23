@@ -54,6 +54,27 @@
           }
         },
         {
+          "uuid": "99999999-1008-4555-8555-000000001008",
+          "code": "QGRPM",
+          "type": "M",
+          "text": "买过下面哪些（可多选）",
+          "other": true,
+          "attributes": { "max_answers": "3" },
+          "theme": "mjy-grouped-options",
+          "themeOptions": {
+            "collapsible": false,
+            "groups": [
+              { "label": "水果", "codes": ["M1", "M2"] },
+              { "label": "蔬菜", "codes": ["M3"] }
+            ]
+          },
+          "subquestions": [
+            { "uuid": "99999999-2007-4555-8555-000000002007", "code": "M1", "text": "苹果" },
+            { "uuid": "99999999-2008-4555-8555-000000002008", "code": "M2", "text": "香蕉" },
+            { "uuid": "99999999-2009-4555-8555-000000002009", "code": "M3", "text": "白菜" }
+          ]
+        },
+        {
           "uuid": "99999999-1003-4555-8555-000000001003",
           "code": "QSCAN",
           "type": "S",

@@ -54,6 +54,19 @@ MIN_ROWS_ATTRIBUTE = "mjy_table_min_rows"
 MAX_ROWS_ATTRIBUTE = "mjy_table_max_rows"
 STRUCTURE_VERSION_ATTRIBUTE = "mjy_structure_version"
 
+#: 题型字母 → 引擎存放该题型视图的目录名（``QuestionTemplate::getFolderName``）。
+#: 主题必须在 ``themes/question/<名字>/survey/questions/answer/<这里的值>/`` 下放 config.xml
+#: 与视图，少一个目录引擎就静默降级成基础主题（ADR 0006 决定 6）。
+VIEW_FOLDERS = {
+    "X": "boilerplate",
+    "S": "shortfreetext",
+    "T": "longfreetext",
+    "L": "listradio",
+    "M": "multiplechoice",
+    "P": "multiplechoice_with_comments",
+    "F": "arrays/array",
+}
+
 Issue = Tuple[str, str, str]  # (错误码, 相对题目的路径, 消息)
 
 
@@ -358,9 +371,21 @@ def _lower_heatmap(question: Question, values: Dict[str, Any]) -> Lowering:
     return Lowering(attributes={COLUMNS_ATTRIBUTE: _canonical_json(_heatmap_columns(values))})
 
 
+def _grouped_option_codes(question: Question) -> List[str]:
+    """本题「一个选项行一个代码」的那一批代码。
+
+    单选（``L``）的选项是答案选项，多选（``M``）的选项是子题——两边的代码都在答卷里
+    对应一列（多选是子题列，单选是同一列的取值），但来源不是同一张表，不能混用。
+    「其他」项没有代码，不参与分组。
+    """
+    if question.type == "M":
+        return [sub.code for sub in question.subquestions]
+    return [answer.code for answer in question.answers_on_scale(0)]
+
+
 def _check_groups(question: Question, values: Dict[str, Any]) -> List[Issue]:
     """分组必须恰好覆盖本题的全部选项：漏掉一个就是拼错了，别让它在页面上消失。"""
-    codes = [answer.code for answer in question.answers_on_scale(0)]
+    codes = _grouped_option_codes(question)
     issues: List[Issue] = []
     listed: List[str] = []
     for index, raw in enumerate(values.get("groups") or []):
@@ -444,9 +469,10 @@ _THEMES = (
         name="mjy-grouped-options",
         label="选项分类",
         requirement="R02-04",
-        # 本批只做单选（listradio）：多选的选项行由 rows/*.twig 包含进来，
-        # 换主题要连行模板一起接管，放 02.4。
-        types=("L",),
+        # 单选按 answers 分组，多选按 subquestions 分组（_grouped_option_codes）。
+        # 多选的选项行由 rows/*.twig 包含进来，主题连行模板一起接管，
+        # 把子题代码打进行标记，浏览器端才认得出哪一行属于哪一组。
+        types=("L", "M"),
         options=(
             OptionSpec("groups", "list", required=True),
             OptionSpec("collapsible", "bool", attribute="mjy_option_groups_collapsible", default=False),
