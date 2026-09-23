@@ -22,6 +22,9 @@ PARTICIPANT_REF = "ref"
 #: 只有 v2 才认识的键。v1 定义里出现它们直接拒绝，绝不静默丢掉一条显示条件。
 _LOGIC_KEYS = ("condition", "calculation", "validation")
 
+#: 计分展开出来的题组标题（WP-03.3）。
+DEFAULT_SCORING_GROUP_TITLE = "计分结果"
+
 _INHERIT_THEME = "inherit"
 
 
@@ -91,6 +94,41 @@ class Question:
 
 
 @dataclass(frozen=True)
+class ScoreItem:
+    """一个计分项：一道题按选项给分（points），或按数值乘权重（weight）。
+
+    question 可以写题目代码，也可以写题目 UUID（推荐编辑器用 UUID）。
+    member 是数组题的行代码。points 保持作者给的顺序，编译出的表达式才稳定。
+    """
+
+    question: str
+    member: str = ""
+    points: Tuple[Tuple[str, float], ...] = ()
+    weight: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class ScoreBand:
+    """一个分段。up_to 是这一段的上界（含），最后一段不写上界表示「及以上」。"""
+
+    code: str
+    up_to: Optional[float] = None
+    text: str = ""
+
+
+@dataclass(frozen=True)
+class Score:
+    """一份计分表：若干计分项加总成一个分数，再按分段给出结果。"""
+
+    uuid: str
+    code: str
+    title: str
+    items: Tuple[ScoreItem, ...]
+    bands: Tuple[ScoreBand, ...] = ()
+    group_title: str = DEFAULT_SCORING_GROUP_TITLE
+
+
+@dataclass(frozen=True)
 class Group:
     """一个题组。题组本身不出现在答卷列里，只影响分页与顺序。"""
 
@@ -125,6 +163,9 @@ class SurveyDefinition:
     branding: Any = None
     #: 按语言的文本原文（同上）。缺项按基础语言回退，回退发生在编译期。
     translations: Any = None
+    #: 计分表（WP-03.3，v2 专有）。语义校验在 logic/scoring.py，展开成计算值题后
+    #: 与作者手写的 DSL 走同一条解析、检查、编译链路。
+    scoring: Tuple[Score, ...] = ()
 
     @property
     def has_logic(self) -> bool:
@@ -177,7 +218,80 @@ class SurveyDefinition:
             policy=copy.deepcopy(payload.get("policy")),
             branding=copy.deepcopy(payload.get("branding")),
             translations=copy.deepcopy(payload.get("translations")),
+            scoring=_scoring(payload.get("scoring"), is_logic),
         )
+
+
+def _scoring(payload: Any, is_logic: bool) -> Tuple[Score, ...]:
+    if payload is None:
+        return ()
+    if not is_logic:
+        raise DefinitionError(
+            "scoring requires definitionVersion {}".format(LOGIC_DEFINITION_VERSION)
+        )
+    if not isinstance(payload, list):
+        raise DefinitionError("'scoring' must be a list, got {}".format(type(payload).__name__))
+    return tuple(_score(entry, "scoring[{}]".format(index)) for index, entry in enumerate(payload))
+
+
+def _score(payload: Any, where: str) -> Score:
+    _require_mapping(payload, where)
+    items = _list(payload, "items")
+    if not items:
+        raise DefinitionError("{}.items must not be empty".format(where))
+    return Score(
+        uuid=_text(payload, "uuid", where),
+        code=_text(payload, "code", where),
+        title=_text(payload, "title", where),
+        group_title=_optional_text(payload, "groupTitle") or DEFAULT_SCORING_GROUP_TITLE,
+        items=tuple(
+            _score_item(entry, "{}.items[{}]".format(where, index)) for index, entry in enumerate(items)
+        ),
+        bands=tuple(
+            _score_band(entry, "{}.bands[{}]".format(where, index))
+            for index, entry in enumerate(payload.get("bands") or [])
+        ),
+    )
+
+
+def _score_item(payload: Any, where: str) -> ScoreItem:
+    _require_mapping(payload, where)
+    weight = payload.get("weight")
+    return ScoreItem(
+        question=_text(payload, "question", where),
+        member=_optional_text(payload, "member"),
+        points=_points(payload.get("points"), where),
+        weight=None if weight is None else _number(weight, where, "weight"),
+    )
+
+
+def _points(payload: Any, where: str) -> Tuple[Tuple[str, float], ...]:
+    """保持作者给的顺序：编译出的表达式必须可复现。"""
+    if payload is None:
+        return ()
+    _require_mapping(payload, where + ".points")
+    entries = []
+    for key, value in payload.items():
+        if not isinstance(key, str) or not key:
+            raise DefinitionError("{}.points keys must be non-empty strings".format(where))
+        entries.append((key, _number(value, where + ".points", key)))
+    return tuple(entries)
+
+
+def _score_band(payload: Any, where: str) -> ScoreBand:
+    _require_mapping(payload, where)
+    up_to = payload.get("upTo")
+    return ScoreBand(
+        code=_text(payload, "code", where),
+        up_to=None if up_to is None else _number(up_to, where, "upTo"),
+        text=_optional_text(payload, "text"),
+    )
+
+
+def _number(value: Any, where: str, key: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DefinitionError("{}.{} must be a number, got {!r}".format(where, key, value))
+    return float(value)
 
 
 def _group(payload: Any, index: int, is_logic: bool) -> Group:

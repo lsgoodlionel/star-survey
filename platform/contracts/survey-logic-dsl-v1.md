@@ -1,6 +1,6 @@
 # 问卷逻辑 DSL v1（definitionVersion 2）
 
-WP-03 切片 03.1／03.2。平台作者端（编辑器、AI 草稿）只写本 DSL，**永远不直写引擎表达式**；
+WP-03 切片 03.1／03.2／03.3／03.4。平台作者端（编辑器、AI 草稿）只写本 DSL，**永远不直写引擎表达式**；
 发布网关（`platform/tools/publish-gateway/pubgw/logic/`）负责校验并编译成 LimeSurvey
 ExpressionScript 的受限子集。实现与本文件不一致时以测试为准并修正本文件。
 
@@ -128,3 +128,93 @@ CODE/NAME  := 字母开头的字母数字串（不含下划线）
 
 失败条目与既有格式一致：`"<错误码> <路径>: <消息>"`，路径如
 `groups[1].questions[0].condition`、`groups[1].questions[2].validation.rule`、`groups[0].questions[1].answers[0].text`。
+
+## 6. 计分（WP-03.3）
+
+顶层 `scoring` 是一个数组，每项是一份计分表（v1 定义里出现直接 400）。计分**不是第二套编译器**：
+它只把计分表展开成本文件前几节的 DSL，再走同一条解析、类型检查、依赖检查与 emit 的链路。
+
+```json
+"scoring": [{
+  "uuid": "…", "code": "STOTAL", "title": "养宠投入分", "groupTitle": "你的结果",
+  "items": [
+    { "question": "QPET",   "points": { "A1": 2, "A2": 5 } },
+    { "question": "QCARE",  "points": { "SQ001": 1, "SQ002": 2 } },
+    { "question": "QARR",   "member": "R1", "points": { "Y1": 4 } },
+    { "question": "QHOURS", "weight": 1 }
+  ],
+  "bands": [
+    { "code": "LOW", "upTo": 4, "text": "投入不多。" },
+    { "code": "MID", "upTo": 9, "text": "得分 {{ STOTAL }}，还不错。" },
+    { "code": "HIGH", "text": "非常投入！" }
+  ]
+}]
+```
+
+- `question` 写题目代码或题目 UUID；数组题另写 `member` 指定行。
+- 按选项计分的题（单选、数组行、多选）写 `points`（选项／子题代码 → 分数）；
+  数值题写 `weight`（分数＝答案 × weight）。两者不能混写，也不能都不写。
+- **未作答的计分项按 0 分**：`points` 展开成 `if(引用 == "代码", 分数, 0)`，
+  `weight` 展开成 `coalesce(引用, 0) * 权重`，总分是它们的 `sum(…)`，所以总分永远不是空值。
+- `bands` 按顺序从低到高，`upTo` 是这一段的上界（含），**只有最后一段不写 `upTo`**，表示「及以上」。
+
+### 展开结果
+
+计分展开成一个**追加在最后的题组**（标题取 `groupTitle`）。它不带条件，分数不会被别人的题组条件
+清空；排在最后也让「只能引用前面的题」自动成立——反过来说，**前面的题不能引用分数**
+（会报 `E_EXPR_LATER_PAGE`）。组里依次是：
+
+| 生成的题 | 代码 | 类型 | 内容 |
+|---|---|---|---|
+| 总分 | `<CODE>` | `*` | `sum(if(…), …, coalesce(…, 0) * w)`，数值 |
+| 分段 | `<CODE>B` | `*` | 按上界嵌套的 `if`，值是分段代码 |
+| 分段文案 | `<CODE>R1`、`R2`… | `X` | 条件 `<CODE>B == "<分段代码>"`，文本是作者写的 `text` |
+
+于是「按分数分支」「展示结果」就是普通的 v2 条件与文本引用，没有新机制：作者也可以自己写
+`condition: "STOTAL > 40"`。分数代码最长 16 字符（题目代码上限 20，要给后缀留位）。
+
+### 作者文本的安全性
+
+生成的表达式里只有数字、题目引用，以及两种平台校验过字符集的代码（选项／子题代码、分段代码），
+**没有一处是作者的自由文本**。作者的自由文本（`title`、分段 `text`）全部落在题目的文本上，由第 1 节
+那条模板规则转义（`{` `}` → `&#123;` `&#125;`），只有 `{{ }}` 里的才编译成表达式。
+
+### 错误码
+
+| 错误码 | 含义 |
+|---|---|
+| `E_SCORING_CODE` / `E_SCORING_CODE_CONFLICT` | 分数代码非法或过长／生成的代码与已有题目或另一份计分表撞名 |
+| `E_SCORING_UNKNOWN_QUESTION` / `E_SCORING_UNKNOWN_KEY` | 计分项指向不存在的题／不存在的选项或子题代码 |
+| `E_SCORING_ITEM_SHAPE` | 该题型不能计分，或 `points` 与 `weight` 用反了 |
+| `E_SCORING_BAND_CODE` / `E_SCORING_BAND_ORDER` | 分段代码非法或重复／上界没有递增、不是最后一段却不写 `upTo` |
+
+## 7. 双执行比对（WP-03.4）
+
+本文件第 4 节的语义有**两份独立实现**，发布前用真引擎逐条比对：
+
+1. **平台**：`pubgw/logic/evaluate.py` 直接在语法树上按本文件求值；
+2. **引擎**：真 LimeSurvey 的 ExpressionManager 跑 `emit.py` 编译出来的 ExpressionScript
+   （`platform/tests/e2e/logic_parity.php` 把同一份答案注入 `$_SESSION`）。
+
+解释器**只实现本文件写下来的语义，不模仿 PHP 的类型杂耍**：引擎在契约之外的角落有自己的脾气时，
+比对必须把它暴露出来，而不是靠两边一起装傻盖住。
+
+每条用例（一处表达式 × 一份答案向量）都带一个**照本文件人工写下的期望值**，它是分歧时的裁判：
+
+| 情况 | 归责 |
+|---|---|
+| 引擎报错 | `compiler`（我们编出了引擎跑不了的表达式） |
+| 两边一致且合期望 | `none` |
+| 两边一致但不合期望 | `both`（编译器与解释器一起错，或本文件错） |
+| 分歧，引擎合期望 | `platform`（解释器错） |
+| 分歧，平台合期望 | `compiler`（编译器错） |
+| 分歧，都不合期望 | `both` |
+| 分歧，没有期望值 | `unknown`——必须人工裁决，**不许当成通过** |
+
+跑法：`[TEST_DB=mysql|pgsql] platform/deploy/test/run-publish-gateway-parity.sh`。
+除了逐条比对，它还做两件事，否则「全对」什么都证明不了：
+
+- **反向对照（mutation）**：故意把编译产物改坏一次、把平台的值谎报一次，比对必须抓住，
+  并且判对是哪一侧；
+- **场景级锚定**：再跑两次真实 HTTP 作答，把引擎**真正存进答卷表**的分数与分段同平台算的比，
+  证明注入会话那一套不是自说自话。

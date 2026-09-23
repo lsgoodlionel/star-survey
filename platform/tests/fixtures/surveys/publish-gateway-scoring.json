@@ -1,0 +1,120 @@
+{
+  "definitionVersion": 2,
+  "uuid": "5c012e00-0001-4555-8555-000000000001",
+  "title": "WP-03 计分样例 {not an expression}",
+  "description": "题目/选项得分、分段与总分、按分段展示结果，外加条件、校验与文本引用。",
+  "language": "en",
+  "theme": "fruity_twentythree",
+  "settings": {
+    "anonymized": "N",
+    "datestamp": "Y",
+    "savetimings": "N",
+    "ipaddr": "N",
+    "refurl": "N",
+    "allowsave": "Y",
+    "allowprev": "Y",
+    "alloweditaftercompletion": "Y",
+    "format": "G",
+    "questionindex": "0",
+    "usecaptcha": "N",
+    "shownoanswer": "N"
+  },
+  "groups": [
+    {
+      "uuid": "5c012e00-1001-4555-8555-000000000001",
+      "title": "About you",
+      "questions": [
+        {
+          "uuid": "5c012e00-2001-4555-8555-000000000001",
+          "code": "QAGE",
+          "type": "N",
+          "text": "How old are you?",
+          "mandatory": true
+        },
+        {
+          "uuid": "5c012e00-2002-4555-8555-000000000002",
+          "code": "QPET",
+          "type": "L",
+          "text": "Which pet do you have?",
+          "mandatory": true,
+          "answers": [
+            { "code": "A1", "text": "Cat" },
+            { "code": "A2", "text": "Dog" },
+            { "code": "A3", "text": "None" }
+          ]
+        },
+        {
+          "uuid": "5c012e00-2003-4555-8555-000000000003",
+          "code": "QNAME",
+          "type": "S",
+          "text": "Your nickname (braces like {this} stay literal)"
+        }
+      ]
+    },
+    {
+      "uuid": "5c012e00-1002-4555-8555-000000000002",
+      "title": "Caring for your pet",
+      "condition": "QPET != \"A3\"",
+      "questions": [
+        {
+          "uuid": "5c012e00-2004-4555-8555-000000000004",
+          "code": "QFREQ",
+          "type": "L",
+          "text": "How often do you care for it?",
+          "condition": "QPET in [\"A1\", \"A2\"]",
+          "answers": [
+            { "code": "F1", "text": "Daily" },
+            { "code": "F2", "text": "Weekly" },
+            { "code": "F3", "text": "Never" }
+          ]
+        },
+        {
+          "uuid": "5c012e00-2005-4555-8555-000000000005",
+          "code": "QCARE",
+          "type": "M",
+          "text": "What do you do for it?",
+          "subquestions": [
+            { "uuid": "5c012e00-3001-4555-8555-000000000001", "code": "SQ001", "text": "Feed" },
+            { "uuid": "5c012e00-3002-4555-8555-000000000002", "code": "SQ002", "text": "Walk" },
+            { "uuid": "5c012e00-3003-4555-8555-000000000003", "code": "SQ003", "text": "Vet visits" }
+          ]
+        },
+        {
+          "uuid": "5c012e00-2006-4555-8555-000000000006",
+          "code": "QHOURS",
+          "type": "N",
+          "text": "Hours per day?",
+          "validation": {
+            "rule": "self <= 24",
+            "message": "At most 24 hours a day (you are {{ QAGE }})."
+          }
+        },
+        {
+          "uuid": "5c012e00-2007-4555-8555-000000000007",
+          "code": "QTIP",
+          "type": "X",
+          "text": "Hi {{ QNAME }}, your pet is a {{ label(QPET) }}."
+        }
+      ]
+    }
+  ],
+  "scoring": [
+    {
+      "uuid": "5c012e00-4001-4555-8555-000000000001",
+      "code": "STOTAL",
+      "title": "Pet care score",
+      "groupTitle": "Your result",
+      "items": [
+        { "question": "QPET", "points": { "A1": 2, "A2": 5 } },
+        { "question": "QFREQ", "points": { "F1": 3, "F2": 2, "F3": 0 } },
+        { "question": "QCARE", "points": { "SQ001": 1, "SQ002": 2, "SQ003": 3 } },
+        { "question": "QHOURS", "weight": 1 }
+      ],
+      "bands": [
+        { "code": "LOW", "upTo": 4, "text": "A light touch { braces stay literal }." },
+        { "code": "MID", "upTo": 9, "text": "A balanced {{ STOTAL }} points." },
+        { "code": "HIGH", "text": "Very involved!" }
+      ]
+    }
+  ]
+}
