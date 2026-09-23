@@ -252,6 +252,22 @@
           }
         },
         {
+          "uuid": "99999999-1014-4555-8555-000000001014",
+          "code": "QKANO",
+          "type": "T",
+          "text": "每个功能点正反各答一遍",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-model-kano",
+          "themeOptions": {
+            "structureVersion": "kn1",
+            "features": [
+              { "code": "F1", "label": "夜间模式 & <深色>" },
+              { "code": "F2", "label": "离线缓存" }
+            ]
+          }
+        },
+        {
           "uuid": "99999999-1007-4555-8555-000000001007",
           "code": "QHEAT",
           "type": "T",

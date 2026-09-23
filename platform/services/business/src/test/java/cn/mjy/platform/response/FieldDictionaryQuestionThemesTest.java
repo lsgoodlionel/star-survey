@@ -33,6 +33,7 @@ class FieldDictionaryQuestionThemesTest {
     private static final UUID SHELF = UUID.fromString("45454545-0010-4111-8111-000000000010");
     private static final UUID MARK = UUID.fromString("45454545-0011-4111-8111-000000000011");
     private static final UUID PSYCH = UUID.fromString("45454545-0012-4111-8111-000000000012");
+    private static final UUID KANO = UUID.fromString("45454545-0013-4111-8111-000000000013");
 
     private final JsonMapper json = JsonMapper.builder().build();
 
@@ -80,7 +81,11 @@ class FieldDictionaryQuestionThemesTest {
                "theme":"mjy-psych-trial",
                "themeOptions":{"structureVersion":"ps1",
                                "trials":[{"code":"T1","label":"第一试次","stimulus":"红","correct":"left"}],
-                               "keys":[{"code":"left","label":"左键 F"}]}}
+                               "keys":[{"code":"left","label":"左键 F"}]}},
+              {"uuid":"45454545-0013-4111-8111-000000000013","code":"QKANO","type":"T","text":"功能点评价",
+               "theme":"mjy-model-kano",
+               "themeOptions":{"structureVersion":"kn1",
+                               "features":[{"code":"F1","label":"夜间模式"}]}}
             ]}]}
             """);
 
@@ -99,7 +104,8 @@ class FieldDictionaryQuestionThemesTest {
             new QuestionFieldView(PK, "QPK", "T", "Q9", "", 0),
             new QuestionFieldView(SHELF, "QSHELF", "T", "Q10", "", 0),
             new QuestionFieldView(MARK, "QMARK", "T", "Q11", "", 0),
-            new QuestionFieldView(PSYCH, "QPSY", "T", "Q12", "", 0));
+            new QuestionFieldView(PSYCH, "QPSY", "T", "Q12", "", 0),
+            new QuestionFieldView(KANO, "QKANO", "T", "Q13", "", 0));
 
     private FieldDictionary.FieldEntry field(String fieldname) {
         return FieldDictionaryBuilder.fields(definition, binding).stream()
@@ -132,6 +138,9 @@ class FieldDictionaryQuestionThemesTest {
         // trials[].correct 推导，引擎那一列不含对错。
         assertThat(field("Q12").label()).isEqualTo("颜色判断实验 [结构化作答]");
         assertThat(field("Q12").options()).isEmpty();
+        // R02-47 专业模型 KANO：正反两问都在副表里，引擎那一列是整块信封。
+        assertThat(field("Q13").label()).isEqualTo("功能点评价 [结构化作答]");
+        assertThat(field("Q13").options()).isEmpty();
     }
 
     @Test

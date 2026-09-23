@@ -1,4 +1,4 @@
-"""切片 02.5 的副表题型：文字点睛（R02-22）、心理实验（R02-46）。
+"""切片 02.5 的副表题型：文字点睛（R02-22）、心理实验（R02-46）、专业模型（R02-47）。
 
 三类都**没有新增任何插件校验**：列全部落在切片 02.4 引入的通用列约束上
 （``type: "enum"`` ＋ ``options``、``distinct``、整数上下限）。这正是当初
@@ -14,8 +14,9 @@ from ..model import Question
 from .theme_columns import _code_list, bounded_rows_issues
 from .theme_kit import (
     COLUMNS_ATTRIBUTE, HARD_MAX_ROWS, HIGHLIGHT_SEGMENTS_ATTRIBUTE, HIGHLIGHT_TEXT_ATTRIBUTE, Issue,
-    Lowering, MAX_COLUMN_OPTIONS, MAX_ROWS_ATTRIBUTE, MIN_ROWS_ATTRIBUTE, OPTION_VALUE,
-    PSYCH_TRIALS_ATTRIBUTE, _int, canonical_json,
+    Lowering, MAX_COLUMN_OPTIONS, MAX_ROWS_ATTRIBUTE, MIN_ROWS_ATTRIBUTE,
+    MODEL_FEATURES_ATTRIBUTE, MODEL_NAME_ATTRIBUTE, OPTION_VALUE, PSYCH_TRIALS_ATTRIBUTE,
+    _int, canonical_json,
 )
 
 # ---------------------------------------------------------------- 文字点睛（R02-22）
@@ -196,6 +197,70 @@ def lower_psych_trial(question: Question, values: Dict[str, Any]) -> Lowering:
         COLUMNS_ATTRIBUTE: canonical_json(psych_trial_columns(values)),
         PSYCH_TRIALS_ATTRIBUTE: canonical_json(trials),
         # 每个试次各一行，不多不少：漏做一个试次不是「没答」，是这次实验不完整。
+        MIN_ROWS_ATTRIBUTE: count,
+        MAX_ROWS_ATTRIBUTE: count,
+    })
+
+
+# ---------------------------------------------------------------- 专业模型：KANO（R02-47）
+
+#: 本主题实现的模型名。读端按它取对应的分析口径（KANO 分类表），不靠猜列名。
+KANO_MODEL = "kano"
+
+#: KANO 的五点量表，**由模型固定**，不是作者能配的选项。
+#:
+#: 这正是「按模型设计生成采集结构」与「作者自己搭一个矩阵」的区别：换了量表，
+#: 5×5 分类表就不再适用，算出来的也就不是 KANO 分类。取值代码用英文而不是 1…5，
+#: 是为了让副表里的单元格自己说明含义——读端看到 ``must`` 就知道是「理所当然」，
+#: 不必回查是哪一版量表。
+KANO_SCALE = (
+    {"code": "like", "label": "喜欢这样"},
+    {"code": "must", "label": "理所当然"},
+    {"code": "neutral", "label": "无所谓"},
+    {"code": "live", "label": "勉强接受"},
+    {"code": "dislike", "label": "不喜欢这样"},
+)
+
+
+def _kano_features(values: Dict[str, Any]) -> Tuple[List[Dict[str, str]], List[Issue]]:
+    return _code_list(values.get("features"), "themeOptions.features", HARD_MAX_ROWS)
+
+
+def check_kano(question: Question, values: Dict[str, Any]) -> List[Issue]:
+    _features, issues = _kano_features(values)
+    return issues
+
+
+def kano_columns(values: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """一行一个功能点：正向问（具备时）与反向问（不具备时）各一列，共用固定量表。
+
+    「每个功能点恰好问一遍」与循环评价同一套办法：功能点列是枚举＋唯一，
+    行数被钉死成功能点个数。两列的取值集合完全相同，恰好张成分类表的 5×5 定义域。
+    """
+    features, _issues = _kano_features(values)
+    # 每列各拿一份量表的副本：列定义要往下传给插件与绑定记录，共享同一个字典
+    # 会让任何一处的就地修改殃及另一列。
+    def scale() -> List[Dict[str, str]]:
+        return [dict(option) for option in KANO_SCALE]
+
+    return [
+        {"code": "feature", "label": "功能点", "type": "enum", "required": True, "distinct": True,
+         "options": features},
+        {"code": "functional", "label": "具备时", "type": "enum", "required": True,
+         "options": scale()},
+        {"code": "dysfunctional", "label": "不具备时", "type": "enum", "required": True,
+         "options": scale()},
+    ]
+
+
+def lower_kano(question: Question, values: Dict[str, Any]) -> Lowering:
+    features, _issues = _kano_features(values)
+    count = str(len(features))
+    return Lowering(attributes={
+        COLUMNS_ATTRIBUTE: canonical_json(kano_columns(values)),
+        MODEL_NAME_ATTRIBUTE: KANO_MODEL,
+        MODEL_FEATURES_ATTRIBUTE: canonical_json(features),
+        # 每个功能点各一行，不多不少：少问一个功能点，那一格分类就无从填起。
         MIN_ROWS_ATTRIBUTE: count,
         MAX_ROWS_ATTRIBUTE: count,
     })

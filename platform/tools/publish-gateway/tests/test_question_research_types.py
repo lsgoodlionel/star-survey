@@ -19,8 +19,8 @@ from pubgw.questions.themes import structure_digest
 from .fixtures import fieldmap_for
 from .qtype_fixtures import definition_with, first_question
 from .theme_fixtures import (
-    HIGHLIGHT_SEGMENTS, HIGHLIGHT_TAGS, HIGHLIGHT_TEXT, PSYCH_KEYS, PSYCH_TRIALS, codes,
-    compile_attributes, psych_trial, text_highlight,
+    HIGHLIGHT_SEGMENTS, HIGHLIGHT_TAGS, HIGHLIGHT_TEXT, KANO_FEATURES, PSYCH_KEYS, PSYCH_TRIALS,
+    codes, compile_attributes, kano, psych_trial, text_highlight,
 )
 
 
@@ -251,6 +251,108 @@ class PsychTrialTest(unittest.TestCase):
     def test_changing_the_reaction_time_cap_changes_the_structure_digest(self):
         self.assertNotEqual(structure_digest(self.columns()),
                             structure_digest(self.columns(maxReactionMs=9000)))
+
+
+# ------------------------------------------------------------------ R02-47 专业模型（KANO）
+
+
+class KanoModelTest(unittest.TestCase):
+    """R02-47 专业模型：按模型设计生成采集结构，而不是只给一个题目标题。
+
+    KANO 每个功能点问两遍——「具备时你怎么想」「不具备时你怎么想」，两问共用同一套
+    **由模型固定的**五点量表。量表不是 ``themeOptions`` 的一项：改了它算出来的就不是
+    KANO 分类，这正是「按模型生成结构」与「作者自己搭一个矩阵」的区别。
+    """
+
+    def columns(self, **options):
+        return json.loads(compile_attributes(kano(**options), code="QKANO")["mjy_table_columns"])
+
+    def test_the_feature_column_is_a_unique_enum_over_the_declared_features(self):
+        feature = self.columns()[0]
+        self.assertEqual(("feature", "enum", True, True),
+                         (feature["code"], feature["type"], feature["required"], feature["distinct"]))
+        self.assertEqual(["F1", "F2"], [option["code"] for option in feature["options"]])
+
+    def test_both_questions_share_the_scale_the_model_fixes(self):
+        functional, dysfunctional = self.columns()[1], self.columns()[2]
+        self.assertEqual(["functional", "dysfunctional"], [functional["code"], dysfunctional["code"]])
+        for column in (functional, dysfunctional):
+            self.assertEqual(("enum", True), (column["type"], column["required"]))
+            self.assertEqual(["like", "must", "neutral", "live", "dislike"],
+                             [option["code"] for option in column["options"]])
+            self.assertEqual(["喜欢这样", "理所当然", "无所谓", "勉强接受", "不喜欢这样"],
+                             [option["label"] for option in column["options"]])
+
+    def test_the_scale_is_not_an_author_supplied_option(self):
+        """作者改不了量表：改了就不是 KANO 了，分类表也不再适用。"""
+        self.assertEqual(["E_THEME_OPTION_UNKNOWN"],
+                         codes(kano(scale=[{"code": "1", "label": "好"}])))
+
+    def test_the_row_count_is_pinned_to_the_number_of_features(self):
+        attributes = compile_attributes(kano(), code="QKANO")
+        self.assertEqual(("2", "2"), (attributes["mjy_table_min_rows"], attributes["mjy_table_max_rows"]))
+
+    def test_the_features_reach_the_theme(self):
+        value = compile_attributes(kano(), code="QKANO")["mjy_model_features"]
+        self.assertEqual(KANO_FEATURES, json.loads(value))
+        self.assertNotIn(" ", value)
+
+    def test_the_model_name_is_recorded_for_the_read_side(self):
+        """读端靠它知道「这道题该用哪张分类表」，不必去猜列名。"""
+        self.assertEqual("kano", compile_attributes(kano(), code="QKANO")["mjy_model_name"])
+
+    def test_structure_version_and_features_are_required(self):
+        for name in ("structureVersion", "features"):
+            with self.subTest(option=name):
+                payload = kano()
+                del payload["themeOptions"][name]
+                self.assertEqual(["E_THEME_OPTION_REQUIRED"], codes(payload))
+
+    def test_bad_feature_lists(self):
+        for features in ([{"label": "没有代码"}],
+                         [{"code": "F1"}, {"code": "F1"}],
+                         [{"code": "bad code"}],
+                         [{"code": "F1", "label": 7}]):
+            with self.subTest(features=features):
+                self.assertEqual(["E_THEME_OPTION_VALUE"], codes(kano(features=features)))
+
+    def test_too_many_features(self):
+        many = [{"code": "F{}".format(index), "label": str(index)} for index in range(501)]
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(kano(features=many)))
+
+    def test_the_answer_is_still_one_engine_column(self):
+        self.assertEqual((("QKANO", "", 0),), expected_rows(first_question(kano())))
+
+    def test_the_theme_is_only_for_long_free_text(self):
+        self.assertEqual(["E_THEME_TYPE_MISMATCH"], codes(dict(kano(), type="S")))
+
+    def test_the_binding_declares_the_feature_and_the_two_question_columns(self):
+        declared = side_table(kano(), code="QKANO")
+        self.assertEqual(["feature", "functional", "dysfunctional"],
+                         [column["code"] for column in declared["columns"]])
+        self.assertEqual("kn1", declared["structureVersion"])
+        self.assertTrue(declared["structureDigest"].startswith("sd1:"))
+
+    def test_adding_a_feature_changes_the_structure_digest(self):
+        wider = KANO_FEATURES + [{"code": "F3", "label": "多端同步"}]
+        self.assertNotEqual(structure_digest(self.columns()),
+                            structure_digest(self.columns(features=wider)))
+
+
+class KanoClassificationTableTest(unittest.TestCase):
+    """分类表是**确定的**：给定 (functional, dysfunctional) 就有唯一一个 KANO 类别。
+
+    本切片不在网关里算分类（那是 WP-08 的统计口径），但要证明生成出来的两列
+    恰好张成分类表的 5×5 定义域——少一个取值，分类表就有格子填不进去。
+    """
+
+    def test_the_two_columns_span_the_whole_five_by_five_table(self):
+        columns = {column["code"]: column
+                   for column in json.loads(compile_attributes(kano(), code="QKANO")["mjy_table_columns"])}
+        functional = [option["code"] for option in columns["functional"]["options"]]
+        dysfunctional = [option["code"] for option in columns["dysfunctional"]["options"]]
+        self.assertEqual(functional, dysfunctional)
+        self.assertEqual(25, len(functional) * len(dysfunctional))
 
 
 class PsychTrialFixtureTest(unittest.TestCase):

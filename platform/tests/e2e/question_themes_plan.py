@@ -45,6 +45,8 @@ THEME_MARKERS = (
         "mjy-text-highlight.js",
         "data-mjy-psych-trial",
         "mjy-psych-trial.js",
+        "data-mjy-model-kano",
+        "mjy-model-kano.js",
         "data-mjy-heatmap",
         "mjy-heatmap.js",
     ),
@@ -94,6 +96,11 @@ MARK_ROWS = [{"segment": MARK_SEGMENTS[0], "tag": "like"},
 PSYCH_ROWS = [{"trial": "T1", "key": "left", "rt": "0"},
               {"trial": "T2", "key": "left", "rt": "5000"}]
 
+#: KANO：一行一个功能点，正反两问共用**由模型固定**的五点量表。
+#: 取量表的两端与中间，证明五个取值都真的可用。
+KANO_ROWS = [{"feature": "F1", "functional": "like", "dysfunctional": "dislike"},
+             {"feature": "F2", "functional": "neutral", "dysfunctional": "live"}]
+
 
 def valid_pages() -> List[Dict[Column, str]]:
     return [
@@ -114,6 +121,7 @@ def valid_pages() -> List[Dict[Column, str]]:
             ("QSHELF", "", 0): envelope(SHELF_ROWS),
             ("QMARK", "", 0): envelope(MARK_ROWS),
             ("QPSY", "", 0): envelope(PSYCH_ROWS),
+            ("QKANO", "", 0): envelope(KANO_ROWS),
             ("QHEAT", "", 0): envelope(HEAT_ROWS),
         },
     ]
@@ -135,8 +143,9 @@ def blank_pages() -> List[Dict[Column, str]]:
             ("QPK", "", 0): envelope([{"P1": "A", "P2": "B"}]),
             ("QSHELF", "", 0): envelope([{"product": "S2", "qty": "1"}]),
             ("QMARK", "", 0): envelope([{"segment": MARK_SEGMENTS[1], "tag": "like"}]),
-            # 心理实验的行数被平台钉死成试次个数，没有「取下限」这回事。
+            # 心理实验与 KANO 的行数都被平台钉死成对象个数，没有「取下限」这回事。
             ("QPSY", "", 0): envelope(PSYCH_ROWS),
+            ("QKANO", "", 0): envelope(KANO_ROWS),
             ("QHEAT", "", 0): envelope([{"x": "0.2500", "y": "0.7500"}]),
         },
     ]
@@ -252,6 +261,21 @@ TAMPERS = (
             {("QPSY", "", 0): envelope([dict(PSYCH_ROWS[0], rt="12.5"), PSYCH_ROWS[1]])}),
     _tamper("psych trial: one trial skipped", 1,
             {("QPSY", "", 0): envelope([PSYCH_ROWS[0]])}),
+    # KANO（R02-47）：功能点列枚举＋唯一，正反两问都枚举到**模型固定**的五点量表。
+    _tamper("kano: a five-point value the model does not define", 1,
+            {("QKANO", "", 0): envelope([dict(KANO_ROWS[0], functional="5"), KANO_ROWS[1]])}),
+    _tamper("kano: a value borrowed from another scale", 1,
+            {("QKANO", "", 0): envelope([dict(KANO_ROWS[0], dysfunctional="hate"), KANO_ROWS[1]])}),
+    _tamper("kano: a feature nobody declared", 1,
+            {("QKANO", "", 0): envelope([dict(KANO_ROWS[0], feature="F9"), KANO_ROWS[1]])}),
+    _tamper("kano: the same feature rated twice", 1,
+            {("QKANO", "", 0): envelope([KANO_ROWS[0], dict(KANO_ROWS[1], feature="F1")])}),
+    _tamper("kano: only the functional half answered", 1,
+            {("QKANO", "", 0): envelope([dict(KANO_ROWS[0], dysfunctional=""), KANO_ROWS[1]])}),
+    _tamper("kano: one feature dropped", 1,
+            {("QKANO", "", 0): envelope([KANO_ROWS[0]])}),
+    _tamper("kano: a self-declared classification column", 1,
+            {("QKANO", "", 0): envelope([dict(KANO_ROWS[0], category="A"), KANO_ROWS[1]])}),
     # 影子字段：浏览器端算出的相关性全写 1，服务端照样重算。
     _tamper("repeating table: bad payload with every relevance* shadow forced to 1", 1,
             {("QTABLE", "", 0): envelope([{"item": "米", "qty": "0"}])}, shadow="all-relevant"),

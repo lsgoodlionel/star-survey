@@ -30,6 +30,9 @@ class MjyThemedQuestionMap
     /** 心理实验（R02-46）：一行一个试次，试次列枚举＋唯一，按键列枚举，反应时是有界整数。 */
     public const PSYCH_TRIAL_THEME = 'mjy-psych-trial';
 
+    /** 专业模型 KANO（R02-47）：一行一个功能点，正反两问各一列，量表由模型固定。 */
+    public const MODEL_KANO_THEME = 'mjy-model-kano';
+
     /**
      * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
      * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应
@@ -44,6 +47,7 @@ class MjyThemedQuestionMap
         self::SHELF_THEME,
         self::TEXT_HIGHLIGHT_THEME,
         self::PSYCH_TRIAL_THEME,
+        self::MODEL_KANO_THEME,
     ];
 
     /** @var array<string, array<string, mixed>> */

@@ -172,8 +172,18 @@ def psych_trial(**options):
     return question("T", code="QPSY", theme="mjy-psych-trial", themeOptions=payload)
 
 
+#: KANO 的功能点（R02-47）。量表不在这里——它由模型固定，作者写不了。
+KANO_FEATURES = [{"code": "F1", "label": "夜间模式"}, {"code": "F2", "label": "离线缓存"}]
+
+
+def kano(**options):
+    payload = {"structureVersion": "kn1", "features": KANO_FEATURES}
+    payload.update(options)
+    return question("T", code="QKANO", theme="mjy-model-kano", themeOptions=payload)
+
+
 ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap(),
-              loop_rating(), image_pk(), shelf(), text_highlight(), psych_trial())
+              loop_rating(), image_pk(), shelf(), text_highlight(), psych_trial(), kano())
 
 
 # ------------------------------------------------------------------ 注册表

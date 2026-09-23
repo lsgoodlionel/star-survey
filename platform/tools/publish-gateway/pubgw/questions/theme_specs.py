@@ -12,13 +12,15 @@ from .theme_columns import _check_columns, _lower_table, _parse_columns
 from .theme_kit import (
     CELL_MAX_LENGTH, COLUMNS_ATTRIBUTE, HARD_MAX_ROWS, HIGHLIGHT_SEGMENTS_ATTRIBUTE,
     HIGHLIGHT_TEXT_ATTRIBUTE, Issue, LOOP_OBJECTS_ATTRIBUTE, Lowering, MAX_ROWS_ATTRIBUTE,
-    MIN_ROWS_ATTRIBUTE, OPTION_REQUIRED, OPTION_VALUE, OptionSpec, PK_ITEMS_ATTRIBUTE,
+    MIN_ROWS_ATTRIBUTE, MODEL_FEATURES_ATTRIBUTE, MODEL_NAME_ATTRIBUTE, OPTION_REQUIRED,
+    OPTION_VALUE, OptionSpec, PK_ITEMS_ATTRIBUTE,
     PK_PAIRS_ATTRIBUTE, PSYCH_TRIALS_ATTRIBUTE, SHELF_IMAGE_ATTRIBUTE, SHELF_PRODUCTS_ATTRIBUTE,
     STRUCTURE_VERSION_ATTRIBUTE, STRUCTURE_VERSION_PATTERN, ThemeSpec, canonical_json,
 )
 from .theme_research import (
-    MAX_HIGHLIGHT_TEXT, MAX_REACTION_MS, check_psych_trial, check_text_highlight,
-    lower_psych_trial, lower_text_highlight, psych_trial_columns, text_highlight_columns,
+    MAX_HIGHLIGHT_TEXT, MAX_REACTION_MS, check_kano, check_psych_trial, check_text_highlight,
+    kano_columns, lower_kano, lower_psych_trial, lower_text_highlight, psych_trial_columns,
+    text_highlight_columns,
 )
 from .theme_structured import (
     MAX_IMAGE_LENGTH, MAX_SHELF_QUANTITY, check_image_pk, check_loop_rating, check_shelf,
@@ -293,6 +295,21 @@ _THEMES = (
         lower=lower_psych_trial,
         side_columns=psych_trial_columns,
     ),
+    ThemeSpec(
+        name="mjy-model-kano",
+        label="专业模型：KANO",
+        requirement="R02-47",
+        types=("T",),
+        options=(
+            _structure_version(),
+            # 只有功能点是作者的事。量表由模型固定（theme_research.KANO_SCALE）——
+            # 换了量表，5×5 分类表就不再适用，算出来的也就不是 KANO 分类。
+            OptionSpec("features", "list", required=True),
+        ),
+        check=check_kano,
+        lower=lower_kano,
+        side_columns=kano_columns,
+    ),
 )
 
 THEMES: Dict[str, ThemeSpec] = {theme.name: theme for theme in _THEMES}
@@ -309,5 +326,6 @@ MANAGED_ATTRIBUTES = frozenset(
      LOOP_OBJECTS_ATTRIBUTE, PK_ITEMS_ATTRIBUTE, PK_PAIRS_ATTRIBUTE,
      SHELF_IMAGE_ATTRIBUTE, SHELF_PRODUCTS_ATTRIBUTE,
      HIGHLIGHT_TEXT_ATTRIBUTE, HIGHLIGHT_SEGMENTS_ATTRIBUTE, PSYCH_TRIALS_ATTRIBUTE,
+     MODEL_NAME_ATTRIBUTE, MODEL_FEATURES_ATTRIBUTE,
      "mjy_option_groups", "commented_checkbox"}
 )

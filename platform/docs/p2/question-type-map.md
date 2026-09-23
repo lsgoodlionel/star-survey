@@ -78,7 +78,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | R02-44 | Vlookup 问卷关联 | L | | 平台关联查询 | — | 后续 |
 | R02-45 | CATI 组件 | L | | 访员工作台 | — | 后续 |
 | R02-46 | 心理实验组件 | P | ✔4（部分） | `T`＋新主题 `mjy-psych-trial`＋副表；一行一个试次，记按键与反应时；正确率由平台按声明推导，设备元数据未做 | JSON 信封，一行一个试次 | `""`；试次明细在副表 |
-| R02-47 | 专业模型组件 | P | | 按模型生成结构 | — | 后续 |
+| R02-47 | 专业模型组件 | P | ✔4（KANO） | `T`＋新主题 `mjy-model-kano`＋副表；一行一个功能点，正反两问共用**模型固定**的五点量表；其余模型逐个补 | JSON 信封，一行一个功能点 | `""`；正反两问在副表 |
 
 ## 三、DSL 扩展（兼容 definitionVersion 1 与 2）
 
@@ -126,6 +126,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | `mjy-shelf` | R02-18 | `T` | `structureVersion`、`image`、`products`（均必填）、`minPicks`、`maxPicks`、`maxQuantity` | `mjy_table_columns`（`product` 枚举＋唯一、`qty` 整数）、`mjy_shelf_image`、`mjy_shelf_products`、`mjy_structure_version`、行数上下限 |
 | `mjy-text-highlight` | R02-22 | `T` | `structureVersion`、`text`、`segments`、`tags`（均必填）、`minMarks`、`maxMarks` | `mjy_table_columns`（`segment` 枚举＋唯一、`tag` 枚举）、`mjy_highlight_text`、`mjy_highlight_segments`、`mjy_structure_version`、行数上下限 |
 | `mjy-psych-trial` | R02-46 | `T` | `structureVersion`、`trials`、`keys`（均必填）、`maxReactionMs` | `mjy_table_columns`（`trial` 枚举＋唯一、`key` 枚举、`rt` 有界整数）、`mjy_psych_trials`、`mjy_structure_version`，行数上下限钉死成试次个数 |
+| `mjy-model-kano` | R02-47 | `T` | `structureVersion`、`features`（均必填）——**量表不是选项** | `mjy_table_columns`（`feature` 枚举＋唯一、`functional`／`dysfunctional` 枚举到固定量表）、`mjy_model_name`、`mjy_model_features`、`mjy_structure_version`，行数上下限钉死成功能点个数 |
 
 422 错误码：`E_THEME_UNKNOWN`（`mjy-` 前缀却没注册＝拼错，目标实例上会静默降级）、
 `E_THEME_TYPE_MISMATCH`、`E_THEME_OPTIONS_UNSUPPORTED`、`E_THEME_OPTION_UNKNOWN`、
@@ -140,7 +141,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | `mjy-scan-input` | 提交任意字符串 | 编译出的 `em_validation_q` 长度规则（所以 `maxLength` 必填） |
 | `mjy-inline-blank` | 没勾选却填了填空、填空超长 | 原生 `commented_checkbox=checked`＋编译出的长度规则 |
 | `mjy-matrix-stepper` | 跳过没走到的行 | 引擎必答在服务端重算（隐藏的行照样提交） |
-| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk`／`mjy-shelf`／`mjy-text-highlight`／`mjy-psych-trial` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
+| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk`／`mjy-shelf`／`mjy-text-highlight`／`mjy-psych-trial`／`mjy-model-kano` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
 
 ## 三之三、副表的存储契约（给读端）
 
@@ -355,6 +356,42 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 硬塞成每行重复一遍既冗余又同样由客户端提供、同样不可信。它归运行时（R08-14
 「心理实验运行时…计时精度与浏览器元信息可查」），本切片不做，也不假装做了。
 
+### R02-47 专业模型：KANO
+
+需求原话是「**按模型设计生成采集结构**并连接可复现分析，不仅提供题目标题」。
+所以本类交付的是**机制**：主题按模型的设计生成列定义，作者只提供采集对象。
+第一个模型是 KANO——每个功能点问两遍（具备时／不具备时），共用一套五点量表。
+
+```
+[{"code":"feature","label":"功能点","type":"enum","required":true,
+  "options":[{"code":"F1","label":"夜间模式"},…],"distinct":true},
+ {"code":"functional","label":"具备时","type":"enum","required":true,"options":<固定量表>},
+ {"code":"dysfunctional","label":"不具备时","type":"enum","required":true,"options":<同一套>}]
+```
+
+固定量表＝`like` 喜欢这样／`must` 理所当然／`neutral` 无所谓／`live` 勉强接受／
+`dislike` 不喜欢这样。取值代码用英文而不是 1…5，是为了让副表里的单元格自己说明含义。
+
+**量表不是 `themeOptions` 的一项，作者改不了。** 这正是「按模型生成结构」与
+「作者自己搭一个矩阵」的区别：换了量表，KANO 的 5×5 分类表就不再适用，
+算出来的也就不是 KANO 分类。写了 `themeOptions.scale` 会被当成未知选项拒掉
+（`E_THEME_OPTION_UNKNOWN`）。功能点列是枚举＋唯一、行数钉死成功能点个数，
+所以「每个功能点恰好问一遍」不用另写规则。
+
+**「连接可复现分析」的锚点是三样**：`mjy_model_name`（读端据此知道该用哪张分类表，
+不靠猜列名）、结构版本（单元格按哪一版列定义写入）、列字典（两列的取值集合恰好
+张成分类表的 5×5 定义域）。分类结果**不是提交上来的**：信封里没有可以放
+「我属于 A 类」的列，e2e 场景 D 有这一条。
+
+**未做，如实记**：
+
+- **只有 KANO 一个模型。** MaxDiff、联合分析、PSM、Gabor-Granger、AHP、TURF、BPTO
+  等各自还需要设计生成器；其中 MaxDiff 的「最好 ≠ 最差」是**跨列**约束，
+  现有的通用列约束表达不了，要么给插件加一条跨列规则、要么换一种列布局，
+  不在本切片里顺手做。
+- **分类与 Better／Worse 系数的计算不在本车道。** 列字典与结构版本已经足够让它
+  可复现，但计算本身属于统计金标准（WP-08）。
+
 ## 四、缺失值（实测，MariaDB 10.11 与 PostgreSQL 16 完全一致）
 
 引擎对同一列有三种「没有值」，平台字段字典与导出按下表解释。「显示了、没作答」一行来自
@@ -418,8 +455,8 @@ Java 744 条（含字段字典的主题映射 3 条）。
 
 ## 五之三、切片 02.5 的实测结果
 
-`run-question-themes.sh`（`TEST_DB=mysql|pgsql`，真实 HTTP，两种数据库**各 222 条断言全部通过**，
-切片 02.4 是 169）。篡改场景 D 共 48 条，其中文字点睛 7 条：
+`run-question-themes.sh`（`TEST_DB=mysql|pgsql`，真实 HTTP，两种数据库**各 248 条断言全部通过**，
+切片 02.4 是 169）。篡改场景 D 共 55 条，其中文字点睛 7 条：
 
 | 篡改 | 挡住它的约束 |
 |---|---|
@@ -448,6 +485,22 @@ Java 744 条（含字段字典的主题映射 3 条）。
 
 八条全部留在本页，且没有任何已提交答卷带着这些值。
 
+KANO 7 条：
+
+| 篡改 | 挡住它的约束 |
+|---|---|
+| 提交模型没定义的量表值（`5`） | `functional` 是枚举到固定量表 |
+| 借用别处的量表值（`hate`） | `dysfunctional` 同上 |
+| **夹带一列 `category` 自称属于 A 类** | 未知列一律拒收——分类由平台算，不由作答者宣布 |
+| 提交一个没声明过的功能点 | `feature` 是枚举列 |
+| 同一功能点问两次 | `feature` 是唯一列 |
+| 只答正向问、反向问留空 | `dysfunctional` 必填——KANO 的两问是一对，缺一问那一格分类无从填起 |
+| 少答一个功能点 | 行数下限＝功能点个数 |
+
+七条全部留在本页，且没有任何已提交答卷带着这些值。
+
+三类合计 22 条篡改用例，每条一个新会话、真实 HTTP 表单提交，两种数据库各跑一遍。
+
 ## 六、本批实现与延后
 
 本批：`L ! M P O 5 Y G F H A B C E 1 : ; S T U Q N K D R | X`（`*` 计算值沿用 WP-03），
@@ -465,6 +518,10 @@ Java 744 条（含字段字典的主题映射 3 条）。
   R02-07 的「选项内嵌填空」已交付，`Q` 多项填空型组合仍在原生子集。
 - **插件扩展**（P 类余下 14 条）：副表的「结构版本」列已落地（ADR 0006 限制 9 解除），
   余下各条缺的是各自的编辑器主题与列定义生成器，不再缺公共设施。
-  R02-03 另需字典服务与级联清值策略；R02-17/20/21/25/26/32/39/41 需资产服务。
+  切片 02.5 又交付 R02-22、R02-46（部分）、R02-47（KANO）。
+  **仍未做的 6 条各有外部阻塞**：R02-03 需平台字典服务（省市区树数千节点，
+  塞不进题目属性）与级联清值策略；R02-20/21/25/26/32/39/41 共 7 条全卡在平台资产服务
+  （媒体版本留存、授权播放、录音录像上传、图片合成、画布快照）——其中 R02-17 的
+  参赛图、货架图与热力图底图已经在用作者填的 URL 顶着，资产服务到位前不再扩大这个欠账。
 - **平台侧**（L 类 8 条）：依赖字典／容量／价格／计时／关联服务，按对应 WP 排期；R02-05 归逻辑 DSL。
 - **阻塞**（B 类 7 条）：供应商或授权渠道未落实（`05-供应商询证清单.md`），不做占位实现。

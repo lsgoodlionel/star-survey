@@ -41,7 +41,8 @@ final class QuestionTypeColumns {
     private static final java.util.Set<String> STRUCTURED_THEMES =
             java.util.Set.of(
                     "mjy-repeating-table", "mjy-heatmap", "mjy-loop-rating",
-                    "mjy-image-pk", "mjy-shelf", "mjy-text-highlight", "mjy-psych-trial");
+                    "mjy-image-pk", "mjy-shelf", "mjy-text-highlight", "mjy-psych-trial",
+                    "mjy-model-kano");
 
     private static final List<OptionLabel> FIVE = scale(5);
     private static final Map<String, List<OptionLabel>> BUILT_IN = Map.of(

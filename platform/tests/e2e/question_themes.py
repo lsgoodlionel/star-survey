@@ -158,14 +158,15 @@ def scenario_values(run: Run, response_id: str) -> None:
     """逐列断言答卷表，再逐格断言副表（含结构版本）。"""
     print("scenario B: every stored column and every projected cell", file=sys.stderr)
     from question_themes_plan import (
-        HEAT_ROWS, LOOP_ROWS, MARK_ROWS, MARK_SEGMENTS, PK_ROWS, PSYCH_ROWS, SHELF_ROWS, TABLE_ROWS,
+        HEAT_ROWS, KANO_ROWS, LOOP_ROWS, MARK_ROWS, MARK_SEGMENTS, PK_ROWS, PSYCH_ROWS,
+        SHELF_ROWS, TABLE_ROWS,
     )
 
     #: 走副表的题：(题目代码, 归一化后的行, 结构版本)。
     side = (("QTABLE", TABLE_ROWS, "rt1"), ("QLOOP", LOOP_ROWS, "lr1"),
             ("QPK", PK_ROWS, "pk1"), ("QSHELF", SHELF_ROWS, "sh1"),
             ("QMARK", MARK_ROWS, "th1"), ("QPSY", PSYCH_ROWS, "ps1"),
-            ("QHEAT", HEAT_ROWS, "hm1"))
+            ("QKANO", KANO_ROWS, "kn1"), ("QHEAT", HEAT_ROWS, "hm1"))
     row = run.last_row()
     run.check("B: response submitted", row[("_submitted", "", 0)] == "1", row)
     expected = {column: value for answers in valid_pages() for column, value in answers.items()}
@@ -254,6 +255,18 @@ def scenario_values(run: Run, response_id: str) -> None:
     run.check("B: QPSY bounds the reaction time in milliseconds",
               (psych_columns["rt"]["type"], psych_columns["rt"]["min"],
                psych_columns["rt"]["max"]) == ("integer", 0, 5000), psych_columns.get("rt"))
+    # KANO：正反两问共用**由模型固定**的五点量表，恰好张成分类表的 5×5 定义域；
+    # 分类由平台按这两列算，信封里同样没有可以放「我属于 A 类」的地方。
+    kano_columns = {column["code"]: column for column in run.side_tables.get("QKANO", {}).get("columns", [])}
+    run.check("B: QKANO binding declares the feature column and both halves and nothing else",
+              list(kano_columns) == ["feature", "functional", "dysfunctional"], list(kano_columns))
+    run.check("B: both QKANO halves share the scale the model fixes",
+              all([option["code"] for option in kano_columns[half]["options"]]
+                  == ["like", "must", "neutral", "live", "dislike"]
+                  for half in ("functional", "dysfunctional")), kano_columns)
+    run.check("B: QKANO pins the feature column to the declared features and forbids repeats",
+              [option["code"] for option in kano_columns.get("feature", {}).get("options", [])] == ["F1", "F2"]
+              and kano_columns["feature"].get("distinct") is True, kano_columns.get("feature"))
     run.report["complete"] = {"{}[{}#{}]".format(*column): value for column, value in row.items()}
 
 
@@ -385,7 +398,7 @@ def main() -> int:
         run.check("publish: every compiled column bound",
                   all(question["fields"] for question in published["binding"]["questions"]))
         run.check("publish: every side-table question declares a side table",
-                  sorted(run.side_tables) == ["QHEAT", "QLOOP", "QMARK", "QPK", "QPSY",
+                  sorted(run.side_tables) == ["QHEAT", "QKANO", "QLOOP", "QMARK", "QPK", "QPSY",
                                               "QSHELF", "QTABLE"],
                   sorted(run.side_tables))
 
