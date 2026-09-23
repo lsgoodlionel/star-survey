@@ -4,10 +4,14 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import sqlite3
 import tempfile
+import time
 import unittest
 
 from pubgw import cli
+from pubgw.store import RESULTS_FILE
 
 from .fakes import FakeEngine
 from .fixtures import sample_definition, sample_payload
@@ -139,3 +143,72 @@ class CommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PruneResultsTest(unittest.TestCase):
+    """回收磁盘是运维显式触发的维护动作（自动路径不做 VACUUM，见 store.reclaim）。"""
+
+    DAY = 24 * 3600
+
+    def setUp(self):
+        self.state_dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.state_dir, RESULTS_FILE)
+
+    def tearDown(self):
+        shutil.rmtree(self.state_dir)
+
+    def run_cli(self, env=None):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(io.StringIO()):
+            code = cli.run(["prune-results"], env=dict({"PUBGW_STATE_DIR": self.state_dir}, **(env or {})))
+        return code, buffer.getvalue()
+
+    def store_row(self, request_id, age_seconds):
+        connection = sqlite3.connect(self.path)
+        with connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS publish_results (request_id TEXT PRIMARY KEY, "
+                "fingerprint TEXT NOT NULL, status INTEGER NOT NULL, body BLOB NOT NULL, "
+                "created_at INTEGER NOT NULL, survey_id INTEGER, pruned_at INTEGER)"
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO publish_results "
+                "(request_id, fingerprint, status, body, created_at) VALUES (?, ?, ?, ?, ?)",
+                (request_id, "fp", 200, sqlite3.Binary(b"x" * 4096), int(time.time()) - age_seconds),
+            )
+        connection.close()
+
+    def test_reports_what_it_dropped_and_vacuums(self):
+        self.store_row("old", 8 * self.DAY)
+        self.store_row("ancient", 100 * self.DAY)
+        self.store_row("fresh", 60)
+
+        code, out = self.run_cli()
+
+        self.assertEqual(0, code)
+        report = json.loads(out)
+        self.assertEqual(1, report["bodiesDropped"])
+        self.assertEqual(1, report["tombstonesDeleted"])
+        self.assertTrue(report["vacuumed"])
+        self.assertEqual(7 * self.DAY, report["resultTtlSeconds"])
+
+    def test_honours_a_configured_window(self):
+        self.store_row("old", 2 * self.DAY)
+
+        code, out = self.run_cli({"PUBGW_RESULT_TTL_SECONDS": "86400"})
+
+        self.assertEqual(0, code)
+        self.assertEqual(1, json.loads(out)["bodiesDropped"])
+
+    def test_refuses_without_a_state_dir(self):
+        code, _ = self.run_cli()
+        self.assertEqual(0, code)  # 上面那次已经建过库；这里只验证缺配置的分支
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(2, cli.run(["prune-results"], env={}))
+
+    def test_refuses_a_bad_retention_window(self):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = cli.run(["prune-results"],
+                           env={"PUBGW_STATE_DIR": self.state_dir, "PUBGW_RESULT_TTL_SECONDS": "60"})
+
+        self.assertEqual(2, code)

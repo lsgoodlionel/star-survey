@@ -267,9 +267,11 @@ E_FINGERPRINT_MISMATCH 结构指纹不一致：编译期 fm1:74e0d199d9839cdc，
    （[ADR 0003](0003-runtime-events.md)）。网关当前的回滚动作 `delete_survey`
    会连答卷一起删，**绝不能**用在已接收答卷的问卷上。生产版必须先做
    「答卷存在性检查 ＋ 拒绝回滚」这道闸门。
-3. **没有幂等与并发保护。** 同一份定义连发两次会产生两个问卷；
-   两个进程同时发布同一份定义不会互相阻塞。生产版需要平台侧的发布锁
-   与「定义指纹 → 已发布 sid」的幂等表。
+3. ~~**没有幂等与并发保护。**~~ 已解决：网关有按 `requestId` 的结果存档（SQLite）与进程内在途锁
+   （`pubgw/store.py`，契约 [publish-gateway-v1](../../contracts/publish-gateway-v1.md)）。
+   存档的留存期见 [ADR 0012](0012-republish-and-drift.md) 决定 7：回执留 7 天、墓碑留 90 天，
+   过期重放是 410 `result_expired`，墓碑到期后同一 `requestId` 才会被当成新请求。
+   在途锁仍只在进程内，网关只能单副本运行（见下）。
 4. **题型主题只在导入后回读，没有发布前预检。** RemoteControl 没有列出
    `lime_question_themes` 的方法，所以「目标实例装没装这个主题」只能等导入完
    再用 `list_questions` 回读比对。代价是一次白跑的导入＋回滚。

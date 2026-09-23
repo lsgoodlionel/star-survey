@@ -143,6 +143,49 @@ class PublishReconciliationTest {
     }
 
     @Test
+    void anAgedOutReceiptEndsTheRetryLoopAndRecordsTheEngineSurveyForCleanup() {
+        // 只能用 pendingAfterUnknown：pendingAfterLostSuccess 会在假网关里按 requestId 预先缓存
+        // 一个成功结果，重发时缓存命中，下面挂的 expired 脚本根本不会被调用。
+        pendingAfterUnknown(ws, survey);
+        gateway.script(survey, request -> FakePublishGateway.expired(200, 700_777));
+
+        reconciler.runOnce();
+
+        // 终局而不是待核对：网关的回执没了，再发一遍只会得到同一个 410。
+        assertThat(surveys.get(ws.owner(), survey).status()).isEqualTo(SurveyStatus.PUBLISH_FAILED);
+        PublishAttemptView attempt = lastPublish(ws, survey);
+        assertThat(attempt.gatewayStatus()).isEqualTo(410);
+        assertThat(attempt.failedStage()).isEqualTo(PublishSettlement.EXPIRED_STAGE);
+        // 引擎里那份问卷平台没有任何版本与路由指向它，按孤儿记录等人工清理。
+        assertThat(attempt.orphanEngineSid()).isEqualTo(700_777);
+        assertThat(routes.findByPublicId(ws.tenant(), survey)).isEmpty();
+        assertThat(surveys.versions(ws.owner(), survey)).isEmpty();
+    }
+
+    @Test
+    void anAgedOutRejectionLeavesNothingBehindInTheEngine() {
+        pendingAfterUnknown(ws, survey);
+        gateway.script(survey, request -> FakePublishGateway.expired(422, null));
+
+        reconciler.runOnce();
+
+        assertThat(surveys.get(ws.owner(), survey).status()).isEqualTo(SurveyStatus.PUBLISH_FAILED);
+        assertThat(lastPublish(ws, survey).orphanEngineSid()).isNull();
+    }
+
+    @Test
+    void anAgedOutReceiptIsNotRetriedAgain() {
+        pendingAfterUnknown(ws, survey);
+        gateway.script(survey, request -> FakePublishGateway.expired(200, 700_778));
+        reconciler.runOnce();
+        int calls = gateway.callsFor(survey).size();
+
+        reconciler.runOnce();
+
+        assertThat(gateway.callsFor(survey)).hasSize(calls);
+    }
+
+    @Test
     void aStillUnknownOutcomeStaysPendingAndBacksOffBeforeTheNextTry() {
         pendingAfterUnknown(ws, survey);
 

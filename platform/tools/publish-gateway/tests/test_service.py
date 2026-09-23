@@ -11,15 +11,18 @@ from .gateway_support import (
     INSTANCE,
     NOW,
     BlockingEngine,
+    MovableClock,
     PasswordEchoEngine,
     encode,
     envelope,
     invalid_definition,
     make_service,
+    make_store,
     new_engine,
     signed_headers,
 )
 from .fixtures import sample_payload
+from pubgw.store import Retention
 
 CONTRACT_RESULT_KEYS = {
     "ok", "surveyId", "failedStage", "failures", "rolledBack",
@@ -182,6 +185,127 @@ class ConflictTest(ServiceTestCase):
             second.join(timeout=10)
 
         self.assertEqual([200, 200], results)
+
+
+DAY = 24 * 3600
+
+
+class RetentionTest(ServiceTestCase):
+    """回执留存有界（契约 v1.3）：窗口内原样重放，过期后 410，墓碑到期后才重新发布。"""
+
+    def setUp(self):
+        super().setUp()
+        self.clock = MovableClock()
+        self.retention = Retention(result_seconds=7 * DAY, tombstone_seconds=90 * DAY)
+
+    def service(self, engine):
+        store = make_store(self.state_dir, clock=self.clock, retention=self.retention)
+        return make_service(engine, self.state_dir, store=store)
+
+    def test_a_replay_inside_the_window_is_byte_identical(self):
+        engine = new_engine()
+        service = self.service(engine)
+        payload = envelope()
+
+        first = self.send(service, payload)
+        self.clock.advance(7 * DAY - 1)
+        second = self.send(service, payload)
+
+        self.assertEqual(first, second)
+        self.assertEqual(1, engine.methods().count("import_survey"))
+
+    def test_a_replay_after_the_window_is_410_expired_and_does_not_publish_again(self):
+        engine = new_engine()
+        service = self.service(engine)
+        payload = envelope()
+        _, first = self.send(service, payload)
+
+        self.clock.advance(7 * DAY)
+        status, body = self.send(service, payload)
+
+        self.assertEqual(410, status)
+        self.assertEqual("expired", body["status"])
+        self.assertEqual("result_expired", body["error"])
+        self.assertEqual(200, body["expired"]["originalStatus"])
+        self.assertEqual(first["result"]["surveyId"], body["expired"]["surveyId"])
+        self.assertEqual(7 * DAY, body["expired"]["retainedSeconds"])
+        self.assertEqual(1, engine.methods().count("import_survey"))
+
+    def test_the_tombstone_says_when_the_receipt_was_stored(self):
+        service = self.service(new_engine())
+        payload = envelope()
+        self.send(service, payload)
+
+        self.clock.advance(7 * DAY)
+        _, body = self.send(service, payload)
+
+        self.assertEqual("2027-01-15T08:00:00Z", body["expired"]["createdAt"])
+
+    def test_an_expired_rejection_reports_422_and_no_survey_id(self):
+        service = self.service(new_engine())
+        payload = envelope(definition=invalid_definition())
+        self.send(service, payload)
+
+        self.clock.advance(7 * DAY)
+        status, body = self.send(service, payload)
+
+        self.assertEqual(410, status)
+        self.assertEqual(422, body["expired"]["originalStatus"])
+        self.assertIsNone(body["expired"]["surveyId"])
+
+    def test_an_expired_failure_reports_the_engine_survey_it_left_behind(self):
+        """回滚也失败的 502 留下孤儿问卷；墓碑必须记住 sid，否则人工清理无从下手。"""
+        service = self.service(new_engine(fail_activate=True, fail_delete=True))
+        payload = envelope()
+        status, first = self.send(service, payload)
+        self.assertEqual(502, status)
+        orphan = first["result"]["orphanSurveyId"]
+        self.assertIsNotNone(orphan)
+
+        self.clock.advance(7 * DAY)
+        _, body = self.send(service, payload)
+
+        self.assertEqual(502, body["expired"]["originalStatus"])
+        self.assertEqual(orphan, body["expired"]["surveyId"])
+
+    def test_a_reused_request_id_with_a_different_body_is_still_400_after_expiry(self):
+        """指纹留在墓碑里：过期不该把"请求体对不上"降级成 410。"""
+        engine = new_engine()
+        service = self.service(engine)
+        request_id = "0b0d3f2e-1111-4111-8111-000000000009"
+        self.send(service, envelope(request_id=request_id))
+
+        self.clock.advance(7 * DAY)
+        other = sample_payload()
+        other["title"] = "another definition"
+        status, body = self.send(service, envelope(request_id=request_id, definition=other))
+
+        self.assertEqual(400, status)
+        self.assertEqual("invalid_request", body["error"])
+        self.assertEqual(1, engine.methods().count("import_survey"))
+
+    def test_once_the_tombstone_ages_out_the_same_request_id_publishes_again(self):
+        """诚实记录的代价：墓碑窗口必须长于平台任何可能的重试视野。"""
+        engine = new_engine()
+        service = self.service(engine)
+        payload = envelope()
+        self.send(service, payload)
+
+        self.clock.advance(90 * DAY)
+        status, _ = self.send(service, payload)
+
+        self.assertEqual(200, status)
+        self.assertEqual(2, engine.methods().count("import_survey"))
+
+    def test_the_expired_reply_carries_no_engine_password(self):
+        """首次 502 的正文里有引擎回显的口令；墓碑只留状态码，重放也不能漏。"""
+        service = self.service(new_engine(PasswordEchoEngine))
+        payload = envelope()
+        self.assertEqual(502, self.send(service, payload)[0])
+
+        self.clock.advance(7 * DAY)
+
+        self.assertEqual(410, self.send(service, payload)[0])  # 口令检查在 tearDown 里统一做
 
 
 class IdempotencyTest(ServiceTestCase):

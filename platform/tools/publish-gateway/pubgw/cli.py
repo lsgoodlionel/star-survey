@@ -5,8 +5,13 @@
     pubgw publish     --definition survey.json --engine-url http://localhost \
                       --engine-instance survey-test-web --binding-out binding.json
     pubgw drift-check --binding binding.json --engine-url http://localhost
+    pubgw prune-results                          # 维护动作，读 PUBGW_STATE_DIR 与两个留存期变量
 
 退出码：0 通过；1 发布失败／校验不通过／检出漂移；2 配置或定义本身有问题。
+
+``prune-results`` 清掉过了留存期的存档并 VACUUM 回收磁盘（契约 v1.3）。VACUUM 要独占锁并重写整个
+文件，放进网关自动路径会与正常请求抢锁（详见 ``store.ResultStore.reclaim``），所以它是**运维在维护
+窗口里显式执行**的命令。行级清理本身由网关进程自己定期做，不需要这个命令。
 
 口令只从环境变量读（默认 ``LIMESURVEY_RPC_PASSWORD``），不接受命令行参数：
 命令行会进 shell 历史与进程列表。
@@ -26,6 +31,7 @@ from .model import DefinitionError, SurveyDefinition
 from .policy.probe import HttpPolicyProbe
 from .publish import Publisher
 from .rpc import HttpTransport, RemoteControlClient, RpcError
+from .store import RESULTS_FILE, ResultStore, retention_from_env
 from .validate import validate_definition
 
 EXIT_OK = 0
@@ -49,6 +55,7 @@ def run(
         "compile": _compile,
         "publish": _publish,
         "drift-check": _drift_check,
+        "prune-results": _prune_results,
     }
     try:
         return handlers[args.command](args, env, transport_factory or HttpTransport)
@@ -79,6 +86,8 @@ def _parser() -> argparse.ArgumentParser:
     drift = subparsers.add_parser("drift-check")
     drift.add_argument("--binding", required=True, help="发布时产出的绑定记录")
     _add_engine_arguments(drift)
+
+    subparsers.add_parser("prune-results", help="清掉过期存档并回收磁盘（配置只从环境变量读）")
     return parser
 
 
@@ -132,6 +141,28 @@ def _publish(args, env, transport_factory) -> int:
         if result.orphan_survey_id is not None:
             _report("orphan survey left behind: sid={}".format(result.orphan_survey_id), EXIT_FAILED)
     return EXIT_OK if result.ok else EXIT_FAILED
+
+
+def _prune_results(args, env, transport_factory) -> int:
+    """按配置的留存期清一遍存档，然后 VACUUM。配置只从环境变量读，与网关进程同一套。"""
+    state_dir = env.get("PUBGW_STATE_DIR", "")
+    if not state_dir:
+        return _report("PUBGW_STATE_DIR is not set", EXIT_CONFIG)
+    try:
+        retention = retention_from_env(env)
+    except ValueError as error:
+        return _report(str(error), EXIT_CONFIG)
+
+    store = ResultStore(os.path.join(state_dir, RESULTS_FILE), retention=retention)
+    report = store.prune()
+    _emit({
+        "bodiesDropped": report.bodies_dropped,
+        "tombstonesDeleted": report.rows_deleted,
+        "vacuumed": store.reclaim(),
+        "resultTtlSeconds": retention.result_seconds,
+        "tombstoneTtlSeconds": retention.tombstone_seconds,
+    })
+    return EXIT_OK
 
 
 def _drift_check(args, env, transport_factory) -> int:

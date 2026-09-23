@@ -26,7 +26,7 @@
 }
 ```
 
-- `requestId`：平台生成的幂等键（UUID）。同一 `requestId` 重复到达时，网关返回首次的结果，不再发布第二次。
+- `requestId`：平台生成的幂等键（UUID）。同一 `requestId` 重复到达时，网关返回首次的结果，不再发布第二次。**存档有留存期**（v1.3）：过期后重放得到 410 `result_expired`，不会被当成新请求再发布一次。
 - 同一 `definition.uuid` 在同一实例上**同一时刻只允许一次发布**；并发的第二个请求得到 409 `publish_in_progress`。
 
 响应：
@@ -36,6 +36,7 @@
 | 200 | `{"status":"published","result":<PublishResult>}` | 已激活，`result.binding` 为绑定记录 |
 | 422 | `{"status":"rejected","result":<PublishResult>}` | 定义未通过前置校验（`failedStage` = `validate`），**引擎未被触碰** |
 | 502 | `{"status":"failed","result":<PublishResult>}` | 引擎侧失败；`rolledBack` 表明是否已回滚，`orphanSurveyId` 非空表示回滚也失败、需人工处理 |
+| 410 | `{"status":"expired","error":"result_expired","expired":{…}}` | 该 `requestId` 确实发布过，但回执已过留存期（v1.3）。**不是"没发过"**，重发无意义 |
 | 409 | `{"status":"conflict","error":"publish_in_progress"}` | 同一定义正在发布 |
 | 404 | `{"error":"unknown_engine_instance"}` | 网关没有这个实例的配置 |
 | 400 | `{"error":"invalid_request"}` | 请求体不合法 |
@@ -49,6 +50,45 @@
 - **409** 同时覆盖两种情况：同一 `requestId` 的首个请求仍在进行中；同一实例上同一 `definition.uuid` 正在发布。
 - 网关的并发锁在进程内，**只能单副本运行**；多副本需要共享锁（留待生产化）。
 - 网关会把所有已配置的引擎口令在响应体与日志中替换为 `***`，即使引擎在错误信息里回显了口令。
+
+### 结果存档的留存期（v1.3，2026-09-23）
+
+存档存在的唯一理由是让 `requestId` 重试幂等，所以它只需要活到平台不再可能重试为止。
+留存分两段，两段都可配置（网关环境变量，见 `platform/tools/publish-gateway/README.md`）：
+
+| 阶段 | 时长 | 库里留着什么 | 同一 `requestId` 重放得到 |
+|---|---|---|---|
+| 回执期 | `PUBGW_RESULT_TTL_SECONDS`，缺省 **7 天**，下限 24 小时 | 完整应答体 | 首次应答，**逐字节一致** |
+| 墓碑期 | `PUBGW_TOMBSTONE_TTL_SECONDS`，缺省 **90 天**，不得短于回执期 | 只有请求指纹、原状态码、落库时刻、引擎 sid；应答体已丢弃 | **410 `result_expired`** |
+| 之后 | — | 什么都没有 | 当成新请求，**会真的再发布一次** |
+
+- 判过期只看 `created_at`，不取决于清理任务什么时候跑：清理晚跑也不会多返回一个字节。网关每小时清一次行；回收磁盘（`VACUUM`）会与正常请求抢锁，是运维显式执行的维护动作，不在自动路径上。
+- 回执期必须盖住平台的整条重试／核对链路。按平台缺省值（`platform.survey.reconcile`：
+  `max-attempts=8`、退避 1 分钟起翻倍、上限 30 分钟）自动核对总跨度约 1.5 小时，之后转人工复核；
+  缺省 7 天是留给人的时间。下限 24 小时是刻意的：写小了等于把幂等关掉，网关宁可拒绝启动。
+- 墓碑期必须长于平台任何可能的重试视野。**这是本节唯一的真实风险**：墓碑一旦消失，
+  同一 `requestId` 就会被当成新请求，在引擎里多出一份问卷。平台侧的人工复核流程必须在墓碑期内收尾。
+
+410 的 `expired` 块：
+
+```json
+{
+  "status": "expired",
+  "error": "result_expired",
+  "expired": {
+    "originalStatus": 200,
+    "createdAt": "2027-01-15T08:00:00Z",
+    "retainedSeconds": 604800,
+    "surveyId": 511001
+  }
+}
+```
+
+- `originalStatus`：首次应答的 HTTP 状态（200 / 422 / 502 / 500）。
+- `surveyId`：**可能还留在引擎里**的那份问卷——首次 200（已发布）或首次 502 且回滚也失败（孤儿）时才有；
+  422、以及干净回滚掉的 502 都是 `null`，因为引擎里什么都没留下。
+- `createdAt`：首次结果落库的时刻（UTC）。`retainedSeconds`：当前配置的回执留存期，便于排障时看出配置。
+- **指纹检查在过期之前**：同一 `requestId` 配不同请求体，仍然是 400 `invalid_request`，不是 410。
 
 `<PublishResult>` 即网关现有 `PublishResult.to_dict()` 的结构（`ok`、`surveyId`、`failedStage`、`failures`、`rolledBack`、`orphanSurveyId`、`steps`、`binding`、`verification`）。`binding` 即 `BindingRecord.to_dict()`：`engineInstance`、`surveyId`、`definitionUuid`、`compilerVersion`、`fingerprintVersion`、`fingerprint`、`language`、`publishedAt`、`questions[]`。
 
@@ -64,3 +104,9 @@
 - 422 / 502 时记录失败阶段与原因，问卷状态回到可再次发布，**不登记路由**；
 - 超时或网络错误：结果未知，状态记为"待核对"，用同一 `requestId` 重试，依赖网关幂等拿到确定结果。
 - 409、500 及无法解析的响应同样按"结果未知"处理（v1.1）；400 / 401 / 404 记为发布失败，重试时换新的 `requestId`。
+- **410 是终局，不是"结果未知"**（v1.3）：重发只会再得到 410。平台记为发布失败（不登记路由、不写版本、
+  问卷回到可再次发布），并把 `expired.surveyId` 按**孤儿问卷**存档 + 大声记日志——那份问卷还在引擎里跑，
+  平台却没有任何版本或路由指向它，只能人工清理。410 应答体读不出细节时仍按 410 处理，绝不退回"结果未知"：
+  那是一个永远走不完的重试环。
+- 人工复核（`survey_publish_attempt.manual_review_at` 非空、自动核对已停止）必须在网关的**墓碑期内**收尾。
+  拖过墓碑期，同一 `requestId` 会被网关当成新请求再发布一次。

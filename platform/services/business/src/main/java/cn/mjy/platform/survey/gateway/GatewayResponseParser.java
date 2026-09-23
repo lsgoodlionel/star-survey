@@ -39,6 +39,34 @@ final class GatewayResponseParser {
                 optionalText(result, "policyDigest"));
     }
 
+    /**
+     * 410 应答体里的 {@code expired} 块。这里<b>刻意宽松</b>：410 已经说明了要紧的那件事
+     * （回执过期、重发没有意义），细节读不出来也不能退回"结果未知"——那是一个永远走不完的重试环。
+     */
+    static GatewayOutcome.Expired expired(JsonNode body) {
+        JsonNode expired = body == null ? null : body.get("expired");
+        if (expired == null || !expired.isObject()) {
+            return new GatewayOutcome.Expired(0, null, null);
+        }
+        return new GatewayOutcome.Expired(lenientInt(expired, "originalStatus", 0),
+                boxedLenientInt(expired, "surveyId"), lenientText(expired, "createdAt"));
+    }
+
+    private static int lenientInt(JsonNode node, String name, int fallback) {
+        Integer value = boxedLenientInt(node, name);
+        return value == null ? fallback : value;
+    }
+
+    private static Integer boxedLenientInt(JsonNode node, String name) {
+        JsonNode value = node.get(name);
+        return value != null && value.isIntegralNumber() && value.canConvertToInt() ? value.intValue() : null;
+    }
+
+    private static String lenientText(JsonNode node, String name) {
+        JsonNode value = node.get(name);
+        return value != null && value.isString() ? value.asString() : null;
+    }
+
     /** 400/401/404 应答体里的 {@code error}；缺失时退回 HTTP 状态说明。 */
     static String error(JsonNode body, int status) {
         JsonNode error = body == null ? null : body.get("error");

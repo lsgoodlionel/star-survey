@@ -232,6 +232,11 @@ public class FakePublishGateway implements PublishGatewayClient {
                 new GatewayResult(false, null, "validate", List.of(failures), false, null, null, null));
     }
 
+    /** 网关的回执已过留存期（契约 v1.3）：重发只会再得到 410。 */
+    public static GatewayOutcome expired(int originalStatus, Integer engineSid) {
+        return new GatewayOutcome.Expired(originalStatus, engineSid, "2027-01-15T08:00:00Z");
+    }
+
     public static GatewayOutcome engineFailed(int orphanSid, String... failures) {
         Integer orphan = orphanSid > 0 ? orphanSid : null;
         return new GatewayOutcome.Failed(502,

@@ -14,6 +14,9 @@
 第 8 步的任何结果都落库，同一 ``requestId`` 之后只重放、不再发布——
 包括 500：那时引擎状态未知，重复发布只会多留一个问卷。
 
+存档是**有界**的（契约 v1.3，见 store.py）：完整回执过了留存期只剩墓碑，此时重放是
+410 ``result_expired``，而不是当作没发过——后者会让平台再发布一次，在引擎里多出一份问卷。
+
 口令防线：响应体在出门前把所有已配置的引擎口令（原文、repr 与 JSON 转义形式）替换成
 ``***``，即使引擎把口令写进了错误信息也不会外泄。
 
@@ -38,7 +41,7 @@ from .ops_request import parse_close_request, parse_drift_request
 from .publish import PublishResult, Publisher
 from .request import InvalidRequest, PublishRequest, parse_request
 from .rpc import HttpTransport, RemoteControlClient, RpcError, Transport
-from .store import InFlight, ResultStore, StoredResult
+from .store import ExpiredResult, InFlight, Lookup, ResultStore
 
 log = logging.getLogger("pubgw.service")
 
@@ -53,6 +56,14 @@ _REJECTED_STAGES = frozenset({"validate", "compile"})
 class Response:
     status: int
     body: bytes
+
+
+@dataclass(frozen=True)
+class _Attempt:
+    """一次发布的应答，外加要写进墓碑的引擎 sid（回执过期后只剩它可查）。"""
+
+    response: Response
+    survey_id: Optional[int] = None
 
 
 class LazyLoginClient(RemoteControlClient):
@@ -236,14 +247,15 @@ class PublishService:
             stored = self._store.get(request.request_id)
             if stored is not None:
                 return self._replay(request, stored)
-            response = self._run(request, engine, definition)
-            stored = self._store.put(request.request_id, request.fingerprint, response.status, response.body)
+            attempt = self._run(request, engine, definition)
+            stored = self._store.put(request.request_id, request.fingerprint, attempt.response.status,
+                                     attempt.response.body, attempt.survey_id)
             return Response(stored.status, stored.body)
         finally:
             for key in acquired:
                 self._locks.release(key)
 
-    def _run(self, request: PublishRequest, engine: EngineConfig, definition: SurveyDefinition) -> Response:
+    def _run(self, request: PublishRequest, engine: EngineConfig, definition: SurveyDefinition) -> _Attempt:
         started = time.monotonic()
         client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
         try:
@@ -255,20 +267,42 @@ class PublishService:
                 "request %s: unexpected error publishing %s on %s; engine state unknown",
                 request.request_id, definition.uuid, engine.instance_id,
             )
-            return self._json(500, {"error": "internal_error"})
+            return _Attempt(self._json(500, {"error": "internal_error"}))
         finally:
             _logout(client, request.request_id)
 
         status, label = classify(result)
         self._log_outcome(request, engine, definition, result, status, time.monotonic() - started)
-        return self._json(status, {"status": label, "result": result.to_dict()})
+        return _Attempt(self._json(status, {"status": label, "result": result.to_dict()}),
+                        surviving_survey_id(result))
 
-    def _replay(self, request: PublishRequest, stored: StoredResult) -> Response:
+    def _replay(self, request: PublishRequest, stored: Lookup) -> Response:
+        """指纹先对：请求体不同一律 400，哪怕存档已经只剩墓碑。"""
         if stored.fingerprint != request.fingerprint:
             log.warning("request %s: requestId reused with a different body", request.request_id)
             return self._invalid()
+        if isinstance(stored, ExpiredResult):
+            return self._expired(request, stored)
         log.info("request %s: replaying stored %s", request.request_id, stored.status)
         return Response(stored.status, stored.body)
+
+    def _expired(self, request: PublishRequest, stored: ExpiredResult) -> Response:
+        """回执过了留存期：给一个明确的终局，平台不能把它当成"没发过"再发一次。"""
+        log.error(
+            "request %s: the stored result aged out (original http %s, engine sid=%s, stored at %s); "
+            "the platform has to settle this publish by hand",
+            request.request_id, stored.original_status, stored.survey_id, _utc(stored.created_at),
+        )
+        return self._json(410, {
+            "status": "expired",
+            "error": "result_expired",
+            "expired": {
+                "originalStatus": stored.original_status,
+                "createdAt": _utc(stored.created_at),
+                "retainedSeconds": self._store.retention.result_seconds,
+                "surveyId": stored.survey_id,
+            },
+        })
 
     def _acquire_all(self, keys: List[Tuple[str, ...]]) -> Optional[List[Tuple[str, ...]]]:
         acquired = []
@@ -317,6 +351,20 @@ class PublishService:
                 "request %s: ORPHAN survey sid=%s left on %s, manual cleanup required",
                 request.request_id, result.orphan_survey_id, engine.instance_id,
             )
+
+
+def surviving_survey_id(result: PublishResult) -> Optional[int]:
+    """回执过期后仍可能留在引擎里的那个 sid：发布成功的、或回滚也失败的孤儿。
+
+    干净回滚掉的 502 不算——那份问卷已经不在了，报出来只会误导人工清理。
+    """
+    if result.orphan_survey_id is not None:
+        return result.orphan_survey_id
+    return result.survey_id if result.ok else None
+
+
+def _utc(epoch_seconds: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
 
 
 def classify(result: PublishResult) -> Tuple[int, str]:
