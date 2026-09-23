@@ -9,12 +9,19 @@
 直接往答卷表写三份答卷，每列一个互不相同的值；再经 ``ResponseReadService``（签名请求，
 RemoteControl 走 ``docker exec curl``）读取第 1、3 号与一个不存在的答卷号。
 断言每一列的值都落在正确的列名上、不存在的答卷报为 missing、第 2 号不被返回。
+
+第二段验证参与者令牌回读（ADR 0016 缺口 (b)，契约 response-read-v1「参与者令牌」）：
+发布一份带参与者的非匿名问卷，用**发布回执里的邀请码**写一份答卷，再以
+``includeRespondent`` 读回，断言读到的令牌正是回执里的那一个——(a)「哪个码发给了谁」与
+(b)「一份答卷属于哪个码」在真实引擎上接上。随后把 ``anonymized`` 改成 ``Y``（列和值都还在）
+断言令牌变成 ``null``，并断言把 ``token`` 当普通列请求被拒。
 """
 
 import argparse
 import json
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, List
 
@@ -50,24 +57,91 @@ def cell(response_id: int, index: int) -> str:
     return "{}{:02d}".format(response_id, index)
 
 
-def insert_response(db: Database, driver: str, survey_id: int, response_id: int, columns: List[str]) -> None:
+def insert_response(db: Database, driver: str, survey_id: int, response_id: int, columns: List[str],
+                    token: str = None) -> None:
     quote = (lambda name: '"{}"'.format(name)) if driver == "pgsql" else (lambda name: "`{}`".format(name))
     names = ["id", "submitdate", "lastpage", "startlanguage", "seed", "startdate", "datestamp"] + columns
     values = [str(response_id), "'2026-09-22 10:00:00'", "2", "'en'", "'1'",
               "'2026-09-22 09:59:00'", "'2026-09-22 10:00:00'"]
     values += ["'{}'".format(cell(response_id, index)) for index in range(len(columns))]
+    if token is not None:
+        names.append("token")
+        values.append("'{}'".format(token))
     db.rows("INSERT INTO {} ({}) VALUES ({})".format(
         _response_table(survey_id), ", ".join(quote(n) for n in names), ", ".join(values)))
 
 
-def read(service: ResponseReadService, survey_id: int, ids: List[int], fields: List[str]) -> Dict:
-    body = json.dumps({"engineInstanceId": INSTANCE, "surveyId": survey_id,
-                       "responseIds": ids, "fields": fields}).encode("utf-8")
+def read(service: ResponseReadService, survey_id: int, ids: List[int], fields: List[str],
+         include_respondent: bool = None) -> Dict:
+    payload = {"engineInstanceId": INSTANCE, "surveyId": survey_id,
+               "responseIds": ids, "fields": fields}
+    if include_respondent is not None:
+        payload["includeRespondent"] = include_respondent
+    body = json.dumps(payload).encode("utf-8")
     stamp = str(int(time.time()))
     headers = {"Content-Type": "application/json", "X-Pubgw-Timestamp": stamp,
                "X-Pubgw-Signature": sign(SECRET, stamp, body)}
     response = service.read(headers, body)
     return {"status": response.status, "body": json.loads(response.body.decode("utf-8"))}
+
+
+
+def respondent_checks(client: RemoteControlClient, service: ResponseReadService, db: Database,
+                      driver: str, definition_payload: Dict) -> Dict:
+    """参与者令牌回读：(a) 哪个码发给了谁 ＋ (b) 一份答卷属于哪个码，在真实引擎上接上。"""
+    payload = json.loads(json.dumps(definition_payload))
+    payload["uuid"] = str(uuid.uuid4())
+    payload["title"] = "response read respondent"
+    payload["participants"] = [{"ref": "contact-7", "firstname": "Zhang", "lastname": "San"}]
+    payload["settings"] = dict(payload.get("settings") or {}, anonymized="N")
+
+    outcome = Publisher(client, engine_instance=INSTANCE).publish(SurveyDefinition.from_dict(payload))
+    if not outcome.ok:
+        return {"令牌回读：发布成功": False}
+    survey_id = outcome.survey_id
+    try:
+        invitations = outcome.to_dict().get("invitations") or []
+        issued = invitations[0]["token"] if invitations else None
+        bound = [(field.fieldname, question.type) for question in outcome.binding.questions
+                 for field in question.fields]
+        fields = [name for name, _ in bound]
+        written = [name for name, qtype in bound if qtype not in DISPLAY_ONLY_TYPES]
+        # 这份答卷就是用发出去的那个邀请码答的。
+        insert_response(db, driver, survey_id, 1, written, token=issued)
+
+        named = read(service, survey_id, [1], fields, include_respondent=True)
+        reported = (named["body"].get("responses") or [{}])[0].get("token")
+
+        # 不要就不该多这个键（应答形状与契约本节之前逐字节一致）。
+        plain = read(service, survey_id, [1], fields)
+        plain_keys = set((plain["body"].get("responses") or [{}])[0])
+
+        # 先以非匿名激活、列和值都已写好，之后改成匿名：列还在，但一律不给。
+        # 引擎自己挡住了这个翻转——问卷激活后 set_survey_properties 会把 anonymized 剔除
+        # （remotecontrol_handle.php:506），所以这个状态只能由直接改库／插件／运维造出来。
+        # 闸门存在的意义正是不信任"列里有值"，这里直接改库把那个状态造出来验它。
+        db.rows("UPDATE lime_surveys SET anonymized = 'Y' WHERE sid = {}".format(survey_id))
+        after = read(service, survey_id, [1], fields, include_respondent=True)
+        after_token = (after["body"].get("responses") or [{}])[0].get("token", "absent")
+        still_stored = db.value("SELECT token FROM {} WHERE id = 1".format(_response_table(survey_id)))
+
+        # token 当普通列请求必须被拒，否则匿名闸门一绕就过。
+        smuggled = read(service, survey_id, [1], fields + ["token"])
+
+        return {
+            "令牌回读：发布带参与者的问卷成功": True,
+            "令牌回读：回执给出了邀请码": bool(issued),
+            "令牌回读：读到的令牌正是回执里的邀请码": reported == issued and issued is not None,
+            "令牌回读：不请求时应答不多 token 键": plain["status"] == 200 and "token" not in plain_keys,
+            "令牌回读：改为匿名后令牌为 null": after["status"] == 200 and after_token is None,
+            "令牌回读：匿名后引擎表里其实还存着令牌": still_stored == issued,
+            "令牌回读：token 当普通列请求被拒": smuggled["status"] == 400,
+        }
+    finally:
+        try:
+            client.delete_survey(survey_id)
+        except RpcError as error:
+            info("清理问卷 {} 失败：{}".format(survey_id, error))
 
 
 def main() -> int:
@@ -114,6 +188,8 @@ def main() -> int:
             "不存在的答卷报为 missing": body.get("missing") == [MISSING_ID],
             "每列的值落在正确的列名上": got == expected,
         }
+        checks.update(respondent_checks(
+            client, service, db, args.db, json.loads(DEFINITION.read_text(encoding="utf-8"))))
         passed = all(checks.values())
         info(("PASS " if passed else "FAIL ") + "export_responses 按位置还原列名")
         for label, ok in checks.items():

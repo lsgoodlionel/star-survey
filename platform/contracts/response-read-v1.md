@@ -11,7 +11,7 @@
 
 ## `POST /v1/responses/read`
 
-请求体（`Content-Type: application/json`，≤ 1 MiB），恰好四个字段：
+请求体（`Content-Type: application/json`，≤ 1 MiB），四个必填字段加一个可选字段：
 
 ```json
 {
@@ -24,7 +24,10 @@
 
 - `surveyId`：引擎 sid，正整数。
 - `responseIds`：1–500 个互不相同的正整数。
-- `fields`：1–5000 个互不相同的引擎答卷列名（`[A-Za-z0-9_#]{1,64}`），不得包含 `id`。
+- `fields`：1–5000 个互不相同的引擎答卷列名（`[A-Za-z0-9_#]{1,64}`），不得包含 `id`，
+  **也不得包含 `token`**（400）：令牌只能经 `includeRespondent` 拿，当普通列请求就绕过了匿名判定。
+- `includeRespondent`（可选，布尔，缺省 `false`）：是否一并回答"这份答卷是用哪个邀请码答的"
+  （ADR 0016 缺口 (b)）。不是布尔即 400。
 
 **排序题（`R`）的名次列**在引擎答卷表里没有物理列，值由网关解析主列 JSON 得到（`pubgw/ranking.py`）：
 名次列 *n* 的值是排在第 *n* 位的项代码，没排到的位置是空串 `""`，整题不适用时（未到达、被条件隐藏）仍为 `null`。
@@ -46,6 +49,26 @@
 | 500 | `{"error":"internal_error"}` | 网关意外异常，不含堆栈 |
 
 `GET /v1/responses/read` → 405（`Allow: POST`）。响应头同发布端点：`Cache-Control: no-store`。
+
+### 参与者令牌（`includeRespondent`，ADR 0016 缺口 (b)）
+
+`includeRespondent: true` 时每条 `responses[]` 多一个 `token` 键：
+
+```json
+{"responses": [{"id": 1, "values": {"Q1": "A1"}, "token": "a1b2c3d4e5f6g7h8"}], "missing": []}
+```
+
+不传这个字段时应答形状与本节之前逐字节一致（不多这个键，也不会多问引擎一次问卷属性）。
+
+- 为什么需要：引擎事件与答卷投影里只有答卷号，**没有令牌**，平台无法判断"张三答完了没有"。
+  发布回执的 `invitations[]` 给出"哪个码发给了谁"，这里给出"一份答卷属于哪个码"，两半合起来
+  催答才能按人生效。
+- **匿名问卷永不给令牌**：要了也是 `null`。引擎只在非匿名时给答卷表建 `token` 列
+  （`SurveyActivator.php:253`），但问卷可以先以非匿名激活、把列和值都写好，之后再把
+  `anonymized` 改成 `Y`——列和数据都还在。所以网关按问卷**当前**的 `anonymized` 判定
+  （只有 `Y` 算匿名，与引擎 `Survey::isAnonymized` 一致），而不是按列在不在。
+- 判定不出来（`get_survey_properties` 失败、或没有这个设置）就**不给**（`null`），不照发。
+- 该答卷没有用令牌进场（非匿名卷也可能有匿名作答）时那一列是空串，一律归为 `null`。
 
 ## 平台侧必须做到
 
