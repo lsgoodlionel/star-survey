@@ -130,25 +130,33 @@ R04-05 部分（IP 规则；地区为可插拔数据源，无数据按 `regionUn
 
 环境：本机磁盘曾被写满（可用 115 MiB），Bash 完全不可用，第五波首批车道空手返回、未改一行。
 清掉 24 个已合并的 agent worktree（约 10 GB，全部 dirty=0／ahead=0）后恢复。Docker 守护进程
-仍因当时的 ENOSPC 楔住：`docker ps`／`docker version` 无限挂起，进程却在。**平台的 Maven 跑在
-容器里（`platform/deploy/platform-dev/mvn.sh`），所以平台单测与全部引擎端到端目前都跑不了**，
-只有网关的 Python 单测可用。
+随后仍因当时的 ENOSPC 楔住，且**菜单栏的 Restart 没生效**——所有 Docker 进程的启动时间仍是
+卡死前那一刻，`_ping` 返回 000，楔住的后端等不到退出。强制结束整套进程再 `open -a Docker`，
+20 秒就绪。守护进程被杀会留下 `survey-test-{db,web,pg}` 僵尸容器，`--fresh` 撞名失败，先删再跑。
 
 | 车道 | 内容 | 状态 |
 |---|---|---|
-| 邀请码读回（ADR 0016 待办） | 发布回执带 `invitations[]`：引擎生成的 token 按定义顺序返回，平台可给每条一个不透明 `ref`；配不齐（行数对不上／缺 token／两条同码）发布失败并回滚 | 网关侧已完成，669 通过 |
+| 邀请码读回（ADR 0016 待办） | 发布回执带 `invitations[]`：引擎生成的 token 按定义顺序返回，平台可给每条一个不透明 `ref`；配不齐（行数对不上／缺 token／两条同码）发布失败并回滚 | 已完成并双库验证 |
 
 按位置对应是唯一可靠的办法，不是图省事：引擎 `foreach ($aParticipantData as &$aParticipant)`
 逐条按引用原地替换，返回与提交同序同长；而成功的条目被整条换成参与者表行属性，平台传的非列
 字段已被 `array_intersect_key` 丢掉，姓名邮箱在开了字段加密的问卷上还是密文——端到端此前按
 `firstname` 对应（直接查 `lime_tokens_<sid>`），在开加密的问卷上会断。
 
-未验证：`access_policy` 端到端已改为从回执取码、并与参与者表逐条比对，但 Docker 卡死，这一改动
-**尚未运行过**。
+测试：网关 669 通过（660 → 669）；平台 986 通过、0 失败 0 错误（未动 Java，确认无回归）；
+`run-access-policy.sh` 双库各 52 项 ok、0 FAIL。端到端不再直接查 `lime_tokens_<sid>`，改为从回执
+取码并与参与者表逐条比对；后续 L2／D 场景用的就是回执里的码，能打开问卷、能触发按 token 限次，
+所以这些码确实可用，不只是形状对。
 
-未做（Docker 恢复前不动）：平台侧在发布成功后按 `ref` 自动登记 `ContactParticipationService.link`
-（`ref` 填联系人 id），这一步做完才真正解开催答与按人限次的前置依赖；现在令牌仍靠投放车道手工登记。
-Java 改动需要容器里的 Maven 才能编译和测试，不盲写。
+**更正一处先前的说法**：这片并不解开催答与按人限次。那是两个独立缺口——
+(a)「哪个码发给了谁」本片解决；(b)「一份答卷属于哪个码」没有解决。`ResponseProjection` 只有
+答卷号、状态与时间戳，**没有 token**，`RespondentIdentityResolver` 这个接缝要的正是 (b)，主代码里
+至今没有实现，网关 `responses.py` 里也完全没有 token 处理。下一片做 (b)：答卷读取暴露参与者令牌
+（引擎在非匿名问卷的答卷表里有 `token` 列），(b) 通了 `RespondentIdentityResolver` 才能实现。
+
+另一处前提：平台目前**根本不在定义里发 `participants`**（主代码里只有模板剥离逻辑提到这个键）。
+所以「发布成功后按 `ref` 自动登记 `ContactParticipationService.link`」还缺上游一步——得有谁把联系人
+名单物化成带 `ref` 的参与者，那属于投放车道，不在本片顺手改。
 
 新增遗留：发布回执按 `requestId` **永久**存档，邀请码明文留在网关状态目录里；`ResultStore` 没有
 保留期。改之前那个 SQLite 不含任何凭据。保留期是影响所有回执的横切改动，另开一片。
