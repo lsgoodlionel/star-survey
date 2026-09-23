@@ -192,3 +192,44 @@ R04-05 部分（IP 规则；地区为可插拔数据源，无数据按 `regionUn
 
 遗留：`includeRespondent` 每次读取多一次 `get_survey_properties`，没有缓存。平台仍不在定义里发
 `participants`，所以"联系人 → 邀请码"的上游（把名单物化成带 `ref` 的参与者）仍属投放车道待做。
+
+## 第五波：导出格式扩展车道（WP-06.3，分支 `wp-06-export-formats`）
+
+**SPSS SAV 导出（R06-03）已做完。** `ExportFormat` 加一项 `sav`，走的就是 ADR 0015 决定 5 预留的
+扩展点：作业模型、分片格式、租约、崩溃恢复、下载再次授权一行没改，迁移 `V601` 只放开
+`response_export_job.format` 的取值。产出是一个 ZIP：`responses.sav`（变量标签与值标签写在 SPSS
+自带的字典里）＋ `variables.csv`（变量字典的可读副本，含消毒后的变量名 ↔ 原始列代码）＋
+原样的 `fields.csv` / `attachments.csv`。取舍见 ADR 0015 增补一。
+
+顺带做的两件小事：`ExportCellGuard` 把防公式注入从 `CsvExportWriter` 里提出来，CSV 与 SAV 共用一个
+单元格出口（二进制格式也过闸——SPSS 能把数据集另存为 xlsx）；`ExportSheet` 多带表头行数与列的变量
+描述，让写出方不必去猜哪几行是表头、也不必从"`code=text; …`"字符串里反解选项。
+
+验证：平台全量 **1010 通过、0 失败 0 错误**（其中新增 `SavExportFormatTest` 9 项、
+`ResponseExportSavTest` 5 项，`ResponseExportResumeTest` 的"崩溃恢复后逐字节相同"加跑了 `sav`）。
+`target/export-sample.sav` 另用**第三方库 pyreadstat 1.2.7**（ReadStat C 库）读回核对：变量名、中文
+变量标签、值标签、`F8.2`/`A16`/`A19`/`A255` 格式、UTF-8、记录数、SYSMIS→NaN、按 UTF-8 字符边界截到
+253 字节、被加了单引号的公式文本，逐项与预期一致。网关与引擎未改动，不涉及端到端。
+
+### 第五波遗留（本车道未做的三项，按原计划顺序）
+
+- **扩展副表作答仍不进导出**（原计划第 1 项，未动）。卡在通道而不是导出：平台的字段字典只认引擎答卷
+  列，副表作答按"题目代码 ＋ 代次 ＋ 行序 ＋ 列代码"存在插件的两张表里（契约
+  `question-extension-tables-v1`），既没有引擎列名，也**没有任何读回来的路**——`MjyStructuredAnswerStore`
+  的 `fetchRows()` / `fetchState()` 至今只有测试在调，插件没开过任何 RPC 或路由；网关只说 RemoteControl
+  （纯标准库，没有数据库驱动），而 `remotecontrol_handle` 只给插件留了 `remoteControlLogin` 一个事件，
+  加不进新的 RPC 方法。可行的形状是仿 `MjyRuntimePolicy::newDirectRequest`（网关已经在用它回读
+  `policyStatus`）给 `MjyQuestionExtensions` 开一个读端点——但 `policyStatus` 只回份数与摘要，而副表作答
+  是个人数据，**这条路要先有一套网关↔插件的共享密钥鉴权**，等于新开一条信任边界，应当先立 ADR。
+  好消息是列字典不缺：`themeOptions.structureVersion` 与 `themeOptions.columns` 已经冻在平台的定义
+  快照里（`pubgw/questions/themes.py` 的 `OptionSpec`），所以这一项**不需要**新迁移，也不需要把
+  网关回执里的 `sideTable` 补进 `survey_question_binding`。
+- **附件打包**（原计划第 2 项，未动）。引擎侧唯一的通道是 RemoteControl 的 `get_uploaded_files`
+  （`remotecontrol_handle.php:3871`），它一次按**一份答卷**把全部文件 base64 塞进一个 JSON 应答里——
+  要先解决"内存有界"（ADR 0015 的硬约束）与失败项重试（R06-07 的"失败项可重试"），还要新增网关端点与契约。
+- **Word / PDF 导出**（原计划第 3 项，未动）。纯平台侧，不需要新通道，是三项里最独立的一项；
+  `templateVersion` 的扩展位早就留好了。
+
+为什么顺序没有照原计划走：第 1、2 项都要同时改 PHP 插件、Python 网关、Java 平台与契约，第 1 项还要先
+立一条新的鉴权边界，双库端到端也得重跑；第 3 项（SAV）是 ADR 0015 自己指定的单组件扩展点。
+按"做完一项算一项、不要全都做一半"，本轮只把能完整交付的那一项做完。

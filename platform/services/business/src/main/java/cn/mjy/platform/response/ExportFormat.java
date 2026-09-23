@@ -9,8 +9,11 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * 本切片支持的导出格式（ADR 0015 决定 5）。新格式（SPSS SAV、Word/PDF 模板）在这里加一项并实现
- * {@link Writer}：写出方拿到的是与格式无关的表（答卷、数据字典、附件清单），行流式给出。
+ * 支持的导出格式（ADR 0015 决定 5，切片 06.3 增补 SAV）。新格式（Word/PDF 模板）在这里加一项并实现
+ * {@link Writer}：写出方拿到的是与格式无关的表（答卷、数据字典、附件清单），行流式给出，
+ * 可以重复重放（SAV 要扫两遍：先定变量宽度，再写数据）。
+ *
+ * <p>加新格式时别忘了迁移里 {@code response_export_job.format} 的取值约束。
  */
 public enum ExportFormat {
 
@@ -18,7 +21,9 @@ public enum ExportFormat {
     CSV("csv", "application/zip", "zip", new CsvExportWriter()),
     /** 最小 OOXML 工作簿，三个工作表。 */
     XLSX("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx",
-            new XlsxExportWriter());
+            new XlsxExportWriter()),
+    /** ZIP 包：SPSS 系统文件 responses.sav（自带变量字典）加三张 CSV 附表。 */
+    SAV("sav", "application/zip", "sav.zip", new SavExportWriter());
 
     /** 把若干张表写成一个文件；只写 out，不关闭它。 */
     interface Writer {
