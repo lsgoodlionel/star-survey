@@ -1,0 +1,31 @@
+{#
+/**
+ * MJY 选项分类（多选）：与 core 的 multiplechoice/answer.twig 逐行一致
+ * （同一个 aRows 循环、同一个 MULTI 计数隐藏域），只多包了一层带分组定义的 data-*。
+ *
+ * 行模板走本主题自己的 rows/（core 的行模板不带选项代码），重排在浏览器端做，
+ * 提交的永远是同一批 checkbox。
+ *
+ * @var $aRows     : 选项行，逐行由 rows/answer_row*.twig 渲染
+ * @var $name
+ * @var $anscount
+ * @var $othertext
+ * @var question_template_attribute  mjy_option_groups / mjy_option_groups_collapsible
+ */
+#}
+<!-- MJY grouped options (multiple choice) -->
+
+<!-- answer -->
+<input type="hidden" name="MULTI{{ name }}" value="{{ anscount }}" />
+<div class="mjy-grouped-options"
+     data-mjy-option-groups="{{ question_template_attribute.mjy_option_groups|escape('html_attr') }}"
+     data-mjy-collapsible="{{ question_template_attribute.mjy_option_groups_collapsible|default(0) }}">
+<ul class="list-unstyled {{ coreClass }} {% if iNbCols > 1 %} ls-column-count-{{ iNbCols }}{% endif %}"{% if iNbCols > 1 %} data-column-count={{ iNbCols }}{% endif %}>
+    {% for aRow in aRows %}
+        {% set rowTemplate = aRow.other ? './survey/questions/answer/multiplechoice/rows/answer_row_other.twig' : './survey/questions/answer/multiplechoice/rows/answer_row.twig' %}
+        <!-- Row {{ loop.index }} -->
+        {% include rowTemplate with aRow %}
+    {% endfor %}
+</ul>
+</div>
+<!-- end of answer -->

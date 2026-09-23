@@ -22,6 +22,9 @@ THEME_MARKERS = (
         "mjy-collapsible.js",
         "data-mjy-option-groups",
         "mjy-grouped-options.js",
+        # 多选分支接管了 rows/*.twig：行标记只可能来自本主题的行模板，
+        # 它出现就说明模板真的被用上了，而不是静默退回 core 的行。
+        "data-mjy-code=",
         "data-mjy-scan",
         "mjy-scan-input.js",
         "data-mjy-stepper",
@@ -32,6 +35,12 @@ THEME_MARKERS = (
     (
         "data-mjy-repeating-table",
         "mjy-repeating-table.js",
+        "data-mjy-loop-rating",
+        "mjy-loop-rating.js",
+        "data-mjy-image-pk",
+        "mjy-image-pk.js",
+        "data-mjy-shelf",
+        "mjy-shelf.js",
         "data-mjy-heatmap",
         "mjy-heatmap.js",
     ),
@@ -55,11 +64,26 @@ TABLE_ROWS = [
 #: 坐标取两端：0 与 1 都在允许范围内，闭区间不能被写成开区间。
 HEAT_ROWS = [{"x": "0.0000", "y": "1.0000"}, {"x": "0.5000", "y": "0.5000"}]
 
+#: 循环评价：一行一个评价对象，行序与 themeOptions.objects 一致，取值取量表两端。
+LOOP_ROWS = [
+    {"target": "B1", "price": "1", "service": "3"},
+    {"target": "B2", "price": "3", "service": "2"},
+]
+
+#: 图片 PK：整题一行，一对一列。_shown 记录当时哪张图在左边（不必填，这里填上）。
+PK_ROWS = [{"P1": "A", "P1_shown": "B", "P2": "C", "P2_shown": "B"}]
+
+#: 货架题：一行一件商品，件数取上限（fixture 的 maxQuantity 是 9）。
+SHELF_ROWS = [{"product": "S1", "qty": "9"}, {"product": "S3", "qty": "1"}]
+
 
 def valid_pages() -> List[Dict[Column, str]]:
     return [
         {
             ("QGRP", "", 0): "A3",
+            # 多选分组：勾两个（分属两组），「其他」填字，不勾的那一项留空。
+            ("QGRPM", "M1", 0): "Y", ("QGRPM", "M3", 0): "Y",
+            ("QGRPM", "other", 0): "枇杷 & <梨>",
             ("QSCAN", "", 0): "6" * SCAN_MAX_LENGTH,
             ("QSTEP", "R1", 0): "L1", ("QSTEP", "R2", 0): "L2",
             ("QSTEP", "R3", 0): "L3", ("QSTEP", "R4", 0): "L1",
@@ -67,6 +91,9 @@ def valid_pages() -> List[Dict[Column, str]]:
         },
         {
             ("QTABLE", "", 0): envelope(TABLE_ROWS),
+            ("QLOOP", "", 0): envelope(LOOP_ROWS),
+            ("QPK", "", 0): envelope(PK_ROWS),
+            ("QSHELF", "", 0): envelope(SHELF_ROWS),
             ("QHEAT", "", 0): envelope(HEAT_ROWS),
         },
     ]
@@ -82,6 +109,11 @@ def blank_pages() -> List[Dict[Column, str]]:
         },
         {
             ("QTABLE", "", 0): envelope([{"item": "米", "qty": "1"}]),
+            # 循环评价与图片 PK 的行数都被平台钉死，没有「取下限」这回事；
+            # 图片 PK 的展示顺序列不必填，这里留空，证明「不必填」是真的。
+            ("QLOOP", "", 0): envelope(LOOP_ROWS),
+            ("QPK", "", 0): envelope([{"P1": "A", "P2": "B"}]),
+            ("QSHELF", "", 0): envelope([{"product": "S2", "qty": "1"}]),
             ("QHEAT", "", 0): envelope([{"x": "0.2500", "y": "0.7500"}]),
         },
     ]
@@ -96,6 +128,8 @@ def _tamper(label: str, page: int, answers: Dict[Column, str], **extra: Any) -> 
 TAMPERS = (
     # 第 1 页：展示型主题的数据形状与原生题一致，闸门是引擎自己的。
     _tamper("grouped options: a code outside the answer list", 0, {("QGRP", "", 0): "A9"}),
+    _tamper("grouped options (multiple choice): one selection over max_answers", 0,
+            {("QGRPM", "M2", 0): "Y"}),
     _tamper("scan input: one character over maxLength", 0,
             {("QSCAN", "", 0): "6" * (SCAN_MAX_LENGTH + 1)}),
     _tamper("inline blank: comment filled while its option is unchecked", 0,
@@ -126,6 +160,40 @@ TAMPERS = (
             {("QHEAT", "", 0): envelope(HEAT_ROWS + [{"x": "0.1", "y": "0.1"}, {"x": "0.2", "y": "0.2"}])}),
     _tamper("heatmap: a coordinate that is not a number", 1,
             {("QHEAT", "", 0): envelope([{"x": "left", "y": "0.5000"}])}),
+    # 循环评价（R02-11）：对象列是枚举＋唯一，行数被钉死成对象个数。
+    _tamper("loop rating: a score outside the declared scale", 1,
+            {("QLOOP", "", 0): envelope([dict(LOOP_ROWS[0], price="9"), LOOP_ROWS[1]])}),
+    _tamper("loop rating: an object nobody declared", 1,
+            {("QLOOP", "", 0): envelope([dict(LOOP_ROWS[0], target="B9"), LOOP_ROWS[1]])}),
+    _tamper("loop rating: the same object rated twice", 1,
+            {("QLOOP", "", 0): envelope([LOOP_ROWS[0], dict(LOOP_ROWS[1], target="B1")])}),
+    _tamper("loop rating: one object dropped", 1,
+            {("QLOOP", "", 0): envelope([LOOP_ROWS[0]])}),
+    _tamper("loop rating: a dimension left empty", 1,
+            {("QLOOP", "", 0): envelope([dict(LOOP_ROWS[0], service=""), LOOP_ROWS[1]])}),
+    # 图片 PK（R02-17）：一对一列，列的取值恰好是这一对的两张图。
+    _tamper("image pk: a picture from another pair", 1,
+            {("QPK", "", 0): envelope([dict(PK_ROWS[0], P1="C")])}),
+    _tamper("image pk: a picture nobody declared", 1,
+            {("QPK", "", 0): envelope([dict(PK_ROWS[0], P2="Z")])}),
+    _tamper("image pk: a pair left unanswered", 1,
+            {("QPK", "", 0): envelope([{"P1": "A", "P1_shown": "A", "P2": "", "P2_shown": "B"}])}),
+    _tamper("image pk: a second row smuggled in", 1,
+            {("QPK", "", 0): envelope(PK_ROWS + [dict(PK_ROWS[0])])}),
+    _tamper("image pk: a pair nobody declared", 1,
+            {("QPK", "", 0): envelope([dict(PK_ROWS[0], P9="A")])}),
+    # 货架题（R02-18）：商品列枚举＋唯一，件数列是带上下限的整数。
+    _tamper("shelf: a product that is not on the shelf", 1,
+            {("QSHELF", "", 0): envelope([{"product": "S9", "qty": "1"}])}),
+    _tamper("shelf: the same product taken twice", 1,
+            {("QSHELF", "", 0): envelope([{"product": "S1", "qty": "1"},
+                                          {"product": "S1", "qty": "2"}])}),
+    _tamper("shelf: a quantity over maxQuantity", 1,
+            {("QSHELF", "", 0): envelope([{"product": "S1", "qty": "10"}])}),
+    _tamper("shelf: zero of something", 1,
+            {("QSHELF", "", 0): envelope([{"product": "S1", "qty": "0"}])}),
+    _tamper("shelf: one product over maxPicks", 1,
+            {("QSHELF", "", 0): envelope(SHELF_ROWS + [{"product": "S2", "qty": "1"}])}),
     # 影子字段：浏览器端算出的相关性全写 1，服务端照样重算。
     _tamper("repeating table: bad payload with every relevance* shadow forced to 1", 1,
             {("QTABLE", "", 0): envelope([{"item": "米", "qty": "0"}])}, shadow="all-relevant"),

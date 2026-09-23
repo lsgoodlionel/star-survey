@@ -15,11 +15,26 @@ class MjyThemedQuestionMap
     /** 热力图选区（R02-19）：同一套 JSON 信封与副表，列定义由平台生成。 */
     public const HEATMAP_THEME = 'mjy-heatmap';
 
+    /** 循环评价（R02-11）：一行一个评价对象，列定义由平台按维度与量表生成。 */
+    public const LOOP_RATING_THEME = 'mjy-loop-rating';
+
+    /** 图片 PK（R02-17）：整题一行，一对一列，列的取值恰好是这一对的两张图。 */
+    public const IMAGE_PK_THEME = 'mjy-image-pk';
+
+    /** 货架题（R02-18）：一行一件商品，商品列枚举＋唯一，件数列整数。 */
+    public const SHELF_THEME = 'mjy-shelf';
+
     /**
      * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
      * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应。
      */
-    public const STRUCTURED_THEMES = [self::REPEATING_TABLE_THEME, self::HEATMAP_THEME];
+    public const STRUCTURED_THEMES = [
+        self::REPEATING_TABLE_THEME,
+        self::HEATMAP_THEME,
+        self::LOOP_RATING_THEME,
+        self::IMAGE_PK_THEME,
+        self::SHELF_THEME,
+    ];
 
     /** @var array<string, array<string, mixed>> */
     private $structuredQuestions;

@@ -1,4 +1,4 @@
-# WP-02 题型映射表（切片 02.1–02.3）
+# WP-02 题型映射表（切片 02.1–02.4）
 
 引擎 LimeSurvey 7.1.2。承载方式三档见 [ADR 0006](../adr/0006-question-types.md)（A 原生、B 原生＋题型主题、C 副表＋插件）；
 本文把需求矩阵 WP-02 的 47 条（R02-01…R02-47）逐条落到五类之一，并给出答案代码、缺失值与导出列映射。
@@ -20,6 +20,9 @@
 以及走副表的 R02-13（自增表格的 DSL 映射）与 R02-19（选点）。副表的「结构版本」列先行落地
 （[副表契约 v1](../../contracts/question-extension-tables-v1.md)），其余 14 条 P 类由此解除阻塞。
 
+切片 02.4（✔3）收口 R02-04 的**多选**分组（接管选项行模板），并新交付 P 类的
+R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节。
+
 ## 二、逐条映射
 
 列说明：**引擎承载**＝题型字母＋关键属性；**答案代码**＝答卷列里存的值；**缺失值**见第四节的三种状态；
@@ -30,21 +33,21 @@
 | R02-01 | 单选 | N | ✔ | `L` 单选按钮、`!` 下拉；`other` 开「其他」 | 选项代码（≤5 位字母数字）；其他＝`-oth-` | `""`；其他文本 `other` |
 | R02-02 | 多选 | N | ✔ | `M`／`P`（带评论）；`min_answers`／`max_answers`；子题 `exclusive:true`→`exclude_all_others`＋服务端互斥规则 | 每个选项一列，选中＝`Y`，未选＝`""` | 子题代码；`P` 另有 `代码comment`；其他 `other`（`P` 再加 `othercomment`） |
 | R02-03 | 多级下拉 | P | | 字典版本＝副表的结构版本（已落地）；级联清值与字典服务仍缺，放 02.4 | — | 后续 |
-| R02-04 | 选项分类 | T | ✔2（单选） | `L`＋新主题 `mjy-grouped-options`：分组必须**恰好覆盖**全部选项，否则 422 | 同 R02-01 | `""` |
+| R02-04 | 选项分类 | T | ✔3 | `L`／`M`＋新主题 `mjy-grouped-options`：分组必须**恰好覆盖**全部选项（单选按答案选项、多选按子题），否则 422 | 同 R02-01／R02-02 | `""`；多选为子题代码 |
 | R02-05 | 漏斗选项 | L | | 原生 `array_filter`，但它是表达式属性，v2 禁止直写；归逻辑 DSL 的 `filter` 切片（WP-03） | — | 后续 |
 | R02-06 | 填空与多项填空 | N | ✔ | `S` 短文本、`Q` 多项填空、`K` 多项数值；`maxLength`、`format`（见第三节）编译成服务端校验 | 原文 | `""`；`Q`/`K` 子题代码 |
 | R02-07 | 填空选择组合 | T | ✔2 | 原生子集：`L`＋其他、`O` 单选带评论；内嵌填空＝`P`＋新主题 `mjy-inline-blank`，清值用原生 `commented_checkbox=checked`，长度上限编译成服务端规则 | 选中＝`Y`；填空＝原文 | 子题代码＋`代码comment` |
 | R02-08 | 超长文本 | N | ✔ | `T`／`U`；`maxLength`（≤16000 字）编译成按字符计数的服务端规则，超限留在本页并提示 | 原文 | `""` |
 | R02-09 | 评分与量表 | N | ✔ | `5` 五分制、`A` 五分矩阵、`B` 十分矩阵、`F`＋自定义刻度；正反向用选项 `assessmentValue` | `5`/`A`：`1`–`5`；`B`：`1`–`10`；`F`：选项代码 | `""`；矩阵为子题代码 |
 | R02-10 | NPS 与评价组件 | T | ✔ | NPS＝`L`＋选项 `0`…`10`＋引擎自带主题 `bootstrap_buttons`；星级＝`5`＋`slider_rating=1` | `0`–`10`；`1`–`5` | `""` |
-| R02-11 | 循环评价 | P | | 评价对象动态、要稳定对象 ID；引擎无循环 | — | 后续 |
+| R02-11 | 循环评价 | P | ✔3 | `T`＋新主题 `mjy-loop-rating`＋副表；一行一个评价对象，一列一个维度，对象列是枚举＋唯一 | JSON 信封，行序＝对象声明序 | `""`；评分在副表，按结构版本解释 |
 | R02-12 | 矩阵与表格 | N | ✔ | `F`、`H`（按列）、`A`/`B`/`C`/`E`（固定刻度）、`1` 双尺度、`:` 数值矩阵、`;` 文本矩阵 | 选项代码；`C`：`Y`/`U`/`N`；`E`：`I`/`S`/`D`；`:`/`;` 原值 | 子题代码；`1` 为子题代码＋尺度 0/1；`:`/`;` 为 `行_列` |
 | R02-13 | 自增表格 | P | ✔2 | `T`＋`mjy-repeating-table`＋副表；列定义、行数上下限与结构版本走 `themeOptions` | JSON 信封 `{"v":1,"rows":[…]}` | `""`；单元格在副表，按结构版本解释 |
 | R02-14 | 矩阵单题作答 | T | ✔2 | `F`＋新主题 `mjy-matrix-stepper`（只接管非下拉布局）；隐藏的行照样提交，必答在服务端重算 | 同 R02-12 | 子题代码 |
 | R02-15 | 排序 | N | ✔ | `R`（7.x 起排序项是**子题**）；`max_subquestions` 限制名次数 | 引擎存一列 JSON 数组（按名次排列的子题代码） | `""`＝JSON 列；名次 `1`…`n` 是 fieldmap 里的虚列（无物理列） |
 | R02-16 | 比重分配 | N | ✔ | `K`＋`equals_num_value`（和为定值）＋`min_num_value_n=0`＋`num_value_int_only`；滑块＝`slider_layout=1` | 数值 | 子题代码 |
-| R02-17 | 图片 PK | P | | 配对随机要可追溯 | — | 后续 |
-| R02-18 | 货架题 | P | | 商品/坐标与货架版本 | — | 后续 |
+| R02-17 | 图片 PK | P | ✔3 | `T`＋新主题 `mjy-image-pk`＋副表；一对一列，列的取值恰好是这一对的两张图，另一列记录当时哪张在左 | JSON 信封，整题一行 | `""`；每对的选择在副表 |
+| R02-18 | 货架题 | P | ✔3 | `T`＋新主题 `mjy-shelf`＋副表；商品列枚举＋唯一，件数列整数带上下限；货架版本＝结构版本 | JSON 信封，一行一件商品 | `""`；取货明细在副表 |
 | R02-19 | 热力图与选区 | P | ✔2（选点） | `T`＋新主题 `mjy-heatmap`＋副表；坐标归一化到 `[0,1]`，由插件逐格校验 | JSON 信封，两列 `x`/`y` | `""`；坐标在副表 |
 | R02-20 | 轮播图 | P | | 媒体版本留存依赖资产服务 | — | 后续 |
 | R02-21 | 视频题 | P | | 授权播放依赖资产服务 | — | 后续 |
@@ -111,11 +114,14 @@
 |---|---|---|---|---|
 | `mjy-collapsible` | R02-43 | `X` | `summary`（必填）、`collapsed` | `mjy_collapse_summary`、`mjy_collapse_default` |
 | `mjy-scan-input` | R02-28 | `S` | `scanFormat`（qr/barcode/any）、`manualEntry` | `mjy_scan_format`、`mjy_scan_manual`；**题目必须另设 `maxLength`** |
-| `mjy-grouped-options` | R02-04 | `L` | `groups`（必填）、`collapsible` | `mjy_option_groups`（JSON）、`mjy_option_groups_collapsible` |
+| `mjy-grouped-options` | R02-04 | `L` `M` | `groups`（必填）、`collapsible` | `mjy_option_groups`（JSON）、`mjy_option_groups_collapsible` |
 | `mjy-matrix-stepper` | R02-14 | `F` | `rowsPerStep`、`showProgress` | `mjy_stepper_rows`、`mjy_stepper_progress` |
 | `mjy-inline-blank` | R02-07 | `P` | `blankLabel`、`blankMaxLength`（必填） | `commented_checkbox=checked`＋每处填空一条长度规则 |
 | `mjy-repeating-table` | R02-13 | `T` | `structureVersion`、`columns`（均必填）、`minRows`、`maxRows` | `mjy_table_columns`、`mjy_table_min_rows`、`mjy_table_max_rows`、`mjy_structure_version` |
 | `mjy-heatmap` | R02-19 | `T` | `structureVersion`、`image`（均必填）、`minPoints`、`maxPoints` | 同上（列定义由平台生成：`x`/`y` decimal，范围 `[0,1]`） |
+| `mjy-loop-rating` | R02-11 | `T` | `structureVersion`、`objects`、`dimensions`、`scale`（均必填） | `mjy_table_columns`（列定义由平台生成）、`mjy_loop_objects`、`mjy_structure_version`，行数上下限钉死成对象个数 |
+| `mjy-image-pk` | R02-17 | `T` | `structureVersion`、`items`、`pairs`（均必填） | `mjy_table_columns`（一对两列）、`mjy_pk_items`、`mjy_pk_pairs`、`mjy_structure_version`，行数上下限钉死成 1 |
+| `mjy-shelf` | R02-18 | `T` | `structureVersion`、`image`、`products`（均必填）、`minPicks`、`maxPicks`、`maxQuantity` | `mjy_table_columns`（`product` 枚举＋唯一、`qty` 整数）、`mjy_shelf_image`、`mjy_shelf_products`、`mjy_structure_version`、行数上下限 |
 
 422 错误码：`E_THEME_UNKNOWN`（`mjy-` 前缀却没注册＝拼错，目标实例上会静默降级）、
 `E_THEME_TYPE_MISMATCH`、`E_THEME_OPTIONS_UNSUPPORTED`、`E_THEME_OPTION_UNKNOWN`、
@@ -126,11 +132,11 @@
 
 | 主题 | 客户端能改什么 | 谁拦住它 |
 |---|---|---|
-| `mjy-grouped-options` | 提交任意选项代码 | 引擎 `checkValidityAnswer` |
+| `mjy-grouped-options` | 提交任意选项代码；多选多勾几项 | 引擎 `checkValidityAnswer`；多选另有 `min_answers`／`max_answers` |
 | `mjy-scan-input` | 提交任意字符串 | 编译出的 `em_validation_q` 长度规则（所以 `maxLength` 必填） |
 | `mjy-inline-blank` | 没勾选却填了填空、填空超长 | 原生 `commented_checkbox=checked`＋编译出的长度规则 |
 | `mjy-matrix-stepper` | 跳过没走到的行 | 引擎必答在服务端重算（隐藏的行照样提交） |
-| `mjy-repeating-table`／`mjy-heatmap` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这两类题必须设为必答） |
+| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk`／`mjy-shelf` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
 
 ## 三之三、副表的存储契约（给读端）
 
@@ -158,6 +164,113 @@
 
 导出与答案读取都应当**从主列解析名次**，不要去读名次列；字段字典把主列与名次列都标上
 排序项选项（`QuestionTypeColumns` 的 `R` 分支），供读端做标签。本切片不动 `responses.py`。
+
+## 三之四、切片 02.4（✔3）
+
+### R02-04 的多选分组
+
+单选那一支（02.3 已交付）靠的是 radio 的 `value` 就是选项代码，脚本照着 `value` 找行即可。
+**多选没有这个便利**：checkbox 的 `value` 恒为 `Y`，代码只在字段名 `{SGQA}_S{sqid}` 里，
+而分组定义写的是子题代码。所以多选这一支必须**连 `rows/*.twig` 一起接管**，
+由行模板把子题代码打成 `data-mjy-code`，脚本才认得出哪一行属于哪一组。
+
+| 面 | 多选这一支多做了什么 |
+|---|---|
+| 主题目录 | `themes/question/mjy-grouped-options/survey/questions/answer/multiplechoice/`：`config.xml`（`questionType` 为 `M`）、`answer.twig`、`rows/answer_row.twig`（多 `data-mjy-code`）、`rows/answer_row_other.twig`（照抄 core，刻意不带标记） |
+| 资产 | 引擎按 `<主题>/survey/questions/answer/<基础题型>/assets` 发布，**一个基础题型一份**；两份脚本逐字节一致，由 `GroupedOptionsTemplateTest` 钉住 |
+| 网关 | `mjy-grouped-options` 的 `types` 改为 `("L", "M")`；`_grouped_option_codes()` 按题型决定「选项」是答案选项还是子题 |
+| 插件 | `mjy_option_groups` 的 `types` 改为 `LM`——少一个字母，引擎导入多选题时会把这个属性整个丢掉，主题拿到空分组后静默平铺 |
+
+「其他」项没有子题代码，**不参与分组也不算漏**：认不出代码的行（其他项、不作答项）
+由脚本留在原来的 `ul` 里，跟在各分组区块后面显示。
+
+服务端把关没有任何新东西：数据形状与原生多选完全一致，越界代码由引擎 `checkValidityAnswer` 挡，
+勾多了由 `max_answers` 挡（e2e 场景 D 各一条）。分组纯属展示，改不动答卷列。
+
+一并新增的注册表检查：`VIEW_FOLDERS`（题型字母 → 引擎视图目录名）＋
+`test_every_registered_type_has_its_own_view_folder`——注册了某个题型却没建对应目录，
+在引擎上表现为静默降级，发布前是看不出来的。
+
+### R02-11 循环评价
+
+同一套评价维度要对每个对象各问一遍。引擎没有循环，作者只能手工复制 N 份题目——
+对象一变就全盘重来，而且答卷列名里没有稳定的对象标识。本主题走副表：
+**一行一个评价对象，一列一个维度**，整块 JSON 信封存进长文本列。
+
+列定义由平台按 `themeOptions` 生成，作者写不了：
+
+```
+[{"code":"target","label":"评价对象","type":"enum","required":true,
+  "options":[{"code":"B1","label":"甲品牌"},…],"distinct":true},
+ {"code":"price","label":"价格","type":"enum","required":true,"options":<量表>},
+ …每个维度一列]
+```
+
+**「每个对象恰好评一次」不是靠按行下标比对，而是三条约束合起来逼出来的**：
+对象列是枚举（只能是声明过的对象）、唯一（不能评两次），行数被钉死成对象个数
+（`mjy_table_min_rows = mjy_table_max_rows = len(objects)`，作答者改不了）。
+三者同时成立就只剩一一对应，不必再写一套依赖行序的规则——行序是浏览器端的事，
+而浏览器端的任何结论都不作数。
+
+为此给列定义加了两条**通用**约束（自增表格也能用）：
+
+| 约束 | 含义 | 服务端在哪儿判 |
+|---|---|---|
+| `type: "enum"` ＋ `options` | 取值集合由平台在发布时声明 | `MjyRepeatingTableValidator::checkColumn()` |
+| `distinct: true` | 同一列的**非空**取值在一次作答里不得重复（空值不算重复） | `MjyRepeatingTableValidator::checkDistinct()` |
+
+两条都进 `structureDigest`：改了可选项等于换了一本字典，早先的答卷必须按它自己那一版读回。
+取值代码的字符集比列代码宽一位（可以数字打头，量表常写成 1…5）。
+
+**仍未做**：评价对象是**静态声明**的。需求里的「对象动态」（由前面某道题的作答决定评谁）
+要等逻辑 DSL 的引用能力，本片不做，也不假装做了。
+
+### R02-17 图片 PK
+
+成对比较：每次给两张图，挑一张。**整题一行，一对一列**，这一列的可选值恰好是
+这一对的两张图：
+
+```
+[{"code":"P1","label":"包装甲 / 包装乙","type":"enum","required":true,
+  "options":[{"code":"A","label":"包装甲"},{"code":"B","label":"包装乙"}]},
+ {"code":"P1_shown","label":"包装甲 / 包装乙（先展示）","type":"enum","required":false,
+  "options":[…同上…]},
+ …每对两列]
+```
+
+这样「选了别的一对里的图」根本不需要跨列规则——枚举列自己就挡住了。
+本类**没动插件一行校验代码**，用的全是 R02-11 引入的枚举列；这也是把那两条约束
+做成通用列约束（而不是给循环评价特制）的回报。
+
+**「配对随机要可追溯」怎么落**：配对由平台声明、固定不变（随结构版本留痕），
+随机的是**每一对里两张图的左右位置**——位置偏好是成对比较公认的偏倚来源。
+随机的那一半连同选择一起写进 `<配对代码>_shown`，事后能还原「这个人是在哪种摆法下
+做的选择」。位置在首次渲染时掷一次就记住，作答者返回上一页时看到的摆法不会变。
+
+`_shown` 列**不必填**：关掉 JavaScript 直接填信封的那条路径给不出展示顺序，
+为它硬性必填等于把没有 JS 的人挡在外面。端到端的「只答必答题」场景就是这么提交的
+（两列留空，照样收卷）。
+
+### R02-18 货架题
+
+在一张货架图上点热区取货并填件数。两列就够了：
+
+| 列 | 形状 | 为什么 |
+|---|---|---|
+| `product` | 枚举（货架上声明过的商品）＋**唯一** | 同一件商品不能取两次——要多拿就改件数，否则同一件会摊成两行，读端还得自己求和 |
+| `qty` | 整数，`min=1`、`max=maxQuantity`（缺省 99） | 取了却填 0 件不是「没取」，是自相矛盾 |
+
+取货件数的上下限就是行数上下限（`minPicks`／`maxPicks`）。发布期另有一条：
+`minPicks` 不得超过货架上的商品数——商品列是唯一列，要求取的件数多过货架上的商品，
+作答者永远交不了卷，这种题不该发得出去。
+
+热区是**归一化坐标**（左上角 `x`/`y` ＋ 宽高 `w`/`h`，都在 `[0,1]`，且不得越出图），
+换一张尺寸不同的货架图不用改坐标。
+
+**货架版本就是结构版本**：换了货架图或挪了热区就得换一版，
+否则半年前的答卷会被按今天的货架解释。
+
+本类同样**没动插件一行校验代码**：枚举、唯一、整数上下限都是现成的列约束。
 
 ## 四、缺失值（实测，MariaDB 10.11 与 PostgreSQL 16 完全一致）
 
@@ -233,8 +346,8 @@ Java 744 条（含字段字典的主题映射 3 条）。
 
 延后原因：
 
-- **需要新题型主题**：R02-04 的**多选**分组仍未做——多选的选项行由 `rows/*.twig` 包含进来，
-  换主题要连行模板一起接管（02.4）。R02-07 的「选项内嵌填空」已交付，`Q` 多项填空型组合仍在原生子集。
+- **需要新题型主题**：R02-04 的多选分组已在切片 02.4 交付（见第三之四节）。
+  R02-07 的「选项内嵌填空」已交付，`Q` 多项填空型组合仍在原生子集。
 - **插件扩展**（P 类余下 14 条）：副表的「结构版本」列已落地（ADR 0006 限制 9 解除），
   余下各条缺的是各自的编辑器主题与列定义生成器，不再缺公共设施。
   R02-03 另需字典服务与级联清值策略；R02-17/20/21/25/26/32/39/41 需资产服务。

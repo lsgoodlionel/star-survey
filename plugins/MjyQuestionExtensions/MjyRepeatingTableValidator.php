@@ -75,7 +75,48 @@ class MjyRepeatingTableValidator
                 $rows[] = $row;
             }
         }
+        if ($errors === []) {
+            $errors = $this->checkDistinct($rows);
+        }
         return $errors === [] ? MjyValidationResult::valid($rows) : MjyValidationResult::invalid($errors);
+    }
+
+    /**
+     * 唯一列：同一列的**非空**取值在一次作答里不得重复。
+     *
+     * 循环评价（R02-11）靠它把「每个评价对象恰好评一次」钉住：对象列是枚举，
+     * 行数被 min/max 钉死成对象个数，再加上这一条唯一约束，三者合起来就是一一对应。
+     * 空值不算重复——非必答的唯一列可以有多行留空。
+     *
+     * @param array<int, array<string, string>> $rows
+     * @return string[]
+     */
+    private function checkDistinct(array $rows): array
+    {
+        $errors = [];
+        foreach ($this->spec->columns() as $column) {
+            if (!$column['distinct']) {
+                continue;
+            }
+            $seen = [];
+            foreach ($rows as $index => $row) {
+                $value = $row[$column['code']] ?? '';
+                if ($value === '') {
+                    continue;
+                }
+                if (isset($seen[$value])) {
+                    $errors[] = sprintf(
+                        '第 %d 行的 %s 与第 %d 行重复',
+                        $index + 1,
+                        $column['label'],
+                        $seen[$value]
+                    );
+                    continue;
+                }
+                $seen[$value] = $index + 1;
+            }
+        }
+        return $errors;
     }
 
     /**
@@ -189,6 +230,13 @@ class MjyRepeatingTableValidator
         }
         if ($column['maxLength'] !== null && $length > $column['maxLength']) {
             $errors[] = sprintf('%s 超过 %d 个字符', $label, $column['maxLength']);
+            return;
+        }
+        if ($column['type'] === MjyTableColumnSpec::TYPE_ENUM) {
+            // 取值集合由平台声明，作答者只能从里面挑；浏览器端渲染成什么都不作数。
+            if (!in_array($value, $column['options'] ?? [], true)) {
+                $errors[] = $label . ' 不在可选范围内';
+            }
             return;
         }
         if ($column['type'] === MjyTableColumnSpec::TYPE_TEXT) {

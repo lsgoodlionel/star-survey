@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 货架题（需求 R02-18）。
+
+  在一张货架图上点选商品并填件数。引擎没有这个题型，本主题扩展长文本题（type T），
+  把「取了什么、取了几件」序列化成 JSON 信封存进长文本列，结构投影进插件副表
+  （platform/contracts/question-extension-tables-v1.md）。
+
+  两列：product 是枚举＋唯一（只能是货架上声明过的商品，同一件不能取两次——
+  要多拿就改件数，否则同一件商品会摊成两行，读端还得自己求和），
+  qty 是带上下限的整数。两条约束都在服务端由插件重算。
+
+  货架图与商品热区放 mjy_shelf_image 与 mjy_shelf_products（热区坐标归一化到 [0,1]，
+  换了图的尺寸不用改坐标），由发布网关按 themeOptions 生成，作者不能直写。
+  **货架版本就是结构版本**：换了货架图或挪了热区就得换一版，
+  否则半年前的答卷会被按今天的货架解释。
+
+  answercolumndefinition 把答卷列从默认的 text 提升为 mediumtext
+  （application/models/QuestionTheme.php:775）。这个标签**不能**用 CDATA 包起来。
+-->
+<config>
+    <metadata>
+        <name>mjy-shelf</name>
+        <type>question_theme</type>
+        <title>MJY 货架题</title>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>货架题：在货架图上按热区取货并填件数，结构投影进副表</description>
+        <questionType>T</questionType>
+        <group>Text questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>0</assessable>
+        <class>text-long mjy-shelf</class>
+        <answercolumndefinition>mediumtext</answercolumndefinition>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-shelf.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-shelf.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_table_columns</name>
+            <category>MJY 货架题</category>
+            <sortorder>10</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>列定义（JSON）</caption>
+            <help>两列：product（枚举＋唯一）与 qty（整数）</help>
+        </attribute>
+        <attribute>
+            <name>mjy_shelf_image</name>
+            <category>MJY 货架题</category>
+            <sortorder>20</sortorder>
+            <inputtype>text</inputtype>
+            <default></default>
+            <caption>货架图地址</caption>
+            <help>作答者在这张图上点选；净化会改写 URL 里的 &amp; ，所以不过滤</help>
+        </attribute>
+        <attribute>
+            <name>mjy_shelf_products</name>
+            <category>MJY 货架题</category>
+            <sortorder>30</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>商品与热区（JSON）</caption>
+            <help>形如 [{"code":"S1","label":"牛奶","x":0.1,"y":0.2,"w":0.2,"h":0.3}]，坐标归一化到 [0,1]</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_min_rows</name>
+            <category>MJY 货架题</category>
+            <sortorder>40</sortorder>
+            <inputtype>integer</inputtype>
+            <default>0</default>
+            <caption>最少取几件商品</caption>
+            <help>0 表示允许不取</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_max_rows</name>
+            <category>MJY 货架题</category>
+            <sortorder>50</sortorder>
+            <inputtype>integer</inputtype>
+            <default>10</default>
+            <caption>最多取几件商品</caption>
+            <help>服务端强制，浏览器端只是提示</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

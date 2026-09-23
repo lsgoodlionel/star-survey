@@ -177,6 +177,69 @@ class MjyRepeatingTableValidatorTest extends TestBaseClass
         $this->assertFalse($result->isValid());
     }
 
+    // ------------------------------------------------------------ 枚举列与唯一列（R02-11）
+
+    /**
+     * 枚举列的取值集合由平台在发布时声明，作答者只能从里面挑。
+     * 浏览器端渲染成下拉或按钮都不作数——提交上来的是字符串，闸门只能在这里。
+     */
+    public function testEnumCellOutsideTheDeclaredOptionsIsRejected()
+    {
+        $result = $this->validateScored('{"v":1,"rows":[{"target":"T1","service":"S9"}]}');
+
+        $this->assertFalse($result->isValid());
+        $this->assertNotEmpty($result->errors());
+    }
+
+    public function testEnumCellInsideTheDeclaredOptionsIsAccepted()
+    {
+        $result = $this->validateScored('{"v":1,"rows":[{"target":"T1","service":"S2"}]}');
+
+        $this->assertTrue($result->isValid(), implode('; ', $result->errors()));
+        $this->assertSame([['target' => 'T1', 'service' => 'S2']], $result->rows());
+    }
+
+    /**
+     * 唯一列：同一个评价对象不能被评两次。行数被 min/max 钉死之后，
+     * 「枚举＋唯一＋行数」合起来就逼出了一一对应，不必另写一套按行下标的规则。
+     */
+    public function testRepeatedValueInADistinctColumnIsRejected()
+    {
+        $result = $this->validateScored(
+            '{"v":1,"rows":[{"target":"T1","service":"S1"},{"target":"T1","service":"S2"}]}'
+        );
+
+        $this->assertFalse($result->isValid());
+        $this->assertNotEmpty($result->errors());
+    }
+
+    public function testDistinctColumnAcceptsDifferentValues()
+    {
+        $result = $this->validateScored(
+            '{"v":1,"rows":[{"target":"T1","service":"S1"},{"target":"T2","service":"S2"}]}'
+        );
+
+        $this->assertTrue($result->isValid(), implode('; ', $result->errors()));
+    }
+
+    /** 空值不算重复：非必答的唯一列可以有多行留空。 */
+    public function testEmptyValuesDoNotCollideInADistinctColumn()
+    {
+        $spec = '[{"code":"tag","type":"enum","options":["A","B"],"distinct":true}]';
+        $validator = new \MjyRepeatingTableValidator(\MjyTableColumnSpec::fromJson($spec), 0, 10);
+
+        $result = $validator->validate('{"v":1,"rows":[{"tag":""},{"tag":""}]}');
+
+        $this->assertTrue($result->isValid(), implode('; ', $result->errors()));
+    }
+
+    public function testAnEnumColumnWithoutOptionsIsRefusedAtParseTime()
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        \MjyTableColumnSpec::fromJson('[{"code":"tag","type":"enum"}]');
+    }
+
     private function rowsWith(string $item): string
     {
         return json_encode(['v' => 1, 'rows' => [['item' => $item]]], JSON_UNESCAPED_UNICODE);
@@ -189,6 +252,19 @@ class MjyRepeatingTableValidatorTest extends TestBaseClass
             $minRows,
             $maxRows
         );
+        return $validator->validate($answer);
+    }
+
+    /** 循环评价那一类的列形状：一列认对象（枚举＋唯一），一列存评分（枚举）。 */
+    private function validateScored(?string $answer): \MjyValidationResult
+    {
+        $spec = '[
+            {"code":"target","label":"评价对象","type":"enum","required":true,"distinct":true,
+             "options":[{"code":"T1","label":"甲"},{"code":"T2","label":"乙"}]},
+            {"code":"service","label":"服务","type":"enum","required":true,
+             "options":[{"code":"S1","label":"差"},{"code":"S2","label":"好"}]}
+        ]';
+        $validator = new \MjyRepeatingTableValidator(\MjyTableColumnSpec::fromJson($spec), 1, 2);
         return $validator->validate($answer);
     }
 }

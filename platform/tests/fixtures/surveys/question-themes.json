@@ -54,6 +54,27 @@
           }
         },
         {
+          "uuid": "99999999-1008-4555-8555-000000001008",
+          "code": "QGRPM",
+          "type": "M",
+          "text": "买过下面哪些（可多选）",
+          "other": true,
+          "attributes": { "max_answers": "3" },
+          "theme": "mjy-grouped-options",
+          "themeOptions": {
+            "collapsible": false,
+            "groups": [
+              { "label": "水果", "codes": ["M1", "M2"] },
+              { "label": "蔬菜", "codes": ["M3"] }
+            ]
+          },
+          "subquestions": [
+            { "uuid": "99999999-2007-4555-8555-000000002007", "code": "M1", "text": "苹果" },
+            { "uuid": "99999999-2008-4555-8555-000000002008", "code": "M2", "text": "香蕉" },
+            { "uuid": "99999999-2009-4555-8555-000000002009", "code": "M3", "text": "白菜" }
+          ]
+        },
+        {
           "uuid": "99999999-1003-4555-8555-000000001003",
           "code": "QSCAN",
           "type": "S",
@@ -115,6 +136,73 @@
             "columns": [
               { "code": "item", "label": "商品", "type": "text", "required": true, "maxLength": 20 },
               { "code": "qty", "label": "数量", "type": "integer", "required": true, "min": 1, "max": 99 }
+            ]
+          }
+        },
+        {
+          "uuid": "99999999-1009-4555-8555-000000001009",
+          "code": "QLOOP",
+          "type": "T",
+          "text": "逐个品牌打分",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-loop-rating",
+          "themeOptions": {
+            "structureVersion": "lr1",
+            "objects": [
+              { "code": "B1", "label": "甲品牌 & <老字号>" },
+              { "code": "B2", "label": "乙品牌" }
+            ],
+            "dimensions": [
+              { "code": "price", "label": "价格" },
+              { "code": "service", "label": "服务" }
+            ],
+            "scale": [
+              { "code": "1", "label": "差" },
+              { "code": "2", "label": "一般" },
+              { "code": "3", "label": "好" }
+            ]
+          }
+        },
+        {
+          "uuid": "99999999-1010-4555-8555-000000001010",
+          "code": "QPK",
+          "type": "T",
+          "text": "每一对里选更喜欢的一张",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交（展示顺序那一列可以留空）。",
+          "mandatory": true,
+          "theme": "mjy-image-pk",
+          "themeOptions": {
+            "structureVersion": "pk1",
+            "items": [
+              { "code": "A", "label": "包装甲 & <老版>", "image": "/themes/survey/fruity_twentythree/files/logo.png" },
+              { "code": "B", "label": "包装乙", "image": "/themes/survey/fruity_twentythree/files/logo.png" },
+              { "code": "C", "label": "包装丙", "image": "/themes/survey/fruity_twentythree/files/logo.png" }
+            ],
+            "pairs": [
+              { "code": "P1", "left": "A", "right": "B" },
+              { "code": "P2", "left": "B", "right": "C" }
+            ]
+          }
+        },
+        {
+          "uuid": "99999999-1011-4555-8555-000000001011",
+          "code": "QSHELF",
+          "type": "T",
+          "text": "从货架上取你会买的商品",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-shelf",
+          "themeOptions": {
+            "structureVersion": "sh1",
+            "image": "/themes/survey/fruity_twentythree/files/logo.png",
+            "minPicks": 1,
+            "maxPicks": 2,
+            "maxQuantity": 9,
+            "products": [
+              { "code": "S1", "label": "牛奶 & <整箱>", "x": 0.0, "y": 0.0, "w": 0.4, "h": 0.5 },
+              { "code": "S2", "label": "面包", "x": 0.5, "y": 0.0, "w": 0.4, "h": 0.5 },
+              { "code": "S3", "label": "鸡蛋", "x": 0.0, "y": 0.6, "w": 1.0, "h": 0.4 }
             ]
           }
         },

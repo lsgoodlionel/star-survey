@@ -201,11 +201,28 @@ class MjyQuestionExtensionsTest extends TestBaseClass
         // 题型主题 config.xml 里的 <xssfilter>false</xssfilter> 只是字符串，起不到作用。
         $definitions = \QuestionAttribute::getOwnQuestionAttributesViaPlugin();
 
-        foreach (['mjy_structure_version', 'mjy_heatmap_image', 'mjy_option_groups'] as $name) {
+        $jsonBearing = [
+            'mjy_structure_version', 'mjy_heatmap_image', 'mjy_option_groups',
+            'mjy_loop_objects', 'mjy_pk_items', 'mjy_pk_pairs',
+            'mjy_shelf_image', 'mjy_shelf_products',
+        ];
+        foreach ($jsonBearing as $name) {
             $this->assertArrayHasKey($name, $definitions);
             $this->assertFalse($definitions[$name]['xssfilter'], $name . ' 存的不是 HTML');
         }
         $this->assertStringContainsString(\Question::QT_L_LIST, $definitions['mjy_option_groups']['types']);
+    }
+
+    public function testOptionGroupsAreDeclaredForBothSingleAndMultipleChoice()
+    {
+        // R02-04 的多选分支：分组定义走同一个属性，但引擎按 types 决定这道题
+        // 认不认识它——漏掉 M 的话，导入多选题时 mjy_option_groups 会被丢掉，
+        // 主题拿到空分组，页面静默退回平铺（ADR 0006 决定 6 的同类故障）。
+        $definitions = \QuestionAttribute::getOwnQuestionAttributesViaPlugin();
+
+        $types = $definitions['mjy_option_groups']['types'];
+        $this->assertStringContainsString(\Question::QT_L_LIST, $types);
+        $this->assertStringContainsString(\Question::QT_M_MULTIPLE_CHOICE, $types);
     }
 
     public function testEveryStructuredThemeIsRecognisedAsAStructuredQuestion()
