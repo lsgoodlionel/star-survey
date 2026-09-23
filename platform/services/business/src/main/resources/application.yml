@@ -91,3 +91,15 @@ platform:
       lease: PT5M
       max-attempts: 5
       backoff: PT1M
+  # 通讯录导入作业（WP-18，ADR 0017）。逐行判定、可断点续跑；原始行在作业结束时删除。
+  contacts:
+    import:
+      enabled: ${PLATFORM_CONTACTS_IMPORT_ENABLED:true}
+      interval: ${PLATFORM_CONTACTS_IMPORT_INTERVAL:PT10S}
+      initial-delay: PT20S
+      lease: PT5M
+      max-attempts: 5
+      backoff: PT1M
+      max-rows-per-run: ${PLATFORM_CONTACTS_IMPORT_MAX_ROWS_PER_RUN:500}
+      max-rows: ${PLATFORM_CONTACTS_IMPORT_MAX_ROWS:50000}
+      max-content-bytes: ${PLATFORM_CONTACTS_IMPORT_MAX_CONTENT_BYTES:8388608}
