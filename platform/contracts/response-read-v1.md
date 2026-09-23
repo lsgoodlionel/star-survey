@@ -11,14 +11,20 @@
 
 ## `POST /v1/responses/read`
 
-请求体（`Content-Type: application/json`，≤ 1 MiB），四个必填字段加一个可选字段：
+请求体（`Content-Type: application/json`，≤ 1 MiB），四个必填字段，外加三个可选字段
+（`includeRespondent` 与 `generation`＋`extensionQuestions` 互相正交，可同时出现）：
 
 ```json
 {
   "engineInstanceId": "hd-engine-01",
   "surveyId": 900001,
   "responseIds": [1, 3, 999],
-  "fields": ["Q1", "Q1_Cother", "Q5_S8#0"]
+  "fields": ["Q1", "Q1_Cother", "Q5_S8#0"],
+
+  "includeRespondent": true,
+
+  "generation": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+  "extensionQuestions": ["TABLE1"]
 }
 ```
 
@@ -26,10 +32,18 @@
 - `responseIds`：1–500 个互不相同的正整数。
 - `fields`：1–5000 个互不相同的引擎答卷列名（`[A-Za-z0-9_#]{1,64}`），不得包含 `id`，
   **也不得包含 `token`**（400）：令牌只能经 `includeRespondent` 拿，当普通列请求就绕过了匿名判定。
-  `includeRespondent` 为真时**可以为空数组**（只要"这份答卷是谁交的"，不必多请求一列无关作答，
-  `values` 回空对象）；否则至少一列。
+  `includeRespondent` 为真、**或**点名了 `extensionQuestions` 时**可以为空数组**
+  （只要"这份答卷是谁交的"或只要扩展表作答，不必多请求一列无关作答，`values` 回空对象）；
+  否则至少一列。
 - `includeRespondent`（可选，布尔，缺省 `false`）：是否一并回答"这份答卷是用哪个邀请码答的"
   （ADR 0016 缺口 (b)）。不是布尔即 400。
+- `generation`（可选）：代次，`[A-Za-z0-9][A-Za-z0-9._-]{0,35}`。
+- `extensionQuestions`（可选）：≤ 50 个互不相同的题目代码（`[A-Za-z0-9_]{1,64}`），
+  即绑定记录里带 `sideTable` 的那些题。网关自己不存绑定，所以由平台点名。
+
+`generation` 与 `extensionQuestions` **要么都给要么都不给**：只给题目代码而不给代次 → 400。
+代次是副表自然键的一段，没有它无法保证不串代次（ADR 0013 决定 3），宁可拒绝也不读。
+出现上述之外的任何字段 → 400。
 
 **排序题（`R`）的名次列**在引擎答卷表里没有物理列，值由网关解析主列 JSON 得到（`pubgw/ranking.py`）：
 名次列 *n* 的值是排在第 *n* 位的项代码，没排到的位置是空串 `""`，整题不适用时（未到达、被条件隐藏）仍为 `null`。
@@ -47,7 +61,7 @@
 | 400 | `{"error":"invalid_request"}` | 请求体或 Content-Type 不合法 |
 | 401 | `{"error":"<原因>"}` | 认证失败，不做任何引擎调用 |
 | 404 | `{"error":"unknown_engine_instance"}` | 网关没有这个实例的配置 |
-| 502 | `{"error":"engine_error"}` | 引擎登录被拒、RPC 失败、导出结果不是 base64 JSON 或列数不符；不带引擎错误原文 |
+| 502 | `{"error":"engine_error"}` | 引擎登录被拒、RPC 失败、导出结果不是 base64 JSON 或列数不符；**插件通道不可达或未配置**；不带引擎错误原文 |
 | 500 | `{"error":"internal_error"}` | 网关意外异常，不含堆栈 |
 
 `GET /v1/responses/read` → 405（`Allow: POST`）。响应头同发布端点：`Cache-Control: no-store`。
@@ -72,6 +86,38 @@
 - 判定不出来（`get_survey_properties` 失败、或没有这个设置）就**不给**（`null`），不照发。
 - 该答卷没有用令牌进场（非匿名卷也可能有匿名作答）时那一列是空串，一律归为 `null`。
 
+### 扩展表作答（`extensionAnswers`）
+
+请求带了 `generation`＋`extensionQuestions` 时，200 的体里多一段 `extensionAnswers`
+（其余字段一字不变；与 `includeRespondent` 同时出现时，`responses[].token` 与这一段各自照常给出）：
+
+```json
+{
+  "responses": [{"id": 1, "values": {"Q1": "A1"}}],
+  "missing": [999],
+  "extensionAnswers": {
+    "1": {
+      "TABLE1": {
+        "structureVersion": "rt3",
+        "isValid": true,
+        "rows": [{"item": "甲", "qty": "2"}, {"item": "乙", "qty": "3"}]
+      }
+    }
+  }
+}
+```
+
+**为什么单列一段而不并进 `values`**：副表作答是行×列，且行数逐份答卷不同。
+压进扁平列需要一个「最多多少行」的约定，而那个上限在读取时并不知道——
+字段字典是发布时冻结的，副表行数是作答时才产生的。硬压要么截断作答，要么让列集随数据漂移。
+
+- 键是答卷号的十进制字符串；没有副表数据的答卷不出现，一个都没有时是 `{}`。
+- `rows` 下标即行序；单元格值一律是字符串，`NULL` 为 `""`。
+- `structureVersion` 决定用哪一版列字典解释列代码，`"0"` 表示无从考证
+  （见 [`question-extension-tables-v1.md`](question-extension-tables-v1.md)）。
+- 值来自网关↔插件鉴权通道（[`plugin-channel-v1.md`](plugin-channel-v1.md)），
+  **失败关闭**：通道任何非 200 或该引擎没配通道密钥，整页 502，绝不少返回。
+
 ## 平台侧必须做到
 
 - 只在 `view-raw-responses` 判定通过后调用；敏感列遮蔽在平台侧完成（网关返回原值）。
@@ -83,7 +129,8 @@
 ## 验证
 
 - 网关单测：`platform/tools/publish-gateway/tests/test_responses.py`（假引擎按 7.1.2 导出形状作答）、
-  `tests/test_ranking.py`（名次解析、投影与列结构缓存）。
+  `tests/test_ranking.py`（名次解析、投影与列结构缓存）、
+  `tests/test_response_extensions.py`（扩展表作答单列一段、扁平字段不受影响、失败即关闭）。
 - 真引擎：`TEST_DB=mysql|pgsql platform/deploy/test/run-response-read.sh`（多列题、"其他"、评论、双尺度逐列核对）；
   排序题的名次在 `run-question-types.sh` 场景 D2（HTTP 真实作答后逐名次核对）。
 - 平台：`HttpResponseAnswerSourceTest`（签名逐字节、应答解析、失败即关闭）。

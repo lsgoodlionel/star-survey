@@ -60,20 +60,30 @@ docker build -t survey-publish-gateway platform/tools/publish-gateway
 | `PUBGW_STATE_DIR` | 幂等结果 SQLite（`publish-results.sqlite3`）所在目录（必填；镜像里是 `/var/lib/pubgw`，应挂持久卷） |
 | `PUBGW_HOST` / `PUBGW_PORT` | 监听地址与端口，缺省 `127.0.0.1:8080`（镜像里是 `0.0.0.0:8080`） |
 | 配置里 `passwordEnv` 指名的变量 | 各实例的引擎管理员口令 |
+| 配置里 `channelSecretEnv` 指名的变量 | 各实例的插件通道密钥（可选，见下） |
 
-引擎实例配置（口令**只**走环境变量，文件里出现口令字段直接拒绝启动）：
+引擎实例配置（口令与密钥**只**走环境变量，文件里出现明文字段直接拒绝启动）：
 
 ```json
 {
   "hd-engine-01": {
     "rpcUrl": "http://engine-01/index.php/admin/remotecontrol",
     "user": "admin",
-    "passwordEnv": "PUBGW_ENGINE_HD01_PASSWORD"
+    "passwordEnv": "PUBGW_ENGINE_HD01_PASSWORD",
+    "channelSecretEnv": "PUBGW_ENGINE_HD01_CHANNEL_SECRET"
   }
 }
 ```
 
 `rpcUrl` 是完整的 RemoteControl 端点。任何配置错误都以退出码 `2` 拒绝启动。
+
+`channelSecretEnv` 可选，是网关↔插件鉴权通道的密钥（[ADR 0018](../../docs/adr/0018-gateway-plugin-channel.md)，
+契约 [`plugin-channel-v1`](../../contracts/plugin-channel-v1.md)）：读扩展表作答走这条通道。
+不配就是这台引擎没开通道，平台点名扩展题时**失败关闭**（整页 502），不会安静地少返回；
+配了却取不到值则拒绝启动。
+
+通道密钥由平台按公式派生后下发，网关**只**拿到通道密钥，拿不到引擎实例密钥——
+派生是单向的，所以网关被攻破也伪造不了引擎事件。
 
 行为要点：
 
