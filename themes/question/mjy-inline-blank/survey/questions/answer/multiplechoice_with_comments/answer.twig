@@ -1,0 +1,25 @@
+{#
+/**
+ * MJY 选项内嵌填空：与 core 的 multiplechoice_with_comments/answer.twig 逐行一致
+ * （行模板仍走 ./rows/*.twig，本主题不接管它们），只多一层带填空配置的 div。
+ *
+ * @var name / value / aRows  同 core
+ * @var question_template_attribute  mjy_inline_blank_label / mjy_inline_blank_max
+ */
+#}
+<!-- MJY inline blank -->
+
+<!-- answer -->
+<input type='hidden' name='{{ name }}' value='{{ value }}' />
+<div class="mjy-inline-blank"
+     data-mjy-inline-blank="1"
+     data-mjy-blank-label="{{ question_template_attribute.mjy_inline_blank_label|default('')|escape('html_attr') }}"
+     data-mjy-blank-max="{{ question_template_attribute.mjy_inline_blank_max|default(0) }}">
+<ul class="{{ coreClass }} list-unstyled" role="group" aria-labelledby="ls-question-text-{{ basename }}">
+        {% for aRow in aRows %}
+                {% set rowTemplate = aRow.other ? './survey/questions/answer/multiplechoice_with_comments/rows/answer_row_other.twig' : './survey/questions/answer/multiplechoice_with_comments/rows/answer_row.twig' %}
+                {% include rowTemplate with aRow %}
+        {% endfor %}
+</ul>
+</div>
+<!-- end of answer -->

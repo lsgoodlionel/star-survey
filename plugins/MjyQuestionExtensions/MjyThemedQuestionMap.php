@@ -12,19 +12,28 @@ class MjyThemedQuestionMap
     /** 自增表格的题型主题名，必须与 themes/question/ 下的目录名一致。 */
     public const REPEATING_TABLE_THEME = 'mjy-repeating-table';
 
+    /** 热力图选区（R02-19）：同一套 JSON 信封与副表，列定义由平台生成。 */
+    public const HEATMAP_THEME = 'mjy-heatmap';
+
+    /**
+     * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
+     * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应。
+     */
+    public const STRUCTURED_THEMES = [self::REPEATING_TABLE_THEME, self::HEATMAP_THEME];
+
     /** @var array<string, array<string, mixed>> */
-    private $repeatingTables;
+    private $structuredQuestions;
 
     /** @var array<string, array<string, mixed>> */
     private $uploads;
 
     /**
-     * @param array<string, array<string, mixed>> $repeatingTables
+     * @param array<string, array<string, mixed>> $structuredQuestions
      * @param array<string, array<string, mixed>> $uploads
      */
-    private function __construct(array $repeatingTables, array $uploads)
+    private function __construct(array $structuredQuestions, array $uploads)
     {
-        $this->repeatingTables = $repeatingTables;
+        $this->structuredQuestions = $structuredQuestions;
         $this->uploads = $uploads;
     }
 
@@ -37,7 +46,7 @@ class MjyThemedQuestionMap
             ->order('qid')
             ->queryAll();
 
-        $repeatingTables = [];
+        $structuredQuestions = [];
         $uploads = [];
         foreach ($rows as $row) {
             $entry = [
@@ -45,23 +54,24 @@ class MjyThemedQuestionMap
                 'code' => (string) $row['title'],
                 'fieldName' => 'Q' . (int) $row['qid'],
             ];
-            if ((string) $row['question_theme_name'] === self::REPEATING_TABLE_THEME) {
-                $repeatingTables[$entry['code']] = $entry;
+            if (in_array((string) $row['question_theme_name'], self::STRUCTURED_THEMES, true)) {
+                $entry['theme'] = (string) $row['question_theme_name'];
+                $structuredQuestions[$entry['code']] = $entry;
                 continue;
             }
             if ((string) $row['type'] === Question::QT_VERTICAL_FILE_UPLOAD) {
                 $uploads[$entry['code']] = $entry;
             }
         }
-        return new self($repeatingTables, $uploads);
+        return new self($structuredQuestions, $uploads);
     }
 
     /**
      * @return array<string, array<string, mixed>> 题目代码 => 题目信息
      */
-    public function repeatingTables(): array
+    public function structuredQuestions(): array
     {
-        return $this->repeatingTables;
+        return $this->structuredQuestions;
     }
 
     /**

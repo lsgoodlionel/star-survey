@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 热力图选区（需求 R02-19）。
+
+  与自增表格同一档（[ADR 0006] C 档）：基础题型是长文本（type T），整组坐标以
+  JSON 信封 {"v":1,"rows":[{"x":..,"y":..},...]} 存进那一列，插件
+  MjyQuestionExtensions 按列定义逐格校验后投影进副表
+  （platform/contracts/question-extension-tables-v1.md）。
+
+  坐标一律归一化到 0…1：换一张分辨率不同的底图，旧答卷仍然落在同一个相对位置。
+  范围写在列定义里（min=0 max=1），由插件在服务端强制，浏览器端算出来的值一概不信。
+
+  answercolumndefinition 想把答卷列提成 mediumtext，但它在 7.1.2 里是死代码
+  （ADR 0006 限制 4），所以点数上限由平台在 mjy_table_max_rows 里框住。
+-->
+<config>
+    <metadata>
+        <name>mjy-heatmap</name>
+        <type>question_theme</type>
+        <title>MJY 热力图选区</title>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>热力图选区：在图片上点选若干位置，按归一化坐标存进长文本列</description>
+        <questionType>T</questionType>
+        <group>Text questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>0</assessable>
+        <class>text-long mjy-heatmap</class>
+        <answercolumndefinition>mediumtext</answercolumndefinition>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-heatmap.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-heatmap.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_heatmap_image</name>
+            <category>MJY 热力图选区</category>
+            <sortorder>10</sortorder>
+            <inputtype>text</inputtype>
+            <default></default>
+            <caption>底图地址</caption>
+            <help>作答者在这张图上点选</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_columns</name>
+            <category>MJY 热力图选区</category>
+            <sortorder>20</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>列定义（JSON）</caption>
+            <help>由发布网关生成：x、y 两列 decimal，范围 0…1</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_min_rows</name>
+            <category>MJY 热力图选区</category>
+            <sortorder>30</sortorder>
+            <inputtype>integer</inputtype>
+            <default>0</default>
+            <caption>最少点数</caption>
+            <help>0 表示允许不点</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_max_rows</name>
+            <category>MJY 热力图选区</category>
+            <sortorder>40</sortorder>
+            <inputtype>integer</inputtype>
+            <default>10</default>
+            <caption>最多点数</caption>
+            <help>服务端强制，浏览器端只是提示</help>
+        </attribute>
+        <attribute>
+            <name>mjy_structure_version</name>
+            <category>MJY 热力图选区</category>
+            <sortorder>50</sortorder>
+            <inputtype>text</inputtype>
+            <default></default>
+            <caption>副表结构版本</caption>
+            <help>平台发布时声明；改了列定义就要换一个</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

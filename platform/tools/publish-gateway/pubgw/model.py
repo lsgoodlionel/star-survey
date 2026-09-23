@@ -79,6 +79,9 @@ class Question:
     #: 均编译成服务端校验（platform/docs/p2/question-type-map.md 第三节）。
     format: str = ""
     max_length: Optional[int] = None
+    #: WP-02 切片 02.3：平台题型主题的配置（pubgw/questions/themes.py）。
+    #: 缺省为空＝不带任何主题配置，编译结果与旧定义逐字节一致。
+    theme_options: Dict[str, Any] = field(default_factory=dict)
 
     def answers_on_scale(self, scale: int) -> Tuple[AnswerOption, ...]:
         return tuple(answer for answer in self.answers if answer.scale == scale)
@@ -213,7 +216,19 @@ def _question(payload: Any, where: str, is_logic: bool) -> Question:
         validation=_validation(payload.get("validation"), where),
         format=_optional_text(payload, "format"),
         max_length=_optional_integer(payload.get("maxLength"), where, "maxLength"),
+        theme_options=_theme_options(payload.get("themeOptions"), where),
     )
+
+
+def _theme_options(payload: Any, where: str) -> Dict[str, Any]:
+    """只查「是不是一个键为字符串的对象」；每个主题自己的取值规则在 questions/themes.py（422）。"""
+    if payload is None:
+        return {}
+    _require_mapping(payload, where + ".themeOptions")
+    for key in payload:
+        if not isinstance(key, str):
+            raise DefinitionError("{}.themeOptions keys must be strings".format(where))
+    return copy.deepcopy(dict(payload))
 
 
 def _check_logic_keys(payload: Mapping[str, Any], where: str, is_logic: bool) -> None:

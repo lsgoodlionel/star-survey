@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 扫码录入（需求 R02-28）。
+
+  数据形状与短文本题（type S）完全一致：答卷表里仍然是一列文本。主题只在输入框旁边
+  加一个「扫一扫」按钮，用浏览器自带的 BarcodeDetector 把摄像头里的码写进输入框。
+
+  扫到的内容整串由客户端提交，服务端不可能知道它「真的是扫出来的」，所以发布网关
+  强制这类题必须设 maxLength（编译成 em_validation_q 的长度规则），
+  见 platform/docs/p2/question-type-map.md。
+-->
+<config>
+    <metadata>
+        <name>mjy-scan-input</name>
+        <type>question_theme</type>
+        <title>MJY 扫码录入</title>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>扫码录入：摄像头扫二维码或条形码，结果写进短文本列</description>
+        <questionType>S</questionType>
+        <group>Text questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>0</assessable>
+        <class>text-short mjy-scan-input</class>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-scan-input.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-scan-input.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_scan_format</name>
+            <category>MJY 扫码录入</category>
+            <sortorder>10</sortorder>
+            <inputtype>text</inputtype>
+            <default>qr</default>
+            <caption>码制</caption>
+            <help>qr＝二维码，barcode＝一维条码，any＝都认</help>
+        </attribute>
+        <attribute>
+            <name>mjy_scan_manual</name>
+            <category>MJY 扫码录入</category>
+            <sortorder>20</sortorder>
+            <inputtype>integer</inputtype>
+            <default>1</default>
+            <caption>允许手工输入</caption>
+            <help>0＝只能扫码（浏览器不支持时仍会放开，否则作答者填不下去）</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

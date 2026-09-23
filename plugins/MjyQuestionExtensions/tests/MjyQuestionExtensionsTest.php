@@ -195,6 +195,81 @@ class MjyQuestionExtensionsTest extends TestBaseClass
         }
     }
 
+    public function testPluginDeclaresTheJsonBearingAttributesWithoutXssFiltering()
+    {
+        // 净化会把 JSON 的引号与 URL 的 & 改写掉，而 xssfilter 必须是真布尔值：
+        // 题型主题 config.xml 里的 <xssfilter>false</xssfilter> 只是字符串，起不到作用。
+        $definitions = \QuestionAttribute::getOwnQuestionAttributesViaPlugin();
+
+        foreach (['mjy_structure_version', 'mjy_heatmap_image', 'mjy_option_groups'] as $name) {
+            $this->assertArrayHasKey($name, $definitions);
+            $this->assertFalse($definitions[$name]['xssfilter'], $name . ' 存的不是 HTML');
+        }
+        $this->assertStringContainsString(\Question::QT_L_LIST, $definitions['mjy_option_groups']['types']);
+    }
+
+    public function testEveryStructuredThemeIsRecognisedAsAStructuredQuestion()
+    {
+        // 热力图（R02-19）与自增表格（R02-13）共用同一套信封、校验器与副表，
+        // 只是列定义由平台生成；插件按主题名认题，认漏一个＝这道题的作答无人校验。
+        $question = $this->question(self::TABLE_CODE);
+        $db = \App()->getDb();
+        try {
+            foreach (\MjyThemedQuestionMap::STRUCTURED_THEMES as $theme) {
+                $db->createCommand()->update(
+                    $db->tablePrefix . 'questions',
+                    ['question_theme_name' => $theme],
+                    'qid = :qid',
+                    [':qid' => $question->qid]
+                );
+                $map = \MjyThemedQuestionMap::forSurvey($db, (int) self::$surveyId);
+                $this->assertArrayHasKey(self::TABLE_CODE, $map->structuredQuestions(), $theme);
+            }
+        } finally {
+            $db->createCommand()->update(
+                $db->tablePrefix . 'questions',
+                ['question_theme_name' => self::THEME_NAME],
+                'qid = :qid',
+                [':qid' => $question->qid]
+            );
+            self::$plugin->resetRequestState();
+        }
+    }
+
+    public function testProjectionStampsTheStructureVersionDeclaredOnTheQuestion()
+    {
+        $question = $this->question(self::TABLE_CODE);
+        $responseId = $this->saveResponse('{"v":1,"rows":[{"item":"甲","qty":"1"}]}');
+
+        // 属性缺失（本契约之前发布的问卷）：标成「不知道是哪一版」，不猜。
+        self::$plugin->projectResponse(self::$surveyId, $responseId);
+        $this->assertSame(
+            \MjyStructuredAnswerStore::LEGACY_STRUCTURE_VERSION,
+            (string) $this->storedState($responseId)[\MjyStructuredAnswerStore::STRUCTURE_VERSION_COLUMN]
+        );
+
+        $this->setAttribute((int) $question->qid, 'mjy_structure_version', 'rt7');
+        try {
+            self::$plugin->projectResponse(self::$surveyId, $responseId);
+
+            $this->assertSame(
+                'rt7',
+                (string) $this->storedState($responseId)[\MjyStructuredAnswerStore::STRUCTURE_VERSION_COLUMN]
+            );
+            $this->assertSame(
+                ['rt7'],
+                self::$plugin->structuredAnswers()->fetchStructureVersions(
+                    self::$surveyId,
+                    self::$plugin->currentGeneration(self::$surveyId),
+                    $responseId,
+                    self::TABLE_CODE
+                )
+            );
+        } finally {
+            $this->removeAttribute((int) $question->qid, 'mjy_structure_version');
+        }
+    }
+
     public function testRejectionMessageIsHtmlEscapedBeforeItReachesTheTemplate()
     {
         // man_message 会被模板以 raw 渲染（valid_message_and_help.twig:25）。
@@ -282,6 +357,27 @@ class MjyQuestionExtensionsTest extends TestBaseClass
         $question = \Question::model()->findByAttributes(['sid' => self::$surveyId, 'title' => $code]);
         $this->assertNotNull($question, "Question $code should exist");
         return $question;
+    }
+
+    private function setAttribute(int $qid, string $name, string $value): void
+    {
+        $db = \App()->getDb();
+        $this->removeAttribute($qid, $name);
+        $db->createCommand()->insert($db->tablePrefix . 'question_attributes', [
+            'qid' => $qid,
+            'attribute' => $name,
+            'value' => $value,
+        ]);
+    }
+
+    private function removeAttribute(int $qid, string $name): void
+    {
+        $db = \App()->getDb();
+        $db->createCommand()->delete(
+            $db->tablePrefix . 'question_attributes',
+            'qid = :qid AND attribute = :name',
+            [':qid' => $qid, ':name' => $name]
+        );
     }
 
     private function attribute(int $qid, string $name): ?string

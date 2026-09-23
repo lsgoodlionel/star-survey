@@ -16,7 +16,9 @@ import tools.jackson.databind.JsonNode;
  *   <li>多选（{@code M P}）的子题列选中为 {@code Y}；</li>
  *   <li>矩阵（{@code : ;}）的 aid 是"行代码_列代码"，行子题在尺度 0、列子题在尺度 1；</li>
  *   <li>排序（{@code R}）的主列是按名次排列的子题代码 JSON 数组，名次列 aid 为 1…n；</li>
- *   <li>单选带评论（{@code O}）的 {@code comment} 列、上传题（{@code |}）的 {@code filecount} 列是自由值。</li>
+ *   <li>单选带评论（{@code O}）的 {@code comment} 列、上传题（{@code |}）的 {@code filecount} 列是自由值；</li>
+ *   <li>平台题型主题（{@code theme}）先于题型字母决定含义：副表题型的那一列是整块 JSON 信封，
+ *       选项内嵌填空的评论列是主题配置的填空。</li>
  * </ul>
  */
 final class QuestionTypeColumns {
@@ -26,6 +28,18 @@ final class QuestionTypeColumns {
     static final String COMMENT_LABEL = "（评论）";
     static final String FILE_COUNT_LABEL = "文件数";
     static final String CHECKED = "Y";
+    static final String STRUCTURED_LABEL = "结构化作答";
+    static final String INLINE_BLANK_THEME = "mjy-inline-blank";
+    static final String DEFAULT_BLANK_LABEL = "补充";
+
+    /**
+     * 作答以 JSON 信封存进基础题型那一列、真正的结构在副表里的题型主题
+     * （网关 {@code pubgw/questions/themes.py} 的 STRUCTURED_THEMES，
+     * 契约 platform/contracts/question-extension-tables-v1.md）。
+     * 这一列是整块 JSON，不是可枚举的取值。
+     */
+    private static final java.util.Set<String> STRUCTURED_THEMES =
+            java.util.Set.of("mjy-repeating-table", "mjy-heatmap");
 
     private static final List<OptionLabel> FIVE = scale(5);
     private static final Map<String, List<OptionLabel>> BUILT_IN = Map.of(
@@ -41,6 +55,15 @@ final class QuestionTypeColumns {
     }
 
     static Optional<String> label(JsonNode question, String type, String aid, String text) {
+        String theme = question.path("theme").asString("");
+        if (STRUCTURED_THEMES.contains(theme) && aid.isEmpty()) {
+            return Optional.of(text + " [" + STRUCTURED_LABEL + "]");
+        }
+        if (INLINE_BLANK_THEME.equals(theme) && aid.endsWith(COMMENT)) {
+            String base = aid.substring(0, aid.length() - COMMENT.length());
+            String blank = question.path("themeOptions").path("blankLabel").asString(DEFAULT_BLANK_LABEL);
+            return Optional.of(text + " [" + subquestionText(question, base, 0).orElse(base) + "]（" + blank + "）");
+        }
         switch (type) {
             case ":", ";" -> {
                 int split = aid.indexOf('_');
@@ -69,6 +92,9 @@ final class QuestionTypeColumns {
 
     /** 该列可取的值；返回空表示交给通用规则（按定义里的 answers）。 */
     static Optional<List<OptionLabel>> options(JsonNode question, String type, String aid, boolean isChoiceColumn) {
+        if (STRUCTURED_THEMES.contains(question.path("theme").asString(""))) {
+            return Optional.of(List.of());
+        }
         if (BUILT_IN.containsKey(type)) {
             return Optional.of(isChoiceColumn ? BUILT_IN.get(type) : List.of());
         }

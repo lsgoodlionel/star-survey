@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 矩阵单题作答（需求 R02-14）。
+
+  数据形状与数组题（type F）完全一致：每个行子题一列，引擎的必答与选项校验照旧
+  在服务端重算——逐行导航只是展示，跳过某一行不等于绕过必答。
+
+  本主题只接管「非下拉」布局（no_dropdown）。题目设了 use_dropdown 时下拉布局回落到
+  引擎的基础模板，表现为普通数组题。
+-->
+<config>
+    <metadata>
+        <name>mjy-matrix-stepper</name>
+        <type>question_theme</type>
+        <title>MJY 矩阵单题作答</title>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>矩阵单题作答：一次只显示一行（或几行），在同一页里逐行推进</description>
+        <questionType>F</questionType>
+        <group>Arrays</group>
+        <subquestions>1</subquestions>
+        <answerscales>1</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>1</assessable>
+        <class>array-flexible-row mjy-matrix-stepper</class>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-matrix-stepper.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-matrix-stepper.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_stepper_rows</name>
+            <category>MJY 矩阵单题作答</category>
+            <sortorder>10</sortorder>
+            <inputtype>integer</inputtype>
+            <default>1</default>
+            <caption>每步显示的行数</caption>
+            <help>1＝一次一行</help>
+        </attribute>
+        <attribute>
+            <name>mjy_stepper_progress</name>
+            <category>MJY 矩阵单题作答</category>
+            <sortorder>20</sortorder>
+            <inputtype>integer</inputtype>
+            <default>1</default>
+            <caption>显示进度</caption>
+            <help>1＝显示「第 n / 共 m 行」</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

@@ -16,6 +16,7 @@ from typing import Dict, List, Sequence
 
 from ..model import Group, Question, SurveyDefinition
 from .formats import FORMATS
+from .themes import lower_theme, read_theme_options
 
 VALIDATION_ATTRIBUTE = "em_validation_q"
 TIP_ATTRIBUTE = "em_validation_q_tip"
@@ -54,6 +55,10 @@ def _lower_question(question: Question) -> Question:
             "(is_empty({v}) or strlen(html_entity_decode({v})) <= {n})".format(v=variable, n=question.max_length)
         )
         tips.append(_MAX_LENGTH_TIP.format(question.max_length))
+    theme = lower_theme(question, read_theme_options(question)[0])
+    attributes.update(theme.attributes)
+    rules.extend(theme.rules)
+    tips.extend(theme.tips)
     exclusive = [sub.code for sub in question.subquestions if sub.exclusive]
     if exclusive:
         attributes["exclude_all_others"] = ";".join(exclusive)

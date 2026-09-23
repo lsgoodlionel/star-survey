@@ -5,7 +5,7 @@
  *
  * 引擎没有「自增表格」题型，也没有任何可以**否决一次作答提交**的插件事件。
  * 本插件把平台需要的三件事接到引擎上：
- *  - newQuestionAttributes：自增表格的列定义、最少/最多行数；
+ *  - newQuestionAttributes：结构化题型的列定义、行数上下限、副表结构版本；
  *  - beforeSurveyPage：在引擎处理 POST 之前重新校验并归一化结构化作答，
  *    不合法时把值清空，借引擎自己的必答校验把作答者留在本页（见 ADR 0006）；
  *  - afterResponseSave / afterSurveyDynamicSave：把结构化作答投影进副表；
@@ -115,7 +115,7 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
     }
 
     /**
-     * 对本次 POST 里出现的每一道自增表格题做服务端校验。
+     * 对本次 POST 里出现的每一道结构化题型做服务端校验。
      *
      * 每道题单独兜异常：一道题的列定义坏掉**不能**让其余题目的校验被跳过，
      * 那是最糟的失败方式（失败开放）。
@@ -125,7 +125,7 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
     public function gatePostedAnswers(int $surveyId): array
     {
         $this->pageErrors = [];
-        foreach ($this->questionMap($surveyId)->repeatingTables() as $question) {
+        foreach ($this->questionMap($surveyId)->structuredQuestions() as $question) {
             try {
                 $this->gateAnswer($surveyId, $question);
             } catch (\Throwable $exception) {
@@ -214,14 +214,14 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
     }
 
     /**
-     * 重新读取答卷行，把所有自增表格题投影进副表。保存钩子与后台补投都走这一条路径。
+     * 重新读取答卷行，把所有结构化题型（自增表格、热力图…）投影进副表。保存钩子与后台补投都走这一条路径。
      *
      * @return array<string, MjyValidationResult> 题目代码 => 校验结果
      */
     public function projectResponse(int $surveyId, int $responseId): array
     {
         $map = $this->questionMap($surveyId);
-        if ($map->repeatingTables() === [] && $map->uploads() === []) {
+        if ($map->structuredQuestions() === [] && $map->uploads() === []) {
             return [];
         }
         $row = $this->responseRow($surveyId, $responseId);
@@ -231,9 +231,16 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         $generation = $this->currentGeneration($surveyId);
 
         $results = [];
-        foreach ($map->repeatingTables() as $code => $question) {
+        foreach ($map->structuredQuestions() as $code => $question) {
             $result = $this->validatorFor($question)->validate($row[$question['fieldName']] ?? null);
-            $this->structuredAnswers()->recordAnswer($surveyId, $generation, $responseId, $code, $result);
+            $this->structuredAnswers()->recordAnswer(
+                $surveyId,
+                $generation,
+                $responseId,
+                $code,
+                $this->structureVersionFor($question),
+                $result
+            );
             $results[$code] = $result;
         }
         foreach ($map->uploads() as $code => $question) {
@@ -346,6 +353,20 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
             sprintf('survey %d %s rejected: %s', $surveyId, $fieldName, $result->errorText()),
             CLogger::LEVEL_INFO,
             self::LOG_CATEGORY
+        );
+    }
+
+    /**
+     * 副表结构版本：平台在 .lss 里声明的那一个，消毒后使用。
+     * 属性缺失或被改坏时回落到「不知道是哪一版」，而不是假装是第 1 版。
+     *
+     * @param array<string, mixed> $question
+     */
+    public function structureVersionFor(array $question): string
+    {
+        $attributes = $this->questionAttributes((int) $question['qid']);
+        return MjyStructuredAnswerStore::normaliseStructureVersion(
+            $attributes[MjyQuestionAttributeDefinitions::STRUCTURE_VERSION] ?? null
         );
     }
 

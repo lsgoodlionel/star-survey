@@ -1,0 +1,49 @@
+{#
+/**
+ * MJY 扫码录入：短文本输入框 ＋ 一个「扫一扫」按钮。
+ *
+ * 与 core 的 shortfreetext/text/item.twig 形状一致（name / id / maxlength 一个不改），
+ * 只多了一层 data-* 与按钮。提交的永远是这个 input，扫码只是往里写值。
+ *
+ * @var name       引擎字段名
+ * @var dispVal    已存的值
+ * @var maxlength  maximum_chars（由发布网关按 maxLength 写入）
+ * @var question_template_attribute  mjy_scan_format / mjy_scan_manual
+ */
+#}
+<!-- MJY scan input -->
+{% if withColumn %}
+<div class='{{ coreClass }} row'>
+    <div class="{{ extraclass }}">
+{% else %}
+<div class='{{ coreClass }} {{ extraclass }}'>
+{% endif %}
+    <div class="mjy-scan-input"
+         data-mjy-scan="1"
+         data-mjy-field="{{ name }}"
+         data-mjy-format="{{ question_template_attribute.mjy_scan_format|default('qr')|escape('html_attr') }}"
+         data-mjy-manual="{{ question_template_attribute.mjy_scan_manual|default(1) }}">
+        <div class="ls-input-group">
+            <input
+                class="form-control mjy-scan-input__value"
+                type="text"
+                name="{{ name }}"
+                id="answer{{ name }}"
+                value="{{ dispVal }}"
+                placeholder="{{ flatString(processString(placeholder,1),1) }}"
+                {% if inputsize %}size="{{ inputsize }}" {% endif %}
+                {% if maxlength %}maxlength="{{ maxlength }}" {% endif %}
+                aria-labelledby="ls-question-text-{{ basename }}"
+            />
+            <button type="button" class="btn btn-outline-secondary mjy-scan-input__start" hidden>{{ gT('Scan') }}</button>
+        </div>
+        <video class="mjy-scan-input__preview" playsinline muted hidden></video>
+        <p class="mjy-scan-input__note" role="status"></p>
+    </div>
+{% if withColumn %}
+    </div>
+</div>
+{% else %}
+</div>
+{% endif %}
+<!-- end of answer -->

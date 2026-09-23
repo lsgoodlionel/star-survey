@@ -1,0 +1,29 @@
+{#
+/**
+ * MJY 选项分类：与 core 的 listradio/answer.twig 逐行一致（sRows 已经由 PHP 渲染好），
+ * 只多了一层带分组定义的 data-*。重排在浏览器端做，提交的永远是同一批 radio。
+ *
+ * @var name
+ * @var value
+ * @var question_template_attribute  mjy_option_groups / mjy_option_groups_collapsible
+ */
+#}
+<!-- MJY grouped options -->
+
+<!-- answer -->
+{{ sTimer }}
+<div class="mjy-grouped-options"
+     data-mjy-option-groups="{{ question_template_attribute.mjy_option_groups|escape('html_attr') }}"
+     data-mjy-collapsible="{{ question_template_attribute.mjy_option_groups_collapsible|default(0) }}">
+<ul class="{{ coreClass }} list-unstyled {% if iNbCols > 1 %} ls-column-count-{{iNbCols}}{% endif %}" role="radiogroup" aria-labelledby="ls-question-text-{{ name }}"{% if iNbCols > 1 %} data-column-count={{iNbCols}}{% endif %}>
+    {# rows/answer_row.php #}
+    {{ sRows }}
+</ul>
+</div>
+{# Value for expression manager javascript (use id) ; no need to submit #}
+{{ C.Html.hiddenField("java"~name,value,({
+    'id' : "java"~name,
+    'disabled' : true,
+}))
+}}
+<!-- end of answer -->

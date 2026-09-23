@@ -14,10 +14,11 @@
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .model import SurveyDefinition
 from .qtypes import expected_rows
+from .questions.themes import side_table_binding
 
 #: 指纹算法版本。换算法时一并换掉它，旧绑定记录才不会被误判成漂移。
 FINGERPRINT_VERSION = "fm1"
@@ -50,15 +51,22 @@ class FieldBinding:
 
 @dataclass(frozen=True)
 class QuestionBinding:
-    """平台题目 UUID ↔ 引擎题目代码 ↔ 引擎字段名，三段映射的一行。"""
+    """平台题目 UUID ↔ 引擎题目代码 ↔ 引擎字段名，三段映射的一行。
+
+    C 档题型再多一段：作答的 JSON 信封由插件按列定义投影进副表，
+    ``side_table`` 记下结构版本与列字典，读端据此解释那些单元格
+    （platform/contracts/question-extension-tables-v1.md）。
+    """
 
     uuid: str
     code: str
     type: str
     fields: Tuple[FieldBinding, ...]
+    #: 副表声明；只有 C 档题型才有，别的题目这一键整个不出现。
+    side_table: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "uuid": self.uuid,
             "code": self.code,
             "type": self.type,
@@ -67,6 +75,9 @@ class QuestionBinding:
                 for item in self.fields
             ],
         }
+        if self.side_table is not None:
+            payload["sideTable"] = self.side_table
+        return payload
 
 
 def parse_fieldmap(raw: Mapping[str, Mapping[str, Any]]) -> Tuple[FieldmapRow, ...]:
@@ -130,6 +141,7 @@ def binding_map(
                 fields=tuple(
                     FieldBinding(row.fieldname, row.aid, row.scale) for row in matched
                 ),
+                side_table=side_table_binding(question),
             )
         )
     return tuple(bindings)

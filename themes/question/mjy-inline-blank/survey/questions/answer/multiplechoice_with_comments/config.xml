@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 选项内嵌填空（需求 R02-07 的「选项内嵌填空」一支）。
+
+  数据形状与多选带评论（type P）完全一致：每个子题一列（选中＝Y）＋一列评论，
+  填空就落在评论列上。两条服务端闸门都不靠本主题：
+
+  - 清值策略用引擎自带的 commented_checkbox=checked（em_manager_helper.php:1516 起，
+    在服务端 _ValidateQuestion 里重算）：没勾选却写了填空 → 留在本页；
+  - 填空长度由发布网关编译成 em_validation_q 的一段。
+
+  主题只负责把评论输入框挪到选项同一行，并在未勾选时禁用它。
+-->
+<config>
+    <metadata>
+        <name>mjy-inline-blank</name>
+        <type>question_theme</type>
+        <title>MJY 选项内嵌填空</title>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>选项内嵌填空：勾选后在同一行里补一段文字</description>
+        <questionType>P</questionType>
+        <group>Multiple choice questions</group>
+        <subquestions>1</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>1</assessable>
+        <class>multiple-opt-comments mjy-inline-blank</class>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-inline-blank.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-inline-blank.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_inline_blank_label</name>
+            <category>MJY 选项内嵌填空</category>
+            <sortorder>10</sortorder>
+            <inputtype>text</inputtype>
+            <default>补充</default>
+            <caption>填空提示语</caption>
+            <help>显示在填空框里的占位文字</help>
+        </attribute>
+        <attribute>
+            <name>mjy_inline_blank_max</name>
+            <category>MJY 选项内嵌填空</category>
+            <sortorder>20</sortorder>
+            <inputtype>integer</inputtype>
+            <default>100</default>
+            <caption>填空长度上限</caption>
+            <help>浏览器端只是提示，服务端由 em_validation_q 重算</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>
