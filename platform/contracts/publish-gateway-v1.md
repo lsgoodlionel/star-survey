@@ -50,6 +50,30 @@
 - 网关的并发锁在进程内，**只能单副本运行**；多副本需要共享锁（留待生产化）。
 - 网关会把所有已配置的引擎口令在响应体与日志中替换为 `***`，即使引擎在错误信息里回显了口令。
 
+### 邀请码回读（v1.2，2026-09-23，ADR 0016）
+
+定义带 `participants` 时，发布回执多一个 `invitations` 键；不带参与者的发布与本节之前逐字节一致。
+
+```json
+"invitations": [
+  {"index": 0, "ref": "contact-7", "token": "a1b2c3d4e5f6g7h8", "tid": "1"},
+  {"index": 1, "ref": null,        "token": "h8g7f6e5d4c3b2a1", "tid": "2"}
+]
+```
+
+- 网关的 `add_participants` 固定 `create_token=true`，**定义里写的 token 会被引擎替换**，
+  平台要发的邀请码只能这样拿。
+- `index` 是定义里 `participants` 的下标，数组与定义**同序同长**。对应关系只能按位置：
+  引擎逐条按引用原地替换提交数组，成功的条目被整条换成参与者表行属性，平台传的非列字段
+  已被丢弃，姓名邮箱在开了字段加密的问卷上是密文——按这些字段对不回来。
+- `participants[].ref` 是**平台自选的不透明引用**（可选，字符串，同一定义内不得重复，不得为空，
+  否则 422）。网关摘掉它、不转发给引擎，只在回执里原样回显。没写的回显 `null`，按 `index` 对应。
+- 邀请码配不齐时**发布失败并回滚**（502，`failedStage` = `activate`）：返回行数与提交不一致、
+  某一条没有 token、两条拿到同一个 token，都属此类。平台拿不到码却以为发布成功会登记路由、
+  发出一批打不开的邀请，且无从察觉。
+- `invitations` 会随回执按 `requestId` 一起存档，所以**网关状态目录里存着已签发的邀请码明文**；
+  存储目前没有保留期（遗留）。
+
 `<PublishResult>` 即网关现有 `PublishResult.to_dict()` 的结构（`ok`、`surveyId`、`failedStage`、`failures`、`rolledBack`、`orphanSurveyId`、`steps`、`binding`、`verification`）。`binding` 即 `BindingRecord.to_dict()`：`engineInstance`、`surveyId`、`definitionUuid`、`compilerVersion`、`fingerprintVersion`、`fingerprint`、`language`、`publishedAt`、`questions[]`。
 
 ## `GET /healthz`
