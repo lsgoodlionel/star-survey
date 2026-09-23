@@ -39,7 +39,9 @@ final class QuestionTypeColumns {
      * 这一列是整块 JSON，不是可枚举的取值。
      */
     private static final java.util.Set<String> STRUCTURED_THEMES =
-            java.util.Set.of("mjy-repeating-table", "mjy-heatmap", "mjy-loop-rating", "mjy-image-pk");
+            java.util.Set.of(
+                    "mjy-repeating-table", "mjy-heatmap", "mjy-loop-rating",
+                    "mjy-image-pk", "mjy-shelf");
 
     private static final List<OptionLabel> FIVE = scale(5);
     private static final Map<String, List<OptionLabel>> BUILT_IN = Map.of(

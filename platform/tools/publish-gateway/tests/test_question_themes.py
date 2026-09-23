@@ -129,8 +129,21 @@ def image_pk(**options):
     return question("T", code="QPK", theme="mjy-image-pk", themeOptions=payload)
 
 
+SHELF_PRODUCTS = [
+    {"code": "S1", "label": "牛奶", "x": 0.1, "y": 0.2, "w": 0.2, "h": 0.3},
+    {"code": "S2", "label": "面包", "x": 0.5, "y": 0.2, "w": 0.2, "h": 0.3},
+]
+
+
+def shelf(**options):
+    payload = {"structureVersion": "sh1", "image": "https://assets.example.invalid/shelf.png",
+               "products": SHELF_PRODUCTS, "maxPicks": 3}
+    payload.update(options)
+    return question("T", code="QSHELF", theme="mjy-shelf", themeOptions=payload)
+
+
 ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap(),
-              loop_rating(), image_pk())
+              loop_rating(), image_pk(), shelf())
 
 
 # ------------------------------------------------------------------ 注册表
@@ -672,6 +685,73 @@ class ImagePkTest(unittest.TestCase):
         self.assertEqual((("QPK", "", 0),), expected_rows(first_question(image_pk())))
 
 
+class ShelfTest(unittest.TestCase):
+    """R02-18 货架题：在货架图上按热区取货，取了什么、取了几件。
+
+    商品列是枚举＋唯一（同一件商品不能取两次，要多拿就改数量），
+    数量列是整数带上下限。货架版本就是结构版本——换了货架图或挪了热区就得换一版，
+    否则半年前的答卷会被按今天的货架解释。
+    """
+
+    def columns(self, **options):
+        return json.loads(compile_attributes(shelf(**options), code="QSHELF")["mjy_table_columns"])
+
+    def test_the_product_column_is_a_unique_enum_over_the_declared_products(self):
+        product = self.columns()[0]
+        self.assertEqual(("product", "enum", True, True),
+                         (product["code"], product["type"], product["required"], product["distinct"]))
+        self.assertEqual(["S1", "S2"], [option["code"] for option in product["options"]])
+
+    def test_the_quantity_column_is_a_bounded_integer(self):
+        quantity = self.columns()[1]
+        self.assertEqual(("qty", "integer", True, 1, 99),
+                         (quantity["code"], quantity["type"], quantity["required"],
+                          quantity["min"], quantity["max"]))
+
+    def test_the_quantity_cap_is_configurable(self):
+        self.assertEqual(5, self.columns(maxQuantity=5)[1]["max"])
+
+    def test_pick_bounds_reach_the_plugin_row_bounds(self):
+        attributes = compile_attributes(shelf(minPicks=1, maxPicks=4), code="QSHELF")
+        self.assertEqual(("1", "4"), (attributes["mjy_table_min_rows"], attributes["mjy_table_max_rows"]))
+
+    def test_unordered_pick_bounds_are_rejected(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(shelf(minPicks=4, maxPicks=2)))
+
+    def test_you_cannot_be_asked_for_more_picks_than_there_are_products(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(shelf(minPicks=3, maxPicks=3)))
+
+    def test_the_shelf_photo_and_the_hotspots_reach_the_theme(self):
+        attributes = compile_attributes(shelf(), code="QSHELF")
+        self.assertEqual("https://assets.example.invalid/shelf.png", attributes["mjy_shelf_image"])
+        self.assertEqual(SHELF_PRODUCTS, json.loads(attributes["mjy_shelf_products"]))
+
+    def test_structure_version_image_and_products_are_required(self):
+        for name in ("structureVersion", "image", "products"):
+            with self.subTest(option=name):
+                payload = shelf()
+                del payload["themeOptions"][name]
+                self.assertEqual(["E_THEME_OPTION_REQUIRED"], codes(payload))
+
+    def test_hotspots_are_normalised_coordinates(self):
+        """热区一律归一化到 [0,1]：货架图换了尺寸，坐标不用跟着改。"""
+        for product in ({"code": "S1", "label": "牛奶", "x": -0.1, "y": 0.2, "w": 0.2, "h": 0.2},
+                        {"code": "S1", "label": "牛奶", "x": 0.1, "y": 1.2, "w": 0.2, "h": 0.2},
+                        {"code": "S1", "label": "牛奶", "x": 0.1, "y": 0.2, "w": 0, "h": 0.2},
+                        {"code": "S1", "label": "牛奶", "x": 0.9, "y": 0.2, "w": 0.5, "h": 0.2},
+                        {"code": "S1", "label": "牛奶", "x": 0.1, "y": 0.2},
+                        {"code": "S1", "label": "牛奶", "x": "左", "y": 0.2, "w": 0.2, "h": 0.2}):
+            with self.subTest(product=product):
+                self.assertIn("E_THEME_OPTION_VALUE", codes(shelf(products=[product])))
+
+    def test_duplicate_product_codes_are_rejected(self):
+        twice = [SHELF_PRODUCTS[0], dict(SHELF_PRODUCTS[1], code="S1")]
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(shelf(products=twice)))
+
+    def test_the_answer_is_still_one_engine_column(self):
+        self.assertEqual((("QSHELF", "", 0),), expected_rows(first_question(shelf())))
+
+
 class SideTableBindingTest(unittest.TestCase):
     """绑定记录里的副表声明：读端据此解释单元格（contracts/question-extension-tables-v1.md）。"""
 
@@ -698,6 +778,11 @@ class SideTableBindingTest(unittest.TestCase):
         declared = self.binding(heatmap(), code="QHEAT").to_dict()["sideTable"]
         self.assertEqual(["x", "y"], [column["code"] for column in declared["columns"]])
         self.assertEqual("hm1", declared["structureVersion"])
+
+    def test_a_shelf_declares_the_product_and_quantity_columns(self):
+        declared = self.binding(shelf(), code="QSHELF").to_dict()["sideTable"]
+        self.assertEqual(["product", "qty"], [column["code"] for column in declared["columns"]])
+        self.assertEqual("sh1", declared["structureVersion"])
 
     def test_an_image_pk_declares_one_column_per_pair_plus_its_shown_column(self):
         declared = self.binding(image_pk(), code="QPK").to_dict()["sideTable"]

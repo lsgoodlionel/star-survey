@@ -30,6 +30,7 @@ class FieldDictionaryQuestionThemesTest {
     private static final UUID GROUPED_MULTI = UUID.fromString("45454545-0007-4111-8111-000000000007");
     private static final UUID LOOP = UUID.fromString("45454545-0008-4111-8111-000000000008");
     private static final UUID PK = UUID.fromString("45454545-0009-4111-8111-000000000009");
+    private static final UUID SHELF = UUID.fromString("45454545-0010-4111-8111-000000000010");
 
     private final JsonMapper json = JsonMapper.builder().build();
 
@@ -63,7 +64,11 @@ class FieldDictionaryQuestionThemesTest {
                "themeOptions":{"structureVersion":"pk1",
                                "items":[{"code":"A","label":"甲","image":"a.png"},
                                         {"code":"B","label":"乙","image":"b.png"}],
-                               "pairs":[{"code":"P1","left":"A","right":"B"}]}}
+                               "pairs":[{"code":"P1","left":"A","right":"B"}]}},
+              {"uuid":"45454545-0010-4111-8111-000000000010","code":"QSHELF","type":"T","text":"从货架上取货",
+               "theme":"mjy-shelf",
+               "themeOptions":{"structureVersion":"sh1","image":"shelf.png",
+                               "products":[{"code":"S1","label":"牛奶","x":0.1,"y":0.2,"w":0.2,"h":0.3}]}}
             ]}]}
             """);
 
@@ -79,7 +84,8 @@ class FieldDictionaryQuestionThemesTest {
             new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_S72", "M2", 0),
             new QuestionFieldView(GROUPED_MULTI, "QGRPM", "M", "Q7_other", "other", 0),
             new QuestionFieldView(LOOP, "QLOOP", "T", "Q8", "", 0),
-            new QuestionFieldView(PK, "QPK", "T", "Q9", "", 0));
+            new QuestionFieldView(PK, "QPK", "T", "Q9", "", 0),
+            new QuestionFieldView(SHELF, "QSHELF", "T", "Q10", "", 0));
 
     private FieldDictionary.FieldEntry field(String fieldname) {
         return FieldDictionaryBuilder.fields(definition, binding).stream()
@@ -102,6 +108,9 @@ class FieldDictionaryQuestionThemesTest {
         // R02-17 图片 PK：每一对的选择都在副表里。
         assertThat(field("Q9").label()).isEqualTo("哪个包装更好 [结构化作答]");
         assertThat(field("Q9").options()).isEmpty();
+        // R02-18 货架题：取了什么、取了几件都在副表里。
+        assertThat(field("Q10").label()).isEqualTo("从货架上取货 [结构化作答]");
+        assertThat(field("Q10").options()).isEmpty();
     }
 
     @Test

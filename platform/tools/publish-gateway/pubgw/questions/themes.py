@@ -62,6 +62,9 @@ LOOP_OBJECTS_ATTRIBUTE = "mjy_loop_objects"
 #: 图片 PK（R02-17）：参赛图片与配对，主题据此渲染成对的图。
 PK_ITEMS_ATTRIBUTE = "mjy_pk_items"
 PK_PAIRS_ATTRIBUTE = "mjy_pk_pairs"
+#: 货架题（R02-18）：货架图与商品热区，主题据此在图上画可点区域。
+SHELF_IMAGE_ATTRIBUTE = "mjy_shelf_image"
+SHELF_PRODUCTS_ATTRIBUTE = "mjy_shelf_products"
 
 #: 题型字母 → 引擎存放该题型视图的目录名（``QuestionTemplate::getFolderName``）。
 #: 主题必须在 ``themes/question/<名字>/survey/questions/answer/<这里的值>/`` 下放 config.xml
@@ -588,6 +591,83 @@ def _lower_image_pk(question: Question, values: Dict[str, Any]) -> Lowering:
     })
 
 
+# ---------------------------------------------------------------- 货架题（R02-18）
+
+#: 商品数量的绝对上限：一次作答说「我拿了一万件」没有意义，先把最坏情况框住。
+MAX_SHELF_QUANTITY = 999
+#: 热区的四个归一化坐标（左上角 ＋ 宽高），一律落在 [0,1] 内。
+_HOTSPOT_KEYS = ("x", "y", "w", "h")
+
+
+def _hotspot_issues(raw: Any, index: int) -> List[Issue]:
+    """热区坐标：归一化到 [0,1]，换了货架图的尺寸也不用改坐标。"""
+    path = "themeOptions.products[{}]".format(index)
+    box: Dict[str, float] = {}
+    for key in _HOTSPOT_KEYS:
+        value = raw.get(key) if isinstance(raw, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return [(OPTION_VALUE, "{}.{}".format(path, key), "{} 必须是数字".format(key))]
+        box[key] = float(value)
+    if not (0 <= box["x"] <= 1 and 0 <= box["y"] <= 1):
+        return [(OPTION_VALUE, path, "热区的左上角必须落在 [0,1] 内")]
+    if not (0 < box["w"] <= 1 and 0 < box["h"] <= 1):
+        return [(OPTION_VALUE, path, "热区的宽高必须在 (0,1] 内")]
+    if box["x"] + box["w"] > 1 or box["y"] + box["h"] > 1:
+        return [(OPTION_VALUE, path, "热区不能越出货架图")]
+    return []
+
+
+def _shelf_products(values: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Issue]]:
+    """商品：代码＋标签＋货架图上的热区。"""
+    products, issues = _code_list(values.get("products"), "themeOptions.products", MAX_COLUMN_OPTIONS)
+    if issues:
+        return [], issues
+    declared = values.get("products") or []
+    for index, (product, raw) in enumerate(zip(products, declared)):
+        found = _hotspot_issues(raw, index)
+        issues.extend(found)
+        if not found:
+            product.update({key: raw[key] for key in _HOTSPOT_KEYS})
+    return ([], issues) if issues else (products, [])
+
+
+def _check_shelf(question: Question, values: Dict[str, Any]) -> List[Issue]:
+    products, issues = _shelf_products(values)
+    if issues:
+        return issues
+    least, most = values.get("minPicks", 0), values.get("maxPicks", 0)
+    if least > most:
+        return [(OPTION_VALUE, "themeOptions.minPicks", "minPicks 不能大于 maxPicks")]
+    # 商品列是唯一列，一件商品最多占一行——要求取的件数多过货架上的商品就永远交不了卷。
+    if least > len(products):
+        return [(OPTION_VALUE, "themeOptions.minPicks",
+                 "minPicks 超过了货架上的商品数 {}".format(len(products)))]
+    return []
+
+
+def _shelf_columns(values: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """取了什么（枚举＋唯一）、取了几件（整数带上下限）。
+
+    唯一约束的意思是「同一件商品不能取两次」——要多拿就改数量，
+    否则同一件商品会摊成两行，读端得自己求和。
+    """
+    products, _issues = _shelf_products(values)
+    return [
+        {"code": "product", "label": "商品", "type": "enum", "required": True, "distinct": True,
+         "options": [{"code": item["code"], "label": item["label"]} for item in products]},
+        {"code": "qty", "label": "件数", "type": "integer", "required": True,
+         "min": 1, "max": values.get("maxQuantity", 99)},
+    ]
+
+
+def _lower_shelf(question: Question, values: Dict[str, Any]) -> Lowering:
+    products, _issues = _shelf_products(values)
+    return Lowering(attributes={
+        COLUMNS_ATTRIBUTE: _canonical_json(_shelf_columns(values)),
+        SHELF_PRODUCTS_ATTRIBUTE: _canonical_json(products),
+    })
+
+
 def _heatmap_columns(values: Dict[str, Any]) -> List[Dict[str, Any]]:
     """归一化坐标：两列 decimal，范围写死在 0…1，服务端由插件逐格校验。"""
     return [
@@ -803,6 +883,28 @@ _THEMES = (
         lower=_lower_image_pk,
         side_columns=_image_pk_columns,
     ),
+    ThemeSpec(
+        name="mjy-shelf",
+        label="货架题",
+        requirement="R02-18",
+        types=("T",),
+        options=(
+            OptionSpec("structureVersion", "text", attribute=STRUCTURE_VERSION_ATTRIBUTE, required=True,
+                       max_length=32, pattern=STRUCTURE_VERSION_PATTERN,
+                       pattern_hint="必须以字母或数字开头，只含字母数字与 . _ -（副表契约 v1）"),
+            OptionSpec("image", "text", attribute=SHELF_IMAGE_ATTRIBUTE, required=True,
+                       max_length=MAX_IMAGE_LENGTH),
+            OptionSpec("products", "list", required=True),
+            OptionSpec("minPicks", "integer", attribute=MIN_ROWS_ATTRIBUTE, default=0,
+                       minimum=0, maximum=HARD_MAX_ROWS),
+            OptionSpec("maxPicks", "integer", attribute=MAX_ROWS_ATTRIBUTE, default=10,
+                       minimum=1, maximum=HARD_MAX_ROWS),
+            OptionSpec("maxQuantity", "integer", default=99, minimum=1, maximum=MAX_SHELF_QUANTITY),
+        ),
+        check=_check_shelf,
+        lower=_lower_shelf,
+        side_columns=_shelf_columns,
+    ),
 )
 
 THEMES: Dict[str, ThemeSpec] = {theme.name: theme for theme in _THEMES}
@@ -817,5 +919,6 @@ STRUCTURE_VERSION_ATTRIBUTE_NAME = STRUCTURE_VERSION_ATTRIBUTE
 MANAGED_ATTRIBUTES = frozenset(
     {COLUMNS_ATTRIBUTE, MIN_ROWS_ATTRIBUTE, MAX_ROWS_ATTRIBUTE, STRUCTURE_VERSION_ATTRIBUTE,
      LOOP_OBJECTS_ATTRIBUTE, PK_ITEMS_ATTRIBUTE, PK_PAIRS_ATTRIBUTE,
+     SHELF_IMAGE_ATTRIBUTE, SHELF_PRODUCTS_ATTRIBUTE,
      "mjy_option_groups", "commented_checkbox"}
 )

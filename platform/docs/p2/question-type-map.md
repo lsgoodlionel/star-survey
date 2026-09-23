@@ -21,7 +21,7 @@
 （[副表契约 v1](../../contracts/question-extension-tables-v1.md)），其余 14 条 P 类由此解除阻塞。
 
 切片 02.4（✔3）收口 R02-04 的**多选**分组（接管选项行模板），并新交付 P 类的
-R02-11 循环评价与 R02-17 图片 PK，见第三之四节。
+R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节。
 
 ## 二、逐条映射
 
@@ -47,7 +47,7 @@ R02-11 循环评价与 R02-17 图片 PK，见第三之四节。
 | R02-15 | 排序 | N | ✔ | `R`（7.x 起排序项是**子题**）；`max_subquestions` 限制名次数 | 引擎存一列 JSON 数组（按名次排列的子题代码） | `""`＝JSON 列；名次 `1`…`n` 是 fieldmap 里的虚列（无物理列） |
 | R02-16 | 比重分配 | N | ✔ | `K`＋`equals_num_value`（和为定值）＋`min_num_value_n=0`＋`num_value_int_only`；滑块＝`slider_layout=1` | 数值 | 子题代码 |
 | R02-17 | 图片 PK | P | ✔3 | `T`＋新主题 `mjy-image-pk`＋副表；一对一列，列的取值恰好是这一对的两张图，另一列记录当时哪张在左 | JSON 信封，整题一行 | `""`；每对的选择在副表 |
-| R02-18 | 货架题 | P | | 商品/坐标与货架版本 | — | 后续 |
+| R02-18 | 货架题 | P | ✔3 | `T`＋新主题 `mjy-shelf`＋副表；商品列枚举＋唯一，件数列整数带上下限；货架版本＝结构版本 | JSON 信封，一行一件商品 | `""`；取货明细在副表 |
 | R02-19 | 热力图与选区 | P | ✔2（选点） | `T`＋新主题 `mjy-heatmap`＋副表；坐标归一化到 `[0,1]`，由插件逐格校验 | JSON 信封，两列 `x`/`y` | `""`；坐标在副表 |
 | R02-20 | 轮播图 | P | | 媒体版本留存依赖资产服务 | — | 后续 |
 | R02-21 | 视频题 | P | | 授权播放依赖资产服务 | — | 后续 |
@@ -121,6 +121,7 @@ R02-11 循环评价与 R02-17 图片 PK，见第三之四节。
 | `mjy-heatmap` | R02-19 | `T` | `structureVersion`、`image`（均必填）、`minPoints`、`maxPoints` | 同上（列定义由平台生成：`x`/`y` decimal，范围 `[0,1]`） |
 | `mjy-loop-rating` | R02-11 | `T` | `structureVersion`、`objects`、`dimensions`、`scale`（均必填） | `mjy_table_columns`（列定义由平台生成）、`mjy_loop_objects`、`mjy_structure_version`，行数上下限钉死成对象个数 |
 | `mjy-image-pk` | R02-17 | `T` | `structureVersion`、`items`、`pairs`（均必填） | `mjy_table_columns`（一对两列）、`mjy_pk_items`、`mjy_pk_pairs`、`mjy_structure_version`，行数上下限钉死成 1 |
+| `mjy-shelf` | R02-18 | `T` | `structureVersion`、`image`、`products`（均必填）、`minPicks`、`maxPicks`、`maxQuantity` | `mjy_table_columns`（`product` 枚举＋唯一、`qty` 整数）、`mjy_shelf_image`、`mjy_shelf_products`、`mjy_structure_version`、行数上下限 |
 
 422 错误码：`E_THEME_UNKNOWN`（`mjy-` 前缀却没注册＝拼错，目标实例上会静默降级）、
 `E_THEME_TYPE_MISMATCH`、`E_THEME_OPTIONS_UNSUPPORTED`、`E_THEME_OPTION_UNKNOWN`、
@@ -135,7 +136,7 @@ R02-11 循环评价与 R02-17 图片 PK，见第三之四节。
 | `mjy-scan-input` | 提交任意字符串 | 编译出的 `em_validation_q` 长度规则（所以 `maxLength` 必填） |
 | `mjy-inline-blank` | 没勾选却填了填空、填空超长 | 原生 `commented_checkbox=checked`＋编译出的长度规则 |
 | `mjy-matrix-stepper` | 跳过没走到的行 | 引擎必答在服务端重算（隐藏的行照样提交） |
-| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
+| `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk`／`mjy-shelf` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
 
 ## 三之三、副表的存储契约（给读端）
 
@@ -249,6 +250,27 @@ R02-11 循环评价与 R02-17 图片 PK，见第三之四节。
 `_shown` 列**不必填**：关掉 JavaScript 直接填信封的那条路径给不出展示顺序，
 为它硬性必填等于把没有 JS 的人挡在外面。端到端的「只答必答题」场景就是这么提交的
 （两列留空，照样收卷）。
+
+### R02-18 货架题
+
+在一张货架图上点热区取货并填件数。两列就够了：
+
+| 列 | 形状 | 为什么 |
+|---|---|---|
+| `product` | 枚举（货架上声明过的商品）＋**唯一** | 同一件商品不能取两次——要多拿就改件数，否则同一件会摊成两行，读端还得自己求和 |
+| `qty` | 整数，`min=1`、`max=maxQuantity`（缺省 99） | 取了却填 0 件不是「没取」，是自相矛盾 |
+
+取货件数的上下限就是行数上下限（`minPicks`／`maxPicks`）。发布期另有一条：
+`minPicks` 不得超过货架上的商品数——商品列是唯一列，要求取的件数多过货架上的商品，
+作答者永远交不了卷，这种题不该发得出去。
+
+热区是**归一化坐标**（左上角 `x`/`y` ＋ 宽高 `w`/`h`，都在 `[0,1]`，且不得越出图），
+换一张尺寸不同的货架图不用改坐标。
+
+**货架版本就是结构版本**：换了货架图或挪了热区就得换一版，
+否则半年前的答卷会被按今天的货架解释。
+
+本类同样**没动插件一行校验代码**：枚举、唯一、整数上下限都是现成的列约束。
 
 ## 四、缺失值（实测，MariaDB 10.11 与 PostgreSQL 16 完全一致）
 

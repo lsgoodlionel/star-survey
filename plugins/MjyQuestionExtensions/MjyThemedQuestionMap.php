@@ -21,6 +21,9 @@ class MjyThemedQuestionMap
     /** 图片 PK（R02-17）：整题一行，一对一列，列的取值恰好是这一对的两张图。 */
     public const IMAGE_PK_THEME = 'mjy-image-pk';
 
+    /** 货架题（R02-18）：一行一件商品，商品列枚举＋唯一，件数列整数。 */
+    public const SHELF_THEME = 'mjy-shelf';
+
     /**
      * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
      * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应。
@@ -30,6 +33,7 @@ class MjyThemedQuestionMap
         self::HEATMAP_THEME,
         self::LOOP_RATING_THEME,
         self::IMAGE_PK_THEME,
+        self::SHELF_THEME,
     ];
 
     /** @var array<string, array<string, mixed>> */

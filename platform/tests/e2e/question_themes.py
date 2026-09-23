@@ -157,11 +157,11 @@ def scenario_render(run: Run) -> None:
 def scenario_values(run: Run, response_id: str) -> None:
     """逐列断言答卷表，再逐格断言副表（含结构版本）。"""
     print("scenario B: every stored column and every projected cell", file=sys.stderr)
-    from question_themes_plan import HEAT_ROWS, LOOP_ROWS, PK_ROWS, TABLE_ROWS
+    from question_themes_plan import HEAT_ROWS, LOOP_ROWS, PK_ROWS, SHELF_ROWS, TABLE_ROWS
 
     #: 走副表的题：(题目代码, 归一化后的行, 结构版本)。
     side = (("QTABLE", TABLE_ROWS, "rt1"), ("QLOOP", LOOP_ROWS, "lr1"),
-            ("QPK", PK_ROWS, "pk1"), ("QHEAT", HEAT_ROWS, "hm1"))
+            ("QPK", PK_ROWS, "pk1"), ("QSHELF", SHELF_ROWS, "sh1"), ("QHEAT", HEAT_ROWS, "hm1"))
     row = run.last_row()
     run.check("B: response submitted", row[("_submitted", "", 0)] == "1", row)
     expected = {column: value for answers in valid_pages() for column, value in answers.items()}
@@ -220,6 +220,13 @@ def scenario_values(run: Run, response_id: str) -> None:
               and [item["code"] for item in pk_columns["P2"]["options"]] == ["B", "C"], pk_columns)
     run.check("B: the QPK shown column is not mandatory",
               pk_columns["P1_shown"]["required"] is False, pk_columns["P1_shown"])
+    # 货架题：商品列枚举＋唯一（同一件不能取两次，要多拿就改件数），件数列是有界整数。
+    shelf_columns = {column["code"]: column for column in run.side_tables.get("QSHELF", {}).get("columns", [])}
+    run.check("B: QSHELF binding declares a unique product enum and a bounded quantity",
+              [item["code"] for item in shelf_columns.get("product", {}).get("options", [])] == ["S1", "S2", "S3"]
+              and shelf_columns["product"].get("distinct") is True
+              and (shelf_columns["qty"]["type"], shelf_columns["qty"]["min"],
+                   shelf_columns["qty"]["max"]) == ("integer", 1, 9), shelf_columns)
     run.report["complete"] = {"{}[{}#{}]".format(*column): value for column, value in row.items()}
 
 
@@ -351,7 +358,8 @@ def main() -> int:
         run.check("publish: every compiled column bound",
                   all(question["fields"] for question in published["binding"]["questions"]))
         run.check("publish: every side-table question declares a side table",
-                  sorted(run.side_tables) == ["QHEAT", "QLOOP", "QPK", "QTABLE"], sorted(run.side_tables))
+                  sorted(run.side_tables) == ["QHEAT", "QLOOP", "QPK", "QSHELF", "QTABLE"],
+                  sorted(run.side_tables))
 
         response_id = scenario_render(run)
         scenario_values(run, response_id)

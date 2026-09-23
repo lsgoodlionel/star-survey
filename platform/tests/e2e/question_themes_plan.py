@@ -39,6 +39,8 @@ THEME_MARKERS = (
         "mjy-loop-rating.js",
         "data-mjy-image-pk",
         "mjy-image-pk.js",
+        "data-mjy-shelf",
+        "mjy-shelf.js",
         "data-mjy-heatmap",
         "mjy-heatmap.js",
     ),
@@ -71,6 +73,9 @@ LOOP_ROWS = [
 #: 图片 PK：整题一行，一对一列。_shown 记录当时哪张图在左边（不必填，这里填上）。
 PK_ROWS = [{"P1": "A", "P1_shown": "B", "P2": "C", "P2_shown": "B"}]
 
+#: 货架题：一行一件商品，件数取上限（fixture 的 maxQuantity 是 9）。
+SHELF_ROWS = [{"product": "S1", "qty": "9"}, {"product": "S3", "qty": "1"}]
+
 
 def valid_pages() -> List[Dict[Column, str]]:
     return [
@@ -88,6 +93,7 @@ def valid_pages() -> List[Dict[Column, str]]:
             ("QTABLE", "", 0): envelope(TABLE_ROWS),
             ("QLOOP", "", 0): envelope(LOOP_ROWS),
             ("QPK", "", 0): envelope(PK_ROWS),
+            ("QSHELF", "", 0): envelope(SHELF_ROWS),
             ("QHEAT", "", 0): envelope(HEAT_ROWS),
         },
     ]
@@ -107,6 +113,7 @@ def blank_pages() -> List[Dict[Column, str]]:
             # 图片 PK 的展示顺序列不必填，这里留空，证明「不必填」是真的。
             ("QLOOP", "", 0): envelope(LOOP_ROWS),
             ("QPK", "", 0): envelope([{"P1": "A", "P2": "B"}]),
+            ("QSHELF", "", 0): envelope([{"product": "S2", "qty": "1"}]),
             ("QHEAT", "", 0): envelope([{"x": "0.2500", "y": "0.7500"}]),
         },
     ]
@@ -175,6 +182,18 @@ TAMPERS = (
             {("QPK", "", 0): envelope(PK_ROWS + [dict(PK_ROWS[0])])}),
     _tamper("image pk: a pair nobody declared", 1,
             {("QPK", "", 0): envelope([dict(PK_ROWS[0], P9="A")])}),
+    # 货架题（R02-18）：商品列枚举＋唯一，件数列是带上下限的整数。
+    _tamper("shelf: a product that is not on the shelf", 1,
+            {("QSHELF", "", 0): envelope([{"product": "S9", "qty": "1"}])}),
+    _tamper("shelf: the same product taken twice", 1,
+            {("QSHELF", "", 0): envelope([{"product": "S1", "qty": "1"},
+                                          {"product": "S1", "qty": "2"}])}),
+    _tamper("shelf: a quantity over maxQuantity", 1,
+            {("QSHELF", "", 0): envelope([{"product": "S1", "qty": "10"}])}),
+    _tamper("shelf: zero of something", 1,
+            {("QSHELF", "", 0): envelope([{"product": "S1", "qty": "0"}])}),
+    _tamper("shelf: one product over maxPicks", 1,
+            {("QSHELF", "", 0): envelope(SHELF_ROWS + [{"product": "S2", "qty": "1"}])}),
     # 影子字段：浏览器端算出的相关性全写 1，服务端照样重算。
     _tamper("repeating table: bad payload with every relevance* shadow forced to 1", 1,
             {("QTABLE", "", 0): envelope([{"item": "米", "qty": "0"}])}, shadow="all-relevant"),

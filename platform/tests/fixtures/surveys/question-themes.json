@@ -186,6 +186,27 @@
           }
         },
         {
+          "uuid": "99999999-1011-4555-8555-000000001011",
+          "code": "QSHELF",
+          "type": "T",
+          "text": "从货架上取你会买的商品",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-shelf",
+          "themeOptions": {
+            "structureVersion": "sh1",
+            "image": "/themes/survey/fruity_twentythree/files/logo.png",
+            "minPicks": 1,
+            "maxPicks": 2,
+            "maxQuantity": 9,
+            "products": [
+              { "code": "S1", "label": "牛奶 & <整箱>", "x": 0.0, "y": 0.0, "w": 0.4, "h": 0.5 },
+              { "code": "S2", "label": "面包", "x": 0.5, "y": 0.0, "w": 0.4, "h": 0.5 },
+              { "code": "S3", "label": "鸡蛋", "x": 0.0, "y": 0.6, "w": 1.0, "h": 0.4 }
+            ]
+          }
+        },
+        {
           "uuid": "99999999-1007-4555-8555-000000001007",
           "code": "QHEAT",
           "type": "T",

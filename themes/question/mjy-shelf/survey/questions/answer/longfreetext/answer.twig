@@ -1,0 +1,39 @@
+{#
+/**
+ * MJY 货架题：货架图上按热区点选商品并填件数；整题序列化成 JSON 信封。
+ *
+ * 真正被提交的永远是下面那个 textarea（name = 引擎字段名），货架只是它的编辑器。
+ * 关掉 JavaScript 时 textarea 直接可见，作答者仍能提交合法的 JSON —— 服务端校验
+ * （MjyQuestionExtensions::beforeSurveyPage）对两条路径一视同仁。
+ *
+ * @var name  引擎字段名（Q<qid>）
+ * @var dispVal  已存的 JSON 信封
+ * @var question_template_attribute  mjy_shelf_image / mjy_shelf_products / min / max
+ */
+#}
+<!-- MJY shelf -->
+<div class="{{ coreClass }} {{ extraclass }} mjy-shelf"
+     data-mjy-shelf="1"
+     data-mjy-field="{{ name }}"
+     {# 只能用沙箱白名单里的过滤器，别名 e 不在其中（application/config/internal.php:331） #}
+     data-mjy-image="{{ question_template_attribute.mjy_shelf_image|escape('html_attr') }}"
+     data-mjy-products="{{ question_template_attribute.mjy_shelf_products|escape('html_attr') }}"
+     data-mjy-min-rows="{{ question_template_attribute.mjy_table_min_rows|default(0) }}"
+     data-mjy-max-rows="{{ question_template_attribute.mjy_table_max_rows|default(10) }}">
+
+    <div class="mjy-shelf__editor" hidden>
+        <div class="mjy-shelf__stage">
+            <img class="mjy-shelf__photo" src="" alt="" />
+        </div>
+        <ul class="mjy-shelf__basket list-unstyled"></ul>
+    </div>
+
+    <textarea
+        class="form-control mjy-shelf__raw"
+        name="{{ name }}"
+        id="answer{{ name }}"
+        rows="{{ drows }}"
+        aria-labelledby="ls-question-text-{{ basename }}"
+    >{{ dispVal }}</textarea>
+</div>
+<!-- end of answer -->
