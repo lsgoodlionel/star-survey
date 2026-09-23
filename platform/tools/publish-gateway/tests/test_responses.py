@@ -20,16 +20,34 @@ from .gateway_support import ENGINE_PASSWORD, INSTANCE, NOW, SECRET, signed_head
 
 SID = 511001
 F1, F2, F3 = "511001X1X1", "511001X1X2", "511001X1X3other"
+#: 排序题（R）：答卷表只有一列 JSON，名次列在 fieldmap 里是虚列（aid ＝ 名次）。
+RANK_Q, RANK_1, RANK_2, RANK_3 = "Q77", "Q77_S101", "Q77_S102", "Q77_S103"
+
+
+def ranking_fieldmap(ranks=(RANK_1, RANK_2, RANK_3)):
+    """get_fieldmap 的形状：一道短文本题 ＋ 一道三个名次的排序题，外加一条元数据行。"""
+    raw = {
+        "id": {"fieldname": "id", "type": "id"},
+        F1: {"fieldname": F1, "qid": 5, "type": "S", "title": "TEXT", "aid": "", "scale_id": 0},
+        RANK_Q: {"fieldname": RANK_Q, "qid": 77, "type": "R", "title": "RANK", "scale_id": 0},
+    }
+    for position, fieldname in enumerate(ranks, start=1):
+        raw[fieldname] = {"fieldname": fieldname, "qid": 77, "type": "R", "title": "RANK",
+                          "aid": position, "sqid": 100 + position, "scale_id": 0}
+    return raw
 
 
 class FakeExportEngine:
-    def __init__(self, rows=None, codes=None, error=None, drop_column=False):
+    def __init__(self, rows=None, codes=None, error=None, drop_column=False, fieldmap=None):
         #: 答卷号 → {列名: 值}
         self.rows = rows if rows is not None else {}
         #: 列名 → 表头代码；缺省时每列用同一个代码，故意制造重复表头
         self.codes = codes or {}
         self.error = error
         self.drop_column = drop_column
+        #: get_fieldmap 的原样应答；缺省空表＝没有排序题
+        self.fieldmap = fieldmap if fieldmap is not None else {}
+        self.fieldmap_calls = 0
         self.exports = []
         self.logged_out = False
 
@@ -41,6 +59,9 @@ class FakeExportEngine:
         elif method == "release_session_key":
             self.logged_out = True
             result = "OK"
+        elif method == "get_fieldmap":
+            self.fieldmap_calls += 1
+            result = self.fieldmap
         elif method == "export_responses":
             result = self._export(*params)
         else:
@@ -173,6 +194,66 @@ class SuccessfulReadTest(ReadTestCase):
 
         self.assertEqual(200, status)
         self.assertEqual([1, 2, 3], body["missing"])
+
+
+class RankingColumnTest(ReadTestCase):
+    """排序题的名次是从主列 JSON 解析出来的（question-type-map.md 第四节）。"""
+
+    def test_each_rank_column_holds_the_item_ranked_at_that_position(self):
+        engine = FakeExportEngine(rows={1: {RANK_Q: '["B","A"]'}}, fieldmap=ranking_fieldmap())
+
+        status, body = self.read(engine, request_body(ids=[1], fields=[RANK_Q, RANK_1, RANK_2, RANK_3]))
+
+        self.assertEqual(200, status)
+        self.assertEqual({RANK_Q: '["B","A"]', RANK_1: "B", RANK_2: "A", RANK_3: ""},
+                         body["responses"][0]["values"])
+
+    def test_rank_columns_can_be_read_without_asking_for_the_json_column(self):
+        engine = FakeExportEngine(rows={1: {RANK_Q: '["B","A"]'}}, fieldmap=ranking_fieldmap())
+
+        status, body = self.read(engine, request_body(ids=[1], fields=[F1, RANK_1, RANK_2]))
+
+        self.assertEqual(200, status)
+        self.assertEqual({F1: None, RANK_1: "B", RANK_2: "A"}, body["responses"][0]["values"])
+        self.assertIn(RANK_Q, engine.exports[0]["fields"])
+
+    def test_an_answered_ranking_that_ranked_nothing_leaves_every_position_empty(self):
+        engine = FakeExportEngine(rows={1: {RANK_Q: "[]"}, 2: {RANK_Q: ""}}, fieldmap=ranking_fieldmap())
+
+        status, body = self.read(engine, request_body(ids=[1, 2], fields=[RANK_1, RANK_2, RANK_3]))
+
+        self.assertEqual(200, status)
+        for entry in body["responses"]:
+            self.assertEqual({RANK_1: "", RANK_2: "", RANK_3: ""}, entry["values"], entry["id"])
+
+    def test_a_ranking_that_does_not_apply_stays_null(self):
+        engine = FakeExportEngine(rows={1: {RANK_Q: None, F1: "x"}}, fieldmap=ranking_fieldmap())
+
+        status, body = self.read(engine, request_body(ids=[1], fields=[F1, RANK_Q, RANK_1, RANK_2]))
+
+        self.assertEqual(200, status)
+        self.assertEqual({F1: "x", RANK_Q: None, RANK_1: None, RANK_2: None},
+                         body["responses"][0]["values"])
+
+    def test_a_json_column_that_is_not_an_array_of_codes_is_502(self):
+        for value in ('{"A": 1}', "not json", '[["A"]]'):
+            with self.subTest(value=value):
+                engine = FakeExportEngine(rows={1: {RANK_Q: value}}, fieldmap=ranking_fieldmap())
+
+                status, body = self.read(engine, request_body(ids=[1], fields=[RANK_1]))
+
+                self.assertEqual(502, status)
+                self.assertEqual({"error": "engine_error"}, body)
+
+    def test_the_fieldmap_is_read_once_per_survey_not_once_per_page(self):
+        engine = FakeExportEngine(rows={1: {RANK_Q: '["A"]'}}, fieldmap=ranking_fieldmap())
+        service = make_service(engine)
+        body = request_body(ids=[1], fields=[RANK_1])
+
+        for _ in range(3):
+            self.assertEqual(200, service.read(signed_headers(body), body).status)
+
+        self.assertEqual(1, engine.fieldmap_calls)
 
 
 class EngineFailureTest(ReadTestCase):

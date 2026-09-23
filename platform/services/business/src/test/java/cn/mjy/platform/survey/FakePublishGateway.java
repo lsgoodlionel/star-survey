@@ -184,8 +184,7 @@ public class FakePublishGateway implements PublishGatewayClient {
                 String field = "Q" + (column++);
                 questions.add(new GatewayBinding.QuestionBinding(
                         question.get("uuid").asString(), question.get("code").asString(),
-                        question.get("type").asString(),
-                        List.of(new GatewayBinding.FieldBinding(field, "", 0))));
+                        question.get("type").asString(), fields(question, field)));
             }
         }
         GatewayBinding binding = new GatewayBinding(request.engineInstanceId(), sid,
@@ -193,6 +192,23 @@ public class FakePublishGateway implements PublishGatewayClient {
                 definition.get("language").asString(), "2026-09-22T08:00:00Z", questions);
         return new GatewayOutcome.Published(
                 new GatewayResult(true, sid, null, List.of(), false, null, binding));
+    }
+
+    /**
+     * 每道题一列，排序题（{@code R}）除外：它像真网关那样多出「名次」虚列
+     * （JSON 主列 ＋ aid 为 1…n 的名次列，见 {@code pubgw/qtypes.py} 的 _ranking_rows）。
+     */
+    private static List<GatewayBinding.FieldBinding> fields(JsonNode question, String field) {
+        List<GatewayBinding.FieldBinding> fields = new ArrayList<>();
+        fields.add(new GatewayBinding.FieldBinding(field, "", 0));
+        if ("R".equals(question.get("type").asString())) {
+            int rank = 0;
+            for (JsonNode ignored : question.path("subquestions")) {
+                rank++;
+                fields.add(new GatewayBinding.FieldBinding(field + "_S" + rank, Integer.toString(rank), 0));
+            }
+        }
+        return List.copyOf(fields);
     }
 
     public static GatewayOutcome rejected(String... failures) {

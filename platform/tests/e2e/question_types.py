@@ -233,12 +233,30 @@ def scenario_response_read(run: Run, response_id: str, instance: str) -> None:
         ok = (db_value is None and got in (None, "")) or (db_value is not None and got is not None and same(db_value, got))
         run.check("D: {} read back as stored".format(key), ok, {"db": db_value, "read": got})
     if virtual:
-        with_virtual = read_responses(service, instance, run.survey_id, int(response_id), names + virtual)
-        got = (with_virtual["body"].get("responses") or [{}])[0].get("values", {})
-        run.report["readWithVirtualRankColumns"] = {
-            "status": with_virtual["status"], "values": {name: got.get(name) for name in virtual}}
-        print("  [info] reading the {} virtual rank columns too -> {}".format(
-            len(virtual), run.report["readWithVirtualRankColumns"]), file=sys.stderr)
+        scenario_rank_columns(run, service, instance, response_id, names, virtual)
+
+
+def scenario_rank_columns(run: Run, service: ResponseReadService, instance: str, response_id: str,
+                          names: List[str], virtual: List[str]) -> None:
+    """排序题的名次列没有物理列，值由网关从主列 JSON 摊出来（question-type-map.md 第四节）。"""
+    print("scenario D2: virtual rank columns carry the item ranked at that position", file=sys.stderr)
+    reply = read_responses(service, instance, run.survey_id, int(response_id), names + virtual)
+    run.check("D2: HTTP 200 with the virtual rank columns too", reply["status"] == 200, reply)
+    values = (reply["body"].get("responses") or [{}])[0].get("values", {})
+    for column, name in sorted(run.fields.items()):
+        if name not in virtual:
+            continue
+        code, aid, _ = column
+        if not aid.isdigit():
+            run.check("D2: {} is a rank column".format(name), False, column)
+            continue
+        ranked = json.loads(run.report["complete"].get("{}[#0]".format(code)) or "[]")
+        position = int(aid) - 1
+        expected = ranked[position] if 0 <= position < len(ranked) else ""
+        run.check("D2: {} rank {} reads back as {!r}".format(code, aid, expected),
+                  values.get(name) == expected, {"read": values.get(name), "stored": ranked})
+    run.report["readWithVirtualRankColumns"] = {
+        "status": reply["status"], "values": {name: values.get(name) for name in virtual}}
 
 
 def read_responses(service: ResponseReadService, instance: str, survey_id: int, response_id: int,

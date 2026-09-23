@@ -22,6 +22,15 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .auth import SIGNATURE_HEADER, TIMESTAMP_HEADER, AuthError, verify
 from .engines import EngineConfig, is_valid_instance_id
+from .ranking import (
+    RankingColumns,
+    RankingLayoutCache,
+    UntrustedRanking,
+    decompose,
+    missing_main_columns,
+    ranking_columns,
+    requested_columns,
+)
 from .rpc import RemoteControlClient, RpcError, Transport
 from .service import LazyLoginClient, Response, http_transport
 
@@ -133,10 +142,20 @@ class ExportClient(LazyLoginClient):
             raise UntrustedExport("export_responses result is not base64") from None
 
 
-def read_answers(client: ExportClient, request: ReadRequest) -> Dict[int, Dict[str, Optional[str]]]:
-    """按区间调用导出，按位置把每条记录还原为 列名 → 值，只保留请求的答卷号。"""
+def read_answers(
+    client: ExportClient,
+    request: ReadRequest,
+    layouts: Sequence[RankingColumns] = (),
+) -> Dict[int, Dict[str, Optional[str]]]:
+    """按区间调用导出，按位置把每条记录还原为 列名 → 值，只保留请求的答卷号。
+
+    ``layouts`` 是这份问卷的排序题列形状：它们的名次列没有物理列，值由主列 JSON 摊出来。
+    """
     wanted = set(request.response_ids)
-    columns = (_ID_COLUMN,) + request.fields
+    ranking = requested_columns(layouts, request.fields)
+    # 名次要从主列算，主列没被请求时多读一列，应答时再投影掉。
+    read_fields = request.fields + missing_main_columns(ranking, request.fields)
+    columns = (_ID_COLUMN,) + read_fields
     found: Dict[int, Dict[str, Optional[str]]] = {}
     for lo, hi in id_ranges(request.response_ids):
         document = client.export_json(request.survey_id, lo, hi, columns)
@@ -145,9 +164,25 @@ def read_answers(client: ExportClient, request: ReadRequest) -> Dict[int, Dict[s
         for record in _records(document):
             values = _row_values(record, len(columns))
             rid = _as_response_id(values[0])
-            if rid in wanted:
-                found[rid] = {name: _text(value) for name, value in zip(request.fields, values[1:])}
+            if rid not in wanted:
+                continue
+            row = {name: _text(value) for name, value in zip(read_fields, values[1:])}
+            found[rid] = _project(row, ranking, request.fields)
     return found
+
+
+def _project(
+    row: Dict[str, Optional[str]],
+    ranking: Sequence[RankingColumns],
+    fields: Sequence[str],
+) -> Dict[str, Optional[str]]:
+    if not ranking:
+        return row
+    try:
+        expanded = decompose(row, ranking)
+    except UntrustedRanking as error:
+        raise UntrustedExport(str(error)) from None
+    return {name: expanded[name] for name in fields}
 
 
 def _records(document: bytes) -> List[Any]:
@@ -205,6 +240,7 @@ class ResponseReadService:
         self._secret = secret
         self._transport_factory = transport_factory
         self._now = now
+        self._layouts = RankingLayoutCache(now)
 
     def read(self, headers: Mapping[str, str], body: bytes) -> Response:
         lowered = {str(name).lower(): value for name, value in headers.items()}
@@ -229,7 +265,12 @@ class ResponseReadService:
     def _read(self, engine: EngineConfig, request: ReadRequest) -> Response:
         client = ExportClient(self._transport_factory(engine), engine.user, engine.password)
         try:
-            found = read_answers(client, request)
+            # 排序题的名次列是虚列：先问一次列结构（按问卷缓存），再按它摊平主列 JSON。
+            layouts = self._layouts.get(
+                (engine.instance_id, request.survey_id),
+                lambda: ranking_columns(client.get_fieldmap(request.survey_id)),
+            )
+            found = read_answers(client, request, layouts)
         except RpcError as error:
             log.warning("response read on %s sid %s: RemoteControl %s failed",
                         engine.instance_id, request.survey_id, error.method)

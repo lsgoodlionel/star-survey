@@ -18,6 +18,6 @@ source "$REPO_ROOT/platform/deploy/test/lib.sh"
 prepare_test_stack
 enable_remote_control
 
-(cd "$REPO_ROOT/platform/tools/publish-gateway" && python3 -m unittest tests.test_responses)
+(cd "$REPO_ROOT/platform/tools/publish-gateway" && python3 -m unittest tests.test_responses tests.test_ranking)
 
 python3 "$REPO_ROOT/platform/tests/e2e/response_read.py" --container "$CONTAINER" --db "$TEST_DB" --db-container "$TEST_PREFIX-$DB_SERVICE"
