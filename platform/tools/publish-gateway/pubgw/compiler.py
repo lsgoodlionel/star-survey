@@ -13,6 +13,8 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .branding.compile import CompiledBranding, compile_branding
+from .branding.translations import LanguageTexts, parse_translations, texts_for
 from .fieldmap import definition_signature, fingerprint
 from .logic.lower import lower_definition
 from .model import SurveyDefinition
@@ -128,6 +130,8 @@ class CompiledSurvey:
     definition_uuid: str
     #: 访问策略的编译产物（ADR 0016）；定义没有策略时为 None。
     policy: Optional[CompiledPolicy] = None
+    #: 品牌的编译产物（契约 survey-branding-v1）；定义没有 branding 时为 None。
+    branding: Optional[CompiledBranding] = None
 
 
 class LssCompiler:
@@ -145,21 +149,29 @@ class LssCompiler:
             )
         signature = definition_signature(definition)
         policy = compile_policy(definition)
+        branding = compile_branding(definition)
         return CompiledSurvey(
             # v2 的逻辑先降到引擎层（relevance／属性／转义文本）；v1 原样通过。
             # 题型扩展键（format／maxLength／exclusive）再降成属性与服务端规则；没有就原样通过。
             # 访问策略（ADR 0016）另行编译为原生设置与插件设置行。
-            lss=self._document(lower_question_types(lower_definition(definition)), policy),
+            # 品牌（契约 survey-branding-v1）另行编译为按问卷的主题选项。
+            lss=self._document(lower_question_types(lower_definition(definition)), policy, branding),
             compiler_version=self.version,
             signature=signature,
             fingerprint=fingerprint(signature),
             definition_uuid=definition.uuid,
             policy=policy,
+            branding=branding,
         )
 
     # ------------------------------------------------------------- 文档
 
-    def _document(self, definition: SurveyDefinition, policy: Optional[CompiledPolicy] = None) -> str:
+    def _document(
+        self,
+        definition: SurveyDefinition,
+        policy: Optional[CompiledPolicy] = None,
+        branding: Optional[CompiledBranding] = None,
+    ) -> str:
         layout = _Layout(definition)
         parts = [
             '<?xml version="1.0" encoding="UTF-8"?>',
@@ -176,8 +188,13 @@ class LssCompiler:
             _section("answer_l10ns", _ANSWER_L10N_FIELDS, layout.answer_l10n_rows()),
             _section("question_attributes", _QUESTION_ATTRIBUTE_FIELDS, layout.attribute_rows()),
             _section("surveys", _survey_fields(policy), [_survey_row(definition, policy)]),
-            _section("surveys_languagesettings", _LANGUAGE_SETTINGS_FIELDS, _language_rows(definition)),
+            _section(
+                "surveys_languagesettings",
+                _LANGUAGE_SETTINGS_FIELDS,
+                _language_rows(definition, layout.translations),
+            ),
             _section("plugin_settings", _PLUGIN_SETTING_FIELDS, _plugin_setting_rows(policy)),
+            _themes(branding),
             "</document>",
         ]
         return "\n".join(part for part in parts if part)
@@ -188,6 +205,8 @@ class _Layout:
 
     def __init__(self, definition: SurveyDefinition):
         self._definition = definition
+        self.translations = parse_translations(definition)
+        self._languages = _languages_of(definition)
         self._gids: Dict[str, int] = {}
         self._qids: Dict[str, int] = {}
         for index, group in enumerate(definition.groups):
@@ -213,16 +232,22 @@ class _Layout:
         ]
 
     def group_l10n_rows(self) -> List[Dict[str, str]]:
-        return [
-            {
-                "id": str(_L10N_BASE + index + 1),
-                "gid": str(self._gids[group.uuid]),
-                "group_name": group.title,
-                "description": group.description,
-                "language": self._definition.language,
-            }
-            for index, group in enumerate(self._definition.groups)
-        ]
+        rows = []
+        identifier = _L10N_BASE
+        for language in self._languages:
+            texts = texts_for(self.translations, language)
+            for group in self._definition.groups:
+                identifier += 1
+                rows.append(
+                    {
+                        "id": str(identifier),
+                        "gid": str(self._gids[group.uuid]),
+                        "group_name": texts.group(group.uuid, "title", group.title),
+                        "description": texts.group(group.uuid, "description", group.description),
+                        "language": language,
+                    }
+                )
+        return rows
 
     def question_rows(self) -> List[Dict[str, str]]:
         rows = []
@@ -271,22 +296,42 @@ class _Layout:
     def question_l10n_rows(self) -> List[Dict[str, str]]:
         rows = []
         identifier = _L10N_BASE
-        for question in self._definition.questions():
-            identifier += 1
-            rows.append(self._l10n_row(identifier, question.uuid, question.text, question.help))
-        for question in self._definition.questions():
-            for subquestion in question.subquestions:
+        for language in self._languages:
+            texts = texts_for(self.translations, language)
+            for question in self._definition.questions():
                 identifier += 1
-                rows.append(self._l10n_row(identifier, subquestion.uuid, subquestion.text, ""))
+                rows.append(
+                    self._l10n_row(
+                        identifier,
+                        question.uuid,
+                        texts.question(question.uuid, "text", question.text),
+                        texts.question(question.uuid, "help", question.help),
+                        language,
+                    )
+                )
+            for question in self._definition.questions():
+                for subquestion in question.subquestions:
+                    identifier += 1
+                    rows.append(
+                        self._l10n_row(
+                            identifier,
+                            subquestion.uuid,
+                            texts.subquestion(subquestion.uuid, subquestion.text),
+                            "",
+                            language,
+                        )
+                    )
         return rows
 
-    def _l10n_row(self, identifier: int, uuid: str, text: str, help_text: str) -> Dict[str, str]:
+    def _l10n_row(
+        self, identifier: int, uuid: str, text: str, help_text: str, language: str
+    ) -> Dict[str, str]:
         return {
             "id": str(identifier),
             "qid": str(self._qids[uuid]),
             "question": text,
             "help": help_text,
-            "language": self._definition.language,
+            "language": language,
         }
 
     def answer_rows(self) -> List[Dict[str, str]]:
@@ -309,20 +354,24 @@ class _Layout:
 
     def answer_l10n_rows(self) -> List[Dict[str, str]]:
         rows = []
-        aid = _AID_BASE
         identifier = _L10N_BASE
-        for question in self._definition.questions():
-            for answer in question.answers:
-                aid += 1
-                identifier += 1
-                rows.append(
-                    {
-                        "id": str(identifier),
-                        "aid": str(aid),
-                        "answer": answer.text,
-                        "language": self._definition.language,
-                    }
-                )
+        for language in self._languages:
+            texts = texts_for(self.translations, language)
+            aid = _AID_BASE
+            for question in self._definition.questions():
+                for answer in question.answers:
+                    aid += 1
+                    identifier += 1
+                    rows.append(
+                        {
+                            "id": str(identifier),
+                            "aid": str(aid),
+                            "answer": texts.answer(
+                                (question.uuid, answer.code, answer.scale), answer.text
+                            ),
+                            "language": language,
+                        }
+                    )
         return rows
 
     def attribute_rows(self) -> List[Dict[str, str]]:
@@ -370,14 +419,20 @@ def _survey_row(definition: SurveyDefinition, policy: Optional[CompiledPolicy] =
     return {name: values.get(name, "") for name in _survey_fields(policy)}
 
 
-def _language_rows(definition: SurveyDefinition) -> List[Dict[str, str]]:
-    languages = (definition.language,) + definition.additional_languages
+def _languages_of(definition: SurveyDefinition) -> Tuple[str, ...]:
+    return (definition.language,) + definition.additional_languages
+
+
+def _language_rows(
+    definition: SurveyDefinition, translations: Dict[str, LanguageTexts]
+) -> List[Dict[str, str]]:
     return [
         {
             "surveyls_survey_id": str(_SID),
             "surveyls_language": language,
-            "surveyls_title": definition.title,
-            "surveyls_description": definition.description,
+            "surveyls_title": texts_for(translations, language).title or definition.title,
+            "surveyls_description": texts_for(translations, language).description
+            or definition.description,
             "surveyls_welcometext": "",
             "surveyls_endtext": "",
             "surveyls_url": "",
@@ -385,7 +440,7 @@ def _language_rows(definition: SurveyDefinition) -> List[Dict[str, str]]:
             "surveyls_dateformat": "1",
             "surveyls_numberformat": "0",
         }
-        for language in languages
+        for language in _languages_of(definition)
     ]
 
 
@@ -393,9 +448,32 @@ def _language_rows(definition: SurveyDefinition) -> List[Dict[str, str]]:
 
 
 def _languages(definition: SurveyDefinition) -> str:
-    languages = (definition.language,) + definition.additional_languages
-    body = "\n".join("  " + _leaf("language", language) for language in languages)
+    body = "\n".join("  " + _leaf("language", language) for language in _languages_of(definition))
     return " <languages>\n{}\n </languages>".format(body)
+
+
+def _themes(branding: Optional[CompiledBranding]) -> str:
+    """按问卷的主题选项小节。没有品牌就整段省略，编译结果与本切片之前逐字节相同。
+
+    形状由导入端决定（``import_helper.php`` 读 ``themes/theme``，
+    ``TemplateManifest::importManifestLss()`` 读 ``template_name`` 与 ``config/options``），
+    与本文件其余小节的 ``fields`` / ``rows`` 形状不同，所以单独拼。
+    """
+    if branding is None or not branding.options:
+        return ""
+    options = "\n".join(
+        "     " + _leaf(name, branding.options[name]) for name in sorted(branding.options)
+    )
+    return (
+        " <themes>\n"
+        "  <theme>\n"
+        "   {name}\n"
+        "   <config>\n"
+        "    <options>\n{options}\n    </options>\n"
+        "   </config>\n"
+        "  </theme>\n"
+        " </themes>"
+    ).format(name=_leaf("template_name", branding.theme_name), options=options)
 
 
 def _section(name: str, fields: Sequence[str], rows: Sequence[Dict[str, str]]) -> str:

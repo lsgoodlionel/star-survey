@@ -112,6 +112,10 @@ class SurveyDefinition:
     definition_version: int = DEFINITION_VERSION
     #: 访问策略原文（WP-04，ADR 0016）。结构与语义都在 pubgw/policy/ 里校验（422），这里只保存副本。
     policy: Any = None
+    #: 品牌原文（WP-19，契约 survey-branding-v1）。校验与编译在 pubgw/branding/ 里，这里只保存副本。
+    branding: Any = None
+    #: 按语言的文本原文（同上）。缺项按基础语言回退，回退发生在编译期。
+    translations: Any = None
 
     @property
     def has_logic(self) -> bool:
@@ -160,6 +164,8 @@ class SurveyDefinition:
             participants=tuple(_participant(entry) for entry in payload.get("participants") or []),
             definition_version=version,
             policy=copy.deepcopy(payload.get("policy")),
+            branding=copy.deepcopy(payload.get("branding")),
+            translations=copy.deepcopy(payload.get("translations")),
         )
 
 
