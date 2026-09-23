@@ -44,6 +44,9 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
     /** @var MjyGenerationRef|null */
     private $generations;
 
+    /** @var MjyChannelRateLimit|null */
+    private $channelRateLimit;
+
     /** @var bool */
     private $isSchemaReady = false;
 
@@ -108,18 +111,30 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         return is_array($_GET) ? $_GET : [];
     }
 
+    /**
+     * 装配端点。**这里一律不碰数据库**：它在验签之前就被构造，任何在此建表或查表的动作
+     * 都会让未签名的请求逼出一次真实查询（独立安全审查发现过一次：
+     * 急着 ensureSchema() 让匿名洪水每次都跑一遍 schema 查询）。
+     * 额度表由 ensureSchema()（激活时）与首次 allow()（验签之后）负责。
+     */
     public function answerChannel(): MjyExtensionAnswerEndpoint
     {
         $instanceId = self::engineInstanceId();
-        $rateLimit = new MjyChannelRateLimit(App()->getDb(), $instanceId);
-        $rateLimit->ensureSchema();
 
         return new MjyExtensionAnswerEndpoint(
             new MjyChannelAuth(self::instanceSecrets(), $instanceId),
             new MjyExtensionAnswerReader(App()->getDb(), $this->structuredAnswers()),
-            $rateLimit,
+            $this->channelRateLimit(),
             $instanceId
         );
+    }
+
+    public function channelRateLimit(): MjyChannelRateLimit
+    {
+        if ($this->channelRateLimit === null) {
+            $this->channelRateLimit = new MjyChannelRateLimit(App()->getDb(), self::engineInstanceId());
+        }
+        return $this->channelRateLimit;
     }
 
     /**
@@ -159,6 +174,8 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         $this->structuredAnswers()->ensureSchema();
         $this->uploadSessions()->ensureSchema();
         $this->generations()->ensureSchema();
+        // 额度表在激活时就建好，运行时那条路径（首次 allow()）因此几乎永远只是一次命中。
+        $this->channelRateLimit()->ensureSchema();
         $this->isSchemaReady = true;
     }
 
@@ -171,6 +188,7 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         $this->isSchemaReady = false;
         $this->questionMaps = [];
         $this->generationCache = [];
+        $this->channelRateLimit = null;
     }
 
     public function newQuestionAttributes()

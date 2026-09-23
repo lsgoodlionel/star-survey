@@ -431,6 +431,32 @@ class MjyQuestionExtensionsTest extends TestBaseClass
         );
     }
 
+    /**
+     * WP-06.4：装配通道端点的过程**一律不得碰数据库**。
+     *
+     * 端点在验签之前就被装配（newDirectRequest 里先 answerChannel() 再 handle()），
+     * 所以这里任何一次建表或查表，都会让不带签名的请求逼出一次真实的数据库往返——
+     * 正好推翻 ADR 0018 决定 6「验签之前零 IO」的立论。独立安全审查在
+     * answerChannel() 里发现过一次急着 ensureSchema()，这条用例把它钉住。
+     */
+    public function testAssemblingTheAnswerChannelTouchesNoSchema()
+    {
+        $table = self::$plugin->channelRateLimit()->tableName();
+        \App()->getDb()->createCommand()->setText('DROP TABLE IF EXISTS ' . $table)->execute();
+        \App()->getDb()->getSchema()->refresh();
+        // 丢掉本请求内缓存的「已确认建过表」，否则装配时的 ensureSchema 会被缓存挡掉而测不出来。
+        self::$plugin->resetRequestState();
+
+        self::$plugin->answerChannel();
+
+        $this->assertNull(
+            \App()->getDb()->getSchema()->getTable($table, true),
+            '装配端点不得建表：它发生在验签之前'
+        );
+
+        self::$plugin->ensureSchema();
+    }
+
     private function storedRows(int $responseId): array
     {
         return self::$plugin->structuredAnswers()->fetchRows(

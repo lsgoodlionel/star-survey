@@ -281,6 +281,43 @@ class MjyExtensionAnswerEndpointTest extends TestBaseClass
         $this->assertSame('{"error":"unauthorized"}', $response->body());
     }
 
+    /**
+     * 数组形态的参数污染（`sig[]=x`）也走统一 401。
+     *
+     * 独立安全审查提醒：sig 不在必填清单里，若不在白名单那一遍就挡住非标量，
+     * 它会一路走到 (string) 转换，触发 PHP 的 "Array to string conversion" 警告；
+     * 开了 display_errors 的环境会把带服务器路径的警告文本喷在响应体前面，
+     * 那就既破坏了「逐字相同」又泄露了路径。
+     */
+    public function testAnArrayValuedParameterIsRejectedWithTheSameResponse(): void
+    {
+        $expected = $this->endpoint()->handle($this->params(), self::NOW);
+
+        foreach (['sig', 'sid', 'ts', 'responseIds'] as $name) {
+            $params = $this->params();
+            $params[$name] = ['x'];
+            $response = $this->endpoint()->handle($params, self::NOW);
+
+            $this->assertSame(401, $response->status(), $name);
+            $this->assertSame($expected->body(), $response->body(), $name);
+        }
+    }
+
+    /**
+     * 编码不出来就报 500，绝不回一个 200 加空体。
+     * 空体在网关侧会被判为「应答不是 JSON」而失败关闭，但插件这边必须留下日志原因。
+     */
+    public function testAnUnencodableAnswerBecomesA500(): void
+    {
+        $endpoint = $this->endpoint(new BadUtf8Reader(\App()->getDb(), self::$store));
+
+        $response = $endpoint->handle($this->signed($this->params()), self::NOW);
+
+        $this->assertSame(500, $response->status());
+        $this->assertSame('{"error":"unavailable"}', $response->body());
+        $this->assertNotSame('', $response->reason());
+    }
+
     /** 拒绝的原因进日志，不进应答。 */
     public function testTheRejectionReasonCodeIsAvailableForLoggingOnly(): void
     {
@@ -342,6 +379,19 @@ class ExplodingReader extends \MjyExtensionAnswerReader
     public function read(int $surveyId, string $generation, array $responseIds, array $questionCodes, int $cellLimit): ?array
     {
         throw new \RuntimeException('boom');
+    }
+}
+
+/** 回一个 json_encode 编不出来的单元格值（非法 UTF-8）。 */
+class BadUtf8Reader extends \MjyExtensionAnswerReader
+{
+    public function read(int $surveyId, string $generation, array $responseIds, array $questionCodes, int $cellLimit): ?array
+    {
+        return [7 => ['TABLE1' => [
+            'structureVersion' => 'rt3',
+            'isValid' => true,
+            'rows' => [['item' => "\xB1\x31"]],
+        ]]];
     }
 }
 

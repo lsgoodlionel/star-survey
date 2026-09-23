@@ -25,6 +25,7 @@ class MjyExtensionAnswerEndpoint
     public const MAX_RESPONSE_IDS = 200;
     public const MAX_QUESTION_CODES = 50;
     public const MAX_CELLS = 20000;
+    private const LOG_CATEGORY = 'plugin.MjyQuestionExtensions';
 
     /** 封闭白名单：出现任何其他参数即拒绝。 */
     private const ALLOWED_PARAMS = [
@@ -99,19 +100,36 @@ class MjyExtensionAnswerEndpoint
             $answers = $this->reader->read($surveyId, $generation, $responseIds, $questionCodes, self::MAX_CELLS);
         } catch (Throwable $exception) {
             // 原因只进服务端日志：调用方拿到的永远是同一段无细节的体。
+            Yii::log(
+                sprintf('extension answer read failed: %s: %s', get_class($exception), $exception->getMessage()),
+                CLogger::LEVEL_ERROR,
+                self::LOG_CATEGORY
+            );
             return MjyChannelResponse::unavailable('read_failed');
         }
         if ($answers === null) {
             return MjyChannelResponse::pageTooLarge();
         }
+        $body = $this->encode($surveyId, $generation, $answers);
+        if ($body === null) {
+            // 编不出来就报错。回一个 200 加空体会让网关看见「应答不是 JSON」，
+            // 而插件这边一声不响——静默的数据缺失比报错危险得多。
+            Yii::log(
+                'extension answers could not be encoded as JSON (invalid UTF-8 in a cell value?)',
+                CLogger::LEVEL_ERROR,
+                self::LOG_CATEGORY
+            );
+            return MjyChannelResponse::unavailable('encode_failed');
+        }
 
-        return MjyChannelResponse::ok($this->encode($surveyId, $generation, $answers));
+        return MjyChannelResponse::ok($body);
     }
 
     /**
      * @param array<int, array<string, array{structureVersion: string, isValid: bool, rows: array}>> $answers
+     * @return string|null null ＝ 编码失败（单元格里有非法 UTF-8）
      */
-    private function encode(int $surveyId, string $generation, array $answers): string
+    private function encode(int $surveyId, string $generation, array $answers): ?string
     {
         $payload = [];
         foreach ($answers as $responseId => $questions) {
@@ -125,7 +143,7 @@ class MjyExtensionAnswerEndpoint
             }
         }
 
-        return (string) json_encode([
+        $json = json_encode([
             'plugin' => self::PLUGIN_NAME,
             'engineInstanceId' => $this->engineInstanceId,
             'surveyId' => $surveyId,
@@ -135,6 +153,8 @@ class MjyExtensionAnswerEndpoint
             // 于是 json_encode 要不要输出成数组就取决于键恰好是不是 0,1,2,…——不能依赖这种巧合。
             'answers' => (object) $payload,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return $json === false ? null : $json;
     }
 
     /**
@@ -145,13 +165,20 @@ class MjyExtensionAnswerEndpoint
      */
     private static function checkShape(array $query): string
     {
-        foreach (array_keys($query) as $name) {
+        foreach ($query as $name => $value) {
             if (!in_array((string) $name, self::ALLOWED_PARAMS, true)) {
                 return 'unknown_parameter';
             }
+            // 每个值都要在这里挡住非标量，不能只挡必填的那几个：
+            // `sig[]=x` 这样的数组会一路走到 (string) 转换，触发 PHP 的
+            // "Array to string conversion" 警告；开了 display_errors 的环境会把带
+            // 服务器路径的警告喷在响应体前面，既破坏「逐字相同」又泄露路径。
+            if (!is_scalar($value)) {
+                return 'non_scalar_parameter';
+            }
         }
         foreach (self::REQUIRED_PARAMS as $name) {
-            if (!isset($query[$name]) || !is_scalar($query[$name])) {
+            if (!isset($query[$name])) {
                 return 'missing_parameter';
             }
         }

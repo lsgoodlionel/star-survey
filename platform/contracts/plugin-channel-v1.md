@@ -164,5 +164,6 @@ POST 会先被 Yii 的 CSRF 校验挡下，事件根本不派发。代价：`sid
 - 网关侧单元测试：`platform/tools/publish-gateway/tests/test_channel.py`
   （签名向量、规范化查询串、失败关闭、不记值）。
 - 插件侧 PHPUnit：`plugins/MjyQuestionExtensions/tests/MjyChannelAuthTest.php`（验签与统一拒绝）、
-  `MjyExtensionAnswerEndpointTest.php`（端到端读取、代次隔离、体量上限、限流）。
+  `MjyExtensionAnswerEndpointTest.php`（端到端读取、代次隔离、体量上限、限流）、
+  `MjyChannelRateLimitTest.php`（懒建表——验签之前不得碰表——与窗口计数）。
 - 跨语言签名一致性：两侧各有一组**同一份**固定向量，任一端改了算法都会红。

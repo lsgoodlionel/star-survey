@@ -257,3 +257,18 @@ N+1：200 条答卷 × 若干扩展题 = 数百次查询。因此 store 增加�
 
 见 `platform/contracts/plugin-channel-v1.md` 的「验证」节与本车道提交信息中的测试证据。
 测试先行：每条断言都先以 RED 出现过，回归钉子另行标注。
+
+独立安全审查（2026-09-24，实现完成后另起一轮）结论与处理：
+
+| 级别 | 问题 | 处理 |
+|---|---|---|
+| **严重** | `answerChannel()` 在**验签之前**就调 `MjyChannelRateLimit::ensureSchema()`。Yii 的 `getTable($name, true)` 恒绕过缓存直接 `loadTable()`，所以每个匿名请求都能逼出一次真实的 schema 查询——正好推翻决定 6「验签之前零 IO」的立论，成为不需要密钥的放大面 | 已修复：额度表改为**懒建**（只有验签之后的 `allow()` 会碰表），激活时 `ensureSchema()` 预先建好；装配过程一律不碰数据库。补了两条钉子：`MjyChannelRateLimitTest::testConstructingTheLimiterTouchesNothing` 与 `MjyQuestionExtensionsTest::testAssemblingTheAnswerChannelTouchesNoSchema`（后者经变异验证——把那行加回去即红） |
+| 中 | `sig` 不在必填清单里，数组形态（`sig[]=x`）会一路走到 `(string)` 转换，触发 PHP "Array to string conversion" 警告；开了 `display_errors` 的环境会把带服务器路径的警告喷在响应体前面，既破坏「逐字相同」又泄露路径 | 已修复：白名单那一遍就挡住**所有**非标量参数 |
+| 中 | `json_encode` 失败（单元格里有非法 UTF-8）被 `(string)` 静默转成空串 → **200 加空体**，契约里没有这种应答，插件侧也不留日志 | 已修复：编码失败返回 `500 unavailable` 并写错误日志 |
+| 低 | 读取失败只记固定串 `read_failed`，真实的数据库/配置故障在服务端没有诊断线索 | 已修复：异常类名与消息写服务端日志（不带请求参数、不带作答值），应答仍是同一段无细节的体 |
+| 低 | 时间戳允许 12 位，32 位 PHP 上理论溢出 | 不处理：32 位 PHP 已不在部署目标内 |
+
+审查确认通过的部分：签名覆盖完整（改投不了插件函数、问卷或答卷）、`hash_equals` 定时安全且轮换期两个密钥都比完不短路、
+派生的 `hash_hmac` 参数顺序两端一致、SQL 占位符逐个唯一无注入、状态码不受请求输入影响故无头注入、
+密钥与作答值不进日志与异常、单元格上限用 `LIMIT n+1` 能真正探出溢出、正则一律 `\A…\z` 加 `/D` 且无回溯风险、
+密钥缺失一律失败关闭。

@@ -29,6 +29,9 @@ class MjyChannelRateLimit
     /** @var int */
     private $limit;
 
+    /** @var bool 本请求内是否已确认过表存在 */
+    private $isSchemaReady = false;
+
     public function __construct(CDbConnection $db, string $engineInstanceId, int $limit = self::DEFAULT_LIMIT)
     {
         $this->db = $db;
@@ -41,9 +44,21 @@ class MjyChannelRateLimit
         return $this->db->tablePrefix . self::TABLE;
     }
 
+    /**
+     * **只能在验签之后调用。**
+     *
+     * Yii 的 `getTable($name, true)` 恒绕过缓存直接 loadTable()，是一次真实的数据库往返。
+     * 独立安全审查发现，端点原先在验签**之前**就急着调它，于是任何匿名请求都能逼出一次
+     * schema 查询——正好推翻 ADR 0018 决定 6「验签之前零 IO」的立论，成为不需要密钥的放大面。
+     * 现在只有 allow() 会走到这里，而 allow() 在验签之后。
+     */
     public function ensureSchema(): void
     {
+        if ($this->isSchemaReady) {
+            return;
+        }
         if ($this->db->getSchema()->getTable($this->tableName(), true) !== null) {
+            $this->isSchemaReady = true;
             return;
         }
         try {
@@ -66,13 +81,16 @@ class MjyChannelRateLimit
             }
         }
         $this->db->getSchema()->refresh();
+        $this->isSchemaReady = true;
     }
 
     /**
-     * 记一次调用，并回答「还在额度内吗」。
+     * 记一次调用，并回答「还在额度内吗」。**只在验签之后调用。**
      */
     public function allow(int $surveyId, int $now): bool
     {
+        // 懒建表：表的存在性检查本身就是数据库往返，不能让未验签的请求触发它。
+        $this->ensureSchema();
         $window = intdiv($now, self::WINDOW_SECONDS) * self::WINDOW_SECONDS;
         $hits = $this->bump($surveyId, $window);
 
