@@ -323,6 +323,20 @@ class SurveyTextImportTest {
     }
 
     @Test
+    void anAbsurdlyLongSingleLineIsReportedInsteadOfBeingParsed() {
+        // 极长的行会让"结尾方括号"这类回溯型正则退化成平方复杂度，先按长度挡掉。
+        String bomb = "[".repeat(200_000);
+
+        SurveyImportPreview preview = preview("1. 正常题[填空]\n" + bomb + "\n");
+
+        assertThat(preview.questions()).hasSize(1);
+        assertThat(preview.problems()).singleElement().satisfies(problem -> {
+            assertThat(problem.line()).isEqualTo(2);
+            assertThat(problem.code()).isEqualTo("line_too_long");
+        });
+    }
+
+    @Test
     void importingNeedsEditRightsOnTheSurvey() {
         TenantContext viewer = fixture.member(ws, "stats", "statistics_viewer", survey);
 

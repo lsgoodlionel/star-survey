@@ -43,6 +43,12 @@ final class QuestionTextParser {
     static final int MAX_QUESTIONS = 500;
     static final int MAX_OPTIONS = 200;
     static final int MAX_QUESTION_TEXT = 2_000;
+    /**
+     * 单行长度上限。既是形状上的合理值，也是安全下限：下面几个正则都带回溯
+     * （尤其是"找结尾的方括号"那个），拿一行几十万个 {@code [} 去跑会退化成平方复杂度。
+     * 超长的行在跑任何正则之前就被挡掉，并记一条问题。
+     */
+    static final int MAX_LINE_CHARS = 4_000;
     static final int MAX_OPTION_TEXT = 500;
     /** 需要选项的题型至少要有几个选项。 */
     private static final int MIN_OPTIONS = 2;
@@ -148,6 +154,11 @@ final class QuestionTextParser {
 
         void accept(int lineNo, String line) {
             if (line.isEmpty()) {
+                return;
+            }
+            if (line.length() > MAX_LINE_CHARS) {
+                problems.add(new ImportProblem(lineNo, "line_too_long",
+                        "这一行超过 " + MAX_LINE_CHARS + " 字，已跳过"));
                 return;
             }
             Matcher question = QUESTION_START.matcher(line);
