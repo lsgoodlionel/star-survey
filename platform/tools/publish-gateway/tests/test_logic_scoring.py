@@ -5,14 +5,16 @@
 """
 
 import copy
+import json
 import unittest
+from dataclasses import replace
 
 from pubgw.logic.lower import lower_definition
-from pubgw.logic.scoring import expand_scoring
-from pubgw.model import DefinitionError, SurveyDefinition
+from pubgw.logic.scoring import ScoringError, expand_scoring
+from pubgw.model import DefinitionError, Score, ScoreItem, SurveyDefinition
 from pubgw.validate import validate_definition
 
-from .logic_fixtures import base_payload
+from .logic_fixtures import base_payload, question
 
 
 def payload_with_scoring(scoring):
@@ -245,6 +247,92 @@ class CompilationTest(unittest.TestCase):
         definition = SurveyDefinition.from_dict(payload)
         # 计分题追加在最后一组，第三组的题引用它属于「向后引用」，必须被挡下。
         self.assertIn("E_EXPR_LATER_PAGE", issue_codes(definition))
+
+
+class ReferenceRenderingTest(unittest.TestCase):
+    """计分把题目引用插进生成的 DSL 文本，插进去的东西必须是受限字符集。
+
+    定性：**不是提权**。生成的文本会被标准 v2 解析器重新解析，走同样的类型检查、
+    引用检查与环检测，作者本来就能直接写 v2 DSL 表达式。问题是正确性（校验的是原始
+    引用，渲染出来的可能指向另一道题）和不变式（契约 §6 与本模块顶部都声称生成的
+    表达式里没有一处作者自由文本）。根治在 model.py 的解析期字符集；这里是纵深防御。
+    """
+
+    HOSTILE = 'X") + 999, 0) * 1, sum(1'
+
+    def test_a_hostile_uuid_never_gets_as_far_as_expansion(self):
+        payload = payload_with_scoring([dict(SIMPLE_SCORE, items=[{"question": self.HOSTILE, "weight": 1}])])
+        question(payload, "QAGE")["uuid"] = self.HOSTILE
+        with self.assertRaises(DefinitionError):
+            SurveyDefinition.from_dict(payload)
+
+    def test_expansion_refuses_a_reference_it_cannot_render_safely(self):
+        # 绕过解析期（直接造 dataclass），展开必须自己也挡住，而不是原样拼进表达式。
+        hostile = Score(
+            uuid="score-x", code="STOTAL", title="总分",
+            items=(ScoreItem(question=self.HOSTILE, weight=1.0),),
+        )
+        definition = replace(SurveyDefinition.from_dict(base_payload()), scoring=(hostile,))
+        with self.assertRaises(ScoringError):
+            expand_scoring(definition)
+
+    def test_a_safe_uuid_still_renders_as_a_uuid_reference(self):
+        score = dict(SIMPLE_SCORE, items=[{"question": "q-age", "weight": 1}])
+        total = question_by_code(generated(definition_with([score])), "STOTAL")
+        self.assertEqual(total.calculation, 'sum(coalesce(q("q-age"), 0) * 1)')
+
+
+class GroupTitleTest(unittest.TestCase):
+    """多份计分表共用一个计分组，标题冲突必须报错，不能静默丢掉一个。"""
+
+    def test_two_scores_with_different_group_titles_are_rejected(self):
+        first = dict(SIMPLE_SCORE, groupTitle="结果甲")
+        second = dict(SIMPLE_SCORE, uuid="score-2", code="SOTHER", groupTitle="结果乙")
+        self.assertIn("E_SCORING_GROUP_TITLE", issue_codes(definition_with([first, second])))
+
+    def test_two_scores_sharing_a_group_title_expand_into_one_group(self):
+        first = dict(SIMPLE_SCORE, groupTitle="结果")
+        second = dict(SIMPLE_SCORE, uuid="score-2", code="SOTHER", groupTitle="结果")
+        definition = definition_with([first, second])
+        self.assertEqual(issue_codes(definition), [])
+        group = generated(definition)
+        self.assertEqual(group.title, "结果")
+        codes = [item.code for item in group.questions]
+        self.assertIn("STOTAL", codes)
+        self.assertIn("SOTHER", codes)
+        self.assertIn("SOTHERB", codes)
+
+    def test_scores_that_both_leave_the_group_title_default_agree(self):
+        second = dict(SIMPLE_SCORE, uuid="score-2", code="SOTHER")
+        score = {key: value for key, value in SIMPLE_SCORE.items() if key != "groupTitle"}
+        self.assertEqual(issue_codes(definition_with([score, second])), [])
+
+
+class NonFiniteNumberTest(unittest.TestCase):
+    """Infinity／NaN 是 json.loads 默认认的字面量，进了表达式会被当成标识符引用。"""
+
+    def test_non_finite_points_are_rejected(self):
+        for value in (float("inf"), float("-inf"), float("nan")):
+            payload = payload_with_scoring(
+                [dict(SIMPLE_SCORE, items=[{"question": "QPET", "points": {"A1": value}}])]
+            )
+            with self.assertRaises(DefinitionError, msg=repr(value)):
+                SurveyDefinition.from_dict(payload)
+
+    def test_non_finite_weight_and_band_bound_are_rejected(self):
+        with self.assertRaises(DefinitionError):
+            definition_with([dict(SIMPLE_SCORE, items=[{"question": "QAGE", "weight": float("inf")}])])
+        with self.assertRaises(DefinitionError):
+            definition_with([dict(SIMPLE_SCORE, bands=[
+                {"code": "LOW", "upTo": float("nan")}, {"code": "HIGH"}
+            ])])
+
+    def test_the_json_literals_are_rejected_too(self):
+        payload = payload_with_scoring([SIMPLE_SCORE])
+        text = json.dumps(payload).replace('"weight": 2', '"weight": Infinity')
+        self.assertIn("Infinity", text)
+        with self.assertRaises(DefinitionError):
+            SurveyDefinition.from_json(text)
 
 
 if __name__ == "__main__":

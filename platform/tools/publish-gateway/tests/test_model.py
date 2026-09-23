@@ -110,5 +110,64 @@ class SurveyDefinitionParsingTest(unittest.TestCase):
             SurveyDefinition.from_dict(payload)
 
 
+class UuidCharsetTest(unittest.TestCase):
+    """UUID 是系统边界上的外部数据，字符集必须在解析期就钉死。
+
+    理由不是「防提权」——生成的文本会被标准 v2 解析器重新解析，走同样的类型检查、
+    引用检查与环检测，而作者本来就能直接写 v2 DSL 表达式，注入者拿不到新能力。
+    真正的问题有两个：
+
+    1. **正确性**：校验时看的是原始引用，渲染出来的文本却可能指向另一道题；
+    2. **不变式**：契约 §6「作者文本的安全性」声称生成的表达式里没有一处作者自由文本。
+       只要 UUID 能带任意字符，这句话就是假的——而且是潜伏的：将来只要有一个插值点
+       不再被重新解析，它立刻变成真注入。
+
+    取值范围要同时容纳现存的两种写法：标准 UUID 与平台的 slug。
+    """
+
+    def definition_with_uuid(self, where, value):
+        payload = minimal_payload()
+        if where == "definition":
+            payload["uuid"] = value
+        elif where == "group":
+            payload["groups"][0]["uuid"] = value
+        else:
+            payload["groups"][0]["questions"][0]["uuid"] = value
+        return payload
+
+    def test_standard_uuids_are_accepted(self):
+        payload = self.definition_with_uuid("question", "11111111-1111-4111-8111-111111111111")
+        self.assertEqual(
+            SurveyDefinition.from_dict(payload).groups[0].questions[0].uuid,
+            "11111111-1111-4111-8111-111111111111",
+        )
+
+    def test_platform_slugs_are_accepted(self):
+        for slug in ("q-single", "sq-m2", "logic-0001", "q1", "def_0001", "q-"):
+            payload = self.definition_with_uuid("question", slug)
+            self.assertEqual(SurveyDefinition.from_dict(payload).groups[0].questions[0].uuid, slug)
+
+    def test_expression_syntax_in_a_uuid_is_rejected(self):
+        # 复现：这个 UUID 曾能从 scoring 生成的 q("…") 字符串字面量里逃出来。
+        hostile = 'X") + 999, 0) * 1, sum(1'
+        for where in ("definition", "group", "question"):
+            with self.assertRaises(DefinitionError, msg=where):
+                SurveyDefinition.from_dict(self.definition_with_uuid(where, hostile))
+
+    def test_other_unsafe_shapes_are_rejected(self):
+        for value in ('a"b', "a b", "a{b}", "-lead", "_lead", "a\\b", "a\nb", "a" * 129):
+            with self.assertRaises(DefinitionError, msg=repr(value)):
+                SurveyDefinition.from_dict(self.definition_with_uuid("question", value))
+
+    def test_subquestion_uuids_are_checked_too(self):
+        payload = minimal_payload()
+        payload["definitionVersion"] = 2
+        payload["groups"][0]["questions"][0]["subquestions"] = [
+            {"uuid": 'X") or (1', "code": "SQ001", "text": "一"}
+        ]
+        with self.assertRaises(DefinitionError):
+            SurveyDefinition.from_dict(payload)
+
+
 if __name__ == "__main__":
     unittest.main()

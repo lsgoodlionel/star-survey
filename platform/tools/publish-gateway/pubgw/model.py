@@ -7,6 +7,8 @@ validate.py。解析失败一律抛 DefinitionError，绝不带着半成品往�
 
 import copy
 import json
+import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
@@ -24,6 +26,23 @@ _LOGIC_KEYS = ("condition", "calculation", "validation")
 
 #: 计分展开出来的题组标题（WP-03.3）。
 DEFAULT_SCORING_GROUP_TITLE = "计分结果"
+
+#: UUID 的合法字符集，同时容纳现存的两种写法：标准 UUID
+#: （``11111111-1111-4111-8111-111111111111``）与平台的 slug（``q-single``、``sq-m2``）。
+#:
+#: 为什么钉在解析期而不是等到用的地方再转义：UUID 会被**插进生成的 DSL 文本**
+#: （计分把题目引用渲染成 ``q("<uuid>")``）。带引号的 UUID 能从字符串字面量里逃出来，
+#: 这不是提权——生成的文本随后由标准 v2 解析器重新解析，走同样的类型检查、引用检查与
+#: 环检测，而作者本来就能直接写 v2 DSL 表达式——但它坏了两件事：
+#:
+#: 1. **正确性**：校验时看的是原始引用，渲染出来的文本却可能指向另一道题；
+#: 2. **不变式**：契约 §6 与 logic/scoring.py 都声称「生成的表达式里没有一处作者的
+#:    自由文本」。UUID 不受限时这句话是假的，而且是潜伏的——将来只要有一个插值点
+#:    不再被重新解析，它立刻变成真注入。
+#:
+#: 所以在系统边界上一次关掉整类问题；各插值点另有一层断言作为纵深防御。
+UUID_MAX_LENGTH = 128
+_UUID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 _INHERIT_THEME = "inherit"
 
@@ -202,7 +221,7 @@ class SurveyDefinition:
         is_logic = version == LOGIC_DEFINITION_VERSION
         participants, participant_refs = _participants(payload.get("participants"))
         return cls(
-            uuid=_text(payload, "uuid", "definition"),
+            uuid=_uuid(payload, "uuid", "definition"),
             title=_text(payload, "title", "definition"),
             language=_text(payload, "language", "definition"),
             description=_optional_text(payload, "description"),
@@ -240,7 +259,7 @@ def _score(payload: Any, where: str) -> Score:
     if not items:
         raise DefinitionError("{}.items must not be empty".format(where))
     return Score(
-        uuid=_text(payload, "uuid", where),
+        uuid=_uuid(payload, "uuid", where),
         code=_text(payload, "code", where),
         title=_text(payload, "title", where),
         group_title=_optional_text(payload, "groupTitle") or DEFAULT_SCORING_GROUP_TITLE,
@@ -291,7 +310,12 @@ def _score_band(payload: Any, where: str) -> ScoreBand:
 def _number(value: Any, where: str, key: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise DefinitionError("{}.{} must be a number, got {!r}".format(where, key, value))
-    return float(value)
+    number = float(value)
+    # json.loads 默认就认 Infinity／-Infinity／NaN 这三个字面量。放进来会被渲染成
+    # inf／nan 写进生成的表达式，再被引擎当成标识符去查变量。
+    if not math.isfinite(number):
+        raise DefinitionError("{}.{} 必须是有限数值，实际是 {!r}".format(where, key, value))
+    return number
 
 
 def _group(payload: Any, index: int, is_logic: bool) -> Group:
@@ -299,7 +323,7 @@ def _group(payload: Any, index: int, is_logic: bool) -> Group:
     _require_mapping(payload, where)
     _check_logic_keys(payload, where, is_logic)
     return Group(
-        uuid=_text(payload, "uuid", where),
+        uuid=_uuid(payload, "uuid", where),
         title=_text(payload, "title", where),
         description=_optional_text(payload, "description"),
         relevance=_optional_text(payload, "relevance") or "1",
@@ -315,7 +339,7 @@ def _question(payload: Any, where: str, is_logic: bool) -> Question:
     _require_mapping(payload, where)
     _check_logic_keys(payload, where, is_logic)
     return Question(
-        uuid=_text(payload, "uuid", where),
+        uuid=_uuid(payload, "uuid", where),
         code=_text(payload, "code", where),
         type=_text(payload, "type", where),
         text=_text(payload, "text", where),
@@ -386,7 +410,7 @@ def _answer(payload: Any, where: str) -> AnswerOption:
 def _subquestion(payload: Any, where: str) -> SubQuestion:
     _require_mapping(payload, where)
     return SubQuestion(
-        uuid=_text(payload, "uuid", where),
+        uuid=_uuid(payload, "uuid", where),
         code=_text(payload, "code", where),
         text=_text(payload, "text", where),
         scale=_integer(payload.get("scale", 0), where, "scale"),
@@ -418,6 +442,17 @@ def _participants(payload: Any) -> Tuple[List[Dict[str, str]], List[Optional[str
         entries.append(fields)
         refs.append(ref)
     return entries, refs
+
+
+def _uuid(payload: Mapping[str, Any], key: str, where: str) -> str:
+    value = _text(payload, key, where)
+    if len(value) > UUID_MAX_LENGTH or not _UUID_PATTERN.match(value):
+        raise DefinitionError(
+            "{}.{} 只能由字母、数字、'-'、'_' 组成并以字母或数字开头，最长 {} 个字符，实际是 {!r}".format(
+                where, key, UUID_MAX_LENGTH, value
+            )
+        )
+    return value
 
 
 def _settings(payload: Any) -> Dict[str, str]:

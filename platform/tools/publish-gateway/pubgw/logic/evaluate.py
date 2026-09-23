@@ -17,18 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, FrozenSet, List, Mapping, Optional
 
 from . import ast
-from .scope import (
-    ANY,
-    BOOL,
-    CHOICE,
-    NUMBER,
-    OTHER_CODE,
-    SELECTED,
-    TEXT,
-    WHOLE_SET,
-    Resolved,
-    Scope,
-)
+from .scope import BOOL, NUMBER, OTHER_CODE, SELECTED, WHOLE_SET, Resolved, Scope
 from ..model import Question
 
 #: 多选题「选中」在答卷里的值。

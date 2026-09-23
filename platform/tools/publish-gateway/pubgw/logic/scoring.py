@@ -18,6 +18,7 @@
 模板路径转义（``{`` ``}`` → ``&#123;`` ``&#125;``），永远不会变成可执行表达式。
 """
 
+import re
 from dataclasses import replace
 from typing import List, Optional, Tuple
 
@@ -25,7 +26,7 @@ from .model import LogicModel
 from .scope import CHOICE, NUMBER, SET, ResolutionError, Resolved, Scope
 from . import ast
 from ..codes import ANSWER_CODE_MAX_LENGTH, check_answer_code, check_question_code
-from ..model import Group, Question, Score, ScoreBand, ScoreItem, SurveyDefinition
+from ..model import UUID_MAX_LENGTH, Group, Question, Score, ScoreBand, ScoreItem, SurveyDefinition
 from ..validate import ValidationIssue
 
 #: 总分题的代码就是分数代码；分段题加后缀 B，分段文案题加 R1、R2……
@@ -36,13 +37,27 @@ RESULT_SUFFIX = "R"
 
 _SCORABLE_KINDS = (CHOICE, SET, NUMBER)
 
+#: 插值前的断言用的字符集，与 model.py（UUID）和 codes.py（题目、子题、选项代码）一致。
+_UUID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,%d}$" % (UUID_MAX_LENGTH - 1))
+_QUESTION_CODE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+_MEMBER_PATTERN = re.compile(r"^[A-Za-z0-9]+$")
+
+
+class ScoringError(ValueError):
+    """展开计分表时发现它根本没法安全地渲染成 DSL。
+
+    正常路径上到不了这里：check_scoring 先过一遍，题目引用的字符集又在 model.py
+    的解析期就钉死了。留着它是纵深防御——万一哪天有人绕过解析期直接造 dataclass，
+    宁可炸也不要把一段没校验过的文本拼进生成的表达式里。
+    """
+
 
 def check_scoring(definition: SurveyDefinition) -> List[ValidationIssue]:
     """计分表的语义校验。结构问题（缺字段、类型不对）已经在 model.py 拦掉了。"""
     if not definition.scoring:
         return []
     model = LogicModel(definition)
-    issues: List[ValidationIssue] = []
+    issues: List[ValidationIssue] = _check_group_title(definition.scoring)
     taken = {question.code for question in definition.questions()}
     for index, score in enumerate(definition.scoring):
         where = "scoring[{}]".format(index)
@@ -69,6 +84,24 @@ def expand_scoring(definition: SurveyDefinition) -> SurveyDefinition:
 
 
 # ------------------------------------------------------------------ 校验
+
+
+def _check_group_title(scores: Tuple[Score, ...]) -> List[ValidationIssue]:
+    """所有计分表共用一个计分组，所以 groupTitle 必须一致——不一致就报错，不静默丢。"""
+    titles = {score.group_title for score in scores}
+    if len(titles) <= 1:
+        return []
+    return [
+        ValidationIssue(
+            "E_SCORING_GROUP_TITLE",
+            "scoring[{}].groupTitle".format(index),
+            "所有计分表共用一个计分组，groupTitle 必须一致（出现了 {}）".format(
+                "、".join(repr(title) for title in sorted(titles))
+            ),
+        )
+        for index, score in enumerate(scores)
+        if score.group_title != scores[0].group_title
+    ]
 
 
 def _check_code(score: Score, where: str, taken: set) -> List[ValidationIssue]:
@@ -197,6 +230,18 @@ def _check_band_bound(bands, band: ScoreBand, index: int, path: str) -> List[Val
     return []
 
 
+def _safe(value: str, pattern, what: str) -> str:
+    """把 value 插进生成的 DSL 之前，断言它确实是受限字符集。
+
+    根治在 model.py 的解析期（UUID）与 validate.py 的代码规则（题目、子题、选项代码）；
+    这里再断言一次，是为了让契约 §6 那句「生成的表达式里没有一处作者的自由文本」
+    成为**本模块自己保证**的不变式，而不是依赖上游某处没被改坏。
+    """
+    if not isinstance(value, str) or not pattern.match(value):
+        raise ScoringError("{} {!r} 不是受限字符集，拒绝把它拼进生成的表达式".format(what, value))
+    return value
+
+
 def _resolve(scope: Scope, item: ScoreItem) -> Resolved:
     by_uuid = item.question in scope.by_uuid or item.question in scope.subquestion_owner
     return scope.resolve(ast.Ref(item.question, by_uuid, item.member or None, None, 0))
@@ -259,19 +304,23 @@ def _terms_of(scope: Scope, item: ScoreItem) -> List[str]:
     resolved = _resolve(scope, item)
     if resolved.type.kind == SET:
         return [
-            'if({}.{}, {}, 0)'.format(reference, key, _number_text(points)) for key, points in item.points
+            "if({}.{}, {}, 0)".format(reference, _safe(key, _MEMBER_PATTERN, "子题代码"), _number_text(points))
+            for key, points in item.points
         ]
     return [
-        'if({} == "{}", {}, 0)'.format(reference, key, _number_text(points)) for key, points in item.points
+        'if({} == "{}", {}, 0)'.format(reference, _safe(key, _MEMBER_PATTERN, "选项代码"), _number_text(points))
+        for key, points in item.points
     ]
 
 
 def _reference_text(scope: Scope, item: ScoreItem) -> str:
     if item.question in scope.by_uuid or item.question in scope.subquestion_owner:
-        head = 'q("{}")'.format(item.question)
+        head = 'q("{}")'.format(_safe(item.question, _UUID_PATTERN, "题目 UUID"))
     else:
-        head = item.question
-    return "{}.{}".format(head, item.member) if item.member else head
+        head = _safe(item.question, _QUESTION_CODE_PATTERN, "题目代码")
+    if not item.member:
+        return head
+    return "{}.{}".format(head, _safe(item.member, _MEMBER_PATTERN, "子题代码"))
 
 
 def _band_expression(score: Score) -> str:
@@ -280,10 +329,14 @@ def _band_expression(score: Score) -> str:
 
 def _nested_band(code: str, bands: Tuple[ScoreBand, ...], index: int) -> str:
     band = bands[index]
+    band_code = _safe(band.code, _MEMBER_PATTERN, "分段代码")
     if index == len(bands) - 1:
-        return '"{}"'.format(band.code)
+        return '"{}"'.format(band_code)
     return 'if({} <= {}, "{}", {})'.format(
-        code, _number_text(band.up_to), band.code, _nested_band(code, bands, index + 1)
+        _safe(code, _QUESTION_CODE_PATTERN, "分数代码"),
+        _number_text(band.up_to),
+        band_code,
+        _nested_band(code, bands, index + 1),
     )
 
 
