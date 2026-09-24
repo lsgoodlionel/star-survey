@@ -34,7 +34,8 @@ final class SavExportWriter implements ExportFormat.Writer {
     }
 
     @Override
-    public void write(List<ExportSheet> sheets, OutputStream out) throws IOException {
+    public void write(ExportContent content, OutputStream out) throws IOException {
+        List<ExportSheet> sheets = content.sheets();
         if (sheets.isEmpty()) {
             throw new IOException("a sav bundle needs at least the responses sheet");
         }

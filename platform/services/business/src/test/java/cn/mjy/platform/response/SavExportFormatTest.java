@@ -62,7 +62,7 @@ class SavExportFormatTest {
 
     private static Map<String, byte[]> write() throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ExportFormat.SAV.writer().write(bundle(), out);
+        ExportFormat.SAV.writer().write(ExportContent.ofSheets(bundle()), out);
         Map<String, byte[]> entries = new LinkedHashMap<>();
         try (ZipInputStream in = new ZipInputStream(new ByteArrayInputStream(out.toByteArray()))) {
             ZipEntry entry;
@@ -165,8 +165,8 @@ class SavExportFormatTest {
     void theSameInputProducesAByteIdenticalBundle() throws IOException {
         ByteArrayOutputStream first = new ByteArrayOutputStream();
         ByteArrayOutputStream second = new ByteArrayOutputStream();
-        ExportFormat.SAV.writer().write(bundle(), first);
-        ExportFormat.SAV.writer().write(bundle(), second);
+        ExportFormat.SAV.writer().write(ExportContent.ofSheets(bundle()), first);
+        ExportFormat.SAV.writer().write(ExportContent.ofSheets(bundle()), second);
 
         assertThat(first.toByteArray()).isEqualTo(second.toByteArray());
     }

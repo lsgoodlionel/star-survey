@@ -28,6 +28,12 @@ final class ExportLayout {
             "type", "aid", "scale", "label", "sensitive", "masking", "options");
     static final List<String> ATTACHMENT_HEADER = List.of("version", "sid", "responseid", "column", "fieldname",
             "index", "name", "size", "ext", "storedname", "sha256");
+    /**
+     * 扩展副表作答表：一个单元格一行（ADR 0015 增补二）。列集与列字典无关，因此不随作答漂移，
+     * 结构版本为 {@code "0"}（列字典无从考证）的单元格也照样落得下。
+     */
+    static final List<String> EXTENSION_HEADER = List.of("version", "sid", "responseid", "generation", "question",
+            "structureversion", "isvalid", "rowindex", "column", "value");
 
     /** 固定列里可枚举的两列：投影状态与作答状态。统计格式据此写值标签。 */
     private static final Map<String, List<OptionLabel>> FIXED_OPTIONS = Map.of(

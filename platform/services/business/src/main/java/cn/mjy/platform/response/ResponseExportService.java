@@ -173,12 +173,26 @@ public class ResponseExportService {
                 });
     }
 
-    /** 冻结来源与各 sid 此刻的最近代次（ADR 0013 决定 3）。须在租户作用域内调用。 */
+    /**
+     * 冻结来源、各 sid 此刻的最近代次与副表题名单（ADR 0013 决定 3、ADR 0015 增补二）。须在租户作用域内调用。
+     *
+     * <p>副表题超过网关单次上限时当场拒绝建作业：分多次读会让同一份文件里的副表来自不同时刻，
+     * 与「作业创建即定水位线」相冲；悄悄少读几道题更不行。
+     */
     private ExportPlan plan(List<Source> surveySources) {
         return new ExportPlan(surveySources.stream()
                 .map(s -> new PlannedSource(s.version(), s.engineInstanceId(), s.engineSid(),
-                        projections.latestGeneration(s.engineInstanceId(), s.engineSid()).orElse(null), s.fields()))
+                        projections.latestGeneration(s.engineInstanceId(), s.engineSid()).orElse(null), s.fields(),
+                        extensionQuestions(s)))
                 .toList());
+    }
+
+    private static List<String> extensionQuestions(Source source) {
+        if (source.extensionQuestions().size() > AnswerQuery.MAX_EXTENSION_QUESTIONS) {
+            throw new InvalidResponseQueryException("version " + source.version() + " has more than "
+                    + AnswerQuery.MAX_EXTENSION_QUESTIONS + " side-table questions and cannot be exported");
+        }
+        return source.extensionQuestions();
     }
 
     void deleteFilesQuietly(TenantId tenant, UUID jobId) {
@@ -221,7 +235,8 @@ public class ResponseExportService {
                 throw new InvalidResponseQueryException("surveyId in the body does not match the path");
             }
             ExportFormat format = ExportFormat.fromCode(request.format())
-                    .orElseThrow(() -> new InvalidResponseQueryException("format must be one of csv, xlsx"));
+                    .orElseThrow(() -> new InvalidResponseQueryException(
+                            "format must be one of csv, xlsx, sav, docx"));
             String template = request.templateVersion();
             if (template != null && !template.isEmpty() && !DEFAULT_TEMPLATE.equals(template)) {
                 throw new InvalidResponseQueryException("templateVersion must be empty or default");

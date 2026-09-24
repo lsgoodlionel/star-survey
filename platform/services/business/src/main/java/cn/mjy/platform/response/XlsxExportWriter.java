@@ -34,7 +34,8 @@ final class XlsxExportWriter implements ExportFormat.Writer {
     }
 
     @Override
-    public void write(List<ExportSheet> sheets, OutputStream out) throws IOException {
+    public void write(ExportContent content, OutputStream out) throws IOException {
+        List<ExportSheet> sheets = content.sheets();
         try (ExportZip zip = new ExportZip(out)) {
             text(zip, "[Content_Types].xml", contentTypes(sheets.size()));
             text(zip, "_rels/.rels", rootRels());
@@ -73,7 +74,7 @@ final class XlsxExportWriter implements ExportFormat.Writer {
                 continue;
             }
             writer.write("<c t=\"inlineStr\"><is><t xml:space=\"preserve\">");
-            writer.write(escape(truncate(cell)));
+            writer.write(ExportXml.escape(truncate(cell)));
             writer.write("</t></is></c>");
         }
         writer.write("</row>");
@@ -88,34 +89,6 @@ final class XlsxExportWriter implements ExportFormat.Writer {
             end--;
         }
         return value.substring(0, end);
-    }
-
-    /** XML 转义，并丢弃 XML 1.0 不允许的字符（控制字符、孤立代理、U+FFFE/U+FFFF）。 */
-    static String escape(String value) {
-        StringBuilder out = new StringBuilder(value.length() + 16);
-        for (int i = 0; i < value.length(); ) {
-            int cp = value.codePointAt(i);
-            i += Character.charCount(cp);
-            if (!allowedInXml(cp)) {
-                continue;
-            }
-            switch (cp) {
-                case '<' -> out.append("&lt;");
-                case '>' -> out.append("&gt;");
-                case '&' -> out.append("&amp;");
-                case '"' -> out.append("&quot;");
-                case '\r' -> out.append("&#13;");
-                default -> out.appendCodePoint(cp);
-            }
-        }
-        return out.toString();
-    }
-
-    private static boolean allowedInXml(int cp) {
-        return cp == 0x9 || cp == 0xA || cp == 0xD
-                || (cp >= 0x20 && cp <= 0xD7FF)
-                || (cp >= 0xE000 && cp <= 0xFFFD)
-                || (cp >= 0x10000 && cp <= 0x10FFFF);
     }
 
     private static String contentTypes(int sheets) {
@@ -149,7 +122,7 @@ final class XlsxExportWriter implements ExportFormat.Writer {
         StringBuilder xml = new StringBuilder(XML_DECL)
                 .append("<workbook xmlns=\"").append(NS_MAIN).append("\" xmlns:r=\"").append(NS_REL).append("\"><sheets>");
         for (int i = 0; i < sheets.size(); i++) {
-            xml.append("<sheet name=\"").append(escape(sheets.get(i).title())).append("\" sheetId=\"").append(i + 1)
+            xml.append("<sheet name=\"").append(ExportXml.escape(sheets.get(i).title())).append("\" sheetId=\"").append(i + 1)
                     .append("\" r:id=\"rId").append(i + 1).append("\"/>");
         }
         return xml.append("</sheets></workbook>").toString();

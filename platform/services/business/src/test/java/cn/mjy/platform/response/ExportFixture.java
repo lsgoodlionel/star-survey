@@ -168,6 +168,32 @@ public class ExportFixture {
         return rows;
     }
 
+    /** DOCX 里 {@code word/document.xml} 的全部文本片段，按出现顺序。 */
+    public static List<String> docxTexts(byte[] docx) {
+        List<String> texts = new ArrayList<>();
+        try (ZipInputStream in = new ZipInputStream(new java.io.ByteArrayInputStream(docx))) {
+            ZipEntry entry;
+            while ((entry = in.getNextEntry()) != null) {
+                if (!"word/document.xml".equals(entry.getName())) {
+                    continue;
+                }
+                javax.xml.parsers.DocumentBuilderFactory factory =
+                        javax.xml.parsers.DocumentBuilderFactory.newInstance();
+                factory.setNamespaceAware(true);
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                org.w3c.dom.NodeList all = factory.newDocumentBuilder()
+                        .parse(new java.io.ByteArrayInputStream(in.readAllBytes()))
+                        .getElementsByTagNameNS("*", "t");
+                for (int i = 0; i < all.getLength(); i++) {
+                    texts.add(all.item(i).getTextContent());
+                }
+            }
+        } catch (IOException | javax.xml.parsers.ParserConfigurationException | org.xml.sax.SAXException e) {
+            throw new IllegalStateException("could not read the docx", e);
+        }
+        return texts;
+    }
+
     public static String sha256(byte[] bytes) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));

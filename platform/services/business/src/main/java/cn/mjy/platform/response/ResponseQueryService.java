@@ -114,7 +114,8 @@ public class ResponseQueryService {
         }
         Map<Source, AnswerBatch> fetched = new LinkedHashMap<>();
         wanted.forEach((source, ids) -> fetched.put(source,
-                answers.read(source.engineInstanceId(), source.engineSid(), ids, source.fieldnames())));
+                answers.read(AnswerQuery.of(source.engineInstanceId(), source.engineSid(), ids,
+                        source.fieldnames()))));
         return slice.entries().stream().map(entry -> row(entry, slice, fetched, policy)).toList();
     }
 
