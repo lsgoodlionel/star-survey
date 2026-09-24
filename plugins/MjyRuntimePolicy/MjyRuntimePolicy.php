@@ -238,12 +238,23 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
             if ($surveyId <= 0) {
                 return;
             }
-            $this->readyEngine()->confirmEntry($surveyId, $this->sessionKey($surveyId));
+            $sessionKey = $this->sessionKey($surveyId);
+            $this->readyEngine()->confirmEntry($surveyId, $sessionKey);
+            $now = $this->engine()->clock()->nowUtc();
             $policy = $this->accessPolicies()->find($surveyId);
             if ($policy !== null) {
-                $now = $this->engine()->clock()->nowUtc();
                 $this->accessGate()->confirm($policy, $this->accessRequest($surveyId, $policy), $now);
-                $this->proctor()->onComplete($surveyId, $this->sessionKey($surveyId), $now);
+                $this->proctor()->ensureSchema();
+                $this->proctor()->onComplete($surveyId, $sessionKey, $now);
+            }
+        });
+        // 判分与限时策略无关：没有限时的考试一样要判。单独 safely 一次，
+        // 判分失败不该把"确认名额"也一起吞掉。
+        $this->safely(function () {
+            $surveyId = (int) $this->getEvent()->get('surveyId');
+            $responseId = $this->currentResponseId($surveyId);
+            if ($surveyId > 0 && $responseId !== null) {
+                $this->gradeResponse($surveyId, $responseId);
             }
         });
     }
@@ -301,9 +312,54 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     public function proctor(): MjyExamProctor
     {
         if ($this->proctor === null) {
-            $this->proctor = new MjyExamProctor(App()->getDb(), self::engineInstanceId());
+            $this->proctor = (new MjyExamProctor(App()->getDb(), self::engineInstanceId()))
+                ->withGrading(function (int $surveyId, int $responseId): void {
+                    // 判分失败不能连累收卷：卷子已经交了，分数可以事后重判。
+                    $this->safely(function () use ($surveyId, $responseId) {
+                        $this->gradeResponse($surveyId, $responseId);
+                    });
+                });
         }
         return $this->proctor;
+    }
+
+    /**
+     * 判一份卷（WP-10）。
+     *
+     * 答案只从答卷表读，对错只在这里推——作答者提交不了"我答对了"，答卷表里
+     * 根本没有可以放对错的列。成绩写进插件表，不往答卷表加列（理由见
+     * MjyExamScoreStore 的说明）。
+     */
+    public function gradeResponse(int $surveyId, int $responseId): ?MjyExamResult
+    {
+        $key = $this->examKeys()->find($surveyId);
+        if ($key === null) {
+            return null; // 这份问卷不是考试
+        }
+        $survey = Survey::model()->findByPk($surveyId);
+        if ($survey === null) {
+            return null;
+        }
+        $row = App()->getDb()->createCommand()
+            ->select('*')->from('{{responses_' . $surveyId . '}}')
+            ->where('id = :id', [':id' => $responseId])
+            ->queryRow();
+        if ($row === false) {
+            return null;
+        }
+        $answers = (new MjyExamAnswerReader(createFieldMap($survey, 'full', false, false, $survey->language)))
+            ->read($row, $key->questionCodes());
+        $result = (new MjyExamGrader())->grade($key, $answers);
+
+        $scores = $this->examScores();
+        $scores->ensureSchema();
+        $scores->save($surveyId, $responseId, $result, $key->digest(), $this->engine()->clock()->nowUtc());
+        return $result;
+    }
+
+    public function examScores(): MjyExamScoreStore
+    {
+        return new MjyExamScoreStore(App()->getDb(), self::engineInstanceId());
     }
 
     /**

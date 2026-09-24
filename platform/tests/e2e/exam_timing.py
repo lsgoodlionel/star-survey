@@ -44,6 +44,7 @@ from pubgw.model import SurveyDefinition  # noqa: E402
 from pubgw.policy.probe import HttpPolicyProbe  # noqa: E402
 from pubgw.publish import Publisher  # noqa: E402
 from pubgw.rpc import RemoteControlClient  # noqa: E402
+from exam_support import response_fields  # noqa: E402
 
 RESPONDER = "platform/tests/e2e/access_respond.php"
 PLUGIN = "MjyRuntimePolicy"
@@ -52,6 +53,8 @@ DURATION_SECONDS = 60
 #: 到点之后再多等几秒，避开秒级边界。
 SLACK_SECONDS = 8
 FORGED_TIME = "Mon, 01 Jan 2001 00:00:00 GMT"
+#: 第一题的正确答案。强制交卷之后这份卷子也要被判分（WP-10）。
+ANSWER_ONE = "MJYSENTINELTIMED3X7"
 
 
 class Context:
@@ -111,6 +114,12 @@ class Context:
             "SELECT submitdate FROM lime_responses_{} WHERE id = {}".format(survey_id, response_id))
         return None if value in ("", "NULL", None) else value[:19]
 
+    def score_of(self, survey_id: int, response_id: str) -> Optional[List[str]]:
+        rows = self.db.rows(
+            "SELECT score, max_score FROM lime_mjyruntimepolicy_exam_score "
+            "WHERE survey_id = {} AND response_id = {}".format(survey_id, response_id))
+        return rows[0] if rows else None
+
     def responses(self, survey_id: int) -> List[List[str]]:
         return self.db.rows(
             "SELECT id, submitdate FROM lime_responses_{} ORDER BY id".format(survey_id))
@@ -156,6 +165,12 @@ def definition(title: str, participants: List[Dict[str, str]]) -> Dict[str, Any]
                        "maxDurationSeconds": DURATION_SECONDS},
         },
         "participants": participants,
+        # 强制交卷之后也要判分（WP-10）：这条路径不经过 afterSurveyComplete，
+        # 只有监考在收卷时触发，所以必须单独有证据。
+        "exam": {
+            "examVersion": 1,
+            "answerKey": [{"question": "QONE", "correct": [ANSWER_ONE], "points": 5}],
+        },
     }
 
 
@@ -225,9 +240,10 @@ def main() -> int:
     print("T1: 进场并答完第一页", file=sys.stderr)
     jar_a = context.new_jar()
     saved_form = "/tmp/exam-timing-a-{}.json".format(sid)
+    fields = response_fields(context.db, sid)
     pages = context.respond(jar_a, [
         {"get": start_url(sid, tokens["A"])},
-        {"submit": {}, "move": "movenext"},
+        {"submit": {fields["QONE"]: ANSWER_ONE}, "move": "movenext"},
         {"saveForm": saved_form},
     ])
     context.check("T1: 进得去", pages[0]["kind"] == "survey", texts(pages))
@@ -274,7 +290,7 @@ def main() -> int:
     print("T9 准备：C 号答一页就关掉浏览器", file=sys.stderr)
     context.respond(context.new_jar(), [
         {"get": start_url(sid, tokens["C"])},
-        {"submit": {}, "move": "movenext"},
+        {"submit": {fields["QONE"]: ANSWER_ONE}, "move": "movenext"},
     ])
     attempt_c = context.attempt(sid, tokens["C"])
     context.check("T9 准备：C 号也有一份未交的答卷",
@@ -303,6 +319,11 @@ def main() -> int:
                   submitted_at == attempt_a["deadline_at"][:19],
                   {"submitdate": submitted_at, "deadline": attempt_a["deadline_at"]})
     context.check("T6: 考场记录记成了强制交卷", attempt_a["state"] == "forced", attempt_a)
+
+    graded = context.score_of(sid, attempt_a["response_id"])
+    context.check("T6: 强制交上来的卷子也判了分（WP-10）", graded is not None, attempt_a)
+    context.check("T6: 分数按答案键算出来的是 5",
+                  graded is not None and float(graded[0]) == 5.0, graded)
 
     late = context.exam_time(jar_a, sid)
     context.check("T6: 服务端报已到点且剩余为 0",
@@ -336,6 +357,10 @@ def main() -> int:
     context.check("T9: 收上来的 submitdate 同样是截止时刻",
                   submitted_c == attempt_c["deadline_at"][:19],
                   {"submitdate": submitted_c, "deadline": attempt_c["deadline_at"]})
+    graded_c = context.score_of(sid, attempt_c["response_id"])
+    context.check("T9: cron 收上来的卷子也判了分（WP-10）",
+                  graded_c is not None and float(graded_c[0]) == 5.0, graded_c)
+
     run_cron(context)
     context.check("T9: 再跑一次 cron 不会重复改动",
                   context.submitdate_of(sid, attempt_c["response_id"]) == submitted_c)

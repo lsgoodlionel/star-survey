@@ -19,9 +19,24 @@ class MjyExamProctor
     /** @var MjyExamAttemptStore */
     private $attempts;
 
+    /** @var callable|null 判分回调：(问卷号, 答卷行号) → void。没有答案键就不设。 */
+    private $grade;
+
     public function __construct(CDbConnection $db, string $engineInstanceId)
     {
         $this->attempts = new MjyExamAttemptStore($db, $engineInstanceId);
+    }
+
+    /**
+     * 挂上判分（WP-10）。强制交卷与正常交卷都要判，所以由监考统一触发：
+     * 收卷的那一刻正是这份卷子定稿的那一刻。
+     *
+     * @param callable $grade function(int $surveyId, int $responseId): void
+     */
+    public function withGrading(callable $grade): self
+    {
+        $this->grade = $grade;
+        return $this;
     }
 
     public function ensureSchema(): void
@@ -51,7 +66,10 @@ class MjyExamProctor
         $timer = new MjyExamTimer($deadline, $nowUtc);
         if ($timer->isExpired()) {
             // 先交卷，再由调用方拒绝。
-            $this->attempts->forceSubmit($surveyId, $sessionKey, $nowUtc);
+            $attempt = $this->attempts->find($surveyId, $sessionKey);
+            if ($this->attempts->forceSubmit($surveyId, $sessionKey, $nowUtc) && $attempt !== null) {
+                $this->gradeIfPossible($surveyId, $attempt['response_id']);
+            }
         }
         return $timer;
     }
@@ -61,6 +79,8 @@ class MjyExamProctor
      */
     public function onComplete(int $surveyId, string $sessionKey, string $nowUtc): void
     {
+        // 这里不判分：正常交卷由插件在 afterSurveyComplete 里判（那条路不依赖限时策略，
+        // 没有限时的考试也要判）。监考只负责两条强制交卷的路径。
         $this->attempts->markSubmitted($surveyId, $sessionKey, $nowUtc);
     }
 
@@ -73,6 +93,25 @@ class MjyExamProctor
      */
     public function reap(int $surveyId, string $nowUtc): int
     {
-        return $this->attempts->reap($surveyId, $nowUtc);
+        $settled = 0;
+        foreach ($this->attempts->expired($surveyId, $nowUtc) as $attempt) {
+            if ($this->attempts->forceSubmit($surveyId, $attempt['session_key'], $nowUtc)) {
+                $this->gradeIfPossible($surveyId, $attempt['response_id']);
+            }
+            $settled++;
+        }
+        return $settled;
+    }
+
+    /**
+     * 判分失败不影响收卷：卷子已经交上去了，分数可以事后重判；
+     * 反过来，为了判分把收卷也一起回滚才是真的丢东西。
+     */
+    private function gradeIfPossible(int $surveyId, ?int $responseId): void
+    {
+        if ($this->grade === null || $responseId === null) {
+            return;
+        }
+        ($this->grade)($surveyId, $responseId);
     }
 }
