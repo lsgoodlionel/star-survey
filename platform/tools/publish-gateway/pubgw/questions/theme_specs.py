@@ -9,8 +9,11 @@ from typing import Any, Dict, List
 
 from ..model import Question
 from .theme_columns import _check_columns, _lower_table, _parse_columns
+from .theme_dictionary import cascading_columns, check_cascading, lower_cascading
 from .theme_kit import (
-    CELL_MAX_LENGTH, COLUMNS_ATTRIBUTE, HARD_MAX_ROWS, HIGHLIGHT_SEGMENTS_ATTRIBUTE,
+    CELL_MAX_LENGTH, COLUMNS_ATTRIBUTE, DICTIONARY_ATTRIBUTE, DICTIONARY_DIGEST_ATTRIBUTE,
+    DICTIONARY_LEVELS_ATTRIBUTE, DICTIONARY_VERSION_ATTRIBUTE, HARD_MAX_ROWS,
+    HIGHLIGHT_SEGMENTS_ATTRIBUTE,
     HIGHLIGHT_TEXT_ATTRIBUTE, Issue, LOOP_OBJECTS_ATTRIBUTE, Lowering, MAX_ROWS_ATTRIBUTE,
     MIN_ROWS_ATTRIBUTE, MODEL_FEATURES_ATTRIBUTE, MODEL_NAME_ATTRIBUTE, OPTION_REQUIRED,
     OPTION_VALUE, OptionSpec, PK_ITEMS_ATTRIBUTE,
@@ -296,6 +299,27 @@ _THEMES = (
         side_columns=psych_trial_columns,
     ),
     ThemeSpec(
+        name="mjy-cascading-select",
+        label="多级下拉",
+        requirement="R02-03",
+        types=("T",),
+        options=(
+            _structure_version(),
+            # 引用哪本字典是作者写的；版本与摘要由平台在发布时固化
+            # （ADR 0019 决定 2），到了网关它们已经是定义的一部分，所以在这里是必填的。
+            OptionSpec("dictionary", "text", attribute=DICTIONARY_ATTRIBUTE, required=True, max_length=64),
+            OptionSpec("dictionaryVersion", "text", attribute=DICTIONARY_VERSION_ATTRIBUTE, required=True,
+                       max_length=32, pattern=STRUCTURE_VERSION_PATTERN,
+                       pattern_hint="必须以字母或数字开头，只含字母数字与 . _ -"),
+            OptionSpec("dictionaryDigest", "text", attribute=DICTIONARY_DIGEST_ATTRIBUTE, required=True,
+                       max_length=32),
+            OptionSpec("levels", "list", required=True),
+        ),
+        check=check_cascading,
+        lower=lower_cascading,
+        side_columns=cascading_columns,
+    ),
+    ThemeSpec(
         name="mjy-model-kano",
         label="专业模型：KANO",
         requirement="R02-47",
@@ -327,5 +351,7 @@ MANAGED_ATTRIBUTES = frozenset(
      SHELF_IMAGE_ATTRIBUTE, SHELF_PRODUCTS_ATTRIBUTE,
      HIGHLIGHT_TEXT_ATTRIBUTE, HIGHLIGHT_SEGMENTS_ATTRIBUTE, PSYCH_TRIALS_ATTRIBUTE,
      MODEL_NAME_ATTRIBUTE, MODEL_FEATURES_ATTRIBUTE,
+     DICTIONARY_ATTRIBUTE, DICTIONARY_VERSION_ATTRIBUTE, DICTIONARY_DIGEST_ATTRIBUTE,
+     DICTIONARY_LEVELS_ATTRIBUTE,
      "mjy_option_groups", "commented_checkbox"}
 )

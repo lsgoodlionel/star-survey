@@ -37,6 +37,8 @@ THEME_MARKERS = (
         "mjy-repeating-table.js",
         "data-mjy-loop-rating",
         "mjy-loop-rating.js",
+        "data-mjy-cascading-select",
+        "mjy-cascading-select.js",
         "data-mjy-image-pk",
         "mjy-image-pk.js",
         "data-mjy-shelf",
@@ -101,6 +103,12 @@ PSYCH_ROWS = [{"trial": "T1", "key": "left", "rt": "0"},
 KANO_ROWS = [{"feature": "F1", "functional": "like", "dysfunctional": "dislike"},
              {"feature": "F2", "functional": "neutral", "dysfunctional": "live"}]
 
+#: 多级下拉（R02-03）：整题一行，一级一列。两道题分别用同一本字典的两版，
+#: 专门用来证明两版在引擎上共存且互不串味。
+REGION_ROWS = [{"L1": "440000", "L2": "440100", "L3": "440103"}]
+#: 440104 只在 2023.1 里有，2024.1 里没有——跨版本的篖改用它。
+REGION_OLD_ROWS = [{"L1": "440000", "L2": "440100", "L3": "440104"}]
+
 
 def valid_pages() -> List[Dict[Column, str]]:
     return [
@@ -123,6 +131,8 @@ def valid_pages() -> List[Dict[Column, str]]:
             ("QPSY", "", 0): envelope(PSYCH_ROWS),
             ("QKANO", "", 0): envelope(KANO_ROWS),
             ("QHEAT", "", 0): envelope(HEAT_ROWS),
+            ("QREGION", "", 0): envelope(REGION_ROWS),
+            ("QREGION2", "", 0): envelope(REGION_OLD_ROWS),
         },
     ]
 
@@ -147,6 +157,9 @@ def blank_pages() -> List[Dict[Column, str]]:
             ("QPSY", "", 0): envelope(PSYCH_ROWS),
             ("QKANO", "", 0): envelope(KANO_ROWS),
             ("QHEAT", "", 0): envelope([{"x": "0.2500", "y": "0.7500"}]),
+            # 多级下拉的行数被钉死成 1，且每一级都必填，没有「取下限」这回事。
+            ("QREGION", "", 0): envelope(REGION_ROWS),
+            ("QREGION2", "", 0): envelope(REGION_OLD_ROWS),
         },
     ]
 
@@ -192,6 +205,24 @@ TAMPERS = (
             {("QHEAT", "", 0): envelope(HEAT_ROWS + [{"x": "0.1", "y": "0.1"}, {"x": "0.2", "y": "0.2"}])}),
     _tamper("heatmap: a coordinate that is not a number", 1,
             {("QHEAT", "", 0): envelope([{"x": "left", "y": "0.5000"}])}),
+    # 多级下拉（R02-03）：服务端判的是**整条路径**，不是逐格。
+    # 前端级联根本产生不了这几种组合，它们只能是手写信封或改 DOM 来的。
+    _tamper("cascading select: a city from another province", 1,
+            {("QREGION", "", 0): envelope([{"L1": "110000", "L2": "440100", "L3": "440103"}])}),
+    _tamper("cascading select: a district that does not exist", 1,
+            {("QREGION", "", 0): envelope([{"L1": "440000", "L2": "440100", "L3": "440199"}])}),
+    # 440104 只存在于 2023.1，QREGION 用的是 2024.1——跨版本的节点进不来。
+    _tamper("cascading select: a node that only exists in the other dictionary version", 1,
+            {("QREGION", "", 0): envelope([{"L1": "440000", "L2": "440100", "L3": "440104"}])}),
+    _tamper("cascading select: a level skipped", 1,
+            {("QREGION", "", 0): envelope([{"L1": "440000", "L2": "440103", "L3": "440103"}])}),
+    _tamper("cascading select: the path does not start at a root", 1,
+            {("QREGION", "", 0): envelope([{"L1": "440100", "L2": "440103", "L3": "440103"}])}),
+    _tamper("cascading select: a required level left empty", 1,
+            {("QREGION", "", 0): envelope([{"L1": "440000", "L2": "440100", "L3": ""}])}),
+    _tamper("cascading select: one row over the pinned row count", 1,
+            {("QREGION", "", 0): envelope([{"L1": "440000", "L2": "440100", "L3": "440103"},
+                                           {"L1": "110000", "L2": "110100", "L3": "110101"}])}),
     # 循环评价（R02-11）：对象列是枚举＋唯一，行数被钉死成对象个数。
     _tamper("loop rating: a score outside the declared scale", 1,
             {("QLOOP", "", 0): envelope([dict(LOOP_ROWS[0], price="9"), LOOP_ROWS[1]])}),

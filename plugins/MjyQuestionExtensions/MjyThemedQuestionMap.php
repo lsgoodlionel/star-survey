@@ -34,6 +34,12 @@ class MjyThemedQuestionMap
     public const MODEL_KANO_THEME = 'mjy-model-kano';
 
     /**
+     * 多级下拉（R02-03）：整题一行，一级一列。与别的副表题型的区别是取值集合不在列定义里，
+     * 而在 MjyDictionaryStore 里（ADR 0019）——行政区划有数千个节点。
+     */
+    public const CASCADING_SELECT_THEME = 'mjy-cascading-select';
+
+    /**
      * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
      * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应
      * （网关侧 tests/test_plugin_registry_parity.py 按源码文本对一遍：
@@ -48,6 +54,7 @@ class MjyThemedQuestionMap
         self::TEXT_HIGHLIGHT_THEME,
         self::PSYCH_TRIAL_THEME,
         self::MODEL_KANO_THEME,
+        self::CASCADING_SELECT_THEME,
     ];
 
     /** @var array<string, array<string, mixed>> */

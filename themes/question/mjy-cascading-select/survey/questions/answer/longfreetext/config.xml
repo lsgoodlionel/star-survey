@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 多级下拉（需求 R02-03）：省 / 市 / 区这类层级字典的逐级选择。
+
+  与别的 mjy- 副表主题的根本差别只有一条：**取值集合不在题目属性里**。行政区划到区县
+  有三千多个节点，既超过枚举列 200 个取值的上限，也不该每道题重复一份、每次发布重传一份。
+  所以列的类型是 dict（这一列的合法取值＝某本字典某一版的第 N 层），字典本身作为快照随
+  .lss 的 plugin_settings 下发，由插件物化进带索引的表（ADR 0019、platform/contracts/
+  question-extension-tables-v1.md）。
+
+  作答页因此**不能**一次拿到全部选项：脚本逐级向插件的 dictionaryNodes 端点按页取，
+  选了上一级才去取下一级。关掉 JavaScript 时 textarea 直接可见，作答者仍能手写 JSON 信封——
+  服务端校验（MjyQuestionExtensions::beforeSurveyPage）对两条路径一视同仁，
+  逐级核对这条路径在**那一版**字典里真实存在且自上而下相连。
+
+  整题一行：一个人只在一个地方，行数上下限由平台钉死成 1，作答者改不了。
+
+  answercolumndefinition 把答卷列从默认的 text 提升为 mediumtext
+  （application/models/QuestionTheme.php:775）。这个标签**不能**用 CDATA 包起来。
+-->
+<config>
+    <metadata>
+        <name>mjy-cascading-select</name>
+        <type>question_theme</type>
+        <title>MJY 多级下拉</title>
+        <creationDate>2026-09-24</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>多级下拉：逐级从平台字典里选，取值集合按页取，服务端逐级核对整条路径</description>
+        <questionType>T</questionType>
+        <group>Text questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>0</assessable>
+        <class>text-long mjy-cascading-select</class>
+        <answercolumndefinition>mediumtext</answercolumndefinition>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-cascading-select.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-cascading-select.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_table_columns</name>
+            <category>MJY 多级下拉</category>
+            <sortorder>10</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>列定义（JSON）</caption>
+            <help>一级一列，type 恒为 dict，取值由 (字典, 版本, 层) 决定</help>
+        </attribute>
+        <attribute>
+            <name>mjy_dictionary</name>
+            <category>MJY 多级下拉</category>
+            <sortorder>20</sortorder>
+            <inputtype>text</inputtype>
+            <default></default>
+            <caption>引用的字典</caption>
+            <help>平台字典代码，如 cn-admin-divisions</help>
+        </attribute>
+        <attribute>
+            <name>mjy_dictionary_version</name>
+            <category>MJY 多级下拉</category>
+            <sortorder>30</sortorder>
+            <inputtype>text</inputtype>
+            <default></default>
+            <caption>字典版本</caption>
+            <help>由平台在发布时固化，作者改不了；已发布的问卷永远按这一版判定</help>
+        </attribute>
+        <attribute>
+            <name>mjy_dictionary_digest</name>
+            <category>MJY 多级下拉</category>
+            <sortorder>40</sortorder>
+            <inputtype>text</inputtype>
+            <default></default>
+            <caption>字典内容摘要</caption>
+            <help>插件据它判断引擎上装着的那份是不是同一份</help>
+        </attribute>
+        <attribute>
+            <name>mjy_dictionary_levels</name>
+            <category>MJY 多级下拉</category>
+            <sortorder>50</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>各级标题（JSON）</caption>
+            <help>形如 ["省","市","区"]，一级一列</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_min_rows</name>
+            <category>MJY 多级下拉</category>
+            <sortorder>60</sortorder>
+            <inputtype>integer</inputtype>
+            <default>1</default>
+            <caption>最少行数</caption>
+            <help>由平台钉死成 1：一个人只在一个地方</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_max_rows</name>
+            <category>MJY 多级下拉</category>
+            <sortorder>70</sortorder>
+            <inputtype>integer</inputtype>
+            <default>1</default>
+            <caption>最多行数</caption>
+            <help>同上；服务端强制，浏览器端只是提示</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

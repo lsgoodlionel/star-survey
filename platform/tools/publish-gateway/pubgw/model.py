@@ -185,6 +185,9 @@ class SurveyDefinition:
     #: 计分表（WP-03.3，v2 专有）。语义校验在 logic/scoring.py，展开成计算值题后
     #: 与作者手写的 DSL 走同一条解析、检查、编译链路。
     scoring: Tuple[Score, ...] = ()
+    #: 层级字典快照（R02-03，ADR 0019）。平台在发布时按当前版本物化进来；
+    #: 形状校验在 questions/theme_dictionary.py，这里只保存副本。没有多级下拉的定义里没有这个键。
+    dictionaries: Tuple[Any, ...] = ()
 
     @property
     def has_logic(self) -> bool:
@@ -238,7 +241,16 @@ class SurveyDefinition:
             branding=copy.deepcopy(payload.get("branding")),
             translations=copy.deepcopy(payload.get("translations")),
             scoring=_scoring(payload.get("scoring"), is_logic),
+            dictionaries=_dictionaries(payload.get("dictionaries")),
         )
+
+
+def _dictionaries(payload: Any) -> Tuple[Any, ...]:
+    if payload is None:
+        return ()
+    if not isinstance(payload, list):
+        raise DefinitionError("'dictionaries' must be a list, got {}".format(type(payload).__name__))
+    return tuple(copy.deepcopy(entry) for entry in payload)
 
 
 def _scoring(payload: Any, is_logic: bool) -> Tuple[Score, ...]:

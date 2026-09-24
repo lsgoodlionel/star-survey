@@ -25,6 +25,11 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 
 切片 02.5（✔4）交付 P 类里**没有外部阻塞**的几条，见第三之五节。
 
+字典车道（✔5）解除 R02-03 的阻塞：平台侧的层级字典服务（版本化、按父节点分页、关键字搜索、
+服务端路径判定）落地，多级下拉随之交付，见[ADR 0019](../adr/0019-platform-dictionary.md)与
+[平台字典契约](../../contracts/platform-dictionary-v1.md)。`run-question-themes.sh` 的场景库里
+加了两道多级下拉题（分别引用同一本字典的两版），双库各 248 → 278 项。
+
 ## 二、逐条映射
 
 列说明：**引擎承载**＝题型字母＋关键属性；**答案代码**＝答卷列里存的值；**缺失值**见第四节的三种状态；
@@ -34,7 +39,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 |---|---|---|---|---|---|---|
 | R02-01 | 单选 | N | ✔ | `L` 单选按钮、`!` 下拉；`other` 开「其他」 | 选项代码（≤5 位字母数字）；其他＝`-oth-` | `""`；其他文本 `other` |
 | R02-02 | 多选 | N | ✔ | `M`／`P`（带评论）；`min_answers`／`max_answers`；子题 `exclusive:true`→`exclude_all_others`＋服务端互斥规则 | 每个选项一列，选中＝`Y`，未选＝`""` | 子题代码；`P` 另有 `代码comment`；其他 `other`（`P` 再加 `othercomment`） |
-| R02-03 | 多级下拉 | P | | 字典版本＝副表的结构版本（已落地）；级联清值与字典服务仍缺，放 02.4 | — | 后续 |
+| R02-03 | 多级下拉 | P | ✔5 | `T`＋新主题 `mjy-cascading-select`＋副表；整题一行、一级一列，列类型 `dict`——取值集合是平台字典某一版的第 N 层，不在题目属性里（[ADR 0019](../adr/0019-platform-dictionary.md)） | JSON 信封，整题一行 | `""`；各级代码在副表 |
 | R02-04 | 选项分类 | T | ✔3 | `L`／`M`＋新主题 `mjy-grouped-options`：分组必须**恰好覆盖**全部选项（单选按答案选项、多选按子题），否则 422 | 同 R02-01／R02-02 | `""`；多选为子题代码 |
 | R02-05 | 漏斗选项 | L | | 原生 `array_filter`，但它是表达式属性，v2 禁止直写；归逻辑 DSL 的 `filter` 切片（WP-03） | — | 后续 |
 | R02-06 | 填空与多项填空 | N | ✔ | `S` 短文本、`Q` 多项填空、`K` 多项数值；`maxLength`、`format`（见第三节）编译成服务端校验 | 原文 | `""`；`Q`/`K` 子题代码 |
@@ -126,7 +131,13 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | `mjy-shelf` | R02-18 | `T` | `structureVersion`、`image`、`products`（均必填）、`minPicks`、`maxPicks`、`maxQuantity` | `mjy_table_columns`（`product` 枚举＋唯一、`qty` 整数）、`mjy_shelf_image`、`mjy_shelf_products`、`mjy_structure_version`、行数上下限 |
 | `mjy-text-highlight` | R02-22 | `T` | `structureVersion`、`text`、`segments`、`tags`（均必填）、`minMarks`、`maxMarks` | `mjy_table_columns`（`segment` 枚举＋唯一、`tag` 枚举）、`mjy_highlight_text`、`mjy_highlight_segments`、`mjy_structure_version`、行数上下限 |
 | `mjy-psych-trial` | R02-46 | `T` | `structureVersion`、`trials`、`keys`（均必填）、`maxReactionMs` | `mjy_table_columns`（`trial` 枚举＋唯一、`key` 枚举、`rt` 有界整数）、`mjy_psych_trials`、`mjy_structure_version`，行数上下限钉死成试次个数 |
+| `mjy-cascading-select` | R02-03 | `T` | `structureVersion`、`dictionary`、`dictionaryVersion`、`dictionaryDigest`、`levels`（均必填；后两项由平台在发布时固化，作者写了会被摘掉） | `mjy_table_columns`（一级一列，`type: "dict"`）、`mjy_dictionary`、`mjy_dictionary_version`、`mjy_dictionary_digest`、`mjy_dictionary_levels`、`mjy_structure_version`，行数上下限钉死成 1 |
 | `mjy-model-kano` | R02-47 | `T` | `structureVersion`、`features`（均必填）——**量表不是选项** | `mjy_table_columns`（`feature` 枚举＋唯一、`functional`／`dysfunctional` 枚举到固定量表）、`mjy_model_name`、`mjy_model_features`、`mjy_structure_version`，行数上下限钉死成功能点个数 |
+
+多级下拉另有一组定义级的 422：`E_DICTIONARY_MISSING`（引用的那一版没随定义下发）、
+`E_DICTIONARY_DIGEST`（摘要对不上）、`E_DICTIONARY_SHAPE`（快照自己不成立）、
+`E_DICTIONARY_DEPTH`（声明的级数多过字典的层数）、`E_DICTIONARY_UNUSED`（下发了没人用），
+见[平台字典契约](../../contracts/platform-dictionary-v1.md)第四节。
 
 422 错误码：`E_THEME_UNKNOWN`（`mjy-` 前缀却没注册＝拼错，目标实例上会静默降级）、
 `E_THEME_TYPE_MISMATCH`、`E_THEME_OPTIONS_UNSUPPORTED`、`E_THEME_OPTION_UNKNOWN`、
@@ -142,6 +153,7 @@ R02-11 循环评价、R02-17 图片 PK 与 R02-18 货架题，见第三之四节
 | `mjy-inline-blank` | 没勾选却填了填空、填空超长 | 原生 `commented_checkbox=checked`＋编译出的长度规则 |
 | `mjy-matrix-stepper` | 跳过没走到的行 | 引擎必答在服务端重算（隐藏的行照样提交） |
 | `mjy-repeating-table`／`mjy-heatmap`／`mjy-loop-rating`／`mjy-image-pk`／`mjy-shelf`／`mjy-text-highlight`／`mjy-psych-trial`／`mjy-model-kano` | 整块 JSON 信封 | 插件 `beforeSurveyPage` 逐格重算并归一化；不合法时清空＋题目必答把人留在本页（ADR 0006 限制 1，所以这几类题必须设为必答） |
+| `mjy-cascading-select` | 整块 JSON 信封；改 DOM 把别的省的市塞进第二级 | 同上，外加**整条路径**判定：逐级核对代码在这一版字典里、层深对得上、父节点恰好是上一级。查不到就拒（失败关闭） |
 
 ## 三之三、副表的存储契约（给读端）
 
