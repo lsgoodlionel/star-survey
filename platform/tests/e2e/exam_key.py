@@ -248,6 +248,13 @@ _REQUEST_NOISE = [
     (re.compile(r"\b[0-9a-f]{32,64}\b"), "HEX"),
     (re.compile(r"\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\b"), "TIME"),
     (re.compile(r"\b\d{10,}\b"), "EPOCH"),
+    # 每次请求都重新生成的随机记号。**必须按名字抹**，不能指望"位数够长"那条规则：
+    # LEMpostKey 有时 9 位有时 10 位，靠位数抹会时灵时不灵，让 K2 变成偶发失败
+    # （真的偶发过一次）。start_time 同理，按名字抹才稳定。
+    (re.compile(r'value="[^"]*"\s+name="LEMpostKey"'), "LEMPOSTKEY"),
+    (re.compile(r'name="LEMpostKey"\s+value="[^"]*"'), "LEMPOSTKEY"),
+    (re.compile(r'value="[^"]*"\s+name="start_time"'), "STARTTIME"),
+    (re.compile(r'name="start_time"\s+value="[^"]*"'), "STARTTIME"),
 ]
 
 
