@@ -315,6 +315,21 @@ def parse_upload_request(body: bytes) -> UploadRequest:
     return UploadRequest(instance_id, survey_id, generation, tuple(sorted(set(ids))), "")
 
 
+def _urlopen(url: str) -> bytes:
+    """生产用的取回。超时比副表作答那条长：一件上传可以到 16 MiB。
+
+    错误里**刻意不带** ``str(error)``——它可能含完整 URL（内有 ``sig``）。类名足够区分失败类型。
+    """
+    from http.client import HTTPException
+    from urllib.request import Request, urlopen
+
+    try:
+        with urlopen(Request(url, method="GET"), timeout=_TIMEOUT_SECONDS) as response:
+            return response.read()
+    except (OSError, HTTPException) as error:
+        raise ChannelError("upload channel transport failed ({})".format(type(error).__name__)) from None
+
+
 def _http_channel(config: EngineConfig, now: Callable[[], float]) -> Optional[UploadSessionClient]:
     if not config.channel_secret:
         return None

@@ -190,6 +190,24 @@ class HttpResponderUploadSourceTest {
                 .isInstanceOf(ResponderUploadsUnavailableException.class);
     }
 
+    /**
+     * 应答体量必须在<b>解析之前</b>就封顶（独立安全审查的 MEDIUM）。
+     *
+     * <p>原先先把整个应答读成字节数组再 {@code readTree}，只有之后才看 {@code sizeBytes}——
+     * 一个被攻破的插件返回一坨超大的 {@code contentBase64}，平台就得先把它整个读进内存、
+     * 再整棵树解析完，才走到那个上限判断。判断放得太晚等于没有判断。
+     */
+    @Test
+    void agatewayReplyLargerThanTheCapIsRefusedWithoutBeingParsed() {
+        reply = "{\"uploadToken\":\"" + TOKEN + "\",\"questionCode\":\"REC1\",\"responseId\":7,"
+                + "\"originalName\":\"a\",\"extension\":\"webm\",\"sizeBytes\":1,\"contentBase64\":\""
+                + "A".repeat((int) (HttpResponderUploadSource.MAX_RESPONSE_BYTES + 1024)) + "\"}";
+
+        assertThatThrownBy(() -> source().content(INSTANCE, SID, GENERATION, TOKEN))
+                .isInstanceOf(ResponderUploadsUnavailableException.class)
+                .hasMessageContaining("too large");
+    }
+
     @Test
     void anEmptyPageNeverLeavesTheProcess() {
         assertThat(source().manifest(INSTANCE, SID, GENERATION, List.of())).isEmpty();

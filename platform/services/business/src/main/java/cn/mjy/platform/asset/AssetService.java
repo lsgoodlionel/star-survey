@@ -8,6 +8,7 @@ import cn.mjy.platform.shared.tenant.TenantScope;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -184,13 +185,27 @@ public class AssetService {
                 // 与"不存在"同一句话：端点会把它变成逐字节相同的 404。
                 throw notFound(assetId);
             }
-            if (expected == AssetOrigin.RESPONDENT
-                    && (row.respondentKey() == null || !row.respondentKey().equals(fingerprint))) {
+            if (expected == AssetOrigin.RESPONDENT && !sameFingerprint(row.respondentKey(), fingerprint)) {
                 throw notFound(assetId);
             }
             return assets.findVersion(assetId, versionNo).orElseThrow(() -> notFound(assetId));
         });
         return read(assetId, versionNo, version);
+    }
+
+    /**
+     * 指纹比对用<b>定时安全比较</b>，与签名那道保持同一种做法。
+     *
+     * <p>走到这一步的人本来就已经过了签名那关（要过它得先知道这个指纹），
+     * 所以今天并不构成可用的侧信道。用常量时间是为了这句话在<b>签发逻辑将来被改坏之后</b>
+     * 依然成立——这道闸存在的理由正是"两道互不依赖"（决定 9）。
+     */
+    private static boolean sameFingerprint(String stored, String presented) {
+        if (stored == null || presented == null) {
+            return false;
+        }
+        return MessageDigest.isEqual(stored.getBytes(StandardCharsets.UTF_8),
+                presented.getBytes(StandardCharsets.UTF_8));
     }
 
     private AssetContent read(UUID assetId, int versionNo, AssetVersionView version) {

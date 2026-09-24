@@ -1,6 +1,7 @@
 package cn.mjy.platform.asset;
 
 import cn.mjy.platform.shared.TenantContext;
+import cn.mjy.platform.tenant.engine.EngineInstanceService;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -36,6 +37,7 @@ public class ResponderUploadPuller {
     private final ResponderUploadSource uploads;
     private final RespondentTokens respondents;
     private final ResponderAssetService assets;
+    private final EngineInstanceService engines;
 
     /**
      * 「这份答卷是用哪个邀请码答的」这条窄接缝。生产实现是
@@ -49,14 +51,18 @@ public class ResponderUploadPuller {
     }
 
     public ResponderUploadPuller(ResponderUploadSource uploads, RespondentTokens respondents,
-            ResponderAssetService assets) {
+            ResponderAssetService assets, EngineInstanceService engines) {
         this.uploads = uploads;
         this.respondents = respondents;
         this.assets = assets;
+        this.engines = engines;
     }
 
     public ResponderUploadPullResult pull(TenantContext ctx, String engineInstanceId, long engineSid,
             String generation, List<Long> responseIds) {
+        // **第一件事**：那台引擎是不是你的。放在出网之前，否则别人租户的作答者令牌与文件名
+        // 已经进过本租户的进程了（独立安全审查的 CRITICAL）。
+        requireOwnEngine(ctx, engineInstanceId);
         if (responseIds.isEmpty()) {
             return new ResponderUploadPullResult(0, 0, 0);
         }
@@ -89,6 +95,23 @@ public class ResponderUploadPuller {
         log.info("responder upload pull on {} sid {}: {} ingested, {} already present, {} refused",
                 engineInstanceId, engineSid, ingested, skipped, refused);
         return new ResponderUploadPullResult(ingested, skipped, refused);
+    }
+
+    /**
+     * 引擎坐标是<b>调用方给的</b>，因此必须核对归属（独立安全审查的 CRITICAL）。
+     *
+     * <p>本仓库其余每一条读路径都不接受调用方直接给引擎坐标——它们从租户作用域内的问卷行
+     * 解析出来（{@code ResponseQueryService} 那条）。拉取端点是唯一的例外，
+     * 因为「哪一页答卷」这件事此刻只有调用方知道；例外就得自己补上判定。
+     *
+     * <p>判定不自己写 SQL：{@code engine_instance} 本来就带 {@code UNIQUE (tenant_id, id)}
+     * 与行级安全，{@link EngineInstanceService#find} 在租户作用域内查——查不到就说明不是你的。
+     * 不区分"不是你的"与"压根没有"：与资产那边同一句话，免得靠报错枚举别人的实例标识。
+     */
+    private void requireOwnEngine(TenantContext ctx, String engineInstanceId) {
+        if (engineInstanceId == null || engines.find(ctx.tenantId(), engineInstanceId).isEmpty()) {
+            throw new AssetNotFoundException("no such engine instance in this tenant: " + engineInstanceId);
+        }
     }
 
     /** 已经拉过哪些：判据是来源证据表，不是本地缓存。 */

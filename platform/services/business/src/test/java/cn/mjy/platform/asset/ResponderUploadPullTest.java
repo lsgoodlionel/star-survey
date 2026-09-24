@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.mjy.platform.shared.TenantContext;
+import cn.mjy.platform.tenant.engine.EngineInstanceService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,7 +23,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 @AssetIntegrationTest
 class ResponderUploadPullTest {
 
-    private static final String INSTANCE = "engine-a";
     private static final long SID = 4242L;
     private static final String GENERATION = "gen-1";
     private static final String ALICE = "invite-code-alice";
@@ -37,11 +37,19 @@ class ResponderUploadPullTest {
     @Autowired
     private AssetTickets tickets;
 
+    @Autowired
+    private EngineInstanceService engines;
+
     private TenantContext owner;
+
+    /** 引擎实例随用例新建：拉取要求那台引擎属于调用方这个租户（独立安全审查的 CRITICAL）。 */
+    private String instance;
 
     @BeforeEach
     void seed() {
-        owner = fixture.newTenant();
+        AssetFixture.EngineWorkspace ws = fixture.newTenantWithEngine();
+        owner = ws.owner();
+        instance = ws.engineInstanceId();
     }
 
     @Test
@@ -53,7 +61,7 @@ class ResponderUploadPullTest {
                 .with(bobs, 9L, "REC1", AssetFixture.webm());
         ResponderUploadPuller puller = puller(source, Map.of(7L, ALICE, 9L, BOB));
 
-        ResponderUploadPullResult result = puller.pull(owner, INSTANCE, SID, GENERATION, List.of(7L, 9L));
+        ResponderUploadPullResult result = puller.pull(owner, instance, SID, GENERATION, List.of(7L, 9L));
 
         assertThat(result.ingested()).isEqualTo(2);
         assertThat(result.skipped()).isZero();
@@ -69,14 +77,14 @@ class ResponderUploadPullTest {
         UUID token = UUID.randomUUID();
         FakeUploadSource source = new FakeUploadSource().with(token, 7L, "REC1", AssetFixture.webm());
         ResponderUploadPuller puller = puller(source, Map.of(7L, ALICE));
-        puller.pull(owner, INSTANCE, SID, GENERATION, List.of(7L));
+        puller.pull(owner, instance, SID, GENERATION, List.of(7L));
 
-        ResponderUploadPullResult again = puller.pull(owner, INSTANCE, SID, GENERATION, List.of(7L));
+        ResponderUploadPullResult again = puller.pull(owner, instance, SID, GENERATION, List.of(7L));
 
         assertThat(again.ingested()).isZero();
         assertThat(again.skipped()).isEqualTo(1);
         assertThat(source.contentCalls()).containsExactly(token);
-        assertThat(responderAssets.forResponse(owner, INSTANCE, SID, GENERATION, 7L)).hasSize(1);
+        assertThat(responderAssets.forResponse(owner, instance, SID, GENERATION, 7L)).hasSize(1);
     }
 
     /** 认不出作答者（匿名卷、没用邀请码进场）：照样入库，但没有绑定，签不出票。 */
@@ -85,7 +93,7 @@ class ResponderUploadPullTest {
         UUID token = UUID.randomUUID();
         FakeUploadSource source = new FakeUploadSource().with(token, 7L, "REC1", AssetFixture.webm());
 
-        puller(source, Map.of()).pull(owner, INSTANCE, SID, GENERATION, List.of(7L));
+        puller(source, Map.of()).pull(owner, instance, SID, GENERATION, List.of(7L));
 
         assertThat(responderAssets.respondentKeyOf(owner, token)).isEmpty();
         assertThatThrownBy(() -> responderAssets.mintTicket(owner, token, 1))
@@ -97,7 +105,7 @@ class ResponderUploadPullTest {
     void amanifestFailureAbortsTheWholePull() {
         ResponderUploadPuller puller = puller(new ExplodingUploadSource(), Map.of(7L, ALICE));
 
-        assertThatThrownBy(() -> puller.pull(owner, INSTANCE, SID, GENERATION, List.of(7L)))
+        assertThatThrownBy(() -> puller.pull(owner, instance, SID, GENERATION, List.of(7L)))
                 .isInstanceOf(ResponderUploadsUnavailableException.class);
     }
 
@@ -111,11 +119,11 @@ class ResponderUploadPullTest {
                 .with(bad, 7L, "REC2", AssetFixture.svg());
 
         ResponderUploadPullResult result = puller(source, Map.of(7L, ALICE))
-                .pull(owner, INSTANCE, SID, GENERATION, List.of(7L));
+                .pull(owner, instance, SID, GENERATION, List.of(7L));
 
         assertThat(result.ingested()).isEqualTo(1);
         assertThat(result.refused()).isEqualTo(1);
-        assertThat(responderAssets.forResponse(owner, INSTANCE, SID, GENERATION, 7L)).hasSize(1);
+        assertThat(responderAssets.forResponse(owner, instance, SID, GENERATION, 7L)).hasSize(1);
     }
 
     /** 空页不出网。 */
@@ -124,14 +132,14 @@ class ResponderUploadPullTest {
         FakeUploadSource source = new FakeUploadSource();
 
         ResponderUploadPullResult result = puller(source, Map.of())
-                .pull(owner, INSTANCE, SID, GENERATION, List.of());
+                .pull(owner, instance, SID, GENERATION, List.of());
 
         assertThat(result.ingested()).isZero();
         assertThat(source.manifestCalls()).isZero();
     }
 
     private ResponderUploadPuller puller(ResponderUploadSource source, Map<Long, String> respondents) {
-        return new ResponderUploadPuller(source, (instance, sid, ids) -> respondents, responderAssets);
+        return new ResponderUploadPuller(source, (instance, sid, ids) -> respondents, responderAssets, engines);
     }
 
     /** 假网关：按清单交付字节，并记下取过哪些 token。 */

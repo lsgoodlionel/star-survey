@@ -2,6 +2,7 @@ package cn.mjy.platform.asset;
 
 import cn.mjy.platform.survey.gateway.PublishGatewaySigner;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -43,6 +44,15 @@ public class HttpResponderUploadSource implements ResponderUploadSource {
     public static final int MIN_SECRET_BYTES = 32;
     /** 单件上传的字节上限；插件、网关、平台三处各判各的。 */
     static final long MAX_CONTENT_BYTES = 16L * 1024 * 1024;
+    /**
+     * 整个应答的字节上限，<b>在解析之前</b>就封顶。
+     *
+     * <p>base64 把 16 MiB 撑成约 21.3 MiB，再加 JSON 外壳与元数据，留到 24 MiB。
+     * 只判 {@code sizeBytes} 是不够的：那要等整个应答读完、整棵树解析完才轮得到
+     * （独立安全审查的 MEDIUM）。一个被攻破的插件返回一坨超大的 base64，
+     * 就能让平台先把它整个读进内存。
+     */
+    static final long MAX_RESPONSE_BYTES = 24L * 1024 * 1024;
 
     private static final Logger log = LoggerFactory.getLogger(HttpResponderUploadSource.class);
 
@@ -110,17 +120,31 @@ public class HttpResponderUploadSource implements ResponderUploadSource {
             throw unavailable("publish gateway is not configured");
         }
         byte[] body = json.writeValueAsBytes(envelope);
-        HttpResponse<byte[]> response = send(body);
-        if (response.statusCode() != 200) {
-            log.warn("upload read on {} sid {} refused with http {}", engineInstanceId, engineSid,
-                    response.statusCode());
-            throw unavailable("gateway returned http " + response.statusCode());
-        }
-        try {
-            return json.readTree(response.body());
+        HttpResponse<InputStream> response = send(body);
+        try (InputStream stream = response.body()) {
+            if (response.statusCode() != 200) {
+                log.warn("upload read on {} sid {} refused with http {}", engineInstanceId, engineSid,
+                        response.statusCode());
+                throw unavailable("gateway returned http " + response.statusCode());
+            }
+            return json.readTree(bounded(stream));
         } catch (JacksonException e) {
             throw unavailable("gateway reply is not JSON");
+        } catch (IOException e) {
+            throw unavailable("gateway network error: " + e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * 最多读 {@link #MAX_RESPONSE_BYTES} 个字节，多一个就拒——<b>在解析之前</b>。
+     * 多读一个字节用来分辨"刚好到上限"与"超了"，不会因为正好等于上限而误判。
+     */
+    private static byte[] bounded(InputStream stream) throws IOException {
+        byte[] bytes = stream.readNBytes((int) MAX_RESPONSE_BYTES + 1);
+        if (bytes.length > MAX_RESPONSE_BYTES) {
+            throw unavailable("the gateway reply is too large: over " + MAX_RESPONSE_BYTES + " bytes");
+        }
+        return bytes;
     }
 
     private List<ResponderUploadRef> parseManifest(JsonNode reply, Set<Long> requested) {
@@ -222,7 +246,7 @@ public class HttpResponderUploadSource implements ResponderUploadSource {
         return node != null && node.isString() ? node.asString() : "";
     }
 
-    private HttpResponse<byte[]> send(byte[] body) {
+    private HttpResponse<InputStream> send(byte[] body) {
         String timestamp = Long.toString(clock.instant().getEpochSecond());
         HttpRequest request = HttpRequest.newBuilder(uploadsUri)
                 .timeout(timeout)
@@ -232,7 +256,7 @@ public class HttpResponderUploadSource implements ResponderUploadSource {
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .build();
         try {
-            return http.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            return http.send(request, HttpResponse.BodyHandlers.ofInputStream());
         } catch (HttpTimeoutException e) {
             throw unavailable("gateway timed out after " + timeout);
         } catch (IOException e) {

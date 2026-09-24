@@ -146,6 +146,19 @@ class UploadSessionClientTest(unittest.TestCase):
         with self.assertRaises(channel.ChannelError):
             self.client(json.dumps(payload).encode("utf-8")).content(4242, GENERATION, TOKEN)
 
+    def test_the_default_client_can_be_constructed_without_injecting_fetch(self):
+        """生产路径不注入 ``fetch``，所以默认分支必须真的存在。
+
+        每条用例都注入假 ``fetch``，默认分支因此一次都没被执行过——
+        本类里 ``_urlopen`` 曾经根本没定义，整个拉取功能在生产上一调即 ``NameError``，
+        而测试全绿（独立安全审查抓到的 HIGH）。这一条专门守住那个分支。
+        """
+        client = uploads.UploadSessionClient.from_rpc_url(
+            "https://engine.example/index.php/admin/remotecontrol", INSTANCE, "x" * 32)
+
+        self.assertIsNotNone(client)
+        self.assertTrue(callable(client._fetch))
+
     def test_a_malformed_token_is_refused_before_the_request_goes_out(self):
         urls = []
         with self.assertRaises(channel.InvalidChannelRequest):

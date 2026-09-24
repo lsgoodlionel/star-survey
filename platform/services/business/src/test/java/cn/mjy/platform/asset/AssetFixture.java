@@ -1,7 +1,12 @@
 package cn.mjy.platform.asset;
 
 import cn.mjy.platform.access.AccessFixture;
+import cn.mjy.platform.access.MemberService;
 import cn.mjy.platform.shared.TenantContext;
+import cn.mjy.platform.shared.TenantId;
+import cn.mjy.platform.tenant.TenantFixtures;
+import cn.mjy.platform.tenant.engine.EngineFixtures;
+import cn.mjy.platform.tenant.engine.EngineInstanceService;
 import java.nio.charset.StandardCharsets;
 import org.springframework.stereotype.Component;
 
@@ -16,13 +21,42 @@ public class AssetFixture {
     public static final String EDITOR_ROLE = "project_manager";
 
     private final AccessFixture access;
+    private final TenantFixtures tenants;
+    private final MemberService members;
+    private final EngineInstanceService engines;
 
-    public AssetFixture(AccessFixture access) {
+    public AssetFixture(AccessFixture access, TenantFixtures tenants, MemberService members,
+            EngineInstanceService engines) {
         this.access = access;
+        this.tenants = tenants;
+        this.members = members;
+        this.engines = engines;
     }
 
     public TenantContext newTenant() {
         return access.newTenant();
+    }
+
+    /**
+     * 一个<b>真实租户行</b>（不是只有 TenantId）＋ 一套 active 引擎实例。
+     *
+     * <p>拉取作答者上传要求那台引擎属于调用方这个租户（独立安全审查的 CRITICAL），
+     * 而 {@code engine_instance.tenant_id} 指向 {@code tenant} 表，所以租户必须真的开通过。
+     */
+    public EngineWorkspace newTenantWithEngine() {
+        TenantId tenant = tenants.activeTenant();
+        members.bootstrapOwner(tenant, AccessFixture.OWNER, "trace-bootstrap");
+        String instance = EngineFixtures.uniqueInstanceId();
+        engines.register(tenant, instance, "https://engine.example/" + instance, "op", "trace");
+        return new EngineWorkspace(AccessFixture.context(tenant, AccessFixture.OWNER), instance);
+    }
+
+    /** 一个租户及其自己的引擎实例标识。 */
+    public record EngineWorkspace(TenantContext owner, String engineInstanceId) {
+
+        public TenantId tenant() {
+            return owner.tenantId();
+        }
     }
 
     public TenantContext editor(TenantContext owner, String actor) {
