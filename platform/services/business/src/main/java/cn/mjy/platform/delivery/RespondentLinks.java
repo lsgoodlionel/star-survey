@@ -1,6 +1,7 @@
 package cn.mjy.platform.delivery;
 
 import cn.mjy.platform.shared.TenantId;
+import cn.mjy.platform.shared.security.SignedParameters;
 import cn.mjy.platform.tenant.engine.EngineInstance;
 import cn.mjy.platform.tenant.engine.EngineInstanceService;
 import cn.mjy.platform.tenant.routing.SurveyRoute;
