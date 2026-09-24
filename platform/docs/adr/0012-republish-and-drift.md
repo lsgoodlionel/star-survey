@@ -199,14 +199,16 @@ draft ──> publishing ──> published ──（草稿改动后重新发布�
 
 - 网关单元测试：`tests/test_close.py`、`tests/test_operations.py` 与 `tests/test_server.py` 的新增用例
   （收口、幂等、缺失 sid、引擎拒存、口令脱敏、漂移 match / 改代码 / 仅指纹 / 被停用 / 被删 / 过期不算、400/401/404/502）。
-- 留存期（决定 7）：网关 `tests/test_store.py`（`RetentionWindowTest` / `PruneSchedulerTest`：窗口内原样、
+- 留存期（决定 8）：网关 `tests/test_store.py`（`RetentionWindowTest` / `PruneSchedulerTest`：窗口内原样、
   过期只剩墓碑、判过期不等清理、清理幂等、墓碑到期后整行消失且同一 requestId 可再用、旧库补列迁移、
   配置下限与三段窗口的先后约束、带码的回执按短窗口过期且墓碑记住"带过码"、清理线程首轮不等待且异常不致死）与 `tests/test_service.py`
   （`RetentionTest` 与 `InvitationRetentionTest`：410 的应答形状、过期后不再发布、过期的 422／502 分别报
   `surveyId` 空与孤儿 sid、指纹不符仍是 400、墓碑到期后真的会再发布一次、410 应答不泄漏引擎口令、
   带码的回执 24 小时即 410 而不带码的照留一周、窗口过后状态目录里搜不到任何 token）；平台
-  `HttpPublishGatewayClientTest`（410 归类、无细节的 410 仍是终局）与 `PublishReconciliationTest`
-  （过期即终局、孤儿 sid 存档、不再重试、带过码的另记 `expired_invitations`）。
+  `HttpPublishGatewayClientTest`（410 归类、无细节的 410 仍是终局、带过码的 410 报 `heldInvitationCodes`）
+  与 `PublishReconciliationTest`（过期即终局、孤儿 sid 存档、不再重试、带过码的另记 `expired_invitations`）。
+  网关全套 997 通过，平台全套 1091 通过（新增 8 项；2026-09-24 在容器 Maven 上跑，`java`／`mvn` 不在
+  开发机 PATH 上）。
 - 平台测试：`SurveyRepublishTest`（切换、旧版不可变且可查、只收口旧版、无改动 409、激活失败保留旧路由、
   发布中旧版仍被路由且并发只有一个赢、未知结果核对后才切换、收口失败后台重试、审批与改稿作废）、
   `SurveyRouteSwitchTest`、`SurveyDriftCheckTest`、`SurveyRepublishApiTest`、`HttpGatewayOperationsTest`。
