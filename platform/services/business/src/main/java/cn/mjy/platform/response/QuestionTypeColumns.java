@@ -42,7 +42,7 @@ final class QuestionTypeColumns {
             java.util.Set.of(
                     "mjy-repeating-table", "mjy-heatmap", "mjy-loop-rating",
                     "mjy-image-pk", "mjy-shelf", "mjy-text-highlight", "mjy-psych-trial",
-                    "mjy-model-kano");
+                    "mjy-model-kano", "mjy-cascading-select");
 
     private static final List<OptionLabel> FIVE = scale(5);
     private static final Map<String, List<OptionLabel>> BUILT_IN = Map.of(

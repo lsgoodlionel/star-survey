@@ -20,6 +20,8 @@ from .logic.lower import lower_definition
 from .logic.scoring import expand_scoring
 from .model import SurveyDefinition
 from .policy.compile import PLUGIN_NAME, POLICY_KEY, CompiledPolicy, compile_policy
+from .questions.theme_dictionary import setting_payload
+from .questions.theme_kit import DICTIONARY_SETTING_KEY, QUESTION_PLUGIN_NAME
 from .qtypes import DEFAULT_THEMES
 from .questions.lower import lower_question_types
 from .validate import ValidationReport, validate_definition
@@ -197,7 +199,8 @@ class LssCompiler:
                 _LANGUAGE_SETTINGS_FIELDS,
                 _language_rows(definition, layout.translations),
             ),
-            _section("plugin_settings", _PLUGIN_SETTING_FIELDS, _plugin_setting_rows(policy)),
+            _section("plugin_settings", _PLUGIN_SETTING_FIELDS,
+                     _plugin_setting_rows(definition, policy)),
             _themes(branding),
             "</document>",
         ]
@@ -401,10 +404,24 @@ def _survey_fields(policy: Optional[CompiledPolicy]) -> Tuple[str, ...]:
     return _SURVEY_FIELDS + tuple(name for name in _POLICY_SURVEY_FIELDS if name in native)
 
 
-def _plugin_setting_rows(policy: Optional[CompiledPolicy]) -> List[Dict[str, str]]:
-    if policy is None or policy.payload is None:
-        return []
-    return [{"name": PLUGIN_NAME, "key": POLICY_KEY, "value": policy.payload}]
+def _plugin_setting_rows(definition: SurveyDefinition,
+                         policy: Optional[CompiledPolicy]) -> List[Dict[str, str]]:
+    """写进 lime_plugin_settings（model=Survey）的几行。
+
+    访问策略一行（MjyRuntimePolicy），字典快照一行（MjyQuestionExtensions）。
+    字典走这条载体而不是题目属性：一份快照可能被同一份问卷里多道题引用，
+    按题存等于每道题重复一份几十万字符。
+    """
+    rows: List[Dict[str, str]] = []
+    if policy is not None and policy.payload is not None:
+        rows.append({"name": PLUGIN_NAME, "key": POLICY_KEY, "value": policy.payload})
+    if definition.dictionaries:
+        rows.append({
+            "name": QUESTION_PLUGIN_NAME,
+            "key": DICTIONARY_SETTING_KEY,
+            "value": setting_payload(definition.dictionaries),
+        })
+    return rows
 
 
 def _survey_row(definition: SurveyDefinition, policy: Optional[CompiledPolicy] = None) -> Dict[str, str]:

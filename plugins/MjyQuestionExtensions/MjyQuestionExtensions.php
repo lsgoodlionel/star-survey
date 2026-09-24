@@ -47,6 +47,12 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
     /** @var MjyChannelRateLimit|null */
     private $channelRateLimit;
 
+    /** @var MjyDictionaryStore|null */
+    private $dictionaryStore;
+
+    /** @var array<string, bool> 本请求内「这一版字典装好了没有」的缓存，键是 代码@版本@摘要 */
+    private $installedDictionaries = [];
+
     /** @var bool */
     private $isSchemaReady = false;
 
@@ -81,15 +87,27 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
     public function newDirectRequest()
     {
         $event = $this->getEvent();
-        if ($event->get('target') !== self::$name
-            || $event->get('function') !== MjyExtensionAnswerEndpoint::FUNCTION_NAME) {
+        if ($event->get('target') !== self::$name) {
+            return;
+        }
+        $function = $event->get('function');
+        if ($function === MjyDictionaryNodesEndpoint::FUNCTION_NAME) {
+            $this->emit($this->dictionaryNodes()->handle($this->channelQuery()), 'dictionary node endpoint');
+            return;
+        }
+        if ($function !== MjyExtensionAnswerEndpoint::FUNCTION_NAME) {
             return;
         }
         $response = $this->answerChannel()->handle($this->channelQuery(), time());
+        $this->emit($response, 'extension answer channel');
+    }
+
+    /** 两条直连端点共用的出口：稳定原因码进日志，绝不带密钥、签名或作答值。 */
+    private function emit(MjyChannelResponse $response, string $what): void
+    {
         if ($response->reason() !== '') {
-            // 稳定原因码；绝不带密钥、签名或作答值。
             Yii::log(
-                sprintf('extension answer channel refused a request: %s', $response->reason()),
+                sprintf('%s refused a request: %s', $what, $response->reason()),
                 CLogger::LEVEL_WARNING,
                 self::LOG_CATEGORY
             );
@@ -98,6 +116,15 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         header('Cache-Control: no-store');
         echo $response->body();
         App()->end();
+    }
+
+    /**
+     * 作答页取字典某一层的一页（R02-03）。**没有签名**：作答者手里没有通道密钥。
+     * 它只服务「这份问卷真的引用了这本字典的这一版」，给不出任何已发布问卷没展示过的东西。
+     */
+    public function dictionaryNodes(): MjyDictionaryNodesEndpoint
+    {
+        return new MjyDictionaryNodesEndpoint(App()->getDb(), $this->dictionaries());
     }
 
     /**
@@ -176,6 +203,7 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         $this->generations()->ensureSchema();
         // 额度表在激活时就建好，运行时那条路径（首次 allow()）因此几乎永远只是一次命中。
         $this->channelRateLimit()->ensureSchema();
+        $this->dictionaries()->ensureSchema();
         $this->isSchemaReady = true;
     }
 
@@ -189,6 +217,7 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         $this->questionMaps = [];
         $this->generationCache = [];
         $this->channelRateLimit = null;
+        $this->installedDictionaries = [];
     }
 
     public function newQuestionAttributes()
@@ -329,7 +358,7 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
 
         $results = [];
         foreach ($map->structuredQuestions() as $code => $question) {
-            $result = $this->validatorFor($question)->validate($row[$question['fieldName']] ?? null);
+            $result = $this->validatorFor($surveyId, $question)->validate($row[$question['fieldName']] ?? null);
             $this->structuredAnswers()->recordAnswer(
                 $surveyId,
                 $generation,
@@ -401,6 +430,15 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         return $this->structuredAnswers;
     }
 
+    /** 层级字典快照（R02-03，ADR 0019）。 */
+    public function dictionaries(): MjyDictionaryStore
+    {
+        if ($this->dictionaryStore === null) {
+            $this->dictionaryStore = new MjyDictionaryStore(App()->getDb());
+        }
+        return $this->dictionaryStore;
+    }
+
     public function uploadSessions(): MjyUploadSessionStore
     {
         if ($this->uploadSessions === null) {
@@ -437,7 +475,7 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         }
         // 作答者可以把字段发成数组（Qxxx[]=…），直接转字符串会产生警告。
         $posted = is_array($_POST[$fieldName]) ? null : (string) $_POST[$fieldName];
-        $result = $this->validatorFor($question)->validate($posted);
+        $result = $this->validatorFor($surveyId, $question)->validate($posted);
         if ($result->isValid()) {
             // 服务端归一化：入库的永远是重新编码过的信封，不是浏览器发来的原文。
             $_POST[$fieldName] = $result->normalisedJson();
@@ -470,14 +508,101 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
     /**
      * @param array<string, mixed> $question
      */
-    private function validatorFor(array $question): MjyRepeatingTableValidator
+    private function validatorFor(int $surveyId, array $question): MjyRepeatingTableValidator
     {
         $attributes = $this->questionAttributes((int) $question['qid']);
         return new MjyRepeatingTableValidator(
             MjyTableColumnSpec::fromJson($attributes[MjyQuestionAttributeDefinitions::COLUMNS] ?? null),
             (int) ($attributes[MjyQuestionAttributeDefinitions::MIN_ROWS] ?? 0),
-            (int) ($attributes[MjyQuestionAttributeDefinitions::MAX_ROWS] ?? 0)
+            (int) ($attributes[MjyQuestionAttributeDefinitions::MAX_ROWS] ?? 0),
+            $this->dictionaryFor($surveyId, $attributes)
         );
+    }
+
+    /**
+     * 这道题要用的字典，必要时先物化进引擎（ADR 0019 决定 3）。
+     *
+     * 不用字典的题目返回 null，校验器也不会去碰它；用字典却装不上的同样返回 null，
+     * 校验器因此**拒收**——查不到不等于合法。
+     *
+     * @param array<string, string> $attributes
+     */
+    private function dictionaryFor(int $surveyId, array $attributes): ?MjyDictionaryStore
+    {
+        $code = (string) ($attributes[MjyQuestionAttributeDefinitions::DICTIONARY] ?? '');
+        $version = (string) ($attributes[MjyQuestionAttributeDefinitions::DICTIONARY_VERSION] ?? '');
+        $digest = (string) ($attributes[MjyQuestionAttributeDefinitions::DICTIONARY_DIGEST] ?? '');
+        if ($code === '' || $version === '' || $digest === '') {
+            return null;
+        }
+        return $this->installDictionary($surveyId, $code, $version, $digest) ? $this->dictionaries() : null;
+    }
+
+    /**
+     * 按摘要幂等：装过的那一版就什么都不做，所以只有引擎上第一份引用它的答卷会付物化的代价。
+     *
+     * 快照的来源是发布时写进 lime_plugin_settings 的那一行（model=Survey）——它随 .lss 进来，
+     * 走的是已有的发布通道，不新开信任边界。
+     */
+    private function installDictionary(int $surveyId, string $code, string $version, string $digest): bool
+    {
+        $cacheKey = $code . '@' . $version . '@' . $digest;
+        if (isset($this->installedDictionaries[$cacheKey])) {
+            return $this->installedDictionaries[$cacheKey];
+        }
+        $store = $this->dictionaries();
+        if ($store->isInstalled($code, $version, $digest)) {
+            return $this->installedDictionaries[$cacheKey] = true;
+        }
+        $installed = false;
+        try {
+            foreach ($this->declaredDictionaries($surveyId) as $one) {
+                if (($one['code'] ?? null) !== $code || ($one['version'] ?? null) !== $version) {
+                    continue;
+                }
+                if (($one['digest'] ?? null) !== $digest) {
+                    break;
+                }
+                $store->install($code, $version, $digest, $one['nodes'] ?? []);
+                $installed = true;
+                break;
+            }
+        } catch (Exception $e) {
+            Yii::log(
+                sprintf('survey %d dictionary %s@%s install failed: %s', $surveyId, $code, $version, $e->getMessage()),
+                CLogger::LEVEL_ERROR,
+                self::LOG_CATEGORY
+            );
+            $installed = false;
+        }
+        if (!$installed) {
+            Yii::log(
+                sprintf('survey %d has no usable snapshot for dictionary %s@%s', $surveyId, $code, $version),
+                CLogger::LEVEL_WARNING,
+                self::LOG_CATEGORY
+            );
+        }
+        return $this->installedDictionaries[$cacheKey] = $installed;
+    }
+
+    /**
+     * 本份问卷随 .lss 带进来的字典快照。只在真要物化时才读（几十万字符的 JSON）。
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function declaredDictionaries(int $surveyId): array
+    {
+        // DbStorage::getGeneric() **已经替我们 json_decode 过**（Storage/DbStorage.php:60），
+        // 所以这里拿到的正常是数组；真引擎端到端第一次跑就是被这一点拦住的（当时只认字符串）。
+        // 仍然容得下字符串：别的 Storage 实现不保证解码。
+        $raw = $this->get(MjyDictionaryStore::SETTING_KEY, 'Survey', $surveyId);
+        if (is_string($raw)) {
+            $raw = $raw === '' ? null : json_decode($raw, true);
+        }
+        if (!is_array($raw) || ($raw['v'] ?? null) !== 1 || !is_array($raw['dictionaries'] ?? null)) {
+            return [];
+        }
+        return array_values(array_filter($raw['dictionaries'], 'is_array'));
     }
 
     /**

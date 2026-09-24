@@ -36,12 +36,20 @@ class MjyRepeatingTableValidator
     /** @var int */
     private $maxRows;
 
-    public function __construct(MjyTableColumnSpec $spec, int $minRows, int $maxRows)
-    {
+    /** @var MjyDictionaryStore|null 有 dict 列时必须给；给不出来就拒收（失败关闭）。 */
+    private $dictionaries;
+
+    public function __construct(
+        MjyTableColumnSpec $spec,
+        int $minRows,
+        int $maxRows,
+        ?MjyDictionaryStore $dictionaries = null
+    ) {
         $this->spec = $spec;
         $this->minRows = max(0, $minRows);
         // 属性缺失或为 0 时回落到默认上限，绝不放开成无限行。
         $this->maxRows = min($maxRows > 0 ? $maxRows : self::DEFAULT_MAX_ROWS, self::HARD_MAX_ROWS);
+        $this->dictionaries = $dictionaries;
     }
 
     public function validate(?string $rawAnswer): MjyValidationResult
@@ -77,6 +85,9 @@ class MjyRepeatingTableValidator
         }
         if ($errors === []) {
             $errors = $this->checkDistinct($rows);
+        }
+        if ($errors === []) {
+            $errors = $this->checkDictionaryPaths($rows);
         }
         return $errors === [] ? MjyValidationResult::valid($rows) : MjyValidationResult::invalid($errors);
     }
@@ -117,6 +128,100 @@ class MjyRepeatingTableValidator
             }
         }
         return $errors;
+    }
+
+    /**
+     * 多级下拉（R02-03）的**路径判定**：同一本字典的几个 dict 列按 level 排好，
+     * 构成一条自上而下的路径；这条路径必须在**那一版**字典里真实存在、逐级相连。
+     *
+     * 为什么不能靠逐单元格判：“440100 是不是一个合法的市”单看一格是成立的，
+     * 但“它在北京下面”不成立。跨省的市、跨版本的节点都只有把整条路径放在一起看才拦得住。
+     *
+     * **没有字典就拒**：查不到不等于合法。此时这道题谁也交不了，那正是应有的结果——
+     * 发布期的对账（网关 E_DICTIONARY_MISSING）本就不应该让这种问卷发得出去。
+     *
+     * @param array<int, array<string, string>> $rows
+     * @return string[]
+     */
+    private function checkDictionaryPaths(array $rows): array
+    {
+        $groups = $this->dictionaryGroups();
+        if ($groups === []) {
+            return [];
+        }
+        if ($this->dictionaries === null) {
+            return ['本题要按平台字典判定所选层级，但引擎上没有可用的字典'];
+        }
+        $errors = [];
+        foreach ($groups as $group) {
+            foreach ($rows as $index => $row) {
+                $errors = array_merge($errors, $this->checkOnePath($group, $row, $index + 1));
+            }
+        }
+        return $errors;
+    }
+
+    /**
+     * 按 (字典, 版本) 分组的 dict 列，组内按 level 升序。
+     * 一道题里允许有多组（例如同时问户籍地与现居地）。
+     *
+     * @return array<string, array<int, array<string, mixed>>>
+     */
+    private function dictionaryGroups(): array
+    {
+        $groups = [];
+        foreach ($this->spec->columns() as $column) {
+            if ($column['type'] !== MjyTableColumnSpec::TYPE_DICT) {
+                continue;
+            }
+            $groups[$column['dictionary'] . '@' . $column['dictionaryVersion']][] = $column;
+        }
+        foreach ($groups as &$columns) {
+            usort($columns, static function (array $left, array $right): int {
+                return $left['level'] <=> $right['level'];
+            });
+        }
+        unset($columns);
+        return $groups;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $columns 同一本字典同一版的列，已按 level 升序
+     * @param array<string, string> $row
+     * @return string[]
+     */
+    private function checkOnePath(array $columns, array $row, int $rowNumber): array
+    {
+        $codes = [];
+        foreach ($columns as $column) {
+            $value = $row[$column['code']] ?? '';
+            if ($value === '') {
+                // 必填已由 checkColumn 管住；非必填的空值意味着这条路径到此为止。
+                break;
+            }
+            $codes[] = $value;
+        }
+        if ($codes === []) {
+            return [];
+        }
+        $first = $columns[0];
+        $found = $this->dictionaries->nodesIn($first['dictionary'], $first['dictionaryVersion'], $codes);
+        $parent = '';
+        foreach ($codes as $position => $code) {
+            $label = sprintf('第 %d 行的 %s', $rowNumber, $columns[$position]['label']);
+            if (!isset($found[$code])) {
+                return [$label . ' 的 ' . $code . ' 不在本题所用的那一版字典里'];
+            }
+            $node = $found[$code];
+            if ((int) $node['depth'] !== $columns[$position]['level']) {
+                return [$label . ' 的 ' . $code . ' 不是这一层的取值'];
+            }
+            if ((string) $node['parent_code'] !== $parent) {
+                return [$label . ' 的 ' . $code . ' 不属于上一级'];
+            }
+            $parent = $code;
+        }
+        return [];
     }
 
     /**
@@ -236,6 +341,15 @@ class MjyRepeatingTableValidator
             // 取值集合由平台声明，作答者只能从里面挑；浏览器端渲染成什么都不作数。
             if (!in_array($value, $column['options'] ?? [], true)) {
                 $errors[] = $label . ' 不在可选范围内';
+            }
+            return;
+        }
+        if ($column['type'] === MjyTableColumnSpec::TYPE_DICT) {
+            // 字典列只在这里看字符集：“这个代码存不存在”要把整条路径放在一起看（checkDictionaryPaths）。
+            // 这一步不是多余的：它把能当参数用的值拦在查库之前，并且不让字典列落进数值分支——
+            // 行政区划代码碰巧全是数字，别的字典（门店、品类）并不是。
+            if (preg_match(MjyTableColumnSpec::VALUE_CODE_PATTERN, $value) !== 1) {
+                $errors[] = $label . ' 不是合法的字典代码';
             }
             return;
         }

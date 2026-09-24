@@ -38,6 +38,14 @@ class MjyQuestionAttributeDefinitions
     /** 专业模型（R02-47）：模型名与该模型的采集对象；读端按模型名取分析口径。 */
     public const MODEL_NAME = 'mjy_model_name';
     public const MODEL_FEATURES = 'mjy_model_features';
+    /**
+     * 多级下拉（R02-03）引用哪本字典、哪一版、那一版的内容摘要，以及每一级的标题。
+     * 取值集合刻意不在这里：它们随快照走 plugin_settings，物化进 MjyDictionaryStore。
+     */
+    public const DICTIONARY = 'mjy_dictionary';
+    public const DICTIONARY_VERSION = 'mjy_dictionary_version';
+    public const DICTIONARY_DIGEST = 'mjy_dictionary_digest';
+    public const DICTIONARY_LEVELS = 'mjy_dictionary_levels';
 
     private const CATEGORY = 'MJY 结构化题型';
     private const CATEGORY_GROUPS = 'MJY 选项分类';
@@ -96,6 +104,18 @@ class MjyQuestionAttributeDefinitions
             ]),
             self::MODEL_FEATURES => self::definition($structured, 150, 'textarea', '', '模型采集对象（JSON）', [
                 'help' => '形如 [{"code":"F1","label":"夜间模式"}]，一个对象一行；量表由模型固定，不在这里',
+            ]),
+            self::DICTIONARY => self::definition($structured, 210, 'text', '', '引用的字典', [
+                'help' => '平台字典代码，如 cn-admin-divisions',
+            ]),
+            self::DICTIONARY_VERSION => self::definition($structured, 220, 'text', '', '字典版本', [
+                'help' => '由平台在发布时固化，作者改不了',
+            ]),
+            self::DICTIONARY_DIGEST => self::definition($structured, 230, 'text', '', '字典内容摘要', [
+                'help' => '插件据它判断引擎上装着的那份是不是同一份',
+            ]),
+            self::DICTIONARY_LEVELS => self::definition($structured, 240, 'textarea', '', '各级标题（JSON）', [
+                'help' => '形如 ["省","市","区"]，一级一列',
             ]),
             // R02-04 的两支：单选按答案选项分组，多选按子题分组，共用同一份 JSON。
             // 少写一个题型字母，引擎导入那种题时会把这个属性丢掉，主题拿到空分组静默平铺。

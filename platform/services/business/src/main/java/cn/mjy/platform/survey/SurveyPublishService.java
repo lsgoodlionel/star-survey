@@ -55,11 +55,12 @@ public class SurveyPublishService {
     private final PublishSettlement settlement;
     private final PublishApprovalGate approvalGate;
     private final Optional<SurveyParticipantSource> participants;
+    private final Optional<SurveyDictionarySource> dictionaries;
 
     SurveyPublishService(TenantScope tenantScope, SurveyRepository surveys,
             PublishAttemptRepository attempts, SurveyDefinitions definitions, EngineInstanceService engines,
             PublishGatewayClient gateway, PublishSettlement settlement, PublishApprovalGate approvalGate,
-            Optional<SurveyParticipantSource> participants) {
+            Optional<SurveyParticipantSource> participants, Optional<SurveyDictionarySource> dictionaries) {
         this.tenantScope = tenantScope;
         this.surveys = surveys;
         this.attempts = attempts;
@@ -69,6 +70,7 @@ public class SurveyPublishService {
         this.settlement = settlement;
         this.approvalGate = approvalGate;
         this.participants = participants;
+        this.dictionaries = dictionaries;
     }
 
     /** 已固化、即将发给网关的一次尝试。 */
@@ -121,7 +123,8 @@ public class SurveyPublishService {
         approvalGate.authorizeFreshAttempt(ctx, clearance, row, requestId);
         String instance = activeEngineInstance(ctx.tenantId());
         ObjectNode normalized = definitions.normalize(definitions.parse(row.draftDefinition()), row.id());
-        String definition = definitions.serialize(materializeParticipants(ctx, row.id(), normalized));
+        ObjectNode pinned = pinDictionaries(normalized);
+        String definition = definitions.serialize(materializeParticipants(ctx, row.id(), pinned));
         attempts.insert(ctx.tenantId(), requestId, row.id(), row.draftVersion(), instance, definition, ctx.actorId());
         surveys.markPublishing(row.id(), requestId);
         return new Ticket(row.id(), requestId, instance, row.draftVersion(), definition);
@@ -141,6 +144,24 @@ public class SurveyPublishService {
         }
         List<UUID> refs = participants.map(source -> source.audienceOf(ctx, surveyId)).orElseGet(List::of);
         return definitions.withParticipants(definition, refs);
+    }
+
+    /**
+     * 引用了字典的问卷（多级下拉，R02-03）把每本字典固化成<b>发布这一刻</b>的当前版本，
+     * 连同节点快照写进定义（ADR 0019 决定 2）。定义快照不可变，所以这一版从此跟着这一版问卷走：
+     * 字典之后再更新，已发布的问卷仍按当初那一版判定路径，老答卷不会变成非法路径。
+     *
+     * <p>改版再发布（ADR 0012）＝新的引擎问卷，那时才会重新固化到新的当前版本——那是一次显式的动作。
+     */
+    private ObjectNode pinDictionaries(ObjectNode definition) {
+        List<String> codes = SurveyDictionaryRefs.codesIn(definition);
+        if (codes.isEmpty()) {
+            return definition;
+        }
+        SurveyDictionarySource source = dictionaries.orElseThrow(() -> new InvalidDefinitionException(
+                List.of("this definition references dictionaries " + codes
+                        + " but no dictionary service is available")));
+        return definitions.withDictionaries(definition, source.pin(codes));
     }
 
     /** 核对：结果未知时只能原样重发（同一 requestId、同一实例、同一份定义），由网关幂等给出确定结局。 */

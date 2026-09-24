@@ -59,6 +59,23 @@ class MjyChannelResponse
         return new self(200, $body, '');
     }
 
+    /**
+     * 作答者可见的那条字典端点用的两个出口（MjyDictionaryNodesEndpoint）。
+     *
+     * 那条端点**没有签名**（作答者手里没有密钥），因此不适用「验签前一律同一个 401」那条规矩：
+     * 它读的是公共参考数据，区分「请求写错了」与「这份问卷没用这本字典」不构成预言机，
+     * 而含糊其辞只会让前端没法自查。
+     */
+    public static function badRequest(string $reason): self
+    {
+        return new self(400, '{"error":"bad_request"}', $reason);
+    }
+
+    public static function notFound(string $reason): self
+    {
+        return new self(404, '{"error":"not_found"}', $reason);
+    }
+
     public function status(): int
     {
         return $this->status;

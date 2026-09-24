@@ -90,6 +90,7 @@ def validate_definition(definition: SurveyDefinition) -> ValidationReport:
     from .logic.scoring import check_scoring, expand_scoring
     from .policy.schema import check_policy
     from .questions.check import check_question_type
+    from .questions.dictionary_check import check_dictionaries
 
     issues: List[ValidationIssue] = []
     issues.extend(_check_settings(definition))
@@ -109,6 +110,7 @@ def validate_definition(definition: SurveyDefinition) -> ValidationReport:
     issues.extend(check_policy(definition))
     issues.extend(check_branding(definition))
     issues.extend(check_translations(definition))
+    issues.extend(check_dictionaries(definition))
     return ValidationReport(tuple(issues))
 
 
