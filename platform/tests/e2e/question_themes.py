@@ -159,14 +159,15 @@ def scenario_values(run: Run, response_id: str) -> None:
     print("scenario B: every stored column and every projected cell", file=sys.stderr)
     from question_themes_plan import (
         HEAT_ROWS, KANO_ROWS, LOOP_ROWS, MARK_ROWS, MARK_SEGMENTS, PK_ROWS, PSYCH_ROWS,
-        SHELF_ROWS, TABLE_ROWS,
+        REGION_OLD_ROWS, REGION_ROWS, SHELF_ROWS, TABLE_ROWS,
     )
 
     #: 走副表的题：(题目代码, 归一化后的行, 结构版本)。
     side = (("QTABLE", TABLE_ROWS, "rt1"), ("QLOOP", LOOP_ROWS, "lr1"),
             ("QPK", PK_ROWS, "pk1"), ("QSHELF", SHELF_ROWS, "sh1"),
             ("QMARK", MARK_ROWS, "th1"), ("QPSY", PSYCH_ROWS, "ps1"),
-            ("QKANO", KANO_ROWS, "kn1"), ("QHEAT", HEAT_ROWS, "hm1"))
+            ("QKANO", KANO_ROWS, "kn1"), ("QHEAT", HEAT_ROWS, "hm1"),
+            ("QREGION", REGION_ROWS, "cs1"), ("QREGION2", REGION_OLD_ROWS, "cs0"))
     row = run.last_row()
     run.check("B: response submitted", row[("_submitted", "", 0)] == "1", row)
     expected = {column: value for answers in valid_pages() for column, value in answers.items()}
@@ -399,7 +400,7 @@ def main() -> int:
                   all(question["fields"] for question in published["binding"]["questions"]))
         run.check("publish: every side-table question declares a side table",
                   sorted(run.side_tables) == ["QHEAT", "QKANO", "QLOOP", "QMARK", "QPK", "QPSY",
-                                              "QSHELF", "QTABLE"],
+                                              "QREGION", "QREGION2", "QSHELF", "QTABLE"],
                   sorted(run.side_tables))
 
         response_id = scenario_render(run)

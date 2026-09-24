@@ -3,6 +3,7 @@ package cn.mjy.platform.delivery;
 import cn.mjy.platform.delivery.DeliveryTaskRepository.TaskRow;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
+import cn.mjy.platform.shared.security.SignedParameters;
 import cn.mjy.platform.shared.tenant.TenantScope;
 import java.security.SecureRandom;
 import java.util.HexFormat;

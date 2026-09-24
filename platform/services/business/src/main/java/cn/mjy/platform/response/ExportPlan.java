@@ -16,17 +16,26 @@ record ExportPlan(List<PlannedSource> sources) {
     }
 
     /**
-     * @param latestGeneration 创建时该 sid 最近出现的代次；为 {@code null} 表示当时还没有任何答卷
+     * @param latestGeneration   创建时该 sid 最近出现的代次；为 {@code null} 表示当时还没有任何答卷
+     * @param extensionQuestions 该版本里有副表的题目代码，顺序即定义顺序；切片 06.4 之前建的作业没有这一段，
+     *                           反序列化成空表（旧作业照旧不带副表作答，不会因为升级而改变文件内容）
      */
     record PlannedSource(int version, String engineInstanceId, long engineSid, String latestGeneration,
-            List<FieldEntry> fields) {
+            List<FieldEntry> fields, List<String> extensionQuestions) {
 
         PlannedSource {
             fields = List.copyOf(fields);
+            extensionQuestions = extensionQuestions == null ? List.of() : List.copyOf(extensionQuestions);
         }
 
         List<String> fieldnames() {
             return fields.stream().map(FieldEntry::fieldname).distinct().toList();
+        }
+
+        /** 标了敏感的副表题：它们的单元格与那一列 JSON 信封同进同退，不能一处遮蔽另一处明文。 */
+        Set<String> sensitiveQuestionCodes() {
+            return fields.stream().filter(FieldEntry::sensitive).map(FieldEntry::code)
+                    .collect(Collectors.toUnmodifiableSet());
         }
     }
 

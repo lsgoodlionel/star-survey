@@ -30,7 +30,10 @@
           "type": "X",
           "text": "以下是关于购物习惯的问题。",
           "theme": "mjy-collapsible",
-          "themeOptions": { "summary": "第一部分：购物习惯", "collapsed": false }
+          "themeOptions": {
+            "summary": "第一部分：购物习惯",
+            "collapsed": false
+          }
         },
         {
           "uuid": "99999999-1002-4555-8555-000000001002",
@@ -40,16 +43,40 @@
           "mandatory": true,
           "theme": "mjy-grouped-options",
           "answers": [
-            { "code": "A1", "text": "苹果" },
-            { "code": "A2", "text": "香蕉" },
-            { "code": "A3", "text": "白菜" },
-            { "code": "A4", "text": "土豆" }
+            {
+              "code": "A1",
+              "text": "苹果"
+            },
+            {
+              "code": "A2",
+              "text": "香蕉"
+            },
+            {
+              "code": "A3",
+              "text": "白菜"
+            },
+            {
+              "code": "A4",
+              "text": "土豆"
+            }
           ],
           "themeOptions": {
             "collapsible": true,
             "groups": [
-              { "label": "水果", "codes": ["A1", "A2"] },
-              { "label": "蔬菜", "codes": ["A3", "A4"] }
+              {
+                "label": "水果",
+                "codes": [
+                  "A1",
+                  "A2"
+                ]
+              },
+              {
+                "label": "蔬菜",
+                "codes": [
+                  "A3",
+                  "A4"
+                ]
+              }
             ]
           }
         },
@@ -59,19 +86,44 @@
           "type": "M",
           "text": "买过下面哪些（可多选）",
           "other": true,
-          "attributes": { "max_answers": "3" },
+          "attributes": {
+            "max_answers": "3"
+          },
           "theme": "mjy-grouped-options",
           "themeOptions": {
             "collapsible": false,
             "groups": [
-              { "label": "水果", "codes": ["M1", "M2"] },
-              { "label": "蔬菜", "codes": ["M3"] }
+              {
+                "label": "水果",
+                "codes": [
+                  "M1",
+                  "M2"
+                ]
+              },
+              {
+                "label": "蔬菜",
+                "codes": [
+                  "M3"
+                ]
+              }
             ]
           },
           "subquestions": [
-            { "uuid": "99999999-2007-4555-8555-000000002007", "code": "M1", "text": "苹果" },
-            { "uuid": "99999999-2008-4555-8555-000000002008", "code": "M2", "text": "香蕉" },
-            { "uuid": "99999999-2009-4555-8555-000000002009", "code": "M3", "text": "白菜" }
+            {
+              "uuid": "99999999-2007-4555-8555-000000002007",
+              "code": "M1",
+              "text": "苹果"
+            },
+            {
+              "uuid": "99999999-2008-4555-8555-000000002008",
+              "code": "M2",
+              "text": "香蕉"
+            },
+            {
+              "uuid": "99999999-2009-4555-8555-000000002009",
+              "code": "M3",
+              "text": "白菜"
+            }
           ]
         },
         {
@@ -81,7 +133,9 @@
           "text": "扫描商品条码",
           "maxLength": 12,
           "theme": "mjy-scan-input",
-          "themeOptions": { "scanFormat": "barcode" }
+          "themeOptions": {
+            "scanFormat": "barcode"
+          }
         },
         {
           "uuid": "99999999-1004-4555-8555-000000001004",
@@ -90,17 +144,44 @@
           "text": "逐项评价",
           "mandatory": true,
           "theme": "mjy-matrix-stepper",
-          "themeOptions": { "rowsPerStep": 2 },
+          "themeOptions": {
+            "rowsPerStep": 2
+          },
           "answers": [
-            { "code": "L1", "text": "不满意" },
-            { "code": "L2", "text": "一般" },
-            { "code": "L3", "text": "满意" }
+            {
+              "code": "L1",
+              "text": "不满意"
+            },
+            {
+              "code": "L2",
+              "text": "一般"
+            },
+            {
+              "code": "L3",
+              "text": "满意"
+            }
           ],
           "subquestions": [
-            { "uuid": "99999999-2001-4555-8555-000000002001", "code": "R1", "text": "价格" },
-            { "uuid": "99999999-2002-4555-8555-000000002002", "code": "R2", "text": "品质" },
-            { "uuid": "99999999-2003-4555-8555-000000002003", "code": "R3", "text": "配送" },
-            { "uuid": "99999999-2004-4555-8555-000000002004", "code": "R4", "text": "客服" }
+            {
+              "uuid": "99999999-2001-4555-8555-000000002001",
+              "code": "R1",
+              "text": "价格"
+            },
+            {
+              "uuid": "99999999-2002-4555-8555-000000002002",
+              "code": "R2",
+              "text": "品质"
+            },
+            {
+              "uuid": "99999999-2003-4555-8555-000000002003",
+              "code": "R3",
+              "text": "配送"
+            },
+            {
+              "uuid": "99999999-2004-4555-8555-000000002004",
+              "code": "R4",
+              "text": "客服"
+            }
           ]
         },
         {
@@ -109,11 +190,43 @@
           "type": "P",
           "text": "用过下面哪些，并写出型号",
           "theme": "mjy-inline-blank",
-          "themeOptions": { "blankLabel": "型号", "blankMaxLength": 8 },
+          "themeOptions": {
+            "blankLabel": "型号",
+            "blankMaxLength": 8
+          },
           "subquestions": [
-            { "uuid": "99999999-2005-4555-8555-000000002005", "code": "S1", "text": "手机" },
-            { "uuid": "99999999-2006-4555-8555-000000002006", "code": "S2", "text": "平板" }
+            {
+              "uuid": "99999999-2005-4555-8555-000000002005",
+              "code": "S1",
+              "text": "手机"
+            },
+            {
+              "uuid": "99999999-2006-4555-8555-000000002006",
+              "code": "S2",
+              "text": "平板"
+            }
           ]
+        },
+        {
+          "uuid": "99999999-1020-4555-8555-000000001020",
+          "code": "QCARO",
+          "type": "L",
+          "text": "哪个包装最吸引你",
+          "mandatory": true,
+          "theme": "mjy-carousel",
+          "answers": [
+            { "code": "C1", "text": "包装甲" },
+            { "code": "C2", "text": "包装乙" },
+            { "code": "C3", "text": "包装丙" }
+          ],
+          "themeOptions": {
+            "autoplay": false,
+            "slides": [
+              { "code": "C1", "url": "https://platform.example.invalid/a/11111111-1111-4111-8111-111111111111/22222221-2222-4222-8222-222222222222/1?exp=1900000000&sig=ZmFrZS1zaWduYXR1cmU", "alt": "红色包装的果汁", "assetVersion": 1 },
+              { "code": "C2", "url": "https://platform.example.invalid/a/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/1?exp=1900000000&sig=ZmFrZS1zaWduYXR1cmU", "alt": "蓝色包装的果汁", "assetVersion": 1 },
+              { "code": "C3", "url": "https://platform.example.invalid/a/11111111-1111-4111-8111-111111111111/22222223-2222-4222-8222-222222222222/1?exp=1900000000&sig=ZmFrZS1zaWduYXR1cmU", "alt": "绿色包装的果汁", "assetVersion": 1 }
+            ]
+          }
         }
       ]
     },
@@ -134,8 +247,21 @@
             "minRows": 1,
             "maxRows": 3,
             "columns": [
-              { "code": "item", "label": "商品", "type": "text", "required": true, "maxLength": 20 },
-              { "code": "qty", "label": "数量", "type": "integer", "required": true, "min": 1, "max": 99 }
+              {
+                "code": "item",
+                "label": "商品",
+                "type": "text",
+                "required": true,
+                "maxLength": 20
+              },
+              {
+                "code": "qty",
+                "label": "数量",
+                "type": "integer",
+                "required": true,
+                "min": 1,
+                "max": 99
+              }
             ]
           }
         },
@@ -150,17 +276,38 @@
           "themeOptions": {
             "structureVersion": "lr1",
             "objects": [
-              { "code": "B1", "label": "甲品牌 & <老字号>" },
-              { "code": "B2", "label": "乙品牌" }
+              {
+                "code": "B1",
+                "label": "甲品牌 & <老字号>"
+              },
+              {
+                "code": "B2",
+                "label": "乙品牌"
+              }
             ],
             "dimensions": [
-              { "code": "price", "label": "价格" },
-              { "code": "service", "label": "服务" }
+              {
+                "code": "price",
+                "label": "价格"
+              },
+              {
+                "code": "service",
+                "label": "服务"
+              }
             ],
             "scale": [
-              { "code": "1", "label": "差" },
-              { "code": "2", "label": "一般" },
-              { "code": "3", "label": "好" }
+              {
+                "code": "1",
+                "label": "差"
+              },
+              {
+                "code": "2",
+                "label": "一般"
+              },
+              {
+                "code": "3",
+                "label": "好"
+              }
             ]
           }
         },
@@ -175,13 +322,33 @@
           "themeOptions": {
             "structureVersion": "pk1",
             "items": [
-              { "code": "A", "label": "包装甲 & <老版>", "image": "/themes/survey/fruity_twentythree/files/logo.png" },
-              { "code": "B", "label": "包装乙", "image": "/themes/survey/fruity_twentythree/files/logo.png" },
-              { "code": "C", "label": "包装丙", "image": "/themes/survey/fruity_twentythree/files/logo.png" }
+              {
+                "code": "A",
+                "label": "包装甲 & <老版>",
+                "image": "/themes/survey/fruity_twentythree/files/logo.png"
+              },
+              {
+                "code": "B",
+                "label": "包装乙",
+                "image": "/themes/survey/fruity_twentythree/files/logo.png"
+              },
+              {
+                "code": "C",
+                "label": "包装丙",
+                "image": "/themes/survey/fruity_twentythree/files/logo.png"
+              }
             ],
             "pairs": [
-              { "code": "P1", "left": "A", "right": "B" },
-              { "code": "P2", "left": "B", "right": "C" }
+              {
+                "code": "P1",
+                "left": "A",
+                "right": "B"
+              },
+              {
+                "code": "P2",
+                "left": "B",
+                "right": "C"
+              }
             ]
           }
         },
@@ -200,9 +367,30 @@
             "maxPicks": 2,
             "maxQuantity": 9,
             "products": [
-              { "code": "S1", "label": "牛奶 & <整箱>", "x": 0.0, "y": 0.0, "w": 0.4, "h": 0.5 },
-              { "code": "S2", "label": "面包", "x": 0.5, "y": 0.0, "w": 0.4, "h": 0.5 },
-              { "code": "S3", "label": "鸡蛋", "x": 0.0, "y": 0.6, "w": 1.0, "h": 0.4 }
+              {
+                "code": "S1",
+                "label": "牛奶 & <整箱>",
+                "x": 0.0,
+                "y": 0.0,
+                "w": 0.4,
+                "h": 0.5
+              },
+              {
+                "code": "S2",
+                "label": "面包",
+                "x": 0.5,
+                "y": 0.0,
+                "w": 0.4,
+                "h": 0.5
+              },
+              {
+                "code": "S3",
+                "label": "鸡蛋",
+                "x": 0.0,
+                "y": 0.6,
+                "w": 1.0,
+                "h": 0.4
+              }
             ]
           }
         },
@@ -218,13 +406,28 @@
             "structureVersion": "th1",
             "text": "苹果很甜，香蕉太软，梨子刚好。",
             "segments": [
-              { "start": 0, "length": 4 },
-              { "start": 5, "length": 4 },
-              { "start": 10, "length": 4 }
+              {
+                "start": 0,
+                "length": 4
+              },
+              {
+                "start": 5,
+                "length": 4
+              },
+              {
+                "start": 10,
+                "length": 4
+              }
             ],
             "tags": [
-              { "code": "like", "label": "喜欢 & <很喜欢>" },
-              { "code": "dislike", "label": "不喜欢" }
+              {
+                "code": "like",
+                "label": "喜欢 & <很喜欢>"
+              },
+              {
+                "code": "dislike",
+                "label": "不喜欢"
+              }
             ],
             "minMarks": 1,
             "maxMarks": 2
@@ -242,12 +445,28 @@
             "structureVersion": "ps1",
             "maxReactionMs": 5000,
             "trials": [
-              { "code": "T1", "label": "第一试次 & <练习>", "stimulus": "红", "correct": "left" },
-              { "code": "T2", "label": "第二试次", "stimulus": "蓝", "correct": "right" }
+              {
+                "code": "T1",
+                "label": "第一试次 & <练习>",
+                "stimulus": "红",
+                "correct": "left"
+              },
+              {
+                "code": "T2",
+                "label": "第二试次",
+                "stimulus": "蓝",
+                "correct": "right"
+              }
             ],
             "keys": [
-              { "code": "left", "label": "左键 F" },
-              { "code": "right", "label": "右键 J" }
+              {
+                "code": "left",
+                "label": "左键 F"
+              },
+              {
+                "code": "right",
+                "label": "右键 J"
+              }
             ]
           }
         },
@@ -262,8 +481,14 @@
           "themeOptions": {
             "structureVersion": "kn1",
             "features": [
-              { "code": "F1", "label": "夜间模式 & <深色>" },
-              { "code": "F2", "label": "离线缓存" }
+              {
+                "code": "F1",
+                "label": "夜间模式 & <深色>"
+              },
+              {
+                "code": "F2",
+                "label": "离线缓存"
+              }
             ]
           }
         },
@@ -280,7 +505,128 @@
             "minPoints": 1,
             "maxPoints": 3
           }
+        },
+        {
+          "uuid": "99999999-1015-4555-8555-000000001015",
+          "code": "QREGION",
+          "type": "T",
+          "text": "你所在的省 / 市 / 区",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-cascading-select",
+          "themeOptions": {
+            "structureVersion": "cs1",
+            "dictionary": "e2e-divisions",
+            "dictionaryVersion": "2024.1",
+            "dictionaryDigest": "dg1:0123456789abcdef",
+            "levels": [
+              "省",
+              "市",
+              "区"
+            ]
+          }
+        },
+        {
+          "uuid": "99999999-1016-4555-8555-000000001016",
+          "code": "QREGION2",
+          "type": "T",
+          "text": "上一版字典下的省 / 市 / 区",
+          "help": "关闭 JavaScript 时直接填 JSON 信封也可以提交。",
+          "mandatory": true,
+          "theme": "mjy-cascading-select",
+          "themeOptions": {
+            "structureVersion": "cs0",
+            "dictionary": "e2e-divisions",
+            "dictionaryVersion": "2023.1",
+            "dictionaryDigest": "dg1:fedcba9876543210",
+            "levels": [
+              "省",
+              "市",
+              "区"
+            ]
+          }
         }
+      ]
+    }
+  ],
+  "dictionaries": [
+    {
+      "code": "e2e-divisions",
+      "version": "2024.1",
+      "digest": "dg1:0123456789abcdef",
+      "nodes": [
+        [
+          "110000",
+          "",
+          "北京市"
+        ],
+        [
+          "110100",
+          "110000",
+          "市辖区"
+        ],
+        [
+          "110101",
+          "110100",
+          "东城区"
+        ],
+        [
+          "440000",
+          "",
+          "广东省"
+        ],
+        [
+          "440100",
+          "440000",
+          "广州市"
+        ],
+        [
+          "440103",
+          "440100",
+          "荔湾区"
+        ]
+      ]
+    },
+    {
+      "code": "e2e-divisions",
+      "version": "2023.1",
+      "digest": "dg1:fedcba9876543210",
+      "nodes": [
+        [
+          "110000",
+          "",
+          "北京市"
+        ],
+        [
+          "110100",
+          "110000",
+          "市辖区"
+        ],
+        [
+          "110101",
+          "110100",
+          "东城区"
+        ],
+        [
+          "440000",
+          "",
+          "广东省"
+        ],
+        [
+          "440100",
+          "440000",
+          "广州市"
+        ],
+        [
+          "440103",
+          "440100",
+          "荔湾区"
+        ],
+        [
+          "440104",
+          "440100",
+          "越秀区 & <旧版>"
+        ]
       ]
     }
   ]

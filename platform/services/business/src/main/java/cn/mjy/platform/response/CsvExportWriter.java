@@ -18,9 +18,9 @@ final class CsvExportWriter implements ExportFormat.Writer {
     private static final String LINE_END = "\r\n";
 
     @Override
-    public void write(List<ExportSheet> sheets, OutputStream out) throws IOException {
+    public void write(ExportContent content, OutputStream out) throws IOException {
         try (ExportZip zip = new ExportZip(out)) {
-            for (ExportSheet sheet : sheets) {
+            for (ExportSheet sheet : content.sheets()) {
                 try (OutputStream entry = zip.entry(sheet.fileName() + ".csv")) {
                     writeSheet(sheet, entry);
                 }

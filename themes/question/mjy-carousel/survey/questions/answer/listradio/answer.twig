@@ -1,0 +1,32 @@
+{#
+/**
+ * MJY 轮播图：与 core 的 listradio/answer.twig 逐行一致（sRows 已经由 PHP 渲染好），
+ * 只多了一层带幻灯片定义的 data-*。配图与切换在浏览器端做，提交的永远是同一批 radio。
+ *
+ * 注意用 escape('html_attr') 而不是别名 e——Twig 沙箱白名单里只有前者
+ * （application/config/internal.php:331）。
+ *
+ * @var name
+ * @var value
+ * @var question_template_attribute  mjy_carousel_slides / mjy_carousel_autoplay
+ */
+#}
+<!-- MJY carousel -->
+
+<!-- answer -->
+{{ sTimer }}
+<div class="mjy-carousel"
+     data-mjy-carousel="{{ question_template_attribute.mjy_carousel_slides|escape('html_attr') }}"
+     data-mjy-autoplay="{{ question_template_attribute.mjy_carousel_autoplay|default(0) }}">
+<ul class="{{ coreClass }} list-unstyled {% if iNbCols > 1 %} ls-column-count-{{iNbCols}}{% endif %}" role="radiogroup" aria-labelledby="ls-question-text-{{ name }}"{% if iNbCols > 1 %} data-column-count={{iNbCols}}{% endif %}>
+    {# rows/answer_row.php #}
+    {{ sRows }}
+</ul>
+</div>
+{# Value for expression manager javascript (use id) ; no need to submit #}
+{{ C.Html.hiddenField("java"~name,value,({
+    'id' : "java"~name,
+    'disabled' : true,
+}))
+}}
+<!-- end of answer -->

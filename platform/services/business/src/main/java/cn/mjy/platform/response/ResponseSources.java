@@ -24,11 +24,18 @@ import org.springframework.stereotype.Component;
 @Component
 class ResponseSources {
 
-    /** 一个答卷来源：投影行按 (实例, sid) 归入它，作答按它的列名读取。 */
-    record Source(int version, String engineInstanceId, long engineSid, List<FieldEntry> fields) {
+    /**
+     * 一个答卷来源：投影行按 (实例, sid) 归入它，作答按它的列名读取。
+     *
+     * @param extensionQuestions 该版本里有副表的题目代码；网关不存绑定，副表题由平台点名
+     *                           （契约 response-read-v1「扩展表作答」）
+     */
+    record Source(int version, String engineInstanceId, long engineSid, List<FieldEntry> fields,
+            List<String> extensionQuestions) {
 
         Source {
             fields = List.copyOf(fields);
+            extensionQuestions = List.copyOf(extensionQuestions);
         }
 
         List<String> fieldnames() {
@@ -59,9 +66,11 @@ class ResponseSources {
      */
     List<Source> sources(TenantContext ctx, UUID surveyId) {
         Map<EngineSurvey, Source> bySid = new LinkedHashMap<>();
-        for (VersionFields v : dictionary(ctx, surveyId)) {
+        for (PublishedVersionView v : versions(ctx, surveyId)) {
             bySid.put(new EngineSurvey(v.engineInstanceId(), v.engineSid()),
-                    new Source(v.version(), v.engineInstanceId(), v.engineSid(), v.fields()));
+                    new Source(v.version(), v.engineInstanceId(), v.engineSid(),
+                            FieldDictionaryBuilder.fields(v.definition(), v.fields()),
+                            ExtensionQuestions.codes(v.definition())));
         }
         return bySid.values().stream().sorted(Comparator.comparingInt(Source::version)).toList();
     }

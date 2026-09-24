@@ -9,6 +9,9 @@
 
 ## 一、两张表
 
+> 字典车道另加了两张表（`_dict_version` / `_dict_node`）存层级字典的快照。
+> 它们不存任何作答，属于[平台字典契约](platform-dictionary-v1.md)第五节，本文不重复。
+
 ```
 {prefix}mjyquestionextensions_answer_cell      一个单元格一行
   engine_instance_id  string(64)   引擎实例 id（ADR 0003 的自然键第一段）
@@ -117,9 +120,19 @@ rows = fetchRows(sid, generation, responseId, questionCode)
 | `min` / `max` | 数值列 | 闭区间 |
 | `options` | `type: "enum"` | **取值集合**，形如 `[{"code":"1","label":"差"}]`；读端按它把单元格里的代码翻成标签 |
 | `distinct` | 任意列 | `true` ＝ 同一列的非空取值在一次作答里不重复（WP-02 切片 02.4 起） |
+| `dictionary` / `dictionaryVersion` / `level` | `type: "dict"` | 取值集合**不在列定义里**：它是这本字典这一版的第 `level` 层（R02-03，见 [platform-dictionary-v1](platform-dictionary-v1.md)）。读端要翻标签得去查字典 |
+
+`type: "dict"` 是 WP-02 字典车道新增的列类型。它与 `enum` 只差一件事：取值集合太大，
+放不进题目属性（行政区划有三千多个节点）。因此 `dict` 列不得声明 `options`；
+引擎侧的取值集合由插件从随 `.lss` 下发的字典快照物化而来，服务端按**整条路径**判定
+（单看一格判不出「这个市在不在这个省下面」）。
 
 `options` 与 `distinct` 都算**结构**：改了可选项或唯一约束就必须换结构版本，
 `structureDigest` 把两者都算进去（标签不算，改标签不影响读回）。
+
+字典列引用的 **(字典, 版本)** 同样算结构：字典换了一版，单元格里那些代码的含义就变了，
+与改了枚举选项是同一回事。它在原有八个字段**之后**追加一段 `|<字典>@<版本>`，
+且只在字典列上出现，所以既有题型的 `sd1:` 摘要逐字节不变。
 
 `fetchStructureVersions()` 返回这条答卷这道题在单元格表里出现过的全部版本。
 正常只有一个；返回多个说明有人绕过 `replaceRows()` 直接写库，读端应当报警而不是合并。

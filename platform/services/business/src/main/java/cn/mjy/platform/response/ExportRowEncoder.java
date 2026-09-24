@@ -2,6 +2,7 @@ package cn.mjy.platform.response;
 
 import cn.mjy.platform.access.ResponseFieldPolicy;
 import cn.mjy.platform.engine.ResponseState;
+import cn.mjy.platform.response.AnswerBatch.ExtensionAnswer;
 import cn.mjy.platform.response.AttachmentManifest.Attachment;
 import cn.mjy.platform.response.ExportPlan.PlannedSource;
 import cn.mjy.platform.response.FieldDictionary.FieldEntry;
@@ -11,6 +12,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 把一批快照行＋该批作答编码成表格行（已遮蔽）与附件清单行。纯函数：同样的输入得到同样的行，
@@ -18,21 +21,29 @@ import java.util.Objects;
  */
 final class ExportRowEncoder {
 
-    /** 一批的编码结果。 */
-    record Encoded(List<List<String>> rows, List<List<String>> attachments) {
+    /**
+     * 一批的编码结果：逐份答卷一条记录。按答卷分组而不是按表分组，分片里三类行因此交替存放，
+     * 逐份成文的格式（Word / PDF）不必跨表连接就能一次流式读出一份答卷（{@link ExportRecord}）。
+     * 按表读出时（{@link ExportPartCodec#read}）每一类的先后次序与分组时完全相同。
+     */
+    record Encoded(List<ExportRecord> records) {
 
         Encoded {
-            rows = List.copyOf(rows);
-            attachments = List.copyOf(attachments);
+            records = List.copyOf(records);
         }
     }
 
     private final ExportLayout layout;
     private final ResponseFieldPolicy policy;
+    /** 版本号 → 该版本里标了敏感的题目代码；每批算一次，不逐行重算。 */
+    private final Map<Integer, Set<String>> sensitiveQuestions;
 
     ExportRowEncoder(ExportLayout layout, ResponseFieldPolicy policy) {
         this.layout = layout;
         this.policy = policy;
+        this.sensitiveQuestions = layout.plan().sources().stream()
+                .collect(Collectors.toUnmodifiableMap(PlannedSource::version,
+                        PlannedSource::sensitiveQuestionCodes));
     }
 
     /** 该行要不要去引擎取作答：未删除且属于创建时的最近代次。 */
@@ -45,20 +56,56 @@ final class ExportRowEncoder {
      * @param answers 版本号 → 该批从引擎读到的作答
      */
     Encoded encode(List<ExportItem> items, Map<Integer, AnswerBatch> answers) {
-        List<List<String>> rows = new ArrayList<>(items.size());
-        List<List<String>> attachments = new ArrayList<>();
+        List<ExportRecord> records = new ArrayList<>(items.size());
         for (ExportItem item : items) {
             PlannedSource source = layout.plan().source(item.version());
-            Map<String, String> raw = needsAnswers(item, source)
-                    ? answers.getOrDefault(item.version(), AnswerBatch.empty()).answers().get(item.responseId())
-                    : null;
+            AnswerBatch batch = answers.getOrDefault(item.version(), AnswerBatch.empty());
+            Map<String, String> raw = needsAnswers(item, source) ? batch.answers().get(item.responseId()) : null;
             Map<String, String> values = raw == null ? null : policy.apply(raw);
-            rows.add(row(item, source, status(item, source, raw), values));
-            if (values != null) {
-                attachments.addAll(attachments(item, source, values));
+            List<String> row = row(item, source, status(item, source, raw), values);
+            List<List<String>> attachments = values == null ? List.of() : attachments(item, source, values);
+            List<List<String>> extensions = needsAnswers(item, source)
+                    ? extensions(item, source, batch) : List.<List<String>>of();
+            records.add(new ExportRecord(row, attachments, extensions));
+        }
+        return new Encoded(records);
+    }
+
+    /**
+     * 一道副表题的全部单元格，每格一行，顺序是 (题目, 行序, 列序)——列序即插件写入时的列字典顺序。
+     *
+     * <p>一行单元格都没有的题目仍然留一行（行序与列为空）：闸门没过时副表本来就是空的，
+     * 引擎答卷列里却还留着不可信的原文，导出必须让人一眼看出「这条不可信」而不是「作答者没填」
+     * （契约 question-extension-tables-v1 第三节第 1 条）。
+     */
+    private List<List<String>> extensions(ExportItem item, PlannedSource source, AnswerBatch batch) {
+        Set<String> sensitive = sensitiveQuestions.getOrDefault(source.version(), Set.of());
+        List<List<String>> rows = new ArrayList<>();
+        for (String question : source.extensionQuestions()) {
+            ExtensionAnswer answer = batch.extension(item.responseId(), question);
+            if (answer == null) {
+                continue;
+            }
+            boolean masked = sensitive.contains(question);
+            if (answer.rows().isEmpty()) {
+                rows.add(extensionRow(item, question, answer, "", "", ""));
+                continue;
+            }
+            for (int index = 0; index < answer.rows().size(); index++) {
+                String rowIndex = Integer.toString(index);
+                answer.rows().get(index).forEach((column, value) ->
+                        rows.add(extensionRow(item, question, answer, rowIndex, column,
+                                Objects.toString(policy.cell(value, masked), ""))));
             }
         }
-        return new Encoded(rows, attachments);
+        return rows;
+    }
+
+    private static List<String> extensionRow(ExportItem item, String question, ExtensionAnswer answer,
+            String rowIndex, String column, String value) {
+        return List.of(Integer.toString(item.version()), Long.toString(item.engineSid()),
+                Long.toString(item.responseId()), item.generation(), question, answer.structureVersion(),
+                Boolean.toString(answer.valid()), rowIndex, column, value);
     }
 
     private static AnswersStatus status(ExportItem item, PlannedSource source, Map<String, String> raw) {

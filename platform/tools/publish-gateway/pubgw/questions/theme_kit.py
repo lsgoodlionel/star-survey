@@ -60,10 +60,42 @@ HIGHLIGHT_SEGMENTS_ATTRIBUTE = "mjy_highlight_segments"
 #: 心理实验（R02-46）：试次（刺激＋正确按键）。**正确按键不进列定义**——
 #: 正确与否由平台按声明推导，作答者提交不了「我答对了」。
 PSYCH_TRIALS_ATTRIBUTE = "mjy_psych_trials"
+#: 轮播图（R02-20）：幻灯片（选项代码＋平台签发的取件地址＋替代文本＋被钉死的资产版本号）。
+#: **不放作者自己填的图片地址**——这一类的图一律来自平台资产服务（ADR 0019）。
+CAROUSEL_SLIDES_ATTRIBUTE = "mjy_carousel_slides"
+CAROUSEL_AUTOPLAY_ATTRIBUTE = "mjy_carousel_autoplay"
 #: 专业模型（R02-47）：模型名与该模型的采集对象。读端按模型名取对应的分析口径，
 #: 不靠猜列名——「连接可复现分析」的锚点就是这一对属性加上结构版本。
 MODEL_NAME_ATTRIBUTE = "mjy_model_name"
 MODEL_FEATURES_ATTRIBUTE = "mjy_model_features"
+
+#: 多级下拉（R02-03）：引用哪本字典、哪一版、那一版的内容摘要，以及每一级的标题。
+#: 取值集合刻意不在属性里：行政区划有数千个节点，它们随字典快照走 plugin_settings。
+DICTIONARY_ATTRIBUTE = "mjy_dictionary"
+DICTIONARY_VERSION_ATTRIBUTE = "mjy_dictionary_version"
+DICTIONARY_DIGEST_ATTRIBUTE = "mjy_dictionary_digest"
+DICTIONARY_LEVELS_ATTRIBUTE = "mjy_dictionary_levels"
+
+#: 字典快照在 lime_plugin_settings 里的键（model=Survey），与插件侧约定。
+DICTIONARY_SETTING_KEY = "dictionaries"
+#: 字典快照的信封版本。
+DICTIONARY_PAYLOAD_VERSION = 1
+#: 插件名：副表与字典都归 MjyQuestionExtensions。
+QUESTION_PLUGIN_NAME = "MjyQuestionExtensions"
+
+#: 一道多级下拉最多几级。与平台 DictionaryLimits.MAX_DEPTH 一致。
+MAX_DICTIONARY_LEVELS = 8
+#: 字典代码：与平台 DictionaryLimits.CODE 一致。
+DICTIONARY_CODE_PATTERN = re.compile(r"\A[a-z][a-z0-9-]{1,63}\Z")
+#: 字典节点代码：与枚举列的取值字符集一致。
+DICTIONARY_NODE_PATTERN = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,31}\Z")
+#: 字典内容摘要：平台 DictionaryDigest 的形状。
+DICTIONARY_DIGEST_PATTERN = re.compile(r"\Adg1:[0-9a-f]{16}\Z")
+#: 一份快照最多多少节点。与平台 DictionaryLimits.MAX_NODES 一致：
+#: 它们要一起塞进 1 MiB 的定义里。
+MAX_DICTIONARY_NODES = 8000
+#: 节点标签长度上限。
+MAX_DICTIONARY_LABEL = 200
 
 #: 题型字母 → 引擎存放该题型视图的目录名（``QuestionTemplate::getFolderName``）。
 #: 主题必须在 ``themes/question/<名字>/survey/questions/answer/<这里的值>/`` 下放 config.xml

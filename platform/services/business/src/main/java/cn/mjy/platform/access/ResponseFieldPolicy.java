@@ -28,6 +28,14 @@ public final class ResponseFieldPolicy {
         return revealSensitive;
     }
 
+    /**
+     * 扩展副表里的一个单元格：它不是引擎答卷列，敏感与否由<b>题目</b>决定（那一列 JSON 信封的敏感标记）。
+     * 遮蔽规则与 {@link #apply} 逐字一致，不能因为换了张表就宽一档。
+     */
+    public String cell(String value, boolean sensitive) {
+        return !revealSensitive && sensitive && value != null ? MASK : value;
+    }
+
     public Map<String, String> apply(Map<String, String> record) {
         Map<String, String> copy = new LinkedHashMap<>(record);
         if (!revealSensitive) {

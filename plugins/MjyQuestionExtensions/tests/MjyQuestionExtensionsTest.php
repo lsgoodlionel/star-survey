@@ -207,6 +207,9 @@ class MjyQuestionExtensionsTest extends TestBaseClass
             'mjy_shelf_image', 'mjy_shelf_products',
             'mjy_highlight_text', 'mjy_highlight_segments', 'mjy_psych_trials',
             'mjy_model_name', 'mjy_model_features',
+            // 轮播图（R02-20）：JSON 里嵌着平台签发的取件地址，净化会把 & 改写成 &amp;，
+            // 图就全裂了——而且是静默的，页面照样渲染。
+            'mjy_carousel_slides',
         ];
         foreach ($jsonBearing as $name) {
             $this->assertArrayHasKey($name, $definitions);

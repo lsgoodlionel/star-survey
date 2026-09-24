@@ -312,7 +312,10 @@ public class ResponseExportWorker {
         return policy;
     }
 
-    /** 按版本分组读作答：只读未删除、属于创建时最近代次的行；一批不超过网关单次上限。 */
+    /**
+     * 按版本分组读作答：只读未删除、属于创建时最近代次的行；一批不超过网关单次上限。
+     * 副表题在计划里点名，代次取计划冻结的那一个——两者一起给才读得到副表（契约 response-read-v1）。
+     */
     private Map<Integer, AnswerBatch> fetch(ExportPlan plan, List<ExportItem> items) {
         Map<Integer, List<Long>> wanted = new LinkedHashMap<>();
         for (ExportItem item : items) {
@@ -323,8 +326,9 @@ public class ResponseExportWorker {
         Map<Integer, AnswerBatch> fetched = new LinkedHashMap<>();
         wanted.forEach((version, ids) -> {
             PlannedSource source = plan.source(version);
-            fetched.put(version, source.fieldnames().isEmpty() ? AnswerBatch.empty()
-                    : answers.read(source.engineInstanceId(), source.engineSid(), ids, source.fieldnames()));
+            AnswerQuery query = new AnswerQuery(source.engineInstanceId(), source.engineSid(), ids,
+                    source.fieldnames(), source.latestGeneration(), source.extensionQuestions());
+            fetched.put(version, query.isEmpty() ? AnswerBatch.empty() : answers.read(query));
         });
         return fetched;
     }

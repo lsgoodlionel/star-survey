@@ -38,11 +38,11 @@ final class QuestionTypeColumns {
      * 契约 platform/contracts/question-extension-tables-v1.md）。
      * 这一列是整块 JSON，不是可枚举的取值。
      */
-    private static final java.util.Set<String> STRUCTURED_THEMES =
+    static final java.util.Set<String> STRUCTURED_THEMES =
             java.util.Set.of(
                     "mjy-repeating-table", "mjy-heatmap", "mjy-loop-rating",
                     "mjy-image-pk", "mjy-shelf", "mjy-text-highlight", "mjy-psych-trial",
-                    "mjy-model-kano");
+                    "mjy-model-kano", "mjy-cascading-select");
 
     private static final List<OptionLabel> FIVE = scale(5);
     private static final Map<String, List<OptionLabel>> BUILT_IN = Map.of(

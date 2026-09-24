@@ -21,6 +21,8 @@ import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import cn.mjy.platform.response.AnswerBatch.ExtensionAnswer;
+import java.util.Map;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -29,6 +31,13 @@ class HttpResponseAnswerSourceTest {
 
     private static final String SECRET = "contract-test-secret-0123456789abcdef";
     private static final long NOW = 1_790_000_000L;
+    private static final String EXTENSION_REPLY = """
+            {"responses":[{"id":1,"values":{"9X1X1":"A1","9X1X2":null}},
+                          {"id":3,"values":{"9X1X1":"A2","9X1X2":"你好"}}],
+             "missing":[2],
+             "extensionAnswers":{"1":{"TABLE1":{"structureVersion":"rt3","isValid":true,
+                                                "rows":[{"item":"甲","qty":"2"},{"item":"乙","qty":"3"}]}}}}
+            """;
 
     private final JsonMapper json = JsonMapper.builder().build();
     private final AtomicReference<Captured> captured = new AtomicReference<>();
@@ -86,8 +95,13 @@ class HttpResponseAnswerSourceTest {
     }
 
     private AnswerBatch read() {
-        return client(SECRET, Duration.ofSeconds(5)).read("hd-engine-01", 900001, List.of(1L, 2L, 3L),
-                List.of("9X1X1", "9X1X2"));
+        return client(SECRET, Duration.ofSeconds(5)).read(AnswerQuery.of("hd-engine-01", 900001,
+                List.of(1L, 2L, 3L), List.of("9X1X1", "9X1X2")));
+    }
+
+    private AnswerBatch readWithExtensions() {
+        return client(SECRET, Duration.ofSeconds(5)).read(new AnswerQuery("hd-engine-01", 900001,
+                List.of(1L, 2L, 3L), List.of("9X1X1", "9X1X2"), "gen-a", List.of("TABLE1")));
     }
 
     @Test
@@ -146,8 +160,9 @@ class HttpResponseAnswerSourceTest {
     void aTimeoutIsUnavailable() {
         delayMillis = 1500;
 
-        assertThatThrownBy(() -> client(SECRET, Duration.ofMillis(300)).read("hd-engine-01", 1, List.of(1L),
-                List.of("f"))).isInstanceOf(ResponseAnswersUnavailableException.class);
+        assertThatThrownBy(() -> client(SECRET, Duration.ofMillis(300))
+                .read(AnswerQuery.of("hd-engine-01", 1, List.of(1L), List.of("f"))))
+                .isInstanceOf(ResponseAnswersUnavailableException.class);
     }
 
     @Test
@@ -155,16 +170,94 @@ class HttpResponseAnswerSourceTest {
         HttpResponseAnswerSource weak = client("too-short", Duration.ofSeconds(5));
 
         assertThat(weak.isConfigured()).isFalse();
-        assertThatThrownBy(() -> weak.read("hd-engine-01", 1, List.of(1L), List.of("f")))
+        assertThatThrownBy(() -> weak.read(AnswerQuery.of("hd-engine-01", 1, List.of(1L), List.of("f"))))
                 .isInstanceOf(ResponseAnswersUnavailableException.class);
         assertThat(captured.get()).isNull();
     }
 
     @Test
     void anEmptyRequestNeverReachesTheGateway() {
-        AnswerBatch batch = client(SECRET, Duration.ofSeconds(5)).read("hd-engine-01", 1, List.of(), List.of("f"));
+        AnswerBatch batch = client(SECRET, Duration.ofSeconds(5))
+                .read(AnswerQuery.of("hd-engine-01", 1, List.of(), List.of("f")));
 
         assertThat(batch.answers()).isEmpty();
+        assertThat(captured.get()).isNull();
+    }
+
+    // ---- 扩展副表作答（契约 response-read-v1「扩展表作答」）----
+
+    /** 不点名副表题时请求体与应答形状一字不变：既有调用方不该因为加了这一段而多问引擎。 */
+    @Test
+    void aRequestWithoutSideTablesCarriesNeitherGenerationNorQuestions() {
+        read();
+
+        JsonNode body = json.readTree(captured.get().body());
+        assertThat(body.has("generation")).isFalse();
+        assertThat(body.has("extensionQuestions")).isFalse();
+    }
+
+    @Test
+    void sideTableQuestionsAreSentWithTheGenerationTheyBelongTo() {
+        reply = EXTENSION_REPLY;
+
+        readWithExtensions();
+
+        JsonNode body = json.readTree(captured.get().body());
+        assertThat(body.get("generation").asString()).isEqualTo("gen-a");
+        assertThat(body.get("extensionQuestions").toString()).isEqualTo("[\"TABLE1\"]");
+    }
+
+    @Test
+    void extensionAnswersAreKeyedByResponseIdAndQuestionCode() {
+        reply = EXTENSION_REPLY;
+
+        AnswerBatch batch = readWithExtensions();
+
+        ExtensionAnswer table = batch.extension(1L, "TABLE1");
+        assertThat(table.structureVersion()).isEqualTo("rt3");
+        assertThat(table.valid()).isTrue();
+        assertThat(table.rows()).containsExactly(Map.of("item", "甲", "qty", "2"), Map.of("item", "乙", "qty", "3"));
+        assertThat(batch.extension(3L, "TABLE1")).isNull();
+        assertThat(batch.answers()).containsOnlyKeys(1L, 3L);
+    }
+
+    /** 点了名却没有这一段，是网关没按契约办事——失败即关闭，不能当成「这批没有副表作答」。 */
+    @Test
+    void aMissingExtensionSectionMeansTheReplyCannotBeTrusted() {
+        assertThatThrownBy(this::readWithExtensions).isInstanceOf(ResponseAnswersUnavailableException.class);
+    }
+
+    @Test
+    void anUnrequestedResponseOrQuestionInTheExtensionSectionIsUntrusted() {
+        for (String section : new String[] {
+                "{\"99\":{\"TABLE1\":{\"structureVersion\":\"rt3\",\"isValid\":true,\"rows\":[]}}}",
+                "{\"1\":{\"OTHER\":{\"structureVersion\":\"rt3\",\"isValid\":true,\"rows\":[]}}}",
+                "{\"1\":{\"TABLE1\":{\"isValid\":true,\"rows\":[]}}}",
+                "{\"1\":{\"TABLE1\":{\"structureVersion\":\"rt3\",\"rows\":[]}}}",
+                "{\"1\":{\"TABLE1\":{\"structureVersion\":\"rt3\",\"isValid\":true}}}",
+                "{\"1\":{\"TABLE1\":{\"structureVersion\":\"rt3\",\"isValid\":true,\"rows\":[[]]}}}",
+                "[]"}) {
+            reply = "{\"responses\":[{\"id\":1,\"values\":{\"9X1X1\":\"A1\",\"9X1X2\":null}}],"
+                    + "\"missing\":[],\"extensionAnswers\":" + section + "}";
+            assertThatThrownBy(this::readWithExtensions).as(section)
+                    .isInstanceOf(ResponseAnswersUnavailableException.class);
+        }
+    }
+
+    /** 一份副表作答都没有时是空对象，不是缺这一段。 */
+    @Test
+    void anEmptyExtensionSectionIsAValidReply() {
+        reply = "{\"responses\":[{\"id\":1,\"values\":{\"9X1X1\":\"A1\",\"9X1X2\":null}}],"
+                + "\"missing\":[],\"extensionAnswers\":{}}";
+
+        assertThat(readWithExtensions().extensions()).isEmpty();
+    }
+
+    /** 代次是副表自然键的一段：只给题目代码不给代次，本端就地拒绝，不等网关退回 400。 */
+    @Test
+    void sideTableQuestionsWithoutAGenerationAreRefusedBeforeAnyCall() {
+        assertThatThrownBy(() -> new AnswerQuery("hd-engine-01", 1, List.of(1L), List.of("f"), null,
+                List.of("TABLE1"))).isInstanceOf(IllegalArgumentException.class);
         assertThat(captured.get()).isNull();
     }
 }

@@ -4,6 +4,7 @@
 ``ALL_THEMED`` 把它们凑齐，用来证明「每个注册过的主题在它自己的题型上都能通过」。
 """
 
+import dataclasses
 import json
 import unittest
 import xml.etree.ElementTree as ElementTree
@@ -21,8 +22,33 @@ TABLE_COLUMNS = [
 ]
 
 
+#: 多级下拉用的那本字典快照（北京 / 广东两棵子树）。
+#: 平台在发布时把它物化进定义，所以任何带多级下拉的样例定义都必须带着它。
+DICTIONARY_SNAPSHOT = {
+    "code": "cn-admin-divisions",
+    "version": "2024.1",
+    "digest": "dg1:0123456789abcdef",
+    "nodes": [
+        ["110000", "", "北京市"],
+        ["110100", "110000", "市辖区"],
+        ["110101", "110100", "东城区"],
+        ["440000", "", "广东省"],
+        ["440100", "440000", "广州市"],
+        ["440103", "440100", "荔湾区"],
+    ],
+}
+
+
+def themed_definition(*questions, version=1):
+    """样例定义；里面有多级下拉时自动带上它引用的字典快照。"""
+    payload = definition_with(*questions, version=version)
+    if any(item.get("theme") == "mjy-cascading-select" for item in questions):
+        return dataclasses.replace(payload, dictionaries=(DICTIONARY_SNAPSHOT,))
+    return payload
+
+
 def issues(*questions, version=1):
-    report = validate_definition(definition_with(*questions, version=version))
+    report = validate_definition(themed_definition(*questions, version=version))
     return [(issue.code, issue.path) for issue in report.issues]
 
 
@@ -31,7 +57,7 @@ def codes(*questions, version=1):
 
 
 def compile_attributes(*questions, code="Q1"):
-    tree = ElementTree.fromstring(LssCompiler().compile(definition_with(*questions)).lss)
+    tree = ElementTree.fromstring(LssCompiler().compile(themed_definition(*questions)).lss)
     rows = [{child.tag: (child.text or "") for child in row}
             for row in tree.findall("question_attributes/rows/row")]
     qids = {row.find("title").text: row.find("qid").text
@@ -40,7 +66,7 @@ def compile_attributes(*questions, code="Q1"):
 
 
 def theme_row(*questions, code="Q1"):
-    tree = ElementTree.fromstring(LssCompiler().compile(definition_with(*questions)).lss)
+    tree = ElementTree.fromstring(LssCompiler().compile(themed_definition(*questions)).lss)
     for row in tree.findall("questions/rows/row"):
         if row.find("title").text == code:
             node = row.find("question_theme_name")
@@ -182,8 +208,63 @@ def kano(**options):
     return question("T", code="QKANO", theme="mjy-model-kano", themeOptions=payload)
 
 
+def cascading_select(**options):
+    """R02-03：引用一本字典的某一版，三级。版本与摘要是平台发布时固化下来的。"""
+    payload = {
+        "structureVersion": "r1",
+        "dictionary": "cn-admin-divisions",
+        "dictionaryVersion": "2024.1",
+        "dictionaryDigest": "dg1:0123456789abcdef",
+        "levels": ["省", "市", "区"],
+    }
+    payload.update(options)
+    return question("T", code="QREGION", theme="mjy-cascading-select", themeOptions=payload)
+# ------------------------------------------------------------------ 切片 02.6 的媒体类
+
+
+#: 平台在发布时写进定义的取件地址形状（ADR 0019 决定 4）：路径带租户 / 资产 / 版本，
+#: 查询串带过期时刻与签名。样例里的值只要形状对就行，签名本身由平台侧的用例覆盖。
+ASSET_URL = "https://survey.example/a/9f1c.../{}/1?exp=1800000000&sig=AAAA"
+
+
+#: 「这个参数没传」与「这个参数传的是 None（＝把键去掉）」要分得开。
+_DEFAULT = object()
+
+_SLIDE_LABELS = {"A1": "包装甲", "A2": "包装乙"}
+
+
+def slide(code, url=_DEFAULT, alt=_DEFAULT, version=1):
+    """一张幻灯片：对准一个选项代码，带平台签发的地址、替代文本与被钉死的资产版本号。
+
+    ``url``／``version`` 传 ``None`` 表示**把这个键去掉**，用来构造缺字段的用例；
+    ``alt`` 传空串则保留这个键但留空（替代文本必填的用例靠它）。
+    """
+    payload = {"code": code}
+    address = ASSET_URL.format(code.lower()) if url is _DEFAULT else url
+    if address is not None:
+        payload["url"] = address
+    payload["alt"] = _SLIDE_LABELS.get(code, code) if alt is _DEFAULT else alt
+    if version is not None:
+        payload["assetVersion"] = version
+    return payload
+
+
+def carousel(qtype="L", slides=_DEFAULT, attributes=None, **options):
+    """R02-20 轮播图：原生单选＋主题，一张幻灯片对一个选项。"""
+    payload = {"slides": [slide("A1"), slide("A2")] if slides is _DEFAULT else slides}
+    if payload["slides"] is None:
+        del payload["slides"]
+    payload.update(options)
+    extra = {"theme": "mjy-carousel", "themeOptions": payload,
+             "answers": [answer("A1"), answer("A2")]}
+    if attributes:
+        extra["attributes"] = attributes
+    return question(qtype, code="QCARO", **extra)
+
+
 ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap(),
-              loop_rating(), image_pk(), shelf(), text_highlight(), psych_trial(), kano())
+              loop_rating(), image_pk(), shelf(), text_highlight(), psych_trial(), kano(),
+              cascading_select(), carousel())
 
 
 # ------------------------------------------------------------------ 注册表

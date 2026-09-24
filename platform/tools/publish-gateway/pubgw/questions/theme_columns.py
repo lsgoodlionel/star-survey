@@ -20,17 +20,29 @@ def structure_digest(columns: List[Dict[str, Any]]) -> str:
     枚举列的**取值集合**与唯一约束也算结构：改了可选项等于换了一本字典，
     早先的答卷必须按它自己那一版读回（副表契约 v1 第二节）。
     """
-    lines = [
-        "{}|{}|{}|{}|{}|{}|{}|{}".format(
-            column["code"], column["type"], "1" if column.get("required") else "0",
-            column.get("maxLength", ""), column.get("min", ""), column.get("max", ""),
-            ",".join(option["code"] for option in column.get("options", ())),
-            "1" if column.get("distinct") else "0",
-        )
-        for column in columns
-    ]
+    lines = [_digest_line(column) for column in columns]
     digest = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
     return "{}:{}".format(STRUCTURE_DIGEST_VERSION, digest[:16])
+
+
+def _digest_line(column: Dict[str, Any]) -> str:
+    """一列一行。
+
+    字典列（``type: "dict"``）的取值集合不在列定义里，而是由 (字典, 版本) 决定，
+    所以它们得进摘要——字典换了一版，单元格里那些代码的含义就变了，与改了枚举选项是同一回事。
+
+    追加在原有八个字段**之后**且只在字典列上出现，因此既有题型的摘要逐字节不变。
+    """
+    line = "{}|{}|{}|{}|{}|{}|{}|{}".format(
+        column["code"], column["type"], "1" if column.get("required") else "0",
+        column.get("maxLength", ""), column.get("min", ""), column.get("max", ""),
+        ",".join(option["code"] for option in column.get("options", ())),
+        "1" if column.get("distinct") else "0",
+    )
+    if column.get("dictionary"):
+        line += "|{}@{}".format(column["dictionary"], column.get("dictionaryVersion", ""))
+    return line
+
 
 def _code_list(raw: Any, path: str, limit: int, pattern: Any = None) -> Tuple[List[Dict[str, str]], List[Issue]]:
     """一串「代码＋标签」的取值，写成 ``["A","B"]`` 或 ``[{"code":"A","label":"优"}]`` 都可以。

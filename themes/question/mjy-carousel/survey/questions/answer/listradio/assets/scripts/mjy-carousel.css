@@ -1,0 +1,68 @@
+/* MJY 轮播图（R02-20）。只管布局与状态，不改选项本身的可点区域。 */
+
+.mjy-carousel-track {
+    position: relative;
+}
+
+.mjy-carousel-panel[hidden] {
+    display: none;
+}
+
+.mjy-carousel-figure {
+    margin: 0 0 0.5em;
+    text-align: center;
+}
+
+.mjy-carousel-image {
+    max-width: 100%;
+    height: auto;
+}
+
+/* 图裂了只是少一张图：替代文本与提示留在原地，选项照常可选。 */
+.mjy-carousel-broken .mjy-carousel-image {
+    display: none;
+}
+
+.mjy-carousel-error {
+    margin: 0;
+    padding: 1em;
+    border: 1px dashed currentColor;
+    font-size: 0.9em;
+}
+
+.mjy-carousel-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5em;
+    margin-top: 0.5em;
+}
+
+.mjy-carousel-arrow {
+    border: 1px solid currentColor;
+    background: transparent;
+    border-radius: 50%;
+    width: 2em;
+    height: 2em;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.mjy-carousel-dots {
+    display: flex;
+    gap: 0.35em;
+}
+
+.mjy-carousel-dot {
+    width: 0.7em;
+    height: 0.7em;
+    padding: 0;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+}
+
+.mjy-carousel-dot[aria-current="true"] {
+    background: currentColor;
+}

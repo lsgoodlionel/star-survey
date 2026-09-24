@@ -38,9 +38,21 @@ class MjyQuestionAttributeDefinitions
     /** 专业模型（R02-47）：模型名与该模型的采集对象；读端按模型名取分析口径。 */
     public const MODEL_NAME = 'mjy_model_name';
     public const MODEL_FEATURES = 'mjy_model_features';
+    /**
+     * 多级下拉（R02-03）引用哪本字典、哪一版、那一版的内容摘要，以及每一级的标题。
+     * 取值集合刻意不在这里：它们随快照走 plugin_settings，物化进 MjyDictionaryStore。
+     */
+    public const DICTIONARY = 'mjy_dictionary';
+    public const DICTIONARY_VERSION = 'mjy_dictionary_version';
+    public const DICTIONARY_DIGEST = 'mjy_dictionary_digest';
+    public const DICTIONARY_LEVELS = 'mjy_dictionary_levels';
+    /** 轮播图的幻灯片（R02-20，JSON）：图来自平台资产服务，地址带签名与过期时刻（ADR 0019）。 */
+    public const CAROUSEL_SLIDES = 'mjy_carousel_slides';
+    public const CAROUSEL_AUTOPLAY = 'mjy_carousel_autoplay';
 
     private const CATEGORY = 'MJY 结构化题型';
     private const CATEGORY_GROUPS = 'MJY 选项分类';
+    private const CATEGORY_CAROUSEL = 'MJY 轮播图';
 
     /**
      * @return array<string, array<string, mixed>>
@@ -97,6 +109,43 @@ class MjyQuestionAttributeDefinitions
             self::MODEL_FEATURES => self::definition($structured, 150, 'textarea', '', '模型采集对象（JSON）', [
                 'help' => '形如 [{"code":"F1","label":"夜间模式"}]，一个对象一行；量表由模型固定，不在这里',
             ]),
+            self::DICTIONARY => self::definition($structured, 210, 'text', '', '引用的字典', [
+                'help' => '平台字典代码，如 cn-admin-divisions',
+            ]),
+            self::DICTIONARY_VERSION => self::definition($structured, 220, 'text', '', '字典版本', [
+                'help' => '由平台在发布时固化，作者改不了',
+            ]),
+            self::DICTIONARY_DIGEST => self::definition($structured, 230, 'text', '', '字典内容摘要', [
+                'help' => '插件据它判断引擎上装着的那份是不是同一份',
+            ]),
+            self::DICTIONARY_LEVELS => self::definition($structured, 240, 'textarea', '', '各级标题（JSON）', [
+                'help' => '形如 ["省","市","区"]，一级一列',
+            ]),
+            // R02-20 轮播图：数据形状就是原生单选，所以挂在 L 上而不是结构化题型上。
+            // 地址里带签名，& 一旦被净化改写，图就全裂——必须走 xssfilter => false。
+            self::CAROUSEL_SLIDES => self::definition(
+                Question::QT_L_LIST,
+                10,
+                'textarea',
+                '',
+                '幻灯片（JSON）',
+                [
+                    'help' => '由平台按资产引用生成，形如 [{"code":"A1","url":"…","alt":"…","assetVersion":1}]',
+                    'category' => self::CATEGORY_CAROUSEL,
+                ]
+            ),
+            self::CAROUSEL_AUTOPLAY => self::definition(
+                Question::QT_L_LIST,
+                20,
+                'integer',
+                '0',
+                '自动轮播',
+                [
+                    'help' => '1＝自动切换；作答者一动就停',
+                    'category' => self::CATEGORY_CAROUSEL,
+                    'xssfilter' => true,
+                ]
+            ),
             // R02-04 的两支：单选按答案选项分组，多选按子题分组，共用同一份 JSON。
             // 少写一个题型字母，引擎导入那种题时会把这个属性丢掉，主题拿到空分组静默平铺。
             self::OPTION_GROUPS => self::definition(

@@ -14,11 +14,26 @@ class MjyTableColumnSpec
     public const TYPE_DECIMAL = 'decimal';
     /** 取值集合由平台在发布时声明（R02-11 循环评价用它认评分与评价对象）。 */
     public const TYPE_ENUM = 'enum';
+    /**
+     * 取值集合是**平台字典某一版的第 N 层**（R02-03 多级下拉，ADR 0019）。
+     *
+     * 与 enum 的区别就在于取值集合不在列定义里：行政区划有数千个节点，
+     * 既超过 MAX_OPTIONS 也不该每道题重复一份。它们在 MjyDictionaryStore 里。
+     */
+    public const TYPE_DICT = 'dict';
 
-    private const TYPES = [self::TYPE_TEXT, self::TYPE_INTEGER, self::TYPE_DECIMAL, self::TYPE_ENUM];
+    private const TYPES = [
+        self::TYPE_TEXT, self::TYPE_INTEGER, self::TYPE_DECIMAL, self::TYPE_ENUM, self::TYPE_DICT,
+    ];
+    private const DICTIONARY_PATTERN = '/^[a-z][a-z0-9-]{1,63}$/';
+    private const DICTIONARY_VERSION_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/';
+    /** 与平台 DictionaryLimits.MAX_DEPTH、网关 MAX_DICTIONARY_LEVELS 一致。 */
+    private const MAX_LEVEL = 8;
     private const CODE_PATTERN = '/^[A-Za-z][A-Za-z0-9_]{0,31}$/';
     /** 取值代码比列代码宽一位：量表常写成 1…5（与网关 _VALUE_CODE_PATTERN 一致）。 */
     private const VALUE_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/';
+    /** 对外公开的同一个形状：字典列的取值用它先把字符集守住，再去查字典。 */
+    public const VALUE_CODE_PATTERN = self::VALUE_PATTERN;
     private const MAX_COLUMNS = 40;
     private const MAX_OPTIONS = 200;
 
@@ -103,7 +118,9 @@ class MjyTableColumnSpec
             'options' => $type === self::TYPE_ENUM ? self::parseOptions($raw['options'] ?? null, $code) : null,
             // 唯一列：同一列的非空取值在一次作答里不得重复。
             'distinct' => !empty($raw['distinct']),
-        ];
+        ] + ($type === self::TYPE_DICT ? self::parseDictionary($raw, $code) : [
+            'dictionary' => null, 'dictionaryVersion' => null, 'level' => null,
+        ]);
     }
 
     /**
@@ -133,6 +150,32 @@ class MjyTableColumnSpec
             $options[] = $value;
         }
         return $options;
+    }
+
+    /**
+     * 字典列的三件事：哪本字典、哪一版、这一列对应第几层。
+     *
+     * 版本必须在列定义里，而不是另外查一次题目属性：单元格是按哪一版写下的，
+     * 跟结构版本一样属于**结构**，它必须随列字典一起被读端看到。
+     *
+     * @param array<string, mixed> $raw
+     * @return array<string, mixed>
+     */
+    private static function parseDictionary(array $raw, string $code): array
+    {
+        $dictionary = $raw['dictionary'] ?? null;
+        if (!is_string($dictionary) || preg_match(self::DICTIONARY_PATTERN, $dictionary) !== 1) {
+            throw new InvalidArgumentException('dict 列必须声明合法的 dictionary：' . $code);
+        }
+        $version = $raw['dictionaryVersion'] ?? null;
+        if (!is_string($version) || preg_match(self::DICTIONARY_VERSION_PATTERN, $version) !== 1) {
+            throw new InvalidArgumentException('dict 列必须声明合法的 dictionaryVersion：' . $code);
+        }
+        $level = $raw['level'] ?? null;
+        if (!is_int($level) || $level < 1 || $level > self::MAX_LEVEL) {
+            throw new InvalidArgumentException('dict 列的 level 必须在 1 到 ' . self::MAX_LEVEL . ' 之间：' . $code);
+        }
+        return ['dictionary' => $dictionary, 'dictionaryVersion' => $version, 'level' => $level];
     }
 
     /**

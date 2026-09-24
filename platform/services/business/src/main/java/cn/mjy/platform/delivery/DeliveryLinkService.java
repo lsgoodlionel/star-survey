@@ -4,6 +4,7 @@ import cn.mjy.platform.delivery.DeliveryLinkRepository.LinkRow;
 import cn.mjy.platform.delivery.DeliveryLinkRepository.ShortLinkTarget;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
+import cn.mjy.platform.shared.security.SignedParameters;
 import cn.mjy.platform.shared.tenant.TenantScope;
 import java.time.Clock;
 import java.time.Duration;

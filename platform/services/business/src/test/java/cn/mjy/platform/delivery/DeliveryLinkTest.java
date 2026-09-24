@@ -1,11 +1,12 @@
 package cn.mjy.platform.delivery;
 
+import cn.mjy.platform.shared.security.SignedParameters;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.mjy.platform.access.AccessFixture;
 import cn.mjy.platform.delivery.DeliveryLinkService.NewLink;
-import cn.mjy.platform.delivery.SignedParameters.Verdict;
+import cn.mjy.platform.shared.security.SignedParameters.Verdict;
 import cn.mjy.platform.response.ResponseFixture.Published;
 import cn.mjy.platform.shared.TenantContext;
 import java.nio.charset.StandardCharsets;

@@ -8,10 +8,12 @@ import static cn.mjy.platform.response.ResponseFixture.SENSITIVE_FIELD;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.mjy.platform.response.AnswerBatch.ExtensionAnswer;
 import cn.mjy.platform.response.FakeResponseAnswerSource.SimulatedCrash;
 import cn.mjy.platform.response.ResponseFixture.Published;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +24,9 @@ import org.springframework.test.context.TestPropertySource;
 /**
  * 可恢复：进程在批次中途死掉（租约未释放、下一个分片写了一半），租约超时后从检查点接着做，
  * 最终文件与一次跑完的作业逐字节相同；网关暂时不可达时作业退避重试，同样得到相同文件。
+ *
+ * <p>场景里带扩展副表作答，且各份答卷的行数<b>不同</b>：逐字节相同的断言因此也覆盖长度不定的那张表
+ * （ADR 0015 增补二）。
  */
 @SpringBootTest
 @TestPropertySource(properties = "platform.response.export.batch-size=7")
@@ -48,18 +53,31 @@ class ResponseExportResumeTest {
 
     @BeforeEach
     void fiftyResponsesWithAnswersAndOneDeleted() {
-        p = fixture.responses().publishedSurvey();
+        p = fixture.responses().publishedSurvey(fixture.responses().extensionDefinition());
         for (long id = 1; id <= RESPONSES; id++) {
             fixture.responses().response(p.tenant(), p.instance(), p.sid(), GENERATION, id,
                     id == 13 ? DELETED : COMPLETED);
             answers.put(p.instance(), p.sid(), id, Map.of(PLAIN_FIELD, "A" + (id % 3),
                     SENSITIVE_FIELD, "=HYPERLINK(\"http://169.254.169.254/\")" + id));
+            answers.putExtension(p.instance(), p.sid(), id, "QTABLE", sideTable(id));
         }
+    }
+
+    /** 行数逐份答卷不同（0–3 行），且第 7 份没通过插件闸门：长表的行数不再与答卷数成比例。 */
+    private static ExtensionAnswer sideTable(long responseId) {
+        if (responseId % 7 == 0) {
+            return new ExtensionAnswer("rt1", false, List.of());
+        }
+        List<Map<String, String>> rows = new java.util.ArrayList<>();
+        for (int index = 0; index < responseId % 4; index++) {
+            rows.add(Map.of("item", "物品" + index, "qty", Integer.toString(index + 1)));
+        }
+        return new ExtensionAnswer("rt1", true, List.copyOf(rows));
     }
 
     @Test
     void aCrashMidJobResumesFromTheCheckpointAndProducesAnIdenticalFile() throws IOException {
-        for (String format : new String[] {"csv", "xlsx", "sav"}) {
+        for (String format : new String[] {"csv", "xlsx", "sav", "docx"}) {
             ExportJobView reference = fixture.create(p.owner(), p, format);
             ExportJobView crashed = fixture.create(p.owner(), p, format);
             byte[] expected = fixture.download(p.owner(), fixture.runToEnd(p.owner(), reference));
@@ -119,6 +137,22 @@ class ResponseExportResumeTest {
         assertThat(rows.get(2).get(text)).startsWith("'=HYPERLINK(");
         assertThat(rows.get(2 + 12).get(status)).isEqualTo("deleted");
         assertThat(rows.get(2 + 12).get(text)).isEmpty();
+    }
+
+    /**
+     * 逐字节相同的断言只有在那张表确实有内容时才说明问题：一张空表在两次跑法里都是空的，
+     * 照样"相同"。这里钉住它确实有内容，且行数与答卷数不成比例（行数逐份答卷不同）。
+     */
+    @Test
+    void theVariableLengthSideTableSheetIsReallyPartOfTheReproducedFile() {
+        ExportJobView job = fixture.runToEnd(p.owner(), fixture.create(p.owner(), p, "csv"));
+
+        var rows = ExportFixture.unzipCsv(fixture.download(p.owner(), job)).get("extensions.csv");
+
+        assertThat(rows.get(0)).containsExactly(ExportLayout.EXTENSION_HEADER.toArray(String[]::new));
+        assertThat(rows).hasSizeGreaterThan(RESPONSES);
+        assertThat(rows.subList(1, rows.size())).anySatisfy(row -> assertThat(row.get(7)).isEqualTo("2"))
+                .anySatisfy(row -> assertThat(row.get(6)).isEqualTo("false"));
     }
 
     @Test

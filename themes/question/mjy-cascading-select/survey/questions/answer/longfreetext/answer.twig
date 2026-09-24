@@ -1,0 +1,41 @@
+{#
+/**
+ * MJY 多级下拉：逐级从平台字典里选，选中的整条路径序列化成 JSON 信封。
+ *
+ * 真正被提交的永远是下面那个 textarea（name = 引擎字段名），下拉框只是它的编辑器。
+ * 关掉 JavaScript 时 textarea 直接可见，作答者仍能手写合法的 JSON —— 服务端校验
+ * （MjyQuestionExtensions::beforeSurveyPage）对两条路径一视同仁。
+ *
+ * **取值集合不在这里。** 别的 mjy- 主题把可选项打进 data-* 属性，本主题不能：
+ * 行政区划有数千个节点。脚本按 data-mjy-endpoint 逐级向插件取，一次一层一页。
+ *
+ * @var name  引擎字段名（Q<qid>）
+ * @var dispVal  已存的 JSON 信封
+ * @var question_template_attribute  mjy_dictionary / mjy_dictionary_version / 各级标题 / 列定义
+ */
+#}
+<!-- MJY cascading select -->
+<div class="{{ coreClass }} {{ extraclass }} mjy-cascading-select"
+     data-mjy-cascading-select="1"
+     data-mjy-field="{{ name }}"
+     data-mjy-sid="{{ surveyid }}"
+     {# 只能用沙箱白名单里的过滤器，别名 e 不在其中（application/config/internal.php:331） #}
+     data-mjy-dictionary="{{ question_template_attribute.mjy_dictionary|escape('html_attr') }}"
+     data-mjy-version="{{ question_template_attribute.mjy_dictionary_version|escape('html_attr') }}"
+     data-mjy-levels="{{ question_template_attribute.mjy_dictionary_levels|escape('html_attr') }}"
+     data-mjy-columns="{{ question_template_attribute.mjy_table_columns|escape('html_attr') }}">
+
+    <div class="mjy-cascading-select__editor" hidden>
+        <div class="mjy-cascading-select__levels"></div>
+        <p class="mjy-cascading-select__status" role="status" aria-live="polite"></p>
+    </div>
+
+    <textarea
+        class="form-control mjy-cascading-select__raw"
+        name="{{ name }}"
+        id="answer{{ name }}"
+        rows="{{ drows }}"
+        aria-labelledby="ls-question-text-{{ basename }}"
+    >{{ dispVal }}</textarea>
+</div>
+<!-- end of answer -->

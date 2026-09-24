@@ -34,6 +34,9 @@ platform:
       enabled: false
       backoff: PT0S
       storage-dir: target/test-exports
+  asset:
+    # 资产字节落在构建目录下；取件票的主密钥由 @AssetIntegrationTest 单独给。
+    storage-dir: target/test-assets
   contacts:
     import:
       # 测试里不启动定时调度，由测试直接调用 ContactImportWorker；失败立即可重试。
