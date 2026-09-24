@@ -1,78 +1,211 @@
 # MJY 平台（LimeSurvey 本土化）
 
-本目录存放本土化商业平台在引擎仓库内的全部自有内容。引擎源码保持与上游一致，自研插件放在 `plugins/Mjy*`（引擎插件加载机制要求放在该目录）。
+多租户 SaaS ＋ 私有化交付的问卷／考试／测评平台。引擎用 LimeSurvey 7.1.2，**引擎源码与上游逐文件一致**，本项目的全部内容都是新增文件（P0-00.2 结论，见 [docs/p0/upstream-diff.md](docs/p0/upstream-diff.md)）。
 
-总方案见 `/Users/lionel/Documents/MJY 2/LimeSurvey本土化方案/04-开发方案总蓝图（仓库校准版）.md`；P0 进度见 [docs/p0/progress.md](docs/p0/progress.md)。
+> 本文件是**开发与系统情况的单一入口**。总方案见 `/Users/lionel/Documents/MJY 2/LimeSurvey本土化方案/04-开发方案总蓝图（仓库校准版）.md` §0，逐波细节见 [docs/p2/progress.md](docs/p2/progress.md)。
 
-## 目录
+---
+
+## 1. 当前状态
+
+`main` @ `d807200b` · 更新 2026-09-24
+
+| 阶段 | 状态 |
+|---|---|
+| P0 基线与可行性 | ✅（供应商询证与法务意见待业务侧） |
+| P1 租户与平台骨架 | ✅ 闸门通过 |
+| P2 通用问卷与本土入口 | 🔄 第一–七波已合并，第八波进行中 |
+| P3 商业与业务应用 | 🔄 考试与测评（WP-09/10）已起步 |
+| P4–P5 | ⬜ |
+
+**测试基线**
+
+| 套件 | 数量 | 说明 |
+|---|---|---|
+| 平台 Java | **1231 通过 / 153 类** | 0 失败 0 错误 |
+| 发布网关 Python | **1039 通过** | |
+| 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
+| 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
+| 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
+
+**代码规模**：平台 Java 522 个文件、网关 Python 63 个、自研插件 3 个、自研作答主题 15 套、数据库迁移 42 个。
+
+---
+
+## 2. 系统构成
+
+```
+浏览器 ──→ LimeSurvey 引擎（作答页 / 后台）
+              │ ①事件回传(HMAC)        ↑ ③RemoteControl + 插件通道
+              ↓                        │
+         平台（Spring Boot, Java 21） ─┴─ 发布网关（Python, 纯标准库）
+              │
+         PostgreSQL（RLS, ENABLE+FORCE）
+```
+
+**三条边界，各自的信任模型不同**：
+
+| 通道 | 方向 | 认证 | 决策 |
+|---|---|---|---|
+| 引擎事件回传 | 引擎 → 平台 | 每实例派生密钥 HMAC | ADR 0003 |
+| 发布与答卷读取 | 平台 → 网关 → 引擎 | 平台↔网关 HMAC＋时间戳；引擎口令只在网关 | ADR 0009 / 0013 |
+| 插件副表读取 | 网关 → 插件 | 通道密钥（自实例密钥再派生一层，单向） | ADR 0018 |
+| 资产取件 | 浏览器 → 平台 | 签名取件票（按租户派生密钥，验签前零 IO） | ADR 0019 |
+
+**为什么平台不直接连引擎库**：引擎口令只留在网关；平台只传它租户已发布版本里记录的 `(实例, sid)`，网关不做业务授权。
+
+**为什么作答页拿不到平台**：引擎到平台只有 cron 回传（ADR 0008 的出网约束），所以任何需要作答者取用的东西都必须**随定义快照发到浏览器**——资产取件票就是这么设计的。
+
+---
+
+## 3. 目录
 
 | 路径 | 内容 |
 |---|---|
-| `platform/deploy/dev/` | 开发镜像（PHP 8.3＋Apache，含 MySQL/PostgreSQL 驱动与 Xdebug） |
-| `platform/deploy/test/` | 与 CI 一致的测试配置与运行脚本 |
-| `platform/deploy/functional/` | functional/acceptance（Selenium＋Firefox）套件验证栈（8095 端口，自带库、tmp、upload、config 卷） |
-| `platform/docs/adr/` | 架构决策记录 |
-| `platform/docs/p0/` | P0 技术验证进度与证据 |
-| `platform/phpunit.xml` | 平台自有测试套件 |
-| `plugins/MjyPlatformBridge/` | 答卷生命周期事件日志与补偿扫描（P0-00.4 原型） |
-| `platform/deploy/exam/` | 考试与配额验证栈（8093 端口，自带数据库与 tmp 卷） |
-| `platform/phpunit-runtime-policy.xml` | `MjyRuntimePolicy` 的测试套件 |
-| `plugins/MjyRuntimePolicy/` | 考试计时与硬名额租约（P0-00.7 原型） |
-| `platform/phpunit-questions.xml` | `MjyQuestionExtensions` 的测试套件 |
-| `plugins/MjyQuestionExtensions/` | 自增表格的服务端校验、结构化副表与上传会话（P0-00.3 原型） |
-| `themes/question/mjy-repeating-table/` | 自增表格题型主题（扩展长文本题 `T`） |
-| `platform/tools/publish-gateway/` | 发布网关：定义 → LSS → 导入 → 激活 → 回读校验 → 回滚（P0-00.8 原型） |
-| `platform/tests/e2e/` | 端到端测试脚本 |
-| `platform/tests/fixtures/surveys/` | 端到端用的问卷 fixture（`.lss`） |
-| `platform/tests/fixtures/plugins/FaultInjector/` | 仅测试用的故障注入插件，只挂载进测试容器 |
+| `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
+| `platform/tools/publish-gateway/` | 发布网关：定义 → LSS → 导入 → 激活 → 回读校验 → 回滚；答卷读取；插件通道客户端 |
+| `platform/tools/engine-theme/` | 把随镜像发布的作答主题装进引擎库 |
+| `platform/tools/log-shipper/` | 错误日志脱敏、去重、上报 |
+| `platform/tools/secure-docs/` | 敏感文档加密 |
+| `platform/contracts/` | 跨组件契约（9 份，见下） |
+| `platform/docs/adr/` | 架构决策记录（19 份） |
+| `platform/docs/p0|p1|p2/` | 逐阶段进度与证据 |
+| `platform/deploy/test/` | 与 CI 一致的测试配置与 14 个端到端脚本 |
+| `platform/deploy/platform-dev/` | 容器化 Maven（本机无需装 JDK）与平台数据库 |
+| `platform/tests/e2e/` | 端到端驱动脚本 |
+| `plugins/MjyPlatformBridge/` | 答卷生命周期事件日志与补偿扫描 |
+| `plugins/MjyQuestionExtensions/` | 结构化副表、上传会话、服务端校验、插件通道端点 |
+| `plugins/MjyRuntimePolicy/` | 访问与作答规则：时间窗、密码、限次、服务端计时、验证码、IP 规则 |
+| `themes/question/mjy-*/` | 15 套自研作答主题 |
 
-## 常用命令（在仓库根目录执行）
+---
+
+## 4. 契约与决策记录
+
+**契约**（跨语言、跨组件的约定，改动需同步三端）
+
+| 契约 | 内容 |
+|---|---|
+| `publish-gateway-v1` / `v1.2` | 发布、改版、收口、漂移、**邀请码回读**、存储保留期 |
+| `response-read-v1` | 按答卷号读作答；**参与者令牌**；扩展表作答 |
+| `survey-logic-dsl-v1` | 定义 v2 逻辑：显示条件、校验、计算值、文本引用、**计分** |
+| `survey-access-policy-v1` | 时间窗、密码、邀请码、限次、服务端时长、验证码、IP 规则 |
+| `survey-branding-v1` | 品牌主题与多语言 |
+| `question-extension-tables-v1` | 插件副表结构版本 |
+| `plugin-channel-v1` | 网关↔插件鉴权通道 |
+| `platform-dictionary-v1` | 层级字典与版本绑定 |
+
+**ADR** 共 19 份，`docs/adr/`。要害几条：0012 改版再发布与漂移、0016 访问策略与邀请码、0017 通讯录、0018 插件通道、0019 资产与字典。
+
+> ⚠️ **已知缺陷：ADR 0019 有两份**（`0019-platform-assets.md` 与 `0019-platform-dictionary.md`），资产与字典两条车道并行时撞号。65 个文件引用 `ADR 0019`。改号待当前一波车道落地后单独处理——现在改会与在跑的车道冲突。
+
+---
+
+## 5. 常用命令（仓库根目录执行）
 
 ```bash
-# 开发环境：http://localhost:8090 ，DB 127.0.0.1:3307
-docker compose -f docker-compose.dev.yml up -d
+# 平台 Java 测试（Maven 跑在容器里，本机无需 JDK）
+# 这个包装脚本跑前清空 surefire 报告、强制 clean test、跑完对账总数与类数，见下面硬规矩 2
+PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh
+PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh --expect-tests 1231 --expect-classes 153
 
-# 引擎 unit 套件（隔离测试库，root/root，admin/password，debug=0）
-platform/deploy/test/run-tests.sh --fresh
+# 发布网关测试（本机无 pytest，用 unittest）
+cd platform/tools/publish-gateway && python3 -m unittest discover -s tests -t . -q
 
-# 平台自有测试
-platform/deploy/test/run-tests.sh -c platform/phpunit.xml
+# 测试总数对账脚本自己的用例
+cd platform/tools/test-report && python3 -m unittest discover -s tests -t . -q
 
-# 引擎浏览器套件（独立的 survey-functional 栈，自动起栈；跑完用 teardown.sh 拆）
-platform/deploy/functional/run-functional.sh --fresh security api
-platform/deploy/functional/run-functional.sh --with-mjy-plugins security api  # 自研插件归因对照
-platform/deploy/functional/teardown.sh
+# 引擎端到端（涉及数据库的都要 mysql 与 pgsql 各跑一遍）
+TEST_DB=mysql platform/deploy/test/run-p1-e2e.sh --fresh
+TEST_DB=pgsql platform/deploy/test/run-access-policy.sh --fresh
 
-# 端到端故障注入（真实 HTTP 填写＋SIGKILL），加 TEST_DB=pgsql 切换数据库
-platform/deploy/test/run-fault-injection.sh
-
-# 题型纵切（数组题 / 自增表格 / 上传题走完整生命周期）
-platform/deploy/test/run-tests.sh -c platform/phpunit-questions.xml
-platform/deploy/test/run-question-slice.sh
-
-# 考试与配额（独立的 survey-exam 栈：起栈、跑验证、拆栈）
-platform/deploy/exam/setup.sh
-EXAM_CONCURRENCY=100 platform/deploy/exam/run-exam-policy.sh
-docker exec survey-exam-web vendor/bin/phpunit -c platform/phpunit-runtime-policy.xml
-platform/deploy/exam/teardown.sh
-
-# 发布网关（校验 → 编译 → 导入 → 激活 → 回读 → 回滚 → 漂移检查）
-platform/deploy/test/run-publish-gateway.sh
-cd platform/tools/publish-gateway && python3 -m unittest discover -s tests -t .
-
-# 品牌主题与多语言（zh-business 主题、作答页去广告、语言切换与回退）
-platform/deploy/test/run-brand-theme.sh
-TEST_DB=pgsql platform/deploy/test/run-brand-theme.sh
-
-# 把随镜像发布的作答主题装进引擎库（部署时执行一次；上面的端到端会自己跑）
-docker exec survey-web php platform/tools/engine-theme/install-survey-theme.php zh-business
-
-# 代码风格（仓库规则集）
-docker exec survey-web vendor/bin/phpcs --standard=phpcs.ruleset.xml plugins/MjyPlatformBridge
+# 并行开发时各车道用自己的前缀，互不踩踏
+SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test/run-question-themes.sh
 ```
 
-## 仓库与分支
+### 跑测试的三条硬规矩（都是真实踩出来的）
 
-- 代码仓库：`lsgoodlionel/star-survey`（remote `origin`），唯一工作分支 `main`。
+1. **必须 `clean test`**。Maven 不删被改名或删除的资源，`target/classes` 里会留旧文件。迁移改名后只跑 `test`，轻则看到 935 个报错的**假故障**，重则旧迁移恰好可重复执行而给出**假成功**。
+2. **跑前清空 `target/surefire-reports`，跑后核对总数与类数**。只看 `failures=0` 会被两种假绿骗到，两种都真实发生过：新测试类根本没被执行（靠总数差 14 才发现）；改包名后旧报告残留被重复计数（虚高 14 条 1 个类）。**这条已经做成脚本**：`platform/deploy/test/run-platform-tests.sh` 清空报告目录、强制 `clean test`，跑完把报告与源码的类集合对起来（源码里有 `@Test` 的类必须有报告＝事故一；报告里的类必须在源码里找得到＝事故二），对不上以 2 退出。**汇报数字一律用它的输出，不要手工数。**
+3. **并行车道必须用独立前缀与独立数据库名**，且预先分配迁移号段——让各车道自己 `ls` 选号是不够的，三条并行时它们看到的最高号都一样，必然撞号（已发生过一次）。
+
+### 持续集成
+
+本土化部分的检查在 `.github/workflows/platform-quality.yml`（上游自带的几条只在 `master` / `develop-*` 触发，本仓库工作分支是 `main`）：
+
+| Job | 内容 | 需要什么 |
+|---|---|---|
+| `parity-tables` | 发布网关单测（含**三端注册表**与**三端数值上限**两张对照表）＋ 对账脚本自己的用例 | 只要 Python，秒级 |
+| `gateway-parity-e2e` | WP-03.4 双执行比对，`mysql` 与 `pgsql` 两个矩阵分支各跑一遍 | 起引擎栈（脚本自行构建 `survey-web` 镜像） |
+
+平台 Java 套件暂未进 CI：Maven 走 `maven-settings.xml` 里的阿里云镜像，GitHub runner 上是冷缓存加跨境拉取，接进来大概率又慢又飘。它目前是本地约定。
+
+---
+
+## 6. 已交付能力
+
+| 工作包 | 状态 | 内容 |
+|---|---|---|
+| WP-23 共同基础 | 🟡 | 租户隔离（RLS）、公开路由、身份绑定、每实例事件密钥、审计；事件日志与补偿扫描；催答完成对账。跨系统对账报表、隐私删除、监控 ⬜ |
+| WP-22 套餐与计量 | 🟡 | 套餐版本、试用／付费订阅、有效答卷计量、席位额度、租户开通；赠送有效期 ⬜ |
+| WP-19 团队与品牌 | 🟡 | 角色目录、资源树授权继承、字段与导出权限、席位联动；企业模板库；`zh-business` 主题与多语言。协作员到期、自定义域名 ⬜ |
+| WP-01 创建与编辑 | ✅ | 定义格式与 LSS 编译、首发与改版再发布（原子路由切换）、草稿乐观锁、漂移检测、**旧版恢复**、**批量文本导入预览** |
+| WP-02 题型 | 🟡 | 47 项对照表；原生与原生加主题；**15 套自研主题**；插件副表结构版本；服务端校验（手机号／邮编／身份证／统一社会信用代码）。剩 6 类待资产服务补齐能力 |
+| WP-03 逻辑与计算 | ✅ | 定义 v2 DSL、类型检查与环检测、AST→ExpressionScript、**计分**、**双执行比对**（双库 48 例零分歧） |
+| WP-04 访问与作答规则 | ✅ | 时间窗（含改客户端时钟）、密码、邀请码、按 token/设备/IP 限次、服务端时长、验证码、IP 规则；策略摘要双端校验 |
+| WP-05 投放触达 | ✅ | 链接、二维码、短链、内嵌、签名渠道参数；批量任务（崩溃续跑不重发）、回执验签去重、退订不可翻转；催答与通知。真实短信／邮件通道 ⏳ |
+| WP-06 数据与输出 | 🟡 | 分页查询、字段字典、脱敏；导出作业（快照、续跑、再授权）；CSV／XLSX／**SAV**／**DOCX**；**扩展表作答进导出**。附件打包、PDF ⬜ |
+| WP-18 通讯录 | ✅ | 三类身份分离、名单导入去重、部门树与数据范围、**联系人 → 邀请码自动登记** |
+| WP-20 集成 | 🟡 | 企微／钉钉／飞书授权与免登、事件回调、定时同步。真实联调待凭据 ⏳ |
+| WP-09/10 考试测评 | 🔄 | 本波进行中 |
+
+---
+
+## 7. 已知遗留
+
+**部署前必须处理**
+
+- 发布网关的并发锁与限流**都在进程内**：网关只能单副本运行；多副本时实际限额 ＝ 缺省值 × 副本数。真实按 IP 限流需入口层提供客户端地址（不信任 `X-Forwarded-For`）。
+- **对象存储只有本地实现**，资产与导出在多副本下都需共享卷或对象存储。
+- 引擎自身的 phpunit 套件**未与 CI 配置对齐**（P0 起的遗留），因此未纳入本项目的回归基线。
+
+**安全相关（已记录、未修）**
+
+- **资产取件票是 bearer**：拿到链接的人能看图。这对问卷媒体是有意为之（作答链接自己也是 bearer），但**作答者自己上传的内容不能沿用这条路**。
+- 邀请码在 `contact_participation` 里，撤销只置 `revoked_at`、不删文本；旧引擎问卷已关闭故码打不开任何东西，但「过期凭据不落盘」需要运维清理策略。
+- 飞书解密测试 **1/256 flaky**：`AES/CBC/PKCS5Padding` 靠填充异常判定密钥错误，错误密钥下填充恰好合法的概率约 1/256。验签排在解密之前，故非漏洞，但会造成唬人的假警报。
+- 停用租户已签发的令牌最长 10 分钟内仍有效。
+
+**一致性与规范**
+
+- **ADR 0019 撞号**（见 §4）。
+- **平台自有键政策不一致**：`participants`／`dictionaryVersion` 静默摘除，`assetVersion` 判定义非法并报错。已决定统一为报错，待处理。
+- ~~三端（平台／网关／插件）的数值上限常量靠注释互指，没有自动一致性检查~~ **已补**：`platform/tools/publish-gateway/tests/test_limit_parity.py` 的声明式对照表，15 组，跟着网关单测与 CI 跑；当时对照表上线时三端全部一致，没有发现存量漂移。字符集／正则形状仍只靠注释互指，**没有**进对照表。
+- 双执行比对**仍然是固定快照**（4 条手写向量 × 12 处表达式 = 48 条，期望值按契约人工写下），无类型驱动的随机差分测试。接进 CI 只是让这份快照每次改动都被重跑，覆盖面没有变；要扩得往 `publish-gateway-scoring.vectors.json` 里加向量。
+
+**功能缺口**
+
+- PDF 导出卡在中文字体（已决定随仓库交付思源黑体，SIL OFL 1.1）。
+- 附件打包卡在 `get_uploaded_files`——它一次把**整份答卷**的全部文件 base64 塞进一个 JSON 应答。
+- 字典节点上限 8000（由定义快照 1 MiB 倒推）：到区县够用，到乡镇街道不够。
+- 行政区划数据集**不随仓库交付**（各家许可与署名义务不同，由交付方决定）。
+- 新主题的编辑器脚本只有「标记与 JS 真的出现在页面上」这一层证据，无浏览器交互测试。
+
+---
+
+## 8. 工程约定
+
+- **测试先行**：先写测试、**亲眼看它失败**再实现。首跑即绿的用例是「回归钉子」，必须与「驱动实现的测试」分开说明——两者价值不同。
+- **涉及数据库的端到端一律双库**（MySQL ＋ PostgreSQL）。只过一种不算数。
+- **契约改动要三端同步**，并尽量用机器钉住。两张对照表都在网关测试里，不需要 JVM 与 PHP：`test_plugin_registry_parity.py`（注册表）、`test_limit_parity.py`（数值上限常量）。
+- **一致性检查自己也要有「它确实会红」的用例**。对着人为制造的不一致断言它报错——一个永远不会红的检查毫无价值。先例：`LimitParityGoesRedTest`、`platform/tools/test-report/tests/`。
+- **并行车道不动共享汇总文档**（`docs/p2/progress.md`），由集成方统一写——否则每次合并必冲突。
+- 文件 200–400 行为宜、最多 800 行；函数 <50 行；错误显式处理，不静默吞掉。
+- 提交信息 `<type>: <描述>`，正文写清**为什么这么选**，尤其是反直觉的决定——合并冲突的取舍也要写进最终提交信息，否则 squash 之后无处可查。
+
+## 9. 仓库与分支
+
+- 代码仓库：`lsgoodlionel/star-survey`（remote `origin`），唯一长期分支 `main`，经 PR 合并。
 - 上游 fork `lsgoodlionel/LimeSurvey` 保留为 remote `limesurvey-fork`，用于对比上游与合并升级。
 - `main` 的根提交是 LimeSurvey 7.1.2 快照（上游 `4c20c680`）：本地为浅克隆，无法推送浅历史，故以单个根提交导入；上游完整历史仍在 fork 仓库。
+- **不要修改引擎源码与根 `README.md`**：自有内容全部是新增文件，这个不变式是上游升级可行性的基础。

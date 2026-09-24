@@ -30,6 +30,13 @@ prepare_test_stack() {
   fi
   cp "$TEST_DIR/config.$TEST_DB.php" "$TEST_DIR/.runtime/config.php"
 
+  # test-web 只引用 survey-web 镜像、自己不带 build。全新检出（CI，或刚换的开发机）里
+  # 没有这个镜像，compose 会去 registry 拉一个并不存在的名字然后失败。缺了就地构建一次。
+  if ! docker image inspect survey-web >/dev/null 2>&1; then
+    echo "building the survey-web image (first run in this checkout)..."
+    docker compose -f "$REPO_ROOT/docker-compose.dev.yml" build web >/dev/null
+  fi
+
   if $is_fresh; then
     "${COMPOSE[@]}" rm -sf "$DB_SERVICE" test-web >/dev/null
   fi
