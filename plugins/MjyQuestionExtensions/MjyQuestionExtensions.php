@@ -95,11 +95,33 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
             $this->emit($this->dictionaryNodes()->handle($this->channelQuery()), 'dictionary node endpoint');
             return;
         }
+        if ($function === MjyUploadSessionEndpoint::FUNCTION_LIST
+            || $function === MjyUploadSessionEndpoint::FUNCTION_CONTENT) {
+            $this->emit($this->uploadChannel()->handle($this->channelQuery(), time()), 'upload session channel');
+            return;
+        }
         if ($function !== MjyExtensionAnswerEndpoint::FUNCTION_NAME) {
             return;
         }
         $response = $this->answerChannel()->handle($this->channelQuery(), time());
         $this->emit($response, 'extension answer channel');
+    }
+
+    /**
+     * 作答者上传的读取端点（ADR 0019 决定 8）。与 answerChannel() 同一条规矩：
+     * **装配过程一律不碰数据库、不碰磁盘**——它在验签之前就被构造。
+     */
+    public function uploadChannel(): MjyUploadSessionEndpoint
+    {
+        $instanceId = self::engineInstanceId();
+
+        return new MjyUploadSessionEndpoint(
+            new MjyChannelAuth(self::instanceSecrets(), $instanceId),
+            $this->uploadSessions(),
+            new MjyUploadFileReader((string) Yii::app()->getConfig('uploaddir')),
+            $this->channelRateLimit(),
+            $instanceId
+        );
     }
 
     /** 两条直连端点共用的出口：稳定原因码进日志，绝不带密钥、签名或作答值。 */

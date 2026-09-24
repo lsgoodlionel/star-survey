@@ -178,6 +178,73 @@ class MjyUploadSessionStore
             ->queryAll();
     }
 
+    /**
+     * 一页答卷里**已绑定**的上传会话（ADR 0019 决定 8 的清单来源）。
+     *
+     * 只取已绑定的：未绑定的会话其字节还在临时目录里，且提交时文件名还会再变一次
+     * （引擎重命名成一个全新的 fu_，且不派发任何事件），此刻取不出可靠的东西。
+     *
+     * @param int[] $responseIds 调用方已按形状校验过（全是正整数）
+     * @return array<int, array<string, mixed>>
+     */
+    public function fetchBound(int $surveyId, string $generation, array $responseIds): array
+    {
+        if ($responseIds === []) {
+            return [];
+        }
+        $placeholders = [];
+        $params = [
+            ':instance' => $this->engineInstanceId,
+            ':sid' => $surveyId,
+            ':gen' => $generation,
+            ':state' => self::STATE_BOUND,
+        ];
+        foreach (array_values($responseIds) as $index => $responseId) {
+            $name = ':r' . $index;
+            $placeholders[] = $name;
+            $params[$name] = (int) $responseId;
+        }
+
+        return $this->db->createCommand()
+            ->select('*')
+            ->from($this->tableName())
+            ->where(
+                'engine_instance_id = :instance AND survey_id = :sid AND generation = :gen'
+                . ' AND state = :state AND response_id IN (' . implode(',', $placeholders) . ')',
+                $params
+            )
+            ->order('response_id, id')
+            ->queryAll();
+    }
+
+    /**
+     * 一条已绑定的会话。按 **(实例, sid, 代次, token)** 四者定位——
+     * 光有 token 改不到别的代次、别的问卷去。
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findBound(int $surveyId, string $generation, string $uploadToken): ?array
+    {
+        $row = $this->db->createCommand()
+            ->select('*')
+            ->from($this->tableName())
+            ->where(
+                'engine_instance_id = :instance AND survey_id = :sid AND generation = :gen'
+                . ' AND upload_token = :token AND state = :state',
+                [
+                    ':instance' => $this->engineInstanceId,
+                    ':sid' => $surveyId,
+                    ':gen' => $generation,
+                    ':token' => $uploadToken,
+                    ':state' => self::STATE_BOUND,
+                ]
+            )
+            ->limit(1)
+            ->queryRow();
+
+        return $row === false ? null : $row;
+    }
+
     public function purgeResponse(int $surveyId, string $generation, int $responseId): int
     {
         return $this->db->createCommand()->delete(
