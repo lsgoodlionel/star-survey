@@ -55,7 +55,8 @@ class ResponseExportSavTest {
         Map<String, byte[]> entries = runAndDownload();
 
         assertThat(entries.keySet())
-                .containsExactly("responses.sav", "variables.csv", "fields.csv", "attachments.csv");
+                .containsExactly("responses.sav", "variables.csv", "fields.csv", "attachments.csv",
+                        "extensions.csv");
         List<List<String>> variables = ExportFixture.parseCsv(utf8(entries.get("variables.csv")));
         assertThat(variables.get(0)).containsExactly("name", "code", "label", "measure", "width", "valuelabels");
         assertThat(variables).anySatisfy(row -> assertThat(row)

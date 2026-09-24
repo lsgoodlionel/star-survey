@@ -16,13 +16,17 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 分片的中间格式，与最终文件格式无关：每行一个前缀字母加一个 JSON 字符串数组——
- * {@code R} 是答卷表的一行，{@code A} 是附件清单的一行。JSON 转义保证一行里不会出现换行。
+ * {@code R} 是答卷表的一行，{@code A} 是附件清单的一行，{@code E} 是扩展副表的一个单元格。
+ * JSON 转义保证一行里不会出现换行。
  * 分片里的值已经遮蔽，从不落盘未遮蔽的敏感值。
  */
 final class ExportPartCodec {
 
     static final char RESPONSE = 'R';
     static final char ATTACHMENT = 'A';
+    static final char EXTENSION = 'E';
+
+    private static final String KINDS = "" + RESPONSE + ATTACHMENT + EXTENSION;
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final TypeReference<List<String>> CELLS = new TypeReference<>() {
@@ -39,6 +43,9 @@ final class ExportPartCodec {
         for (List<String> row : encoded.attachments()) {
             line(writer, ATTACHMENT, row);
         }
+        for (List<String> row : encoded.extensions()) {
+            line(writer, EXTENSION, row);
+        }
         writer.flush();
     }
 
@@ -53,7 +60,7 @@ final class ExportPartCodec {
         BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
         String line;
         while ((line = reader.readLine()) != null) {
-            if (line.isEmpty() || (line.charAt(0) != RESPONSE && line.charAt(0) != ATTACHMENT)) {
+            if (line.isEmpty() || KINDS.indexOf(line.charAt(0)) < 0) {
                 throw new IOException("corrupt export part");
             }
             if (line.charAt(0) != kind) {

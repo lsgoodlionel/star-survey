@@ -97,6 +97,29 @@ public class ResponseFixture {
         return definition;
     }
 
+    /**
+     * 样例定义再加两道副表题（C 档题型，主题 {@code mjy-repeating-table}）：一道普通、一道标了敏感。
+     * 网关替身照常给每道题一列（那一列是整块 JSON 信封），结构化作答走 extensionAnswers 段。
+     */
+    public ObjectNode extensionDefinition() {
+        ObjectNode definition = sensitiveDefinition();
+        ArrayNode questions = (ArrayNode) definition.get("groups").get(0).get("questions");
+        questions.add(json.readTree("""
+                {"uuid":"33333333-0020-4111-8111-000000000020","code":"QTABLE","type":"T","text":"随行物品",
+                 "theme":"mjy-repeating-table",
+                 "themeOptions":{"structureVersion":"rt1",
+                                 "columns":[{"code":"item","label":"物品","type":"text"},
+                                            {"code":"qty","label":"数量","type":"integer"}]}}
+                """));
+        questions.add(json.readTree("""
+                {"uuid":"33333333-0021-4111-8111-000000000021","code":"QSECRET","type":"T","text":"家庭成员",
+                 "theme":"mjy-repeating-table","sensitive":true,
+                 "themeOptions":{"structureVersion":"rt2",
+                                 "columns":[{"code":"name","label":"姓名","type":"text"}]}}
+                """));
+        return definition;
+    }
+
     public ObjectNode sensitiveDefinition() {
         ObjectNode definition = surveys.definition();
         ObjectNode qtext = (ObjectNode) definition.get("groups").get(0).get("questions").get(1);

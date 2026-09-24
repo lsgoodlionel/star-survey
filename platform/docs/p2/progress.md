@@ -527,7 +527,14 @@ Java 三次都是「标题少了 `[结构化作答]`」）。**一处例外**：
 
 ### 第六波新增遗留
 
-- **扩展表答案已到平台，但尚未进 CSV/XLSX/SAV**。通道通了不等于导出通了，导出侧的表头展开是下一片。
+- ~~**扩展表答案已到平台，但尚未进 CSV/XLSX/SAV**~~ → 第七波切片 06.4 做完了，见 ADR 0015 增补二。
+  不定行数的落法：**单列一张长表 `extensions`，一个单元格一行**，固定十列
+  （`version sid responseid generation question structureversion isvalid rowindex column value`）。
+  否决了「宽表加序号后缀」（需要一个冻结表头时并不知道的行数上限，硬压要么截断要么让列集漂移——
+  与网关侧 `extensionAnswers` 单列一段是同一条理由），也否决了「每行一条记录、列代码横着展开」
+  （表头要一份冻结的列字典，而八个 C 档主题里只有 `mjy-repeating-table` 的列就是定义快照里的
+  `themeOptions.columns`，另外七个由网关 `side_columns` 各自推出来，平台再写一遍就是契约警告过的那种重复）。
+  代价：文件行数 ＝ 单元格数，分析前要透视一次。列字典（列标签、类型、取值集合）仍不进导出。
 - **附件打包**仍卡在 `get_uploaded_files`：它一次把**整份答卷**的全部文件 base64 塞进一个 JSON 应答，
   需先解决内存有界（ADR 0015 硬约束）与失败项重试。
 - **通道是 GET**：`application/config/internal.php:153` 只对 `rest`／`admin/remotecontrol`／

@@ -1,5 +1,6 @@
 package cn.mjy.platform.response;
 
+import cn.mjy.platform.response.AnswerBatch.ExtensionAnswer;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,13 +20,15 @@ import org.springframework.stereotype.Component;
 public class FakeResponseAnswerSource implements ResponseAnswerSource {
 
     /** 一次调用的记录。 */
-    public record Call(String engineInstanceId, long engineSid, List<Long> responseIds, List<String> fieldnames) {
+    public record Call(String engineInstanceId, long engineSid, List<Long> responseIds, List<String> fieldnames,
+            String generation, List<String> extensionQuestions) {
     }
 
     private record Key(String instance, long sid, long responseId) {
     }
 
     private final Map<Key, Map<String, String>> rows = new ConcurrentHashMap<>();
+    private final Map<Key, Map<String, ExtensionAnswer>> sideTables = new ConcurrentHashMap<>();
     private final Map<String, Boolean> failing = new ConcurrentHashMap<>();
     private final List<Call> calls = new CopyOnWriteArrayList<>();
     private final Map<String, AtomicInteger> crashes = new ConcurrentHashMap<>();
@@ -47,6 +50,13 @@ public class FakeResponseAnswerSource implements ResponseAnswerSource {
 
     public void put(String instance, long sid, long responseId, Map<String, String> values) {
         rows.put(new Key(instance, sid, responseId), new HashMap<>(values));
+    }
+
+    /** 存一道副表题在一份答卷里的结构化作答（网关的 extensionAnswers 段）。 */
+    public void putExtension(String instance, long sid, long responseId, String questionCode,
+            ExtensionAnswer answer) {
+        sideTables.computeIfAbsent(new Key(instance, sid, responseId), k -> new ConcurrentHashMap<>())
+                .put(questionCode, answer);
     }
 
     /** 让某个实例的读取失败（网关不可达、引擎报错）。 */
@@ -74,8 +84,13 @@ public class FakeResponseAnswerSource implements ResponseAnswerSource {
     }
 
     @Override
-    public AnswerBatch read(String engineInstanceId, long engineSid, List<Long> responseIds, List<String> fieldnames) {
-        calls.add(new Call(engineInstanceId, engineSid, List.copyOf(responseIds), List.copyOf(fieldnames)));
+    public AnswerBatch read(AnswerQuery query) {
+        String engineInstanceId = query.engineInstanceId();
+        long engineSid = query.engineSid();
+        List<Long> responseIds = query.responseIds();
+        List<String> fieldnames = query.fieldnames();
+        calls.add(new Call(engineInstanceId, engineSid, List.copyOf(responseIds), List.copyOf(fieldnames),
+                query.generation(), query.extensionQuestions()));
         if (failing.containsKey(engineInstanceId)) {
             throw new ResponseAnswersUnavailableException("fake gateway failure for " + engineInstanceId);
         }
@@ -100,7 +115,29 @@ public class FakeResponseAnswerSource implements ResponseAnswerSource {
             }
             found.put(id, projected);
         }
-        return new AnswerBatch(found);
+        return new AnswerBatch(found, extensions(query));
+    }
+
+    /** 只回请求里点名的副表题，一道都没有的答卷不出现——与网关一致。 */
+    private Map<Long, Map<String, ExtensionAnswer>> extensions(AnswerQuery query) {
+        if (!query.wantsExtensions()) {
+            return Map.of();
+        }
+        Map<Long, Map<String, ExtensionAnswer>> found = new LinkedHashMap<>();
+        for (Long id : query.responseIds()) {
+            Map<String, ExtensionAnswer> stored =
+                    sideTables.get(new Key(query.engineInstanceId(), query.engineSid(), id));
+            if (stored == null) {
+                continue;
+            }
+            Map<String, ExtensionAnswer> projected = new LinkedHashMap<>();
+            query.extensionQuestions().stream().filter(stored::containsKey)
+                    .forEach(code -> projected.put(code, stored.get(code)));
+            if (!projected.isEmpty()) {
+                found.put(id, projected);
+            }
+        }
+        return found;
     }
 
     private static AnswerBatch synthesized(Synthesizer synthesizer, List<Long> responseIds, List<String> fieldnames) {

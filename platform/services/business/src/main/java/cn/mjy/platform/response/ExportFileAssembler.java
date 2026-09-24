@@ -15,6 +15,9 @@ import org.springframework.stereotype.Component;
 /**
  * 收尾：按序读取分片，经 {@link ExportFormat.Writer} 流式写出最终文件，同时计算大小与 SHA-256。
  * 内存占用与总行数无关——任何时刻只持有一行。
+ *
+ * <p>四张表：答卷、字段字典、附件清单、扩展副表作答。后三张都是长表（一条记录一行），
+ * 没有数据时只剩表头，但一定在——附表在不在不该随数据变。
  */
 @Component
 class ExportFileAssembler {
@@ -47,6 +50,10 @@ class ExportFileAssembler {
                 ExportSheet.of("attachments", "附件清单", 1, sink -> {
                     sink.accept(ExportLayout.ATTACHMENT_HEADER);
                     readParts(parts, ExportPartCodec.ATTACHMENT, sink);
+                }),
+                ExportSheet.of("extensions", "扩展表作答", 1, sink -> {
+                    sink.accept(ExportLayout.EXTENSION_HEADER);
+                    readParts(parts, ExportPartCodec.EXTENSION, sink);
                 }));
         try (ExportFileStore.Upload upload = files.create(key)) {
             MessageDigest digest = sha256();

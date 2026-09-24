@@ -133,4 +133,6 @@
   `tests/test_response_extensions.py`（扩展表作答单列一段、扁平字段不受影响、失败即关闭）。
 - 真引擎：`TEST_DB=mysql|pgsql platform/deploy/test/run-response-read.sh`（多列题、"其他"、评论、双尺度逐列核对）；
   排序题的名次在 `run-question-types.sh` 场景 D2（HTTP 真实作答后逐名次核对）。
-- 平台：`HttpResponseAnswerSourceTest`（签名逐字节、应答解析、失败即关闭）。
+- 平台：`HttpResponseAnswerSourceTest`（签名逐字节、应答解析、失败即关闭；扩展表作答的请求体、
+  解析与「缺这一段／没点过名的答卷或题目／`rows` 形状不对」一律不可信）。
+  扩展表作答进导出见 ADR 0015 增补二（`ResponseExportExtensionsTest`）。
