@@ -221,26 +221,22 @@ def run_cron(context: Context) -> None:
 # ------------------------------------------------------------------ 场景
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--container", required=True)
-    parser.add_argument("--db", choices=("mysql", "pgsql"), default="mysql")
-    parser.add_argument("--db-container", required=True)
-    args = parser.parse_args()
-    context = Context(args.container, Database(args.db, args.db_container))
-
+def scenario_publish(context: Context) -> Dict[str, Any]:
     receipt = publish_ok(context, definition(
         "WP-09.2 服务端计时",
         [{"ref": "A", "firstname": "A"}, {"ref": "B", "firstname": "B"}, {"ref": "C", "firstname": "C"}]))
-    sid = receipt["surveyId"]
     tokens = {item["ref"]: item["token"] for item in receipt.get("invitations") or []}
     context.check("发布回执给出了三张准考证", sorted(tokens) == ["A", "B", "C"], tokens)
+    return {"sid": receipt["surveyId"], "tokens": tokens,
+            "fields": response_fields(context.db, receipt["surveyId"])}
 
-    # ------------------------------------------------- T1/T3 进场、答第一页、剩余时间
+
+def scenario_enter_and_answer(context: Context, state: Dict[str, Any]) -> None:
+    """T1／T3：进场、答完第一页、服务端报剩余时间。"""
+    sid, tokens, fields = state["sid"], state["tokens"], state["fields"]
     print("T1: 进场并答完第一页", file=sys.stderr)
     jar_a = context.new_jar()
     saved_form = "/tmp/exam-timing-a-{}.json".format(sid)
-    fields = response_fields(context.db, sid)
     pages = context.respond(jar_a, [
         {"get": start_url(sid, tokens["A"])},
         {"submit": {fields["QONE"]: ANSWER_ONE}, "move": "movenext"},
@@ -264,6 +260,12 @@ def main() -> int:
                   attempt_a)
     context.check("T3: 此时没有任何人交卷", context.submitted_count(sid) == 0, context.responses(sid))
 
+    state.update({"jar_a": jar_a, "saved_form": saved_form, "first": first, "attempt_a": attempt_a})
+
+
+def scenario_forged_clock(context: Context, state: Dict[str, Any]) -> None:
+    """T2：改客户端时钟。"""
+    sid, jar_a, first = state["sid"], state["jar_a"], state["first"]
     # ---------------------------------------------------------- T2 改客户端时钟
     print("T2: 改客户端时钟", file=sys.stderr)
     forged = context.exam_time(jar_a, sid,
@@ -272,6 +274,11 @@ def main() -> int:
                   abs(forged["remainingSeconds"] - first["remainingSeconds"]) <= 5,
                   {"before": first, "after": forged})
 
+
+def scenario_resume(context: Context, state: Dict[str, Any]) -> None:
+    """T4：断线续考；顺带让 C 号留下一份只答了一页的卷，给 T9 的 cron 收。"""
+    sid, tokens, fields = state["sid"], state["tokens"], state["fields"]
+    first, attempt_a = state["first"], state["attempt_a"]
     # ---------------------------------------------------------- T4 断线续考
     print("T4: 断线续考——换浏览器、同一准考证", file=sys.stderr)
     jar_a2 = context.new_jar()
@@ -297,6 +304,10 @@ def main() -> int:
                   attempt_c.get("response_id") not in (None, "", "NULL")
                   and context.submitdate_of(sid, attempt_c["response_id"]) is None, attempt_c)
 
+    state["attempt_c"] = attempt_c
+
+
+def wait_for_the_deadline() -> None:
     # ---------------------------------------------------------- 等到点
     deadline_passed = datetime.now(timezone.utc) + timedelta(seconds=DURATION_SECONDS + SLACK_SECONDS)
     delay = (deadline_passed - datetime.now(timezone.utc)).total_seconds()
@@ -304,6 +315,9 @@ def main() -> int:
     if delay > 0:
         time.sleep(delay)
 
+def scenario_replayed_session(context: Context, state: Dict[str, Any]) -> None:
+    """T6：重放到点前存下的表单——被拒，且那份卷已被强制交掉并判了分。"""
+    sid, jar_a, tokens, saved_form = state["sid"], state["jar_a"], state["tokens"], state["saved_form"]
     # ---------------------------------------------------------- T6 重放旧会话
     print("T6: 重放到点前存下的表单", file=sys.stderr)
     pages = context.respond(jar_a, [{"postSaved": saved_form, "move": "movesubmit"}])
@@ -329,6 +343,10 @@ def main() -> int:
     context.check("T6: 服务端报已到点且剩余为 0",
                   late.get("expired") is True and late.get("remainingSeconds") == 0, late)
 
+
+def scenario_direct_post(context: Context, state: Dict[str, Any]) -> None:
+    """T7：不进场，直接 POST。"""
+    sid, saved_form = state["sid"], state["saved_form"]
     # ---------------------------------------------------------- T7 直接 POST 绕过计时
     print("T7: 不进场，直接 POST", file=sys.stderr)
     before = context.responses(sid)
@@ -336,6 +354,10 @@ def main() -> int:
     context.check("T7: 直接 POST 被拒", pages[0]["kind"] == "message", texts(pages))
     context.check("T7: 没有新答卷落库", len(context.responses(sid)) == len(before), context.responses(sid))
 
+
+def scenario_forged_submit_time(context: Context, state: Dict[str, Any]) -> None:
+    """T8：POST 里塞时间字段。"""
+    sid, tokens, fields = state["sid"], state["tokens"], state["fields"]
     # ---------------------------------------------------------- T8 伪造交卷时间
     print("T8: POST 里塞时间字段", file=sys.stderr)
     context.respond(context.new_jar(), [
@@ -348,6 +370,10 @@ def main() -> int:
         "SELECT COUNT(*) FROM lime_responses_{} WHERE submitdate > '2090-01-01'".format(sid))
     context.check("T8: 伪造的交卷时间没有被采信", forged_count in ("0", ""), forged_count)
 
+
+def scenario_cron_collects(context: Context, state: Dict[str, Any]) -> None:
+    """T9：cron 给关掉浏览器的人收卷并判分。"""
+    sid, tokens = state["sid"], state["tokens"]
     # ---------------------------------------------------------- T9 cron 收卷
     print("T9: cron 给关掉浏览器的人收卷", file=sys.stderr)
     run_cron(context)
@@ -364,6 +390,24 @@ def main() -> int:
     run_cron(context)
     context.check("T9: 再跑一次 cron 不会重复改动",
                   context.submitdate_of(sid, attempt_c["response_id"]) == submitted_c)
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--container", required=True)
+    parser.add_argument("--db", choices=("mysql", "pgsql"), default="mysql")
+    parser.add_argument("--db-container", required=True)
+    args = parser.parse_args()
+    context = Context(args.container, Database(args.db, args.db_container))
+
+    state = scenario_publish(context)
+    scenario_enter_and_answer(context, state)
+    scenario_forged_clock(context, state)
+    scenario_resume(context, state)
+    wait_for_the_deadline()
+    scenario_replayed_session(context, state)
+    scenario_direct_post(context, state)
+    scenario_forged_submit_time(context, state)
+    scenario_cron_collects(context, state)
 
     print(json.dumps({"failures": context.failures}))
     return 1 if context.failures else 0

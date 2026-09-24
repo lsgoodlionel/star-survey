@@ -150,17 +150,9 @@ def start_url(survey_id: int) -> str:
     return "/index.php/{}?newtest=Y&lang=en".format(survey_id)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--container", required=True)
-    parser.add_argument("--db", choices=("mysql", "pgsql"), default="mysql")
-    parser.add_argument("--db-container", required=True)
-    args = parser.parse_args()
-    context = Context(args.container, Database(args.db, args.db_container))
-
-    sid = publish_ok(context, definition("WP-10 客观题自动评分"))
-    fields = context.fields(sid)
-
+def scenario_graded(context: Context, state: Dict[str, Any]) -> None:
+    """G1：一份对错混合的卷子，分数、对题数、满分都对得上。"""
+    sid, fields = state["sid"], state["fields"]
     # -------------------------------------------------------------- G1 判分
     print("G1: 一份对错混合的卷子", file=sys.stderr)
     # 单选答对（5）；多选只选了一个，整套不对（0）；填空大小写不同，按 ignoreCase 算对（3）。
@@ -180,8 +172,7 @@ def main() -> int:
     score = context.score_of(sid, ids[0])
     context.check("G1: 判出了成绩", score is not None)
     if score is None:
-        print(json.dumps({"failures": context.failures}))
-        return 1
+        raise RuntimeError("没有判出成绩，后面的断言都没有意义")
     context.check("G1: 得分是 8（5 + 0 + 3）", float(score["score"]) == 8.0, score)
     context.check("G1: 满分是 12", float(score["max_score"]) == 12.0, score)
     context.check("G1: 答对 2 题，共 3 题",
@@ -192,11 +183,21 @@ def main() -> int:
                   and detail["QMULTI"]["correct"] is False
                   and detail["QCITY"]["correct"] is True, detail)
 
+    state.update({"answers": answers, "ids": ids, "score": score})
+
+
+def scenario_detail_has_no_answers(context: Context, state: Dict[str, Any]) -> None:
+    """G2：成绩明细里没有正确答案。"""
+    score = state["score"]
     # -------------------------------------------------------------- G2 明细不含答案
     print("G2: 成绩明细里没有正确答案", file=sys.stderr)
     for needle in (TEXT_SENTINEL, TEXT_SENTINEL.lower(), "SQ003"):
         context.check("G2: 明细里没有 {}".format(needle), needle not in score["detail"], score["detail"])
 
+
+def scenario_score_is_not_in_the_response_table(context: Context, state: Dict[str, Any]) -> None:
+    """G3：成绩只在插件表里。"""
+    sid = state["sid"]
     # -------------------------------------------------------------- G3 成绩不在答卷表
     print("G3: 成绩只在插件表里", file=sys.stderr)
     columns = [row[0].lower() for row in context.db.rows(
@@ -206,6 +207,10 @@ def main() -> int:
                   not any(word in name for name in columns for word in ("score", "correct", "grade")),
                   columns)
 
+
+def scenario_tampered_submission(context: Context, state: Dict[str, Any]) -> None:
+    """G4：POST 里塞分数字段。"""
+    sid, fields, answers = state["sid"], state["fields"], state["answers"]
     # -------------------------------------------------------------- G4 篡改
     print("G4: POST 里塞分数字段", file=sys.stderr)
     tampered = dict(answers)
@@ -225,6 +230,12 @@ def main() -> int:
     context.check("G4: 第一份卷的成绩没有被这次提交改掉",
                   float(context.score_of(sid, ids[0])["score"]) == 8.0)
 
+    state["ids"] = ids
+
+
+def scenario_one_score_per_paper(context: Context, state: Dict[str, Any]) -> None:
+    """G5：一份卷子只有一份成绩。"""
+    sid, ids = state["sid"], state["ids"]
     # -------------------------------------------------------------- G5 不留两份
     print("G5: 一份卷子只有一份成绩", file=sys.stderr)
     rows = context.db.value(
@@ -232,6 +243,10 @@ def main() -> int:
         "WHERE survey_id = {} AND response_id = {}".format(sid, ids[0]))
     context.check("G5: 一份答卷只对应一行成绩", rows == "1", rows)
 
+
+def scenario_blank_paper(context: Context, state: Dict[str, Any]) -> None:
+    """G6：一道都不答。"""
+    sid = state["sid"]
     # -------------------------------------------------------------- G6 没答的题
     print("G6: 一道都不答", file=sys.stderr)
     context.respond(context.new_jar(), [
@@ -248,6 +263,25 @@ def main() -> int:
                   blank is not None and all(not item["answered"]
                                             for item in json.loads(blank["detail"]).values()),
                   blank)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--container", required=True)
+    parser.add_argument("--db", choices=("mysql", "pgsql"), default="mysql")
+    parser.add_argument("--db-container", required=True)
+    args = parser.parse_args()
+    context = Context(args.container, Database(args.db, args.db_container))
+
+    sid = publish_ok(context, definition("WP-10 客观题自动评分"))
+    state: Dict[str, Any] = {"sid": sid, "fields": context.fields(sid)}
+
+    scenario_graded(context, state)
+    scenario_detail_has_no_answers(context, state)
+    scenario_score_is_not_in_the_response_table(context, state)
+    scenario_tampered_submission(context, state)
+    scenario_one_score_per_paper(context, state)
+    scenario_blank_paper(context, state)
 
     print(json.dumps({"failures": context.failures}))
     return 1 if context.failures else 0
