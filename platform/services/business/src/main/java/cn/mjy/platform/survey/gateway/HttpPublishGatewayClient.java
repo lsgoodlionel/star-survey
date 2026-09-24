@@ -189,6 +189,7 @@ public class HttpPublishGatewayClient implements PublishGatewayClient {
                 case 200 -> new GatewayOutcome.Published(GatewayResponseParser.result(body, true));
                 case 422, 502 -> new GatewayOutcome.Failed(status, GatewayResponseParser.result(body, false));
                 case 400, 401, 404 -> new GatewayOutcome.Refused(status, GatewayResponseParser.error(body, status));
+                case 410 -> GatewayResponseParser.expired(body);
                 default -> new GatewayOutcome.Unknown("gateway returned http " + status);
             };
         } catch (JacksonException | GatewayResponseParser.MalformedResponseException e) {

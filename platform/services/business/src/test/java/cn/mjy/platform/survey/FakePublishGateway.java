@@ -283,6 +283,16 @@ public class FakePublishGateway implements PublishGatewayClient {
                 new GatewayResult(false, null, "validate", List.of(failures), false, null, null, null));
     }
 
+    /** 网关的回执已过留存期（契约 v1.3）：重发只会再得到 410。 */
+    public static GatewayOutcome expired(int originalStatus, Integer engineSid) {
+        return new GatewayOutcome.Expired(originalStatus, engineSid, "2027-01-15T08:00:00Z", false);
+    }
+
+    /** 同上，但那份回执带过邀请码（缺省 24 小时的短窗口，契约 v1.3）。 */
+    public static GatewayOutcome expiredWithInvitations(int engineSid) {
+        return new GatewayOutcome.Expired(200, engineSid, "2027-01-15T08:00:00Z", true);
+    }
+
     public static GatewayOutcome engineFailed(int orphanSid, String... failures) {
         Integer orphan = orphanSid > 0 ? orphanSid : null;
         return new GatewayOutcome.Failed(502,

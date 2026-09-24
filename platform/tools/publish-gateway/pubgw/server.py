@@ -11,10 +11,18 @@
 ``PUBGW_STATE_DIR``         幂等结果 SQLite 所在目录（必填）
 ``PUBGW_HOST``              监听地址，缺省 127.0.0.1（容器里设为 0.0.0.0）
 ``PUBGW_PORT``              监听端口，缺省 8080
+``PUBGW_RESULT_TTL_SECONDS``     完整回执的留存期，缺省 7 天，下限 24 小时
+``PUBGW_TOMBSTONE_TTL_SECONDS``  墓碑的留存期，缺省 90 天，不得短于回执留存期
+``PUBGW_INVITATION_TTL_SECONDS`` 带邀请码的回执的留存期，缺省 24 小时，下限 2 小时，
+                                 不得长于回执留存期
 ==========================  ===============================================
 
 任何一项不合法都拒绝启动（退出码 2）。收到 SIGTERM 时停止接新请求，
 等在途发布做完再退出——半路被杀的发布会在引擎里留下孤儿问卷。
+
+留存语义见 store.py 与契约 v1.3：留存期只是上界，判过期不依赖清理线程；
+清理线程（``PruneScheduler``）只删行。回收磁盘（VACUUM）会与正常请求抢锁，
+因此是运维显式触发的维护动作：``python3 -m pubgw.cli prune-results``。
 """
 
 import json
@@ -32,7 +40,7 @@ from .auth import check_secret
 from .engines import ConfigError, EngineConfig, load_engines
 from .responses import READ_PATH, ResponseReadService
 from .service import PublishService, Response
-from .store import ResultStore
+from .store import RESULTS_FILE, PruneScheduler, ResultStore, Retention, retention_from_env
 
 log = logging.getLogger("pubgw.server")
 
@@ -41,7 +49,6 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 #: 单个连接读请求的超时；发布本身耗时由 RPC 超时约束，与此无关。
 READ_TIMEOUT_SECONDS = 30
-RESULTS_FILE = "publish-results.sqlite3"
 EXIT_CONFIG = 2
 
 PUBLISH_PATH = "/v1/publish"
@@ -63,6 +70,7 @@ class Settings:
     state_dir: str
     host: str
     port: int
+    retention: Retention
 
 
 def load_settings(env: Mapping[str, str]) -> Settings:
@@ -89,7 +97,15 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         state_dir=state_dir,
         host=env.get("PUBGW_HOST", "") or DEFAULT_HOST,
         port=_port(env.get("PUBGW_PORT", "")),
+        retention=_retention(env),
     )
+
+
+def _retention(env: Mapping[str, str]) -> Retention:
+    try:
+        return retention_from_env(env)
+    except ValueError as error:
+        raise StartupError(str(error)) from None
 
 
 def _port(value: str) -> int:
@@ -100,9 +116,16 @@ def _port(value: str) -> int:
     return int(value)
 
 
-def build_service(settings: Settings) -> PublishService:
-    store = ResultStore(os.path.join(settings.state_dir, RESULTS_FILE))
-    return PublishService(engines=settings.engines, store=store, secret=settings.secret)
+def build_store(settings: Settings) -> ResultStore:
+    return ResultStore(os.path.join(settings.state_dir, RESULTS_FILE), retention=settings.retention)
+
+
+def build_service(settings: Settings, store: Optional[ResultStore] = None) -> PublishService:
+    return PublishService(
+        engines=settings.engines,
+        store=store if store is not None else build_store(settings),
+        secret=settings.secret,
+    )
 
 
 def build_response_service(settings: Settings) -> ResponseReadService:
@@ -236,16 +259,25 @@ def serve(httpd: GatewayServer) -> None:
 def main(env: Optional[Mapping[str, str]] = None) -> int:
     try:
         settings = load_settings(os.environ if env is None else env)
-        service = build_service(settings)
+        store = build_store(settings)
+        service = build_service(settings, store)
         httpd = build_server(service, settings.host, settings.port, build_response_service(settings))
     except (StartupError, OSError) as error:
         log.error("refusing to start: %s", error)
         return EXIT_CONFIG
     log.info(
-        "publish gateway listening on %s:%s with %d engine instance(s)",
+        "publish gateway listening on %s:%s with %d engine instance(s); "
+        "receipts are kept for %ds (%ds when they carry invitation codes), tombstones for %ds",
         settings.host, httpd.server_address[1], len(settings.engines),
+        settings.retention.result_seconds, settings.retention.invitation_seconds,
+        settings.retention.tombstone_seconds,
     )
-    serve(httpd)
+    pruner = PruneScheduler(store)
+    pruner.start()
+    try:
+        serve(httpd)
+    finally:
+        pruner.stop()
     return 0
 
 

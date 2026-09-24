@@ -289,6 +289,49 @@ class SettingsTest(unittest.TestCase):
     def test_refuses_to_start_with_a_bad_port(self):
         self.refused(PUBGW_PORT="http")
 
+    def test_retention_defaults_to_a_week_of_receipts_and_a_quarter_of_tombstones(self):
+        retention = load_settings(self.env).retention
+
+        self.assertEqual(7 * 24 * 3600, retention.result_seconds)
+        self.assertEqual(90 * 24 * 3600, retention.tombstone_seconds)
+
+    def test_an_explicit_retention_window_is_honoured(self):
+        retention = load_settings(dict(self.env, PUBGW_RESULT_TTL_SECONDS="172800",
+                                       PUBGW_TOMBSTONE_TTL_SECONDS="864000")).retention
+
+        self.assertEqual(172800, retention.result_seconds)
+        self.assertEqual(864000, retention.tombstone_seconds)
+
+    def test_refuses_to_start_with_a_non_numeric_retention_window(self):
+        self.refused(PUBGW_RESULT_TTL_SECONDS="a week")
+
+    def test_refuses_to_start_with_a_receipt_window_below_the_floor(self):
+        message = self.refused(PUBGW_RESULT_TTL_SECONDS="3600")
+
+        self.assertIn("result retention window", message)
+        self.assertIn("86400", message)
+
+    def test_refuses_to_start_when_tombstones_are_shorter_than_receipts(self):
+        message = self.refused(PUBGW_RESULT_TTL_SECONDS="604800", PUBGW_TOMBSTONE_TTL_SECONDS="86400")
+
+        self.assertIn("tombstone retention window", message)
+
+    def test_the_invitation_window_defaults_to_a_day(self):
+        self.assertEqual(24 * 3600, load_settings(self.env).retention.invitation_seconds)
+
+    def test_an_explicit_invitation_window_is_honoured(self):
+        settings = load_settings(dict(self.env, PUBGW_INVITATION_TTL_SECONDS="7200"))
+
+        self.assertEqual(7200, settings.retention.invitation_seconds)
+
+    def test_refuses_to_start_when_codes_would_outlive_the_receipt(self):
+        message = self.refused(PUBGW_RESULT_TTL_SECONDS="86400", PUBGW_INVITATION_TTL_SECONDS="172800")
+
+        self.assertIn("invitation retention window", message)
+
+    def test_a_bad_retention_value_names_the_variable_that_is_wrong(self):
+        self.assertIn("PUBGW_TOMBSTONE_TTL_SECONDS", self.refused(PUBGW_TOMBSTONE_TTL_SECONDS="forever"))
+
     def test_main_exits_with_2_when_misconfigured(self):
         with self.assertLogs("pubgw", level="ERROR"):
             self.assertEqual(2, server.main({}))

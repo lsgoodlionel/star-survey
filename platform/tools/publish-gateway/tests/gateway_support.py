@@ -51,10 +51,30 @@ def engine_config(instance=INSTANCE):
     )
 
 
-def make_service(engine, state_dir, clock=None):
+class MovableClock:
+    """可推进的时钟：留存期以天计，测试不可能真等。"""
+
+    def __init__(self, value=NOW):
+        self.value = float(value)
+
+    def __call__(self):
+        return self.value
+
+    def advance(self, seconds):
+        self.value += seconds
+
+
+def make_store(state_dir, clock=None, retention=None):
+    return ResultStore(
+        os.path.join(state_dir, "results.sqlite3"), retention=retention, now=clock or (lambda: NOW)
+    )
+
+
+def make_service(engine, state_dir, clock=None, store=None):
+    """store 单独传入：推进留存期的测试不能连带推进 HMAC 时间戳（±300 秒）。"""
     return PublishService(
         engines={INSTANCE: engine_config()},
-        store=ResultStore(os.path.join(state_dir, "results.sqlite3")),
+        store=store if store is not None else make_store(state_dir),
         secret=SECRET,
         transport_factory=lambda config: engine.transport,
         now=clock or (lambda: NOW),

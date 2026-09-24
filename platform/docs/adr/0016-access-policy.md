@@ -204,7 +204,9 @@
 - ✅ 网关 `add_participants` 总是让引擎生成 token（`create_token=true`），定义里写的 token 会被替换；
   平台要发的邀请码现在随发布回执一并返回（`invitations[]`，按定义顺序，平台可给每条一个不透明
   `ref`），见契约 publish-gateway-v1「邀请码回读」。配不齐就发布失败并回滚。
-  遗留：回执按 `requestId` 永久存档，**邀请码明文留在网关状态目录里**，存储没有保留期。
+  存档：回执按 `requestId` 存档，所以邀请码明文会落到网关状态目录。**带码的回执因此只留 24 小时**
+  （`PUBGW_INVITATION_TTL_SECONDS`，[ADR 0012](0012-republish-and-drift.md) 决定 8），到点整份回执
+  过期成不含正文的墓碑，重放是 410 `result_expired`。
 - ✅ 上游也通了：平台现在会在发布时把问卷受众物化成 `participants`（每条只带 `ref`＝联系人 id，
   个人信息不出平台），发布成功后按 `ref` 自动登记"哪个码发给了谁"（ADR 0017 决定 8）。
   只有 `access.invitationRequired` 为真才发这个键。邀请码在平台侧只落

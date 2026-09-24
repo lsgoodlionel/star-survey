@@ -194,6 +194,56 @@ class HttpPublishGatewayClientTest {
     }
 
     @Test
+    void a410MeansTheStoredReceiptAgedOutAndCarriesTheEngineSurvey() {
+        status = 410;
+        reply = """
+                {"status":"expired","error":"result_expired",
+                 "expired":{"originalStatus":200,"createdAt":"2027-01-15T08:00:00Z",
+                            "retainedSeconds":604800,"surveyId":511001}}
+                """;
+
+        assertThat(publish()).isEqualTo(new GatewayOutcome.Expired(200, 511001, "2027-01-15T08:00:00Z", false));
+    }
+
+    @Test
+    void anExpiredRejectionHasNoEngineSurveyToCleanUp() {
+        status = 410;
+        reply = """
+                {"status":"expired","error":"result_expired",
+                 "expired":{"originalStatus":422,"createdAt":"2027-01-15T08:00:00Z",
+                            "retainedSeconds":604800,"surveyId":null}}
+                """;
+
+        assertThat(publish()).isEqualTo(new GatewayOutcome.Expired(422, null, "2027-01-15T08:00:00Z", false));
+    }
+
+    @Test
+    void a410ForAReceiptThatCarriedInvitationCodesSaysSo() {
+        status = 410;
+        reply = """
+                {"status":"expired","error":"result_expired",
+                 "expired":{"originalStatus":200,"createdAt":"2027-01-15T08:00:00Z",
+                            "retainedSeconds":86400,"surveyId":511001,"heldInvitationCodes":true}}
+                """;
+
+        assertThat(publish())
+                .isEqualTo(new GatewayOutcome.Expired(200, 511001, "2027-01-15T08:00:00Z", true));
+    }
+
+    @Test
+    void a410WithoutDetailsIsStillTerminalRatherThanUnknown() {
+        // 重发只会再得到 410，所以细节读不出来也不能退回"结果未知"——那是一个永远走不完的重试环。
+        status = 410;
+        reply = "{\"status\":\"expired\"}";
+
+        assertThat(publish()).isInstanceOfSatisfying(GatewayOutcome.Expired.class, expired -> {
+            assertThat(expired.originalStatus()).isZero();
+            assertThat(expired.surveyId()).isNull();
+            assertThat(expired.heldInvitationCodes()).isFalse();
+        });
+    }
+
+    @Test
     void anUnexpectedStatusOrAnUnreadable200IsUnknown() {
         status = 500;
         reply = "oops";
