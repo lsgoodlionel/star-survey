@@ -45,6 +45,7 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     private const DEVICE_PATTERN = '/\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/';
     private const STATUS_FUNCTION = 'policyStatus';
     private const EXAM_STATUS_FUNCTION = 'examStatus';
+    private const EXAM_TIME_FUNCTION = 'examTime';
     private const CLOSED_ACCESS = 'C';
 
     protected $storage = 'DbStorage';
@@ -65,6 +66,9 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
 
     /** @var string|null 本次请求的设备号（首次访问时新发） */
     private $deviceId;
+
+    /** @var MjyExamProctor|null */
+    private $proctor;
 
     public function init()
     {
@@ -134,6 +138,11 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
             $this->askForPassword($surveyId, $access[0]);
             return;
         }
+        if ($access !== null) {
+            // 判定之后、拒绝之前：记考场记录，到点的先把卷强制交掉。
+            // 顺序不能反——deny() 末尾是 App()->end()。
+            $this->proctorExam($surveyId, $access[1]);
+        }
         if ($access !== null && !$access[1]->isAllowed()) {
             $this->deny($surveyId, $access[1]);
             return;
@@ -158,8 +167,8 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     {
         $event = $this->getEvent();
         $function = $event->get('function');
-        if ($event->get('target') !== self::$name
-            || !in_array($function, [self::STATUS_FUNCTION, self::EXAM_STATUS_FUNCTION], true)) {
+        $known = [self::STATUS_FUNCTION, self::EXAM_STATUS_FUNCTION, self::EXAM_TIME_FUNCTION];
+        if ($event->get('target') !== self::$name || !in_array($function, $known, true)) {
             return;
         }
         $surveyId = (int) App()->getRequest()->getParam('sid');
@@ -180,7 +189,38 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
         if ($function === self::EXAM_STATUS_FUNCTION) {
             return $this->examKeys()->status($surveyId);
         }
+        if ($function === self::EXAM_TIME_FUNCTION) {
+            return $this->examTime($surveyId);
+        }
         return $this->accessPolicies()->status($surveyId);
+    }
+
+    /**
+     * 作答页问"还剩多少秒"（WP-09.2）。
+     *
+     * **答案永远由服务端算**：截止时刻是首次进场时按数据库时钟定死的，这里只拿
+     * 数据库时钟再减一次。请求里的任何时间字段、浏览器时钟都不是输入，改了没用。
+     * 页面上的倒计时只是展示，到底收不收这次提交由 beforeSurveyPage 另行判定。
+     *
+     * 身份取当前会话：换个浏览器问不到别人的剩余时间。
+     *
+     * @return array{surveyId: int, remainingSeconds: int, serverNow: string, expired: bool}|array{surveyId: int, timed: false}
+     */
+    private function examTime(int $surveyId): array
+    {
+        $policy = $this->accessPolicies()->find($surveyId);
+        if ($policy === null || $policy->maxDurationSeconds() === null) {
+            return ['surveyId' => $surveyId, 'timed' => false];
+        }
+        $this->readyEngine();
+        $this->proctor()->ensureSchema();
+        $attempt = (new MjyExamAttemptStore(App()->getDb(), self::engineInstanceId()))
+            ->find($surveyId, $this->sessionKey($surveyId));
+        if ($attempt === null) {
+            return ['surveyId' => $surveyId, 'timed' => false];
+        }
+        $timer = new MjyExamTimer($attempt['deadline_at'], $this->engine()->clock()->nowUtc());
+        return ['surveyId' => $surveyId] + $timer->toPayload();
     }
 
     public function examKeys(): MjyExamKeyStore
@@ -203,6 +243,7 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
             if ($policy !== null) {
                 $now = $this->engine()->clock()->nowUtc();
                 $this->accessGate()->confirm($policy, $this->accessRequest($surveyId, $policy), $now);
+                $this->proctor()->onComplete($surveyId, $this->sessionKey($surveyId), $now);
             }
         });
     }
@@ -214,6 +255,9 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     {
         $this->safely(function () {
             $this->reapExpiredLeases();
+        });
+        $this->safely(function () {
+            $this->reapExpiredExams();
         });
     }
 
@@ -231,6 +275,67 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
             });
         }
         return $reaped;
+    }
+
+    /**
+     * 到点未交的卷由服务端强制交掉（WP-09.2）。
+     *
+     * 直接关掉浏览器的人不会再发请求，beforeSurveyPage 挂不上——这条是唯一的兜底。
+     *
+     * @return int 结掉了几份
+     */
+    public function reapExpiredExams(): int
+    {
+        $this->readyEngine();
+        $this->proctor()->ensureSchema();
+        $now = $this->engine()->clock()->nowUtc();
+        $settled = 0;
+        foreach (Survey::model()->findAllByAttributes(['active' => 'Y']) as $survey) {
+            $this->safely(function () use ($survey, $now, &$settled) {
+                $settled += $this->proctor()->reap((int) $survey->sid, $now);
+            });
+        }
+        return $settled;
+    }
+
+    public function proctor(): MjyExamProctor
+    {
+        if ($this->proctor === null) {
+            $this->proctor = new MjyExamProctor(App()->getDb(), self::engineInstanceId());
+        }
+        return $this->proctor;
+    }
+
+    /**
+     * 记考场记录，并在到点时先把卷强制交掉。
+     *
+     * 失败只写日志：记账坏了不该把还在考试的人挡在门外（与 ADR 0007 决定 6 一致——
+     * 闸门 fail closed，记账 fail open）。
+     */
+    private function proctorExam(int $surveyId, MjyPolicyDecision $decision): void
+    {
+        if ($decision->deadlineAt() === null) {
+            return; // 这份问卷没有限时
+        }
+        $this->safely(function () use ($surveyId, $decision) {
+            $this->proctor()->ensureSchema();
+            $this->proctor()->onPage(
+                $surveyId,
+                $this->sessionKey($surveyId),
+                $decision,
+                $this->currentResponseId($surveyId),
+                $this->engine()->clock()->nowUtc()
+            );
+        });
+    }
+
+    /**
+     * 引擎当前这次作答的答卷行号。第一页提交之前还没有。
+     */
+    private function currentResponseId(int $surveyId): ?int
+    {
+        $srid = $_SESSION['responses_' . $surveyId]['srid'] ?? null;
+        return is_numeric($srid) ? (int) $srid : null;
     }
 
     /**
