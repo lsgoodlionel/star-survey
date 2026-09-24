@@ -1,8 +1,8 @@
-package cn.mjy.platform.delivery;
+package cn.mjy.platform.shared.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import cn.mjy.platform.delivery.SignedParameters.Verdict;
+import cn.mjy.platform.shared.security.SignedParameters.Verdict;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;

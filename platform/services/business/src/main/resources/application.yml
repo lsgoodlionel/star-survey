@@ -3,6 +3,12 @@
 spring:
   application:
     name: mjy-platform-business
+  servlet:
+    # 资产上传是唯一的 multipart 入口。容器这一层先挡一次，服务层再按 platform.asset.max-bytes
+    # 判一次（两道是故意的：容器的上限改不到运行期配置里去）。
+    multipart:
+      max-file-size: ${PLATFORM_ASSET_MAX_BYTES:16777216}B
+      max-request-size: ${PLATFORM_ASSET_MAX_REQUEST_BYTES:17825792}B
   datasource:
     url: ${PLATFORM_DB_URL:jdbc:postgresql://localhost:5433/platform}
     username: ${PLATFORM_DB_APP_USER:platform_app}
@@ -111,6 +117,17 @@ platform:
       lease: PT5M
       max-attempts: 5
       backoff: PT1M
+  # 平台资产服务（ADR 0019）。作者上传的图片 / 音频 / 视频，取代题型里作者填 URL 的临时做法。
+  # 字节先落本地目录（多副本需共享卷，生产换对象存储实现，与导出共用 BlobStore）。
+  # 取件票按 PLATFORM_ASSET_SECRET（至少 32 字节）按租户派生；缺失时应用照常启动，
+  # 但签发与验签一律拒绝——带资产引用的问卷因此发不出去（失败即关闭）。
+  asset:
+    storage-dir: ${PLATFORM_ASSET_DIR:}
+    max-bytes: ${PLATFORM_ASSET_MAX_BYTES:16777216}
+    # 票据随定义快照固化，到期只能靠改版再发布刷新（ADR 0019 已知限制 1）。
+    ticket-ttl: ${PLATFORM_ASSET_TICKET_TTL:P180D}
+    # 匿名取件 /a/{租户}/{资产}/{版本} 挂在它下面。
+    public-base-url: ${PLATFORM_PUBLIC_BASE_URL:}
   # 通讯录导入作业（WP-18，ADR 0017）。逐行判定、可断点续跑；原始行在作业结束时删除。
   contacts:
     import:

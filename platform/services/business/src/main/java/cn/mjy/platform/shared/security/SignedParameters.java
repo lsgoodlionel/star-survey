@@ -1,4 +1,4 @@
-package cn.mjy.platform.delivery;
+package cn.mjy.platform.shared.security;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -14,7 +14,10 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * 链接上的签名业务参数（R05-08）：预填、归因等参数由平台签名，接收方不可篡改、不可增删、到期即失效。
+ * 链接与地址上的签名参数：平台签发、接收方不可篡改、不可增删、到期即失效。
+ *
+ * <p>本来是投放链接（R05-08）自己的东西，资产取件票（ADR 0019 决定 4）需要同一套语义，
+ * 因此提到 {@code shared} 下——<b>签名实现只留一份</b>，两处共用同一批向量测试。：预填、归因等参数由平台签名，接收方不可篡改、不可增删、到期即失效。
  *
  * <p>规范串（签名对象）：
  * <pre>

@@ -46,9 +46,13 @@ class MjyQuestionAttributeDefinitions
     public const DICTIONARY_VERSION = 'mjy_dictionary_version';
     public const DICTIONARY_DIGEST = 'mjy_dictionary_digest';
     public const DICTIONARY_LEVELS = 'mjy_dictionary_levels';
+    /** 轮播图的幻灯片（R02-20，JSON）：图来自平台资产服务，地址带签名与过期时刻（ADR 0019）。 */
+    public const CAROUSEL_SLIDES = 'mjy_carousel_slides';
+    public const CAROUSEL_AUTOPLAY = 'mjy_carousel_autoplay';
 
     private const CATEGORY = 'MJY 结构化题型';
     private const CATEGORY_GROUPS = 'MJY 选项分类';
+    private const CATEGORY_CAROUSEL = 'MJY 轮播图';
 
     /**
      * @return array<string, array<string, mixed>>
@@ -117,6 +121,31 @@ class MjyQuestionAttributeDefinitions
             self::DICTIONARY_LEVELS => self::definition($structured, 240, 'textarea', '', '各级标题（JSON）', [
                 'help' => '形如 ["省","市","区"]，一级一列',
             ]),
+            // R02-20 轮播图：数据形状就是原生单选，所以挂在 L 上而不是结构化题型上。
+            // 地址里带签名，& 一旦被净化改写，图就全裂——必须走 xssfilter => false。
+            self::CAROUSEL_SLIDES => self::definition(
+                Question::QT_L_LIST,
+                10,
+                'textarea',
+                '',
+                '幻灯片（JSON）',
+                [
+                    'help' => '由平台按资产引用生成，形如 [{"code":"A1","url":"…","alt":"…","assetVersion":1}]',
+                    'category' => self::CATEGORY_CAROUSEL,
+                ]
+            ),
+            self::CAROUSEL_AUTOPLAY => self::definition(
+                Question::QT_L_LIST,
+                20,
+                'integer',
+                '0',
+                '自动轮播',
+                [
+                    'help' => '1＝自动切换；作答者一动就停',
+                    'category' => self::CATEGORY_CAROUSEL,
+                    'xssfilter' => true,
+                ]
+            ),
             // R02-04 的两支：单选按答案选项分组，多选按子题分组，共用同一份 JSON。
             // 少写一个题型字母，引擎导入那种题时会把这个属性丢掉，主题拿到空分组静默平铺。
             self::OPTION_GROUPS => self::definition(

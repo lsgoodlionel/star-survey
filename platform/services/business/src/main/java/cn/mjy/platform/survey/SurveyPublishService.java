@@ -56,11 +56,13 @@ public class SurveyPublishService {
     private final PublishApprovalGate approvalGate;
     private final Optional<SurveyParticipantSource> participants;
     private final Optional<SurveyDictionarySource> dictionaries;
+    private final Optional<SurveyAssetSource> assets;
 
     SurveyPublishService(TenantScope tenantScope, SurveyRepository surveys,
             PublishAttemptRepository attempts, SurveyDefinitions definitions, EngineInstanceService engines,
             PublishGatewayClient gateway, PublishSettlement settlement, PublishApprovalGate approvalGate,
-            Optional<SurveyParticipantSource> participants, Optional<SurveyDictionarySource> dictionaries) {
+            Optional<SurveyParticipantSource> participants, Optional<SurveyDictionarySource> dictionaries,
+            Optional<SurveyAssetSource> assets) {
         this.tenantScope = tenantScope;
         this.surveys = surveys;
         this.attempts = attempts;
@@ -71,6 +73,7 @@ public class SurveyPublishService {
         this.approvalGate = approvalGate;
         this.participants = participants;
         this.dictionaries = dictionaries;
+        this.assets = assets;
     }
 
     /** 已固化、即将发给网关的一次尝试。 */
@@ -124,7 +127,8 @@ public class SurveyPublishService {
         String instance = activeEngineInstance(ctx.tenantId());
         ObjectNode normalized = definitions.normalize(definitions.parse(row.draftDefinition()), row.id());
         ObjectNode pinned = pinDictionaries(normalized);
-        String definition = definitions.serialize(materializeParticipants(ctx, row.id(), pinned));
+        ObjectNode withAssets = materializeAssets(ctx, row.id(), row.draftVersion(), pinned);
+        String definition = definitions.serialize(materializeParticipants(ctx, row.id(), withAssets));
         attempts.insert(ctx.tenantId(), requestId, row.id(), row.draftVersion(), instance, definition, ctx.actorId());
         surveys.markPublishing(row.id(), requestId);
         return new Ticket(row.id(), requestId, instance, row.draftVersion(), definition);
@@ -162,6 +166,17 @@ public class SurveyPublishService {
                 List.of("this definition references dictionaries " + codes
                         + " but no dictionary service is available")));
         return definitions.withDictionaries(definition, source.pin(codes));
+    }
+
+    /**
+     * 把定义里的资产引用（{@code assetId}）解析成作答页取得到的签名地址，并登记这一版的引用
+     * （ADR 0019 决定 5）。取的是发布那一刻的当前版本，写进快照——媒体版本留存就落在这一步。
+     *
+     * <p>资产模块未装时，带资产引用的问卷发不出去（接口实现自己判），而不是发出一份图全裂的问卷。
+     */
+    private ObjectNode materializeAssets(TenantContext ctx, UUID surveyId, int draftVersion, ObjectNode definition) {
+        return assets.map(source -> source.materialize(ctx, surveyId, draftVersion, definition))
+                .orElseGet(() -> SurveyAssetSource.requireNoAssetReferences(definition));
     }
 
     /** 核对：结果未知时只能原样重发（同一 requestId、同一实例、同一份定义），由网关幂等给出确定结局。 */

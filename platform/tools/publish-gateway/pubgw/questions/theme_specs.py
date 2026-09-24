@@ -12,14 +12,15 @@ from .theme_columns import _check_columns, _lower_table, _parse_columns
 from .theme_dictionary import cascading_columns, check_cascading, lower_cascading
 from .theme_kit import (
     CELL_MAX_LENGTH, COLUMNS_ATTRIBUTE, DICTIONARY_ATTRIBUTE, DICTIONARY_DIGEST_ATTRIBUTE,
-    DICTIONARY_LEVELS_ATTRIBUTE, DICTIONARY_VERSION_ATTRIBUTE, HARD_MAX_ROWS,
-    HIGHLIGHT_SEGMENTS_ATTRIBUTE,
+    DICTIONARY_LEVELS_ATTRIBUTE, DICTIONARY_VERSION_ATTRIBUTE, HARD_MAX_ROWS, HIGHLIGHT_SEGMENTS_ATTRIBUTE,
+    CAROUSEL_AUTOPLAY_ATTRIBUTE, CAROUSEL_SLIDES_ATTRIBUTE,
     HIGHLIGHT_TEXT_ATTRIBUTE, Issue, LOOP_OBJECTS_ATTRIBUTE, Lowering, MAX_ROWS_ATTRIBUTE,
     MIN_ROWS_ATTRIBUTE, MODEL_FEATURES_ATTRIBUTE, MODEL_NAME_ATTRIBUTE, OPTION_REQUIRED,
     OPTION_VALUE, OptionSpec, PK_ITEMS_ATTRIBUTE,
     PK_PAIRS_ATTRIBUTE, PSYCH_TRIALS_ATTRIBUTE, SHELF_IMAGE_ATTRIBUTE, SHELF_PRODUCTS_ATTRIBUTE,
     STRUCTURE_VERSION_ATTRIBUTE, STRUCTURE_VERSION_PATTERN, ThemeSpec, canonical_json,
 )
+from .theme_media import check_carousel, lower_carousel
 from .theme_research import (
     MAX_HIGHLIGHT_TEXT, MAX_REACTION_MS, check_kano, check_psych_trial, check_text_highlight,
     kano_columns, lower_kano, lower_psych_trial, lower_text_highlight, psych_trial_columns,
@@ -334,6 +335,20 @@ _THEMES = (
         lower=lower_kano,
         side_columns=kano_columns,
     ),
+    ThemeSpec(
+        name="mjy-carousel",
+        label="轮播图",
+        requirement="R02-20",
+        # 数据形状就是原生单选：一张幻灯片对一个选项，答案代码即选项代码，不需要副表。
+        # 图不是作者填的地址，是平台资产服务解析出来的签名取件地址（ADR 0019 决定 5）。
+        types=("L",),
+        options=(
+            OptionSpec("slides", "list", required=True),
+            OptionSpec("autoplay", "bool", default=False),
+        ),
+        check=check_carousel,
+        lower=lower_carousel,
+    ),
 )
 
 THEMES: Dict[str, ThemeSpec] = {theme.name: theme for theme in _THEMES}
@@ -351,7 +366,7 @@ MANAGED_ATTRIBUTES = frozenset(
      SHELF_IMAGE_ATTRIBUTE, SHELF_PRODUCTS_ATTRIBUTE,
      HIGHLIGHT_TEXT_ATTRIBUTE, HIGHLIGHT_SEGMENTS_ATTRIBUTE, PSYCH_TRIALS_ATTRIBUTE,
      MODEL_NAME_ATTRIBUTE, MODEL_FEATURES_ATTRIBUTE,
-     DICTIONARY_ATTRIBUTE, DICTIONARY_VERSION_ATTRIBUTE, DICTIONARY_DIGEST_ATTRIBUTE,
-     DICTIONARY_LEVELS_ATTRIBUTE,
+     DICTIONARY_ATTRIBUTE, DICTIONARY_VERSION_ATTRIBUTE, DICTIONARY_DIGEST_ATTRIBUTE, DICTIONARY_LEVELS_ATTRIBUTE,
+     CAROUSEL_SLIDES_ATTRIBUTE, CAROUSEL_AUTOPLAY_ATTRIBUTE,
      "mjy_option_groups", "commented_checkbox"}
 )

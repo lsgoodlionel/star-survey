@@ -60,6 +60,10 @@ HIGHLIGHT_SEGMENTS_ATTRIBUTE = "mjy_highlight_segments"
 #: 心理实验（R02-46）：试次（刺激＋正确按键）。**正确按键不进列定义**——
 #: 正确与否由平台按声明推导，作答者提交不了「我答对了」。
 PSYCH_TRIALS_ATTRIBUTE = "mjy_psych_trials"
+#: 轮播图（R02-20）：幻灯片（选项代码＋平台签发的取件地址＋替代文本＋被钉死的资产版本号）。
+#: **不放作者自己填的图片地址**——这一类的图一律来自平台资产服务（ADR 0019）。
+CAROUSEL_SLIDES_ATTRIBUTE = "mjy_carousel_slides"
+CAROUSEL_AUTOPLAY_ATTRIBUTE = "mjy_carousel_autoplay"
 #: 专业模型（R02-47）：模型名与该模型的采集对象。读端按模型名取对应的分析口径，
 #: 不靠猜列名——「连接可复现分析」的锚点就是这一对属性加上结构版本。
 MODEL_NAME_ATTRIBUTE = "mjy_model_name"

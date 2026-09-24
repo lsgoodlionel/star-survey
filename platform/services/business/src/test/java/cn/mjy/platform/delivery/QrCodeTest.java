@@ -1,5 +1,6 @@
 package cn.mjy.platform.delivery;
 
+import cn.mjy.platform.shared.security.SignedParameters;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

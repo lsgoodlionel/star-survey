@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>三种用途互不相通：
  * <ul>
- *   <li>{@code link}——链接业务参数签名（{@link SignedParameters}）；</li>
+ *   <li>{@code link}——链接业务参数签名（{@link cn.mjy.platform.shared.security.SignedParameters}）；</li>
  *   <li>{@code unsubscribe}——退订令牌；</li>
  *   <li>{@code receipt}——渠道商回执回调的共享密钥，按 (租户, 渠道商) 再派生一层，
  *       由租户管理员读出后配置到渠道商后台。</li>
