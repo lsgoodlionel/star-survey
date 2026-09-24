@@ -28,11 +28,16 @@ class AssetController {
     private static final int MAX_LIMIT = 200;
 
     private final AssetService assets;
+    private final ResponderAssetService responderAssets;
     private final CurrentTenant currentTenant;
+    private final String publicBaseUrl;
 
-    AssetController(AssetService assets, CurrentTenant currentTenant) {
+    AssetController(AssetService assets, ResponderAssetService responderAssets, CurrentTenant currentTenant,
+            AssetProperties properties) {
         this.assets = assets;
+        this.responderAssets = responderAssets;
         this.currentTenant = currentTenant;
+        this.publicBaseUrl = properties.publicBaseUrl();
     }
 
     @PostMapping(consumes = "multipart/form-data")
@@ -56,6 +61,36 @@ class AssetController {
     @GetMapping("/{id}")
     AssetView get(@PathVariable UUID id) {
         return assets.get(currentTenant.require(), id);
+    }
+
+    /**
+     * 取一个版本的字节。<b>走主安全链</b>：租户级 {@code view}，与取件票完全无关。
+     *
+     * <p>这是作答者上传（录音、录像、画布快照）在审阅答卷时的读法——
+     * 作者不该为了听一段录音去伪造一张绑定票（ADR 0019 决定 9）。
+     */
+    @GetMapping("/{id}/versions/{version}/content")
+    ResponseEntity<?> content(@PathVariable UUID id, @PathVariable int version) {
+        TenantContext ctx = currentTenant.require();
+        return AssetResponses.serve(id, version, assets.openAsStaff(ctx, id, version));
+    }
+
+    /**
+     * 给一件作答者上传的资产签一张绑定本人的取件票（ADR 0019 决定 9）。
+     *
+     * <p>应答里的地址<b>不含令牌</b>：作答页必须自己补上 {@code rt} 才凑得出一次合法取件。
+     */
+    @PostMapping("/{id}/respondent-ticket")
+    RespondentTicketView respondentTicket(@PathVariable UUID id,
+            @RequestParam(name = "version", required = false) Integer version) {
+        TenantContext ctx = currentTenant.require();
+        int versionNo = version == null ? assets.get(ctx, id).currentVersion() : version;
+        return new RespondentTicketView(responderAssets.mintTicket(ctx, id, versionNo).url(publicBaseUrl),
+                versionNo);
+    }
+
+    /** 绑定取件票的对外视图。{@code url} 还差一个 {@code rt} 才能用——这是故意的。 */
+    public record RespondentTicketView(String url, int version) {
     }
 
     /** 停用：不再能被新的发布引用，已发布的问卷照常回放。 */

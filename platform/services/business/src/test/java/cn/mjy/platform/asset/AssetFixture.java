@@ -33,25 +33,29 @@ public class AssetFixture {
         return access.member(owner, actor, VIEWER_ROLE, null);
     }
 
-    /** 最小 PNG：八字节签名 ＋ 一段填充。内容是不是合法图像不在闸门的职责里，文件头是。 */
+    /**
+     * 最小 PNG：签名 ＋ IHDR ＋ IDAT ＋ IEND，<b>不带任何元数据块</b>。
+     *
+     * <p>像素内容不在闸门的职责里，<b>容器结构在</b>：剥离器会按块边界走一遍
+     * （ADR 0019 决定 10），结构不成立就整件拒收，所以夹具得是真的块流而不是一段填充。
+     * 既然没有可剥的东西，剥完与剥前逐字节相同——"上传什么取回什么"的用例因此仍然成立。
+     */
     public static byte[] png() {
-        return withTail(new byte[] {(byte) 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a});
+        return ImageBytes.minimalPng();
     }
 
+    /** 最小 JPEG：SOI ＋ APP0(JFIF) ＋ SOS ＋ 扫描数据 ＋ EOI，不带 APP1。 */
     public static byte[] jpeg() {
-        return withTail(new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xe0});
+        return ImageBytes.minimalJpeg();
     }
 
     public static byte[] gif() {
         return withTail("GIF89a".getBytes(StandardCharsets.US_ASCII));
     }
 
-    /** RIFF 容器：第 8 字节起是 WEBP。 */
+    /** 最小 WebP：RIFF/WEBP 容器里一个 VP8 块，不带 EXIF。 */
     public static byte[] webp() {
-        byte[] bytes = new byte[64];
-        System.arraycopy("RIFF".getBytes(StandardCharsets.US_ASCII), 0, bytes, 0, 4);
-        System.arraycopy("WEBP".getBytes(StandardCharsets.US_ASCII), 0, bytes, 8, 4);
-        return bytes;
+        return ImageBytes.minimalWebp();
     }
 
     /** RIFF 容器，但第 9–12 字节是 WAVE：声明成 image/webp 时必须被认出来不是图。 */
@@ -60,6 +64,11 @@ public class AssetFixture {
         System.arraycopy("RIFF".getBytes(StandardCharsets.US_ASCII), 0, bytes, 0, 4);
         System.arraycopy("WAVE".getBytes(StandardCharsets.US_ASCII), 0, bytes, 8, 4);
         return bytes;
+    }
+
+    /** Matroska / WebM 的 EBML 头；作答者的录音录像走这一种。 */
+    public static byte[] webm() {
+        return withTail(new byte[] {0x1a, 0x45, (byte) 0xdf, (byte) 0xa3});
     }
 
     public static byte[] mp4() {

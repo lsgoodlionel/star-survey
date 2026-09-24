@@ -18,7 +18,7 @@ import org.springframework.stereotype.Repository;
 class AssetRepository {
 
     private static final String ASSET_COLUMNS =
-            "id, name, kind, status, current_version, created_at, updated_at";
+            "id, name, kind, status, origin, respondent_key, current_version, created_at, updated_at";
     private static final String VERSION_COLUMNS =
             "version_no, content_type, byte_size, sha256, original_name, storage_key, created_at";
 
@@ -28,17 +28,20 @@ class AssetRepository {
         this.jdbc = jdbc;
     }
 
-    /** 资产行（不含版本元数据）。 */
-    record AssetRow(UUID id, String name, AssetKind kind, AssetStatus status, int currentVersion,
-            Instant createdAt, Instant updatedAt) {
+    /** 资产行（不含版本元数据）。{@code respondentKey} 是指纹，可为 null。 */
+    record AssetRow(UUID id, String name, AssetKind kind, AssetStatus status, AssetOrigin origin,
+            String respondentKey, int currentVersion, Instant createdAt, Instant updatedAt) {
     }
 
-    void insertAsset(UUID id, String name, AssetKind kind, String createdBy) {
+    void insertAsset(UUID id, String name, AssetKind kind, AssetOrigin origin, String respondentKey,
+            String createdBy) {
         jdbc.sql("""
-                        INSERT INTO platform_asset (tenant_id, id, kind, name, status, current_version, created_by)
-                        VALUES (app_current_tenant(), :id, :kind, :name, 'active', 1, :by)
+                        INSERT INTO platform_asset (tenant_id, id, kind, name, status, origin, respondent_key,
+                            current_version, created_by)
+                        VALUES (app_current_tenant(), :id, :kind, :name, 'active', :origin, :key, 1, :by)
                         """)
-                .param("id", id).param("kind", kind.code()).param("name", name).param("by", createdBy)
+                .param("id", id).param("kind", kind.code()).param("name", name)
+                .param("origin", origin.code()).param("key", respondentKey).param("by", createdBy)
                 .update();
     }
 
@@ -74,10 +77,56 @@ class AssetRepository {
                 .param("id", id).query(AssetRepository::toAsset).optional();
     }
 
+    /** 素材库列表：<b>只列作者素材</b>。作答者上传是答卷数据，不该出现在素材库里（ADR 0019 决定 8）。 */
     List<AssetRow> listActive(int limit) {
         return jdbc.sql("SELECT " + ASSET_COLUMNS + " FROM platform_asset WHERE status = 'active'"
-                        + " ORDER BY created_at DESC, id DESC LIMIT :limit")
+                        + " AND origin = 'author' ORDER BY created_at DESC, id DESC LIMIT :limit")
                 .param("limit", limit).query(AssetRepository::toAsset).list();
+    }
+
+    /** 作答者上传的来源证据。与资产行同事务写入：两者要么都有，要么都没有。 */
+    void insertIntake(UUID assetId, ResponderUpload upload) {
+        jdbc.sql("""
+                        INSERT INTO platform_asset_intake (tenant_id, asset_id, engine_instance_id, engine_sid,
+                            generation, response_id, question_code)
+                        VALUES (app_current_tenant(), :asset, :instance, :sid, :gen, :response, :code)
+                        """)
+                .param("asset", assetId).param("instance", upload.engineInstanceId())
+                .param("sid", upload.engineSid()).param("gen", upload.generation())
+                .param("response", upload.responseId()).param("code", upload.questionCode())
+                .update();
+    }
+
+    List<ResponderAssetView> listIntake(String engineInstanceId, long engineSid, String generation,
+            long responseId) {
+        return jdbc.sql("""
+                        SELECT i.asset_id, i.question_code, i.ingested_at, a.kind, a.respondent_key,
+                               v.content_type, v.byte_size
+                        FROM platform_asset_intake i
+                        JOIN platform_asset a ON a.tenant_id = i.tenant_id AND a.id = i.asset_id
+                        JOIN platform_asset_version v ON v.tenant_id = a.tenant_id AND v.asset_id = a.id
+                             AND v.version_no = a.current_version
+                        WHERE i.engine_instance_id = :instance AND i.engine_sid = :sid
+                          AND i.generation = :gen AND i.response_id = :response
+                        ORDER BY i.question_code, i.asset_id
+                        """)
+                .param("instance", engineInstanceId).param("sid", engineSid).param("gen", generation)
+                .param("response", responseId)
+                .query(AssetRepository::toIntake).list();
+    }
+
+    /** 这次入库与已存在的那一行是不是同一次上传（幂等重放，而不是篡改）。 */
+    boolean intakeMatches(UUID assetId, ResponderUpload upload) {
+        return Boolean.TRUE.equals(jdbc.sql("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM platform_asset_intake
+                            WHERE asset_id = :asset AND engine_instance_id = :instance AND engine_sid = :sid
+                              AND generation = :gen AND response_id = :response AND question_code = :code)
+                        """)
+                .param("asset", assetId).param("instance", upload.engineInstanceId())
+                .param("sid", upload.engineSid()).param("gen", upload.generation())
+                .param("response", upload.responseId()).param("code", upload.questionCode())
+                .query(Boolean.class).single());
     }
 
     Optional<AssetVersionView> findVersion(UUID assetId, int versionNo) {
@@ -124,9 +173,18 @@ class AssetRepository {
         return new AssetRow(rs.getObject("id", UUID.class), rs.getString("name"),
                 AssetKind.fromCode(rs.getString("kind")).orElseThrow(),
                 AssetStatus.fromCode(rs.getString("status")).orElseThrow(),
+                AssetOrigin.fromCode(rs.getString("origin")).orElseThrow(),
+                rs.getString("respondent_key"),
                 rs.getInt("current_version"),
                 rs.getObject("created_at", OffsetDateTime.class).toInstant(),
                 rs.getObject("updated_at", OffsetDateTime.class).toInstant());
+    }
+
+    private static ResponderAssetView toIntake(ResultSet rs, int row) throws SQLException {
+        return new ResponderAssetView(rs.getObject("asset_id", UUID.class), rs.getString("question_code"),
+                AssetKind.fromCode(rs.getString("kind")).orElseThrow(), rs.getString("content_type"),
+                rs.getLong("byte_size"), rs.getString("respondent_key") != null,
+                rs.getObject("ingested_at", OffsetDateTime.class).toInstant());
     }
 
     private static AssetVersionView toVersion(ResultSet rs, int row) throws SQLException {

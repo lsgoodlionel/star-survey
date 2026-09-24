@@ -53,17 +53,30 @@ public class AssetService {
         String assetName = requireName(name);
         Checked checked = validated(upload);
         UUID id = UUID.randomUUID();
-        String key = storageKey(ctx.tenantId(), id, 1);
         return tenantScope.call(ctx.tenantId(), () -> {
             // 判权在落盘之前：没有 edit 的人连一个字节都不该写进存储。
             access.requireWrite(ctx);
-            write(key, upload.content());
-            assets.insertAsset(id, assetName, checked.kind(), ctx.actorId());
-            assets.insertVersion(id, 1, key, checked.contentType(), checked.byteSize(), checked.sha256(),
-                    requireOriginalName(upload), ctx.actorId());
-            audit.record(ctx, AssetAudit.CREATE, id, "v1 " + checked.contentType() + " " + checked.byteSize());
-            return view(assets.readAsset(id).orElseThrow(), 1);
+            return store(ctx, id, assetName, checked, upload, AssetOrigin.AUTHOR, null, null);
         });
+    }
+
+    /**
+     * 落一件全新资产：字节先写存储、再写元数据，两种来源共用同一条路。
+     * 调用方负责租户作用域与判权；{@code intake} 非空时同事务登记来源证据。
+     */
+    AssetView store(TenantContext ctx, UUID id, String name, Checked checked, AssetUpload upload,
+            AssetOrigin origin, String respondentKey, ResponderUpload intake) {
+        String key = storageKey(ctx.tenantId(), id, 1);
+        write(key, checked.content());
+        assets.insertAsset(id, name, checked.kind(), origin, respondentKey, ctx.actorId());
+        assets.insertVersion(id, 1, key, checked.contentType(), checked.byteSize(), checked.sha256(),
+                requireOriginalName(upload), ctx.actorId());
+        if (intake != null) {
+            assets.insertIntake(id, intake);
+        }
+        audit.record(ctx, AssetAudit.CREATE, id, "v1 " + origin.code() + " " + checked.contentType()
+                + " " + checked.byteSize());
+        return view(assets.readAsset(id).orElseThrow(), 1);
     }
 
     /** 给已有资产追加一个新版本；旧版本原样留着（媒体版本留存）。 */
@@ -71,10 +84,11 @@ public class AssetService {
         Checked checked = validated(upload);
         return tenantScope.call(ctx.tenantId(), () -> {
             access.requireWrite(ctx);
-            assets.findAsset(assetId).orElseThrow(() -> notFound(assetId));
+            AssetRow existing = assets.findAsset(assetId).orElseThrow(() -> notFound(assetId));
+            requireAuthorAsset(existing, "add a version to");
             int versionNo = assets.nextVersion(assetId);
             String key = storageKey(ctx.tenantId(), assetId, versionNo);
-            write(key, upload.content());
+            write(key, checked.content());
             assets.insertVersion(assetId, versionNo, key, checked.contentType(), checked.byteSize(),
                     checked.sha256(), requireOriginalName(upload), ctx.actorId());
             audit.record(ctx, AssetAudit.VERSION, assetId, "v" + versionNo + " " + checked.contentType());
@@ -115,11 +129,12 @@ public class AssetService {
         });
     }
 
-    /** 删除：只有从没被任何一版问卷引用过的资产可以删。 */
+    /** 删除：只有从没被任何一版问卷引用过的<b>作者素材</b>可以删。 */
     public void delete(TenantContext ctx, UUID assetId) {
         tenantScope.run(ctx.tenantId(), () -> {
             access.requireWrite(ctx);
-            assets.findAsset(assetId).orElseThrow(() -> notFound(assetId));
+            AssetRow row = assets.findAsset(assetId).orElseThrow(() -> notFound(assetId));
+            requireAuthorAsset(row, "delete");
             if (assets.hasReferences(assetId)) {
                 throw new AssetConflictException(AssetConflictException.ASSET_IN_USE,
                         "asset " + assetId + " is referenced by a published survey; archive it instead");
@@ -131,12 +146,54 @@ public class AssetService {
     }
 
     /**
-     * 回放一个版本的字节。**没有 TenantContext**：匿名取件端点验签之后带着票据里那个
+     * 已认证作者取字节。<b>不看 origin</b>：作者审阅答卷时要听得到那段录音，
+     * 判权由 {@code access} 的租户级 {@code view} 负责，不由取件票负责。
+     */
+    public AssetContent openAsStaff(TenantContext ctx, UUID assetId, int versionNo) {
+        AssetVersionView version = tenantScope.call(ctx.tenantId(), () -> {
+            access.requireRead(ctx);
+            assets.readAsset(assetId).orElseThrow(() -> notFound(assetId));
+            return assets.findVersion(assetId, versionNo).orElseThrow(() -> notFound(assetId));
+        });
+        return read(assetId, versionNo, version);
+    }
+
+    /**
+     * 回放一个版本的字节。<b>没有 TenantContext</b>：匿名取件端点验签之后带着票据里那个
      * （已签名的）租户标识调进来，元数据仍在行级安全作用域内读出，隔离的判定点没有变。
      */
     public AssetContent open(TenantId tenant, UUID assetId, int versionNo) {
-        AssetVersionView version = tenantScope.call(tenant, () -> assets.findVersion(assetId, versionNo)
-                .orElseThrow(() -> notFound(assetId)));
+        // bearer 那条路只放作者素材：作答者上传的内容走绑定票（决定 9），
+        // 一旦从这里漏出去，按身份授权那一整套当场被绕开。
+        return openInternal(tenant, assetId, versionNo, AssetOrigin.AUTHOR, null);
+    }
+
+    /**
+     * 绑定作答者的取件（ADR 0019 决定 9）。{@code fingerprint} 是取件方出示的令牌算出来的，
+     * 必须与资产行上存的那个一致——这是签名之外<b>第二道互不依赖的闸</b>。
+     */
+    public AssetContent openForRespondent(TenantId tenant, UUID assetId, int versionNo, String fingerprint) {
+        return openInternal(tenant, assetId, versionNo, AssetOrigin.RESPONDENT, fingerprint);
+    }
+
+    private AssetContent openInternal(TenantId tenant, UUID assetId, int versionNo, AssetOrigin expected,
+            String fingerprint) {
+        AssetVersionView version = tenantScope.call(tenant, () -> {
+            AssetRow row = assets.readAsset(assetId).orElseThrow(() -> notFound(assetId));
+            if (row.origin() != expected) {
+                // 与"不存在"同一句话：端点会把它变成逐字节相同的 404。
+                throw notFound(assetId);
+            }
+            if (expected == AssetOrigin.RESPONDENT
+                    && (row.respondentKey() == null || !row.respondentKey().equals(fingerprint))) {
+                throw notFound(assetId);
+            }
+            return assets.findVersion(assetId, versionNo).orElseThrow(() -> notFound(assetId));
+        });
+        return read(assetId, versionNo, version);
+    }
+
+    private AssetContent read(UUID assetId, int versionNo, AssetVersionView version) {
         try {
             InputStream content = files.open(version.storageKey());
             return new AssetContent(version.contentType(), version.byteSize(), version.sha256(), content);
@@ -145,11 +202,18 @@ public class AssetService {
         }
     }
 
-    /** 嗅探与校验的结果：之后一切都按这里认出来的来。 */
-    private record Checked(String contentType, AssetKind kind, long byteSize, String sha256) {
+    /**
+     * 嗅探、剥离与校验的结果：之后一切都按这里认出来的来。
+     * {@code content} 是<b>剥完元数据</b>那份字节——落盘、算摘要、回放的都是它。
+     */
+    record Checked(String contentType, AssetKind kind, byte[] content, long byteSize, String sha256) {
     }
 
-    private Checked validated(AssetUpload upload) {
+    /**
+     * 三道闸门（大小、类型白名单、文件头）＋ 剥元数据，<b>先于</b>任何落盘与落库。
+     * 作者上传与作答者上传走的是同一条，引擎侧的限制不是平台的闸门。
+     */
+    Checked validated(AssetUpload upload) {
         byte[] content = upload == null ? null : upload.content();
         if (content == null || content.length == 0) {
             throw new InvalidAssetException("the uploaded file is empty");
@@ -164,7 +228,22 @@ public class AssetService {
         if (!AssetContentTypes.contentMatches(contentType, content)) {
             throw new InvalidAssetException("the file content does not match its declared type " + contentType);
         }
-        return new Checked(contentType, kind, content.length, sha256(content));
+        // 剥元数据（ADR 0019 决定 10），然后**再过一遍魔数**：剥离器自己不能把一张图变成别的东西。
+        byte[] stripped = AssetImageMetadata.strip(contentType, content);
+        if (!AssetContentTypes.contentMatches(contentType, stripped)) {
+            throw new InvalidAssetException("stripping the metadata of a " + contentType + " did not leave a "
+                    + contentType);
+        }
+        return new Checked(contentType, kind, stripped, stripped.length, sha256(stripped));
+    }
+
+    /** 作答者上传是答卷数据，不是素材：素材库上的写操作一概不许落到它身上。 */
+    private static void requireAuthorAsset(AssetRow row, String action) {
+        if (row.origin() != AssetOrigin.AUTHOR) {
+            throw new AssetConflictException(AssetConflictException.RESPONDENT_ASSET,
+                    "asset " + row.id() + " was uploaded by a respondent; the asset library cannot " + action
+                            + " it");
+        }
     }
 
     private void write(String key, byte[] content) {
