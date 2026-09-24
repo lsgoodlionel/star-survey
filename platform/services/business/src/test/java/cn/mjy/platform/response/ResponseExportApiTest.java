@@ -140,8 +140,9 @@ class ResponseExportApiTest {
 
     @Test
     void invalidRequestsAre400() throws Exception {
-        // docx 还没实现；sav 从切片 06.3 起是合法取值，不能再拿它当"不认识的格式"的例子。
-        for (String body : new String[] {"{\"format\":\"docx\"}", "{\"format\":\"csv\",\"templateVersion\":\"v9\"}",
+        // pdf 还没实现；sav（切片 06.3）与 docx（切片 06.4）都已是合法取值，不能再拿它们当
+        // "不认识的格式"的例子。
+        for (String body : new String[] {"{\"format\":\"pdf\"}", "{\"format\":\"csv\",\"templateVersion\":\"v9\"}",
                 "{\"format\":\"csv\",\"filter\":{\"states\":[\"bogus\"]}}", "{}", "not json"}) {
             mvc.perform(as(p.owner(), post(exportsUrl())).contentType(MediaType.APPLICATION_JSON).content(body))
                     .andExpect(status().isBadRequest())

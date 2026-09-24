@@ -235,7 +235,8 @@ public class ResponseExportService {
                 throw new InvalidResponseQueryException("surveyId in the body does not match the path");
             }
             ExportFormat format = ExportFormat.fromCode(request.format())
-                    .orElseThrow(() -> new InvalidResponseQueryException("format must be one of csv, xlsx"));
+                    .orElseThrow(() -> new InvalidResponseQueryException(
+                            "format must be one of csv, xlsx, sav, docx"));
             String template = request.templateVersion();
             if (template != null && !template.isEmpty() && !DEFAULT_TEMPLATE.equals(template)) {
                 throw new InvalidResponseQueryException("templateVersion must be empty or default");

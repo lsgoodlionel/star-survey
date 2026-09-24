@@ -77,7 +77,7 @@ class ResponseExportResumeTest {
 
     @Test
     void aCrashMidJobResumesFromTheCheckpointAndProducesAnIdenticalFile() throws IOException {
-        for (String format : new String[] {"csv", "xlsx", "sav"}) {
+        for (String format : new String[] {"csv", "xlsx", "sav", "docx"}) {
             ExportJobView reference = fixture.create(p.owner(), p, format);
             ExportJobView crashed = fixture.create(p.owner(), p, format);
             byte[] expected = fixture.download(p.owner(), fixture.runToEnd(p.owner(), reference));

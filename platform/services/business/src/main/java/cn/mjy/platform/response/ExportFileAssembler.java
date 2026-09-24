@@ -35,7 +35,23 @@ class ExportFileAssembler {
     Written assemble(String key, ExportFormat format, ExportLayout layout, boolean revealSensitive,
             List<String> parts) {
         List<List<String>> header = layout.responseHeader();
-        List<ExportSheet> sheets = List.of(
+        ExportContent content = new ExportContent(sheets(layout, revealSensitive, parts), header.get(0),
+                header.get(1), sink -> readRecords(parts, sink));
+        try (ExportFileStore.Upload upload = files.create(key)) {
+            MessageDigest digest = sha256();
+            CountingStream counted = new CountingStream(new DigestOutputStream(upload.stream(), digest));
+            format.writer().write(content, counted);
+            counted.flush();
+            upload.commit();
+            return new Written(counted.count, HexFormat.of().formatHex(digest.digest()));
+        } catch (IOException e) {
+            throw new UncheckedIOException("could not assemble export file", e);
+        }
+    }
+
+    private List<ExportSheet> sheets(ExportLayout layout, boolean revealSensitive, List<String> parts) {
+        List<List<String>> header = layout.responseHeader();
+        return List.of(
                 new ExportSheet("responses", "答卷", header.size(), layout.variables(), sink -> {
                     for (List<String> row : header) {
                         sink.accept(row);
@@ -55,22 +71,21 @@ class ExportFileAssembler {
                     sink.accept(ExportLayout.EXTENSION_HEADER);
                     readParts(parts, ExportPartCodec.EXTENSION, sink);
                 }));
-        try (ExportFileStore.Upload upload = files.create(key)) {
-            MessageDigest digest = sha256();
-            CountingStream counted = new CountingStream(new DigestOutputStream(upload.stream(), digest));
-            format.writer().write(sheets, counted);
-            counted.flush();
-            upload.commit();
-            return new Written(counted.count, HexFormat.of().formatHex(digest.digest()));
-        } catch (IOException e) {
-            throw new UncheckedIOException("could not assemble export file", e);
-        }
     }
 
     private void readParts(List<String> parts, char kind, ExportSheet.RowSink sink) throws IOException {
         for (String part : parts) {
             try (InputStream in = files.open(part)) {
                 ExportPartCodec.read(in, kind, sink);
+            }
+        }
+    }
+
+    /** 逐份答卷重放分片；与按表读出的是同一批分片，顺序也相同。 */
+    private void readRecords(List<String> parts, ExportRecord.Sink sink) throws IOException {
+        for (String part : parts) {
+            try (InputStream in = files.open(part)) {
+                ExportPartCodec.readRecords(in, sink);
             }
         }
     }

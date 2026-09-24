@@ -65,7 +65,7 @@ class ExportFormatTest {
 
     private static byte[] write(ExportFormat format) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        format.writer().write(workbook(), out);
+        format.writer().write(ExportContent.ofSheets(workbook()), out);
         return out.toByteArray();
     }
 

@@ -22,17 +22,14 @@ import java.util.stream.Collectors;
 final class ExportRowEncoder {
 
     /**
-     * 一批的编码结果。
-     *
-     * @param extensions 扩展副表作答，一个单元格一行（ADR 0015 增补二）；行数取决于各份答卷填了几行，
-     *                   与答卷数不成比例
+     * 一批的编码结果：逐份答卷一条记录。按答卷分组而不是按表分组，分片里三类行因此交替存放，
+     * 逐份成文的格式（Word / PDF）不必跨表连接就能一次流式读出一份答卷（{@link ExportRecord}）。
+     * 按表读出时（{@link ExportPartCodec#read}）每一类的先后次序与分组时完全相同。
      */
-    record Encoded(List<List<String>> rows, List<List<String>> attachments, List<List<String>> extensions) {
+    record Encoded(List<ExportRecord> records) {
 
         Encoded {
-            rows = List.copyOf(rows);
-            attachments = List.copyOf(attachments);
-            extensions = List.copyOf(extensions);
+            records = List.copyOf(records);
         }
     }
 
@@ -59,23 +56,19 @@ final class ExportRowEncoder {
      * @param answers 版本号 → 该批从引擎读到的作答
      */
     Encoded encode(List<ExportItem> items, Map<Integer, AnswerBatch> answers) {
-        List<List<String>> rows = new ArrayList<>(items.size());
-        List<List<String>> attachments = new ArrayList<>();
-        List<List<String>> extensions = new ArrayList<>();
+        List<ExportRecord> records = new ArrayList<>(items.size());
         for (ExportItem item : items) {
             PlannedSource source = layout.plan().source(item.version());
             AnswerBatch batch = answers.getOrDefault(item.version(), AnswerBatch.empty());
             Map<String, String> raw = needsAnswers(item, source) ? batch.answers().get(item.responseId()) : null;
             Map<String, String> values = raw == null ? null : policy.apply(raw);
-            rows.add(row(item, source, status(item, source, raw), values));
-            if (values != null) {
-                attachments.addAll(attachments(item, source, values));
-            }
-            if (needsAnswers(item, source)) {
-                extensions.addAll(extensions(item, source, batch));
-            }
+            List<String> row = row(item, source, status(item, source, raw), values);
+            List<List<String>> attachments = values == null ? List.of() : attachments(item, source, values);
+            List<List<String>> extensions = needsAnswers(item, source)
+                    ? extensions(item, source, batch) : List.<List<String>>of();
+            records.add(new ExportRecord(row, attachments, extensions));
         }
-        return new Encoded(rows, attachments, extensions);
+        return new Encoded(records);
     }
 
     /**
