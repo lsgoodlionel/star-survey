@@ -47,6 +47,13 @@ class MjyAttachmentFileEndpoint
     /** 引擎生成的存储名（`fu_…`）。不含 `/`、不以点开头，另在下面单独挡 `..`。 */
     private const STORED_NAME_PATTERN = '/\A[A-Za-z0-9][A-Za-z0-9._-]{0,254}\z/D';
     private const MAX_BYTES_PATTERN = '/\A[1-9][0-9]{0,11}\z/D';
+    /**
+     * 答卷表里**一定不是**上传列的那几列。定位器本来就只拿那一列去比对存储名、从不把它的内容
+     * 交出去，所以今天点名 token 也只会得到 404；但把这条规矩写明**不依赖**那个间接性——
+     * 将来谁把 decodeUploadedFiles() 改成"解不出就原样返回"，这里就是唯一还立着的那道。
+     * 网关侧 pubgw/attachments.py 有同一份名单，两端不靠不同的推理得出同一个结论。
+     */
+    private const NEVER_UPLOAD_COLUMNS = ['token', 'id', 'submitdate', 'startlanguage', 'seed'];
 
     /** @var MjyChannelAuth */
     private $auth;
@@ -180,6 +187,9 @@ class MjyAttachmentFileEndpoint
         // 字符集已经排除了 `/`，这一条是第二道：将来字符集放宽时它仍然成立。
         if (strpos((string) $query['storedName'], '..') !== false) {
             return 'bad_storedName';
+        }
+        if (in_array(strtolower((string) $query['field']), self::NEVER_UPLOAD_COLUMNS, true)) {
+            return 'bad_field';
         }
 
         return '';

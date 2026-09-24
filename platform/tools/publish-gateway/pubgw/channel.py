@@ -280,6 +280,8 @@ ATTACHMENT_FUNCTION = "attachmentFile"
 #: 转手附件字节时的块大小。整份文件**从不**进内存：客户端与端点都只持有这一块。
 ATTACHMENT_CHUNK_BYTES = 64 * 1024
 _ATTACHMENT_TIMEOUT_SECONDS = 120
+#: 整趟传输的绝对上限。套接字超时只管单次读，挡不住"每次都卡在超时线下一点"的慢速流。
+ATTACHMENT_TRANSFER_DEADLINE_SECONDS = 600
 
 _FIELD_NAME = re.compile(r"\A[A-Za-z0-9_#]{1,64}\Z")
 #: 引擎给上传文件起的存储名（``fu_…``）。只认这一套字符，且不含 ``..``——
@@ -300,10 +302,11 @@ class AttachmentStream:
     那是**不可信**（ChannelError），不是「太大」，绝不能被当成一个可以记下来的永久结论。
     """
 
-    def __init__(self, response: Any, length: int, max_bytes: int):
+    def __init__(self, response: Any, length: int, max_bytes: int, deadline: Optional[float] = None):
         self._response = response
         self.length = length
         self._max_bytes = max_bytes
+        self._deadline = deadline
 
     def chunks(self):
         seen = 0
@@ -315,6 +318,10 @@ class AttachmentStream:
                 seen += len(chunk)
                 if seen > self._max_bytes:
                     raise ChannelError("attachment channel streamed more than the agreed limit")
+                # 套接字超时只管**单次** recv：每 119 秒滴一个字节的流永远不会触发它。
+                # 所以整趟传输另有一个绝对截止时间。
+                if self._deadline is not None and _monotonic() > self._deadline:
+                    raise ChannelError("attachment channel took longer than the transfer deadline")
                 yield chunk
         finally:
             self.close()
@@ -401,7 +408,8 @@ class AttachmentClient:
             # 刻意不带 str(error)：它可能含完整 URL（内有 sig）。
             raise ChannelError("attachment channel refused the read at {} ({})".format(
                 self._index_url, type(error).__name__)) from None
-        return AttachmentStream(response, _content_length(response), max_bytes)
+        return AttachmentStream(response, _content_length(response), max_bytes,
+                                _monotonic() + ATTACHMENT_TRANSFER_DEADLINE_SECONDS)
 
 
 def _content_length(response: Any) -> int:
@@ -432,6 +440,12 @@ def _check_stored_name(stored_name: str) -> str:
     if not _STORED_NAME.match(name) or ".." in name:
         raise InvalidChannelRequest("stored name is outside the grammar")
     return name
+
+
+def _monotonic() -> float:
+    import time
+
+    return time.monotonic()
 
 
 def _urlopen_stream(url: str, timeout: int = _ATTACHMENT_TIMEOUT_SECONDS) -> Any:

@@ -44,12 +44,16 @@ public class HttpResponseAttachmentSource implements ResponseAttachmentSource {
     private static final int COPY_BUFFER_BYTES = 64 * 1024;
     private static final int HTTP_NOT_FOUND = 404;
     private static final int HTTP_TOO_LARGE = 413;
+    /** 整趟传输的上限 ＝ 单次请求超时的几倍：大文件允许慢，但不允许无限慢。 */
+    private static final int TRANSFER_DEADLINE_FACTOR = 10;
 
     private static final Logger log = LoggerFactory.getLogger(HttpResponseAttachmentSource.class);
 
     private final URI uri;
     private final byte[] secret;
     private final Duration timeout;
+    /** 整趟传输的绝对上限；请求超时只管应答头到达之前那一段。 */
+    private final Duration transferDeadline;
     private final Clock clock;
     private final JsonMapper json;
     private final HttpClient http;
@@ -68,6 +72,7 @@ public class HttpResponseAttachmentSource implements ResponseAttachmentSource {
         this.uri = baseUrl == null ? null : baseUrl.resolve(ATTACHMENT_PATH);
         this.secret = secret == null ? new byte[0] : secret.getBytes(StandardCharsets.UTF_8);
         this.timeout = timeout;
+        this.transferDeadline = timeout.multipliedBy(TRANSFER_DEADLINE_FACTOR);
         this.clock = clock;
         this.json = json;
         this.http = HttpClient.newBuilder().connectTimeout(timeout).build();
@@ -103,6 +108,7 @@ public class HttpResponseAttachmentSource implements ResponseAttachmentSource {
      */
     private Outcome copy(AttachmentQuery query, InputStream content, OutputStream sink) throws IOException {
         byte[] buffer = new byte[COPY_BUFFER_BYTES];
+        long deadline = System.nanoTime() + transferDeadline.toNanos();
         long written = 0;
         int read;
         while ((read = content.read(buffer)) >= 0) {
@@ -110,6 +116,13 @@ public class HttpResponseAttachmentSource implements ResponseAttachmentSource {
             if (written > query.maxBytes()) {
                 throw new ResponseAttachmentsUnavailableException(
                         "gateway streamed more than the agreed limit for sid " + query.engineSid());
+            }
+            // 请求超时只管「应答头什么时候到」，管不住之后每一次 read()：
+            // 一条每次都卡在超时线下一点的慢速流能把这个线程永远占住。所以整趟传输另有一个
+            // 绝对截止时间——附件是有上限的，一次合法传输本来就该在里面做完。
+            if (System.nanoTime() - deadline > 0) {
+                throw new ResponseAttachmentsUnavailableException(
+                        "gateway took longer than " + transferDeadline + " to stream one attachment");
             }
             sink.write(buffer, 0, read);
         }

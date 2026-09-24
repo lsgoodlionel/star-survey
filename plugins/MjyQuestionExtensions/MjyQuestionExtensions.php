@@ -129,7 +129,13 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
         header('Content-Length: ' . $file->size());
         header('Cache-Control: no-store');
         header('X-Content-Type-Options: nosniff');
-        readfile($file->path());
+        // 压住警告并自己判返回值：头与 Content-Length 已经发出去了，此时再让 PHP 把
+        // 「readfile(...): Failed to open stream」连同**服务器路径**喷进字节流，
+        // 等于在一份二进制附件后面追一段路径泄露。读不动就断在这里，调用方会因为
+        // 长度对不上而判这次取件失败并重试（那正是想要的结果）。
+        if (@readfile($file->path()) === false) {
+            Yii::log('attachment could not be streamed', CLogger::LEVEL_ERROR, self::LOG_CATEGORY);
+        }
         App()->end();
     }
 

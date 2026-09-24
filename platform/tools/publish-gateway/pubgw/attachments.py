@@ -52,8 +52,10 @@ _FIELDS = frozenset({
 _GENERATION = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,35}\Z")
 _FIELD_NAME = re.compile(r"\A[A-Za-z0-9_#]{1,64}\Z")
 _STORED_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,254}\Z")
-#: 参与者令牌列不是作答列，更不可能是上传列。当普通列要就绕过了匿名判定（同 responses.py）。
-_TOKEN_COLUMN = "token"
+#: 答卷表里**一定不是**上传列的那几列。参与者令牌尤其不能当普通列要——那会绕过匿名判定
+#: （同 responses.py）。插件侧 MjyAttachmentFileEndpoint 有同一份名单：两端不靠不同的推理
+#: 得出同一个结论。
+_NEVER_UPLOAD_COLUMNS = frozenset({"token", "id", "submitdate", "startlanguage", "seed"})
 
 ChannelFactory = Callable[[EngineConfig], Optional[AttachmentClient]]
 
@@ -135,8 +137,8 @@ def _matching(value: Any, pattern, what: str) -> str:
 
 def _column(value: Any) -> str:
     name = _matching(value, _FIELD_NAME, "field")
-    if name == _TOKEN_COLUMN:
-        raise InvalidAttachmentRequest("the token column is not an upload column")
+    if name.lower() in _NEVER_UPLOAD_COLUMNS:
+        raise InvalidAttachmentRequest("that column is never an upload column")
     return name
 
 

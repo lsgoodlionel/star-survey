@@ -251,6 +251,8 @@ class RequestParsingTest(unittest.TestCase):
             body(maxBytes=0),
             body(storedName=".."),
             body(field="token"),
+            body(field="ID"),
+            body(field="submitdate"),
             json.dumps({"engineInstanceId": INSTANCE}).encode("utf-8"),
             b"not json",
         ]:

@@ -269,6 +269,11 @@ class MjyAttachmentFileEndpointTest extends TestBaseClass
             'bad stored name' => $this->signed($this->params(['storedName' => '../../etc/passwd'])),
             'dotted stored name' => $this->signed($this->params(['storedName' => 'fu..1'])),
             'bad field' => $this->signed($this->params(['field' => 'no spaces'])),
+            // 令牌列语法上合规，但它一定不是上传列。定位器本来也只会回 404，
+            // 但这条规矩写在形状检查里，不依赖 decodeUploadedFiles() 的间接性
+            // （网关侧 pubgw/attachments.py 有同一份名单）。
+            'token column' => $this->signed($this->params(['field' => 'token'])),
+            'id column' => $this->signed($this->params(['field' => 'ID'])),
             'bad generation' => $this->signed($this->params(['generation' => 'bad generation'])),
             'bad response id' => $this->signed($this->params(['responseId' => '0'])),
             'bad max bytes' => $this->signed($this->params(['maxBytes' => '0'])),
