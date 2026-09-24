@@ -3,10 +3,37 @@
 ## 构建与测试
 
 ```bash
-PLATFORM_DB_NAME=<你的库名> platform/deploy/platform-dev/mvn.sh test
+PLATFORM_DB_NAME=<你的库名> platform/deploy/test/run-platform-tests.sh
 ```
 
 本机不需要 Java，Maven 在容器里运行，依赖走阿里云镜像并缓存在命名卷。每条并行车道用自己的数据库名，互不干扰。
+
+### 测试数字一律走对账脚本
+
+**车道汇报「跑了多少条、多少个类」只认 `run-platform-tests.sh` 的输出，不要手工数 `target/surefire-reports`。** 前几波两次被假绿骗到，两次都是人工核对才发现的：
+
+1. 新测试类根本没被执行，报告里却 `failures=0`（靠总数差 14 才发现）；
+2. 改包名后旧报告残留在 `target/surefire-reports` 里被**重复计数**（虚高 14 条 1 个类）。
+
+脚本做三件事：跑前清空报告目录并确认清空、强制 `mvn clean test`、跑完把报告和源码对账：
+
+- 源码里有 `@Test`／`@ParameterizedTest`／`@RepeatedTest`／`@TestFactory`／`@TestTemplate`、名字又落在 surefire 默认扫描模式里的类，**必须**有一份报告——少一份就是事故 1；
+- 报告里出现的类，**必须**在源码里找得到——多一份就是事故 2；
+- 外加：同一个类多份报告、0 条用例的报告、失败／错误非零。
+
+对不上就以 2 退出。用法：
+
+```bash
+PLATFORM_DB_NAME=platform_x platform/deploy/test/run-platform-tests.sh
+# 与上一轮记下的数字对账（汇报前跑这一条）
+PLATFORM_DB_NAME=platform_x platform/deploy/test/run-platform-tests.sh --expect-tests 1231 --expect-classes 153
+# Maven 参数放在 -- 之后
+PLATFORM_DB_NAME=platform_x platform/deploy/test/run-platform-tests.sh -- -Dtest=SurveyServiceTest
+```
+
+对账本身是 `platform/tools/test-report/surefire_reconcile.py`，可以单独对着已有的报告目录跑；它的用例在 `platform/tools/test-report/tests/`（`cd platform/tools/test-report && python3 -m unittest discover -s tests -t . -q`），里面按两次事故的原样造了 fixture，证明它确实会红。
+
+不按文件时间判断陈旧：Maven 在容器里跑，报告 mtime 来自容器时钟，和宿主机时钟不是一个源，比时间会出假红。上面的集合对账是无时钟的。
 
 ## 模块与包的归属
 
