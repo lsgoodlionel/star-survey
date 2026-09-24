@@ -36,6 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Mapping, Optional
 from urllib.parse import urlsplit
 
+from .attachments import ATTACHMENT_PATH, AttachmentReadService, AttachmentStream
 from .auth import check_secret
 from .engines import ConfigError, EngineConfig, load_engines
 from .responses import READ_PATH, ResponseReadService
@@ -132,21 +133,28 @@ def build_response_service(settings: Settings) -> ResponseReadService:
     return ResponseReadService(engines=settings.engines, secret=settings.secret)
 
 
+def build_attachment_service(settings: Settings) -> AttachmentReadService:
+    return AttachmentReadService(engines=settings.engines, secret=settings.secret)
+
+
 class GatewayServer(ThreadingHTTPServer):
     # 非守护线程 + server_close 时等待：停机时让在途发布做完。
     daemon_threads = False
     block_on_close = True
 
-    def __init__(self, address, service: PublishService, responses: Optional[ResponseReadService] = None):
+    def __init__(self, address, service: PublishService, responses: Optional[ResponseReadService] = None,
+                 attachments: Optional[AttachmentReadService] = None):
         super().__init__(address, GatewayHandler)
         self.service = service
         self.responses = responses
+        self.attachments = attachments
 
 
 def build_server(
-    service: PublishService, host: str, port: int, responses: Optional[ResponseReadService] = None
+    service: PublishService, host: str, port: int, responses: Optional[ResponseReadService] = None,
+    attachments: Optional[AttachmentReadService] = None
 ) -> GatewayServer:
-    return GatewayServer((host, port), service, responses)
+    return GatewayServer((host, port), service, responses, attachments)
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
@@ -158,7 +166,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = self._path()
         if path == HEALTH_PATH:
             self._send(Response(200, _json({"status": "ok"})))
-        elif path in POST_ROUTES or path == READ_PATH:
+        elif path in POST_ROUTES or path in (READ_PATH, ATTACHMENT_PATH):
             self._method_not_allowed("POST")
         else:
             self._not_found()
@@ -190,6 +198,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return getattr(self.server.service, operation)
         if path == READ_PATH and self.server.responses is not None:
             return self.server.responses.read
+        if path == ATTACHMENT_PATH and self.server.attachments is not None:
+            return self.server.attachments.fetch
         return None
 
     # ------------------------------------------------------------ 零件
@@ -222,7 +232,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def _method_not_allowed(self, allowed: str) -> None:
         self._send(Response(405, _json({"error": "method_not_allowed"})), {"Allow": allowed})
 
-    def _send(self, response: Response, extra_headers: Optional[Mapping[str, str]] = None) -> None:
+    def _send(self, response, extra_headers: Optional[Mapping[str, str]] = None) -> None:
+        if isinstance(response, AttachmentStream):
+            self._send_stream(response)
+            return
         self.send_response(response.status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(response.body)))
@@ -232,6 +245,27 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.send_header(name, value)
         self.end_headers()
         self.wfile.write(response.body)
+
+    def _send_stream(self, stream: AttachmentStream) -> None:
+        """附件字节按块写出：整份文件从不进内存（ADR 0015 增补四的"内存有界"在外壳这一层）。
+
+        长度取自引擎的 Content-Length，所以不需要分块传输编码；写到一半断了就断了——
+        平台那一侧没有提交上传，存储里不会留半截文件。
+        """
+        self.send_response(stream.status)
+        self.send_header("Content-Type", stream.content_type)
+        self.send_header("Content-Length", str(stream.length))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        try:
+            for chunk in stream.chunks():
+                self.wfile.write(chunk)
+        except Exception:  # noqa: BLE001 — 头已经发出去了，只能断开；对外绝不带堆栈
+            log.exception("attachment stream broke while writing")
+            self.close_connection = True
+        finally:
+            stream.close()
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002 — 覆盖基类签名
         log.info("%s %s", self.address_string(), format % args)
@@ -261,7 +295,8 @@ def main(env: Optional[Mapping[str, str]] = None) -> int:
         settings = load_settings(os.environ if env is None else env)
         store = build_store(settings)
         service = build_service(settings, store)
-        httpd = build_server(service, settings.host, settings.port, build_response_service(settings))
+        httpd = build_server(service, settings.host, settings.port, build_response_service(settings),
+                             build_attachment_service(settings))
     except (StartupError, OSError) as error:
         log.error("refusing to start: %s", error)
         return EXIT_CONFIG

@@ -138,6 +138,70 @@ POST 会先被 Yii 的 CSRF 校验挡下，事件根本不派发。代价：`sid
 - `isValid` 来自 `answer_state.is_valid`。**`errors` 列不出现在应答里**——
   它是给作答者看的拒绝理由，不是导出内容。
 
+## GET `<engine>/index.php/plugins/direct`（`function=attachmentFile`）
+
+一次取**一份**上传附件的字节（R06-07，ADR 0015 增补四）。密钥、签名、±300 秒窗口、
+统一 401、限流位置全部与 `extensionAnswers` 相同——**只多一个函数，不多一条信任边界**。
+
+```
+?plugin=MjyQuestionExtensions
+&function=attachmentFile
+&sid=42
+&generation=3f2a…
+&responseId=1001
+&field=123456X7X8
+&storedName=fu_1a2b3c
+&maxBytes=67108864
+&ts=1800000000
+&sig=<64 hex>
+```
+
+同样是**封闭白名单**。
+
+| 参数 | 约束 |
+|---|---|
+| `function` | 固定 `attachmentFile` |
+| `sid` / `responseId` | 正整数，≤ 10 位 |
+| `generation` | `[A-Za-z0-9][A-Za-z0-9._-]{0,35}` |
+| `field` | `[A-Za-z0-9_#]{1,64}`，引擎答卷表的列名 |
+| `storedName` | `[A-Za-z0-9][A-Za-z0-9._-]{0,254}`，且不含 `..` |
+| `maxBytes` | 正整数，≤ 12 位；插件再与自己的硬顶 512 MiB 取小 |
+
+**只按引擎生成的存储名取件**：作答者起的原始文件名不进 URL，因此不进 access log
+（与「答案值只在响应体里」同一条理由）。
+
+### 应答
+
+| 状态 | 体 | 含义 |
+|---|---|---|
+| `200` | **字节流**，`application/octet-stream`，带 `Content-Length` | 取到了 |
+| `401` | `{"error":"unauthorized"}` | 验签之前的一切拒绝，同一个应答 |
+| `404` | `{"error":"not_found"}` | 这一份取不到（**不区分原因**，见下） |
+| `413` | `{"error":"too_large"}` | 超出 `maxBytes`；绝不截断 |
+| `429` | `{"error":"rate_limited"}` | 超出速率额度 |
+| `500` | `{"error":"unavailable"}` | 插件内部故障，原因只在服务端日志 |
+
+### 引擎侧的三道闸门（都不满足时一律 404，不说是哪一道）
+
+1. **代次**必须是这份问卷当前的代次——与扩展表作答同一条规矩，串代次一律取不到。
+2. **这份文件必须真的列在这份答卷的这一列里**：列名先按答卷表的实际列白名单过一遍，
+   再把那一列的作答 JSON 解开逐个比 `filename`。这与导出的附件清单是**同一个来源**，
+   所以「清单里有」与「取得到」说的是同一件事。**只做文件名语法检查是不够的**：
+   那样持有通道密钥的一方就能按名字翻遍整个问卷的上传目录。
+3. **路径必须落在这份问卷的上传目录之内**：语法之外再做一次 realpath 归一化比对。
+
+404 刻意不区分「代次不符」「答卷不在」「这一列里没有这个名字」「文件已被清理」：
+对调用方来说它们是同一件事（取不到、不必重试），区分只会多给一件能探测的事。
+
+### 一次一份，不做批量
+
+不提供「一次取一份答卷的全部附件」。RemoteControl 的 `get_uploaded_files` 正是那么做的，
+两个后果都不能接受：内存随附件数与大小一起涨；其中一份不在磁盘上会让整次调用报错。
+一份一次既让两端的内存有界，也让失败项可以单独重试。
+
+**本通道仍然只读且幂等**，因此决定 4「不做一次性随机数」在这条函数上同样成立：
+重放拿到的是重放者本就拿到过的同一份文件。
+
 ## 引擎侧（插件）必须做到
 
 - **验签之前不碰数据库、不碰任何作答**。派生密钥只读环境变量，验签只做一次进程内 HMAC。
@@ -162,7 +226,10 @@ POST 会先被 Yii 的 CSRF 校验挡下，事件根本不派发。代价：`sid
 ## 验证
 
 - 网关侧单元测试：`platform/tools/publish-gateway/tests/test_channel.py`
-  （签名向量、规范化查询串、失败关闭、不记值）。
+  （签名向量、规范化查询串、失败关闭、不记值）、`tests/test_attachments.py`
+  （附件取件的签名、逐块流式、404／413／502 的分界、HTTP 外壳）。
+- 插件侧附件取件：`MjyAttachmentFileEndpointTest.php`（三道闸门、统一 401、
+  限流在验签之后、超限不截断、定位失败不泄露原因）。
 - 插件侧 PHPUnit：`plugins/MjyQuestionExtensions/tests/MjyChannelAuthTest.php`（验签与统一拒绝）、
   `MjyExtensionAnswerEndpointTest.php`（端到端读取、代次隔离、体量上限、限流）、
   `MjyChannelRateLimitTest.php`（懒建表——验签之前不得碰表——与窗口计数）。

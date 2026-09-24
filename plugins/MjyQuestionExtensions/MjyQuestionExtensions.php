@@ -95,11 +95,38 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
             $this->emit($this->dictionaryNodes()->handle($this->channelQuery()), 'dictionary node endpoint');
             return;
         }
+        if ($function === MjyAttachmentFileEndpoint::FUNCTION_NAME) {
+            $outcome = $this->attachmentChannel()->handle($this->channelQuery(), time());
+            if ($outcome instanceof MjyChannelFile) {
+                $this->emitFile($outcome);
+            } else {
+                $this->emit($outcome, 'attachment file channel');
+            }
+            return;
+        }
         if ($function !== MjyExtensionAnswerEndpoint::FUNCTION_NAME) {
             return;
         }
         $response = $this->answerChannel()->handle($this->channelQuery(), time());
         $this->emit($response, 'extension answer channel');
+    }
+
+    /**
+     * 附件字节的出口：{@see readfile} 按块写出，**整份文件不进内存**
+     * （ADR 0015 增补四）。先清掉输出缓冲，否则 PHP 会替我们把整份文件攒起来，
+     * 把这条端点唯一的内存保证悄悄抵消掉。
+     */
+    private function emitFile(MjyChannelFile $file): void
+    {
+        header('Content-Type: application/octet-stream', true, 200);
+        header('Content-Length: ' . $file->size());
+        header('Cache-Control: no-store');
+        header('X-Content-Type-Options: nosniff');
+        while (ob_get_level() > 0) {
+            ob_end_flush();
+        }
+        readfile($file->path());
+        App()->end();
     }
 
     /** 两条直连端点共用的出口：稳定原因码进日志，绝不带密钥、签名或作答值。 */
@@ -153,6 +180,20 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
             new MjyExtensionAnswerReader(App()->getDb(), $this->structuredAnswers()),
             $this->channelRateLimit(),
             $instanceId
+        );
+    }
+
+    /**
+     * 装配附件取件端点。与 {@see answerChannel()} 同样**一律不碰数据库**：
+     * 它在验签之前就被构造，任何在此查表的动作都会让未签名的请求逼出一次真实查询。
+     */
+    public function attachmentChannel(): MjyAttachmentFileEndpoint
+    {
+        return new MjyAttachmentFileEndpoint(
+            new MjyChannelAuth(self::instanceSecrets(), self::engineInstanceId()),
+            new MjyAttachmentLocator(App()->getDb(), $this->generations(),
+                (string) App()->getConfig('uploaddir')),
+            $this->channelRateLimit()
         );
     }
 
