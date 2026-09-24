@@ -44,6 +44,7 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     private const DEVICE_COOKIE_SECONDS = 31536000;
     private const DEVICE_PATTERN = '/\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/';
     private const STATUS_FUNCTION = 'policyStatus';
+    private const EXAM_STATUS_FUNCTION = 'examStatus';
     private const CLOSED_ACCESS = 'C';
 
     protected $storage = 'DbStorage';
@@ -145,19 +146,25 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     }
 
     /**
-     * 发布网关回读：`GET index.php/plugins/direct?plugin=MjyRuntimePolicy&function=policyStatus&sid=N`。
-     * 只回份数、能否解析与摘要，不回策略内容（密码哈希不出引擎）。
+     * 发布网关回读：`GET index.php/plugins/direct?plugin=MjyRuntimePolicy&function=<名字>&sid=N`。
+     *
+     * - `policyStatus`：访问策略的份数、能否解析与摘要（密码哈希不出引擎）；
+     * - `examStatus`：考试答案键的份数、能否解析、摘要与题数。
+     *
+     * **两个端点都只回摘要，绝不回内容。** 这条路由是公开的（没有鉴权），
+     * 把答案或密码哈希回出去等于换个地方下发。
      */
     public function newDirectRequest()
     {
         $event = $this->getEvent();
-        if ($event->get('target') !== self::$name || $event->get('function') !== self::STATUS_FUNCTION) {
+        $function = $event->get('function');
+        if ($event->get('target') !== self::$name
+            || !in_array($function, [self::STATUS_FUNCTION, self::EXAM_STATUS_FUNCTION], true)) {
             return;
         }
         $surveyId = (int) App()->getRequest()->getParam('sid');
         try {
-            $status = ['plugin' => self::$name, 'active' => true]
-                + $this->accessPolicies()->status($surveyId);
+            $status = ['plugin' => self::$name, 'active' => true] + $this->status($function, $surveyId);
         } catch (\Throwable $exception) {
             $this->logFailure($exception);
             $status = ['plugin' => self::$name, 'active' => true, 'surveyId' => $surveyId, 'error' => 'unavailable'];
@@ -166,6 +173,19 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
         header('Cache-Control: no-store');
         echo json_encode($status);
         App()->end();
+    }
+
+    private function status(string $function, int $surveyId): array
+    {
+        if ($function === self::EXAM_STATUS_FUNCTION) {
+            return $this->examKeys()->status($surveyId);
+        }
+        return $this->accessPolicies()->status($surveyId);
+    }
+
+    public function examKeys(): MjyExamKeyStore
+    {
+        return new MjyExamKeyStore(App()->getDb(), (int) $this->id);
     }
 
     /**
