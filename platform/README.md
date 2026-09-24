@@ -105,7 +105,8 @@
 
 ```bash
 # 平台 Java 测试（Maven 跑在容器里，本机无需 JDK）
-PLATFORM_DB_NAME=platform platform/deploy/platform-dev/mvn.sh clean test
+# 一律用这个包装脚本，不要自己写数数的命令——见下面硬规矩 2
+PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh
 
 # 发布网关测试（本机无 pytest，用 unittest）
 cd platform/tools/publish-gateway && python3 -m unittest discover -s tests -t . -q
@@ -121,7 +122,13 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 ### 跑测试的三条硬规矩（都是真实踩出来的）
 
 1. **必须 `clean test`**。Maven 不删被改名或删除的资源，`target/classes` 里会留旧文件。迁移改名后只跑 `test`，轻则看到 935 个报错的**假故障**，重则旧迁移恰好可重复执行而给出**假成功**。
-2. **跑前清空 `target/surefire-reports`，跑后核对总数与类数**。只看 `failures=0` 会被两种假绿骗到，两种都真实发生过：新测试类根本没被执行（靠总数差 14 才发现）；改包名后旧报告残留被重复计数（虚高 14 条 1 个类）。
+2. **跑前清空 `target/surefire-reports`，跑后用 `run-platform-tests.sh` 对账——不要自己写数数的命令。**
+   只看 `failures=0` 会被三种假绿骗到，**三种都真实发生过**：
+   - 新测试类根本没被执行（靠总数差 14 才发现）；
+   - 改包名后旧报告残留被重复计数（虚高 14 条 1 个类）；
+   - **量具本身有盲区**：surefire 的 `.txt` 摘要把带 `@Nested` 的类记成 `Tests run: 0`（XML 里那几条用例是记在外层类名下的），所以任何基于 `.txt` 求和的命令，对这类类**永远看不见**——它哪天真的不跑了，总数纹丝不动，守门的规矩完全不报警。
+     本项目曾因此出现同一次运行 XML 算 1287、`.txt` 算 1282 的分歧，绕了三轮才定位。
+   对账脚本读 XML 并交叉核对类集合，不受此影响。**因此：不要用 `grep "Tests run:" *.txt | awk` 这类一行流数数。**
 3. **并行车道必须用独立前缀与独立数据库名**，且预先分配迁移号段——让各车道自己 `ls` 选号是不够的，三条并行时它们看到的最高号都一样，必然撞号（已发生过一次）。
 
 ---
