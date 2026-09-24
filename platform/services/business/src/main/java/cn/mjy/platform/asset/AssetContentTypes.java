@@ -25,6 +25,19 @@ final class AssetContentTypes {
 
     private static final Map<String, Allowed> ALLOWED = allowList();
 
+    /** 扩展名 → 白名单里的类型。只用于「引擎只记扩展名」那条入库路径。 */
+    private static final Map<String, String> EXTENSIONS = Map.ofEntries(
+            Map.entry("png", "image/png"),
+            Map.entry("jpg", "image/jpeg"),
+            Map.entry("jpeg", "image/jpeg"),
+            Map.entry("gif", "image/gif"),
+            Map.entry("webp", "image/webp"),
+            Map.entry("mp3", "audio/mpeg"),
+            Map.entry("wav", "audio/wav"),
+            Map.entry("webm", "audio/webm"),
+            Map.entry("mp4", "video/mp4"),
+            Map.entry("m4v", "video/mp4"));
+
     private AssetContentTypes() {
     }
 
@@ -40,6 +53,23 @@ final class AssetContentTypes {
         int semicolon = declared.indexOf(';');
         String bare = semicolon < 0 ? declared : declared.substring(0, semicolon);
         return bare.trim().toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * 按扩展名给出一个<b>声明</b>的内容类型（ADR 0019 决定 8：引擎只记扩展名，不记内容类型）。
+     *
+     * <p>它只用来和嗅探结果对照——真正入库与回放的仍然是嗅探出来的那个（决定 3）。
+     * 认不出的扩展名返回空串，于是它在白名单那一步就被拒，<b>失败即关闭</b>。
+     *
+     * <p><b>{@code .webm} 记作 {@code audio/webm}</b>：WebM 的容器头（EBML）分不出音轨与视轨，
+     * 要分清得真的解析 Segment，那是一整个容器解析器。作答者上传里录音（R02-25）是主要场景，
+     * 两者的字节与回放路径完全相同，差别只在 {@code kind} 这一列的归类。记为已知限制。
+     */
+    static String fromExtension(String extension) {
+        if (extension == null) {
+            return "";
+        }
+        return EXTENSIONS.getOrDefault(extension.trim().toLowerCase(Locale.ROOT), "");
     }
 
     static Optional<AssetKind> kindOf(String contentType) {

@@ -138,6 +138,75 @@ POST 会先被 Yii 的 CSRF 校验挡下，事件根本不派发。代价：`sid
 - `isValid` 来自 `answer_state.is_valid`。**`errors` 列不出现在应答里**——
   它是给作答者看的拒绝理由，不是导出内容。
 
+## `function=uploadSessions` / `function=uploadContent`（作答者上传，ADR 0019 决定 8）
+
+同一条通道、同一套密钥与签名规则，只是换了两个函数名。交出去的是**作答者上传的文件本身**，
+比副表作答更敏感，因此规矩只加不减。
+
+```
+?plugin=MjyQuestionExtensions&function=uploadSessions
+&sid=42&generation=3f2a…&responseIds=1001,1002&ts=…&sig=…
+
+?plugin=MjyQuestionExtensions&function=uploadContent
+&sid=42&generation=3f2a…&uploadToken=<uuid>&ts=…&sig=…
+```
+
+参数集合同样是**封闭白名单**，两个函数各一份。
+
+| 参数 | 约束 |
+|---|---|
+| `responseIds` | 仅 `uploadSessions`：逗号分隔正整数，**严格升序、互不相同**，1–200 个 |
+| `uploadToken` | 仅 `uploadContent`：**单个** UUID，不是列表 |
+
+`uploadContent` **一次只取一件**：作答者上传是整块二进制，一次一件才让单次应答的体量有界。
+这是 ADR 0015「`get_uploaded_files` 把整份答卷 base64 进一个应答」那条遗留的反面。
+
+**清单只来自上传会话表**（`{prefix}mjyquestionextensions_upload_session`），
+答卷字段里那张文件清单一个字都不参与——它是作答者可控的 POST 数据。本端点因此
+**没有**接受文件名／大小／类型的入参形状：不是「传了也忽略」，是根本没有那个参数，
+白名单会把它当未知参数归到统一 401。
+
+只列**已绑定**（`state = 'bound'`）的会话：未绑定的字节还在临时目录里，
+提交时文件名还会再变一次（引擎重命名成一个全新的 `fu_`，且不派发任何事件）。
+
+取字节按 **(实例, sid, 代次, token)** 四者定位：光有 token 改不到别的代次、别的问卷去。
+
+### 应答
+
+`uploadSessions` 的 200：
+
+```json
+{
+  "plugin": "MjyQuestionExtensions",
+  "engineInstanceId": "hd-engine-01",
+  "surveyId": 42,
+  "generation": "3f2a…",
+  "uploads": {
+    "1001": [
+      {"uploadToken": "…uuid…", "questionCode": "REC1",
+       "originalName": "录音.webm", "extension": "webm", "sizeBytes": 20480}
+    ]
+  }
+}
+```
+
+`uploadContent` 的 200 另加 `responseId` 与 `contentBase64`（单件，≤ 16 MiB）。
+
+| 状态 | 体 | 含义 |
+|---|---|---|
+| `200` | 见上 | 读到了（**包括「一件都没有」**，此时 `uploads` 是 `{}`） |
+| `401` | `{"error":"unauthorized"}` | 验签之前的一切拒绝，与 `extensionAnswers` 同一个出口 |
+| `404` | `{"error":"not_found"}` | **验签之后**：这个 token 在这个 (sid, 代次) 下没有已绑定的会话 |
+| `400` | `{"error":"page_too_large"}` | 验签通过，但这一件超过 16 MiB |
+| `500` | `{"error":"unavailable"}` | 会话行在而字节读不出来，或内部故障 |
+
+**会话行在、字节没了一律报错**，绝不回一个「看着完整、其实空的」应答：
+那会让平台存下一件空资产而没有任何人察觉。
+
+`stored_name` 是这条端点唯一的外部输入，插件侧**挡三次**：名字白名单
+（`[A-Za-z0-9][A-Za-z0-9._-]{0,254}`，不含斜杠）、`..` 判定、
+`realpath` 与问卷上传目录比对（符号链接也在这里被挡住）。
+
 ## 引擎侧（插件）必须做到
 
 - **验签之前不碰数据库、不碰任何作答**。派生密钥只读环境变量，验签只做一次进程内 HMAC。

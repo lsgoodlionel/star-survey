@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -29,13 +30,15 @@ class AssetController {
 
     private final AssetService assets;
     private final ResponderAssetService responderAssets;
+    private final ResponderUploadPuller puller;
     private final CurrentTenant currentTenant;
     private final String publicBaseUrl;
 
-    AssetController(AssetService assets, ResponderAssetService responderAssets, CurrentTenant currentTenant,
-            AssetProperties properties) {
+    AssetController(AssetService assets, ResponderAssetService responderAssets, ResponderUploadPuller puller,
+            CurrentTenant currentTenant, AssetProperties properties) {
         this.assets = assets;
         this.responderAssets = responderAssets;
+        this.puller = puller;
         this.currentTenant = currentTenant;
         this.publicBaseUrl = properties.publicBaseUrl();
     }
@@ -91,6 +94,23 @@ class AssetController {
 
     /** 绑定取件票的对外视图。{@code url} 还差一个 {@code rt} 才能用——这是故意的。 */
     public record RespondentTicketView(String url, int version) {
+    }
+
+    /**
+     * 把一页答卷的作答者上传从引擎拉进资产库（ADR 0019 决定 8）。
+     *
+     * <p>本切片<b>没有接调度</b>：谁来定期拉、多久拉一次是答卷读取车道的排期，
+     * 应当与 ADR 0013 的按页补取合并成一次遍历，不该各拉各的（已知限制 9）。
+     */
+    @PostMapping("/uploads/pull")
+    ResponderUploadPullResult pullUploads(@RequestBody UploadPullRequest request) {
+        return puller.pull(currentTenant.require(), request.engineInstanceId(), request.engineSid(),
+                request.generation(), request.responseIds() == null ? List.of() : request.responseIds());
+    }
+
+    /** 拉取请求：点名一页答卷。**没有**按文件名要文件的形状——清单由上传会话说了算。 */
+    public record UploadPullRequest(String engineInstanceId, long engineSid, String generation,
+            List<Long> responseIds) {
     }
 
     /** 停用：不再能被新的发布引用，已发布的问卷照常回放。 */
