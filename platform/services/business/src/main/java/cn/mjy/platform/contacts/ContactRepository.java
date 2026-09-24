@@ -121,6 +121,15 @@ class ContactRepository {
                 .query(ContactRepository::toRow).optional();
     }
 
+    /**
+     * 本租户里有没有这个联系人。不看数据范围：调用方是发布收尾，
+     * 它拿到的 id 是平台自己写进定义、由网关回显的 {@code ref}，这里只判"是不是本租户的人"。
+     */
+    boolean exists(UUID id) {
+        return Boolean.TRUE.equals(jdbc.sql("SELECT EXISTS (SELECT 1 FROM contact WHERE id = :id)")
+                .param("id", id).query(Boolean.class).single());
+    }
+
     /** 名单内按去重值查（导入与新建的判重入口）。不看范围：去重是名单内的事实，不是可见性。 */
     Optional<ContactRow> findInListByDedupe(UUID listId, String dedupeValue) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM contact c"

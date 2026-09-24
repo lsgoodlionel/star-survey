@@ -10,6 +10,15 @@ import json
 from pubgw.qtypes import expected_rows
 
 
+#: 参与者表的列（``Token`` 模型的 tableSchema）。引擎用 array_intersect_key 只留这些，
+#: 平台传的别的键不会回到回执里。
+TOKEN_COLUMNS = frozenset({
+    "tid", "participant_id", "firstname", "lastname", "email", "emailstatus",
+    "token", "language", "blacklisted", "sent", "remindersent", "remindercount",
+    "completed", "usesleft", "validfrom", "validuntil",
+})
+
+
 class FakeEngine:
     """按一份定义模拟引擎，可以通过开关注入各种故障。"""
 
@@ -24,6 +33,8 @@ class FakeEngine:
         drop_fields=(),
         sticky_settings=(),
         participant_errors=False,
+        participant_tokens=None,
+        participants_returned=None,
         import_result=None,
     ):
         self.definition = definition
@@ -35,6 +46,10 @@ class FakeEngine:
         self.drop_fields = tuple(drop_fields)
         self.sticky_settings = tuple(sticky_settings)
         self.participant_errors = participant_errors
+        #: 逐条指定引擎生成的 token（空串＝generateToken 没生成出来）。
+        self.participant_tokens = participant_tokens
+        #: 只返回前 n 条，用来钉住"返回列表比提交的短"。
+        self.participants_returned = participants_returned
         self.import_result = import_result
         self.calls = []
         self.surveys = {}
@@ -96,7 +111,23 @@ class FakeEngine:
         if self.participant_errors:
             return [dict(entry, errors={"email": ["Email address is not valid"]}) for entry in participants]
         self.participants[sid] = participants
-        return [dict(entry, tid=index + 1) for index, entry in enumerate(participants)]
+        # 成功的条目被整条换成 token 行属性：平台传的非列字段已经被
+        # array_intersect_key 丢掉，且按引用原地替换，所以与提交同序。
+        rows = []
+        for index, entry in enumerate(participants):
+            row = {key: value for key, value in entry.items() if key in TOKEN_COLUMNS}
+            row["tid"] = index + 1
+            if create_token:
+                row["token"] = self._token_for(index)
+            rows.append(row)
+        if self.participants_returned is not None:
+            rows = rows[: self.participants_returned]
+        return rows
+
+    def _token_for(self, index):
+        if self.participant_tokens is None:
+            return "tok{}".format(index + 1)
+        return self.participant_tokens[index]
 
     def _delete_survey(self, key, sid):
         if self.fail_delete:

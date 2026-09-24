@@ -17,6 +17,7 @@ from .branding.compile import CompiledBranding, compile_branding
 from .branding.translations import LanguageTexts, parse_translations, texts_for
 from .fieldmap import definition_signature, fingerprint
 from .logic.lower import lower_definition
+from .logic.scoring import expand_scoring
 from .model import SurveyDefinition
 from .policy.compile import PLUGIN_NAME, POLICY_KEY, CompiledPolicy, compile_policy
 from .qtypes import DEFAULT_THEMES
@@ -147,6 +148,9 @@ class LssCompiler:
                 + ", ".join(sorted({issue.code for issue in report.issues})),
                 report,
             )
+        # 计分表先展开成计算值题与结果说明题，后面的签名、字段映射、LSS 都按展开后的定义来，
+        # 分数列才会进答卷表。没有计分表时 expand_scoring 原样返回，v1 产物逐字节不变。
+        definition = expand_scoring(definition)
         signature = definition_signature(definition)
         policy = compile_policy(definition)
         branding = compile_branding(definition)

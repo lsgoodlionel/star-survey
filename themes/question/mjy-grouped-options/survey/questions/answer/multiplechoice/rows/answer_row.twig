@@ -1,0 +1,46 @@
+{#
+/**
+ * MJY 选项分类（多选）：选项行。
+ *
+ * 与 core 的 multiplechoice/rows/answer_row.twig 逐行一致，**只多一个 data-mjy-code**。
+ * 多选行的 checkbox value 恒为 "Y"，选项代码只在字段名（{SGQA}_S{sqid}）里，
+ * 而分组定义写的是子题代码，所以必须在这里把代码打到行上：
+ * 没有它，浏览器端只能靠猜哪一行属于哪一组。
+ *
+ * title 是子题代码，由 RenderMultipleChoice::getRows() 原样带过来；
+ * 它是引擎侧的代码（字母数字），escape('html_attr') 之后再输出。
+ *
+ * @var hiddenfield
+ * @var name
+ * @var title
+ * @var question
+ * @var checkedState
+ * @var sCheckconditionFunction
+ * @var myfname
+ * @var sValue
+ */
+#}
+<!-- answer_row -->
+<li id='javatbd{{ myfname }}'
+    class='question-item answer-item checkbox-item {{ relevanceClass }}'
+    data-mjy-code="{{ title|escape('html_attr') }}">
+    <div class="row">
+        <div class="col-auto">
+            <input
+                type="checkbox"
+                name="{{ myfname }}"
+                id="answer{{ myfname }}"
+                {{ checkedState }}
+                value="Y"
+            />
+            <label for="answer{{ myfname }}" class="checkbox-label control-label">{{ processString(question) }}</label>
+            <input
+                type="hidden"
+                name="java{{ myfname }}"
+                id="java{{ myfname }}"
+                value="{{ C.Html.encode( sValue ) }}"
+            />
+        </div>
+    </div>
+</li>
+<!-- end of answer_row -->

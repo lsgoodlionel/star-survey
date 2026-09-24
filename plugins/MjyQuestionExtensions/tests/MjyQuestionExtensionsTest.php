@@ -201,11 +201,30 @@ class MjyQuestionExtensionsTest extends TestBaseClass
         // 题型主题 config.xml 里的 <xssfilter>false</xssfilter> 只是字符串，起不到作用。
         $definitions = \QuestionAttribute::getOwnQuestionAttributesViaPlugin();
 
-        foreach (['mjy_structure_version', 'mjy_heatmap_image', 'mjy_option_groups'] as $name) {
+        $jsonBearing = [
+            'mjy_structure_version', 'mjy_heatmap_image', 'mjy_option_groups',
+            'mjy_loop_objects', 'mjy_pk_items', 'mjy_pk_pairs',
+            'mjy_shelf_image', 'mjy_shelf_products',
+            'mjy_highlight_text', 'mjy_highlight_segments', 'mjy_psych_trials',
+            'mjy_model_name', 'mjy_model_features',
+        ];
+        foreach ($jsonBearing as $name) {
             $this->assertArrayHasKey($name, $definitions);
             $this->assertFalse($definitions[$name]['xssfilter'], $name . ' 存的不是 HTML');
         }
         $this->assertStringContainsString(\Question::QT_L_LIST, $definitions['mjy_option_groups']['types']);
+    }
+
+    public function testOptionGroupsAreDeclaredForBothSingleAndMultipleChoice()
+    {
+        // R02-04 的多选分支：分组定义走同一个属性，但引擎按 types 决定这道题
+        // 认不认识它——漏掉 M 的话，导入多选题时 mjy_option_groups 会被丢掉，
+        // 主题拿到空分组，页面静默退回平铺（ADR 0006 决定 6 的同类故障）。
+        $definitions = \QuestionAttribute::getOwnQuestionAttributesViaPlugin();
+
+        $types = $definitions['mjy_option_groups']['types'];
+        $this->assertStringContainsString(\Question::QT_L_LIST, $types);
+        $this->assertStringContainsString(\Question::QT_M_MULTIPLE_CHOICE, $types);
     }
 
     public function testEveryStructuredThemeIsRecognisedAsAStructuredQuestion()
@@ -412,6 +431,32 @@ class MjyQuestionExtensionsTest extends TestBaseClass
             $responseId,
             [$this->fieldName(self::TABLE_CODE) => $tableAnswer]
         );
+    }
+
+    /**
+     * WP-06.4：装配通道端点的过程**一律不得碰数据库**。
+     *
+     * 端点在验签之前就被装配（newDirectRequest 里先 answerChannel() 再 handle()），
+     * 所以这里任何一次建表或查表，都会让不带签名的请求逼出一次真实的数据库往返——
+     * 正好推翻 ADR 0018 决定 6「验签之前零 IO」的立论。独立安全审查在
+     * answerChannel() 里发现过一次急着 ensureSchema()，这条用例把它钉住。
+     */
+    public function testAssemblingTheAnswerChannelTouchesNoSchema()
+    {
+        $table = self::$plugin->channelRateLimit()->tableName();
+        \App()->getDb()->createCommand()->setText('DROP TABLE IF EXISTS ' . $table)->execute();
+        \App()->getDb()->getSchema()->refresh();
+        // 丢掉本请求内缓存的「已确认建过表」，否则装配时的 ensureSchema 会被缓存挡掉而测不出来。
+        self::$plugin->resetRequestState();
+
+        self::$plugin->answerChannel();
+
+        $this->assertNull(
+            \App()->getDb()->getSchema()->getTable($table, true),
+            '装配端点不得建表：它发生在验签之前'
+        );
+
+        self::$plugin->ensureSchema();
     }
 
     private function storedRows(int $responseId): array

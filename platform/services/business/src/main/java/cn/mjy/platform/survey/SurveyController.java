@@ -3,8 +3,11 @@ package cn.mjy.platform.survey;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.security.CurrentTenant;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -46,6 +49,27 @@ public class SurveyController {
     public record SaveDraft(@NotNull @Positive Integer expectedVersion, @NotNull JsonNode definition) {
     }
 
+    /** 恢复旧版：expectedVersion 是当前草稿的乐观锁版本，与保存草稿同一把锁。 */
+    public record RestoreVersion(@NotNull @Positive Integer expectedVersion) {
+    }
+
+    /**
+     * 批量文本导入的预览请求：只有原文，不写库。
+     * 长度在反序列化之后立刻挡一道（解析器里还有按字节与按行数的精确上限）。
+     */
+    public record PreviewImport(@NotBlank @Size(max = QuestionTextParser.MAX_TEXT_BYTES) String text) {
+    }
+
+    /**
+     * 确认导入：accept 是预览里要保留的题目序号；groupUuid 为空时新建一个分组。
+     * expectedVersion 与保存草稿同一把乐观锁。
+     */
+    public record ImportQuestions(@NotNull @Positive Integer expectedVersion,
+            @NotBlank @Size(max = QuestionTextParser.MAX_TEXT_BYTES) String text,
+            @NotEmpty @Size(max = QuestionTextParser.MAX_QUESTIONS) List<@NotNull Integer> accept,
+            String groupUuid) {
+    }
+
     @PostMapping
     public ResponseEntity<SurveyView> create(@Valid @RequestBody CreateSurvey request) {
         TenantContext ctx = currentTenant.require();
@@ -82,6 +106,26 @@ public class SurveyController {
     @GetMapping("/{id}/versions/{version}")
     public PublishedVersionView version(@PathVariable UUID id, @PathVariable int version) {
         return surveys.version(currentTenant.require(), id, version);
+    }
+
+    /** 批量文本导入的预览（需要编辑权）：解析原文并返回题目、题型与坏行，不写库。 */
+    @PostMapping("/{id}/import/preview")
+    public SurveyImportPreview previewImport(@PathVariable UUID id, @Valid @RequestBody PreviewImport request) {
+        return surveys.previewImport(currentTenant.require(), id, request.text());
+    }
+
+    /** 确认导入：把预览里被选中的题目并进草稿。 */
+    @PostMapping("/{id}/import")
+    public DraftView importQuestions(@PathVariable UUID id, @Valid @RequestBody ImportQuestions request) {
+        return surveys.importQuestions(currentTenant.require(), id, request.expectedVersion(), request.text(),
+                request.accept(), request.groupUuid());
+    }
+
+    /** 把第 version 版恢复为当前草稿（需要编辑权）。只改草稿：在线版本与公开路由不动。 */
+    @PostMapping("/{id}/versions/{version}/restore")
+    public DraftView restoreVersion(@PathVariable UUID id, @PathVariable int version,
+            @Valid @RequestBody RestoreVersion request) {
+        return surveys.restore(currentTenant.require(), id, version, request.expectedVersion());
     }
 
     private static HttpStatus statusOf(SurveyView survey) {

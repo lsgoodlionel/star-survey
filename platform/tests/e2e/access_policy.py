@@ -54,6 +54,8 @@ class Context:
         self.db = db
         self.failures: List[str] = []
         self.jars = 0
+        #: sid → 发布回执里的 invitations（ADR 0016）。平台就是这样拿到邀请码的。
+        self.invitations: Dict[int, List[Dict[str, Any]]] = {}
 
     def check(self, label: str, condition: bool, detail: Any = "") -> None:
         print("  [{}] {}{}".format("ok" if condition else "FAIL", label, "" if condition else ": {}".format(detail)),
@@ -130,6 +132,7 @@ def publish_ok(context: Context, payload: Dict[str, Any]) -> int:
     context.check("回执的 policyDigest 就是编译出来的摘要",
                   result.get("policyDigest") == expected,
                   {"reported": result.get("policyDigest"), "expected": expected})
+    context.invitations[result["surveyId"]] = result.get("invitations") or []
     return result["surveyId"]
 
 
@@ -161,9 +164,24 @@ def local(zone_name: str, moment: datetime) -> str:
 
 
 def tokens(context: Context, survey_id: int) -> Dict[str, str]:
-    """引擎生成的真实 token（网关的 add_participants 让引擎生成 token，见 ADR 0016 缺口）。"""
-    return {first: token for first, token in context.db.rows(
+    """邀请码，按平台自选的 ref 取（ADR 0016）。
+
+    网关的 add_participants 固定让引擎生成 token，平台只能从发布回执里拿——这里走的就是
+    那条路，不再直接查参与者表。顺带把回执与参与者表逐条比对：回执错了平台会发出一批
+    打不开的邀请，而这是唯一能当场发现的地方。
+    """
+    invitations = context.invitations.get(survey_id) or []
+    by_ref = {item["ref"]: item["token"] for item in invitations}
+    context.check("回执给出了每个参与者的邀请码",
+                  len(by_ref) == len(invitations) and all(by_ref),
+                  invitations)
+
+    # 参与者表里的 firstname 与本套用例的 ref 取同一个字母，可以逐条对上。
+    in_engine = {first: token for first, token in context.db.rows(
         "SELECT firstname, token FROM lime_tokens_{}".format(survey_id))}
+    context.check("回执里的邀请码与参与者表逐条一致", by_ref == in_engine,
+                  {"receipt": by_ref, "engine": in_engine})
+    return by_ref
 
 
 def start_url(survey_id: int, token: Optional[str] = None) -> str:
@@ -301,7 +319,7 @@ def scenario_device_limit(context: Context) -> None:
 
 def scenario_token_limit(context: Context) -> None:
     print("L2: one response per token", file=sys.stderr)
-    participants = [{"firstname": "A"}, {"firstname": "B"}]
+    participants = [{"ref": "A", "firstname": "A"}, {"ref": "B", "firstname": "B"}]
     sid = publish_ok(context, definition("L2 token", {
         "policyVersion": 1, "access": {"invitationRequired": True},
         "limits": {"responses": [{"by": "token", "max": 1}]}}, participants))
@@ -319,11 +337,42 @@ def scenario_token_limit(context: Context) -> None:
     context.check("L2: other token gets in", other[0]["kind"] == "survey", texts(other))
 
 
+def scenario_ref_only_participants(context: Context) -> None:
+    """平台实际发出去的参与者形状（WP-18）：条目上只有 ref，个人信息一概不出引擎。
+
+    平台自己按联系人地址发邀请，引擎不需要知道收件人是谁；而定义快照是不可变的，
+    个人信息写进去就再也删不掉。这里要证明的是：只带 ref 的参与者引擎照收，
+    一人一个邀请码，参与者表里一个字段都没写。
+    """
+    print("P: participants carrying only a platform ref", file=sys.stderr)
+    refs = ["c-" + str(uuid.uuid4()), "c-" + str(uuid.uuid4())]
+    sid = publish_ok(context, definition("P ref-only", {
+        "policyVersion": 1, "access": {"invitationRequired": True}},
+        [{"ref": refs[0]}, {"ref": refs[1]}]))
+    by_ref = {item["ref"]: item["token"] for item in context.invitations[sid]}
+    context.check("P: 每个 ref 都拿回一个互不相同的邀请码",
+                  sorted(by_ref) == sorted(refs) and len(set(by_ref.values())) == 2,
+                  context.invitations[sid])
+    # 全空的行经 Database.rows 会被整体 strip 掉行首制表符，所以改用 SQL 数，两个驱动上都成立。
+    context.check("P: 参与者表里正好两行",
+                  context.db.value("SELECT COUNT(*) FROM lime_tokens_{}".format(sid)) == "2")
+    context.check("P: 参与者表里没有任何个人信息",
+                  context.db.value(
+                      "SELECT COUNT(*) FROM lime_tokens_{} WHERE COALESCE(firstname, '') <> ''"
+                      " OR COALESCE(lastname, '') <> '' OR COALESCE(email, '') <> ''".format(sid)) == "0")
+    context.check("P: closed access (access_mode=C)",
+                  context.db.value("SELECT access_mode FROM lime_surveys WHERE sid = {}".format(sid)) == "C")
+    invited = context.respond(context.new_jar(), [{"get": start_url(sid, by_ref[refs[0]])}])
+    anonymous = context.respond(context.new_jar(), [{"get": start_url(sid)}])
+    context.check("P: 邀请码进得去", invited[0]["kind"] == "survey", texts(invited))
+    context.check("P: 没有邀请码进不去", anonymous[0]["kind"] != "survey", texts(anonymous))
+
+
 def start_duration(context: Context) -> Dict[str, Any]:
     print("D: {}s time limit, token identity".format(DURATION_SECONDS), file=sys.stderr)
     sid = publish_ok(context, definition("D timed", {
         "policyVersion": 1, "access": {"invitationRequired": True},
-        "limits": {"maxDurationSeconds": DURATION_SECONDS}}, [{"firstname": "D"}]))
+        "limits": {"maxDurationSeconds": DURATION_SECONDS}}, [{"ref": "D", "firstname": "D"}]))
     token = tokens(context, sid)["D"]
     jar = context.new_jar()
     form = "/tmp/access-e2e-d-{}.json".format(sid)
@@ -387,6 +436,7 @@ def main() -> int:
     scenario_password(context)
     scenario_device_limit(context)
     scenario_token_limit(context)
+    scenario_ref_only_participants(context)
     scenario_captcha(context)
     scenario_network(context)
     wait_until(max(closing["after"], timed["after"]))

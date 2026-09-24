@@ -1,0 +1,111 @@
+{
+  "_comment": [
+    "WP-03.4 双执行比对的答案向量。answers 的键是引擎变量名（qcode 形式），",
+    "hidden 是被条件隐藏的题目代码，expected 是照 survey-logic-dsl-v1.md 人工写下的",
+    "期望值——它是两边分歧时的裁判，所以必须手写，不能从任何一侧生成。",
+    "计算值题（STOTAL、STOTALB）的值也要写进 answers：引擎里它们先被算出来存进答卷，",
+    "后面的表达式读的是存下来的值。empty 向量故意不写，用来探空值比较的角落。"
+  ],
+  "vectors": [
+    {
+      "name": "dog",
+      "answers": {
+        "QAGE": "30",
+        "QPET": "A2",
+        "QNAME": "Ann",
+        "QFREQ": "F1",
+        "QCARE_SQ001": "Y",
+        "QCARE_SQ002": "Y",
+        "QHOURS": "3",
+        "STOTAL": "14",
+        "STOTALB": "HIGH"
+      },
+      "hidden": [],
+      "expected": {
+        "groups[1].condition": "1",
+        "groups[1].questions[0].condition": "1",
+        "groups[1].questions[2].validation.rule": "1",
+        "groups[1].questions[2].validation.message{{0}}": "30",
+        "groups[1].questions[3].text{{0}}": "Ann",
+        "groups[1].questions[3].text{{1}}": "Dog",
+        "groups[2].questions[0].calculation": "14",
+        "groups[2].questions[1].calculation": "HIGH",
+        "groups[2].questions[2].condition": "",
+        "groups[2].questions[3].condition": "",
+        "groups[2].questions[3].text{{0}}": "14",
+        "groups[2].questions[4].condition": "1"
+      }
+    },
+    {
+      "name": "nopet",
+      "answers": {
+        "QAGE": "50",
+        "QPET": "A3",
+        "QNAME": "Zed",
+        "STOTAL": "0",
+        "STOTALB": "LOW"
+      },
+      "hidden": ["QFREQ", "QCARE", "QHOURS", "QTIP"],
+      "expected": {
+        "groups[1].condition": "",
+        "groups[1].questions[0].condition": "",
+        "groups[1].questions[2].validation.rule": "1",
+        "groups[1].questions[2].validation.message{{0}}": "50",
+        "groups[1].questions[3].text{{0}}": "Zed",
+        "groups[1].questions[3].text{{1}}": "None",
+        "groups[2].questions[0].calculation": "0",
+        "groups[2].questions[1].calculation": "LOW",
+        "groups[2].questions[2].condition": "1",
+        "groups[2].questions[3].condition": "",
+        "groups[2].questions[3].text{{0}}": "0",
+        "groups[2].questions[4].condition": ""
+      }
+    },
+    {
+      "name": "escape",
+      "answers": {
+        "QAGE": "40",
+        "QPET": "A1",
+        "QNAME": "<b>Tom</b>{QAGE}",
+        "QFREQ": "F3",
+        "QHOURS": "24",
+        "STOTAL": "26",
+        "STOTALB": "HIGH"
+      },
+      "hidden": [],
+      "expected": {
+        "groups[1].condition": "1",
+        "groups[1].questions[0].condition": "1",
+        "groups[1].questions[2].validation.rule": "1",
+        "groups[1].questions[2].validation.message{{0}}": "40",
+        "groups[1].questions[3].text{{0}}": "&lt;b&gt;Tom&lt;/b&gt;&#123;QAGE&#125;",
+        "groups[1].questions[3].text{{1}}": "Cat",
+        "groups[2].questions[0].calculation": "26",
+        "groups[2].questions[1].calculation": "HIGH",
+        "groups[2].questions[2].condition": "",
+        "groups[2].questions[3].condition": "",
+        "groups[2].questions[3].text{{0}}": "26",
+        "groups[2].questions[4].condition": "1"
+      }
+    },
+    {
+      "name": "empty",
+      "answers": {},
+      "hidden": [],
+      "expected": {
+        "groups[1].condition": "1",
+        "groups[1].questions[0].condition": "",
+        "groups[1].questions[2].validation.rule": "1",
+        "groups[1].questions[2].validation.message{{0}}": "",
+        "groups[1].questions[3].text{{0}}": "",
+        "groups[1].questions[3].text{{1}}": "",
+        "groups[2].questions[0].calculation": "0",
+        "groups[2].questions[1].calculation": "HIGH",
+        "groups[2].questions[2].condition": "",
+        "groups[2].questions[3].condition": "",
+        "groups[2].questions[3].text{{0}}": "",
+        "groups[2].questions[4].condition": ""
+      }
+    }
+  ]
+}

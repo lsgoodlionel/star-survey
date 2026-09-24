@@ -15,11 +15,40 @@ class MjyThemedQuestionMap
     /** 热力图选区（R02-19）：同一套 JSON 信封与副表，列定义由平台生成。 */
     public const HEATMAP_THEME = 'mjy-heatmap';
 
+    /** 循环评价（R02-11）：一行一个评价对象，列定义由平台按维度与量表生成。 */
+    public const LOOP_RATING_THEME = 'mjy-loop-rating';
+
+    /** 图片 PK（R02-17）：整题一行，一对一列，列的取值恰好是这一对的两张图。 */
+    public const IMAGE_PK_THEME = 'mjy-image-pk';
+
+    /** 货架题（R02-18）：一行一件商品，商品列枚举＋唯一，件数列整数。 */
+    public const SHELF_THEME = 'mjy-shelf';
+
+    /** 文字点睛（R02-22）：一行一处标记，片段列枚举＋唯一，标记列枚举。 */
+    public const TEXT_HIGHLIGHT_THEME = 'mjy-text-highlight';
+
+    /** 心理实验（R02-46）：一行一个试次，试次列枚举＋唯一，按键列枚举，反应时是有界整数。 */
+    public const PSYCH_TRIAL_THEME = 'mjy-psych-trial';
+
+    /** 专业模型 KANO（R02-47）：一行一个功能点，正反两问各一列，量表由模型固定。 */
+    public const MODEL_KANO_THEME = 'mjy-model-kano';
+
     /**
      * 作答走「JSON 信封＋副表」的全部题型主题（ADR 0006 的 C 档）。
-     * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应。
+     * 与发布网关 pubgw/questions/themes.py 的 STRUCTURED_THEMES 一一对应
+     * （网关侧 tests/test_plugin_registry_parity.py 按源码文本对一遍：
+     * 少列一个在引擎上表现为「这道题的作答无人校验」，是静默故障）。
      */
-    public const STRUCTURED_THEMES = [self::REPEATING_TABLE_THEME, self::HEATMAP_THEME];
+    public const STRUCTURED_THEMES = [
+        self::REPEATING_TABLE_THEME,
+        self::HEATMAP_THEME,
+        self::LOOP_RATING_THEME,
+        self::IMAGE_PK_THEME,
+        self::SHELF_THEME,
+        self::TEXT_HIGHLIGHT_THEME,
+        self::PSYCH_TRIAL_THEME,
+        self::MODEL_KANO_THEME,
+    ];
 
     /** @var array<string, array<string, mixed>> */
     private $structuredQuestions;

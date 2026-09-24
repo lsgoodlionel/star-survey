@@ -157,31 +157,40 @@ def scenario_render(run: Run) -> None:
 def scenario_values(run: Run, response_id: str) -> None:
     """逐列断言答卷表，再逐格断言副表（含结构版本）。"""
     print("scenario B: every stored column and every projected cell", file=sys.stderr)
-    from question_themes_plan import HEAT_ROWS, TABLE_ROWS
+    from question_themes_plan import (
+        HEAT_ROWS, KANO_ROWS, LOOP_ROWS, MARK_ROWS, MARK_SEGMENTS, PK_ROWS, PSYCH_ROWS,
+        SHELF_ROWS, TABLE_ROWS,
+    )
 
+    #: 走副表的题：(题目代码, 归一化后的行, 结构版本)。
+    side = (("QTABLE", TABLE_ROWS, "rt1"), ("QLOOP", LOOP_ROWS, "lr1"),
+            ("QPK", PK_ROWS, "pk1"), ("QSHELF", SHELF_ROWS, "sh1"),
+            ("QMARK", MARK_ROWS, "th1"), ("QPSY", PSYCH_ROWS, "ps1"),
+            ("QKANO", KANO_ROWS, "kn1"), ("QHEAT", HEAT_ROWS, "hm1"))
     row = run.last_row()
     run.check("B: response submitted", row[("_submitted", "", 0)] == "1", row)
     expected = {column: value for answers in valid_pages() for column, value in answers.items()}
     for column, value in sorted(expected.items()):
         if run.fields[column] not in run.physical:
             continue
-        if column[0] in ("QTABLE", "QHEAT"):
+        if column[0] in {code for code, _rows, _version in side}:
             continue  # 信封另行按 JSON 比对：插件会重新编码它
         run.check("B: {}[{}#{}] stored {!r}".format(*column, value), row.get(column) == value, row.get(column))
     run.check("B: the boilerplate column stays empty", row[("QSEC", "", 0)] == "", row[("QSEC", "", 0)])
     run.check("B: an unchecked option stores ''", row[("QBLANK", "S2", 0)] == "", row[("QBLANK", "S2", 0)])
+    # 分组只换展示：没勾的那个子题照样是自己的一列，值是 ""，不受分组重排影响。
+    run.check("B: an unchecked grouped multiple-choice option stores ''",
+              row[("QGRPM", "M2", 0)] == "", row[("QGRPM", "M2", 0)])
     run.check("B: the blank of an unchecked option stays empty",
               row[("QBLANK", "S2comment", 0)] == "", row[("QBLANK", "S2comment", 0)])
 
-    stored_table = json.loads(row[("QTABLE", "", 0)] or "null")
-    run.check("B: the repeating table envelope is re-normalised by the plugin",
-              stored_table == {"v": 1, "rows": TABLE_ROWS}, stored_table)
-    stored_heat = json.loads(row[("QHEAT", "", 0)] or "null")
-    run.check("B: the heatmap envelope is re-normalised by the plugin",
-              stored_heat == {"v": 1, "rows": HEAT_ROWS}, stored_heat)
+    for code, rows, _version in side:
+        stored = json.loads(row[(code, "", 0)] or "null")
+        run.check("B: the {} envelope is re-normalised by the plugin".format(code),
+                  stored == {"v": 1, "rows": rows}, stored)
 
     identifier = int(response_id)
-    for code, rows, version in (("QTABLE", TABLE_ROWS, "rt1"), ("QHEAT", HEAT_ROWS, "hm1")):
+    for code, rows, version in side:
         run.check("B: {} projected into the side table".format(code), run.side_rows(identifier, code) == rows,
                   run.side_rows(identifier, code))
         state = run.side_state(identifier, code)
@@ -195,6 +204,69 @@ def scenario_values(run: Run, response_id: str) -> None:
         run.check("B: {} binding declares the side table contract".format(code),
                   declared.get("contract") == "question-extension-tables-v1"
                   and str(declared.get("structureDigest", "")).startswith("sd1:"), declared)
+    # 循环评价的列字典必须带上取值集合：读端靠它把 "1" 翻回「差」，
+    # 插件靠同一份集合拒收不在里面的评分（枚举列）。
+    loop_columns = run.side_tables.get("QLOOP", {}).get("columns", [])
+    run.check("B: QLOOP binding declares the object column as a unique enum",
+              loop_columns[:1] and loop_columns[0]["code"] == "target"
+              and loop_columns[0]["type"] == "enum" and loop_columns[0].get("distinct") is True
+              and [item["code"] for item in loop_columns[0]["options"]] == ["B1", "B2"], loop_columns[:1])
+    run.check("B: QLOOP binding declares every dimension over the declared scale",
+              [column["code"] for column in loop_columns[1:]] == ["price", "service"]
+              and all([item["code"] for item in column["options"]] == ["1", "2", "3"]
+                      for column in loop_columns[1:]), loop_columns[1:])
+    # 图片 PK：一对一列，这一列的可选值恰好是这一对的两张图——「选了别对的图」
+    # 由枚举列自己挡住，不需要任何跨列规则。
+    pk_columns = {column["code"]: column for column in run.side_tables.get("QPK", {}).get("columns", [])}
+    run.check("B: QPK binding declares one column per pair plus its shown column",
+              sorted(pk_columns) == ["P1", "P1_shown", "P2", "P2_shown"], sorted(pk_columns))
+    run.check("B: each QPK choice column only allows its own two pictures",
+              [item["code"] for item in pk_columns["P1"]["options"]] == ["A", "B"]
+              and [item["code"] for item in pk_columns["P2"]["options"]] == ["B", "C"], pk_columns)
+    run.check("B: the QPK shown column is not mandatory",
+              pk_columns["P1_shown"]["required"] is False, pk_columns["P1_shown"])
+    # 货架题：商品列枚举＋唯一（同一件不能取两次，要多拿就改件数），件数列是有界整数。
+    shelf_columns = {column["code"]: column for column in run.side_tables.get("QSHELF", {}).get("columns", [])}
+    run.check("B: QSHELF binding declares a unique product enum and a bounded quantity",
+              [item["code"] for item in shelf_columns.get("product", {}).get("options", [])] == ["S1", "S2", "S3"]
+              and shelf_columns["product"].get("distinct") is True
+              and (shelf_columns["qty"]["type"], shelf_columns["qty"]["min"],
+                   shelf_columns["qty"]["max"]) == ("integer", 1, 9), shelf_columns)
+    # 文字点睛：片段列是枚举＋唯一，取值代码里同时带着偏移与那一段原文的指纹——
+    # 「中文标记偏移和原文版本一致」在服务端就是这一条（改了原文，代码就变）。
+    mark_columns = {column["code"]: column for column in run.side_tables.get("QMARK", {}).get("columns", [])}
+    run.check("B: QMARK binding declares a unique span enum and a tag enum",
+              [option["code"] for option in mark_columns.get("segment", {}).get("options", [])]
+              == list(MARK_SEGMENTS)
+              and mark_columns["segment"].get("distinct") is True
+              and [option["code"] for option in mark_columns["tag"]["options"]] == ["like", "dislike"],
+              mark_columns)
+    run.check("B: every QMARK span is labelled with the source text it points at",
+              [option["label"] for option in mark_columns["segment"]["options"]]
+              == ["苹果很甜", "香蕉太软", "梨子刚好"], mark_columns.get("segment"))
+    # 心理实验：试次列枚举＋唯一、按键列枚举、反应时是有界整数，**没有任何一列能放对错**——
+    # 正确率由平台按定义里的 trials[].correct 推导，作答者提交不了「我答对了」。
+    psych_columns = {column["code"]: column for column in run.side_tables.get("QPSY", {}).get("columns", [])}
+    run.check("B: QPSY binding declares trial, key and reaction time and nothing else",
+              list(psych_columns) == ["trial", "key", "rt"], list(psych_columns))
+    run.check("B: QPSY pins the trial column to the declared trials and forbids repeats",
+              [option["code"] for option in psych_columns.get("trial", {}).get("options", [])] == ["T1", "T2"]
+              and psych_columns["trial"].get("distinct") is True, psych_columns.get("trial"))
+    run.check("B: QPSY bounds the reaction time in milliseconds",
+              (psych_columns["rt"]["type"], psych_columns["rt"]["min"],
+               psych_columns["rt"]["max"]) == ("integer", 0, 5000), psych_columns.get("rt"))
+    # KANO：正反两问共用**由模型固定**的五点量表，恰好张成分类表的 5×5 定义域；
+    # 分类由平台按这两列算，信封里同样没有可以放「我属于 A 类」的地方。
+    kano_columns = {column["code"]: column for column in run.side_tables.get("QKANO", {}).get("columns", [])}
+    run.check("B: QKANO binding declares the feature column and both halves and nothing else",
+              list(kano_columns) == ["feature", "functional", "dysfunctional"], list(kano_columns))
+    run.check("B: both QKANO halves share the scale the model fixes",
+              all([option["code"] for option in kano_columns[half]["options"]]
+                  == ["like", "must", "neutral", "live", "dislike"]
+                  for half in ("functional", "dysfunctional")), kano_columns)
+    run.check("B: QKANO pins the feature column to the declared features and forbids repeats",
+              [option["code"] for option in kano_columns.get("feature", {}).get("options", [])] == ["F1", "F2"]
+              and kano_columns["feature"].get("distinct") is True, kano_columns.get("feature"))
     run.report["complete"] = {"{}[{}#{}]".format(*column): value for column, value in row.items()}
 
 
@@ -208,7 +280,7 @@ def scenario_blank(run: Run) -> None:
     row = run.last_row()
     run.report["blank"] = {"{}[{}#{}]".format(*column): ("NULL" if value is None else repr(value))
                            for column, value in row.items() if not column[0].startswith("_")}
-    for code in ("QSCAN", "QSEC"):
+    for code in ("QSCAN", "QSEC", "QGRPM"):
         cells = [value for (qcode, _, _), value in row.items() if qcode == code]
         run.check("C: unanswered {} stored as ''".format(code), cells and all(v == "" for v in cells), cells)
     blanks = [value for (qcode, aid, _), value in row.items() if qcode == "QBLANK"]
@@ -325,8 +397,10 @@ def main() -> int:
         run = Run(args.container, Database(args.db, args.db_container), args.db, survey_id, published["binding"])
         run.check("publish: every compiled column bound",
                   all(question["fields"] for question in published["binding"]["questions"]))
-        run.check("publish: the two side-table questions declare a side table",
-                  sorted(run.side_tables) == ["QHEAT", "QTABLE"], sorted(run.side_tables))
+        run.check("publish: every side-table question declares a side table",
+                  sorted(run.side_tables) == ["QHEAT", "QKANO", "QLOOP", "QMARK", "QPK", "QPSY",
+                                              "QSHELF", "QTABLE"],
+                  sorted(run.side_tables))
 
         response_id = scenario_render(run)
         scenario_values(run, response_id)

@@ -201,8 +201,19 @@
 - ⏳ 租户级时区配置（目前是草稿里的 `window.timezone`，缺省 `Asia/Shanghai`）。
 - ⏳ 微信 openid、手机号、账户维度的限次；邀请码撤销的平台接口（引擎侧删参与者即时生效）。
 - ⏳ 按日循环的时间窗（如每天 9–17 点）。
-- ⏳ 网关 `add_participants` 总是让引擎生成 token（`create_token=true`），定义里写的 token 会被替换；
-  平台要发的邀请码必须在发布后回读（端到端即如此处理）。这是 P0 起的既有行为，未在本切片改动。
+- ✅ 网关 `add_participants` 总是让引擎生成 token（`create_token=true`），定义里写的 token 会被替换；
+  平台要发的邀请码现在随发布回执一并返回（`invitations[]`，按定义顺序，平台可给每条一个不透明
+  `ref`），见契约 publish-gateway-v1「邀请码回读」。配不齐就发布失败并回滚。
+  遗留：回执按 `requestId` 永久存档，**邀请码明文留在网关状态目录里**，存储没有保留期。
+- ✅ 上游也通了：平台现在会在发布时把问卷受众物化成 `participants`（每条只带 `ref`＝联系人 id，
+  个人信息不出平台），发布成功后按 `ref` 自动登记"哪个码发给了谁"（ADR 0017 决定 8）。
+  只有 `access.invitationRequired` 为真才发这个键。邀请码在平台侧只落
+  `contact_participation.participant_token` 一处，不进审计、日志与定义快照——网关的存档遗留不再多一处。
+- ✅ 「一份答卷属于哪个邀请码」：读端点新增 `includeRespondent`（契约 response-read-v1「参与者令牌」），
+  平台 `GatewayRespondentIdentityResolver` 据此实现 `RespondentIdentityResolver`，催答对账按人生效。
+  **匿名问卷永不给令牌**（按问卷当前 `anonymized` 判定，不按列在不在；判定不出来也不给）；
+  `token` 不能当普通列请求（400）。令牌不落库，每轮对账现读现用。
+  网关未配置时不注册该实现，对账照旧空转——读不到绝不解释成"没人答完"，否则会朝已答完的人发催答。
 - ⏳ 离线 CSV 地区数据源逐行扫描，全量库需要预排序＋二分或缓存。
 - ⏳ 平台重算摘要用的是自己发出去的定义快照：网关若改了规范化规则而平台没跟上，正常发布会被误挡
   （向量表会先红，属于部署前能发现的问题）。

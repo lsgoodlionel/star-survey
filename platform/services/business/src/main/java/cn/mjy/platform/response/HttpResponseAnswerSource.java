@@ -33,10 +33,11 @@ import tools.jackson.databind.node.ObjectNode;
  * 作答值是个人数据：本类只记录状态码与原因，从不记录请求或应答正文。
  */
 @Component
-public class HttpResponseAnswerSource implements ResponseAnswerSource {
+public class HttpResponseAnswerSource implements ResponseAnswerSource, RespondentSource {
 
     static final String READ_PATH = "/v1/responses/read";
-    static final int MIN_SECRET_BYTES = 32;
+    /** 共享密钥的最短长度。注册回读实现的条件也用这一个常量，避免两处阈值分叉。 */
+    public static final int MIN_SECRET_BYTES = 32;
 
     private static final Logger log = LoggerFactory.getLogger(HttpResponseAnswerSource.class);
 
@@ -87,12 +88,73 @@ public class HttpResponseAnswerSource implements ResponseAnswerSource {
     }
 
     private byte[] body(String engineInstanceId, long engineSid, List<Long> responseIds, List<String> fieldnames) {
+        return body(engineInstanceId, engineSid, responseIds, fieldnames, false);
+    }
+
+    private byte[] body(String engineInstanceId, long engineSid, List<Long> responseIds, List<String> fieldnames,
+            boolean includeRespondent) {
         ObjectNode envelope = json.createObjectNode();
         envelope.put("engineInstanceId", engineInstanceId);
         envelope.put("surveyId", engineSid);
         responseIds.forEach(envelope.putArray("responseIds")::add);
         fieldnames.forEach(envelope.putArray("fields")::add);
+        if (includeRespondent) {
+            envelope.put("includeRespondent", true);
+        }
         return json.writeValueAsBytes(envelope);
+    }
+
+    /**
+     * 读取"每份答卷是用哪个邀请码答的"（契约 response-read-v1「参与者令牌」，ADR 0016 缺口 (b)）。
+     *
+     * <p>只取令牌、不取任何作答列（{@code fields} 传空）。<b>认不出是谁的答卷不出现在结果里</b>：
+     * 匿名问卷网关一律回 {@code null}，没用邀请码进场的答卷也是——都不能当作某个人答的。
+     * 令牌不落库，每轮对账现读现用。
+     *
+     * @return 答卷号 → 参与者令牌，只含确实认得出的那些
+     * @throws ResponseAnswersUnavailableException 网关未配置、不可达、拒绝或应答不可信
+     */
+    @Override
+    public Map<Long, String> readRespondents(String engineInstanceId, long engineSid, List<Long> responseIds) {
+        if (responseIds.isEmpty()) {
+            return Map.of();
+        }
+        if (!isConfigured()) {
+            throw new ResponseAnswersUnavailableException("publish gateway is not configured");
+        }
+        byte[] body = body(engineInstanceId, engineSid, responseIds, List.of(), true);
+        HttpResponse<byte[]> response = send(body);
+        if (response.statusCode() != 200) {
+            log.warn("respondent read on {} sid {} refused with http {}", engineInstanceId, engineSid,
+                    response.statusCode());
+            throw new ResponseAnswersUnavailableException("gateway returned http " + response.statusCode());
+        }
+        return parseRespondents(response.body(), Set.copyOf(responseIds));
+    }
+
+    private Map<Long, String> parseRespondents(byte[] body, Set<Long> requested) {
+        try {
+            JsonNode responses = json.readTree(body).get("responses");
+            if (responses == null || !responses.isArray()) {
+                throw untrusted("reply has no responses array");
+            }
+            Map<Long, String> tokens = new LinkedHashMap<>();
+            Set<Long> seen = new HashSet<>();
+            for (JsonNode entry : responses) {
+                long id = responseId(entry, requested, seen);
+                JsonNode token = entry.get("token");
+                if (token == null) {
+                    // 要了令牌却没这个键：网关没按契约办事，不能当作"认不出"。
+                    throw untrusted("reply entry carries no token key");
+                }
+                if (token.isString() && !token.asString().isBlank()) {
+                    tokens.put(id, token.asString());
+                }
+            }
+            return Map.copyOf(tokens);
+        } catch (JacksonException e) {
+            throw untrusted("reply is not JSON");
+        }
     }
 
     private HttpResponse<byte[]> send(byte[] body) {

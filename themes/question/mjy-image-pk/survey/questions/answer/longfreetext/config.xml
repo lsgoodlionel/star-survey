@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 图片 PK（需求 R02-17）。
+
+  成对比较：每次给两张图，作答者挑一张。引擎没有这个题型，本主题扩展长文本题（type T），
+  把整题的选择序列化成 JSON 信封存进长文本列，结构投影进插件副表
+  （platform/contracts/question-extension-tables-v1.md）。
+
+  **一对一列**：这一列的可选值恰好是这一对的两张图，所以「选了不在这一对里的东西」
+  不需要任何跨列规则，枚举列自己就挡住了（MjyRepeatingTableValidator）。
+  另有一列 <配对代码>_shown 记录哪张图先展示——配对由平台声明、固定不变，
+  随机的是展示顺序，随机的那部分要留痕才谈得上可追溯。
+
+  参赛图片与配对由发布网关按 themeOptions 生成，分别放 mjy_pk_items 与 mjy_pk_pairs，
+  作者不能直写。整题就是一行（mjy_table_min_rows = mjy_table_max_rows = 1）。
+
+  answercolumndefinition 把答卷列从默认的 text 提升为 mediumtext
+  （application/models/QuestionTheme.php:775）。这个标签**不能**用 CDATA 包起来。
+-->
+<config>
+    <metadata>
+        <name>mjy-image-pk</name>
+        <type>question_theme</type>
+        <title>MJY 图片 PK</title>
+        <creationDate>2026-09-23</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>图片 PK：成对比较，配对固定、展示顺序随机且留痕</description>
+        <questionType>T</questionType>
+        <group>Text questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>0</assessable>
+        <class>text-long mjy-image-pk</class>
+        <answercolumndefinition>mediumtext</answercolumndefinition>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-image-pk.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-image-pk.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_table_columns</name>
+            <category>MJY 图片 PK</category>
+            <sortorder>10</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>列定义（JSON）</caption>
+            <help>一对两列：选了谁，以及谁先展示</help>
+        </attribute>
+        <attribute>
+            <name>mjy_pk_items</name>
+            <category>MJY 图片 PK</category>
+            <sortorder>20</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>参赛图片（JSON）</caption>
+            <help>形如 [{"code":"A","label":"包装甲","image":"https://…/a.png"}]</help>
+        </attribute>
+        <attribute>
+            <name>mjy_pk_pairs</name>
+            <category>MJY 图片 PK</category>
+            <sortorder>30</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>配对（JSON）</caption>
+            <help>形如 [{"code":"P1","left":"A","right":"B"}]</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_min_rows</name>
+            <category>MJY 图片 PK</category>
+            <sortorder>40</sortorder>
+            <inputtype>integer</inputtype>
+            <default>1</default>
+            <caption>最少行数</caption>
+            <help>整题就是一行，由平台钉死</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_max_rows</name>
+            <category>MJY 图片 PK</category>
+            <sortorder>50</sortorder>
+            <inputtype>integer</inputtype>
+            <default>1</default>
+            <caption>最多行数</caption>
+            <help>整题就是一行，由平台钉死；服务端强制</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>
