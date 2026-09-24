@@ -29,9 +29,4 @@ record ExportContent(List<ExportSheet> sheets, List<String> codes, List<String> 
         return new ExportContent(sheets, List.of(), List.of(), sink -> {
         });
     }
-
-    /** 答卷表；写出方约定它永远是第一张。 */
-    ExportSheet responses() {
-        return sheets().getFirst();
-    }
 }

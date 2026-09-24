@@ -31,7 +31,7 @@ final class DocxExportWriter implements ExportFormat.Writer {
     static final long MAX_RESPONSES = 10_000L;
 
     /** 附件表的表头；列取自 {@link ExportLayout#ATTACHMENT_HEADER} 的后六列（前几列在答卷信息里）。 */
-    static final List<String> ATTACHMENT_COLUMNS = List.of("序号", "名称", "大小", "类型", "存储名", "sha256");
+    private static final List<String> ATTACHMENT_COLUMNS = List.of("序号", "名称", "大小", "类型", "存储名", "sha256");
     private static final int ATTACHMENT_FROM = 5;
 
     /** {@link ExportLayout#FIXED_CODES} 里 {@code responseid} 的下标。 */
