@@ -182,8 +182,52 @@ def kano(**options):
     return question("T", code="QKANO", theme="mjy-model-kano", themeOptions=payload)
 
 
+# ------------------------------------------------------------------ 切片 02.6 的媒体类
+
+
+#: 平台在发布时写进定义的取件地址形状（ADR 0019 决定 4）：路径带租户 / 资产 / 版本，
+#: 查询串带过期时刻与签名。样例里的值只要形状对就行，签名本身由平台侧的用例覆盖。
+ASSET_URL = "https://survey.example/a/9f1c.../{}/1?exp=1800000000&sig=AAAA"
+
+
+#: 「这个参数没传」与「这个参数传的是 None（＝把键去掉）」要分得开。
+_DEFAULT = object()
+
+_SLIDE_LABELS = {"A1": "包装甲", "A2": "包装乙"}
+
+
+def slide(code, url=_DEFAULT, alt=_DEFAULT, version=1):
+    """一张幻灯片：对准一个选项代码，带平台签发的地址、替代文本与被钉死的资产版本号。
+
+    ``url``／``version`` 传 ``None`` 表示**把这个键去掉**，用来构造缺字段的用例；
+    ``alt`` 传空串则保留这个键但留空（替代文本必填的用例靠它）。
+    """
+    payload = {"code": code}
+    address = ASSET_URL.format(code.lower()) if url is _DEFAULT else url
+    if address is not None:
+        payload["url"] = address
+    payload["alt"] = _SLIDE_LABELS.get(code, code) if alt is _DEFAULT else alt
+    if version is not None:
+        payload["assetVersion"] = version
+    return payload
+
+
+def carousel(qtype="L", slides=_DEFAULT, attributes=None, **options):
+    """R02-20 轮播图：原生单选＋主题，一张幻灯片对一个选项。"""
+    payload = {"slides": [slide("A1"), slide("A2")] if slides is _DEFAULT else slides}
+    if payload["slides"] is None:
+        del payload["slides"]
+    payload.update(options)
+    extra = {"theme": "mjy-carousel", "themeOptions": payload,
+             "answers": [answer("A1"), answer("A2")]}
+    if attributes:
+        extra["attributes"] = attributes
+    return question(qtype, code="QCARO", **extra)
+
+
 ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap(),
-              loop_rating(), image_pk(), shelf(), text_highlight(), psych_trial(), kano())
+              loop_rating(), image_pk(), shelf(), text_highlight(), psych_trial(), kano(),
+              carousel())
 
 
 # ------------------------------------------------------------------ 注册表

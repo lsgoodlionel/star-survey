@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 轮播图（需求 R02-20）。
+
+  数据形状与单选题（type L）完全一致：答卷表里仍然是一列选项代码，引擎的
+  checkValidityAnswer 照样拒收不在选项表里的代码。主题只是把每个选项配上一张图，
+  做成可左右切换的轮播。
+
+  图不是作者填的一串 URL，而是**平台资产服务**签发的取件地址（ADR 0019）：
+  作者在草稿里写 assetId，平台发布时解析成带签名与过期时刻的地址，并把当时的
+  版本号一起钉进 mjy_carousel_slides。已发布的问卷因此不会因为作者换了图而变样。
+
+  关掉 JavaScript 时，图与选项按原顺序平铺显示，照样能选、能交。
+-->
+<config>
+    <metadata>
+        <name>mjy-carousel</name>
+        <type>question_theme</type>
+        <title>MJY 轮播图</title>
+        <creationDate>2026-09-24</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>轮播图：每个选项一张平台资产图，可左右切换</description>
+        <questionType>L</questionType>
+        <group>Single choice questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>1</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>1</assessable>
+        <class>list-radio mjy-carousel</class>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-carousel.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-carousel.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_carousel_slides</name>
+            <category>MJY 轮播图</category>
+            <sortorder>10</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>幻灯片（JSON）</caption>
+            <help>由平台按资产引用生成，形如 [{"code":"A1","url":"…","alt":"…","assetVersion":1}]</help>
+        </attribute>
+        <attribute>
+            <name>mjy_carousel_autoplay</name>
+            <category>MJY 轮播图</category>
+            <sortorder>20</sortorder>
+            <inputtype>integer</inputtype>
+            <default>0</default>
+            <caption>自动轮播</caption>
+            <help>1＝自动切换；作答者一动就停</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

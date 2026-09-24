@@ -31,6 +31,12 @@ THEME_MARKERS = (
         "mjy-matrix-stepper.js",
         "data-mjy-inline-blank",
         "mjy-inline-blank.js",
+        # 轮播图（R02-20）：图来自平台资产服务。第三条钉的是「幻灯片定义真的到了页面上」——
+        # 地址与替代文本经 escape('html_attr') 后面目全非，assetVersion 这个纯字母的键名不会，
+        # 它出现就说明那段 JSON 既没丢也没被净化打碎。
+        "data-mjy-carousel",
+        "mjy-carousel.js",
+        "assetVersion",
     ),
     (
         "data-mjy-repeating-table",
@@ -113,6 +119,7 @@ def valid_pages() -> List[Dict[Column, str]]:
             ("QSTEP", "R1", 0): "L1", ("QSTEP", "R2", 0): "L2",
             ("QSTEP", "R3", 0): "L3", ("QSTEP", "R4", 0): "L1",
             ("QBLANK", "S1", 0): "Y", ("QBLANK", "S1comment", 0): "X9&<型>",
+            ("QCARO", "", 0): "C2",
         },
         {
             ("QTABLE", "", 0): envelope(TABLE_ROWS),
@@ -134,6 +141,7 @@ def blank_pages() -> List[Dict[Column, str]]:
             ("QGRP", "", 0): "A1",
             ("QSTEP", "R1", 0): "L1", ("QSTEP", "R2", 0): "L1",
             ("QSTEP", "R3", 0): "L1", ("QSTEP", "R4", 0): "L1",
+            ("QCARO", "", 0): "C1",
         },
         {
             ("QTABLE", "", 0): envelope([{"item": "米", "qty": "1"}]),
@@ -162,6 +170,10 @@ TAMPERS = (
     _tamper("grouped options: a code outside the answer list", 0, {("QGRP", "", 0): "A9"}),
     _tamper("grouped options (multiple choice): one selection over max_answers", 0,
             {("QGRPM", "M2", 0): "Y"}),
+    # 轮播图（R02-20）：数据形状就是原生单选，闸门是引擎自己的 checkValidityAnswer。
+    # 配了图不等于多了一条进门的路——没声明过的代码照样进不来。
+    _tamper("carousel: a code outside the answer list", 0, {("QCARO", "", 0): "C9"}),
+    _tamper("carousel: a code borrowed from another question", 0, {("QCARO", "", 0): "A1"}),
     _tamper("scan input: one character over maxLength", 0,
             {("QSCAN", "", 0): "6" * (SCAN_MAX_LENGTH + 1)}),
     _tamper("inline blank: comment filled while its option is unchecked", 0,
