@@ -49,6 +49,8 @@ public class SurveyDefinitions {
         // participants 由发布时按问卷受众物化（见 withParticipants），草稿里写什么都不算数：
         // 客户端不能自己塞一批收件人，从旧版本恢复来的那一份也要按新受众重新算。
         definition.remove(PARTICIPANTS);
+        // 字典版本同理：由发布时固化（见 withDictionaries），草稿里写的版本与摘要一概摘掉。
+        SurveyDictionaryRefs.stripPins(definition);
         List<String> problems = new ArrayList<>();
         checkTopLevel(definition, problems);
         checkGroups(definition.get("groups"), problems);
@@ -84,6 +86,28 @@ public class SurveyDefinitions {
         if (serialize(copy).getBytes(StandardCharsets.UTF_8).length > MAX_DEFINITION_BYTES) {
             throw new InvalidDefinitionException(List.of("definition with " + refs.size()
                     + " participants exceeds " + MAX_DEFINITION_BYTES + " bytes"));
+        }
+        return copy;
+    }
+
+    /**
+     * 返回一份固化了字典版本的副本（原件不动）：每道多级下拉题写上 {@code dictionaryVersion} 与
+     * {@code dictionaryDigest}，顶层带一份节点快照（ADR 0019 决定 2、3）。
+     *
+     * <p>快照必须随定义走：引擎上没有平台连接，插件要在服务端判定作答路径，就必须在引擎里有这一版字典。
+     * 也正因为它随定义走，才有 {@code DictionaryLimits.MAX_NODES} 那条节点数上限——定义快照总共只有 1 MiB。
+     *
+     * <p>引用了字典却一本都固化不下来时抛 {@link InvalidDefinitionException}：宁可发不出去，
+     * 也不发一份服务端判定不了路径的问卷。
+     */
+    public ObjectNode withDictionaries(ObjectNode definition, List<SurveyDictionarySource.Pinned> pinned) {
+        ObjectNode copy = definition.deepCopy();
+        SurveyDictionaryRefs.applyPins(copy, pinned);
+        int bytes = serialize(copy).getBytes(StandardCharsets.UTF_8).length;
+        if (bytes > MAX_DEFINITION_BYTES) {
+            throw new InvalidDefinitionException(List.of("definition with " + pinned.size()
+                    + " dictionary snapshot(s) is " + bytes + " bytes, over the "
+                    + MAX_DEFINITION_BYTES + " byte limit"));
         }
         return copy;
     }
