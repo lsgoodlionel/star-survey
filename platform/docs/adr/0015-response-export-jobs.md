@@ -590,7 +590,8 @@ platform.storage.endpoint / region / bucket / access-key-id / secret-access-key 
 
 否决「各模块各配一套端点、密钥与桶」：那样迟早出现"导出切过去了、资产还在本地卷上"，
 而那正是两条遗留各自为政的样子。一个开关意味着**切不了一半**。
-`BlobStoreWiringTest` 就钉这一条：两个 bean 必须同时是本地、或同时是对象存储。
+`BlobStoreWiringTest` 与 `BlobStoreObjectStorageWiringTest` 就钉这一条：
+两个 bean 必须同时是本地、或同时是对象存储。
 
 **配了一半就拒绝启动**（缺桶、缺密钥、缺端点）。不退回本地卷：悄悄退回等于多副本各写各的，
 要等到用户下载不到文件才发现。
@@ -646,8 +647,12 @@ XML 构造，不划算；清理是后台动作，不在任何人的等待路径�
   密钥不对时是故障不是缺失；两个模块各占前缀；按前缀删要翻页；前缀按整段匹配；
   放弃的上传一次 PUT 都不发。对面是 `FakeS3`——一份最小的 S3，**SigV4 校验按规格独立写了一遍**，
   不复用被测代码的任何常量：被测实现改错签名这里一定红。
-- `BlobStoreWiringTest`（5 项）：缺省两处都是本地；配上 `kind=s3` 两处**一起**切过去
-  且前缀正确；配了一半拒绝启动；未知 kind 拒绝；端点末尾斜杠。
+- 接线与取值判定（共 5 项，分在三个顶层类里）：`BlobStoreWiringTest`（1 项，缺省两处都是本地）、
+  `BlobStoreObjectStorageWiringTest`（1 项，配上 `kind=s3` 两处**一起**切过去且前缀正确）、
+  `BlobStorePropertiesTest`（3 项，配了一半拒绝启动／未知 kind 拒绝／端点末尾斜杠）。
+  **刻意不用 `@Nested` 合成一个类**：surefire 的 XML 会把 `@Nested` 的用例归到外层类名下，
+  同一次跑的纯文本摘要却给那个类记 `Tests run: 0`，于是「跑后核对总数」这条防假绿的规矩
+  在按 `.txt` 计数时对这样的类恰好失明（本车道集成审查时真实撞上过，XML 1287 / TXT 1282）。
 
 ### 八、残余风险
 
