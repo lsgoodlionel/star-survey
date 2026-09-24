@@ -4,6 +4,7 @@ import cn.mjy.platform.asset.AssetRepository.AssetRow;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.tenant.TenantScope;
 import cn.mjy.platform.survey.InvalidDefinitionException;
+import cn.mjy.platform.survey.PublishUnavailableException;
 import cn.mjy.platform.survey.SurveyAssetSource;
 import java.time.Clock;
 import java.util.ArrayList;
@@ -42,6 +43,9 @@ class SurveyAssetLinks implements SurveyAssetSource {
 
     @Override
     public ObjectNode materialize(TenantContext ctx, UUID surveyId, int draftVersion, ObjectNode definition) {
+        // 先挡住「作者自己把 assetVersion 填好了」那种引用——它可能一个 assetId 都不带，
+        // 下面按 assetId 找引用的那一步根本访问不到它（独立安全审查抓到的一条）。
+        SurveyAssetSource.requirePlatformKeysUnwritten(definition);
         ObjectNode copy = definition.deepCopy();
         List<ObjectNode> references = SurveyAssetSource.references(copy);
         if (references.isEmpty()) {
@@ -105,13 +109,23 @@ class SurveyAssetLinks implements SurveyAssetSource {
         }
     }
 
-    /** 签不出票或没有对外地址时，带资产的问卷一律发不出去——失败即关闭。 */
+    /**
+     * 签不出票或没有对外地址时，带资产的问卷一律发不出去——失败即关闭。
+     *
+     * <p>这里抛的是<b>问卷模块</b>的 {@link PublishUnavailableException} 而不是资产模块自己的异常：
+     * 资产模块的错误映射只挂在 {@code cn.mjy.platform.asset} 上，而这条路径是从问卷控制器进来的，
+     * 抛资产异常会落到没人接的地方，对外变成 500。语义本来就是"发布这件事当下做不了"，
+     * 与"网关没配"同一类，503。
+     */
     private void requireConfigured() {
         if (!tickets.isConfigured()) {
-            throw new AssetUnavailableException(AssetKeys.MASTER_SECRET_PROPERTY + " is not configured");
+            throw new PublishUnavailableException(
+                    AssetKeys.MASTER_SECRET_PROPERTY + " is not configured; surveys that reference assets"
+                            + " cannot be published");
         }
         if (properties.publicBaseUrl().isBlank()) {
-            throw new AssetUnavailableException("platform.asset.public-base-url is not configured");
+            throw new PublishUnavailableException("platform.asset.public-base-url is not configured;"
+                    + " surveys that reference assets cannot be published");
         }
     }
 }

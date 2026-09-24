@@ -97,6 +97,32 @@ class AssetUploadGateTest {
                 .isEqualTo(AssetKind.IMAGE);
     }
 
+    /**
+     * WebP 与 WAV 共用 RIFF 容器，只有第 9–12 字节不同。两者都在白名单里，所以"是不是 RIFF"
+     * 不足以判定——必须逐个类型认到那四个字节，否则一段音频可以被当成图片存下并回放。
+     */
+    @Test
+    void aWavFileDeclaredAsWebpIsRejected() {
+        assertThatThrownBy(() -> assets.create(owner, "假图",
+                new AssetUpload("image/webp", "a.webp", AssetFixture.wav())))
+                .isInstanceOf(InvalidAssetException.class)
+                .hasMessageContaining("content does not match");
+    }
+
+    @Test
+    void aWebpFileDeclaredAsWavIsRejected() {
+        assertThatThrownBy(() -> assets.create(owner, "假音",
+                new AssetUpload("audio/wav", "a.wav", AssetFixture.webp())))
+                .isInstanceOf(InvalidAssetException.class)
+                .hasMessageContaining("content does not match");
+    }
+
+    @Test
+    void aRealWavIsAcceptedAsAudio() {
+        assertThat(assets.create(owner, "wav", new AssetUpload("audio/wav", "a.wav", AssetFixture.wav())).kind())
+                .isEqualTo(AssetKind.AUDIO);
+    }
+
     @Test
     void videoIsAcceptedAndClassifiedAsVideo() {
         assertThat(assets.create(owner, "mp4", new AssetUpload("video/mp4", "a.mp4", AssetFixture.mp4())).kind())

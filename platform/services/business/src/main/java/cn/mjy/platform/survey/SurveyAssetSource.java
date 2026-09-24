@@ -29,7 +29,14 @@ public interface SurveyAssetSource {
     /** 平台在发布时写进去的签名地址；作者自己写了它即判定义非法。 */
     String ASSET_URL = "url";
 
-    /** 平台在发布时写进去的版本号，快照里因此看得出当时用的是第几版。 */
+    /**
+     * 平台在发布时写进去的版本号，快照里因此看得出当时用的是第几版。
+     *
+     * <p><b>这是「平台写、作者写不了」的那把锁。</b>光靠"带 url 的引用不许同时带 assetId"挡不住
+     * ——作者可以干脆不写 {@code assetId}，直接填一串自己的地址，改写器根本不会访问那个对象
+     * （独立安全审查抓到的一条）。所以规则反过来定：<b>草稿里任何一处出现 assetVersion 都判定义非法</b>，
+     * 而每一种带资产的题型主题都必须把它列为必填。于是作者自带的地址凑不齐一条合法的引用。
+     */
     String ASSET_VERSION = "assetVersion";
 
     /**
@@ -45,13 +52,26 @@ public interface SurveyAssetSource {
 
     /** 定义里全部带 {@code assetId} 的对象节点，按出现顺序。 */
     static List<ObjectNode> references(JsonNode definition) {
-        List<ObjectNode> found = new ArrayList<>();
-        collect(definition, found);
-        return found;
+        return objectsWith(definition, ASSET_ID);
+    }
+
+    /**
+     * 草稿里不许出现平台自己要写的键。**在解析资产引用之前调用**，因为它要管的正是
+     * 「一个 assetId 都没有、却已经把地址与版本号填好了」那种引用。
+     *
+     * @throws InvalidDefinitionException 定义里任何一处带 {@code assetVersion}
+     */
+    static void requirePlatformKeysUnwritten(ObjectNode definition) {
+        if (!objectsWith(definition, ASSET_VERSION).isEmpty()) {
+            throw new InvalidDefinitionException(List.of(
+                    ASSET_VERSION + " is written by the platform when it resolves an asset reference;"
+                            + " a draft may not carry it"));
+        }
     }
 
     /** 资产模块未装时的兜底：有引用就发不出去。 */
     static ObjectNode requireNoAssetReferences(ObjectNode definition) {
+        requirePlatformKeysUnwritten(definition);
         if (!references(definition).isEmpty()) {
             throw new InvalidDefinitionException(List.of(
                     "the definition references platform assets but the asset service is not available"));
@@ -59,18 +79,24 @@ public interface SurveyAssetSource {
         return definition;
     }
 
-    private static void collect(JsonNode node, List<ObjectNode> found) {
+    private static List<ObjectNode> objectsWith(JsonNode definition, String key) {
+        List<ObjectNode> found = new ArrayList<>();
+        collect(definition, key, found);
+        return found;
+    }
+
+    private static void collect(JsonNode node, String key, List<ObjectNode> found) {
         if (node instanceof ObjectNode object) {
-            if (object.has(ASSET_ID)) {
+            if (object.has(key)) {
                 found.add(object);
             }
             for (String name : object.propertyNames()) {
-                collect(object.get(name), found);
+                collect(object.get(name), key, found);
             }
             return;
         }
         if (node != null && node.isArray()) {
-            node.forEach(child -> collect(child, found));
+            node.forEach(child -> collect(child, key, found));
         }
     }
 }

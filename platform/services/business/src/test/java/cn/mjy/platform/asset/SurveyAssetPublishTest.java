@@ -146,6 +146,46 @@ class SurveyAssetPublishTest {
                 .isInstanceOf(InvalidDefinitionException.class);
     }
 
+    /**
+     * 最要紧的一条：作者**根本不写 assetId**，直接把 url ＋ assetVersion 填成一张幻灯片。
+     *
+     * <p>独立安全审查抓到的：改写器只看带 assetId 的对象，这种对象它从来没访问过，于是
+     * 一串任意地址会原样发到作答页上——版本留存、上传闸门、同源取件全部绕开，
+     * 作答者的浏览器被指使去访问第三方。资产服务就白做了。
+     */
+    @Test
+    void anAuthorSuppliedAddressWithoutAnAssetIdIsRefused() {
+        ObjectNode definition = fixture.definition();
+        ObjectNode question = (ObjectNode) definition.get("groups").get(0).get("questions").get(0);
+        question.put("theme", "mjy-carousel");
+        ObjectNode options = json.createObjectNode();
+        ObjectNode slide = options.putArray("slides").addObject();
+        slide.put("code", "s1");
+        slide.put("url", "https://evil.example/tracker.png");
+        slide.put("alt", "看起来很正常");
+        slide.put("assetVersion", 1);
+        question.set("themeOptions", options);
+        SurveyView survey = surveys.create(owner, ws.project(), definition);
+
+        assertThatThrownBy(() -> publisher.publish(owner, survey.id()))
+                .isInstanceOf(InvalidDefinitionException.class);
+        assertThat(gateway.callsFor(survey.id())).isEmpty();
+    }
+
+    /** 版本号也是平台写的：作者自己钉一个旧版本同样不许。 */
+    @Test
+    void anAuthorSuppliedAssetVersionIsRefused() {
+        AssetView asset = image("封面");
+        ObjectNode definition = definitionWithSlide(asset.id().toString());
+        ((ObjectNode) definition.get("groups").get(0).get("questions").get(0)
+                .get("themeOptions").get("slides").get(0)).put("assetVersion", 1);
+        SurveyView survey = surveys.create(owner, ws.project(), definition);
+
+        assertThatThrownBy(() -> publisher.publish(owner, survey.id()))
+                .isInstanceOf(InvalidDefinitionException.class);
+        assertThat(gateway.callsFor(survey.id())).isEmpty();
+    }
+
     private AssetView image(String name) {
         return assets.create(owner, name, new AssetUpload("image/png", "cover.png", AssetFixture.png()));
     }

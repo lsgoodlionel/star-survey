@@ -54,6 +54,14 @@ public class AssetFixture {
         return bytes;
     }
 
+    /** RIFF 容器，但第 9–12 字节是 WAVE：声明成 image/webp 时必须被认出来不是图。 */
+    public static byte[] wav() {
+        byte[] bytes = new byte[64];
+        System.arraycopy("RIFF".getBytes(StandardCharsets.US_ASCII), 0, bytes, 0, 4);
+        System.arraycopy("WAVE".getBytes(StandardCharsets.US_ASCII), 0, bytes, 8, 4);
+        return bytes;
+    }
+
     public static byte[] mp4() {
         byte[] bytes = new byte[64];
         System.arraycopy("ftypisom".getBytes(StandardCharsets.US_ASCII), 0, bytes, 4, 8);

@@ -64,9 +64,9 @@ final class AssetContentTypes {
                 bytes -> startsWith(bytes, new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff})));
         types.put("image/gif", new Allowed(AssetKind.IMAGE,
                 bytes -> matchesAscii(bytes, 0, "GIF87a") || matchesAscii(bytes, 0, "GIF89a")));
-        types.put("image/webp", new Allowed(AssetKind.IMAGE, AssetContentTypes::isRiff));
+        types.put("image/webp", new Allowed(AssetKind.IMAGE, bytes -> isRiff(bytes, "WEBP")));
         types.put("audio/mpeg", new Allowed(AssetKind.AUDIO, AssetContentTypes::isMpegAudio));
-        types.put("audio/wav", new Allowed(AssetKind.AUDIO, AssetContentTypes::isRiff));
+        types.put("audio/wav", new Allowed(AssetKind.AUDIO, bytes -> isRiff(bytes, "WAVE")));
         types.put("audio/webm", new Allowed(AssetKind.AUDIO, AssetContentTypes::isMatroska));
         types.put("video/webm", new Allowed(AssetKind.VIDEO, AssetContentTypes::isMatroska));
         types.put("video/mp4", new Allowed(AssetKind.VIDEO, bytes -> matchesAscii(bytes, 4, "ftyp")));
@@ -74,12 +74,13 @@ final class AssetContentTypes {
     }
 
     /**
-     * RIFF 容器（WebP 与 WAV 共用）：第 9–12 字节是 {@code WEBP} 或 {@code WAVE}。
-     * 两者都落在这里，是因为区分它们要读更深的块头，而白名单已经把"能不能收"这件事答完了——
-     * 真正要挡的是"声明成图片的可执行文件"，不是"把 wav 说成 webp"。
+     * RIFF 容器：前四字节是 {@code RIFF}，第 9–12 字节是具体格式。
+     *
+     * <p>WebP 与 WAV 共用这个容器，<b>必须认到那四个字节</b>：只判"是不是 RIFF"的话，
+     * 一段音频可以声明成 {@code image/webp} 存下来，之后就以图片的内容类型被回放。
      */
-    private static boolean isRiff(byte[] bytes) {
-        return matchesAscii(bytes, 0, "RIFF") && (matchesAscii(bytes, 8, "WEBP") || matchesAscii(bytes, 8, "WAVE"));
+    private static boolean isRiff(byte[] bytes, String format) {
+        return matchesAscii(bytes, 0, "RIFF") && matchesAscii(bytes, 8, format);
     }
 
     /** Matroska / WebM 的 EBML 头。 */
