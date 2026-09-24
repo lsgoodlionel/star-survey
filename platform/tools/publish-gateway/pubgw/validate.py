@@ -87,20 +87,25 @@ def validate_definition(definition: SurveyDefinition) -> ValidationReport:
     from .branding.schema import check_branding
     from .branding.translations import check_translations
     from .logic.check import check_logic, check_question_shape
+    from .logic.scoring import check_scoring, expand_scoring
     from .policy.schema import check_policy
     from .questions.check import check_question_type
 
     issues: List[ValidationIssue] = []
     issues.extend(_check_settings(definition))
-    issues.extend(_check_structure(definition))
-    issues.extend(_check_uniqueness(definition))
-    for group_index, group in enumerate(definition.groups):
+    # 计分表先校验再展开：表本身有问题时展开出来的题只会制造二次噪音。
+    scoring_issues = check_scoring(definition)
+    issues.extend(scoring_issues)
+    expanded = definition if scoring_issues else expand_scoring(definition)
+    issues.extend(_check_structure(expanded))
+    issues.extend(_check_uniqueness(expanded))
+    for group_index, group in enumerate(expanded.groups):
         for question_index, question in enumerate(group.questions):
             where = "groups[{}].questions[{}]".format(group_index, question_index)
             issues.extend(_check_question(question, where))
             issues.extend(check_question_shape(question, where))
             issues.extend(check_question_type(question, where))
-    issues.extend(check_logic(definition))
+    issues.extend(check_logic(expanded))
     issues.extend(check_policy(definition))
     issues.extend(check_branding(definition))
     issues.extend(check_translations(definition))

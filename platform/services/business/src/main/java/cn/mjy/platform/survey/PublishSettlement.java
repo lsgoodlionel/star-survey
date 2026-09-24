@@ -26,8 +26,13 @@ import org.springframework.stereotype.Component;
  *       旧版本记入待收口——仍是同一事务，所以路由要么还指向旧版、要么已指向完整落库的新版。
  *       绑定与请求对不上、或路由登记 / 切换失败时，整笔回滚并转为待核对（绝不留下"有版本没路由"的半成品，
  *       旧版照旧在线）；事务提交之后才收口旧的引擎问卷（{@link SupersededVersionCloser}），收口失败不影响结论；</li>
- *   <li>成功但网关没按访问策略办事（回执缺 {@code policyDigest} 或摘要对不上，见
- *       {@link #requireEnforcedPolicy}）：按失败处理——不登记路由、不写版本，引擎里那份按孤儿记录；</li>
+ *   <li>成功但引擎里那份问卷不能用（网关没按访问策略办事，见 {@link #requireEnforcedPolicy}；
+ *       或定义带着参与者却没回读到邀请码，见 {@link #requireIssuedInvitations}）：按失败处理——
+ *       不登记路由、不写版本，引擎里那份按孤儿记录；</li>
+ *   <li>成功且需要邀请码：在同一事务里按回执的 {@code ref} 把邀请码登记成联系人映射
+ *       （{@link SurveyParticipantSource}）。回执本身不可用（认不出的 ref、同一个人两条、两人共用
+ *       一个码）按确定失败处理；其余失败整笔回滚、转为待核对，重试时网关按 requestId 原样返回
+ *       同一份回执，邀请码不会丢；</li>
  *   <li>失败（422/502）与拒收（400/401/404）：记录失败阶段与原因，问卷回到可再次发布，不登记路由；
  *       网关报告孤儿问卷时大声记日志并存档；</li>
  *   <li>回执过期（410，契约 v1.3）：同样按失败收尾——重发只会再得到 410；引擎里可能残留的那份问卷
@@ -56,11 +61,14 @@ class PublishSettlement {
     private final PublishApprovalGate approvalGate;
     private final VersionRetirementRepository retirements;
     private final SupersededVersionCloser closer;
+    private final SurveyDefinitions definitions;
+    private final Optional<SurveyParticipantSource> participants;
 
     PublishSettlement(TenantScope tenantScope, SurveyRepository surveys, PublishAttemptRepository attempts,
             PublishedVersionRepository versions, SurveyRouteService routes, SurveyViews views, SurveyAudit audit,
             PublishApprovalGate approvalGate, VersionRetirementRepository retirements,
-            SupersededVersionCloser closer) {
+            SupersededVersionCloser closer, SurveyDefinitions definitions,
+            Optional<SurveyParticipantSource> participants) {
         this.tenantScope = tenantScope;
         this.surveys = surveys;
         this.attempts = attempts;
@@ -71,25 +79,39 @@ class PublishSettlement {
         this.approvalGate = approvalGate;
         this.retirements = retirements;
         this.closer = closer;
+        this.definitions = definitions;
+        this.participants = participants;
     }
 
-    /** 成功结局无法落地（绑定不符、路由登记失败）：整笔回滚后改记为待核对。 */
+    /**
+     * 成功结局无法落地（绑定不符、路由登记失败、登记邀请码时数据库出问题）：整笔回滚后改记为待核对。
+     * 带上原始异常：转待核对就是为了让人来查，查的时候必须能看到根因。
+     */
     private static final class UnrecordablePublishException extends RuntimeException {
 
         UnrecordablePublishException(String message) {
             super(message);
         }
+
+        UnrecordablePublishException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     /**
-     * 网关没有按平台发去的访问策略办事（回执没有 policyDigest、或摘要对不上）：
-     * 引擎里那份问卷不能当作已发布，否则问卷看着受保护、实际毫不设防（ADR 0016）。
+     * 网关报告已发布，但引擎里那份问卷<b>不能用</b>（ADR 0016）：
+     * <ul>
+     *   <li>访问策略没落地（回执没有 policyDigest、或摘要对不上）——问卷看着受保护、实际毫不设防；</li>
+     *   <li>邀请码没回来（定义带着参与者，回执却没有对应的 invitations）——问卷只进得去邀请码，
+     *       而平台一个码都拿不到，等于谁也进不去。</li>
+     * </ul>
+     * 两者都不是"结果未知"：用同一 requestId 重发只会拿到同一份存档的坏回执，所以直接判发布失败。
      */
-    private static final class UnenforcedPolicyException extends RuntimeException {
+    private static final class UnusablePublishException extends RuntimeException {
 
         private final Integer engineSurveyId;
 
-        UnenforcedPolicyException(String message, Integer engineSurveyId) {
+        UnusablePublishException(String message, Integer engineSurveyId) {
             super(message);
             this.engineSurveyId = engineSurveyId;
         }
@@ -106,17 +128,16 @@ class PublishSettlement {
     private PublishOutcome settleOrPend(TenantContext ctx, Ticket ticket, GatewayOutcome outcome) {
         try {
             return tenantScope.call(ctx.tenantId(), () -> settleLocked(ctx, ticket, outcome));
-        } catch (UnenforcedPolicyException e) {
+        } catch (UnusablePublishException e) {
             // 不是"结果未知"：重发只会再得到同一份不设防的问卷，所以直接判失败，不登记路由、不写版本。
-            log.error("survey {} (request {}) came back published but the gateway did not report the access "
-                    + "policy the platform sent: {}; publish failed", ticket.surveyId(), ticket.requestId(),
-                    e.getMessage());
+            log.error("survey {} (request {}) came back published but the engine survey is not usable: {}; "
+                    + "publish failed", ticket.surveyId(), ticket.requestId(), e.getMessage());
             GatewayOutcome refused = new GatewayOutcome.Failed(200, new GatewayResult(
                     false, null, POLICY_STAGE, List.of(e.getMessage()), false, e.engineSurveyId, null, null));
             return tenantScope.call(ctx.tenantId(), () -> settleLocked(ctx, ticket, refused));
         } catch (UnrecordablePublishException e) {
             log.error("survey {} was published by the gateway (request {}) but could not be recorded: {}; "
-                    + "marked pending_reconciliation", ticket.surveyId(), ticket.requestId(), e.getMessage());
+                    + "marked pending_reconciliation", ticket.surveyId(), ticket.requestId(), e.getMessage(), e);
             GatewayOutcome unknown = new GatewayOutcome.Unknown("unrecordable: " + e.getMessage());
             return tenantScope.call(ctx.tenantId(), () -> settleLocked(ctx, ticket, unknown));
         }
@@ -142,6 +163,7 @@ class PublishSettlement {
 
     private PublishOutcome recordPublished(TenantContext ctx, Ticket ticket, GatewayResult result, SurveyRow row) {
         requireEnforcedPolicy(ticket, result);
+        requireIssuedInvitations(ticket, result);
         GatewayBinding binding = requireMatchingBinding(ticket, result.binding());
         int versionNo = versions.insert(ctx.tenantId(), ticket.surveyId(), ticket.requestId(), ticket.draftVersion(),
                 ticket.definition(), binding, ctx.actorId());
@@ -152,6 +174,9 @@ class PublishSettlement {
         }
         attempts.complete(ticket.requestId(), PublishAttemptRepository.PUBLISHED, 200, null, List.of(), null);
         surveys.markSettled(ticket.surveyId(), SurveyStatus.PUBLISHED, versionNo);
+        // 必须在 markSettled 之后：登记映射要认"当前在线的已发布版本"，那正是刚写进去的这一版。
+        registerInvitations(ctx, ticket, result, new SurveyParticipantSource.Target(
+                versionNo, binding.engineInstance(), binding.surveyId()));
         approvalGate.onPublished(ctx, ticket.surveyId(), ticket.draftVersion(), ticket.requestId());
         audit.record(ctx, SurveyAudit.PUBLISH, ticket.surveyId(), "version=" + versionNo
                 + " engine=" + binding.engineInstance() + " sid=" + binding.surveyId()
@@ -160,12 +185,52 @@ class PublishSettlement {
                 versions.find(ticket.surveyId(), versionNo).orElseThrow());
     }
 
+    /**
+     * 定义带了多少个参与者，回执就必须回读回多少个邀请码（契约 publish-gateway-v1 v1.2 要求同序同长）。
+     * 对不上就判发布失败：平台拿不到码却登记路由，等于上线一份"要邀请码、却没人有码"的问卷，
+     * 而且这是唯一能当场发现的地方。
+     */
+    private void requireIssuedInvitations(Ticket ticket, GatewayResult result) {
+        int expected = definitions.parse(ticket.definition()).path(SurveyDefinitions.PARTICIPANTS).size();
+        int reported = result.invitations().size();
+        if (expected != reported) {
+            throw new UnusablePublishException("the gateway published " + expected + " participants but returned "
+                    + reported + " invitation codes", result.surveyId());
+        }
+    }
+
+    /**
+     * 把邀请码登记成"某个联系人在这一版问卷上的令牌"（WP-18）。邀请码是能直接进入问卷的凭据：
+     * 只在本事务里经过一次，随即由通讯录模块写进映射表，<b>不</b>进审计、日志或版本快照。
+     *
+     * <p>失败要分清两类：回执本身不可用（认不出的 ref、同一个人两条、两人共用一个码）重发也是同一份
+     * 存档回执，属<b>确定失败</b>；其余（数据库不可用之类）才可能是瞬时的，转待核对等下一次核对。
+     */
+    private void registerInvitations(TenantContext ctx, Ticket ticket, GatewayResult result,
+            SurveyParticipantSource.Target target) {
+        if (result.invitations().isEmpty()) {
+            return;
+        }
+        SurveyParticipantSource source = participants.orElseThrow(() -> new UnrecordablePublishException(
+                "invitation codes came back but no participant source is registered"));
+        try {
+            source.registerInvitations(ctx, ticket.surveyId(), target, result.invitations());
+        } catch (UnusableInvitationsException e) {
+            throw new UnusablePublishException("invitation codes could not be mapped to contacts: "
+                    + e.getMessage(), result.surveyId());
+        } catch (RuntimeException e) {
+            // 可能是瞬时的：整笔回滚、转待核对，同一 requestId 重试拿到的是同一份存档回执，码不会丢。
+            throw new UnrecordablePublishException("invitation codes could not be mapped to contacts: "
+                    + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
+        }
+    }
+
     private void registerRoute(TenantContext ctx, Ticket ticket, GatewayBinding binding) {
         try {
             routes.registerPublished(ctx.tenantId(), ticket.surveyId(), binding.engineInstance(),
                     binding.surveyId(), ctx.actorId(), ctx.traceId());
         } catch (ConflictException | NotFoundException e) {
-            throw new UnrecordablePublishException("route registration failed: " + e.getMessage());
+            throw new UnrecordablePublishException("route registration failed: " + e.getMessage(), e);
         }
     }
 
@@ -181,7 +246,7 @@ class PublishSettlement {
             routes.switchPublished(ctx.tenantId(), ticket.surveyId(), live.engineInstanceId(), live.engineSid(),
                     binding.engineInstance(), binding.surveyId(), ctx.actorId(), ctx.traceId());
         } catch (ConflictException | NotFoundException e) {
-            throw new UnrecordablePublishException("route switch failed: " + e.getMessage());
+            throw new UnrecordablePublishException("route switch failed: " + e.getMessage(), e);
         }
         retirements.insert(ctx.tenantId(), ticket.surveyId(), liveVersion, newVersion, live.engineInstanceId(),
                 live.engineSid());
@@ -201,23 +266,23 @@ class PublishSettlement {
         try {
             expected = AccessPolicyDigest.expected(ticket.definition());
         } catch (RuntimeException e) {
-            throw new UnenforcedPolicyException(
+            throw new UnusablePublishException(
                     "the platform cannot recompute the expected policyDigest: " + e.getMessage(), sid);
         }
         String reported = result.policyDigest();
         if (expected.isEmpty()) {
             if (reported != null) {
-                throw new UnenforcedPolicyException(
+                throw new UnusablePublishException(
                         "the gateway reported a policyDigest for a definition that carries no plugin policy", sid);
             }
             return;
         }
         if (reported == null) {
-            throw new UnenforcedPolicyException("the gateway returned no policyDigest for a definition that "
+            throw new UnusablePublishException("the gateway returned no policyDigest for a definition that "
                     + "carries an access policy; it may be an old gateway that dropped the policy", sid);
         }
         if (!expected.get().equalsIgnoreCase(reported)) {
-            throw new UnenforcedPolicyException(
+            throw new UnusablePublishException(
                     "policyDigest mismatch: the gateway enforced a different access policy", sid);
         }
     }

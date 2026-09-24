@@ -5,6 +5,7 @@ import cn.mjy.platform.survey.gateway.DriftOutcome;
 import cn.mjy.platform.survey.gateway.GatewayBinding;
 import cn.mjy.platform.survey.gateway.GatewayCloseRequest;
 import cn.mjy.platform.survey.gateway.GatewayDriftRequest;
+import cn.mjy.platform.survey.gateway.GatewayInvitation;
 import cn.mjy.platform.survey.gateway.GatewayOutcome;
 import cn.mjy.platform.survey.gateway.GatewayRequest;
 import cn.mjy.platform.survey.gateway.GatewayResult;
@@ -38,6 +39,7 @@ public class FakePublishGateway implements PublishGatewayClient {
     public static final String FINGERPRINT = "fm1:74e0d199d9839cdc";
 
     private static final AtomicInteger NEXT_SID = new AtomicInteger(700_000);
+    private static final AtomicInteger NEXT_TOKEN = new AtomicInteger(900_000);
 
     private final JsonMapper json;
     private final List<GatewayRequest> calls = new CopyOnWriteArrayList<>();
@@ -191,7 +193,56 @@ public class FakePublishGateway implements PublishGatewayClient {
         return published(request, json.readTree(request.definitionJson()), digest);
     }
 
+    /** 坏掉的网关：报告已发布，却没有回读任何邀请码（定义明明带着参与者）。 */
+    public GatewayOutcome publishedWithoutInvitations(GatewayRequest request) {
+        JsonNode definition = json.readTree(request.definitionJson());
+        return published(request, definition, AccessPolicyDigest.expected(definition).orElse(null), List.of());
+    }
+
+    /** 坏掉的网关：两个人拿到同一个邀请码（真网关会当场失败并回滚，这里模拟它没有）。 */
+    public GatewayOutcome publishedWithOneCodeForEveryone(GatewayRequest request, List<String> refs) {
+        JsonNode definition = json.readTree(request.definitionJson());
+        String shared = "tok-" + NEXT_TOKEN.incrementAndGet();
+        List<GatewayInvitation> sharedCodes = new ArrayList<>();
+        for (int index = 0; index < refs.size(); index++) {
+            sharedCodes.add(new GatewayInvitation(index, refs.get(index), shared));
+        }
+        return published(request, definition, AccessPolicyDigest.expected(definition).orElse(null),
+                List.copyOf(sharedCodes));
+    }
+
+    /** 回执里的邀请码指向给定的 ref（用来模拟回执认错人）。 */
+    public GatewayOutcome publishedWithInvitationRefs(GatewayRequest request, List<String> refs) {
+        JsonNode definition = json.readTree(request.definitionJson());
+        return published(request, definition, AccessPolicyDigest.expected(definition).orElse(null),
+                invitations(refs));
+    }
+
     private GatewayOutcome published(GatewayRequest request, JsonNode definition, String policyDigest) {
+        return published(request, definition, policyDigest, invitations(refsOf(definition)));
+    }
+
+    /** 真网关的做法：引擎逐条签发 token，按位置配回定义里的 ref。 */
+    private static List<GatewayInvitation> invitations(List<String> refs) {
+        List<GatewayInvitation> invitations = new ArrayList<>();
+        for (int index = 0; index < refs.size(); index++) {
+            invitations.add(new GatewayInvitation(index, refs.get(index),
+                    "tok-" + NEXT_TOKEN.incrementAndGet()));
+        }
+        return List.copyOf(invitations);
+    }
+
+    private static List<String> refsOf(JsonNode definition) {
+        List<String> refs = new ArrayList<>();
+        for (JsonNode participant : definition.path("participants")) {
+            JsonNode ref = participant.get("ref");
+            refs.add(ref == null || ref.isNull() ? null : ref.asString());
+        }
+        return refs;
+    }
+
+    private GatewayOutcome published(GatewayRequest request, JsonNode definition, String policyDigest,
+            List<GatewayInvitation> invitations) {
         int sid = NEXT_SID.incrementAndGet();
         List<GatewayBinding.QuestionBinding> questions = new ArrayList<>();
         int column = 100;
@@ -207,7 +258,7 @@ public class FakePublishGateway implements PublishGatewayClient {
                 definition.get("uuid").asString(), COMPILER_VERSION, "fm1", FINGERPRINT,
                 definition.get("language").asString(), "2026-09-22T08:00:00Z", questions);
         return new GatewayOutcome.Published(
-                new GatewayResult(true, sid, null, List.of(), false, null, binding, policyDigest));
+                new GatewayResult(true, sid, null, List.of(), false, null, binding, policyDigest, invitations));
     }
 
     /**

@@ -21,6 +21,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .auth import SIGNATURE_HEADER, TIMESTAMP_HEADER, AuthError, verify
+from .channel import (
+    MAX_QUESTION_CODES,
+    ChannelError,
+    ExtensionAnswer,
+    ExtensionAnswerClient,
+)
 from .engines import EngineConfig, is_valid_instance_id
 from .ranking import (
     RankingColumns,
@@ -43,12 +49,30 @@ MAX_FIELDS = 5000
 MAX_ID_SPAN = 200
 
 _FIELDS = frozenset({"engineInstanceId", "surveyId", "responseIds", "fields"})
+#: 可选字段并集：``includeRespondent`` 是邀请码回读（ADR 0016 缺口 b），
+#: ``generation`` ＋ ``extensionQuestions`` 是扩展表作答（ADR 0018 决定 9）。
+#: 三者互相正交，可以同时出现。
+_OPTIONAL_FIELDS = frozenset({"includeRespondent", "generation", "extensionQuestions"})
+_GENERATION = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,35}\Z")
+#: 答卷表里的参与者令牌列。只能经 includeRespondent 走匿名判定后拿，不能当普通列请求
+#: （否则匿名闸门一绕就过）。
 _FIELDNAME = re.compile(r"\A[A-Za-z0-9_#]{1,64}\Z")
+_QUESTION_CODE = re.compile(r"\A[A-Za-z0-9_]{1,64}\Z")
 _ID_COLUMN = "id"
+_TOKEN_COLUMN = "token"
 #: 表里没有任何答卷（或答卷表不存在）：不是错误，请求的答卷全都不在。
 _EMPTY_ERRORS = frozenset({"ERR_NO_DATA", "ERR_NO_RESPONSE_TABLE"})
 
 TransportFactory = Callable[[EngineConfig], Transport]
+#: 返回 None ＝ 这台引擎没开通道（没配通道密钥）。调用方据此失败关闭。
+ChannelFactory = Callable[[EngineConfig], Optional[ExtensionAnswerClient]]
+
+
+def _http_channel(config: EngineConfig, now: Callable[[], float]) -> Optional[ExtensionAnswerClient]:
+    if not config.channel_secret:
+        return None
+    return ExtensionAnswerClient.from_rpc_url(
+        config.rpc_url, config.instance_id, config.channel_secret, now=now)
 
 
 class InvalidReadRequest(ValueError):
@@ -65,6 +89,21 @@ class ReadRequest:
     survey_id: int
     response_ids: Tuple[int, ...]
     fields: Tuple[str, ...]
+    #: 是否要回答"这份答卷是用哪个邀请码答的"（ADR 0016 缺口 (b)）。
+    include_respondent: bool = False
+    #: 副表自然键的一段；只有要读扩展表作答时才有（ADR 0018 决定 9）。
+    generation: Optional[str] = None
+    extension_questions: Tuple[str, ...] = ()
+
+    def wants_extensions(self) -> bool:
+        return self.generation is not None and bool(self.extension_questions)
+
+
+@dataclass(frozen=True)
+class AnsweredResponse:
+    values: Dict[str, Optional[str]]
+    #: 参与者令牌；没要、问卷匿名、或该答卷没有令牌时为 None。
+    token: Optional[str] = None
 
 
 def parse_read_request(body: bytes) -> ReadRequest:
@@ -72,20 +111,53 @@ def parse_read_request(body: bytes) -> ReadRequest:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         raise InvalidReadRequest("body is not UTF-8 JSON") from None
-    if not isinstance(payload, dict) or set(payload) != _FIELDS:
-        raise InvalidReadRequest("body must be an object with exactly {}".format(sorted(_FIELDS)))
+    if not isinstance(payload, dict) or not _FIELDS <= set(payload) <= (_FIELDS | _OPTIONAL_FIELDS):
+        raise InvalidReadRequest("body must be an object with {} and optionally {}".format(
+            sorted(_FIELDS), sorted(_OPTIONAL_FIELDS)))
+    include_respondent = payload.get("includeRespondent", False)
+    if not isinstance(include_respondent, bool):
+        raise InvalidReadRequest("includeRespondent must be a boolean")
     instance = payload["engineInstanceId"]
     if not is_valid_instance_id(instance):
         raise InvalidReadRequest("engineInstanceId is not a valid instance id")
     survey_id = payload["surveyId"]
     if not _is_positive_int(survey_id):
         raise InvalidReadRequest("surveyId must be a positive integer")
+    questions = _extension_questions(payload.get("extensionQuestions"))
+    generation = _generation(payload.get("generation"))
+    if questions and generation is None:
+        # 代次是副表自然键的一段。没有它就无法保证不串代次，宁可拒绝也不读。
+        raise InvalidReadRequest("extensionQuestions requires generation")
     return ReadRequest(
         engine_instance_id=instance,
         survey_id=survey_id,
         response_ids=_response_ids(payload["responseIds"]),
-        fields=_fields(payload["fields"]),
+        # 只要"这份答卷是谁交的"或只要扩展表作答时，都不必多请求一列无关作答。
+        fields=_fields(payload["fields"], allow_empty=include_respondent or bool(questions)),
+        include_respondent=include_respondent,
+        generation=generation,
+        extension_questions=questions,
     )
+
+
+def _generation(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _GENERATION.match(value):
+        raise InvalidReadRequest("generation is not a valid generation id")
+    return value
+
+
+def _extension_questions(value: Any) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or len(value) > MAX_QUESTION_CODES:
+        raise InvalidReadRequest("extensionQuestions must hold at most {} codes".format(MAX_QUESTION_CODES))
+    if not all(isinstance(item, str) and _QUESTION_CODE.match(item) for item in value):
+        raise InvalidReadRequest("extensionQuestions must be question codes")
+    if len(set(value)) != len(value):
+        raise InvalidReadRequest("extensionQuestions must be distinct")
+    return tuple(value)
 
 
 def _response_ids(value: Any) -> Tuple[int, ...]:
@@ -96,13 +168,17 @@ def _response_ids(value: Any) -> Tuple[int, ...]:
     return tuple(sorted(value))
 
 
-def _fields(value: Any) -> Tuple[str, ...]:
-    if not isinstance(value, list) or not 0 < len(value) <= MAX_FIELDS:
-        raise InvalidReadRequest("fields must hold 1..{} names".format(MAX_FIELDS))
+def _fields(value: Any, allow_empty: bool = False) -> Tuple[str, ...]:
+    low = 0 if allow_empty else 1
+    if not isinstance(value, list) or not low <= len(value) <= MAX_FIELDS:
+        raise InvalidReadRequest("fields must hold {}..{} names".format(low, MAX_FIELDS))
     if not all(isinstance(item, str) and _FIELDNAME.match(item) for item in value):
         raise InvalidReadRequest("fields must be engine column names")
     if _ID_COLUMN in value or len(set(value)) != len(value):
         raise InvalidReadRequest("fields must be distinct and must not include id")
+    if _TOKEN_COLUMN in value:
+        # 当普通列拿就绕过了匿名判定。要令牌只能走 includeRespondent。
+        raise InvalidReadRequest("the token column must be requested with includeRespondent")
     return tuple(value)
 
 
@@ -122,7 +198,21 @@ def id_ranges(ids: Sequence[int], max_span: int = MAX_ID_SPAN) -> List[Tuple[int
 
 
 class ExportClient(LazyLoginClient):
-    """只读用的 RemoteControl 会话：只加一个 export_responses 调用。"""
+    """只读用的 RemoteControl 会话：export_responses，外加一次匿名判定。"""
+
+    def is_anonymized(self, survey_id: int) -> bool:
+        """问卷是否匿名。判定不出来就当匿名（fail closed，不发令牌）。"""
+        try:
+            properties = self.get_survey_properties(survey_id)
+        except RpcError:
+            log.warning("could not read the anonymity setting of sid %s; withholding tokens", survey_id)
+            return True
+        value = properties.get("anonymized")
+        if not isinstance(value, str):
+            log.warning("sid %s reports no anonymity setting; withholding tokens", survey_id)
+            return True
+        # 引擎认 Y/N/I，只有 Y 算匿名（Survey::isAnonymized 也是 === 'Y'）。
+        return value.strip().upper() == "Y"
 
     def export_json(self, survey_id: int, lo: int, hi: int, columns: Sequence[str]) -> Optional[bytes]:
         """区间内的导出文档（JSON 字节）；表里没有任何答卷时返回 None。"""
@@ -146,17 +236,19 @@ def read_answers(
     client: ExportClient,
     request: ReadRequest,
     layouts: Sequence[RankingColumns] = (),
-) -> Dict[int, Dict[str, Optional[str]]]:
+    with_token: bool = False,
+) -> Dict[int, AnsweredResponse]:
     """按区间调用导出，按位置把每条记录还原为 列名 → 值，只保留请求的答卷号。
 
     ``layouts`` 是这份问卷的排序题列形状：它们的名次列没有物理列，值由主列 JSON 摊出来。
+    ``with_token`` 时多读一列参与者令牌；它不属于作答值，不进 ``values``。
     """
     wanted = set(request.response_ids)
     ranking = requested_columns(layouts, request.fields)
     # 名次要从主列算，主列没被请求时多读一列，应答时再投影掉。
     read_fields = request.fields + missing_main_columns(ranking, request.fields)
-    columns = (_ID_COLUMN,) + read_fields
-    found: Dict[int, Dict[str, Optional[str]]] = {}
+    columns = (_ID_COLUMN,) + read_fields + ((_TOKEN_COLUMN,) if with_token else ())
+    found: Dict[int, AnsweredResponse] = {}
     for lo, hi in id_ranges(request.response_ids):
         document = client.export_json(request.survey_id, lo, hi, columns)
         if document is None:
@@ -166,8 +258,11 @@ def read_answers(
             rid = _as_response_id(values[0])
             if rid not in wanted:
                 continue
-            row = {name: _text(value) for name, value in zip(read_fields, values[1:])}
-            found[rid] = _project(row, ranking, request.fields)
+            answers = values[1:1 + len(read_fields)]
+            row = {name: _text(value) for name, value in zip(read_fields, answers)}
+            # 没用令牌进场的答卷在这一列是空串（非匿名卷也可能有匿名作答），当作没有。
+            token = (_text(values[-1]) or None) if with_token else None
+            found[rid] = AnsweredResponse(_project(row, ranking, request.fields), token)
     return found
 
 
@@ -235,12 +330,14 @@ class ResponseReadService:
         secret: bytes,
         transport_factory: TransportFactory = http_transport,
         now: Callable[[], float] = time.time,
+        channel_factory: Optional[ChannelFactory] = None,
     ):
         self._engines = engines
         self._secret = secret
         self._transport_factory = transport_factory
         self._now = now
         self._layouts = RankingLayoutCache(now)
+        self._channel_factory = channel_factory or (lambda config: _http_channel(config, now))
 
     def read(self, headers: Mapping[str, str], body: bytes) -> Response:
         lowered = {str(name).lower(): value for name, value in headers.items()}
@@ -270,7 +367,11 @@ class ResponseReadService:
                 (engine.instance_id, request.survey_id),
                 lambda: ranking_columns(client.get_fieldmap(request.survey_id)),
             )
-            found = read_answers(client, request, layouts)
+            # 匿名卷永不给令牌：引擎只在非匿名时给答卷表建 token 列
+            # （SurveyActivator.php:253），但问卷可以先以非匿名激活、写好列与值，
+            # 之后再把 anonymized 改成 Y——列和数据都还在，所以按当前设置判定。
+            named = request.include_respondent and not client.is_anonymized(request.survey_id)
+            found = read_answers(client, request, layouts, with_token=named)
         except RpcError as error:
             log.warning("response read on %s sid %s: RemoteControl %s failed",
                         engine.instance_id, request.survey_id, error.method)
@@ -283,11 +384,58 @@ class ResponseReadService:
             return _json(500, {"error": "internal_error"})
         finally:
             _logout(client)
+        extensions: Dict[int, Dict[str, ExtensionAnswer]] = {}
+        if request.wants_extensions():
+            try:
+                extensions = self._read_extensions(engine, request)
+            except ChannelError as error:
+                # 失败关闭：绝不返回「看着完整、其实缺了扩展题」的一页（ADR 0013 决定 8）。
+                log.warning("extension answers on %s sid %s: %s",
+                            engine.instance_id, request.survey_id, error)
+                return _json(502, {"error": "engine_error"})
         missing = [rid for rid in request.response_ids if rid not in found]
-        log.info("response read on %s sid %s: %d found, %d missing",
-                 engine.instance_id, request.survey_id, len(found), len(missing))
-        responses = [{"id": rid, "values": found[rid]} for rid in request.response_ids if rid in found]
-        return _json(200, {"responses": responses, "missing": missing})
+        log.info("response read on %s sid %s: %d found, %d missing, %d with extension answers",
+                 engine.instance_id, request.survey_id, len(found), len(missing), len(extensions))
+        responses = []
+        for rid in request.response_ids:
+            if rid not in found:
+                continue
+            item: Dict[str, Any] = {"id": rid, "values": found[rid].values}
+            if request.include_respondent:
+                # 要了就一定有这个键；匿名、无令牌、判定不出来都是 null。
+                item["token"] = found[rid].token
+            responses.append(item)
+        payload: Dict[str, Any] = {"responses": responses, "missing": missing}
+        if request.wants_extensions():
+            payload["extensionAnswers"] = _extension_payload(extensions)
+        return _json(200, payload)
+
+    def _read_extensions(
+        self, engine: EngineConfig, request: ReadRequest
+    ) -> Dict[int, Dict[str, ExtensionAnswer]]:
+        channel = self._channel_factory(engine)
+        if channel is None:
+            # 配置漏了通道密钥就安静地少返回扩展题，等于一次静默的数据缺失。
+            raise ChannelError("engine {} has no plugin channel configured".format(engine.instance_id))
+        return channel.read(
+            request.survey_id, request.generation, request.response_ids, request.extension_questions)
+
+
+def _extension_payload(
+    extensions: Mapping[int, Mapping[str, ExtensionAnswer]]
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """答卷号转成十进制字符串键（JSON 对象键只能是字符串），行按原序展开。"""
+    payload: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for response_id, questions in extensions.items():
+        payload[str(response_id)] = {
+            code: {
+                "structureVersion": answer.structure_version,
+                "isValid": answer.is_valid,
+                "rows": [dict(row) for row in answer.rows],
+            }
+            for code, answer in questions.items()
+        }
+    return payload
 
 
 def _logout(client: RemoteControlClient) -> None:

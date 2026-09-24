@@ -1,121 +1,41 @@
-"""WP-02 切片 02.3：平台题型主题（themeOptions）的 422 校验与编译产物。
+"""WP-02 平台题型主题：注册表、``themeOptions`` 的 422 校验，以及展示型主题的编译产物。
 
 主题只换展示，不改答卷列的形状，所以每一条都顺带证明 ``expected_rows`` 与结构指纹没有变。
-副表主题（自增表格、热力图）另外证明绑定记录里的副表声明与结构摘要。
+副表主题（自增表格、热力图、循环评价、图片 PK、货架）在 test_question_side_tables.py。
 """
 
 import json
 import unittest
-import xml.etree.ElementTree as ElementTree
 
-from pubgw.compiler import LssCompiler
-from pubgw.fieldmap import binding_map, definition_signature, parse_fieldmap
+from pubgw.fieldmap import definition_signature
 from pubgw.qtypes import expected_rows
-from pubgw.questions.themes import THEMES, structure_digest
-from pubgw.validate import validate_definition
+from pubgw.questions.themes import THEMES
 
-from .fixtures import fieldmap_for
-from .qtype_fixtures import answer, definition_with, first_question, question, sub
-
-TABLE_COLUMNS = [
-    {"code": "item", "label": "物品", "type": "text", "required": True, "maxLength": 40},
-    {"code": "qty", "label": "数量", "type": "integer", "required": True, "min": 1, "max": 99},
-]
-
-
-def issues(*questions, version=1):
-    report = validate_definition(definition_with(*questions, version=version))
-    return [(issue.code, issue.path) for issue in report.issues]
-
-
-def codes(*questions, version=1):
-    return [code for code, _ in issues(*questions, version=version)]
-
-
-def compile_attributes(*questions, code="Q1"):
-    tree = ElementTree.fromstring(LssCompiler().compile(definition_with(*questions)).lss)
-    rows = [{child.tag: (child.text or "") for child in row}
-            for row in tree.findall("question_attributes/rows/row")]
-    qids = {row.find("title").text: row.find("qid").text
-            for row in tree.findall("questions/rows/row")}
-    return {row["attribute"]: row["value"] for row in rows if row["qid"] == qids[code]}
-
-
-def theme_row(*questions, code="Q1"):
-    tree = ElementTree.fromstring(LssCompiler().compile(definition_with(*questions)).lss)
-    for row in tree.findall("questions/rows/row"):
-        if row.find("title").text == code:
-            node = row.find("question_theme_name")
-            return "" if node is None or node.text is None else node.text
-    raise AssertionError("no question row for " + code)
-
-
-# ------------------------------------------------------------------ 各主题的样例题
-
-
-def collapsible(**options):
-    payload = {"summary": "第二部分：家庭情况"}
-    payload.update(options)
-    return question("X", code="QSEC", theme="mjy-collapsible", themeOptions=payload)
-
-
-def scan(max_length=64, **options):
-    payload = dict(options)
-    extra = {"theme": "mjy-scan-input", "themeOptions": payload}
-    if max_length is not None:
-        extra["maxLength"] = max_length
-    return question("S", code="QSCAN", **extra)
-
-
-def grouped(qtype="L", **options):
-    payload = {"groups": [{"label": "水果", "codes": ["A1", "A2"]}, {"label": "蔬菜", "codes": ["A3"]}]}
-    payload.update(options)
-    extra = {"theme": "mjy-grouped-options", "themeOptions": payload}
-    if qtype == "L":
-        extra["answers"] = [answer("A1"), answer("A2"), answer("A3")]
-    else:
-        extra["subquestions"] = [sub("A1"), sub("A2"), sub("A3")]
-    return question(qtype, code="QGRP", **extra)
-
-
-def stepper(**options):
-    return question("F", code="QSTEP", theme="mjy-matrix-stepper", themeOptions=dict(options),
-                    answers=[answer("A1"), answer("A2")], subquestions=[sub("R1"), sub("R2")])
-
-
-def inline_blank(**options):
-    payload = {"blankMaxLength": 30}
-    payload.update(options)
-    return question("P", code="QBLANK", theme="mjy-inline-blank", themeOptions=payload,
-                    subquestions=[sub("S1"), sub("S2")])
-
-
-def table(**options):
-    payload = {"structureVersion": "rt1", "columns": TABLE_COLUMNS, "minRows": 1, "maxRows": 5}
-    payload.update(options)
-    return question("T", code="QTABLE", theme="mjy-repeating-table", themeOptions=payload)
-
-
-def heatmap(**options):
-    payload = {"structureVersion": "hm1", "image": "https://assets.example.invalid/store.png", "maxPoints": 3}
-    payload.update(options)
-    return question("T", code="QHEAT", theme="mjy-heatmap", themeOptions=payload)
-
-
-ALL_THEMED = (collapsible(), scan(), grouped(), stepper(), inline_blank(), table(), heatmap())
-
-
-# ------------------------------------------------------------------ 注册表
+from .qtype_fixtures import definition_with, first_question, question
+from .theme_fixtures import (
+    ALL_THEMED, THEME_ROOT, codes, collapsible, compile_attributes, grouped, inline_blank, issues,
+    scan, stepper, table, theme_row, view_folder,
+)
 
 
 class RegistryTest(unittest.TestCase):
     def test_every_registered_theme_has_a_real_theme_directory(self):
-        from pathlib import Path
-
-        root = Path(__file__).resolve().parents[4] / "themes/question"
         for name in THEMES:
             with self.subTest(theme=name):
-                self.assertTrue((root / name).is_dir(), "{} 没有对应的题型主题目录".format(name))
+                self.assertTrue((THEME_ROOT / name).is_dir(), "{} 没有对应的题型主题目录".format(name))
+
+    def test_every_registered_type_has_its_own_view_folder(self):
+        """一个主题目录可以覆盖多个基础题型，但**每个题型都要有自己的 config.xml**：
+
+        引擎按 ``survey/questions/answer/<基础题型目录>`` 找视图与资产
+        （``QuestionTemplate::getTemplatePath``），少一个目录就是静默降级。
+        """
+        for name, spec in THEMES.items():
+            for qtype in spec.types:
+                with self.subTest(theme=name, type=qtype):
+                    folder = view_folder(name, qtype)
+                    self.assertTrue((folder / "config.xml").is_file(),
+                                    "{} 缺少 {} 的 config.xml".format(name, qtype))
 
     def test_every_registered_theme_is_accepted_on_its_own_type(self):
         for sample in ALL_THEMED:
@@ -224,10 +144,6 @@ class GroupedOptionsTest(unittest.TestCase):
         )
         self.assertNotIn(" ", value)
 
-    def test_multiple_choice_is_deliberately_out_of_this_batch(self):
-        # 多选的选项行走 rows/*.twig，换主题要连行模板一起接管（02.4）。
-        self.assertEqual(["E_THEME_TYPE_MISMATCH"], codes(grouped("M")))
-
     def test_an_option_outside_the_question_is_rejected(self):
         self.assertEqual(["E_THEME_OPTION_VALUE"], codes(grouped(
             groups=[{"label": "水果", "codes": ["A1", "A2", "A3", "A9"]}])))
@@ -242,6 +158,89 @@ class GroupedOptionsTest(unittest.TestCase):
 
     def test_column_shape_is_unchanged(self):
         self.assertEqual((("QGRP", "", 0),), expected_rows(first_question(grouped())))
+
+
+class GroupedOptionsMultipleChoiceTest(unittest.TestCase):
+    """R02-04 的多选分支（第四波遗留）：多选的「选项」是子题，分组按子题代码写。
+
+    多选行的 checkbox value 恒为 ``Y``，代码只在字段名里，所以这一支必须连
+    ``rows/*.twig`` 一起接管，把选项代码打进行标记（见 themes/question/mjy-grouped-options）。
+    """
+
+    def test_multiple_choice_is_accepted(self):
+        self.assertEqual([], codes(grouped("M")))
+
+    def test_groups_are_compiled_canonically(self):
+        value = compile_attributes(grouped("M"), code="QGRP")["mjy_option_groups"]
+        self.assertEqual(
+            [{"label": "水果", "codes": ["A1", "A2"]}, {"label": "蔬菜", "codes": ["A3"]}], json.loads(value)
+        )
+        self.assertNotIn(" ", value)
+
+    def test_the_theme_name_reaches_the_question_row(self):
+        self.assertEqual("mjy-grouped-options", theme_row(grouped("M"), code="QGRP"))
+
+    def test_a_subquestion_outside_the_question_is_rejected(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(grouped(
+            "M", groups=[{"label": "水果", "codes": ["A1", "A2", "A3", "A9"]}])))
+
+    def test_a_subquestion_left_out_of_every_group_is_rejected(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(grouped(
+            "M", groups=[{"label": "水果", "codes": ["A1", "A2"]}])))
+
+    def test_a_subquestion_in_two_groups_is_rejected(self):
+        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(grouped(
+            "M", groups=[{"label": "甲", "codes": ["A1", "A2", "A3"]}, {"label": "乙", "codes": ["A2"]}])))
+
+    def test_the_other_option_does_not_need_a_group(self):
+        """「其他」不是子题，没有代码可写进分组；它留在原来的列表里，不能因此判 422。"""
+        with_other = dict(grouped("M"), other=True)
+        self.assertEqual([], codes(with_other))
+
+    def test_column_shape_is_unchanged(self):
+        self.assertEqual(
+            (("QGRP", "A1", 0), ("QGRP", "A2", 0), ("QGRP", "A3", 0)),
+            expected_rows(first_question(grouped("M"))),
+        )
+
+    def test_single_choice_still_reads_the_answer_options(self):
+        """单选那一支照旧按 answers 判定：两种题型的「选项」来源不同，不能混用。"""
+        self.assertEqual([], codes(grouped("L")))
+
+
+class GroupedOptionsTemplateTest(unittest.TestCase):
+    """多选分支的行模板接管：目录、行标记与两份资产的一致性。"""
+
+    FOLDER = "multiplechoice"
+    VIEWS = ("answer.twig", "rows/answer_row.twig", "rows/answer_row_other.twig")
+    SCRIPT = "assets/scripts/mjy-grouped-options.js"
+
+    def folder(self, name=FOLDER):
+        return THEME_ROOT / "mjy-grouped-options/survey/questions/answer" / name
+
+    def test_the_option_rows_are_taken_over(self):
+        for view in self.VIEWS:
+            with self.subTest(view=view):
+                self.assertTrue((self.folder() / view).is_file(), "缺少 " + view)
+
+    def test_every_option_row_carries_its_own_code(self):
+        """多选行的 checkbox value 恒为 Y，代码只在字段名里——必须由行模板打上去，
+        否则浏览器端按代码分组时只能靠猜。"""
+        rows = (self.folder() / "rows/answer_row.twig").read_text(encoding="utf-8")
+        # 行标记的取值必须来自子题代码 title，并且经过属性转义后再输出。
+        self.assertRegex(rows, r"""data-mjy-code=['"]\{\{\s*title\|escape\('html_attr'\)\s*\}\}['"]""")
+
+    def test_the_other_row_is_not_claimed_by_any_group(self):
+        """「其他」行没有子题代码，必须留空标记，让脚本把它留在原列表里。"""
+        other = (self.folder() / "rows/answer_row_other.twig").read_text(encoding="utf-8")
+        self.assertNotIn("data-mjy-code=", other)
+
+    def test_the_two_view_folders_ship_the_same_script(self):
+        """资产按 ``<主题>/survey/questions/answer/<基础题型>/assets`` 发布，一个题型一份；
+        两份必须逐字节一致，否则单选与多选的分组行为会悄悄分叉。"""
+        single = (self.folder("listradio") / self.SCRIPT).read_bytes()
+        multi = (self.folder() / self.SCRIPT).read_bytes()
+        self.assertEqual(single, multi, "两个基础题型下的分组脚本不一致")
 
 
 class MatrixStepperTest(unittest.TestCase):
@@ -276,110 +275,6 @@ class InlineBlankTest(unittest.TestCase):
             (("QBLANK", "S1", 0), ("QBLANK", "S1comment", 0), ("QBLANK", "S2", 0), ("QBLANK", "S2comment", 0)),
             expected_rows(first_question(inline_blank())),
         )
-
-
-# ------------------------------------------------------------------ 副表主题
-
-
-class RepeatingTableTest(unittest.TestCase):
-    """R02-13 自增表格：整张表一列 JSON，列定义随 .lss 发布，插件按它投影副表。"""
-
-    def test_columns_and_bounds_compile_to_the_plugin_attributes(self):
-        attributes = compile_attributes(table(), code="QTABLE")
-        self.assertEqual("rt1", attributes["mjy_structure_version"])
-        self.assertEqual("1", attributes["mjy_table_min_rows"])
-        self.assertEqual("5", attributes["mjy_table_max_rows"])
-        self.assertEqual(TABLE_COLUMNS, json.loads(attributes["mjy_table_columns"]))
-
-    def test_a_column_label_defaults_to_its_code(self):
-        value = compile_attributes(table(columns=[{"code": "item"}]), code="QTABLE")["mjy_table_columns"]
-        self.assertEqual([{"code": "item", "label": "item", "type": "text", "required": False}], json.loads(value))
-
-    def test_bad_column_definitions(self):
-        for columns in ([{"code": "1bad"}],
-                        [{"code": "item", "type": "money"}],
-                        [{"code": "item"}, {"code": "item"}],
-                        [{"code": "item", "maxLength": 0}],
-                        [{"code": "item", "min": 1}],
-                        [{"code": "qty", "type": "integer", "min": 9, "max": 1}],
-                        ["not an object"]):
-            with self.subTest(columns=columns):
-                self.assertEqual(["E_THEME_OPTION_VALUE"], codes(table(columns=columns)))
-
-    def test_too_many_columns(self):
-        many = [{"code": "c{}".format(index)} for index in range(41)]
-        self.assertIn("E_THEME_OPTION_VALUE", codes(table(columns=many)))
-
-    def test_row_bounds_must_be_ordered_and_within_the_plugin_hard_limit(self):
-        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(table(minRows=5, maxRows=2)))
-        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(table(maxRows=501)))
-
-    def test_the_answer_is_still_one_engine_column(self):
-        self.assertEqual((("QTABLE", "", 0),), expected_rows(first_question(table())))
-
-
-class HeatmapTest(unittest.TestCase):
-    """R02-19 热力图选区：归一化坐标，范围由平台写死，插件逐格校验。"""
-
-    def test_generated_columns_pin_the_coordinate_range(self):
-        columns = json.loads(compile_attributes(heatmap(), code="QHEAT")["mjy_table_columns"])
-        self.assertEqual(["x", "y"], [column["code"] for column in columns])
-        for column in columns:
-            self.assertEqual(("decimal", True, 0, 1), (column["type"], column["required"], column["min"], column["max"]))
-
-    def test_point_bounds_reach_the_plugin_row_bounds(self):
-        attributes = compile_attributes(heatmap(minPoints=1), code="QHEAT")
-        self.assertEqual(("1", "3"), (attributes["mjy_table_min_rows"], attributes["mjy_table_max_rows"]))
-
-    def test_unordered_point_bounds_are_rejected(self):
-        self.assertEqual(["E_THEME_OPTION_VALUE"], codes(heatmap(minPoints=4, maxPoints=2)))
-
-    def test_the_image_is_required(self):
-        payload = heatmap()
-        del payload["themeOptions"]["image"]
-        self.assertEqual(["E_THEME_OPTION_REQUIRED"], codes(payload))
-
-
-class SideTableBindingTest(unittest.TestCase):
-    """绑定记录里的副表声明：读端据此解释单元格（contracts/question-extension-tables-v1.md）。"""
-
-    def binding(self, *questions, code):
-        definition = definition_with(*questions)
-        rows = parse_fieldmap(fieldmap_for(definition))
-        return {item.code: item for item in binding_map(definition, rows)}[code]
-
-    def test_a_plain_question_declares_no_side_table(self):
-        item = self.binding(question("S", code="QS"), code="QS")
-        self.assertIsNone(item.side_table)
-        self.assertNotIn("sideTable", item.to_dict())
-
-    def test_a_repeating_table_declares_its_columns_and_structure_version(self):
-        declared = self.binding(table(), code="QTABLE").to_dict()["sideTable"]
-        self.assertEqual("question-extension-tables-v1", declared["contract"])
-        self.assertEqual("mjyquestionextensions_answer_cell", declared["cellTable"])
-        self.assertEqual("mjyquestionextensions_answer_state", declared["stateTable"])
-        self.assertEqual("rt1", declared["structureVersion"])
-        self.assertEqual(TABLE_COLUMNS, declared["columns"])
-        self.assertTrue(declared["structureDigest"].startswith("sd1:"))
-
-    def test_a_heatmap_declares_the_generated_columns(self):
-        declared = self.binding(heatmap(), code="QHEAT").to_dict()["sideTable"]
-        self.assertEqual(["x", "y"], [column["code"] for column in declared["columns"]])
-        self.assertEqual("hm1", declared["structureVersion"])
-
-    def test_the_digest_follows_the_structure_and_ignores_labels(self):
-        relabelled = [dict(column, label="改了标签") for column in TABLE_COLUMNS]
-        retyped = [dict(TABLE_COLUMNS[0]), dict(TABLE_COLUMNS[1], type="decimal")]
-        self.assertEqual(structure_digest(TABLE_COLUMNS), structure_digest(relabelled))
-        self.assertNotEqual(structure_digest(TABLE_COLUMNS), structure_digest(retyped))
-
-    def test_the_binding_record_round_trips_the_side_table(self):
-        from pubgw.binding import BindingRecord
-
-        item = self.binding(table(), code="QTABLE")
-        record = BindingRecord("e1", 1, "d", "c", "fm1", "fm1:x", "en", "now", (item,))
-        restored = BindingRecord.from_dict(record.to_dict())
-        self.assertEqual(item.side_table, restored.questions[0].side_table)
 
 
 class ShapeStabilityTest(unittest.TestCase):

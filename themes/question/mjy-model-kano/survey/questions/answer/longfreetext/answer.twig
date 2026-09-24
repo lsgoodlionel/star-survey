@@ -1,0 +1,41 @@
+{#
+/**
+ * MJY 专业模型 KANO：每个功能点正反各问一遍；整份问卷序列化成 JSON 信封。
+ *
+ * 真正被提交的永远是下面那个 textarea（name = 引擎字段名），矩阵只是它的编辑器。
+ * 关掉 JavaScript 时 textarea 直接可见，作答者仍能提交合法的 JSON —— 服务端校验
+ * （MjyQuestionExtensions::beforeSurveyPage）对两条路径一视同仁。
+ *
+ * 量表由模型固定，所以脚本不从属性里另取一份：它就在列定义里，
+ * 与插件校验用的是同一份取值集合。
+ *
+ * @var name  引擎字段名（Q<qid>）
+ * @var dispVal  已存的 JSON 信封
+ * @var question_template_attribute  mjy_model_features / 列定义
+ */
+#}
+<!-- MJY model kano -->
+<div class="{{ coreClass }} {{ extraclass }} mjy-model-kano"
+     data-mjy-model-kano="1"
+     data-mjy-field="{{ name }}"
+     {# 只能用沙箱白名单里的过滤器，别名 e 不在其中（application/config/internal.php:331） #}
+     data-mjy-model="{{ question_template_attribute.mjy_model_name|escape('html_attr') }}"
+     data-mjy-features="{{ question_template_attribute.mjy_model_features|escape('html_attr') }}"
+     data-mjy-columns="{{ question_template_attribute.mjy_table_columns|escape('html_attr') }}">
+
+    <div class="mjy-model-kano__editor" hidden>
+        <table class="table table-bordered mjy-model-kano__grid">
+            <thead><tr class="mjy-model-kano__head"></tr></thead>
+            <tbody class="mjy-model-kano__body"></tbody>
+        </table>
+    </div>
+
+    <textarea
+        class="form-control mjy-model-kano__raw"
+        name="{{ name }}"
+        id="answer{{ name }}"
+        rows="{{ drows }}"
+        aria-labelledby="ls-question-text-{{ basename }}"
+    >{{ dispVal }}</textarea>
+</div>
+<!-- end of answer -->

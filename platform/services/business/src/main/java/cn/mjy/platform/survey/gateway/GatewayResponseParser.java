@@ -36,7 +36,28 @@ final class GatewayResponseParser {
                 bool(result, "rolledBack"),
                 optionalInt(result, "orphanSurveyId"),
                 hasBinding ? binding(binding) : null,
-                optionalText(result, "policyDigest"));
+                optionalText(result, "policyDigest"),
+                invitations(result));
+    }
+
+    /**
+     * 回执里的邀请码（契约 v1.2）。没有这个键就是"这次发布不带参与者"；有就必须条条完整——
+     * 少一个 token 就意味着某个人拿不到码，宁可整份应答判为坏掉，也不要发出打不开的邀请。
+     */
+    private static List<GatewayInvitation> invitations(JsonNode result) {
+        JsonNode node = result.get("invitations");
+        if (node == null || node.isNull()) {
+            return List.of();
+        }
+        if (!node.isArray()) {
+            throw new MalformedResponseException("not an array: invitations");
+        }
+        List<GatewayInvitation> invitations = new ArrayList<>();
+        for (JsonNode item : node) {
+            invitations.add(new GatewayInvitation(
+                    requiredInt(item, "index"), optionalText(item, "ref"), text(item, "token")));
+        }
+        return List.copyOf(invitations);
     }
 
     /**

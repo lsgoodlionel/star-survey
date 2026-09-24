@@ -31,19 +31,20 @@ class ExportFileAssembler {
 
     Written assemble(String key, ExportFormat format, ExportLayout layout, boolean revealSensitive,
             List<String> parts) {
+        List<List<String>> header = layout.responseHeader();
         List<ExportSheet> sheets = List.of(
-                new ExportSheet("responses", "答卷", sink -> {
-                    for (List<String> header : layout.responseHeader()) {
-                        sink.accept(header);
+                new ExportSheet("responses", "答卷", header.size(), layout.variables(), sink -> {
+                    for (List<String> row : header) {
+                        sink.accept(row);
                     }
                     readParts(parts, ExportPartCodec.RESPONSE, sink);
                 }),
-                new ExportSheet("fields", "字段字典", sink -> {
+                ExportSheet.of("fields", "字段字典", 1, sink -> {
                     for (List<String> row : layout.dictionaryRows(revealSensitive)) {
                         sink.accept(row);
                     }
                 }),
-                new ExportSheet("attachments", "附件清单", sink -> {
+                ExportSheet.of("attachments", "附件清单", 1, sink -> {
                     sink.accept(ExportLayout.ATTACHMENT_HEADER);
                     readParts(parts, ExportPartCodec.ATTACHMENT, sink);
                 }));

@@ -6,11 +6,15 @@
       "hd-engine-01": {
         "rpcUrl": "http://engine-01/index.php/admin/remotecontrol",
         "user": "admin",
-        "passwordEnv": "PUBGW_ENGINE_HD01_PASSWORD"
+        "passwordEnv": "PUBGW_ENGINE_HD01_PASSWORD",
+        "channelSecretEnv": "PUBGW_ENGINE_HD01_CHANNEL_SECRET"
       }
     }
 
-口令**只**从 ``passwordEnv`` 指名的环境变量读取，文件里写口令直接拒绝。
+``channelSecretEnv`` 可选，是网关↔插件通道的密钥（ADR 0018）：不配就是这台引擎
+没开通道，读扩展表作答会失败关闭；配了却取不到值则拒绝启动。
+
+口令与密钥**只**从环境变量读取，文件里写明文直接拒绝。
 这是系统边界：任何一处不合法都在启动时抛 ConfigError，绝不带病上线。
 错误信息只提变量名，从不带口令本身。
 """
@@ -24,7 +28,7 @@ from urllib.parse import urlsplit
 
 _INSTANCE_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _ENV_NAME = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
-_FIELDS = frozenset({"rpcUrl", "user", "passwordEnv"})
+_FIELDS = frozenset({"rpcUrl", "user", "passwordEnv", "channelSecretEnv"})
 
 
 class ConfigError(ValueError):
@@ -37,6 +41,9 @@ class EngineConfig:
     rpc_url: str
     user: str
     password: str = field(repr=False)
+    #: 网关↔插件通道的密钥（ADR 0018）。为空＝这台引擎没开通道，读扩展表作答会失败关闭。
+    #: 这里**只**放通道密钥，不放实例密钥：派生是单向的，网关被攻破也伪造不了引擎事件。
+    channel_secret: str = field(default="", repr=False)
 
 
 def is_valid_instance_id(value: Any) -> bool:
@@ -80,7 +87,21 @@ def _engine(instance_id: str, entry: Any, env: Mapping[str, str]) -> EngineConfi
     password = env.get(password_env, "")
     if not password:
         raise ConfigError("{}: environment variable {} is missing or empty".format(where, password_env))
-    return EngineConfig(instance_id=instance_id, rpc_url=rpc_url, user=user, password=password)
+    return EngineConfig(instance_id=instance_id, rpc_url=rpc_url, user=user, password=password,
+                        channel_secret=_channel_secret(entry, env, where))
+
+
+def _channel_secret(entry: Mapping[str, Any], env: Mapping[str, str], where: str) -> str:
+    """可选：没配 ``channelSecretEnv`` 就是没开通道。配了却取不到值则拒绝启动（不带病上线）。"""
+    secret_env = entry.get("channelSecretEnv")
+    if secret_env is None:
+        return ""
+    if not isinstance(secret_env, str) or not _ENV_NAME.match(secret_env.strip()):
+        raise ConfigError("{}: channelSecretEnv is not a valid variable name".format(where))
+    secret = env.get(secret_env.strip(), "")
+    if not secret:
+        raise ConfigError("{}: environment variable {} is missing or empty".format(where, secret_env.strip()))
+    return secret
 
 
 def _required_text(entry: Mapping[str, Any], name: str, where: str) -> str:

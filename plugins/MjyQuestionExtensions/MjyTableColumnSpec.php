@@ -12,10 +12,15 @@ class MjyTableColumnSpec
     public const TYPE_TEXT = 'text';
     public const TYPE_INTEGER = 'integer';
     public const TYPE_DECIMAL = 'decimal';
+    /** 取值集合由平台在发布时声明（R02-11 循环评价用它认评分与评价对象）。 */
+    public const TYPE_ENUM = 'enum';
 
-    private const TYPES = [self::TYPE_TEXT, self::TYPE_INTEGER, self::TYPE_DECIMAL];
+    private const TYPES = [self::TYPE_TEXT, self::TYPE_INTEGER, self::TYPE_DECIMAL, self::TYPE_ENUM];
     private const CODE_PATTERN = '/^[A-Za-z][A-Za-z0-9_]{0,31}$/';
+    /** 取值代码比列代码宽一位：量表常写成 1…5（与网关 _VALUE_CODE_PATTERN 一致）。 */
+    private const VALUE_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/';
     private const MAX_COLUMNS = 40;
+    private const MAX_OPTIONS = 200;
 
     /** @var array<int, array<string, mixed>> */
     private $columns;
@@ -95,7 +100,39 @@ class MjyTableColumnSpec
             'maxLength' => isset($raw['maxLength']) ? (int) $raw['maxLength'] : null,
             'min' => isset($raw['min']) ? (float) $raw['min'] : null,
             'max' => isset($raw['max']) ? (float) $raw['max'] : null,
+            'options' => $type === self::TYPE_ENUM ? self::parseOptions($raw['options'] ?? null, $code) : null,
+            // 唯一列：同一列的非空取值在一次作答里不得重复。
+            'distinct' => !empty($raw['distinct']),
         ];
+    }
+
+    /**
+     * 枚举列的取值代码。写成 ["A","B"] 或 [{"code":"A","label":"优"}] 都认，
+     * 这里只留代码——标签是渲染的事，校验只看代码。
+     *
+     * @param mixed $raw
+     * @return string[]
+     */
+    private static function parseOptions($raw, string $code): array
+    {
+        if (!is_array($raw) || $raw === [] || !self::isList($raw)) {
+            throw new InvalidArgumentException('enum 列必须声明非空的 options：' . $code);
+        }
+        if (count($raw) > self::MAX_OPTIONS) {
+            throw new InvalidArgumentException('enum 列的取值超过上限 ' . self::MAX_OPTIONS . '：' . $code);
+        }
+        $options = [];
+        foreach ($raw as $entry) {
+            $value = is_array($entry) ? ($entry['code'] ?? null) : $entry;
+            if (!is_string($value) || preg_match(self::VALUE_PATTERN, $value) !== 1) {
+                throw new InvalidArgumentException('enum 列的取值代码不合法：' . $code);
+            }
+            if (in_array($value, $options, true)) {
+                throw new InvalidArgumentException('enum 列的取值代码重复：' . $code);
+            }
+            $options[] = $value;
+        }
+        return $options;
     }
 
     /**

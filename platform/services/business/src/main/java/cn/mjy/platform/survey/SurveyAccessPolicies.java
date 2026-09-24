@@ -38,6 +38,15 @@ final class SurveyAccessPolicies {
     private SurveyAccessPolicies() {
     }
 
+    /**
+     * 这份定义是否要求邀请码（{@code policy.access.invitationRequired}）。
+     * 只有它为真时发布才物化参与者；为假时定义里连 {@code participants} 这个键都不该出现。
+     */
+    static boolean invitationRequired(JsonNode definition) {
+        return definition != null
+                && definition.path("policy").path("access").path("invitationRequired").asBoolean(false);
+    }
+
     /** 就地处理 {@code definition}（调用方传入的是自己的副本）；问题追加到 {@code problems}。 */
     static void normalize(ObjectNode definition, List<String> problems) {
         JsonNode policy = definition.get("policy");

@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MJY 心理实验（需求 R02-46）。
+
+  逐个试次呈现刺激、记按了哪个键、用了多少毫秒。引擎没有这个题型，本主题扩展长文本题
+  （type T），把整场实验序列化成 JSON 信封存进长文本列，结构投影进插件副表
+  （platform/contracts/question-extension-tables-v1.md）。
+
+  三列：trial 是枚举＋唯一（只能是声明过的试次，同一试次不能记两次），key 是枚举
+  （只能是声明过的按键），rt 是 [0, maxReactionMs] 的整数。三条约束都在服务端由插件重算，
+  行数被钉死成试次个数——漏做一个试次不是「没答」，是这次实验不完整。
+
+  **正确率不是提交上来的。** 每个试次的正确按键写在 mjy_psych_trials 里，随题目定义留痕；
+  正确与否由平台按「试次的正确按键 vs 作答的按键」推导。让浏览器端提交一列 correct
+  等于让作答者自己宣布答对了，那样的正确率没有任何证据力。
+
+  **计时精度不承诺等同实验室硬件。** rt 由浏览器测量，本主题只保证它被原样、有界地记下来，
+  不声称它是硬件级的反应时。设备元数据（浏览器、屏幕、计时精度）是一次作答一份、
+  不是一个试次一份，塞不进这张一行一试次的副表，归运行时（R08-14），本切片不做。
+
+  answercolumndefinition 把答卷列从默认的 text 提升为 mediumtext
+  （application/models/QuestionTheme.php:775）。这个标签**不能**用 CDATA 包起来。
+-->
+<config>
+    <metadata>
+        <name>mjy-psych-trial</name>
+        <type>question_theme</type>
+        <title>MJY 心理实验</title>
+        <creationDate>2026-09-24</creationDate>
+        <author>MJY Platform</author>
+        <authorEmail>wp02@example.invalid</authorEmail>
+        <authorUrl>https://example.invalid</authorUrl>
+        <copyright>Copyright (C) 2026 MJY Platform</copyright>
+        <license>GNU General Public License version 2 or later</license>
+        <version>1.0</version>
+        <apiVersion>1</apiVersion>
+        <description>心理实验：逐试次呈现刺激并记按键与反应时，结构投影进副表</description>
+        <questionType>T</questionType>
+        <group>Text questions</group>
+        <subquestions>0</subquestions>
+        <answerscales>0</answerscales>
+        <hasdefaultvalues>0</hasdefaultvalues>
+        <assessable>0</assessable>
+        <class>text-long mjy-psych-trial</class>
+        <answercolumndefinition>mediumtext</answercolumndefinition>
+    </metadata>
+
+    <compatibility>
+        <version>7.0</version>
+    </compatibility>
+
+    <files>
+        <css>
+            <filename>scripts/mjy-psych-trial.css</filename>
+        </css>
+        <js>
+            <filename>scripts/mjy-psych-trial.js</filename>
+        </js>
+    </files>
+
+    <attributes>
+        <attribute>
+            <name>mjy_table_columns</name>
+            <category>MJY 心理实验</category>
+            <sortorder>10</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>列定义（JSON）</caption>
+            <help>三列：trial（枚举＋唯一）、key（枚举）与 rt（整数毫秒）</help>
+        </attribute>
+        <attribute>
+            <name>mjy_psych_trials</name>
+            <category>MJY 心理实验</category>
+            <sortorder>20</sortorder>
+            <inputtype>textarea</inputtype>
+            <default></default>
+            <caption>试次（JSON）</caption>
+            <help>形如 [{"code":"T1","label":"第一试次","stimulus":"红","correct":"left"}]；correct 只用于平台推导正确率，不下发给浏览器判分</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_min_rows</name>
+            <category>MJY 心理实验</category>
+            <sortorder>30</sortorder>
+            <inputtype>integer</inputtype>
+            <default>0</default>
+            <caption>最少几个试次</caption>
+            <help>由平台钉死成试次个数，作者改不了</help>
+        </attribute>
+        <attribute>
+            <name>mjy_table_max_rows</name>
+            <category>MJY 心理实验</category>
+            <sortorder>40</sortorder>
+            <inputtype>integer</inputtype>
+            <default>0</default>
+            <caption>最多几个试次</caption>
+            <help>同上；服务端强制，浏览器端只是提示</help>
+        </attribute>
+    </attributes>
+
+    <engine>
+        <load_core_css>true</load_core_css>
+        <load_core_js>true</load_core_js>
+        <show_as_template>true</show_as_template>
+        <show_as_question_type>true</show_as_question_type>
+    </engine>
+</config>

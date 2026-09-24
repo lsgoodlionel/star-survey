@@ -1,0 +1,25 @@
+/* MJY 选项分类（R02-04） */
+.mjy-grouped-options__group {
+    border-left: 3px solid rgba(0, 0, 0, 0.1);
+    margin-bottom: 0.75rem;
+    padding-left: 0.75rem;
+}
+
+.mjy-grouped-options__label {
+    color: #495057;
+    cursor: default;
+    font-weight: 600;
+    margin: 0 0 0.25rem;
+}
+
+details.mjy-grouped-options__group > .mjy-grouped-options__label {
+    cursor: pointer;
+}
+
+.mjy-grouped-options__list {
+    margin: 0;
+}
+
+.mjy-grouped-options__empty {
+    margin: 0;
+}

@@ -30,6 +30,8 @@ class ContactsAudit {
     static final String IMPORT_FINISH = "contacts.import.finish";
     static final String PARTICIPATION_LINK = "contacts.participation.link";
     static final String PARTICIPATION_REVOKE = "contacts.participation.revoke";
+    static final String AUDIENCE_SET = "contacts.audience.set";
+    static final String AUDIENCE_CLEAR = "contacts.audience.clear";
 
     private final AuditLogRepository audit;
 

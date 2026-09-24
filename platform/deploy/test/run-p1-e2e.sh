@@ -19,6 +19,8 @@
 #   respondent: completes the survey over HTTP; engine cron relays the events and the
 #             platform projects the response as engine_completed
 #   idempotency: publish again -> 409 already_published, gateway not called again
+#   restore (ADR 0012 决定 7): version 1 back into the draft without touching the live
+#             version or the public route, then published as version 3 on a third sid
 #   republish (ADR 0012): changed draft -> version 2 on a new sid, public route
 #             switched, old sid expired (not deactivated) and still owning its
 #             response, respondent completes version 2 (response ids restart),
@@ -363,4 +365,35 @@ old_projection="$(platform_tenant_sql "$TENANT_ID" "SELECT state FROM response_p
 [[ "$old_projection" == "engine_completed" ]] || fail "old projection changed to '$old_projection'"
 ok "version 1 projection untouched: sid $SID response $RESPONSE_ID -> engine_completed"
 
-echo "P1 e2e passed ($TEST_DB): survey $SURVEY_ID -> $INSTANCE_ID sid $SID then sid $NEW_SID, responses $RESPONSE_ID and $NEW_RESPONSE_ID ingested"
+step "restore: version 1 back into the draft, then publish it as version 3"
+engine_surveys_before_restore="$(db_query "SELECT COUNT(*) FROM lime_surveys" | tr -d '[:space:]')"
+publish_calls_before_restore="$(gateway_publish_calls)"
+python3 "$DRIVER" --base-url "$PLATFORM_URL" --state "$STATE" restore-v1
+THIRD_SID="$(state_field engineSid)"
+[[ "$THIRD_SID" =~ ^[0-9]+$ && "$THIRD_SID" != "$SID" && "$THIRD_SID" != "$NEW_SID" ]] \
+  || fail "restore+publish did not produce a third engine sid: $THIRD_SID"
+# 恢复本身不调网关；只有随后的发布调一次。
+(("$(gateway_publish_calls)" == publish_calls_before_restore + 1)) \
+  || fail "gateway saw $(gateway_publish_calls) publish calls, expected $((publish_calls_before_restore + 1))"
+(("$(gateway_close_calls)" == 2)) || fail "gateway saw $(gateway_close_calls) close calls, expected 2"
+ok "gateway: one publish for version 3, version 2 closed"
+engine_surveys_restored="$(db_query "SELECT COUNT(*) FROM lime_surveys" | tr -d '[:space:]')"
+((engine_surveys_restored == engine_surveys_before_restore + 1)) \
+  || fail "restore+publish should add exactly one engine survey"
+ok "exactly one more engine survey"
+v1_responses="$(db_query "SELECT COUNT(*) FROM lime_responses_$SID" | tr -d '[:space:]')"
+v2_responses="$(db_query "SELECT COUNT(*) FROM lime_responses_$NEW_SID" | tr -d '[:space:]')"
+((v1_responses == 1 && v2_responses == 1)) \
+  || fail "responses were disturbed: sid $SID has $v1_responses, sid $NEW_SID has $v2_responses, expected 1 each"
+ok "version 1 and version 2 response tables are untouched"
+for sid in "$SID" "$NEW_SID"; do
+  closed="$(db_query "SELECT COUNT(*) FROM lime_surveys WHERE sid = $sid AND active = 'Y' AND expires IS NOT NULL" | tr -d '[:space:]')"
+  [[ "$closed" == "1" ]] || fail "superseded sid $sid is not both active and expired"
+done
+ok "both superseded engine surveys stay active but expired"
+v1_projection="$(platform_tenant_sql "$TENANT_ID" "SELECT state FROM response_projection
+  WHERE engine_instance_id = '$INSTANCE_ID' AND survey_id = $SID AND response_id = $RESPONSE_ID;" | tr -d '[:space:]')"
+[[ "$v1_projection" == "engine_completed" ]] || fail "version 1 projection changed to '$v1_projection'"
+ok "version 1 projection still engine_completed after the restore"
+
+echo "P1 e2e passed ($TEST_DB): survey $SURVEY_ID -> $INSTANCE_ID sid $SID then sid $NEW_SID then sid $THIRD_SID (restored version 1), responses $RESPONSE_ID and $NEW_RESPONSE_ID ingested"

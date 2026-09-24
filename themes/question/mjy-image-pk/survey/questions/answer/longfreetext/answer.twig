@@ -1,0 +1,34 @@
+{#
+/**
+ * MJY 图片 PK：一对一屏，作答者点一张图；整题的选择序列化成一行 JSON 信封。
+ *
+ * 真正被提交的永远是下面那个 textarea（name = 引擎字段名），对比区只是它的编辑器。
+ * 关掉 JavaScript 时 textarea 直接可见，作答者仍能提交合法的 JSON —— 服务端校验
+ * （MjyQuestionExtensions::beforeSurveyPage）对两条路径一视同仁。
+ *
+ * @var name  引擎字段名（Q<qid>）
+ * @var dispVal  已存的 JSON 信封
+ * @var question_template_attribute  mjy_table_columns / mjy_pk_items / mjy_pk_pairs
+ */
+#}
+<!-- MJY image pk -->
+<div class="{{ coreClass }} {{ extraclass }} mjy-image-pk"
+     data-mjy-image-pk="1"
+     data-mjy-field="{{ name }}"
+     {# 只能用沙箱白名单里的过滤器，别名 e 不在其中（application/config/internal.php:331） #}
+     data-mjy-items="{{ question_template_attribute.mjy_pk_items|escape('html_attr') }}"
+     data-mjy-pairs="{{ question_template_attribute.mjy_pk_pairs|escape('html_attr') }}">
+
+    <div class="mjy-image-pk__editor" hidden>
+        <ol class="mjy-image-pk__pairs list-unstyled"></ol>
+    </div>
+
+    <textarea
+        class="form-control mjy-image-pk__raw"
+        name="{{ name }}"
+        id="answer{{ name }}"
+        rows="{{ drows }}"
+        aria-labelledby="ls-question-text-{{ basename }}"
+    >{{ dispVal }}</textarea>
+</div>
+<!-- end of answer -->

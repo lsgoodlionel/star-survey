@@ -1,5 +1,6 @@
 package cn.mjy.platform.response;
 
+import cn.mjy.platform.engine.ResponseState;
 import cn.mjy.platform.response.ExportPlan.PlannedSource;
 import cn.mjy.platform.response.FieldDictionary.FieldEntry;
 import cn.mjy.platform.response.FieldDictionary.OptionLabel;
@@ -28,8 +29,22 @@ final class ExportLayout {
     static final List<String> ATTACHMENT_HEADER = List.of("version", "sid", "responseid", "column", "fieldname",
             "index", "name", "size", "ext", "storedname", "sha256");
 
-    /** 合并后的一列：代码与标签（取最早定义它的版本）。 */
-    record Column(String code, String label) {
+    /** 固定列里可枚举的两列：投影状态与作答状态。统计格式据此写值标签。 */
+    private static final Map<String, List<OptionLabel>> FIXED_OPTIONS = Map.of(
+            "state", List.of(new OptionLabel(ResponseState.IN_PROGRESS.dbValue(), "进行中"),
+                    new OptionLabel(ResponseState.ENGINE_COMPLETED.dbValue(), "已完成"),
+                    new OptionLabel(ResponseState.DELETED.dbValue(), "已删除")),
+            "answersstatus", List.of(new OptionLabel(AnswersStatus.AVAILABLE.wire(), "已取到作答"),
+                    new OptionLabel(AnswersStatus.DELETED.wire(), "答卷已删除"),
+                    new OptionLabel(AnswersStatus.ARCHIVED.wire(), "已被替换的代次"),
+                    new OptionLabel(AnswersStatus.MISSING.wire(), "引擎当前表里没有")));
+
+    /** 合并后的一列：代码、标签与可取值（都取最早定义它的版本）。 */
+    record Column(String code, String label, List<OptionLabel> options) {
+
+        Column {
+            options = List.copyOf(options);
+        }
     }
 
     private final ExportPlan plan;
@@ -56,7 +71,7 @@ final class ExportLayout {
                 if (index == null) {
                     index = merged.size();
                     byCode.put(code, index);
-                    merged.add(new Column(code, field.label()));
+                    merged.add(new Column(code, field.label(), field.options()));
                 }
                 mine.put(field.fieldname(), index);
             }
@@ -85,6 +100,17 @@ final class ExportLayout {
 
     Map<String, Integer> positions(int version) {
         return positions.getOrDefault(version, Map.of());
+    }
+
+    /** 答卷表每一列的变量描述，顺序与表头一致（固定列在前）。 */
+    List<ExportVariable> variables() {
+        List<ExportVariable> variables = new ArrayList<>(width());
+        for (int i = 0; i < FIXED_CODES.size(); i++) {
+            String code = FIXED_CODES.get(i);
+            variables.add(new ExportVariable(code, FIXED_LABELS.get(i), FIXED_OPTIONS.getOrDefault(code, List.of())));
+        }
+        columns.forEach(c -> variables.add(new ExportVariable(c.code(), c.label(), c.options())));
+        return List.copyOf(variables);
     }
 
     List<List<String>> responseHeader() {

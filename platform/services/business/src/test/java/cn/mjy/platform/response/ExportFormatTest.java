@@ -31,7 +31,7 @@ class ExportFormatTest {
             Arrays.asList("2", "badcontrol￾chars", "\ttab"));
 
     private static ExportSheet sheet(String file, String title, List<List<String>> rows) {
-        return new ExportSheet(file, title, sink -> {
+        return ExportSheet.of(file, title, 2, sink -> {
             for (List<String> row : rows) {
                 sink.accept(row);
             }
