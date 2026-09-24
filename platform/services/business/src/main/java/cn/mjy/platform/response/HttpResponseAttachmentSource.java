@@ -59,8 +59,9 @@ public class HttpResponseAttachmentSource implements ResponseAttachmentSource {
             @Value("${platform.pubgw.secret:}") String secret,
             @Value("${platform.pubgw.attachment-timeout-seconds:120}") long timeoutSeconds,
             JsonMapper json) {
-        this(url == null || url.isBlank() ? null : URI.create(url.endsWith("/") ? url : url + "/"), secret,
-                Duration.ofSeconds(timeoutSeconds), Clock.systemUTC(), json);
+        // 与作答读取共用同一份地址解析：只认 http(s)，别的（或空）一律当成"没配"。
+        this(HttpResponseAnswerSource.parseBase(url), secret, Duration.ofSeconds(timeoutSeconds),
+                Clock.systemUTC(), json);
     }
 
     HttpResponseAttachmentSource(URI baseUrl, String secret, Duration timeout, Clock clock, JsonMapper json) {

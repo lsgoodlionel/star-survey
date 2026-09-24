@@ -112,19 +112,23 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
     }
 
     /**
-     * 附件字节的出口：{@see readfile} 按块写出，**整份文件不进内存**
-     * （ADR 0015 增补四）。先清掉输出缓冲，否则 PHP 会替我们把整份文件攒起来，
-     * 把这条端点唯一的内存保证悄悄抵消掉。
+     * 附件字节的出口：{@see readfile} 按块写出，**整份文件不进内存**（ADR 0015 增补四）。
+     *
+     * 先把输出缓冲**丢掉**（ob_end_clean 而不是 ob_end_flush）：缓冲区里此刻可能攒着
+     * 别处写的字节（开了 display_errors 时的警告、模板的空白行），冲出去就会垫在文件前面，
+     * 让调用方拿到一份**长度对不上、内容被污染**的附件——而它不会报错，只会悄悄坏掉。
+     * 丢掉的那些内容本来也不该出现在一条二进制端点上；真正的故障另有服务端日志。
+     * 留着缓冲同样不行：PHP 会替我们把整份文件攒起来，把这条端点唯一的内存保证抵消掉。
      */
     private function emitFile(MjyChannelFile $file): void
     {
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
         header('Content-Type: application/octet-stream', true, 200);
         header('Content-Length: ' . $file->size());
         header('Cache-Control: no-store');
         header('X-Content-Type-Options: nosniff');
-        while (ob_get_level() > 0) {
-            ob_end_flush();
-        }
         readfile($file->path());
         App()->end();
     }

@@ -182,16 +182,12 @@ public class S3BlobStore implements BlobStore {
         }
     }
 
+    /** 规范化查询串按参数名升序；没有续读令牌时那一项整个不出现（不是留一个空值）。 */
     private String list(String prefix, String continuationToken) throws IOException {
-        StringBuilder query = new StringBuilder("continuation-token=");
-        query.append(continuationToken == null ? "" : encode(continuationToken));
-        query.append("&list-type=2&max-keys=").append(LIST_PAGE_SIZE);
-        query.append("&prefix=").append(encode(prefix));
-        if (continuationToken == null) {
-            // 规范化查询串按参数名升序；没有续读令牌时那一项整个不出现。
-            query = new StringBuilder("list-type=2&max-keys=" + LIST_PAGE_SIZE + "&prefix=" + encode(prefix));
-        }
-        HttpResponse<String> response = send("GET", null, query.toString(), empty(),
+        String token = continuationToken == null ? ""
+                : "continuation-token=" + encode(continuationToken) + "&";
+        String query = token + "list-type=2&max-keys=" + LIST_PAGE_SIZE + "&prefix=" + encode(prefix);
+        HttpResponse<String> response = send("GET", null, query, empty(),
                 HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() / 100 != 2) {
             throw failed("LIST", prefix, response.statusCode());
