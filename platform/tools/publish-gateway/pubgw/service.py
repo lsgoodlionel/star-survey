@@ -289,9 +289,10 @@ class PublishService:
     def _expired(self, request: PublishRequest, stored: ExpiredResult) -> Response:
         """回执过了留存期：给一个明确的终局，平台不能把它当成"没发过"再发一次。"""
         log.error(
-            "request %s: the stored result aged out (original http %s, engine sid=%s, stored at %s); "
-            "the platform has to settle this publish by hand",
+            "request %s: the stored result aged out (original http %s, engine sid=%s, stored at %s, "
+            "carried invitation codes=%s); the platform has to settle this publish by hand",
             request.request_id, stored.original_status, stored.survey_id, _utc(stored.created_at),
+            stored.held_codes,
         )
         return self._json(410, {
             "status": "expired",
@@ -299,8 +300,11 @@ class PublishService:
             "expired": {
                 "originalStatus": stored.original_status,
                 "createdAt": _utc(stored.created_at),
-                "retainedSeconds": self._store.retention.result_seconds,
+                "retainedSeconds": self._store.lifetime_of(stored.held_codes),
                 "surveyId": stored.survey_id,
+                # 带过邀请码的回执按短窗口过期（契约 v1.3）。平台据此知道
+                # "码已经不在了、必须重新签发"，而不是"只是一份过期的回执"。
+                "heldInvitationCodes": stored.held_codes,
             },
         })
 

@@ -1,6 +1,7 @@
 """POST /v1/publish 的业务语义：逐条对照 platform/contracts/publish-gateway-v1.md。"""
 
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -229,6 +230,7 @@ class RetentionTest(ServiceTestCase):
         self.assertEqual(200, body["expired"]["originalStatus"])
         self.assertEqual(first["result"]["surveyId"], body["expired"]["surveyId"])
         self.assertEqual(7 * DAY, body["expired"]["retainedSeconds"])
+        self.assertFalse(body["expired"]["heldInvitationCodes"])
         self.assertEqual(1, engine.methods().count("import_survey"))
 
     def test_the_tombstone_says_when_the_receipt_was_stored(self):
@@ -306,6 +308,84 @@ class RetentionTest(ServiceTestCase):
         self.clock.advance(7 * DAY)
 
         self.assertEqual(410, self.send(service, payload)[0])  # 口令检查在 tearDown 里统一做
+
+
+class InvitationRetentionTest(ServiceTestCase):
+    """邀请码是凭据：带码的回执只活 24 小时，而不是跟着回执躺一周（契约 v1.3）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.clock = MovableClock()
+        self.retention = Retention(result_seconds=7 * DAY, tombstone_seconds=90 * DAY,
+                                   invitation_seconds=DAY)
+
+    def service(self, engine):
+        store = make_store(self.state_dir, clock=self.clock, retention=self.retention)
+        return make_service(engine, self.state_dir, store=store)
+
+    def with_participants(self):
+        payload = sample_payload()
+        payload["participants"] = [
+            {"ref": "contact-7", "email": "p0@example.invalid", "lastname": "P0"},
+            {"ref": "contact-9", "email": "p1@example.invalid", "lastname": "P1"},
+        ]
+        return payload
+
+    def test_the_codes_replay_inside_the_invitation_window(self):
+        engine = new_engine()
+        service = self.service(engine)
+        payload = envelope(definition=self.with_participants())
+        first = self.send(service, payload)
+        self.assertEqual(200, first[0])
+        self.assertEqual(2, len(first[1]["result"]["invitations"]))
+
+        self.clock.advance(DAY - 1)
+
+        self.assertEqual(first, self.send(service, payload))
+        self.assertEqual(1, engine.methods().count("import_survey"))
+
+    def test_a_receipt_with_codes_is_410_after_a_day_not_after_a_week(self):
+        engine = new_engine()
+        service = self.service(engine)
+        payload = envelope(definition=self.with_participants())
+        _, first = self.send(service, payload)
+
+        self.clock.advance(DAY)
+        status, body = self.send(service, payload)
+
+        self.assertEqual(410, status)
+        self.assertEqual("result_expired", body["error"])
+        self.assertEqual(200, body["expired"]["originalStatus"])
+        self.assertEqual(first["result"]["surveyId"], body["expired"]["surveyId"])
+        self.assertEqual(DAY, body["expired"]["retainedSeconds"])
+        self.assertTrue(body["expired"]["heldInvitationCodes"])
+        self.assertEqual(1, engine.methods().count("import_survey"))
+
+    def test_a_publish_without_participants_still_gets_the_full_week(self):
+        service = self.service(new_engine())
+        payload = envelope()
+        first = self.send(service, payload)
+
+        self.clock.advance(DAY)
+
+        self.assertEqual(first, self.send(service, payload))
+
+    def test_no_token_is_left_in_the_state_directory_after_the_window(self):
+        engine = new_engine()
+        service = self.service(engine)
+        payload = envelope(definition=self.with_participants())
+        _, first = self.send(service, payload)
+        tokens = [item["token"] for item in first["result"]["invitations"]]
+        store = make_store(self.state_dir, clock=self.clock, retention=self.retention)
+
+        self.clock.advance(DAY)
+        store.prune()
+        store.reclaim()
+
+        with open(os.path.join(self.state_dir, "results.sqlite3"), "rb") as handle:
+            blob = handle.read()
+        for token in tokens:
+            self.assertNotIn(token.encode("utf-8"), blob)
 
 
 class IdempotencyTest(ServiceTestCase):

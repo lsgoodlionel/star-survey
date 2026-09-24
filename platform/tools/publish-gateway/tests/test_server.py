@@ -316,6 +316,19 @@ class SettingsTest(unittest.TestCase):
 
         self.assertIn("tombstone retention window", message)
 
+    def test_the_invitation_window_defaults_to_a_day(self):
+        self.assertEqual(24 * 3600, load_settings(self.env).retention.invitation_seconds)
+
+    def test_an_explicit_invitation_window_is_honoured(self):
+        settings = load_settings(dict(self.env, PUBGW_INVITATION_TTL_SECONDS="7200"))
+
+        self.assertEqual(7200, settings.retention.invitation_seconds)
+
+    def test_refuses_to_start_when_codes_would_outlive_the_receipt(self):
+        message = self.refused(PUBGW_RESULT_TTL_SECONDS="86400", PUBGW_INVITATION_TTL_SECONDS="172800")
+
+        self.assertIn("invitation retention window", message)
+
     def test_a_bad_retention_value_names_the_variable_that_is_wrong(self):
         self.assertIn("PUBGW_TOMBSTONE_TTL_SECONDS", self.refused(PUBGW_TOMBSTONE_TTL_SECONDS="forever"))
 

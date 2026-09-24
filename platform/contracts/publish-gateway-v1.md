@@ -72,19 +72,31 @@
 - 邀请码配不齐时**发布失败并回滚**（502，`failedStage` = `activate`）：返回行数与提交不一致、
   某一条没有 token、两条拿到同一个 token，都属此类。平台拿不到码却以为发布成功会登记路由、
   发出一批打不开的邀请，且无从察觉。
-- `invitations` 会随回执按 `requestId` 一起存档，所以**网关状态目录里存着已签发的邀请码明文**；
-  存储目前没有保留期（遗留）。
+- `invitations` 会随回执按 `requestId` 一起存档，所以网关状态目录里会出现已签发的邀请码明文。
+  **带码的回执因此只留 24 小时**（下面 v1.3「结果存档的留存期」），不跟着回执躺满一周。
 
 ### 结果存档的留存期（v1.3，2026-09-23）
 
 存档存在的唯一理由是让 `requestId` 重试幂等，所以它只需要活到平台不再可能重试为止。
-留存分两段，两段都可配置（网关环境变量，见 `platform/tools/publish-gateway/README.md`）：
+留存分几段，都可配置（网关环境变量，见 `platform/tools/publish-gateway/README.md`）：
 
 | 阶段 | 时长 | 库里留着什么 | 同一 `requestId` 重放得到 |
 |---|---|---|---|
 | 回执期 | `PUBGW_RESULT_TTL_SECONDS`，缺省 **7 天**，下限 24 小时 | 完整应答体 | 首次应答，**逐字节一致** |
-| 墓碑期 | `PUBGW_TOMBSTONE_TTL_SECONDS`，缺省 **90 天**，不得短于回执期 | 只有请求指纹、原状态码、落库时刻、引擎 sid；应答体已丢弃 | **410 `result_expired`** |
+| 回执期（**带邀请码**） | `PUBGW_INVITATION_TTL_SECONDS`，缺省 **24 小时**，下限 2 小时，不得长于回执期 | 同上 | 同上 |
+| 墓碑期 | `PUBGW_TOMBSTONE_TTL_SECONDS`，缺省 **90 天**，不得短于回执期 | 只有请求指纹、原状态码、落库时刻、引擎 sid、「带过码」这一位；应答体已丢弃 | **410 `result_expired`** |
 | 之后 | — | 什么都没有 | 当成新请求，**会真的再发布一次** |
+
+**带邀请码的回执活得更短。** `invitations[].token` 是能直接进入问卷的凭据（v1.2），不该跟着回执躺满一周。
+到点后**整份回执**按同一条路过期成墓碑（墓碑不含正文，所以也不含码），重放同样是 410。
+
+刻意**不是**「把 token 挖空、其余照还」：平台的解析要求每条 `invitations[]` 都有非空 token，
+挖空的回执会被判成坏应答、退回「结果未知」，于是一路重试到人工复核——一个机制胜过两个。
+
+24 小时够用的理由：平台的自动核对总跨度约 91 分钟，之后 `manual_review_at` 置位、**永久**停止重发，
+而平台没有「人工重新驱动这次发布」的接口；也就是说 24 小时之后根本不会再有人来重放。
+另一方面平台在收尾时就把码写进 `contact_participation.participant_token`（ADR 0016 / 0017），
+存档并不是平台拿到码的唯一途径。下限 2 小时是为了明显盖过那 91 分钟。
 
 - 判过期只看 `created_at`，不取决于清理任务什么时候跑：清理晚跑也不会多返回一个字节。网关每小时清一次行；回收磁盘（`VACUUM`）会与正常请求抢锁，是运维显式执行的维护动作，不在自动路径上。
 - 回执期必须盖住平台的整条重试／核对链路。按平台缺省值（`platform.survey.reconcile`：
@@ -103,7 +115,8 @@
     "originalStatus": 200,
     "createdAt": "2027-01-15T08:00:00Z",
     "retainedSeconds": 604800,
-    "surveyId": 511001
+    "surveyId": 511001,
+    "heldInvitationCodes": false
   }
 }
 ```
@@ -111,7 +124,11 @@
 - `originalStatus`：首次应答的 HTTP 状态（200 / 422 / 502 / 500）。
 - `surveyId`：**可能还留在引擎里**的那份问卷——首次 200（已发布）或首次 502 且回滚也失败（孤儿）时才有；
   422、以及干净回滚掉的 502 都是 `null`，因为引擎里什么都没留下。
-- `createdAt`：首次结果落库的时刻（UTC）。`retainedSeconds`：当前配置的回执留存期，便于排障时看出配置。
+- `createdAt`：首次结果落库的时刻（UTC）。`retainedSeconds`：**真正作用在这一行上**的那个窗口
+  （带过码的是 24 小时那档），便于排障时看出「为什么才一天就没了」。
+- `heldInvitationCodes`：这份回执带过邀请码。为真时引擎里那份问卷**已经签发过码而平台一条都没收下**，
+  比单纯的过期更要紧：重新发布会换新 sid、换一批新码，旧码随旧 sid 作废，没有「补发旧码」这回事，
+  引擎里那份必须清掉。平台把它记成 `failed_stage = expired_invitations`（普通过期是 `expired`）。
 - **指纹检查在过期之前**：同一 `requestId` 配不同请求体，仍然是 400 `invalid_request`，不是 410。
 
 `<PublishResult>` 即网关现有 `PublishResult.to_dict()` 的结构（`ok`、`surveyId`、`failedStage`、`failures`、`rolledBack`、`orphanSurveyId`、`steps`、`binding`、`verification`）。`binding` 即 `BindingRecord.to_dict()`：`engineInstance`、`surveyId`、`definitionUuid`、`compilerVersion`、`fingerprintVersion`、`fingerprint`、`language`、`publishedAt`、`questions[]`。
@@ -136,5 +153,8 @@
   问卷回到可再次发布），并把 `expired.surveyId` 按**孤儿问卷**存档 + 大声记日志——那份问卷还在引擎里跑，
   平台却没有任何版本或路由指向它，只能人工清理。410 应答体读不出细节时仍按 410 处理，绝不退回"结果未知"：
   那是一个永远走不完的重试环。
+- 410 的 `expired.heldInvitationCodes` 为真时另记一个阶段名（`expired_invitations`）：引擎里那份问卷
+  **已经签发过邀请码而平台一条都没收下**。旧码随旧 sid 作废，没有补发旧码这回事——引擎里那份必须清掉，
+  问卷重新发布拿一批新码。
 - 人工复核（`survey_publish_attempt.manual_review_at` 非空、自动核对已停止）必须在网关的**墓碑期内**收尾。
   拖过墓碑期，同一 `requestId` 会被网关当成新请求再发布一次。

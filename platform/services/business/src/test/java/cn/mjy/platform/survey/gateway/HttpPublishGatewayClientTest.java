@@ -202,7 +202,7 @@ class HttpPublishGatewayClientTest {
                             "retainedSeconds":604800,"surveyId":511001}}
                 """;
 
-        assertThat(publish()).isEqualTo(new GatewayOutcome.Expired(200, 511001, "2027-01-15T08:00:00Z"));
+        assertThat(publish()).isEqualTo(new GatewayOutcome.Expired(200, 511001, "2027-01-15T08:00:00Z", false));
     }
 
     @Test
@@ -214,7 +214,20 @@ class HttpPublishGatewayClientTest {
                             "retainedSeconds":604800,"surveyId":null}}
                 """;
 
-        assertThat(publish()).isEqualTo(new GatewayOutcome.Expired(422, null, "2027-01-15T08:00:00Z"));
+        assertThat(publish()).isEqualTo(new GatewayOutcome.Expired(422, null, "2027-01-15T08:00:00Z", false));
+    }
+
+    @Test
+    void a410ForAReceiptThatCarriedInvitationCodesSaysSo() {
+        status = 410;
+        reply = """
+                {"status":"expired","error":"result_expired",
+                 "expired":{"originalStatus":200,"createdAt":"2027-01-15T08:00:00Z",
+                            "retainedSeconds":86400,"surveyId":511001,"heldInvitationCodes":true}}
+                """;
+
+        assertThat(publish())
+                .isEqualTo(new GatewayOutcome.Expired(200, 511001, "2027-01-15T08:00:00Z", true));
     }
 
     @Test
@@ -226,6 +239,7 @@ class HttpPublishGatewayClientTest {
         assertThat(publish()).isInstanceOfSatisfying(GatewayOutcome.Expired.class, expired -> {
             assertThat(expired.originalStatus()).isZero();
             assertThat(expired.surveyId()).isNull();
+            assertThat(expired.heldInvitationCodes()).isFalse();
         });
     }
 

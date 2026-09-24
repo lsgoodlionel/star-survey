@@ -163,6 +163,22 @@ class PublishReconciliationTest {
     }
 
     @Test
+    void anAgedOutReceiptThatCarriedInvitationCodesIsRecordedUnderItsOwnStage() {
+        // 引擎里那份问卷已经签发过码，平台一条都没收下：重新发布会换新 sid、换新码，旧码随旧 sid 作废。
+        pendingAfterUnknown(ws, survey);
+        gateway.script(survey, request -> FakePublishGateway.expiredWithInvitations(700_779));
+
+        reconciler.runOnce();
+
+        assertThat(surveys.get(ws.owner(), survey).status()).isEqualTo(SurveyStatus.PUBLISH_FAILED);
+        PublishAttemptView attempt = lastPublish(ws, survey);
+        assertThat(attempt.failedStage()).isEqualTo(PublishSettlement.EXPIRED_INVITATIONS_STAGE);
+        assertThat(attempt.orphanEngineSid()).isEqualTo(700_779);
+        assertThat(attempt.failures()).hasSize(1);
+        assertThat(attempt.failures().get(0)).contains("invitation codes");
+    }
+
+    @Test
     void anAgedOutRejectionLeavesNothingBehindInTheEngine() {
         pendingAfterUnknown(ws, survey);
         gateway.script(survey, request -> FakePublishGateway.expired(422, null));

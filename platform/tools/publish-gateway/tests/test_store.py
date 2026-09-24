@@ -9,6 +9,7 @@ import time
 import unittest
 
 from pubgw.store import (
+    MIN_INVITATION_TTL_SECONDS,
     MIN_RESULT_TTL_SECONDS,
     ExpiredResult,
     InFlight,
@@ -220,6 +221,126 @@ class RetentionWindowTest(unittest.TestCase):
             )
 
         self.assertEqual(StoredResult("fp", 200, b"legacy"), self.store().get("req-old"))
+
+
+#: 带邀请码的回执长这样（只保留判定需要的形状）。token 是能直接进入问卷的凭据。
+RECEIPT_WITH_CODES = (
+    b'{"result":{"ok":true,"surveyId":42,'
+    b'"invitations":[{"index":0,"ref":"contact-7","token":"a1b2c3d4e5f6g7h8","tid":"1"}]},'
+    b'"status":"published"}'
+)
+RECEIPT_WITHOUT_CODES = b'{"result":{"ok":true,"surveyId":42},"status":"published"}'
+TOKEN = b"a1b2c3d4e5f6g7h8"
+
+
+class InvitationRetentionTest(unittest.TestCase):
+    """带凭据的回执活得更短：邀请码是能直接进入问卷的凭据，不该陪着回执躺一周。"""
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp()
+        self.path = os.path.join(self.directory, "results.sqlite3")
+        self.clock = MovableClock()
+
+    def tearDown(self):
+        shutil.rmtree(self.directory)
+
+    def raw_file(self):
+        with open(self.path, "rb") as handle:
+            return handle.read()
+
+    def store(self, invitation_seconds=DAY):
+        return ResultStore(
+            self.path,
+            retention=Retention(result_seconds=7 * DAY, tombstone_seconds=90 * DAY,
+                                invitation_seconds=invitation_seconds),
+            now=self.clock,
+        )
+
+    def test_the_default_invitation_window_is_a_day(self):
+        self.assertEqual(DAY, Retention().invitation_seconds)
+
+    def test_an_invitation_window_below_the_floor_is_refused(self):
+        with self.assertRaises(ValueError):
+            Retention(invitation_seconds=MIN_INVITATION_TTL_SECONDS - 1)
+
+    def test_an_invitation_window_longer_than_the_result_window_is_refused(self):
+        with self.assertRaises(ValueError):
+            Retention(result_seconds=2 * DAY, tombstone_seconds=90 * DAY, invitation_seconds=3 * DAY)
+
+    def test_codes_replay_inside_the_invitation_window(self):
+        store = self.store()
+        store.put("req-1", "fp", 200, RECEIPT_WITH_CODES, survey_id=42)
+
+        self.clock.advance(DAY - 1)
+
+        self.assertEqual(RECEIPT_WITH_CODES, store.get("req-1").body)
+
+    def test_a_receipt_holding_codes_expires_at_the_invitation_window(self):
+        store = self.store()
+        store.put("req-1", "fp", 200, RECEIPT_WITH_CODES, survey_id=42)
+        created_at = int(self.clock.value)
+
+        self.clock.advance(DAY)
+
+        self.assertEqual(ExpiredResult("fp", 200, created_at, 42, held_codes=True), store.get("req-1"))
+
+    def test_a_receipt_without_codes_keeps_the_full_result_window(self):
+        store = self.store()
+        store.put("req-1", "fp", 200, RECEIPT_WITHOUT_CODES, survey_id=42)
+
+        self.clock.advance(7 * DAY - 1)
+
+        self.assertEqual(RECEIPT_WITHOUT_CODES, store.get("req-1").body)
+
+    def test_pruning_takes_the_codes_off_disk_at_the_invitation_window(self):
+        store = self.store()
+        store.put("req-1", "fp", 200, RECEIPT_WITH_CODES, survey_id=42)
+        store.put("req-2", "fp", 200, RECEIPT_WITHOUT_CODES, survey_id=43)
+
+        self.clock.advance(DAY)
+        report = store.prune()
+
+        self.assertEqual(1, report.bodies_dropped)
+        self.assertNotIn(TOKEN, self.raw_file())
+        # 没带码的那份还在窗口里，不该被连坐。
+        self.assertEqual(RECEIPT_WITHOUT_CODES, store.get("req-2").body)
+
+    def test_the_tombstone_remembers_that_the_receipt_held_codes(self):
+        """排障时要能看出"为什么才一天就过期了"，而正文那时已经没了。"""
+        store = self.store()
+        store.put("req-1", "fp", 200, RECEIPT_WITH_CODES, survey_id=42)
+        store.put("req-2", "fp", 200, RECEIPT_WITHOUT_CODES, survey_id=43)
+        self.clock.advance(7 * DAY)
+        store.prune()
+
+        self.assertTrue(store.get("req-1").held_codes)
+        self.assertFalse(store.get("req-2").held_codes)
+
+    def test_the_tombstone_left_behind_holds_no_token(self):
+        store = self.store()
+        store.put("req-1", "fp", 200, RECEIPT_WITH_CODES, survey_id=42)
+        self.clock.advance(DAY)
+        store.prune()
+        store.reclaim()
+
+        self.assertIsInstance(store.get("req-1"), ExpiredResult)
+        self.assertNotIn(TOKEN, self.raw_file())
+
+    def test_a_row_written_before_this_window_existed_still_expires_early(self):
+        """第六波已经在往存档里写邀请码了：升级后那些行也必须按短窗口算，不能只管新行。"""
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "CREATE TABLE publish_results (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, "
+                "status INTEGER NOT NULL, body BLOB NOT NULL, created_at INTEGER NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO publish_results VALUES (?, ?, ?, ?, ?)",
+                ("legacy", "fp", 200, sqlite3.Binary(RECEIPT_WITH_CODES), int(self.clock.value)),
+            )
+
+        self.clock.advance(DAY)
+
+        self.assertIsInstance(self.store().get("legacy"), ExpiredResult)
 
 
 class ReclaimTest(unittest.TestCase):

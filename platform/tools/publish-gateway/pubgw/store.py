@@ -6,6 +6,11 @@
   **墓碑**（指纹＋原状态码＋落库时刻＋引擎 sid，正文丢弃），墓碑再留
   ``tombstone_seconds`` 后整行删除。窗口内重放逐字节还原首次应答；墓碑期内重放是
   410 ``result_expired``——一个明确的终局，平台不会误判成"没发过"而重复发布。
+  **带邀请码的回执只留 ``invitation_seconds``（缺省 24 小时）**：``invitations[].token`` 是能
+  直接进入问卷的凭据（ADR 0016），不该陪着回执躺一周。到点整份回执按同一条路过期成墓碑
+  （墓碑里没有正文，所以也没有码），重放同样是 410——不是"把 token 挖掉、别的照还"：
+  平台的解析要求每条都有非空 token，挖空的回执会被判成坏应答、退回"结果未知"，
+  于是重试到人工复核为止。一个机制胜过两个。
 - ``PruneScheduler``：后台定期清理（只删行，不重写文件）。
 - ``InFlight``：``(实例, definition.uuid)`` 同一时刻只允许一个发布，拿不到锁立即失败
   （不排队）——排队会让平台侧的超时与重试更难推理。
@@ -39,7 +44,8 @@ CREATE TABLE IF NOT EXISTS publish_results (
     body        BLOB NOT NULL,
     created_at  INTEGER NOT NULL,
     survey_id   INTEGER,
-    pruned_at   INTEGER
+    pruned_at   INTEGER,
+    held_codes  INTEGER
 )
 """
 _BUSY_TIMEOUT_SECONDS = 30
@@ -53,6 +59,13 @@ DEFAULT_RESULT_TTL_SECONDS = 7 * 24 * 3600
 DEFAULT_TOMBSTONE_TTL_SECONDS = 90 * 24 * 3600
 #: 回执留存期的下限。配置写小了等于把幂等关掉，所以宁可拒绝启动也不静默接受。
 MIN_RESULT_TTL_SECONDS = 24 * 3600
+#: 带邀请码的回执的缺省留存期。平台的自动核对总跨度约 91 分钟、之后就永久停下
+#: （``manual_review_at``，且没有"人工重新驱动这次发布"的接口），所以 24 小时已有 16 倍余量；
+#: 而且平台在收尾时会把码写进 ``contact_participation.participant_token``（ADR 0016 / 0017），
+#: 存档不是平台拿到码的唯一途径。
+DEFAULT_INVITATION_TTL_SECONDS = 24 * 3600
+#: 邀请码留存期的下限：必须明显长于平台自动核对的 91 分钟，否则重试期内就拿不到码了。
+MIN_INVITATION_TTL_SECONDS = 2 * 3600
 #: 后台清理的缺省间隔。留存期以天计，一小时一次足够。
 DEFAULT_PRUNE_INTERVAL_SECONDS = 3600
 
@@ -60,6 +73,12 @@ DEFAULT_PRUNE_INTERVAL_SECONDS = 3600
 RESULTS_FILE = "publish-results.sqlite3"
 RESULT_TTL_ENV = "PUBGW_RESULT_TTL_SECONDS"
 TOMBSTONE_TTL_ENV = "PUBGW_TOMBSTONE_TTL_SECONDS"
+INVITATION_TTL_ENV = "PUBGW_INVITATION_TTL_SECONDS"
+
+#: 存档里"这份回执带着邀请码"的判据。直接在正文里找键名，不另设一列：
+#: 第六波已经在往存档里写码了，列会对旧行漏判，而正文永远是事实本身。
+_INVITATIONS_KEY = '"invitations"'
+_HOLDS_CODES = "instr(CAST(body AS TEXT), '{}') > 0".format(_INVITATIONS_KEY)
 
 
 @dataclass(frozen=True)
@@ -68,6 +87,7 @@ class Retention:
 
     result_seconds: int = DEFAULT_RESULT_TTL_SECONDS
     tombstone_seconds: int = DEFAULT_TOMBSTONE_TTL_SECONDS
+    invitation_seconds: int = DEFAULT_INVITATION_TTL_SECONDS
 
     def __post_init__(self) -> None:
         if self.result_seconds < MIN_RESULT_TTL_SECONDS:
@@ -81,18 +101,30 @@ class Retention:
                 "the tombstone retention window ({}s) must not be shorter than the result "
                 "window ({}s)".format(self.tombstone_seconds, self.result_seconds)
             )
+        if self.invitation_seconds < MIN_INVITATION_TTL_SECONDS:
+            raise ValueError(
+                "the invitation retention window must be at least {} seconds, got {}".format(
+                    MIN_INVITATION_TTL_SECONDS, self.invitation_seconds
+                )
+            )
+        if self.invitation_seconds > self.result_seconds:
+            raise ValueError(
+                "the invitation retention window ({}s) must not outlive the result window "
+                "({}s)".format(self.invitation_seconds, self.result_seconds)
+            )
 
 
 def retention_from_env(env: Mapping[str, str]) -> Retention:
     """从环境变量读留存配置。不合法一律 ``ValueError``，由调用方决定怎么报。"""
     result = _seconds(env, RESULT_TTL_ENV, DEFAULT_RESULT_TTL_SECONDS)
     tombstone = _seconds(env, TOMBSTONE_TTL_ENV, DEFAULT_TOMBSTONE_TTL_SECONDS)
+    invitation = _seconds(env, INVITATION_TTL_ENV, DEFAULT_INVITATION_TTL_SECONDS)
     try:
-        return Retention(result_seconds=result, tombstone_seconds=tombstone)
+        return Retention(result_seconds=result, tombstone_seconds=tombstone,
+                         invitation_seconds=invitation)
     except ValueError as error:
-        raise ValueError(
-            "{} / {}: {}".format(RESULT_TTL_ENV, TOMBSTONE_TTL_ENV, error)
-        ) from None
+        raise ValueError("{} / {} / {}: {}".format(
+            RESULT_TTL_ENV, TOMBSTONE_TTL_ENV, INVITATION_TTL_ENV, error)) from None
 
 
 def _seconds(env: Mapping[str, str], name: str, default: int) -> int:
@@ -115,12 +147,17 @@ class StoredResult:
 
 @dataclass(frozen=True)
 class ExpiredResult:
-    """正文已过期、只剩墓碑。``survey_id`` 是当时引擎里那份问卷（可能没有）。"""
+    """正文已过期、只剩墓碑。``survey_id`` 是当时引擎里那份问卷（可能没有）。
+
+    ``held_codes`` 记住这份回执带过邀请码——它按短窗口过期，排障时要能看出
+    "为什么才一天就没了"，而那时正文已经不在了。墓碑本身从不含码。
+    """
 
     fingerprint: str
     original_status: int
     created_at: int
     survey_id: Optional[int]
+    held_codes: bool = False
 
 
 @dataclass(frozen=True)
@@ -163,8 +200,9 @@ class ResultStore:
         """窗口内返回首次应答；过期返回墓碑；墓碑也到期则视同没有（不看清理跑没跑）。"""
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT fingerprint, status, body, created_at, survey_id, pruned_at "
-                "FROM publish_results WHERE request_id = ?",
+                "SELECT fingerprint, status, body, created_at, survey_id, pruned_at, "
+                "{} OR held_codes = 1 "
+                "FROM publish_results WHERE request_id = ?".format(_HOLDS_CODES),
                 (request_id,),
             ).fetchone()
         if row is None:
@@ -174,9 +212,18 @@ class ResultStore:
         if created_at + self._retention.tombstone_seconds <= now:
             return None
         survey_id = None if row[4] is None else int(row[4])
-        if row[5] is not None or created_at + self._retention.result_seconds <= now:
-            return ExpiredResult(row[0], int(row[1]), created_at, survey_id)
+        holds_codes = bool(row[6])
+        if row[5] is not None or created_at + self._lifetime(holds_codes) <= now:
+            return ExpiredResult(row[0], int(row[1]), created_at, survey_id, holds_codes)
         return StoredResult(fingerprint=row[0], status=int(row[1]), body=bytes(row[2]))
+
+    def _lifetime(self, holds_codes: bool) -> int:
+        """带邀请码的回执按短窗口算——凭据不跟着回执躺满整个回执期。"""
+        return self._retention.invitation_seconds if holds_codes else self._retention.result_seconds
+
+    def lifetime_of(self, held_codes: bool) -> int:
+        """外部（应答里的 ``retainedSeconds``）要报的是真正生效的那个窗口。"""
+        return self._lifetime(held_codes)
 
     def put(
         self,
@@ -215,10 +262,14 @@ class ResultStore:
                 "DELETE FROM publish_results WHERE created_at <= ?",
                 (now - self._retention.tombstone_seconds,),
             ).rowcount
+            # 两条线：带邀请码的按短窗口，其余按回执期。
             bodies = connection.execute(
-                "UPDATE publish_results SET body = X'', pruned_at = ? "
-                "WHERE pruned_at IS NULL AND created_at <= ?",
-                (now, now - self._retention.result_seconds),
+                "UPDATE publish_results "
+                "   SET held_codes = CASE WHEN {codes} THEN 1 ELSE 0 END, body = X'', pruned_at = ? "
+                " WHERE pruned_at IS NULL "
+                "   AND (created_at <= ? OR (created_at <= ? AND {codes}))".format(codes=_HOLDS_CODES),
+                (now, now - self._retention.result_seconds,
+                 now - self._retention.invitation_seconds),
             ).rowcount
         report = PruneReport(max(bodies, 0), max(rows, 0))
         if report:
@@ -258,7 +309,9 @@ class ResultStore:
 def _migrate(connection: sqlite3.Connection) -> None:
     """P0 起就在跑的库没有留存用的两列；补列而不是重建表，既有回执一份不丢。"""
     columns = {row[1] for row in connection.execute("PRAGMA table_info(publish_results)")}
-    for column, definition in (("survey_id", "INTEGER"), ("pruned_at", "INTEGER")):
+    for column, definition in (
+        ("survey_id", "INTEGER"), ("pruned_at", "INTEGER"), ("held_codes", "INTEGER")
+    ):
         if column not in columns:
             connection.execute(
                 "ALTER TABLE publish_results ADD COLUMN {} {}".format(column, definition)

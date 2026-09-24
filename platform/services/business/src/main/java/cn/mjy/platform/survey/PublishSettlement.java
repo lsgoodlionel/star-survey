@@ -36,7 +36,8 @@ import org.springframework.stereotype.Component;
  *   <li>失败（422/502）与拒收（400/401/404）：记录失败阶段与原因，问卷回到可再次发布，不登记路由；
  *       网关报告孤儿问卷时大声记日志并存档；</li>
  *   <li>回执过期（410，契约 v1.3）：同样按失败收尾——重发只会再得到 410；引擎里可能残留的那份问卷
- *       按孤儿记录（见 {@link #recordExpired}）；</li>
+ *       按孤儿记录。回执带过邀请码时另记一个阶段名，因为那份残留问卷已经签发过码
+ *       （见 {@link #recordExpired}）；</li>
  *   <li>未知：待核对，下次发布用同一 requestId 重试。</li>
  * </ul>
  */
@@ -48,6 +49,8 @@ class PublishSettlement {
     static final String POLICY_STAGE = "policy";
     /** 网关回执已过留存期（410 {@code result_expired}，契约 v1.3）时记录的阶段名。 */
     static final String EXPIRED_STAGE = "expired";
+    /** 同上，但那份回执带过邀请码：引擎里的问卷已签发过码，而平台没能收下。 */
+    static final String EXPIRED_INVITATIONS_STAGE = "expired_invitations";
 
     private static final Logger log = LoggerFactory.getLogger(PublishSettlement.class);
 
@@ -335,6 +338,17 @@ class PublishSettlement {
     private PublishOutcome recordExpired(TenantContext ctx, Ticket ticket, GatewayOutcome.Expired expired) {
         String detail = "the gateway receipt aged out (original http " + expired.originalStatus()
                 + ", stored at " + (expired.createdAt() == null ? "an unknown time" : expired.createdAt()) + ")";
+        if (expired.heldInvitationCodes()) {
+            // 码已经签发给了引擎里那份问卷，平台一条都没收下：重新发布会换新 sid、换一批新码，
+            // 旧码随旧 sid 作废，所以没有"补发旧码"这回事。运维要清掉引擎里那份。
+            detail = detail + "; it carried invitation codes that are now gone, so the engine survey "
+                    + "has live codes the platform never recorded";
+            log.error("publish of survey {} (request {}) cannot be settled and its invitation codes are "
+                    + "gone: {}; engine sid={} has issued codes nobody holds and needs manual cleanup",
+                    ticket.surveyId(), ticket.requestId(), detail, expired.surveyId());
+            return recordFailed(ctx, ticket, 410, EXPIRED_INVITATIONS_STAGE, List.of(detail),
+                    expired.surveyId());
+        }
         log.error("publish of survey {} can no longer be settled from the gateway (request {}): {}; "
                 + "engine sid={} needs manual review", ticket.surveyId(), ticket.requestId(), detail,
                 expired.surveyId());

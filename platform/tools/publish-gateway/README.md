@@ -61,6 +61,7 @@ docker build -t survey-publish-gateway platform/tools/publish-gateway
 | `PUBGW_HOST` / `PUBGW_PORT` | 监听地址与端口，缺省 `127.0.0.1:8080`（镜像里是 `0.0.0.0:8080`） |
 | `PUBGW_RESULT_TTL_SECONDS` | 完整回执的留存期，缺省 `604800`（7 天），**下限 86400**（24 小时） |
 | `PUBGW_TOMBSTONE_TTL_SECONDS` | 墓碑的留存期，缺省 `7776000`（90 天），不得短于回执留存期 |
+| `PUBGW_INVITATION_TTL_SECONDS` | **带邀请码**的回执的留存期，缺省 `86400`（24 小时），下限 `7200`（2 小时），不得长于回执留存期 |
 | 配置里 `passwordEnv` 指名的变量 | 各实例的引擎管理员口令 |
 | 配置里 `channelSecretEnv` 指名的变量 | 各实例的插件通道密钥（可选，见下） |
 
@@ -90,6 +91,11 @@ docker build -t survey-publish-gateway platform/tools/publish-gateway
 结果存档的留存期（契约 v1.3）：
 
 - **回执期**（缺省 7 天）内，同一 `requestId` 重放拿到首次应答，逐字节一致。
+- **带邀请码的回执只留 24 小时**：`invitations[].token` 是能直接进入问卷的凭据，不该跟着回执躺满一周。
+  到点后整份回执按同一条路过期成墓碑（墓碑不含正文，也就不含码），重放同样是 410，`expired`
+  块里 `heldInvitationCodes` 为真——平台据此知道"引擎里那份已经签发过码而平台没收下"，必须清掉重发。
+  刻意不做"挖空 token、其余照还"：平台解析要求每条都有非空 token，挖空的回执会被判成坏应答、
+  退回"结果未知"，一路重试到人工复核。
 - 之后只剩**墓碑**（请求指纹、原状态码、落库时刻、引擎 sid；应答体已丢弃），重放是
   `410 result_expired`——一个明确的终局。平台据此记发布失败并把 `expired.surveyId` 按孤儿问卷存档，
   **不会**误判成"没发过"而重复发布。
@@ -109,8 +115,9 @@ docker build -t survey-publish-gateway platform/tools/publish-gateway
 - 诚实边界：不跑 `prune-results` 时，删掉的行留下的空闲页会被后续写入复用，旧正文字节在被覆盖前
   仍在文件里；`VACUUM` 抹的也只是主库文件，WAL 残留、文件系统未擦除的块、以及**任何数据库备份**
   都不受留存期约束——真要按期销毁，备份策略得一起管。
-- 如果 `PublishResult` 将来要带凭据（例如把引擎生成的邀请码回读进回执，见 ADR 0016 缺口），
-  回执期就是那批凭据的明文存活期，必须按小时而不是按天设，并单独在契约里写清楚。
+- 24 小时够用的理由见契约 v1.3：平台自动核对的总跨度约 91 分钟，之后永久停止重发，而平台没有
+  "人工重新驱动这次发布"的接口；且平台收尾时就把码写进 `contact_participation.participant_token`，
+  存档不是它拿到码的唯一途径。**如果以后回执要带别的凭据，走同一条路：给它一个自己的短窗口。**
 
 行为要点：
 

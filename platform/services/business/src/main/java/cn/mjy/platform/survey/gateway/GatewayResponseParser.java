@@ -67,10 +67,11 @@ final class GatewayResponseParser {
     static GatewayOutcome.Expired expired(JsonNode body) {
         JsonNode expired = body == null ? null : body.get("expired");
         if (expired == null || !expired.isObject()) {
-            return new GatewayOutcome.Expired(0, null, null);
+            return new GatewayOutcome.Expired(0, null, null, false);
         }
         return new GatewayOutcome.Expired(lenientInt(expired, "originalStatus", 0),
-                boxedLenientInt(expired, "surveyId"), lenientText(expired, "createdAt"));
+                boxedLenientInt(expired, "surveyId"), lenientText(expired, "createdAt"),
+                lenientBool(expired, "heldInvitationCodes"));
     }
 
     private static int lenientInt(JsonNode node, String name, int fallback) {
@@ -81,6 +82,11 @@ final class GatewayResponseParser {
     private static Integer boxedLenientInt(JsonNode node, String name) {
         JsonNode value = node.get(name);
         return value != null && value.isIntegralNumber() && value.canConvertToInt() ? value.intValue() : null;
+    }
+
+    private static boolean lenientBool(JsonNode node, String name) {
+        JsonNode value = node.get(name);
+        return value != null && value.isBoolean() && value.booleanValue();
     }
 
     private static String lenientText(JsonNode node, String name) {

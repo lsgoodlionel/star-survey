@@ -13,6 +13,8 @@
 ``PUBGW_PORT``              监听端口，缺省 8080
 ``PUBGW_RESULT_TTL_SECONDS``     完整回执的留存期，缺省 7 天，下限 24 小时
 ``PUBGW_TOMBSTONE_TTL_SECONDS``  墓碑的留存期，缺省 90 天，不得短于回执留存期
+``PUBGW_INVITATION_TTL_SECONDS`` 带邀请码的回执的留存期，缺省 24 小时，下限 2 小时，
+                                 不得长于回执留存期
 ==========================  ===============================================
 
 任何一项不合法都拒绝启动（退出码 2）。收到 SIGTERM 时停止接新请求，
@@ -265,9 +267,10 @@ def main(env: Optional[Mapping[str, str]] = None) -> int:
         return EXIT_CONFIG
     log.info(
         "publish gateway listening on %s:%s with %d engine instance(s); "
-        "receipts are kept for %ds, tombstones for %ds",
+        "receipts are kept for %ds (%ds when they carry invitation codes), tombstones for %ds",
         settings.host, httpd.server_address[1], len(settings.engines),
-        settings.retention.result_seconds, settings.retention.tombstone_seconds,
+        settings.retention.result_seconds, settings.retention.invitation_seconds,
+        settings.retention.tombstone_seconds,
     )
     pruner = PruneScheduler(store)
     pruner.start()
