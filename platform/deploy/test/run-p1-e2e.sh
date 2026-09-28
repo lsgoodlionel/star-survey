@@ -56,6 +56,9 @@ PLATFORM_DB_CONTAINER=platform-db
 PLATFORM_DB_NETWORK=platform-dev_default
 export PLATFORM_DB_NAME="platform_p1_e2e${SURVEY_TEST_PREFIX:+_${SURVEY_TEST_PREFIX//-/_}}"
 PLATFORM_JAR="$REPO_ROOT/platform/services/business/target/business-0.1.0-SNAPSHOT.jar"
+# PLATFORM_MVN：怎么跑 Maven。默认容器内（开发机无需装 JDK）；CI 上换 mvn-local.sh，
+# 用 runner 上 actions/setup-java 装好的 Maven，依赖缓存交给 actions/cache。
+MVN="${PLATFORM_MVN:-$REPO_ROOT/platform/deploy/platform-dev/mvn.sh}"
 # The maven image mvn.sh already uses ships a Java 21 runtime: no extra image to pull.
 JAVA_IMAGE=maven:3.9-eclipse-temurin-21
 GATEWAY_DIR="$REPO_ROOT/platform/tools/publish-gateway"
@@ -207,8 +210,11 @@ step "platform: build, fresh database, start"
 # Leftovers of an interrupted run hold connections that would block the drop below.
 docker rm -fv "$PLATFORM_CONTAINER" "$GATEWAY_CONTAINER" >/dev/null 2>&1 || true
 remove_network
-# mvn.sh brings up platform-db; the build itself needs no database.
-"$PLATFORM_DEV_DIR/mvn.sh" -DskipTests package
+# 显式把 platform-db 拉起来。以前这一步是靠「mvn.sh 顺手起了它」的副作用，
+# 一旦换成别的方式跑 Maven（CI 上就是 mvn-local.sh），下面那几条 psql 会对着一个
+# 不存在的容器执行。构建本身不需要数据库，接着的建库需要。
+PLATFORM_DB_NAME="$PLATFORM_DB_NAME" "$PLATFORM_DEV_DIR/ensure-platform-db.sh"
+"$MVN" -DskipTests package
 [[ -f "$PLATFORM_JAR" ]] || fail "platform jar was not built: $PLATFORM_JAR"
 docker exec "$PLATFORM_DB_CONTAINER" psql -U platform_owner -d platform -qc \
   "DROP DATABASE IF EXISTS $PLATFORM_DB_NAME WITH (FORCE)"
