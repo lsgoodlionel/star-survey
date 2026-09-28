@@ -10,18 +10,13 @@
 class MjyAccessPolicyStore
 {
     public const POLICY_KEY = 'mjy_access_policy';
-    private const MODEL = 'Survey';
 
-    /** @var CDbConnection */
-    private $db;
-
-    /** @var int */
-    private $pluginId;
+    /** @var MjySurveySettingReader */
+    private $reader;
 
     public function __construct(CDbConnection $db, int $pluginId)
     {
-        $this->db = $db;
-        $this->pluginId = $pluginId;
+        $this->reader = new MjySurveySettingReader($db, $pluginId);
     }
 
     /**
@@ -68,15 +63,6 @@ class MjyAccessPolicyStore
      */
     private function rawValues(int $surveyId): array
     {
-        $key = $this->db->quoteColumnName('key');
-        $rows = $this->db->createCommand()
-            ->select('value')
-            ->from('{{plugin_settings}}')
-            ->where(
-                "plugin_id = :plugin AND model = :model AND model_id = :sid AND {$key} = :key",
-                [':plugin' => $this->pluginId, ':model' => self::MODEL, ':sid' => $surveyId, ':key' => self::POLICY_KEY]
-            )
-            ->queryColumn();
-        return array_map('strval', $rows);
+        return $this->reader->values($surveyId, self::POLICY_KEY);
     }
 }

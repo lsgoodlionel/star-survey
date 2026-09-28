@@ -19,6 +19,7 @@ from .fieldmap import definition_signature, fingerprint
 from .logic.lower import lower_definition
 from .logic.scoring import expand_scoring
 from .model import SurveyDefinition
+from .exam.compile import EXAM_KEY, CompiledExam, compile_exam
 from .policy.compile import PLUGIN_NAME, POLICY_KEY, CompiledPolicy, compile_policy
 from .questions.theme_dictionary import setting_payload
 from .questions.theme_kit import DICTIONARY_SETTING_KEY, QUESTION_PLUGIN_NAME
@@ -135,6 +136,8 @@ class CompiledSurvey:
     policy: Optional[CompiledPolicy] = None
     #: 品牌的编译产物（契约 survey-branding-v1）；定义没有 branding 时为 None。
     branding: Optional[CompiledBranding] = None
+    #: 考试答案键的编译产物（契约 survey-exam-v1）；定义没有 exam 时为 None。
+    exam: Optional[CompiledExam] = None
 
 
 class LssCompiler:
@@ -156,18 +159,20 @@ class LssCompiler:
         signature = definition_signature(definition)
         policy = compile_policy(definition)
         branding = compile_branding(definition)
+        exam = compile_exam(definition)
         return CompiledSurvey(
             # v2 的逻辑先降到引擎层（relevance／属性／转义文本）；v1 原样通过。
             # 题型扩展键（format／maxLength／exclusive）再降成属性与服务端规则；没有就原样通过。
             # 访问策略（ADR 0016）另行编译为原生设置与插件设置行。
             # 品牌（契约 survey-branding-v1）另行编译为按问卷的主题选项。
-            lss=self._document(lower_question_types(lower_definition(definition)), policy, branding),
+            lss=self._document(lower_question_types(lower_definition(definition)), policy, branding, exam),
             compiler_version=self.version,
             signature=signature,
             fingerprint=fingerprint(signature),
             definition_uuid=definition.uuid,
             policy=policy,
             branding=branding,
+            exam=exam,
         )
 
     # ------------------------------------------------------------- 文档
@@ -177,6 +182,7 @@ class LssCompiler:
         definition: SurveyDefinition,
         policy: Optional[CompiledPolicy] = None,
         branding: Optional[CompiledBranding] = None,
+        exam: Optional[CompiledExam] = None,
     ) -> str:
         layout = _Layout(definition)
         parts = [
@@ -200,7 +206,7 @@ class LssCompiler:
                 _language_rows(definition, layout.translations),
             ),
             _section("plugin_settings", _PLUGIN_SETTING_FIELDS,
-                     _plugin_setting_rows(definition, policy)),
+                     _plugin_setting_rows(definition, policy, exam)),
             _themes(branding),
             "</document>",
         ]
@@ -405,16 +411,23 @@ def _survey_fields(policy: Optional[CompiledPolicy]) -> Tuple[str, ...]:
 
 
 def _plugin_setting_rows(definition: SurveyDefinition,
-                         policy: Optional[CompiledPolicy]) -> List[Dict[str, str]]:
+                         policy: Optional[CompiledPolicy],
+                         exam: Optional[CompiledExam] = None) -> List[Dict[str, str]]:
     """写进 lime_plugin_settings（model=Survey）的几行。
 
-    访问策略一行（MjyRuntimePolicy），字典快照一行（MjyQuestionExtensions）。
+    访问策略一行（MjyRuntimePolicy），考试答案键一行（同一个插件），
+    字典快照一行（MjyQuestionExtensions）。
     字典走这条载体而不是题目属性：一份快照可能被同一份问卷里多道题引用，
     按题存等于每道题重复一份几十万字符。
+
+    答案键走这条载体则是另一个理由：**plugin_settings 从不渲染进作答页**。
+    题目属性会（question_template_attribute 直接进 data-*），所以答案键绝不能走那条路。
     """
     rows: List[Dict[str, str]] = []
     if policy is not None and policy.payload is not None:
         rows.append({"name": PLUGIN_NAME, "key": POLICY_KEY, "value": policy.payload})
+    if exam is not None:
+        rows.append({"name": PLUGIN_NAME, "key": EXAM_KEY, "value": exam.payload})
     if definition.dictionaries:
         rows.append({
             "name": QUESTION_PLUGIN_NAME,
