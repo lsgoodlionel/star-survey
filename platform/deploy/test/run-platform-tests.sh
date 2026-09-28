@@ -15,6 +15,11 @@
 #   --expect-classes N   同上，对测试类数
 #   --                   之后的参数原样交给 Maven
 #
+# PLATFORM_MVN 选 Maven 的跑法，默认 platform/deploy/platform-dev/mvn.sh（容器内跑，
+# 自己起 platform-db）。CI 上换成 mvn-local.sh：runner 已有 JDK 与 Maven，
+# 数据库是 service 容器，连接串由 PLATFORM_DB_URL 给。对账逻辑两条路完全一致——
+# 「跑了多少条」的口径只有这一个，不能因为换了执行环境就换一套数法。
+#
 # 退出码：0 通过；2 对账不通过；其余为 Maven 自己的失败。
 set -euo pipefail
 
@@ -23,6 +28,11 @@ MODULE="$REPO_ROOT/platform/services/business"
 REPORTS="$MODULE/target/surefire-reports"
 SOURCES="$MODULE/src/test/java"
 RECONCILE="$REPO_ROOT/platform/tools/test-report/surefire_reconcile.py"
+MVN="${PLATFORM_MVN:-$REPO_ROOT/platform/deploy/platform-dev/mvn.sh}"
+if [[ ! -x "$MVN" ]]; then
+  echo "PLATFORM_MVN 指向的 $MVN 不可执行" >&2
+  exit 3
+fi
 
 expect_args=()
 while [[ $# -gt 0 ]]; do
@@ -43,7 +53,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "[对账] 数据库：${PLATFORM_DB_NAME:-platform}"
+echo "[对账] 数据库：${PLATFORM_DB_URL:-${PLATFORM_DB_NAME:-platform}}"
+echo "[对账] Maven：$MVN"
 
 # 跑前清空：陈旧报告只要还在目录里，就一定会被重复计数。
 rm -rf "$REPORTS"
@@ -54,7 +65,7 @@ fi
 
 # 一定要 clean：不 clean 的那一轮正是事故 2 的来源（上一轮改包名前的报告留在了 target 里）。
 set +e
-"$REPO_ROOT/platform/deploy/platform-dev/mvn.sh" clean test "$@"
+"$MVN" clean test "$@"
 maven_status=$?
 set -e
 if [[ $maven_status -ne 0 ]]; then

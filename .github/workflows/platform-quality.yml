@@ -40,6 +40,18 @@ jobs:
         working-directory: platform/tools/test-report
         run: python3 -m unittest discover -s tests -t . -q
 
+      # 需求↔测试映射（R23-12）。每道闸门都有一条「人为制造不一致、断言它报错」的用例。
+      - name: 需求追溯校验器的用例
+        working-directory: platform/tools/traceability
+        run: python3 -m unittest discover -s tests -t . -q
+
+      # 真正的闸门：登记表声称的测试必须还在，零散注释里的需求编号必须真的存在。
+      # 这里读不到仓库外的 02 矩阵（检出里没有方案文档目录），第六道闸门会明确打印「跳过」；
+      # 前五道照常生效，编号一律按仓库内的 requirement-index.md 快照校验。
+      - name: 需求追溯校验
+        working-directory: platform/tools/traceability
+        run: python3 -m reqtrace.cli check
+
   gateway-parity-e2e:
     name: 双执行比对 (${{ matrix.db }})
     runs-on: ubuntu-22.04
@@ -73,7 +85,156 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.dev.yml --profile test down -v --remove-orphans
 
-# 还没接进来的：平台 Java 套件（platform/deploy/test/run-platform-tests.sh）。
-# 它要起 platform-db 并让 Maven 走 maven-settings.xml 里的阿里云镜像；GitHub runner
-# 上是冷缓存＋跨境拉取，接进来大概率是一条又慢又飘的 job。目前它是本地约定，
-# 用法写在 platform/services/business/CONVENTIONS.md。要接的话先把镜像配置做成可覆盖的。
+  platform-java:
+    name: 平台 Java 全套
+    runs-on: ubuntu-22.04
+    needs: parity-tables
+    # 早先判断「接进来又慢又飘」的两个理由都已消除（实测数字见 CONVENTIONS.md）：
+    #   镜像：本 job 不走 mvn.sh，因此没有 maven-settings.xml，走 Maven 中央仓库。
+    #         同样的 347 jar／121 MB 冷缓存，阿里云镜像 851 秒、中央仓库 359 秒——
+    #         这还是在国内开发机上量的，镜像在这个 pom 上没有任何好处。
+    #   冷缓存：actions/setup-java 的 cache: maven 按 pom.xml 的哈希缓存 ~/.m2/repository。
+    #         clean test 实际用到 191 jar／约 82 MB，这个量级存取是秒级的，
+    #         只有改 pom 的那次会重新下载。缓存命中时全套实测 74 秒。
+    # 数据库用 service 容器，角色与库名沿用开发环境那份 init-db.sql，不另造一套。
+    services:
+      platform-db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # 换执行环境，但「跑了多少条」的对账口径不变——仍然是 run-platform-tests.sh。
+      PLATFORM_MVN: platform/deploy/platform-dev/mvn-local.sh
+      PLATFORM_DB_URL: jdbc:postgresql://localhost:5432/platform
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      # 对账脚本是 Python 的。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # platform_owner（迁移、拥有表）与 platform_app（运行期）都不是超级用户，
+      # 行级安全对两者都强制生效——这一点是若干 RLS 用例的前提，不能用 postgres 直连代替。
+      - name: 建角色与库
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f platform/deploy/platform-dev/init-db.sql
+
+      # 不写 --expect-tests／--expect-classes：对账脚本无需魔数就会抓住那两次真实事故
+      # （新测试类没被执行、陈旧报告被重复计数），而把总数写进 workflow 会让每个加测试的
+      # PR 都得来改这里。
+      - name: 平台 Java 全套
+        run: platform/deploy/test/run-platform-tests.sh
+
+      - name: 留存 surefire 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: platform/services/business/target/surefire-reports/
+          retention-days: 7
+          if-no-files-found: warn
+
+  access-policy-e2e:
+    name: 访问策略端到端 (${{ matrix.db }})
+    runs-on: ubuntu-22.04
+    needs: parity-tables
+    # 为什么先接这一条：投入产出比最高。它只要引擎栈＋Python 网关，不需要 JVM、不需要
+    # 平台服务，而它覆盖的是**权限与时间闸门**——统一访问密码、邀请码、按 token／设备限次、
+    # 时区窗口与作答时长、IP 规则（R04-01…05）。这些全靠运行时插件在真实引擎里生效，
+    # 网关单测再多也证明不了；一旦漏判就是「谁都能答、答几次都行」。
+    # 双库都跑：策略判定要读引擎表，mysql 与 pgsql 的 SQL 不是同一份。
+    #
+    # ⚠️ 本分支的基线（7b4f0525）比 main 落后 5 个提交，缺 7cbf4c48「到点强制交卷是期望
+    # 行为——改 access_policy 场景 D 的过时断言」。在这个基线上本 job 会因那一条过时断言
+    # 红掉（mysql 与 pgsql 各红同一条，已双库实测确认与数据库无关）。合上 main 之后即绿。
+    # **不要**为了让它变绿去放宽那条断言——它已经在 main 上按 ADR 0007 决定 8 改对了。
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [mysql, pgsql]
+    env:
+      TEST_DB: ${{ matrix.db }}
+      SURVEY_TEST_PREFIX: ap-${{ matrix.db }}
+      COMPOSE_PROJECT_NAME: ap-${{ matrix.db }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 脚本自己会在镜像缺失时构建 survey-web（全新检出里一定缺）并装引擎。
+      # 本身约两分钟——其中两个场景要等服务端时间真的走完，等待是断言的一部分，不能缩。
+      - name: WP-04 访问策略端到端
+        run: platform/deploy/test/run-access-policy.sh --fresh
+
+      - name: 拆掉本分支的栈
+        if: always()
+        run: docker compose -f docker-compose.dev.yml --profile test down -v --remove-orphans
+
+  p1-e2e:
+    name: P1 纵切端到端
+    runs-on: ubuntu-22.04
+    needs: parity-tables
+    # 为什么接这一条：它是唯一一条把**三个真实进程**串起来的用例（平台 Spring Boot ＋
+    # 发布网关 ＋ 引擎），覆盖发布、幂等、版本回滚、改版重发、事件回传与漂移校验。
+    # 别的脚本都只验一段；这条验的是接缝，而接缝坏掉在单测里全是绿的。
+    #
+    # 只跑 mysql 一种数据库：这是纵切冒烟，跨库的 SQL 差异已由 gateway-parity-e2e 的
+    # 双库矩阵覆盖，再乘二只是把最贵的一条 job 变两倍。
+    env:
+      TEST_DB: mysql
+      SURVEY_TEST_PREFIX: p1
+      COMPOSE_PROJECT_NAME: p1
+      # 用 runner 上的 Maven（下一步 setup-java 装的），依赖缓存交给 actions/cache；
+      # 走容器内 mvn.sh 的话 .m2 是个 docker 命名卷，跨 job 不留存，每次都得重下一遍。
+      PLATFORM_MVN: platform/deploy/platform-dev/mvn-local.sh
+      # platform-db 仍由 compose 起（脚本要把平台容器接到它的网络上）；
+      # PLATFORM_DB_URL 由脚本自己按 PLATFORM_DB_NAME 组装，这里不设。
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: P1 纵切端到端
+        run: platform/deploy/test/run-p1-e2e.sh
+
+      - name: 拆掉本分支的栈
+        if: always()
+        run: |
+          docker compose -f docker-compose.dev.yml --profile test down -v --remove-orphans
+          docker rm -fv p1-p1e2e-platform p1-p1e2e-pubgw 2>/dev/null || true
+          docker network rm p1-p1e2e-net 2>/dev/null || true
+
+# 仍未进 CI 的，以及为什么：
+#   - 引擎自身的 phpunit：上游套件，本项目没有改上游文件（docs/p0/upstream-diff.md），
+#     它证明的是上游快照没坏，不是本土化部分没坏。要接的话应当单独一条、允许失败。
+#   - platform/deploy/test 下其余端到端脚本（exam、tenancy、private、functional、
+#     question-themes、response-read、rpc-gate 等）：每一条都要起一套引擎栈，
+#     每套栈都要先构建 survey-web 镜像。本轮按「覆盖接缝与权限闸门」优先接了两条，
+#     其余仍是本地约定。下一批建议先接 run-question-themes.sh（15 类插件题型的唯一
+#     引擎侧证据）与 run-rpc-gate.sh（RPC 白名单）。
