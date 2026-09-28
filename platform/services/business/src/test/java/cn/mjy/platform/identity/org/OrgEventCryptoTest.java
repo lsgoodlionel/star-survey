@@ -116,7 +116,13 @@ class OrgEventCryptoTest {
         assertThat(OrgEventCrypto.feishuSignature("1700000000", "nonce", "encrypt-key",
                 (new String(body, StandardCharsets.UTF_8) + " ").getBytes(StandardCharsets.UTF_8)))
                 .isNotEqualTo(signature);
-        assertThatThrownBy(() -> OrgEventCrypto.openFeishu("other-key", sealed)).isInstanceOf(OrgEventException.class);
+        // 用别的密钥解开：要么补位 / Base64 校验失败，要么得到乱码——绝不会得到原文。错误密钥只有
+        // 255/256 的概率撞上非法 PKCS#5 补位（IV 每次随机），所以断言结果而不是断言一定抛异常。
+        try {
+            assertThat(OrgEventCrypto.openFeishu("other-key", sealed)).isNotEqualTo("{\"a\":1}");
+        } catch (OrgEventException expected) {
+            assertThat(expected.status().value()).isEqualTo(401);
+        }
     }
 
     @Test
