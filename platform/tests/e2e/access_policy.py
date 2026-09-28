@@ -7,11 +7,12 @@
 P  插件没激活时发布带策略的问卷 → 网关回读失败并回滚，引擎里不留问卷。
 W1 开放时间在未来 → 拒绝（中文提示带本地时刻与时区），原生 startdate 是换算后的 UTC。
 W2 已截止（纽约时区）→ 拒绝；清掉原生 expires、伪造 Date 头与 startdate 字段，插件照样拒绝，不落库。
-W3 开始时在窗口内、交卷时已截止 → 这次提交被拒，答卷未提交（改客户端时间不延期）。
+W3 开始时在窗口内、交卷时已截止 → 这次提交被拒，且**没人替他交卷**（改客户端时间不延期）。
 PW 访问密码：错误被拒、正确进入并交卷；解锁只对本 sid 有效；库里只有哈希；状态端点不泄漏哈希。
 L1 按设备限 1 次：同一浏览器第二次被拒；新浏览器可以（已记录的绕过方式）。
 L2 按 token 限 1 次：同一 token 换浏览器第二次被拒（插件提示，不是引擎提示）。
-D  限时 60 秒：服务端到点拒绝提交、不落库；同一 token 换浏览器也不能重新计时。
+D  限时 60 秒：服务端到点拒绝提交，并把那份卷按**截止时刻**强制收掉（WP-09.2，
+   与 W3 刻意不同，见 finish_closing_window 的说明）；同一 token 换浏览器也不能重新计时。
 C  验证码：原生 usecaptcha=X，进入问卷先要验证码。
 N  IP 规则：拒绝 127.0.0.0/8，伪造 X-Forwarded-For 无效。
 """
@@ -39,6 +40,9 @@ from pubgw.policy.probe import HttpPolicyProbe  # noqa: E402
 from pubgw.policy.timewindow import load_zone  # noqa: E402
 from pubgw.publish import Publisher  # noqa: E402
 from pubgw.rpc import RemoteControlClient  # noqa: E402
+from exam_support import (  # noqa: E402
+    exam_attempt, exam_attempt_count, exam_responses, exam_submitdate,
+)
 
 RESPONDER = "platform/tests/e2e/access_respond.php"
 PASSWORD = "Open-Sesame-7"
@@ -78,6 +82,18 @@ class Context:
 
     def submitted(self, survey_id: int) -> int:
         return int(self.db.value("SELECT COUNT(*) FROM lime_responses_{} WHERE submitdate IS NOT NULL".format(survey_id)))
+
+    def responses(self, survey_id: int) -> List[List[str]]:
+        return exam_responses(self.db, survey_id)
+
+    def attempt(self, survey_id: int, token: str) -> Dict[str, str]:
+        return exam_attempt(self.db, survey_id, token)
+
+    def attempts(self, survey_id: int) -> int:
+        return exam_attempt_count(self.db, survey_id)
+
+    def submitdate_of(self, survey_id: int, response_id: str) -> Optional[str]:
+        return exam_submitdate(self.db, survey_id, response_id)
 
 
 # ------------------------------------------------------------------ 定义与发布
@@ -269,10 +285,24 @@ def start_closing_window(context: Context, now: datetime) -> Dict[str, Any]:
 
 
 def finish_closing_window(context: Context, state: Dict[str, Any]) -> None:
+    """窗口截止之后的提交被拒，而且**没人替他交卷**——与场景 D 刻意不同。
+
+    机制上的分界线是判定结果带不带截止时刻（ADR 0007 决定 8）：`denyDuration`
+    带，`MjyRuntimePolicy::proctorExam()` 据此进监考、到点先把卷收掉；`denyClosed`
+    不带，直接返回，连考场记录都不建。所以这份问卷在考场记录表里一行都没有。
+
+    语义上也该如此：限时到点是"这个人的考试时间用完了"，他考完了，卷子要定稿并
+    判分；窗口截止是"整份问卷关门了"，还在填的人不是考完，是被关在门外——把半份
+    卷当成交卷，等于替他把没答完的答案定稿。
+    """
     pages = context.respond(state["jar"], [{"postSaved": state["form"], "move": "movesubmit"}])
+    rows = context.responses(state["sid"])
     context.check("W3: submission after closing is rejected", pages[0]["kind"] == "message"
                   and "截止" in pages[0]["text"], texts(pages))
-    context.check("W3: answer not submitted", context.submitted(state["sid"]) == 0)
+    # 答卷行在库里（单页问卷首次 GET 就会建行），但 submitdate 仍为空。
+    context.check("W3: answer not submitted", context.submitted(state["sid"]) == 0, rows)
+    context.check("W3: 窗口截止不进监考，这份问卷没有考场记录",
+                  context.attempts(state["sid"]) == 0, rows)
 
 
 def scenario_password(context: Context) -> None:
@@ -378,18 +408,49 @@ def start_duration(context: Context) -> Dict[str, Any]:
     form = "/tmp/access-e2e-d-{}.json".format(sid)
     pages = context.respond(jar, [{"get": start_url(sid, token)}, {"saveForm": form}])
     context.check("D: allowed at the start", pages[0]["kind"] == "survey", texts(pages))
-    return {"sid": sid, "jar": jar, "form": form, "token": token,
+    # 单页问卷（format=A）的首次 GET 就会在答卷表建一行（JumpTo → _UpdateValuesInDatabase）。
+    # 到点强制交卷要收的正是这一行，所以先把"有几行、都还没交"记下来当基线。
+    rows = context.responses(sid)
+    context.check("D: 进场后有一份还没交的答卷",
+                  len(rows) == 1 and context.submitted(sid) == 0, rows)
+    return {"sid": sid, "jar": jar, "form": form, "token": token, "responses": rows,
             "after": datetime.now(timezone.utc) + timedelta(seconds=DURATION_SECONDS + SLACK_SECONDS)}
 
 
 def finish_duration(context: Context, state: Dict[str, Any]) -> None:
+    """到点之后：这次提交被拒，而那份卷已由服务端按截止时刻收走了（WP-09.2）。
+
+    这里原本断言的是"`submitdate` 仍为空"。那是 WP-09.2 之前的语义——当时限时只有
+    "到点即拒"，作答者已经落库的答案会永远停在 `submitdate IS NULL`，谁都不算他
+    考过，等于白考一场。ADR 0007 把"到点自动交卷"列为刻意补上的行为（决定 8），
+    所以现在要断言的是**谁收的卷**：考场记录记成 `forced`、`submitdate` 正是截止
+    时刻（不是收卷动作跑起来的时刻），而不是"没人交卷"。
+
+    "被拒绝的提交不落库"这层保证仍然要守，改成对着进场时的基线看：答卷表没有多出
+    新行，交上来的也只有服务端收的那一份。
+    """
+    sid, token = state["sid"], state["token"]
     pages = context.respond(state["jar"], [{"postSaved": state["form"], "move": "movesubmit"}])
-    fresh = context.respond(context.new_jar(), [{"get": start_url(state["sid"], state["token"])}])
+    fresh = context.respond(context.new_jar(), [{"get": start_url(sid, token)}])
     context.check("D: late submission rejected on the server", pages[0]["kind"] == "message"
                   and "限时 1 分钟" in pages[0]["text"], texts(pages))
-    context.check("D: answer not submitted", context.submitted(state["sid"]) == 0)
     context.check("D: same token in a new browser cannot restart the clock",
                   fresh[0]["kind"] == "message" and "限时" in fresh[0]["text"], texts(fresh))
+
+    attempt = context.attempt(sid, token)
+    submitted_at = context.submitdate_of(sid, attempt.get("response_id"))
+    context.check("D: 考场记录指向作答者那份答卷",
+                  attempt.get("response_id") not in (None, "", "NULL"), attempt)
+    context.check("D: 那份卷是服务端强制收的，不是作答者自己交的",
+                  attempt.get("state") == "forced", attempt)
+    # 写进去的必须是截止时刻：作答者的时间就是在那一刻用完的，这样结果也与收卷时机无关。
+    context.check("D: submitdate 正是截止时刻，不是收卷时刻",
+                  submitted_at is not None and submitted_at == attempt.get("deadline_at"),
+                  {"submitdate": submitted_at, "attempt": attempt})
+    rows = context.responses(sid)
+    context.check("D: 被拒绝的提交没有再落一份答卷",
+                  len(rows) == len(state["responses"]), {"before": state["responses"], "after": rows})
+    context.check("D: 交上来的只有服务端收的那一份", context.submitted(sid) == 1, rows)
 
 
 def scenario_captcha(context: Context) -> None:
