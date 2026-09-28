@@ -28,7 +28,9 @@ public enum ExportFormat {
     DOCX("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx",
             new DocxExportWriter()),
     /** 附件包：清单、打包结果索引，以及上传的文件本身（R06-07，ADR 0015 增补四）。 */
-    ATTACHMENTS("attachments", "application/zip", "zip", new AttachmentsExportWriter());
+    ATTACHMENTS("attachments", "application/zip", "zip", new AttachmentsExportWriter()),
+    /** 逐份答卷成文的 PDF：每份答卷起一页，中文字体随交付自带并嵌入（R06-05，ADR 0015 增补五）。 */
+    PDF("pdf", "application/pdf", "pdf", new PdfExportWriter());
 
     /** 把导出内容写成一个文件；只写 out，不关闭它。 */
     interface Writer {

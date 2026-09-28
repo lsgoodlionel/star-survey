@@ -52,33 +52,65 @@ final class ExtensionTables {
     private ExtensionTables() {
     }
 
-    static void write(Writer writer, ExportContent content, ExportRecord record) throws IOException {
-        for (Map.Entry<String, Question> entry : group(record.extensions()).entrySet()) {
-            Question question = entry.getValue();
-            DocxExportWriter.heading(writer, 2,
-                    title(content, entry.getKey()) + "（结构版本 " + question.structureVersion + "）");
-            if (question.rows.isEmpty()) {
-                DocxExportWriter.paragraph(writer, question.valid ? NO_ROWS : INVALID);
-                continue;
-            }
-            table(writer, question);
+    /**
+     * 透视结果，与最终格式无关：Word 与 PDF 拿到的是同一份（DRY——这段分组与补空格的逻辑
+     * 只该有一份实现）。
+     *
+     * @param title 小节标题，已含「（结构版本 …）」
+     * @param note  没有数据表时要写的那句话；有表时为空串
+     * @param rows  表头行在最前，其余是数据行；{@code note} 非空时为空表
+     */
+    record Pivoted(String title, String note, List<List<String>> rows) {
+
+        Pivoted {
+            rows = List.copyOf(rows);
         }
     }
 
-    private static void table(Writer writer, Question question) throws IOException {
+    /** 把一份答卷的副表单元格透视成若干张表，一道副表题一张。 */
+    static List<Pivoted> pivot(ExportContent content, ExportRecord record) {
+        List<Pivoted> pivoted = new ArrayList<>();
+        for (Map.Entry<String, Question> entry : group(record.extensions()).entrySet()) {
+            Question question = entry.getValue();
+            String title = title(content, entry.getKey()) + "（结构版本 " + question.structureVersion + "）";
+            if (question.rows.isEmpty()) {
+                pivoted.add(new Pivoted(title, question.valid ? NO_ROWS : INVALID, List.of()));
+                continue;
+            }
+            pivoted.add(new Pivoted(title, "", rows(question)));
+        }
+        return List.copyOf(pivoted);
+    }
+
+    private static List<List<String>> rows(Question question) {
         List<String> columns = List.copyOf(question.columns);
-        DocxExportWriter.tableStart(writer);
+        List<List<String>> rows = new ArrayList<>(question.rows.size() + 1);
         List<String> header = new ArrayList<>(columns.size() + 1);
         header.add(ROW_HEADER);
         header.addAll(columns);
-        DocxExportWriter.row(writer, header);
+        rows.add(List.copyOf(header));
         for (Map.Entry<String, Map<String, String>> row : question.rows.entrySet()) {
             List<String> cells = new ArrayList<>(columns.size() + 1);
             cells.add(display(row.getKey()));
             columns.forEach(column -> cells.add(row.getValue().getOrDefault(column, "")));
-            DocxExportWriter.row(writer, cells);
+            rows.add(List.copyOf(cells));
         }
-        DocxExportWriter.tableEnd(writer);
+        return rows;
+    }
+
+    static void write(Writer writer, ExportContent content, ExportRecord record) throws IOException {
+        for (Pivoted question : pivot(content, record)) {
+            DocxExportWriter.heading(writer, 2, question.title());
+            if (!question.note().isEmpty()) {
+                DocxExportWriter.paragraph(writer, question.note());
+                continue;
+            }
+            DocxExportWriter.tableStart(writer);
+            for (List<String> row : question.rows()) {
+                DocxExportWriter.row(writer, row);
+            }
+            DocxExportWriter.tableEnd(writer);
+        }
     }
 
     /** 行序号从 0 起（契约口径），给人看的表里从 1 起。 */
