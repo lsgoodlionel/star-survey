@@ -1,9 +1,9 @@
 package cn.mjy.platform.response;
 
+import cn.mjy.platform.engine.ProjectionFilter;
 import cn.mjy.platform.engine.ResponseProjection;
 import cn.mjy.platform.engine.ResponseProjectionQuery;
 import cn.mjy.platform.engine.ResponseProjectionQuery.Position;
-import cn.mjy.platform.engine.ResponseState;
 import cn.mjy.platform.response.ResponseSources.Source;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -40,18 +40,29 @@ class ResponsePager {
         this.projections = projections;
     }
 
-    /** 多取一行判断是否还有下一页，避免调用方多翻一次空页。 */
-    Slice slice(List<Source> sources, ResponseState state, ResponseCursor after, int size) {
+    /**
+     * 多取一行判断是否还有下一页，避免调用方多翻一次空页。
+     *
+     * <p>版本条件在这里筛（版本 ↔ 来源是平台侧的映射），其余条件下推到投影表的 SQL；
+     * 两者都不改变 (版本, 代次, 答卷号) 这条顺序，所以键集游标照旧无漏重（R06-01）。
+     */
+    Slice slice(List<Source> sources, ResponseQuery query) {
+        ResponseCursor after = query.after();
+        int size = query.limit();
+        ProjectionFilter filter = projectionFilter(query);
         List<Entry> entries = new ArrayList<>();
         Map<Source, String> generations = new HashMap<>();
         for (Source source : sources) {
+            if (!query.coversVersion(source.version())) {
+                continue;
+            }
             if (after != null && source.version() < after.version()) {
                 continue;
             }
             Position from = after != null && source.version() == after.version()
                     ? new Position(after.generation(), after.responseId()) : null;
-            List<ResponseProjection> rows = projections.page(source.engineInstanceId(), source.engineSid(), state,
-                    from, size + 1 - entries.size());
+            List<ResponseProjection> rows = projections.page(source.engineInstanceId(), source.engineSid(),
+                    filter, from, size + 1 - entries.size());
             rows.forEach(row -> entries.add(new Entry(source, row)));
             if (!rows.isEmpty()) {
                 projections.latestGeneration(source.engineInstanceId(), source.engineSid())
@@ -62,5 +73,12 @@ class ResponsePager {
             }
         }
         return new Slice(entries, false, generations);
+    }
+
+    /** 查询里能下推到投影表的那部分条件（版本除外：版本 ↔ 来源的映射只在平台侧）。 */
+    private static ProjectionFilter projectionFilter(ResponseQuery query) {
+        return ProjectionFilter.ofState(query.state())
+                .withStarted(query.startedFrom(), query.startedTo())
+                .withCompleted(query.completedFrom(), query.completedTo());
     }
 }

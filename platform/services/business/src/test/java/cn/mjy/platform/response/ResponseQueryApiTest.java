@@ -141,6 +141,40 @@ class ResponseQueryApiTest {
         getAs(p.owner(), "/v1/surveys/not-a-uuid/responses").andExpect(status().isBadRequest());
     }
 
+    /** 复合筛选（R06-01）：状态 ＋ 版本 ＋ 两个时间区间同时出现在查询串里。 */
+    @Test
+    void theCompositeFilterIsAcceptedOnTheQueryString() throws Exception {
+        String window = "&startedFrom=2020-01-01T00:00:00Z&startedTo=2100-01-01T00:00:00Z"
+                + "&completedFrom=2020-01-01T00:00:00Z&completedTo=2100-01-01T00:00:00Z";
+
+        getAs(p.owner(), responsesUrl() + "?state=engine_completed&version=1&limit=10" + window)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].responseId").value(1));
+        getAs(p.owner(), responsesUrl() + "?startedFrom=2100-01-01T00:00:00Z")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(0));
+        getAs(p.owner(), responsesUrl() + "?version=2")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(0));
+        getAs(p.owner(), "/v1/responses?surveyId=" + p.surveyId() + "&version=1" + window)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1));
+    }
+
+    @Test
+    void badFilterParametersAre400() throws Exception {
+        getAs(p.owner(), responsesUrl() + "?startedFrom=2026-09-20").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"));
+        getAs(p.owner(), responsesUrl() + "?startedFrom=2026-09-21T00:00:00Z&startedTo=2026-09-20T00:00:00Z")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"));
+        getAs(p.owner(), responsesUrl() + "?completedFrom=2026-09-21T00:00:00Z&completedTo=2026-09-20T00:00:00Z")
+                .andExpect(status().isBadRequest());
+        getAs(p.owner(), responsesUrl() + "?version=0").andExpect(status().isBadRequest());
+        getAs(p.owner(), responsesUrl() + "?version=abc").andExpect(status().isBadRequest());
+    }
+
     @Test
     void aCursorFromThePreviousPageContinuesTheListing() throws Exception {
         fixture.response(p.tenant(), p.instance(), p.sid(), GENERATION, 2, COMPLETED);

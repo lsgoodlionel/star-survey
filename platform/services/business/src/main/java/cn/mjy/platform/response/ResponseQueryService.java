@@ -15,7 +15,6 @@ import cn.mjy.platform.response.ResponseSummary.VersionCounts;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.tenant.TenantScope;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,7 +23,10 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 /**
- * 答卷查询（WP-06 切片 06.1，ADR 0013）：明细分页、统计汇总、字段字典。
+ * 答卷查询（WP-06 切片 06.1，ADR 0013）：明细分页、复合筛选、统计汇总、字段字典。
+ *
+ * <p>一次明细查询的条件、翻页位置与条数都在 {@link ResponseQuery} 里（含校验）；
+ * 能下推的条件由 {@link ResponsePager} 交给投影表的 SQL，键集游标的无漏重保证因此不变（ADR 0013 增补一）。
  *
  * <p>权限全部经 access 模块判定：明细要 {@code view-raw-responses}（统计查看者 403），
  * 敏感列按 {@link ResponseFieldPolicies} 遮蔽；汇总要 {@code view-statistics}；字段字典要 {@code view}。
@@ -33,8 +35,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class ResponseQueryService {
 
-    public static final int DEFAULT_LIMIT = 50;
-    public static final int MAX_LIMIT = 200;
+    public static final int DEFAULT_LIMIT = ResponseQuery.DEFAULT_LIMIT;
+    public static final int MAX_LIMIT = ResponseQuery.MAX_LIMIT;
     static final String AUDIT_LIST = "response.list";
 
     private final TenantScope tenantScope;
@@ -60,23 +62,26 @@ public class ResponseQueryService {
     }
 
     /**
-     * 明细的一页。
+     * 明细的一页，只按状态筛选。
      *
      * @param state  {@code in_progress} / {@code engine_completed} / {@code deleted}；{@code null} 表示全部
      * @param cursor 上一页的 {@code nextCursor}；{@code null} 表示第一页
      * @param limit  每页条数，1–{@value #MAX_LIMIT}；{@code null} 取 {@value #DEFAULT_LIMIT}
      */
     public ResponsePage list(TenantContext ctx, UUID surveyId, String state, String cursor, Integer limit) {
+        return list(ctx, surveyId, ResponseQuery.parse(state, null, null, null, null, null, cursor, limit));
+    }
+
+    /** 明细的一页，按复合条件筛选（R06-01）。条件、翻页位置与条数都已在 {@link ResponseQuery} 里校验过。 */
+    public ResponsePage list(TenantContext ctx, UUID surveyId, ResponseQuery query) {
         Objects.requireNonNull(ctx, "ctx");
+        Objects.requireNonNull(query, "query");
         access.require(ctx, Permission.VIEW_RAW_RESPONSES, surveyId);
-        ResponseState stateFilter = parseState(state);
-        ResponseCursor after = cursor == null || cursor.isEmpty() ? null : ResponseCursor.decode(cursor);
-        int size = pageSize(limit);
 
         List<Source> surveySources = sources.sources(ctx, surveyId);
         ResponseFieldPolicy policy = fieldPolicies.forResponses(ctx, surveyId,
                 ResponseSources.sensitiveFieldnames(surveySources));
-        Slice slice = tenantScope.call(ctx.tenantId(), () -> pager.slice(surveySources, stateFilter, after, size));
+        Slice slice = tenantScope.call(ctx.tenantId(), () -> pager.slice(surveySources, query));
         List<ResponseRow> rows = withAnswers(slice, policy);
         tenantScope.run(ctx.tenantId(), () -> audit.record(ctx.tenantId(), ctx.actorId(), AUDIT_LIST,
                 "survey/" + surveyId + "/responses", ctx.traceId()));
@@ -152,24 +157,4 @@ public class ResponseQueryService {
                 byState.getOrDefault(ResponseState.DELETED, 0L));
     }
 
-    private static ResponseState parseState(String state) {
-        if (state == null || state.isEmpty()) {
-            return null;
-        }
-        return Arrays.stream(ResponseState.values())
-                .filter(s -> s.dbValue().equals(state))
-                .findFirst()
-                .orElseThrow(() -> new InvalidResponseQueryException(
-                        "state must be one of in_progress, engine_completed, deleted"));
-    }
-
-    private static int pageSize(Integer limit) {
-        if (limit == null) {
-            return DEFAULT_LIMIT;
-        }
-        if (limit < 1 || limit > MAX_LIMIT) {
-            throw new InvalidResponseQueryException("limit must be between 1 and " + MAX_LIMIT);
-        }
-        return limit;
-    }
 }
