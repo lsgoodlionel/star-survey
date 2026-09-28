@@ -1,7 +1,12 @@
 package cn.mjy.platform.asset;
 
 import cn.mjy.platform.access.AccessFixture;
+import cn.mjy.platform.access.MemberService;
 import cn.mjy.platform.shared.TenantContext;
+import cn.mjy.platform.shared.TenantId;
+import cn.mjy.platform.tenant.TenantFixtures;
+import cn.mjy.platform.tenant.engine.EngineFixtures;
+import cn.mjy.platform.tenant.engine.EngineInstanceService;
 import java.nio.charset.StandardCharsets;
 import org.springframework.stereotype.Component;
 
@@ -16,13 +21,42 @@ public class AssetFixture {
     public static final String EDITOR_ROLE = "project_manager";
 
     private final AccessFixture access;
+    private final TenantFixtures tenants;
+    private final MemberService members;
+    private final EngineInstanceService engines;
 
-    public AssetFixture(AccessFixture access) {
+    public AssetFixture(AccessFixture access, TenantFixtures tenants, MemberService members,
+            EngineInstanceService engines) {
         this.access = access;
+        this.tenants = tenants;
+        this.members = members;
+        this.engines = engines;
     }
 
     public TenantContext newTenant() {
         return access.newTenant();
+    }
+
+    /**
+     * 一个<b>真实租户行</b>（不是只有 TenantId）＋ 一套 active 引擎实例。
+     *
+     * <p>拉取作答者上传要求那台引擎属于调用方这个租户（独立安全审查的 CRITICAL），
+     * 而 {@code engine_instance.tenant_id} 指向 {@code tenant} 表，所以租户必须真的开通过。
+     */
+    public EngineWorkspace newTenantWithEngine() {
+        TenantId tenant = tenants.activeTenant();
+        members.bootstrapOwner(tenant, AccessFixture.OWNER, "trace-bootstrap");
+        String instance = EngineFixtures.uniqueInstanceId();
+        engines.register(tenant, instance, "https://engine.example/" + instance, "op", "trace");
+        return new EngineWorkspace(AccessFixture.context(tenant, AccessFixture.OWNER), instance);
+    }
+
+    /** 一个租户及其自己的引擎实例标识。 */
+    public record EngineWorkspace(TenantContext owner, String engineInstanceId) {
+
+        public TenantId tenant() {
+            return owner.tenantId();
+        }
     }
 
     public TenantContext editor(TenantContext owner, String actor) {
@@ -33,25 +67,29 @@ public class AssetFixture {
         return access.member(owner, actor, VIEWER_ROLE, null);
     }
 
-    /** 最小 PNG：八字节签名 ＋ 一段填充。内容是不是合法图像不在闸门的职责里，文件头是。 */
+    /**
+     * 最小 PNG：签名 ＋ IHDR ＋ IDAT ＋ IEND，<b>不带任何元数据块</b>。
+     *
+     * <p>像素内容不在闸门的职责里，<b>容器结构在</b>：剥离器会按块边界走一遍
+     * （ADR 0019 决定 10），结构不成立就整件拒收，所以夹具得是真的块流而不是一段填充。
+     * 既然没有可剥的东西，剥完与剥前逐字节相同——"上传什么取回什么"的用例因此仍然成立。
+     */
     public static byte[] png() {
-        return withTail(new byte[] {(byte) 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a});
+        return ImageBytes.minimalPng();
     }
 
+    /** 最小 JPEG：SOI ＋ APP0(JFIF) ＋ SOS ＋ 扫描数据 ＋ EOI，不带 APP1。 */
     public static byte[] jpeg() {
-        return withTail(new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xe0});
+        return ImageBytes.minimalJpeg();
     }
 
     public static byte[] gif() {
         return withTail("GIF89a".getBytes(StandardCharsets.US_ASCII));
     }
 
-    /** RIFF 容器：第 8 字节起是 WEBP。 */
+    /** 最小 WebP：RIFF/WEBP 容器里一个 VP8 块，不带 EXIF。 */
     public static byte[] webp() {
-        byte[] bytes = new byte[64];
-        System.arraycopy("RIFF".getBytes(StandardCharsets.US_ASCII), 0, bytes, 0, 4);
-        System.arraycopy("WEBP".getBytes(StandardCharsets.US_ASCII), 0, bytes, 8, 4);
-        return bytes;
+        return ImageBytes.minimalWebp();
     }
 
     /** RIFF 容器，但第 9–12 字节是 WAVE：声明成 image/webp 时必须被认出来不是图。 */
@@ -60,6 +98,11 @@ public class AssetFixture {
         System.arraycopy("RIFF".getBytes(StandardCharsets.US_ASCII), 0, bytes, 0, 4);
         System.arraycopy("WAVE".getBytes(StandardCharsets.US_ASCII), 0, bytes, 8, 4);
         return bytes;
+    }
+
+    /** Matroska / WebM 的 EBML 头；作答者的录音录像走这一种。 */
+    public static byte[] webm() {
+        return withTail(new byte[] {0x1a, 0x45, (byte) 0xdf, (byte) 0xa3});
     }
 
     public static byte[] mp4() {
