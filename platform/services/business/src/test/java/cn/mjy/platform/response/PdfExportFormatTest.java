@@ -11,7 +11,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * 纯单元：逐份答卷成文的 PDF（R06-05，ADR 0015 增补五）。排版结构与 DOCX 共用同一套
+ * 纯单元：逐份答卷成文的 PDF（R06-05，ADR 0015 增补六）。排版结构与 DOCX 共用同一套
  * {@link ExportRecord} 视图，差别在写出器——PDF 自己排页、自己嵌字体。
  *
  * <p>读回一律走 {@link PdfReader}：按规范另写的一份最小解析器，从 {@code startxref} 顺着交叉引用表
@@ -196,16 +196,26 @@ class PdfExportFormatTest {
      * PDF 里最容易破坏逐字节相同的两样东西：创建时间与文档 ID。两样都不能随跑一次变一次，
      * 否则崩溃恢复后的文件与一次跑完的不同（{@link ResponseExportResumeTest}）。
      */
+    /**
+     * PDF 里最容易破坏逐字节相同的两样东西：创建时间与文档 ID。两样都不能变，否则崩溃恢复后的
+     * 文件与一次跑完的不同。
+     *
+     * <p><b>为什么要把 ID 的字面值钉死，而不是「两次写出相等」就算数</b>：崩溃恢复真正发生在
+     * <b>另一个进程</b>里，而 {@link ResponseExportResumeTest} 的两次跑法在<b>同一个 JVM</b> 内。
+     * 于是「每个 JVM 随机一次」的文档 ID 在那条测试里照样两次相同——真上线了却每次重启都变。
+     * 这个盲区是实测出来的：把 ID 改成 {@code static final = UUID.randomUUID()} 之后，
+     * 逐字节相同那条断言依旧是绿的。钉死字面值才关得住它。
+     */
     @Test
-    void thereIsNoTimestampAndTheDocumentIdIsFixed() throws IOException {
+    void thereIsNoTimestampAndTheDocumentIdIsAConstantNotSomethingComputedAtRuntime() throws IOException {
         byte[] pdf = write(FIRST);
 
         assertThat(new String(pdf, java.nio.charset.StandardCharsets.ISO_8859_1))
                 .doesNotContain("/CreationDate").doesNotContain("/ModDate");
         assertThat(PdfReader.value(PdfReader.of(pdf).trailer(), "/ID"))
-                .as("文档 ID 是常量，不随跑一次变一次")
-                .isNotEmpty()
-                .isEqualTo(PdfReader.value(PdfReader.of(write(SECOND)).trailer(), "/ID"));
+                .as("文档 ID 必须是编译期常量：跨进程也得是同一个值")
+                .isEqualTo("[<4d4a59504446303030303030303030303030303031>"
+                        + " <4d4a59504446303030303030303030303030303031>]");
     }
 
     /** 30 万答卷的 PDF 没人打得开：与 DOCX 同一个处置，超出上限时作业失败。 */

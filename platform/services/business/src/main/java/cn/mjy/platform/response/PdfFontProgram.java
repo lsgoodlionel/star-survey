@@ -18,7 +18,7 @@ import java.util.TreeSet;
 
 /**
  * 随交付自带的中文字体：解析 TrueType 表、按码位查字形、并按用到的字形裁出一份最小字体程序，
- * 供 PDF 以 {@code /FontFile2} <b>嵌入</b>（ADR 0015 增补五；冻结工作表 P-10 否决了靠阅读器
+ * 供 PDF 以 {@code /FontFile2} <b>嵌入</b>（ADR 0015 增补六；冻结工作表 P-10 否决了靠阅读器
  * CJK 字体包那条备选）。
  *
  * <p>字体是 {@code resources/fonts/MJYSansSC-Regular.ttf}——Noto Sans CJK SC（思源黑体）的

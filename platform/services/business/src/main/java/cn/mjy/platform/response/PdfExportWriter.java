@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 只用 JDK 写出的 PDF 1.7：逐份答卷成文（R06-05，ADR 0015 增补五）。每份答卷起一页，
+ * 只用 JDK 写出的 PDF 1.7：逐份答卷成文（R06-05，ADR 0015 增补六）。每份答卷起一页，
  * 页内依次是「答卷信息」「作答」「结构化作答」「附件」——排版结构与 {@link DocxExportWriter}
  * 共用同一套 {@link ExportRecord} 视图与同一份副表透视（{@link ExtensionTables#pivot}），
  * 差别只在写出器。

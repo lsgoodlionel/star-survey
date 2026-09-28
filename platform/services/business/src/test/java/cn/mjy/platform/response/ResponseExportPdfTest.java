@@ -20,7 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * 整条作业链路产出的 PDF（R06-05，ADR 0015 增补五）：建作业 → 后台跑完 → 下载 → 读回。
+ * 整条作业链路产出的 PDF（R06-05，ADR 0015 增补六）：建作业 → 后台跑完 → 下载 → 读回。
  * 与 Word 那一半共用同一套 {@link ExportRecord} 视图，所以这里核对的是<b>格式特有</b>的那几件事：
  * 中文真的能提取、字体真的嵌进来了、敏感列照旧遮蔽、重跑逐字节相同。
  */

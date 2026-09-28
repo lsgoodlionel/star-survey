@@ -2,7 +2,7 @@
 """从 Noto Sans CJK SC 生成随交付自带、可嵌入 PDF 的中文字体子集。
 
 产物是 `platform/services/business/src/main/resources/fonts/MJYSansSC-Regular.ttf`，
-由 `PdfFontProgram` 在运行期读出、按用到的字形再做一次裁剪后嵌进 PDF（ADR 0015 增补五）。
+由 `PdfFontProgram` 在运行期读出、按用到的字形再做一次裁剪后嵌进 PDF（ADR 0015 增补六）。
 
 ## 为什么要有这一步
 
