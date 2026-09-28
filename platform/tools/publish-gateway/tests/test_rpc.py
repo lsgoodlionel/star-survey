@@ -37,12 +37,14 @@ class CallTest(unittest.TestCase):
         def transport(payload):
             return json.dumps({"id": 1, "result": None, "error": "boom"}).encode("utf-8")
 
+        # 方法名必须在白名单里，否则 ForbiddenMethod 会在传输层之前抛出，
+        # 这两个用例就不再检验它们本来要检验的应答形状（见 test_rpc_allowlist.py）。
         with self.assertRaises(RpcError):
-            RemoteControlClient(transport).call("whatever", [])
+            RemoteControlClient(transport).call("get_survey_properties", [])
 
     def test_raises_on_a_body_that_is_not_json(self):
         with self.assertRaises(RpcError):
-            RemoteControlClient(lambda payload: b"<html>500</html>").call("whatever", [])
+            RemoteControlClient(lambda payload: b"<html>500</html>").call("get_survey_properties", [])
 
 
 class CheckedCallTest(unittest.TestCase):
@@ -196,7 +198,8 @@ class HttpTransportTest(unittest.TestCase):
 
         transport = HttpTransport(self.serve(Handler) + "/custom/rpc", rpc_path="")
 
-        self.assertEqual("OK", RemoteControlClient(transport).call("x", []))
+        # 方法名在这个用例里无关紧要，但必须在白名单里（见 test_rpc_allowlist.py）。
+        self.assertEqual("OK", RemoteControlClient(transport).call("get_survey_properties", []))
         self.assertEqual(["/custom/rpc"], seen)
 
     def test_a_read_timeout_becomes_an_rpc_error(self):

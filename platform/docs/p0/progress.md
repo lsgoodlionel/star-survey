@@ -46,9 +46,9 @@
 8. **隔离完全依赖部署形态**：多个实例共享同一份代码目录时，一个租户写入的 PHP 文件会被邻居实例执行，`security.php` 加密密钥共用，`allowed_hosts.php` 互相覆盖（已实测造成邻居 400）。每租户必须独立代码副本。
 9. 引擎会话 cookie 名固定为 `PHPSESSID`，同域多实例会互相覆盖登录态，需按租户设置 `session.name`。
 10. **共享代码目录还会污染测试**：功能套件里的主题测试被上一轮遗留在共享挂载中的文件搞红，与 00.5 的跨租户问题同源——每实例独立代码副本这条规则对测试环境同样适用。
-11. 答卷附件的匿名访问保护仅来自 `.htaccess`，换 nginx 或 `AllowOverride None` 后，知道 sid 与文件名即可下载他人附件。
+11. 答卷附件的匿名访问保护仅来自 `.htaccess`，换 nginx 或 `AllowOverride None` 后，知道 sid 与文件名即可下载他人附件。**已修（ADR 0020）**：判据搬进服务器配置，与 `AllowOverride` 无关；顺带查实在途上传 `tmp/upload/futmp_*` 此前根本没被挡住，一并收口。
 11. **引擎配额没有原子性**：`Quota::getCompleteCount()`（`Quota.php:165`）是不加锁的全表 COUNT，与 `em_manager_helper.php:5435` 写 `submitdate` 之间没有事务。常规数据量下偶发超发（14 轮里 1 轮 2 人）；答卷表 262,144 行时那条 COUNT 要 24 毫秒，8 个并发抢最后一个名额有 **6～7 人同时抢到**。硬名额必须由平台在进场前预留（ADR 0007）。
-12. **`beforeSurveyPage` 可以拒绝一次提交**：它在 `SurveyIndex.php:228` 派发，早于处理 POST 的 `SurveyRuntimeHelper::run()`（同文件 `:692`），钩子里调 `renderExitMessage()` 会终止请求，答案与 `submitdate` 都不落库。`afterSurveyQuota` 做不到——它派发时答案已经存过了。RemoteControl `add_response` 则完全绕开这个钩子。
+12. **`beforeSurveyPage` 可以拒绝一次提交**：它在 `SurveyIndex.php:228` 派发，早于处理 POST 的 `SurveyRuntimeHelper::run()`（同文件 `:692`），钩子里调 `renderExitMessage()` 会终止请求，答案与 `submitdate` 都不落库。`afterSurveyQuota` 做不到——它派发时答案已经存过了。RemoteControl `add_response` 则完全绕开这个钩子。**已修（ADR 0021）**：网关侧白名单发不出 `add_response` / `update_response`，引擎侧 `MjyRuntimePolicy` 另加一道 `beforeControllerAction` 闸门（运维可按实例显式打开）。
 13. **PHP 会话 id 不是稳定的作答者身份**：`resetAllSessionVariables()`（`frontend_helper.php:1406`）调 `regenerateID(true)`，同一个作答者的 GET 与 POST 会话 id 不同。凡是"按作答者"的计数（名额、计时、防重复）都不能拿会话 id 当键，必须用平台发的 token。
 14. **答卷行在打开问卷时就创建**，不是交卷时创建；"有没有作答"只能看 `submitdate`，不能看行数。
 15. **题目级 `time_limit` 是纯前端 JS 倒计时**（`qanda_helper.php:394` 起），服务端不做任何校验；问卷级 `expires` 虽是服务端判定，但全体考生共享一个到期时刻。考试限时必须由平台按场次下发（ADR 0007）。
@@ -58,3 +58,4 @@
 19. **题型主题缺失时导入静默降级**：`Question::questionThemeNameValidator()`（`Question.php:1531`）把未安装的 `question_theme_name` 换成基础主题，不报错也不写 `importwarnings`。题型主题必须随镜像预装并在发布后回读校验。
 20. **题型主题的 `answercolumndefinition` 在 7.1.2 里是死代码**：`createFieldMap()` 的守卫判断 `$arow['attribute']`（`common_helper.php:1748`），而主查询（同文件 `:1705`）没有这一列，主题声明的答卷列类型永远不生效。
 21. **`update_response` 绕过全部校验**：`remotecontrol_handle.php:3535` 直接 `SurveyDynamic::encryptSave()`，不跑 EM、不跑必答、不跑插件闸门。平台侧的答卷编辑入口必须自己校验。
+  **已修（ADR 0021）**：与发现 12 同一道闸门，端到端复现脚本 `platform/tests/e2e/rpc_gate.py` 先红后绿。

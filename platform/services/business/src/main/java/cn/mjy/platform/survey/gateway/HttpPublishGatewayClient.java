@@ -36,6 +36,7 @@ public class HttpPublishGatewayClient implements PublishGatewayClient {
     static final String PUBLISH_PATH = "/v1/publish";
     static final String CLOSE_PATH = "/v1/close";
     static final String DRIFT_CHECK_PATH = "/v1/drift-check";
+    static final String REVOKE_PATH = "/v1/participants/revoke";
     static final String TIMESTAMP_HEADER = "X-Pubgw-Timestamp";
     static final String SIGNATURE_HEADER = "X-Pubgw-Signature";
 
@@ -118,6 +119,33 @@ public class HttpPublishGatewayClient implements PublishGatewayClient {
             log.error("publish gateway returned an unreadable close response (http {}): {}", exchange.status(),
                     e.getMessage());
             return new CloseOutcome.NotClosed("unreadable http " + exchange.status() + " response");
+        }
+    }
+
+    @Override
+    public RevokeOutcome revokeParticipant(GatewayRevokeRequest request) {
+        if (!isConfigured()) {
+            return new RevokeOutcome.NotRevoked("gateway_not_configured");
+        }
+        ObjectNode envelope = json.createObjectNode();
+        envelope.put("requestId", request.requestId().toString());
+        envelope.put("engineInstanceId", request.engineInstanceId());
+        envelope.put("surveyId", request.surveyId());
+        envelope.put("participantToken", request.participantToken());
+        Exchange exchange = post(REVOKE_PATH, json.writeValueAsBytes(envelope));
+        if (exchange.failure() != null) {
+            return new RevokeOutcome.NotRevoked(exchange.failure());
+        }
+        try {
+            JsonNode body = readBody(exchange);
+            if (exchange.status() == 200) {
+                return GatewayOperationsParser.revoked(body, request.surveyId());
+            }
+            return new RevokeOutcome.NotRevoked("http " + exchange.status() + " " + errorOf(body));
+        } catch (JacksonException | GatewayResponseParser.MalformedResponseException e) {
+            log.error("publish gateway returned an unreadable revoke response (http {}): {}", exchange.status(),
+                    e.getMessage());
+            return new RevokeOutcome.NotRevoked("unreadable http " + exchange.status() + " response");
         }
     }
 
