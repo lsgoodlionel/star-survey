@@ -135,6 +135,11 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | R06-03 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportSavTest.java::theBundleHasTheDatasetItsVariableDictionaryAndTheUsualSideSheets` | 整条作业链路产出 SPSS 包与变量字典 |
 | R06-05 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/DocxExportFormatTest.java::eachResponseGetsItsOwnHeadingAndPage` | 逐份答卷成文 |
 | R06-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportDocxTest.java::everyResponseBecomesItsOwnSectionWithQuestionsAndAnswers` | 整条作业链路产出 Word |
+| R06-05 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/PdfExportFormatTest.java::everyResponseStartsOnItsOwnPage` | PDF 也逐份答卷成文，每份起一页 |
+| R06-05 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/PdfExportFormatTest.java::chineseTextIsReallyExtractableNotJustPaintedOnThePage` | 中文是可提取的文本，不是画在页面上的图形 |
+| R06-05 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/PdfExportFormatTest.java::theChineseFontIsEmbeddedAsASubsetAndNotLeftToTheReader` | 中文字体随交付自带并嵌入（冻结工作表 P-10），不依赖阅读器 |
+| R06-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportPdfTest.java::everyResponseBecomesItsOwnPageWithQuestionsAndAnswers` | 整条作业链路产出 PDF |
+| R06-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportPdfTest.java::sensitiveAnswersAreMaskedInThePdfToo` | 敏感字段脱敏在 PDF 里同样生效 |
 | R06-06 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/DocxExportFormatTest.java::sideTableAnswersArePivotedBackIntoARealTable` | 副表作答还原成表格 |
 | R06-07 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportAttachmentPackageTest.java::thePackageCarriesTheFilesThemselvesAlongsideTheManifest` | 附件包含文件本体与清单 |
 | R06-07 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportAttachmentPackageTest.java::aTransientFailureRetriesAndOnlyRefetchesWhatIsStillMissing` | 失败项可重试 |

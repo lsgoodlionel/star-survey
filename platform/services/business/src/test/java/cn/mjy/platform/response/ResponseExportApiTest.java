@@ -140,9 +140,9 @@ class ResponseExportApiTest {
 
     @Test
     void invalidRequestsAre400() throws Exception {
-        // pdf 还没实现；sav（切片 06.3）与 docx（切片 06.4）都已是合法取值，不能再拿它们当
-        // "不认识的格式"的例子。
-        for (String body : new String[] {"{\"format\":\"pdf\"}", "{\"format\":\"csv\",\"templateVersion\":\"v9\"}",
+        // rtf 没实现；sav（06.3）、docx（06.4）、attachments（R06-07）、pdf（增补五）都已是合法取值，
+        // 不能再拿它们当"不认识的格式"的例子。这个例子已经换过三轮了，每加一种格式就得换一次。
+        for (String body : new String[] {"{\"format\":\"rtf\"}", "{\"format\":\"csv\",\"templateVersion\":\"v9\"}",
                 "{\"format\":\"csv\",\"filter\":{\"states\":[\"bogus\"]}}", "{}", "not json"}) {
             mvc.perform(as(p.owner(), post(exportsUrl())).contentType(MediaType.APPLICATION_JSON).content(body))
                     .andExpect(status().isBadRequest())
