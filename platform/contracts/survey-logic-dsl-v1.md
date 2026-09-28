@@ -103,7 +103,10 @@ CODE/NAME  := 字母开头的字母数字串（不含下划线）
 - **隐藏必答**：条件为假时引擎不检查必答（`em_manager_helper.php` `_ValidateQuestion`：
   `$qrel && !$qhidden` 才查必答），并在该页提交时把隐藏题的值置 NULL（`deletenonvalues`，
   引擎缺省为 1；网关无法经 RemoteControl 读取此实例级配置，部署须保持缺省）。
-  题组条件为假时组内所有题（含计算值）置 NULL。e2e 覆盖「先答后隐藏」被清空。
+  题组条件为假时组内所有题（含计算值）置 NULL。e2e 覆盖「先答后隐藏」被清空，
+  以及**续答之后仍一致**：答完狗名存断点、换全新会话（另一套 cookie，只凭名字口令）续答回来再改成猫，
+  隐藏题照样清成 NULL，整行与不走续答的同一条路径逐列相同
+  （`publish_gateway_logic.py` 场景 D，双库各 18 项）。
 - **引用转义**：文本答案经引擎 `htmlSpecialCharsUserValue()` 转义 `< > & { }` 后才被替换进页面；
   e2e 用 `<b>Tom</b>{QAGE}` 验证页面只出现转义后的文本。
 
