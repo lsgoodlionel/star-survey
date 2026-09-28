@@ -1,5 +1,6 @@
 package cn.mjy.platform.delivery;
 
+import cn.mjy.platform.engine.ProjectionFilter;
 import cn.mjy.platform.engine.ResponseProjection;
 import cn.mjy.platform.engine.ResponseProjectionQuery;
 import cn.mjy.platform.engine.ResponseState;
@@ -79,7 +80,7 @@ class CompletionReconciler {
         return tenantScope.call(tenant, () -> {
             ResponseProjectionQuery.Position after = cursors.find(surveyId).orElse(null);
             List<ResponseProjection> page = projections.page(route.get().engineInstanceId(),
-                    route.get().engineSid(), ResponseState.ENGINE_COMPLETED, after, PAGE);
+                    route.get().engineSid(), ProjectionFilter.ofState(ResponseState.ENGINE_COMPLETED), after, PAGE);
             // 一页最多 PAGE 份答卷，按批问一次；逐条问会把一次对账放大成两百次 HTTP。
             Map<Long, String> keys = resolver.respondentKeysOf(tenant, page);
             int recorded = 0;

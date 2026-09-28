@@ -40,15 +40,18 @@ public class ContactParticipationService {
     private final ContactParticipationRepository participations;
     private final SurveyService surveys;
     private final ContactsAudit audit;
+    private final EngineInvitationRevocation engineRevocation;
 
     ContactParticipationService(TenantScope tenantScope, ContactAccess access, ContactRepository contacts,
-            ContactParticipationRepository participations, SurveyService surveys, ContactsAudit audit) {
+            ContactParticipationRepository participations, SurveyService surveys, ContactsAudit audit,
+            EngineInvitationRevocation engineRevocation) {
         this.tenantScope = tenantScope;
         this.access = access;
         this.contacts = contacts;
         this.participations = participations;
         this.surveys = surveys;
         this.audit = audit;
+        this.engineRevocation = engineRevocation;
     }
 
     /** 人工登记映射；同一联系人、同一版本、同一令牌重复登记幂等。 */
@@ -140,14 +143,42 @@ public class ContactParticipationService {
         });
     }
 
+    /**
+     * 撤销一个邀请码（ADR 0016 缺口「邀请码撤销的平台接口」）。
+     *
+     * <p>顺序是<b>先引擎、后平台</b>，而且不可交换：
+     * <ol>
+     *   <li>经网关删掉引擎 {@code tokens_<sid>} 里那一行参与者（契约 v1.4）。行没了，
+     *       非匿名问卷立刻凭这个码进不去——引擎的作答入口按有没有这一行放人，不用等任何缓存；</li>
+     *   <li>确认删掉之后才写 {@code revoked_at}。</li>
+     * </ol>
+     * 反过来（先写库、再调引擎）就是这个缺口的原状：网关那一步失败时，平台已经把这个码
+     * 记成"已撤销"，而它照样能打开问卷，且没人会再发现。所以网关没确认时本方法抛
+     * {@link InvitationRevocationFailedException}、一个字节都不写。
+     *
+     * <p>删的是<b>这条映射自己</b>的 {@code (实例, sid)}，不是"当前在线版本"的：按 ADR 0012，
+     * 新版本是引擎里另一份问卷、另一套参与者表，令牌活在签发它的那一份上。旧版本的映射
+     * 因此同样撤得掉——那一版即使已被 {@code /v1/close} 收口，收口也只挡新答卷，
+     * 续答与已开启的会话不受它约束。
+     *
+     * <p>网关调用不在数据库事务里（与 {@code SupersededVersionCloser} 同一条规矩）：授权与读取
+     * 在一个租户作用域内完成，写 {@code revoked_at} 在另一个。中间并发的第二次撤销无害——
+     * 那条 UPDATE 带 {@code revoked_at IS NULL}，重复撤销返回 false、不重复记审计。
+     */
     public void revoke(TenantContext ctx, UUID participationId) {
-        tenantScope.run(ctx.tenantId(), () -> {
+        ParticipationView participation = tenantScope.call(ctx.tenantId(), () -> {
             ContactScope scope = access.scopeOf(ctx);
-            ParticipationView participation = participations.find(participationId)
+            ParticipationView found = participations.find(participationId)
                     .orElseThrow(() -> new ContactNotFoundException("participation not found: " + participationId));
-            if (contacts.findVisible(scope, participation.contactId()).isEmpty()) {
+            if (contacts.findVisible(scope, found.contactId()).isEmpty()) {
                 throw new ContactNotFoundException("participation not found: " + participationId);
             }
+            return found;
+        });
+
+        engineRevocation.revoke(participation);
+
+        tenantScope.run(ctx.tenantId(), () -> {
             if (participations.revoke(participationId, ctx.actorId())) {
                 audit.record(ctx, ContactsAudit.PARTICIPATION_REVOKE, "contact-participation", participationId);
             }

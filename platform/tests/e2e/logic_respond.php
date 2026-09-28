@@ -10,10 +10,18 @@
  * plan.json: {"steps": [{"answers": {"<fieldname>": "<value>"}, "move": "movenext|moveprev|movesubmit",
  *                        "needles": ["text to look for in the page shown before this step"]}]}
  *
- * Every step first records the page currently shown (which questions are on it and
- * whether each is visible or hidden as irrelevant), then posts that page's form the
- * way a browser would: every hidden field, the current value of every text input,
- * textarea and checked radio, overridden by the step's answers.
+ * Two extra step kinds drive "resume later" (R03-02 "consistent after resuming"),
+ * the same engine paths question_slice_support.php uses:
+ *   {"save": "<name>"}    post saveall, then the save form with <name> as both
+ *                         identifier and password; the half response stays in the table
+ *   {"resume": "<name>"}  start a brand new session (fresh cookie jar) and load the
+ *                         saved response back with loadall=reload plus name and password
+ *
+ * Every step — including these two — first records the page currently shown (which
+ * questions are on it and whether each is visible or hidden as irrelevant), then acts.
+ * A plain step posts that page's form the way a browser would: every hidden field, the
+ * current value of every text input, textarea and checked radio, overridden by the
+ * step's answers.
  *
  * Prints {"pages": [...], "completed": bool} as JSON on stdout.
  */
@@ -36,33 +44,119 @@ function main(array $argv): int
         fwrite(STDERR, "usage: php logic_respond.php <sid> < plan.json\n");
         return 2;
     }
-    $cookieJar = tempnam(sys_get_temp_dir(), 'logic-e2e-cookies');
+    // One jar per session: a "resume" step opens a new one, so resuming really does
+    // depend on the save name and password rather than on a surviving cookie.
+    $jars = [newJar()];
     try {
-        $page = httpRequest(BASE_URL . "/$surveyId?lang=en&newtest=Y", null, $cookieJar);
-        $pages = [];
-        foreach ($plan['steps'] as $index => $step) {
-            if (strpos($page, COMPLETED_MARKER) !== false) {
-                // Every later page was irrelevant: the engine finished early.
-                break;
-            }
-            $document = loadDocument($page);
-            $pages[] = describePage($document, $page, $step['needles'] ?? []);
-            $form = currentForm($document);
-            if ($form === null) {
-                fwrite(STDERR, "step $index: no survey form on the page\n" . substr(strip_tags($page), 0, 600) . "\n");
-                echo json_encode(['pages' => $pages, 'completed' => false]), "\n";
-                return 1;
-            }
-            $fields = array_merge($form['fields'], array_map('strval', $step['answers'] ?? []));
-            $fields['move'] = (string) ($step['move'] ?? 'movenext');
-            $page = httpRequest($form['action'], $fields, $cookieJar);
-        }
-        $pages[] = describePage(loadDocument($page), $page, []);
-        echo json_encode(['pages' => $pages, 'completed' => strpos($page, COMPLETED_MARKER) !== false]), "\n";
-        return 0;
+        $result = runSteps($surveyId, $plan['steps'], $jars);
+        echo json_encode($result), "\n";
+        return isset($result['broken']) ? 1 : 0;
     } finally {
-        @unlink($cookieJar);
+        foreach ($jars as $jar) {
+            @unlink($jar);
+        }
     }
+}
+
+function newJar(): string
+{
+    return (string) tempnam(sys_get_temp_dir(), 'logic-e2e-cookies');
+}
+
+/**
+ * @param array<int, array<string, mixed>> $steps
+ * @param array<int, string> $jars
+ * @return array{pages: array<int, array<string, mixed>>, completed: bool, broken?: string}
+ */
+function runSteps(int $surveyId, array $steps, array &$jars): array
+{
+    $steps = array_values($steps);
+    // A plan may open with a resume step. Then do NOT start a session first: the engine
+    // creates a response row as soon as a survey is entered, so a throwaway newtest=Y
+    // session would leave an empty row behind and make "resuming reuses the same
+    // response" unverifiable.
+    if (isset($steps[0]['resume'])) {
+        $page = loadSaved($surveyId, (string) $steps[0]['resume'], end($jars));
+        $steps = array_slice($steps, 1);
+    } else {
+        $page = httpRequest(BASE_URL . "/$surveyId?lang=en&newtest=Y", null, end($jars));
+    }
+    $pages = [];
+    foreach ($steps as $index => $step) {
+        if (strpos($page, COMPLETED_MARKER) !== false) {
+            // Every later page was irrelevant: the engine finished early.
+            break;
+        }
+        $document = loadDocument($page);
+        $pages[] = describePage($document, $page, $step['needles'] ?? []);
+        $next = act($surveyId, $step, $document, $jars);
+        if ($next === null) {
+            fwrite(STDERR, "step $index: no survey form on the page\n" . substr(strip_tags($page), 0, 600) . "\n");
+            return ['pages' => $pages, 'completed' => false, 'broken' => "step $index"];
+        }
+        $page = $next;
+    }
+    $pages[] = describePage(loadDocument($page), $page, []);
+    return ['pages' => $pages, 'completed' => strpos($page, COMPLETED_MARKER) !== false];
+}
+
+/**
+ * Carries out one step and returns the page it leads to (null when the page had no form).
+ *
+ * @param array<string, mixed> $step
+ * @param array<int, string> $jars
+ */
+function act(int $surveyId, array $step, DOMDocument $document, array &$jars): ?string
+{
+    if (isset($step['save'])) {
+        return saveForLater($document, (string) $step['save'], end($jars));
+    }
+    if (isset($step['resume'])) {
+        $jars[] = newJar();
+        return loadSaved($surveyId, (string) $step['resume'], end($jars));
+    }
+    $form = currentForm($document);
+    if ($form === null) {
+        return null;
+    }
+    $fields = array_merge($form['fields'], array_map('strval', $step['answers'] ?? []));
+    $fields['move'] = (string) ($step['move'] ?? 'movenext');
+    return httpRequest($form['action'], $fields, end($jars));
+}
+
+/**
+ * "Resume later" takes two posts: saveall returns the save form (the engine embeds it in
+ * the survey form, carrying a hidden savesubmit), then the name and password are posted.
+ */
+function saveForLater(DOMDocument $document, string $saveName, string $cookieJar): string
+{
+    $form = currentForm($document);
+    if ($form === null) {
+        throw new RuntimeException('no survey form to save from');
+    }
+    $savePage = httpRequest($form['action'], array_merge($form['fields'], ['saveall' => 'saveall']), $cookieJar);
+    $saveForm = currentForm(loadDocument($savePage));
+    if ($saveForm === null || !isset($saveForm['fields']['savesubmit'])) {
+        throw new RuntimeException("saveall did not return the save form:\n" . substr(strip_tags($savePage), 0, 600));
+    }
+    return httpRequest($saveForm['action'], array_merge($saveForm['fields'], [
+        'savename' => $saveName,
+        'savepass' => $saveName,
+        'savepass2' => $saveName,
+        'saveemail' => '',
+    ]), $cookieJar);
+}
+
+/** Resume entry point: loadall=reload plus name and password (SurveyIndex.php:456). */
+function loadSaved(int $surveyId, string $saveName, string $cookieJar): string
+{
+    $query = http_build_query([
+        'lang' => 'en',
+        'loadall' => 'reload',
+        'loadname' => $saveName,
+        'loadpass' => $saveName,
+    ]);
+    return httpRequest(BASE_URL . "/$surveyId?$query", null, $cookieJar);
 }
 
 function loadDocument(string $html): DOMDocument

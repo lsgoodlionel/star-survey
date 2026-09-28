@@ -4,6 +4,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +27,10 @@ public class ResponseProjectionQuery {
     public record Position(String generation, long responseId) {
     }
 
+    /** 一个 WHERE 片段及其占位参数。片段是固定文本，永不含调用方提供的字符串。 */
+    private record Condition(String sql, Map<String, Object> params) {
+    }
+
     private static final String COLUMNS = """
             engine_instance_id, survey_id, generation, response_id, state,
             first_event_at, completed_at, deleted_at, last_event_id""";
@@ -37,48 +42,61 @@ public class ResponseProjectionQuery {
     }
 
     /**
-     * 某个 (实例, sid) 下、位置之后的至多 limit 行，按 (代次, 答卷号) 升序。
+     * 某个 (实例, sid) 下、位置之后、命中筛选条件的至多 limit 行，按 (代次, 答卷号) 升序。
      *
-     * @param state 只要该状态的行；{@code null} 表示全部状态
-     * @param after 从该位置之后开始；{@code null} 表示从头开始
+     * <p>条件全部下推到这条 SQL：页因此永远是满的（不足才是最后一页），
+     * 调用方不需要"取一页再扔掉几行"，键集游标的含义也不变（R06-01，ADR 0013 增补一）。
+     *
+     * @param filter 条件；{@link ProjectionFilter#ALL} 表示不限
+     * @param after  从该位置之后开始；{@code null} 表示从头开始
      */
-    public List<ResponseProjection> page(String engineInstanceId, long engineSid, ResponseState state,
+    public List<ResponseProjection> page(String engineInstanceId, long engineSid, ProjectionFilter filter,
             Position after, int limit) {
-        return page(engineInstanceId, engineSid, state, after, limit, null);
-    }
-
-    /**
-     * 同 {@link #page(String, long, ResponseState, Position, int)}，另加水位线：只要平台首次写入投影的时刻
-     * （{@code created_at}）不晚于 createdAtOrBefore 的行。答卷导出用它把快照固定在作业创建那一刻（ADR 0015）。
-     *
-     * @param createdAtOrBefore 水位线；{@code null} 表示不限
-     */
-    public List<ResponseProjection> page(String engineInstanceId, long engineSid, ResponseState state,
-            Position after, int limit, OffsetDateTime createdAtOrBefore) {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be positive");
         }
-        // 条件按是否给出分别拼接固定的 SQL 片段（不含任何调用方文本），让键集条件能直接用上主键索引。
-        String sql = "SELECT " + COLUMNS + " FROM response_projection"
-                + " WHERE engine_instance_id = :instance AND survey_id = :sid"
-                + (state != null ? " AND state = :state" : "")
-                + (after != null ? " AND (generation, response_id) > (:generation, :responseId)" : "")
-                + (createdAtOrBefore != null ? " AND created_at <= :watermark" : "")
-                + " ORDER BY generation, response_id LIMIT :limit";
-        JdbcClient.StatementSpec statement = jdbc.sql(sql)
+        List<Condition> conditions = conditions(filter == null ? ProjectionFilter.ALL : filter, after);
+        StringBuilder sql = new StringBuilder("SELECT ").append(COLUMNS)
+                .append(" FROM response_projection WHERE engine_instance_id = :instance AND survey_id = :sid");
+        conditions.forEach(condition -> sql.append(" AND ").append(condition.sql()));
+        sql.append(" ORDER BY generation, response_id LIMIT :limit");
+
+        JdbcClient.StatementSpec statement = jdbc.sql(sql.toString())
                 .param("instance", engineInstanceId)
                 .param("sid", engineSid)
                 .param("limit", limit);
-        if (state != null) {
-            statement = statement.param("state", state.dbValue());
-        }
-        if (after != null) {
-            statement = statement.param("generation", after.generation()).param("responseId", after.responseId());
-        }
-        if (createdAtOrBefore != null) {
-            statement = statement.param("watermark", createdAtOrBefore);
+        for (Condition condition : conditions) {
+            for (Map.Entry<String, Object> param : condition.params().entrySet()) {
+                statement = statement.param(param.getKey(), param.getValue());
+            }
         }
         return statement.query(ResponseProjectionQuery::mapRow).list();
+    }
+
+    /**
+     * 给出的条件各拼一个固定 SQL 片段（不含任何调用方文本）。键集条件排在最后，
+     * 与 {@code ORDER BY} 一致，走投影主键索引。
+     */
+    private static List<Condition> conditions(ProjectionFilter filter, Position after) {
+        List<Condition> conditions = new ArrayList<>();
+        add(conditions, "state = :state", "state",
+                filter.state() == null ? null : filter.state().dbValue());
+        add(conditions, "first_event_at >= :startedFrom", "startedFrom", SqlTime.utc(filter.startedFrom()));
+        add(conditions, "first_event_at <= :startedTo", "startedTo", SqlTime.utc(filter.startedTo()));
+        add(conditions, "completed_at >= :completedFrom", "completedFrom", SqlTime.utc(filter.completedFrom()));
+        add(conditions, "completed_at <= :completedTo", "completedTo", SqlTime.utc(filter.completedTo()));
+        add(conditions, "created_at <= :watermark", "watermark", SqlTime.utc(filter.createdAtOrBefore()));
+        if (after != null) {
+            conditions.add(new Condition("(generation, response_id) > (:generation, :responseId)",
+                    Map.of("generation", after.generation(), "responseId", after.responseId())));
+        }
+        return List.copyOf(conditions);
+    }
+
+    private static void add(List<Condition> conditions, String sql, String param, Object value) {
+        if (value != null) {
+            conditions.add(new Condition(sql, Map.of(param, value)));
+        }
     }
 
     /** 各状态的答卷数；没有答卷的状态不出现在结果里。 */

@@ -4,6 +4,7 @@ import cn.mjy.platform.access.AccessDecisionService;
 import cn.mjy.platform.access.Permission;
 import cn.mjy.platform.access.ResponseFieldPolicies;
 import cn.mjy.platform.access.ResponseFieldPolicy;
+import cn.mjy.platform.engine.ProjectionFilter;
 import cn.mjy.platform.engine.ResponseProjection;
 import cn.mjy.platform.engine.ResponseProjectionQuery;
 import cn.mjy.platform.engine.ResponseProjectionQuery.Position;
@@ -226,8 +227,10 @@ public class ResponseExportWorker {
         Position after = job.snapshotGeneration() == null ? null
                 : new Position(job.snapshotGeneration(), job.snapshotResponseId());
         return tenantScope.call(run.tenant(), () -> {
+            ProjectionFilter filter = ProjectionFilter.ofState(singleState(run.states()))
+                    .withCreatedAtOrBefore(run.watermark());
             List<ResponseProjection> page = projections.page(source.engineInstanceId(), source.engineSid(),
-                    singleState(run.states()), after, properties.snapshotPageSize(), run.watermark());
+                    filter, after, properties.snapshotPageSize());
             long lastSeq = jobs.maxSeq(run.jobId());
             List<ExportItem> items = items(source, page, run.states(), lastSeq);
             if (!items.isEmpty()) {

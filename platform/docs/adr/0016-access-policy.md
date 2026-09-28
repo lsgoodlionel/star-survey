@@ -200,7 +200,11 @@
 - ⏳ 地区数据集未随仓库交付；省级地区与授权定位未做。（数据集不随仓库交付这一条与 ADR 0019 的
   行政区划字典同一口径：许可与署名义务由交付方按所选数据源决定。）
 - ⏳ 租户级时区配置（目前是草稿里的 `window.timezone`，缺省 `Asia/Shanghai`）。
-- ⏳ 微信 openid、手机号、账户维度的限次；邀请码撤销的平台接口（引擎侧删参与者即时生效）。
+- ⏳ 微信 openid、手机号、账户维度的限次。
+- ✅ **邀请码撤销的平台接口（引擎侧删参与者即时生效）已补**（[ADR 0021](0021-engine-write-paths.md)，
+  契约 [v1.4](../../contracts/publish-gateway-v1.4.md)）：`POST /v1/participants/revoke` 删掉引擎
+  `tokens_<sid>` 里那一行，`ContactParticipationService.revoke()` 改成先引擎后平台——
+  引擎没确认就不写 `revoked_at`。撤销作用在这条映射自己的 `(实例, sid)` 上，旧版本的码同样撤得掉。
 - ⏳ 按日循环的时间窗（如每天 9–17 点）。
 - ✅ 网关 `add_participants` 总是让引擎生成 token（`create_token=true`），定义里写的 token 会被替换；
   平台要发的邀请码现在随发布回执一并返回（`invitations[]`，按定义顺序，平台可给每条一个不透明

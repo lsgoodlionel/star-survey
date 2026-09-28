@@ -24,6 +24,19 @@ final class GatewayOperationsParser {
         return new CloseOutcome.Closed(text(result, "expires"), bool(result, "alreadyClosed"));
     }
 
+    /**
+     * {@code {"status":"revoked","result":{"surveyId":…,"tokenId":…|null,"alreadyAbsent":…}}}，
+     * 且 sid 须与请求一致（契约 v1.4）。
+     */
+    static RevokeOutcome.Revoked revoked(JsonNode body, int expectedSid) {
+        requireStatus(body, "revoked");
+        JsonNode result = object(body, "result");
+        if (integer(result, "surveyId") != expectedSid) {
+            throw new MalformedResponseException("revoke result names another survey");
+        }
+        return new RevokeOutcome.Revoked(bool(result, "alreadyAbsent"));
+    }
+
     /** {@code {"status":"match"|"drift","result":<DriftResult>}}；status 与 drifted 必须一致。 */
     static DriftOutcome.Checked checked(JsonNode body, int expectedSid) {
         JsonNode status = body == null ? null : body.get("status");

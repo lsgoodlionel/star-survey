@@ -36,6 +36,14 @@ public class ContactsErrorHandler {
         return respond(HttpStatus.CONFLICT, e.code(), e.getMessage());
     }
 
+    /**
+     * 撤销没在引擎侧生效：503 而不是 500——这是"稍后重试"，且必须说清邀请码**仍然有效**。
+     */
+    @ExceptionHandler(InvitationRevocationFailedException.class)
+    ResponseEntity<ContactError> notRevoked(InvitationRevocationFailedException e) {
+        return respond(HttpStatus.SERVICE_UNAVAILABLE, "revocation_not_applied", e.getMessage());
+    }
+
     @ExceptionHandler({InvalidContactRequestException.class, MethodArgumentTypeMismatchException.class,
             MissingServletRequestParameterException.class, HttpMessageNotReadableException.class,
             MethodArgumentNotValidException.class})

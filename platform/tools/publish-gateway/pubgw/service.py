@@ -20,10 +20,13 @@
 口令防线：响应体在出门前把所有已配置的引擎口令（原文、repr 与 JSON 转义形式）替换成
 ``***``，即使引擎把口令写进了错误信息也不会外泄。
 
-契约 v1.2 增补的 ``POST /v1/close`` 与 ``POST /v1/drift-check`` 走同样的认证、实例解析与口令防线；
-两者天然幂等（收口重复无害、漂移检查只读），不进 requestId 结果存档。
+契约 v1.2 增补的 ``POST /v1/close`` 与 ``POST /v1/drift-check``、v1.4 增补的
+``POST /v1/participants/revoke`` 走同样的认证、实例解析与口令防线；三者天然幂等
+（收口重复无害、漂移检查只读、撤销一个已经不在引擎里的码同样是"已撤销"），
+都不进 requestId 结果存档。
 """
 
+import hashlib
 import json
 import logging
 import time
@@ -36,8 +39,9 @@ from .close import CloseError, close_survey
 from .drift_check import check_published_survey
 from .engines import EngineConfig
 from .model import DefinitionError, SurveyDefinition
+from .participants import RevokeError, revoke_participant
 from .policy.probe import HttpPolicyProbe, PolicyProbe
-from .ops_request import parse_close_request, parse_drift_request
+from .ops_request import parse_close_request, parse_drift_request, parse_revoke_request
 from .publish import PublishResult, Publisher
 from .request import InvalidRequest, PublishRequest, parse_request
 from .rpc import HttpTransport, RemoteControlClient, RpcError, Transport
@@ -145,6 +149,41 @@ class PublishService:
         finally:
             self._locks.release(key)
 
+    def revoke_participant(self, headers: Mapping[str, str], body: bytes) -> Response:
+        """``POST /v1/participants/revoke``：删掉引擎里的那一行参与者，让邀请码立刻失效（契约 v1.4）。
+
+        与 ``/v1/close`` 同样天然幂等（引擎里本来就没有那个码＝已撤销），因此不进
+        ``requestId`` 结果存档。任何非 200 平台都必须当成"**没有**撤销"。
+        """
+        rejected = self._authenticate("participants/revoke", headers, body)
+        if rejected is not None:
+            return rejected
+        try:
+            request = parse_revoke_request(body)
+        except InvalidRequest as error:
+            log.info("rejected revoke request: %s", error)
+            return self._invalid()
+        engine = self._engines.get(request.engine_instance_id)
+        if engine is None:
+            return self._json(404, {"error": "unknown_engine_instance"})
+
+        # 同一个码同一时刻只处理一个请求：两次并发撤销会让第二次看到"删了一半"。
+        # 锁是**进程内**的（与 /v1/publish、/v1/close 同一个 InFlight，契约 v1.1
+        # 「网关的并发锁在进程内，只能单副本运行」）。多副本下两个进程可能同时进来，
+        # 后一个会拿到 502 而不是 409——结局仍然安全：删两次的第二次拿不到 Deleted，
+        # 平台据此不写 revoked_at，重试即收敛。
+        # 键里放摘要而不是令牌本身：进程级的集合不该长期握着一份凭据。
+        key = ("revoke", engine.instance_id, request.survey_id,
+               hashlib.sha256(request.participant_token.encode("utf-8")).hexdigest())
+        if not self._locks.try_acquire(key):
+            return self._json(409, {"status": "conflict", "error": "revoke_in_progress"})
+        try:
+            return self._with_engine(
+                engine, request.request_id, "revoke sid={}".format(request.survey_id),
+                lambda client: self._revoke(client, request.survey_id, request.participant_token))
+        finally:
+            self._locks.release(key)
+
     def drift_check(self, headers: Mapping[str, str], body: bytes) -> Response:
         """``POST /v1/drift-check``：只读回引擎，报告与期望指纹是否一致。"""
         rejected = self._authenticate("drift-check", headers, body)
@@ -198,7 +237,7 @@ class PublishService:
         client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
         try:
             return action(client)
-        except CloseError as error:
+        except (CloseError, RevokeError) as error:
             log.warning("request %s: %s on %s failed: %s", request_id, label, engine.instance_id,
                         self._redact(str(error)))
             return self._json(502, {"status": "failed", "error": error.code, "detail": error.detail})
@@ -211,6 +250,10 @@ class PublishService:
             return self._json(500, {"error": "internal_error"})
         finally:
             _logout(client, request_id)
+
+    def _revoke(self, client: RemoteControlClient, survey_id: int, token: str) -> Response:
+        result = revoke_participant(client, survey_id, token)
+        return self._json(200, {"status": "revoked", "result": result.to_dict()})
 
     def _close(self, client: RemoteControlClient, survey_id: int) -> Response:
         now = datetime.fromtimestamp(self._now(), tz=timezone.utc)

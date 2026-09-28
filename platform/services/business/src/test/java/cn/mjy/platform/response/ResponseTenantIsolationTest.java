@@ -5,6 +5,7 @@ import static cn.mjy.platform.response.ResponseFixture.GENERATION;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.mjy.platform.engine.ProjectionFilter;
 import cn.mjy.platform.engine.ResponseProjectionQuery;
 import cn.mjy.platform.response.ResponseFixture.Published;
 import cn.mjy.platform.shared.tenant.TenantScope;
@@ -64,9 +65,9 @@ class ResponseTenantIsolationTest {
     @Test
     void theProjectionQueryUnderAnotherTenantsScopeSeesNothing() {
         var inA = tenantScope.call(a.tenant(),
-                () -> projections.page(a.instance(), a.sid(), null, null, 10));
+                () -> projections.page(a.instance(), a.sid(), ProjectionFilter.ALL, null, 10));
         var inB = tenantScope.call(b.tenant(),
-                () -> projections.page(a.instance(), a.sid(), null, null, 10));
+                () -> projections.page(a.instance(), a.sid(), ProjectionFilter.ALL, null, 10));
 
         assertThat(inA).hasSize(1);
         assertThat(inB).isEmpty();

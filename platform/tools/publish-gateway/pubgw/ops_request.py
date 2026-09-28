@@ -1,13 +1,17 @@
-"""契约 v1.2 两个接口的请求体解析（系统边界，与 request.py 同样严格：多一个、少一个、类型不对都是 400）。
+"""契约 v1.2 / v1.4 几个运维接口的请求体解析（系统边界，与 request.py 同样严格：
+多一个、少一个、类型不对都是 400）。
 
 - ``POST /v1/close``：``requestId``（UUID，只用于日志关联）、``engineInstanceId``、``surveyId``（正整数）。
 - ``POST /v1/drift-check``：``engineInstanceId``、``surveyId``、``expectedFingerprint``，可选 ``binding``
   （平台存档的绑定记录原文）。带 ``binding`` 时它必须正是所指的那份：同一实例、同一 sid、同一指纹。
+- ``POST /v1/participants/revoke``（v1.4）：``requestId``、``engineInstanceId``、``surveyId``、
+  ``participantToken``。令牌形状与平台 ``contact_participation.participant_token`` 的约束一致，
+  **校验失败的消息里绝不回显令牌**。
 """
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from .binding import BindingRecord
@@ -19,6 +23,9 @@ _MAX_INSTANCE_ID_LENGTH = 128
 _CLOSE_FIELDS = frozenset({"requestId", "engineInstanceId", "surveyId"})
 _DRIFT_REQUIRED = frozenset({"engineInstanceId", "surveyId", "expectedFingerprint"})
 _DRIFT_OPTIONAL = frozenset({"binding"})
+_REVOKE_FIELDS = frozenset({"requestId", "engineInstanceId", "surveyId", "participantToken"})
+#: 与平台 contact_participation.participant_token 的 CHECK 约束一字不差。
+_TOKEN = re.compile(r"\A[A-Za-z0-9_-]{4,64}\Z")
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,35 @@ def parse_close_request(body: bytes) -> CloseRequest:
         request_id=request_id.lower(),
         engine_instance_id=_instance(payload["engineInstanceId"]),
         survey_id=_survey_id(payload["surveyId"]),
+    )
+
+
+@dataclass(frozen=True)
+class RevokeRequest:
+    request_id: str
+    engine_instance_id: str
+    survey_id: int
+    #: 邀请码是凭据：它只在内存里走一趟，不进日志、不进 repr。
+    participant_token: str = field(repr=False)
+
+
+def parse_revoke_request(body: bytes) -> RevokeRequest:
+    payload = _object(body)
+    if set(payload) != _REVOKE_FIELDS:
+        raise InvalidRequest("revoke body must have exactly {}, got {}".format(
+            sorted(_REVOKE_FIELDS), sorted(payload)))
+    request_id = payload["requestId"]
+    if not isinstance(request_id, str) or not _UUID.match(request_id):
+        raise InvalidRequest("requestId must be a UUID")
+    token = payload["participantToken"]
+    if not isinstance(token, str) or not _TOKEN.match(token):
+        # 消息里不放令牌本身：它是能直接进入问卷的凭据，而 400 的原因会进日志。
+        raise InvalidRequest("participantToken must match [A-Za-z0-9_-]{4,64}")
+    return RevokeRequest(
+        request_id=request_id.lower(),
+        engine_instance_id=_instance(payload["engineInstanceId"]),
+        survey_id=_survey_id(payload["surveyId"]),
+        participant_token=token,
     )
 
 

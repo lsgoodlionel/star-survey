@@ -118,6 +118,34 @@ else
   fail "会话 cookie 名是默认值；同域多实例会互相覆盖登录态（ADR 0002 决定 4）"
 fi
 
+# ---------------------------------------------------------------- A2 类
+section "A2. 答卷附件的匿名访问防护（ADR 0020 / P0 发现 11）"
+
+# 判据是**实测**而不是"配置文件在不在"：.htaccess 只在 AllowOverride 打开时才被读取，
+# 换 nginx 或收紧 AllowOverride 就静默失效。所以放一个金丝雀再匿名 GET 它。
+guard_canary="fu_preflight_canary"
+guard_dir="upload/surveys/999999/files"
+win "mkdir -p /var/www/html/$guard_dir && echo preflight-canary > /var/www/html/$guard_dir/$guard_canary"
+for probe in "$guard_dir/$guard_canary" "tmp/runtime/" "tmp/upload/"; do
+  code=$(win "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/$probe")
+  case "$code" in
+    200) fail "匿名可取 /$probe（HTTP 200）——附件防护没有生效" ;;
+    "")  warn "探不到 /$probe（容器里没有 curl？）；需人工复核" ;;
+    *)   pass "匿名取 /$probe 被拒（HTTP $code）" ;;
+  esac
+done
+# 正对照：拦过头会让问卷渲染不出来。
+win "mkdir -p /var/www/html/tmp/assets/preflight && echo ok > /var/www/html/tmp/assets/preflight/probe.js"
+assets_code=$(win "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/tmp/assets/preflight/probe.js")
+if [[ "$assets_code" == "200" ]]; then
+  pass "tmp/assets 下的前端资源照旧可取（没有拦过头）"
+else
+  fail "tmp/assets 取不到（HTTP $assets_code）；问卷页面会缺 JS/CSS"
+fi
+# 收尾：只删自己放的东西。rmdir 对非空目录会失败，正好避免误删真实问卷的附件目录。
+win "rm -f /var/www/html/$guard_dir/$guard_canary; rm -rf /var/www/html/tmp/assets/preflight"
+win "rmdir /var/www/html/$guard_dir /var/www/html/upload/surveys/999999"
+
 # ---------------------------------------------------------------- B 类
 section "B. 运行时出网通道（见 private-deployment.md 出网清单）"
 

@@ -249,7 +249,7 @@ class _Reader:
         result = []
         for index, value in enumerate(values):
             try:
-                result.append(str(ipaddress.ip_network(value.strip(), strict=False)))
+                result.append(canonical_cidr(value.strip()))
             except ValueError:
                 self._issue("E_POLICY_CIDR", "policy.network.{}[{}]".format(key, index),
                             "{!r} 不是合法的 IP 或 CIDR".format(value))
@@ -337,3 +337,41 @@ class _Reader:
 
     def _issue(self, code: str, path: str, message: str) -> None:
         self._issues.append(ValidationIssue(code, path, message))
+
+
+def canonical_cidr(value: str) -> str:
+    """把一条 IP／CIDR 规范成 policyDigest 用的写法。
+
+    **不能直接用 ``str(ipaddress.ip_network(...))``**：标准库的写法跨 Python 版本变过。
+    IPv4-mapped 的 IPv6 地址在 3.9 是 ``::ffff:102:304``、3.11 起是 ``::ffff:1.2.3.4``
+    （3.11 更贴近 RFC 5952 对这类地址的建议）。而摘要是网关算一遍、平台用 Java 独立再算
+    一遍逐字比对的，Java 侧 ``CanonicalIpNetwork.format()`` 永远输出纯 hextet——跟着标准库
+    走的话，网关换个 Python 版本就会让带这类规则的问卷**发布失败**。
+
+    所以这里自己定死：IPv4 按点分十进制，IPv6 一律纯 hextet ＋ 最长零段压缩（长度相同取
+    最靠前的一段），与 Java 那份独立实现逐条对齐。
+
+    :raises ValueError: 不是合法的 IP 或 CIDR（由调用方翻译成 E_POLICY_CIDR）
+    """
+    network = ipaddress.ip_network(value, strict=False)
+    if network.version == 4:
+        return "{}/{}".format(network.network_address, network.prefixlen)
+    return "{}/{}".format(_compress_hextets(int(network.network_address)), network.prefixlen)
+
+
+def _compress_hextets(address: int) -> str:
+    """16 字节地址 → 纯 hextet 写法，最长的全零段（至少两段）换成 ``::``。"""
+    hextets = ["{:x}".format((address >> shift) & 0xFFFF) for shift in range(112, -1, -16)]
+    best_start, best_length = -1, 0
+    run_start, run_length = -1, 0
+    for index, hextet in enumerate(hextets):
+        if hextet != "0":
+            run_start, run_length = -1, 0
+            continue
+        run_start = index if run_start < 0 else run_start
+        run_length += 1
+        if run_length > best_length:
+            best_start, best_length = run_start, run_length
+    if best_length <= 1:
+        return ":".join(hextets)
+    return ":".join(hextets[:best_start]) + "::" + ":".join(hextets[best_start + best_length:])

@@ -67,6 +67,8 @@
 | `platform/tools/engine-theme/` | 把随镜像发布的作答主题装进引擎库 |
 | `platform/tools/log-shipper/` | 错误日志脱敏、去重、上报 |
 | `platform/tools/secure-docs/` | 敏感文档加密 |
+| `platform/tools/test-report/` | surefire 报告与源码的测试数对账 |
+| `platform/tools/traceability/` | 需求↔测试映射的机器校验（R23-12），数据在 `platform/docs/traceability/` |
 | `platform/contracts/` | 跨组件契约（9 份，见下） |
 | `platform/docs/adr/` | 架构决策记录（19 份） |
 | `platform/docs/p0|p1|p2/` | 逐阶段进度与证据 |
@@ -168,10 +170,29 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 
 | Job | 内容 | 需要什么 |
 |---|---|---|
-| `parity-tables` | 发布网关单测（含**三端注册表**与**三端数值上限**两张对照表）＋ 对账脚本自己的用例 | 只要 Python，秒级 |
+| `parity-tables` | 发布网关单测（含**三端注册表**与**三端数值上限**两张对照表）＋ 对账脚本自己的用例 ＋ **需求追溯校验** | 只要 Python，秒级 |
 | `gateway-parity-e2e` | WP-03.4 双执行比对，`mysql` 与 `pgsql` 两个矩阵分支各跑一遍 | 起引擎栈（脚本自行构建 `survey-web` 镜像） |
+| `platform-java` | 平台 Java 全套（`run-platform-tests.sh`，含测试数对账） | `actions/setup-java` ＋ PostgreSQL service 容器 |
+| `access-policy-e2e` | WP-04 访问策略端到端（R04-01…05），`mysql` 与 `pgsql` 各一遍 | 起引擎栈 |
+| `p1-e2e` | P1 纵切：平台 ＋ 网关 ＋ 引擎三个真实进程 | 引擎栈 ＋ `platform-db` ＋ 平台 jar |
 
-平台 Java 套件暂未进 CI：Maven 走 `maven-settings.xml` 里的阿里云镜像，GitHub runner 上是冷缓存加跨境拉取，接进来大概率又慢又飘。它目前是本地约定。
+平台 Java 套件**已接进 CI**。此前判断「Maven 走阿里云镜像、runner 上冷缓存跨境拉取，
+接进来又慢又飘」，两个理由分别这样消掉：
+
+- **镜像**：CI 不走 `platform-dev/mvn.sh`，改走 `mvn-local.sh`（runner 上 `setup-java`
+  装好的 Maven，没有 `settings.xml`）。实测对照下来，镜像在这个 pom 上**根本没有好处**：
+  同样 347 个 jar／121 MB 的冷缓存，阿里云镜像 851 秒，Maven 中央仓库 359 秒，
+  而这还是在国内开发机上量的。
+- **冷缓存**：`actions/setup-java` 的 `cache: maven` 按 `pom.xml` 哈希缓存 `~/.m2/repository`。
+  `clean test` 实际用到 **191 个 jar、约 82 MB**（与网络无关的量级），`actions/cache`
+  存取秒级，只有改 `pom.xml` 那一次才重新下载。
+
+实测：依赖缓存命中时全套 **74 秒**（1368 条／172 类，0 失败）。两个冷缓存数字测的是
+本机网络、**不能**当作 runner 的预估，口径与完整数据见
+[`platform/services/business/CONVENTIONS.md`](services/business/CONVENTIONS.md)。
+
+端到端脚本按「覆盖接缝与权限闸门」优先接了两条（`run-access-policy.sh`、`run-p1-e2e.sh`），
+其余仍是本地约定；取舍与下一批建议写在 workflow 末尾的注释里。
 
 ---
 

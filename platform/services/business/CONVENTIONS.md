@@ -8,6 +8,45 @@ PLATFORM_DB_NAME=<你的库名> platform/deploy/test/run-platform-tests.sh
 
 本机不需要 Java，Maven 在容器里运行，依赖走阿里云镜像并缓存在命名卷。每条并行车道用自己的数据库名，互不干扰。
 
+### 同一个入口，两种执行环境
+
+`run-platform-tests.sh` 用 `PLATFORM_MVN` 决定怎么跑 Maven，**对账口径两条路完全一致**——
+「跑了多少条」只有一个数法，不能因为换了执行环境就换一套。
+
+| 环境 | `PLATFORM_MVN` | JDK／Maven 来自 | 依赖缓存 | settings.xml | 数据库 |
+|---|---|---|---|---|---|
+| 开发机 | 默认 `platform-dev/mvn.sh` | `maven:3.9-eclipse-temurin-21` 容器 | docker 命名卷 `platform-maven-repo` | 本目录那份（阿里云镜像） | compose 起 `platform-db` |
+| CI | `platform-dev/mvn-local.sh` | `actions/setup-java` | `actions/cache`（`cache: maven`） | 无（Maven 中央仓库） | service 容器 ＋ `init-db.sql` |
+
+`mvn.sh` 另有两个可覆盖项：`PLATFORM_MAVEN_SETTINGS`（置为空字符串＝不挂 settings.xml，
+走中央仓库）与 `PLATFORM_MAVEN_REPO`（依赖缓存的卷名或宿主目录；想实测冷缓存耗时就指向
+一个临时卷，**别动共用的那个**）。
+
+### 为什么 CI 上不用阿里云镜像
+
+阿里云镜像是给**国内开发机**的。GitHub runner 在境外，对它来说镜像是慢且易抖的那一头，
+而 Maven 中央仓库是近的。
+
+实测（2026-09-28，开发机 8 核／8 GB Docker，国内网络）：
+
+| 场景 | 耗时 | 落盘 |
+|---|---|---|
+| 依赖缓存命中，`clean test` 全套（1368 条／172 类，0 失败） | **74 秒**（复测 77 秒） | — |
+| 依赖缓存全冷，`dependency:go-offline`，**阿里云镜像** | **851 秒（14.2 分钟）** | 347 jar／121 MB |
+| 依赖缓存全冷，`dependency:go-offline`，**Maven 中央仓库** | **359 秒（6.0 分钟）** | 347 jar／121 MB |
+
+两次冷缓存落盘的 jar 数与体积完全相同，所以这是一次干净的对照：**即便在国内开发机上，
+中央仓库也比阿里云镜像快 2.4 倍**。镜像在这个 pom 上没有带来任何好处，
+去掉它不是为 CI 做的妥协。
+
+`clean test` 实际用到的是其中一部分：车道共用的 `platform-maven-repo` 卷只跑过
+`clean test`，里面是 **191 jar／约 82 MB**——这才是 `actions/cache` 要存取的量级，秒级。
+
+**不能外推的部分**：上面两个冷缓存数字测的是**本机的网络**。我无法在真实 GitHub runner
+上实测（车道不推送），所以别把它们当成 CI 的预估。能跨环境外推的只有两样：
+依赖体积（与网络无关）和缓存命中时的 74 秒（也与网络无关，可直接当作 CI 上这条 job
+缓存命中时的量级）。
+
 ### 测试数字一律走对账脚本
 
 **车道汇报「跑了多少条、多少个类」只认 `run-platform-tests.sh` 的输出，不要手工数 `target/surefire-reports`。** 前几波两次被假绿骗到，两次都是人工核对才发现的：

@@ -188,6 +188,20 @@ public class ResponseFixture {
         }
     }
 
+    /**
+     * 指定时刻的答卷：首事件时刻决定投影的 {@code first_event_at}，完成事件时刻决定 {@code completed_at}。
+     * 时间区间筛选要固定的时间轴，不能用 {@link #response} 的"现在"。
+     *
+     * @param completedAt {@code null} 表示还在作答（只写保存事件，完成时刻为空）
+     */
+    public void responseAt(TenantId tenant, String instance, long sid, String generation, long responseId,
+            Instant startedAt, Instant completedAt) {
+        event(tenant, instance, sid, generation, responseId, EngineEventType.SAVED, startedAt);
+        if (completedAt != null) {
+            event(tenant, instance, sid, generation, responseId, EngineEventType.COMPLETED, completedAt);
+        }
+    }
+
     public void event(TenantId tenant, String instance, long sid, String generation, long responseId,
             EngineEventType type, Instant occurredAt) {
         EngineEvent event = new EngineEvent(UUID.randomUUID(), type, instance, sid, generation, responseId,

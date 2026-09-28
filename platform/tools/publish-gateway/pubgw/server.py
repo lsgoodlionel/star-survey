@@ -56,9 +56,15 @@ EXIT_CONFIG = 2
 PUBLISH_PATH = "/v1/publish"
 CLOSE_PATH = "/v1/close"
 DRIFT_CHECK_PATH = "/v1/drift-check"
+REVOKE_PATH = "/v1/participants/revoke"
 HEALTH_PATH = "/healthz"
-#: POST 路径 → PublishService 上的处理方法名（契约 v1 与 v1.2）。
-POST_ROUTES = {PUBLISH_PATH: "publish", CLOSE_PATH: "close", DRIFT_CHECK_PATH: "drift_check"}
+#: POST 路径 → PublishService 上的处理方法名（契约 v1、v1.2 与 v1.4）。
+POST_ROUTES = {
+    PUBLISH_PATH: "publish",
+    CLOSE_PATH: "close",
+    DRIFT_CHECK_PATH: "drift_check",
+    REVOKE_PATH: "revoke_participant",
+}
 
 
 class StartupError(Exception):

@@ -11,6 +11,17 @@
 
 传输层是一个 ``callable(bytes) -> bytes``，便于单元测试替换成假引擎，
 也便于端到端脚本把请求转发进容器。
+
+**可调方法集是白名单**（ADR 0007「平台无论如何都要自己承担的部分」第 3 条、ADR 0021）。
+RemoteControl 是引擎的管理接口，里面有两个以**作答者的名义**写答卷、却绕开
+``beforeSurveyPage`` 的方法：``add_response``（P0 发现 12）与 ``update_response``
+（P0 发现 21，直接 ``SurveyDynamic::encryptSave()``）。经它们进来的答卷不受访问规则、
+限次、服务端计时与题型服务端校验的约束，MjyPlatformBridge 的补偿扫描也认不出来源。
+
+引擎管理员口令**只存在网关侧**（契约 publish-gateway-v1「部署与信任边界」），
+所以"网关发不出这两个方法"就等于"平台这条路径上它们不存在"。白名单写在
+:meth:`RemoteControlClient.call` 里，一切 RPC 都从那里出门：新加的读写能力必须
+显式进白名单，漏写立刻在测试里变红，而不是悄悄多一条旁路。
 """
 
 import base64
@@ -22,6 +33,30 @@ Transport = Callable[[bytes], bytes]
 _OK_STATUSES = ("OK", "success")
 _RPC_PATH = "/index.php/admin/remotecontrol"
 
+#: 网关允许发出的 RemoteControl 方法，按用途分组。加能力必须先加到这里。
+ALLOWED_METHODS = frozenset({
+    # 会话
+    "get_session_key", "release_session_key",
+    # 发布链路（publish.py）
+    "import_survey", "activate_survey", "activate_tokens", "add_participants", "delete_survey",
+    # 回读与收口（verify.py、drift_check.py、close.py）
+    "get_fieldmap", "list_questions", "get_survey_properties", "set_survey_properties",
+    # 答卷读取（responses.py）
+    "export_responses",
+    # 邀请码撤销（ADR 0016 / contracts publish-gateway-v1.4）
+    "get_participant_properties", "delete_participants",
+})
+
+#: **永不允许**：以作答者的名义写答卷，绕开 beforeSurveyPage 这道唯一的服务端闸门。
+#: 单列出来不是为了实现（白名单已经挡住了），而是为了让"为什么挡"留在代码里：
+#: 这两个名字将来即使有人手滑加进白名单，下面的断言也会先炸。
+FORBIDDEN_METHODS = frozenset({"add_response", "update_response"})
+
+if ALLOWED_METHODS & FORBIDDEN_METHODS:  # pragma: no cover —— 只在有人手滑改名单时成立
+    # 不用 assert：python -O 会把 assert 整条去掉，而这一条正是最不该被去掉的。
+    raise RuntimeError("ALLOWED_METHODS 里出现了绕过闸门的写答卷方法：{}".format(
+        sorted(ALLOWED_METHODS & FORBIDDEN_METHODS)))
+
 
 class RpcError(RuntimeError):
     """引擎拒绝了这次调用，或者应答根本不是 RemoteControl 的形状。"""
@@ -30,6 +65,19 @@ class RpcError(RuntimeError):
         super().__init__("RemoteControl {} failed: {}".format(method, detail))
         self.method = method
         self.detail = detail
+
+
+class ForbiddenMethod(RpcError):
+    """网关拒绝**发出**这次调用：方法不在白名单里，一个字节都没有到引擎。
+
+    继承 :class:`RpcError` 是为了让发布编排照旧走它的回滚分支——那一层只认 RpcError，
+    别的异常会在设置 survey_id 之前逃逸，连回滚都不会尝试。
+    """
+
+    def __init__(self, method: str):
+        reason = ("refused by the gateway: not in ALLOWED_METHODS"
+                  + ("; this method writes responses behind every gate" if method in FORBIDDEN_METHODS else ""))
+        super().__init__(method, reason)
 
 
 class HttpTransport:
@@ -67,6 +115,9 @@ class RemoteControlClient:
     # --------------------------------------------------------- 底层调用
 
     def call(self, method: str, params: Sequence[Any]) -> Any:
+        if method not in ALLOWED_METHODS:
+            # 在构造请求体之前拦下：不会有任何字节到引擎，也不会有任何口令进日志。
+            raise ForbiddenMethod(method)
         payload = json.dumps({"method": method, "params": list(params), "id": 1}).encode("utf-8")
         body = self._transport(payload)
         try:
@@ -169,6 +220,26 @@ class RemoteControlClient:
 
     def set_survey_properties(self, survey_id: int, properties: Dict[str, str]) -> Any:
         return self.checked("set_survey_properties", [self._session(), survey_id, properties])
+
+    # --------------------------------------------------- 参与者（邀请码撤销）
+
+    def get_participant_properties(
+        self, survey_id: int, query: Dict[str, Any], properties: Sequence[str]
+    ) -> Dict[str, Any]:
+        """按属性查一个参与者。查不到 / 查到多条时引擎返回带 error_code 的字典，原样抛出。"""
+        result = self.checked(
+            "get_participant_properties", [self._session(), survey_id, query, list(properties)]
+        )
+        if not isinstance(result, dict):
+            raise RpcError("get_participant_properties", result)
+        return result
+
+    def delete_participants(self, survey_id: int, token_ids: Sequence[int]) -> Dict[str, Any]:
+        """按 tid 删参与者。成功时返回 ``{tid: 'Deleted'}``；逐条结果必须自己核。"""
+        result = self.checked("delete_participants", [self._session(), survey_id, list(token_ids)])
+        if not isinstance(result, dict):
+            raise RpcError("delete_participants", result)
+        return result
 
 
 def is_accepted(result: Any) -> bool:

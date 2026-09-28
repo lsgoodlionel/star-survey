@@ -16,4 +16,10 @@ public interface PublishGatewayClient {
 
     /** 只读漂移检查（v1.2）。同样不抛异常，拿不准一律 {@link DriftOutcome.Unavailable}。 */
     DriftOutcome driftCheck(GatewayDriftRequest request);
+
+    /**
+     * 撤销一个邀请码：删掉引擎里那一行参与者（v1.4）。同样不抛异常，拿不准一律
+     * {@link RevokeOutcome.NotRevoked}——调用方据此**不写** {@code revoked_at}。
+     */
+    RevokeOutcome revokeParticipant(GatewayRevokeRequest request);
 }

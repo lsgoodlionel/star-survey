@@ -92,9 +92,13 @@ F-04 即消失。
       需要按租户设置 `session.name`（决定 4 尚未落地）。
 - [ ] 网络层未分段：验证栈里拿到对方数据库口令即可直连（决定 5 尚未落地）。
       交付时需要按租户划分网络或加数据库侧的 host 限制。
-- [ ] `upload/surveys/*/files/fu_*` 与 `tmp/runtime/` 的匿名访问防护完全来自引擎自带的 `.htaccess`
+- [x] ~~`upload/surveys/*/files/fu_*` 与 `tmp/runtime/` 的匿名访问防护完全来自引擎自带的 `.htaccess`
       （本镜像 `AllowOverride All` 才生效）。若改用 nginx 或关掉 `AllowOverride`，
-      知道 sid 与文件名即可匿名下载答卷附件，需要在 Web 服务器配置里显式重建这两条规则。
+      知道 sid 与文件名即可匿名下载答卷附件，需要在 Web 服务器配置里显式重建这两条规则。~~
+      **已修**（[ADR 0020](0020-engine-static-exposure.md)）：判据搬进服务器配置
+      （`platform/deploy/dev/engine-static-guard.conf`，nginx 另有一份），与 `AllowOverride` 无关；
+      `platform/deploy/private/preflight.sh` 加了金丝雀实测。顺带查实：在途上传
+      `tmp/upload/futmp_*` 此前**根本没被任何规则挡住**，本次一并收口。
 - [ ] 后台“本实例没有这个 sid”的拒绝落在应用层 `hasSurveyPermission()` 上，不是数据库授权。
       这条属于纵深防御的最外层，不应作为唯一依赖。
 - [ ] 未覆盖：参与者/令牌表（`lime_tokens`）的跨实例尝试、插件安装面、

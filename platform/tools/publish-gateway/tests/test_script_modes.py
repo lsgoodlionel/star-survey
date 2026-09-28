@@ -42,3 +42,29 @@ class OwnedScriptsAreExecutableTest(unittest.TestCase):
         """防止上面那条因为路径前缀写错而永远为空——那就是个假绿。"""
         owned = [p for _, p in tracked_shell_scripts() if p.startswith(OWNED_PREFIXES)]
         self.assertGreater(len(owned), 20, "扫不到自有脚本，前缀大概写错了")
+
+
+class NoBuildArtefactsAreTrackedTest(unittest.TestCase):
+    """构建产物不该进仓库。
+
+    这条也是踩出来的：我在容器里用 Python 3.11 跑测试后 `git add -A`，把 135 个
+    `__pycache__/*.pyc` 一并提交了，而 `.gitignore` 当时根本没有 Python 的规则——
+    网关与工具链都是 Python，这个口子一直开着，只是此前没人在仓库里生成过字节码。
+    """
+
+    #: 一眼就能判定「绝不该被跟踪」的产物。按**后缀**判，不按子串——上游有
+    #: `pChart.class.php`、`xlsxwriter.class.php` 这类文件，子串匹配会误伤它们。
+    FORBIDDEN_SUFFIXES = (".pyc", ".pyo", ".class")
+
+    def test_no_python_or_java_bytecode_is_tracked(self):
+        out = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT,
+                             capture_output=True, text=True, check=True).stdout
+        offenders = [p for p in out.splitlines()
+                     if p.endswith(self.FORBIDDEN_SUFFIXES) or "__pycache__/" in p]
+        self.assertEqual([], offenders[:20], "构建产物被跟踪了，应当进 .gitignore")
+
+    def test_the_scan_actually_looks_at_something(self):
+        """防止上面那条因为 git 调用失败而永远为空——那就是个假绿。"""
+        out = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT,
+                             capture_output=True, text=True, check=True).stdout
+        self.assertGreater(len(out.splitlines()), 1000, "扫不到文件，git 调用大概出了问题")
