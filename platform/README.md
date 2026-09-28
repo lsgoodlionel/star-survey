@@ -111,6 +111,9 @@ PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh
 # 发布网关测试（本机无 pytest，用 unittest）
 cd platform/tools/publish-gateway && python3 -m unittest discover -s tests -t . -q
 
+# 测试总数对账脚本自己的用例
+cd platform/tools/test-report && python3 -m unittest discover -s tests -t . -q
+
 # 引擎端到端（涉及数据库的都要 mysql 与 pgsql 各跑一遍）
 TEST_DB=mysql platform/deploy/test/run-p1-e2e.sh --fresh
 TEST_DB=pgsql platform/deploy/test/run-access-policy.sh --fresh
@@ -158,6 +161,37 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 | WP-20 集成 | 🟡 | 企微／钉钉／飞书授权与免登、事件回调、定时同步。真实联调待凭据 ⏳ |
 | WP-09/10 考试测评 | 🔄 | 本波进行中 |
 
+
+### 持续集成
+
+本土化部分的检查在 `.github/workflows/platform-quality.yml`（上游自带的几条只在 `master` / `develop-*` 触发，本仓库工作分支是 `main`）：
+
+| Job | 内容 | 需要什么 |
+|---|---|---|
+| `parity-tables` | 发布网关单测（含**三端注册表**与**三端数值上限**两张对照表）＋ 对账脚本自己的用例 | 只要 Python，秒级 |
+| `gateway-parity-e2e` | WP-03.4 双执行比对，`mysql` 与 `pgsql` 两个矩阵分支各跑一遍 | 起引擎栈（脚本自行构建 `survey-web` 镜像） |
+
+平台 Java 套件暂未进 CI：Maven 走 `maven-settings.xml` 里的阿里云镜像，GitHub runner 上是冷缓存加跨境拉取，接进来大概率又慢又飘。它目前是本地约定。
+
+---
+
+## 6. 已交付能力
+
+| 工作包 | 状态 | 内容 |
+|---|---|---|
+| WP-23 共同基础 | 🟡 | 租户隔离（RLS）、公开路由、身份绑定、每实例事件密钥、审计；事件日志与补偿扫描；催答完成对账。跨系统对账报表、隐私删除、监控 ⬜ |
+| WP-22 套餐与计量 | 🟡 | 套餐版本、试用／付费订阅、有效答卷计量、席位额度、租户开通；赠送有效期 ⬜ |
+| WP-19 团队与品牌 | 🟡 | 角色目录、资源树授权继承、字段与导出权限、席位联动；企业模板库；`zh-business` 主题与多语言。协作员到期、自定义域名 ⬜ |
+| WP-01 创建与编辑 | ✅ | 定义格式与 LSS 编译、首发与改版再发布（原子路由切换）、草稿乐观锁、漂移检测、**旧版恢复**、**批量文本导入预览** |
+| WP-02 题型 | 🟡 | 47 项对照表；原生与原生加主题；**15 套自研主题**；插件副表结构版本；服务端校验（手机号／邮编／身份证／统一社会信用代码）。剩 6 类待资产服务补齐能力 |
+| WP-03 逻辑与计算 | ✅ | 定义 v2 DSL、类型检查与环检测、AST→ExpressionScript、**计分**、**双执行比对**（双库 48 例零分歧） |
+| WP-04 访问与作答规则 | ✅ | 时间窗（含改客户端时钟）、密码、邀请码、按 token/设备/IP 限次、服务端时长、验证码、IP 规则；策略摘要双端校验 |
+| WP-05 投放触达 | ✅ | 链接、二维码、短链、内嵌、签名渠道参数；批量任务（崩溃续跑不重发）、回执验签去重、退订不可翻转；催答与通知。真实短信／邮件通道 ⏳ |
+| WP-06 数据与输出 | 🟡 | 分页查询、字段字典、脱敏；导出作业（快照、续跑、再授权）；CSV／XLSX／**SAV**／**DOCX**；**扩展表作答进导出**。附件打包、PDF ⬜ |
+| WP-18 通讯录 | ✅ | 三类身份分离、名单导入去重、部门树与数据范围、**联系人 → 邀请码自动登记** |
+| WP-20 集成 | 🟡 | 企微／钉钉／飞书授权与免登、事件回调、定时同步。真实联调待凭据 ⏳ |
+| WP-09/10 考试测评 | 🔄 | 本波进行中 |
+
 ---
 
 ## 7. 已知遗留
@@ -179,8 +213,8 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 
 - **ADR 0019 撞号**（见 §4）。
 - **平台自有键政策不一致**：`participants`／`dictionaryVersion` 静默摘除，`assetVersion` 判定义非法并报错。已决定统一为报错，待处理。
-- 三端（平台／网关／插件）的数值上限常量靠注释互指，**没有自动一致性检查**——这类漂移是静默失败。
-- 双执行比对是**固定快照**（手写向量与期望值），无类型驱动的随机差分测试。
+- ~~三端（平台／网关／插件）的数值上限常量靠注释互指，没有自动一致性检查~~ **已补**：`platform/tools/publish-gateway/tests/test_limit_parity.py` 的声明式对照表，15 组，跟着网关单测与 CI 跑；当时对照表上线时三端全部一致，没有发现存量漂移。字符集／正则形状仍只靠注释互指，**没有**进对照表。
+- 双执行比对**仍然是固定快照**（4 条手写向量 × 12 处表达式 = 48 条，期望值按契约人工写下），无类型驱动的随机差分测试。接进 CI 只是让这份快照每次改动都被重跑，覆盖面没有变；要扩得往 `publish-gateway-scoring.vectors.json` 里加向量。
 
 **功能缺口**
 
@@ -197,6 +231,8 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 - **测试先行**：先写测试、**亲眼看它失败**再实现。首跑即绿的用例是「回归钉子」，必须与「驱动实现的测试」分开说明——两者价值不同。
 - **涉及数据库的端到端一律双库**（MySQL ＋ PostgreSQL）。只过一种不算数。
 - **契约改动要三端同步**，并尽量用机器钉住（先例：`test_plugin_registry_parity.py` 比对三处注册表）。
+# 也可以钉住基线（数字每波都变，用时以本文 §1 的测试基线为准）
+PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh --expect-tests <N> --expect-classes <M>
 - **并行车道不动共享汇总文档**（`docs/p2/progress.md`），由集成方统一写——否则每次合并必冲突。
 - 文件 200–400 行为宜、最多 800 行；函数 <50 行；错误显式处理，不静默吞掉。
 - 提交信息 `<type>: <描述>`，正文写清**为什么这么选**，尤其是反直觉的决定——合并冲突的取舍也要写进最终提交信息，否则 squash 之后无处可查。
