@@ -24,21 +24,37 @@ public class ResponseQueryController {
         this.currentTenant = currentTenant;
     }
 
+    /**
+     * 明细的一页。复合筛选（R06-01）：状态、已发布版本号、首事件时间区间、完成时间区间，
+     * 都可缺省、可任意组合；时间是 ISO-8601 时刻（如 {@code 2026-09-20T00:00:00Z}），区间闭合。
+     */
     @GetMapping("/v1/surveys/{id}/responses")
     public ResponseEntity<ResponsePage> list(@PathVariable UUID id,
             @RequestParam(required = false) String state,
+            @RequestParam(required = false) Integer version,
+            @RequestParam(required = false) String startedFrom,
+            @RequestParam(required = false) String startedTo,
+            @RequestParam(required = false) String completedFrom,
+            @RequestParam(required = false) String completedTo,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) Integer limit) {
-        return noStore(responses.list(currentTenant.require(), id, state, cursor, limit));
+        ResponseQuery query = ResponseQuery.parse(state, version, startedFrom, startedTo, completedFrom, completedTo,
+                cursor, limit);
+        return noStore(responses.list(currentTenant.require(), id, query));
     }
 
     /** 同一查询的蓝图写法：问卷放在查询参数里。 */
     @GetMapping("/v1/responses")
     public ResponseEntity<ResponsePage> listBySurvey(@RequestParam UUID surveyId,
             @RequestParam(required = false) String state,
+            @RequestParam(required = false) Integer version,
+            @RequestParam(required = false) String startedFrom,
+            @RequestParam(required = false) String startedTo,
+            @RequestParam(required = false) String completedFrom,
+            @RequestParam(required = false) String completedTo,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) Integer limit) {
-        return list(surveyId, state, cursor, limit);
+        return list(surveyId, state, version, startedFrom, startedTo, completedFrom, completedTo, cursor, limit);
     }
 
     @GetMapping("/v1/surveys/{id}/responses/summary")

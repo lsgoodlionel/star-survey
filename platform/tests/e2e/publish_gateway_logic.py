@@ -12,10 +12,13 @@
      用户输入的 HTML 被转义显示；第三页条件成立。
    B 先选狗并答了狗名，退回第一页改成猫：狗名必须被清空（隐藏必答与清值一致）。
    C 没有宠物：整个第二组被题组条件隐藏，组内计算值为空，第三页条件不成立。
+   D 答完狗名存断点，换全新会话续答回来再改成猫：清值在续答后照样生效，
+     整行与不走续答的同一条路径逐列一致（R03-02 的「续答后仍一致」那一半）。
 """
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -74,20 +77,46 @@ def respond(context: Context, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
     return docker_php(context.container, RESPONDER, str(context.survey_id), stdin=plan)
 
 
-def last_response(context: Context) -> Dict[str, str]:
+def response_row(context: Context, response_id: int = None) -> Dict[str, Any]:
+    """答卷表里的一行：每道题一列，外加 `_id` 与 `_submitted`。不给答卷号就取最新的一行。"""
     table = "lime_responses_{}".format(context.survey_id)
     columns = list(context.fields.items())
     quote = (lambda name: '"{}"'.format(name)) if context.db._driver == "pgsql" else (lambda name: "`{}`".format(name))
     select = ", ".join("COALESCE(CAST({} AS CHAR(200)), '<NULL>')".format(quote(field)) for _, field in columns)
     if context.db._driver == "pgsql":
         select = select.replace("AS CHAR(200)", "AS TEXT")
+    where = "" if response_id is None else "WHERE id = {}".format(int(response_id))
     rows = context.db.rows(
-        "SELECT submitdate IS NOT NULL, {} FROM {} ORDER BY id DESC LIMIT 1".format(select, table)
+        "SELECT id, submitdate IS NOT NULL, {} FROM {} {} ORDER BY id DESC LIMIT 1".format(select, table, where)
     )
     row = rows[0]
-    values = {code: (None if value == "<NULL>" else value) for (code, _), value in zip(columns, row[1:])}
-    values["_submitted"] = row[0] in ("1", "t", "true")
+    values = {code: (None if value == "<NULL>" else value) for (code, _), value in zip(columns, row[2:])}
+    values["_id"] = int(row[0])
+    values["_submitted"] = row[1] in ("1", "t", "true")
     return values
+
+
+def last_response(context: Context) -> Dict[str, Any]:
+    return response_row(context)
+
+
+def response_count(context: Context) -> int:
+    rows = context.db.rows("SELECT COUNT(*) FROM lime_responses_{}".format(context.survey_id))
+    return int(rows[0][0])
+
+
+def saved_control_srid(context: Context, save_name: str) -> int:
+    """断点记录（lime_saved_control）指向的答卷号；没有记录返回 -1。"""
+    # 这里的 SQL 只能整条拼（db.rows 不带占位参数），所以断点名先按白名单卡死：
+    # 引擎本身也不接受名字里出现斜杠与 & （Save.php），我们只用字母数字与短横。
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,60}", save_name):
+        raise ValueError("save name must be alphanumeric with dashes: {!r}".format(save_name))
+    rows = context.db.rows(
+        "SELECT srid FROM lime_saved_control WHERE sid = {} AND identifier = '{}'".format(
+            context.survey_id, save_name
+        )
+    )
+    return int(rows[0][0]) if rows else -1
 
 
 class NamedDatabase(Database):
@@ -193,6 +222,84 @@ def scenario_no_pet(context: Context) -> None:
     context.check("C: wrap-up stored as NULL", row["QFEED"] is None, row)
 
 
+def scenario_resume_then_hide(context: Context) -> None:
+    """场景 D：狗名答完后存断点，续答回来改成猫——隐藏题的值必须被清掉，
+    而且整行与不走续答的同一条路径逐列一致（R03-02「清值策略在续答后仍一致」）。
+
+    分三段跑，每段各是一次独立的 HTTP 会话，中间才查得了库。
+    """
+    print("scenario D: answer, save for later, resume, then hide the answered question", file=sys.stderr)
+    save_name = "resume{}".format(context.survey_id)
+    saved = resume_save_checkpoint(context, save_name)
+    resumed = resume_then_change_pet(context, save_name, saved)
+    resume_control_path(context, resumed)
+
+
+def resume_save_checkpoint(context: Context, save_name: str) -> Dict[str, Any]:
+    """第一段：答到第二页把狗名留在库里，然后走引擎的「稍后继续」。"""
+    respond(context, [
+        {"answers": context.answers(QAGE="40", QPET="A2", QNAME="Ann"), "move": "movenext"},
+        {"answers": context.answers(QDOGNAME="Rex", QYEARS="3"), "move": "movenext"},
+        {"save": save_name},
+    ])
+    saved = response_row(context)
+    context.check("D: 存断点后半份答卷已落库且未提交", saved["_submitted"] is False, saved)
+    context.check("D: 存断点前答的狗名在库里", saved["QDOGNAME"] == "Rex", saved)
+    context.check("D: 断点记录指向这份答卷", saved_control_srid(context, save_name) == saved["_id"],
+                  (save_name, saved["_id"]))
+    return saved
+
+
+def resume_then_change_pet(context: Context, save_name: str, saved: Dict[str, Any]) -> Dict[str, Any]:
+    """第二段：换一个全新会话续答回来，退回第一页改成猫，再提交。"""
+    count_before = response_count(context)
+    result = respond(context, [
+        {"resume": save_name},
+        {"answers": {}, "move": "moveprev"},
+        {"answers": {}, "move": "moveprev", "needles": ["Rex"]},
+        {"answers": context.answers(QPET="A1"), "move": "movenext"},
+        {"answers": {}, "move": "movenext"},
+        {"answers": context.answers(QFEED="fine"), "move": "movesubmit"},
+    ])
+    # 以 resume 开头的计划不先开会话（否则白占一行答卷），所以 pages[0] 就是续答回来的那一页。
+    pages = result["pages"]
+    context.check("D: 续答回到的是存断点那一页（收尾题可见）", context.state(pages[0], "QFEED") == "visible", pages[0])
+    context.check("D: 续答后第二页上狗名题仍可见", context.state(pages[1], "QDOGNAME") == "visible", pages[1])
+    context.check("D: 续答后第二页上存断点前答的狗名仍在", pages[1]["needles"].get("Rex") is True, pages[1])
+    context.check("D: 退回第一页", context.state(pages[2], "QPET") == "visible", pages[2])
+    context.check("D: 改成猫后狗名题被隐藏", context.state(pages[3], "QDOGNAME") == "hidden", pages[3])
+    context.check("D: 续答后提交成功", result["completed"] is True, pages)
+
+    resumed = response_row(context, saved["_id"])
+    context.check("D: 续答复用同一条答卷（没有新开一行）", response_count(context) == count_before,
+                  (count_before, response_count(context)))
+    context.check("D: 续答后提交的就是那条答卷", resumed["_submitted"] is True, resumed)
+    context.check("D: 续答后被隐藏的狗名清成 NULL", resumed["QDOGNAME"] is None, resumed)
+    context.check("D: 续答后仍可见的年数保持原值", number(resumed["QYEARS"]) == 3, resumed)
+    context.check("D: 续答后计算值 = 40 + 3*2", number(resumed["QSCORE"]) == 46, resumed)
+    context.check("D: 续答后收尾题的答案入库", resumed["QFEED"] == "fine", resumed)
+    return resumed
+
+
+def resume_control_path(context: Context, resumed: Dict[str, Any]) -> None:
+    """第三段：单会话跑同一条路径（不存断点不续答），与续答的那条逐列比对。"""
+    control = respond(context, [
+        {"answers": context.answers(QAGE="40", QPET="A2", QNAME="Ann"), "move": "movenext"},
+        {"answers": context.answers(QDOGNAME="Rex", QYEARS="3"), "move": "movenext"},
+        {"answers": {}, "move": "moveprev"},
+        {"answers": {}, "move": "moveprev"},
+        {"answers": context.answers(QPET="A1"), "move": "movenext"},
+        {"answers": {}, "move": "movenext"},
+        {"answers": context.answers(QFEED="fine"), "move": "movesubmit"},
+    ])
+    context.check("D: 对照路径（不续答）也提交成功", control["completed"] is True, control["pages"][-1])
+    plain = response_row(context)
+    context.check("D: 对照路径是另一条答卷", plain["_id"] != resumed["_id"], (plain["_id"], resumed["_id"]))
+    resumed_values = {code: value for code, value in resumed.items() if code != "_id"}
+    plain_values = {code: value for code, value in plain.items() if code != "_id"}
+    context.check("D: 续答路径与非续答路径逐列一致", resumed_values == plain_values, (resumed_values, plain_values))
+
+
 # ------------------------------------------------------------------ 主流程
 
 
@@ -247,6 +354,7 @@ def main() -> int:
     scenario_cat(context)
     scenario_dog_then_cat(context)
     scenario_no_pet(context)
+    scenario_resume_then_hide(context)
 
     print(json.dumps({"surveyId": survey_id, "failures": context.failures}))
     return 1 if context.failures else 0
