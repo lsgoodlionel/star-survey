@@ -1,0 +1,79 @@
+name: MJY 平台 - 质量闸门
+
+# 上游 LimeSurvey 自带的几条 workflow 只在 master / develop-* 上触发，而本仓库的
+# 工作分支是 main，所以本土化部分的检查单独一条。
+#
+# 两个 job 的分工：
+#   parity-tables      秒级，只要 Python；三端一致性对照表与对账脚本自己的用例
+#   gateway-parity-e2e 重，要起引擎栈；WP-03.4 双执行比对，mysql 与 pgsql 各跑一遍
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity-tables:
+    name: 跨端一致性与对账（单测）
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 网关单测里含两张跨端对照表：注册表（STRUCTURED_THEMES / MANAGED_ATTRIBUTES）
+      # 与数值上限常量。两张都按源码文本比对平台 Java 与插件 PHP，不需要 JVM 或 PHP。
+      - name: 发布网关单测
+        working-directory: platform/tools/publish-gateway
+        run: python3 -m unittest discover -s tests -t . -q
+
+      # 对账脚本按两次真实事故的形状造了 fixture，证明它确实会红。
+      - name: 测试总数对账脚本的用例
+        working-directory: platform/tools/test-report
+        run: python3 -m unittest discover -s tests -t . -q
+
+  gateway-parity-e2e:
+    name: 双执行比对 (${{ matrix.db }})
+    runs-on: ubuntu-22.04
+    needs: parity-tables
+    strategy:
+      # 一种数据库坏掉不要掩盖另一种。
+      fail-fast: false
+      matrix:
+        db: [mysql, pgsql]
+    env:
+      TEST_DB: ${{ matrix.db }}
+      # 两个矩阵分支各用一套容器名，互不干扰（lib.sh 按这两个变量命名栈）。
+      SURVEY_TEST_PREFIX: ci-${{ matrix.db }}
+      COMPOSE_PROJECT_NAME: ci-${{ matrix.db }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 脚本自己会在镜像缺失时构建 survey-web（全新检出里一定缺），并起 test-web ＋ 数据库。
+      # 它**仍然是固定快照**：答案向量与期望值都写死在
+      # platform/tests/fixtures/surveys/publish-gateway-scoring.vectors.json 里，
+      # 期望值按契约人工写下、不从任何一侧生成。接 CI 只是让这份快照每次改动都被重跑，
+      # 没有把它变成随机化或属性化的比对——覆盖面仍然等于那几条手写向量。
+      - name: WP-03.4 双执行比对
+        run: platform/deploy/test/run-publish-gateway-parity.sh --fresh
+
+      - name: 拆掉本分支的栈
+        if: always()
+        run: docker compose -f docker-compose.dev.yml --profile test down -v --remove-orphans
+
+# 还没接进来的：平台 Java 套件（platform/deploy/test/run-platform-tests.sh）。
+# 它要起 platform-db 并让 Maven 走 maven-settings.xml 里的阿里云镜像；GitHub runner
+# 上是冷缓存＋跨境拉取，接进来大概率是一条又慢又飘的 job。目前它是本地约定，
+# 用法写在 platform/services/business/CONVENTIONS.md。要接的话先把镜像配置做成可覆盖的。

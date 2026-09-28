@@ -3,10 +3,37 @@
 ## 构建与测试
 
 ```bash
-PLATFORM_DB_NAME=<你的库名> platform/deploy/platform-dev/mvn.sh test
+PLATFORM_DB_NAME=<你的库名> platform/deploy/test/run-platform-tests.sh
 ```
 
 本机不需要 Java，Maven 在容器里运行，依赖走阿里云镜像并缓存在命名卷。每条并行车道用自己的数据库名，互不干扰。
+
+### 测试数字一律走对账脚本
+
+**车道汇报「跑了多少条、多少个类」只认 `run-platform-tests.sh` 的输出，不要手工数 `target/surefire-reports`。** 前几波两次被假绿骗到，两次都是人工核对才发现的：
+
+1. 新测试类根本没被执行，报告里却 `failures=0`（靠总数差 14 才发现）；
+2. 改包名后旧报告残留在 `target/surefire-reports` 里被**重复计数**（虚高 14 条 1 个类）。
+
+脚本做三件事：跑前清空报告目录并确认清空、强制 `mvn clean test`、跑完把报告和源码对账：
+
+- 源码里有 `@Test`／`@ParameterizedTest`／`@RepeatedTest`／`@TestFactory`／`@TestTemplate`、名字又落在 surefire 默认扫描模式里的类，**必须**有一份报告——少一份就是事故 1；
+- 报告里出现的类，**必须**在源码里找得到——多一份就是事故 2；
+- 外加：同一个类多份报告、0 条用例的报告、失败／错误非零。
+
+对不上就以 2 退出。用法：
+
+```bash
+PLATFORM_DB_NAME=platform_x platform/deploy/test/run-platform-tests.sh
+# 与上一轮记下的数字对账（汇报前跑这一条）
+PLATFORM_DB_NAME=platform_x platform/deploy/test/run-platform-tests.sh --expect-tests 1231 --expect-classes 153
+# Maven 参数放在 -- 之后
+PLATFORM_DB_NAME=platform_x platform/deploy/test/run-platform-tests.sh -- -Dtest=SurveyServiceTest
+```
+
+对账本身是 `platform/tools/test-report/surefire_reconcile.py`，可以单独对着已有的报告目录跑；它的用例在 `platform/tools/test-report/tests/`（`cd platform/tools/test-report && python3 -m unittest discover -s tests -t . -q`），里面按两次事故的原样造了 fixture，证明它确实会红。
+
+不按文件时间判断陈旧：Maven 在容器里跑，报告 mtime 来自容器时钟，和宿主机时钟不是一个源，比时间会出假红。上面的集合对账是无时钟的。
 
 ## 模块与包的归属
 
@@ -50,6 +77,39 @@ CREATE POLICY tenant_isolation ON <t>
 4. 至少一条**跨租户负面测试**：B 读不到 A 的数据、B 写 A 的数据被数据库拒绝。
 
 控制平面表（租户登记、引擎实例登记等）不做行级隔离，但运行期账号的权限要收到最小。只追加的表（审计、账本流水）要 `REVOKE UPDATE, DELETE`。
+
+## 跨端常量的一致性（硬性要求）
+
+同一条限制落在平台（Java）、网关（Python）、插件（PHP）三处时，**不许只靠注释互指**。注释挡不住漂移，而这类漂移全是静默失败：三处不一致时没有任何测试会红，只有真实引擎在特定数据下才暴露。
+
+两张对照表，都跟着网关单测跑（不需要 JVM、不需要 PHP）：
+
+| 对照表 | 管什么 |
+|---|---|
+| `platform/tools/publish-gateway/tests/test_plugin_registry_parity.py` | 注册表：`STRUCTURED_THEMES`、`MANAGED_ATTRIBUTES` |
+| `platform/tools/publish-gateway/tests/test_limit_parity.py` | **数值上限常量**：节点数、层级、行数、列数、单元格长度、批量上限、密钥长度、时间窗…… |
+
+加一条跨端上限时，在 `test_limit_parity.py` 的 `LIMIT_GROUPS` 里加一行，写清 `name`、`why` 和各端落点：
+
+```python
+LimitGroup(
+    name="字典节点数上限",
+    why="快照随定义下发到引擎，和 1 MiB 的定义信封绑死（ADR 0019 决定 3）",
+    sides=(
+        GatewayConstant("pubgw.questions.theme_kit", "MAX_DICTIONARY_NODES"),
+        PhpConstant("MjyDictionaryStore.php", "MAX_NODES"),
+        JavaConstant("dictionary/DictionaryLimits.java", "MAX_NODES"),
+    ),
+)
+```
+
+规则默认是 `SAME`（各端取值相同）；`DECREASING` 表示按声明顺序严格递减，用于「外层信封必须给内层留余量」这类关系（网关请求体上限 > 平台定义上限）。
+
+三条底线：
+
+- 常量**找不到**（改名、挪走、删掉）必须转红，不能当成「这一端没有这个限制」跳过；
+- 取值读不懂（引用了别的常量）就抛，不猜；
+- 检查自己要有「它确实会红」的用例——`LimitParityGoesRedTest` 把真实源码文本里的某个数字人为改掉，断言检查必须报出来。一个永远不会红的一致性检查毫无价值。
 
 ## 其他
 

@@ -41,10 +41,22 @@ public class AssetKeys {
 
     /** 取件票的签名密钥。 */
     SecretKeySpec fetchKey(TenantId tenant) {
+        return derived("fetch/", tenant);
+    }
+
+    /**
+     * 作答者指纹的密钥（ADR 0019 决定 9）。与 {@link #fetchKey} <b>分开派生</b>：
+     * 指纹密钥泄露推不出签名密钥，反之亦然。
+     */
+    SecretKeySpec bindKey(TenantId tenant) {
+        return derived("bind/", tenant);
+    }
+
+    private SecretKeySpec derived(String purpose, TenantId tenant) {
         if (master == null) {
             throw new AssetUnavailableException(MASTER_SECRET_PROPERTY + " is not configured");
         }
-        return new SecretKeySpec(hmac(master, PREFIX + "fetch/" + tenant.value()), ALGORITHM);
+        return new SecretKeySpec(hmac(master, PREFIX + purpose + tenant.value()), ALGORITHM);
     }
 
     private static byte[] hmac(SecretKeySpec key, String context) {

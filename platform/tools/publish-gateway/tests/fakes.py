@@ -55,6 +55,10 @@ class FakeEngine:
         self.surveys = {}
         self.deleted = []
         self.participants = {}
+        #: sid → tokens_<sid> 里此刻的行（撤销会把行删掉）。
+        self.token_rows = {}
+        #: 引擎删不掉（权限、并发）时的行为，用来测"删除没生效"。
+        self.refuse_participant_delete = False
         self.applied_settings = {}
         self._next_sid = 511001
 
@@ -120,9 +124,50 @@ class FakeEngine:
             if create_token:
                 row["token"] = self._token_for(index)
             rows.append(row)
+        self.token_rows[sid] = [dict(row) for row in rows]
         if self.participants_returned is not None:
             rows = rows[: self.participants_returned]
         return rows
+
+    # ---------------------------------------------- 参与者（邀请码撤销，契约 v1.4）
+
+    def _participant_rows(self, sid):
+        """引擎 tokens_<sid> 里此刻的行；只有 add_participants 建过的问卷才有这张表。"""
+        return self.token_rows.get(sid)
+
+    def _get_participant_properties(self, key, sid, query, properties=None):
+        rows = self._participant_rows(sid)
+        if sid not in self.surveys:
+            return {"status": "Error: Invalid survey ID", "error_code": "ERR_INVALID_SURVEY"}
+        if rows is None:
+            return {"status": "Error: No survey participant list", "error_code": "ERR_NO_PARTICIPANT_TABLE"}
+        matched = [row for row in rows
+                   if all(str(row.get(name)) == str(value) for name, value in query.items())]
+        if not matched:
+            return {"status": "Error: No results were found based on your attributes.",
+                    "error_code": "ERR_NOT_FOUND"}
+        if len(matched) > 1:
+            return {"status": "Error: More than 1 result was found based on your attributes.",
+                    "error_code": "ERR_MULTIPLE_MATCHES"}
+        row = matched[0]
+        return {name: row[name] for name in (properties or row)} if properties else dict(row)
+
+    def _delete_participants(self, key, sid, token_ids):
+        rows = self._participant_rows(sid)
+        if sid not in self.surveys:
+            return {"status": "Error: Invalid survey ID", "error_code": "ERR_INVALID_SURVEY"}
+        if rows is None:
+            return {"status": "Error: No survey participant list", "error_code": "ERR_NO_PARTICIPANT_TABLE"}
+        result = {}
+        for tid in token_ids:
+            if self.refuse_participant_delete:
+                result[str(tid)] = "Deletion went wrong"
+                continue
+            remaining = [row for row in rows if row["tid"] != tid]
+            result[str(tid)] = "Deleted" if len(remaining) != len(rows) else "Invalid token ID"
+            self.token_rows[sid] = remaining
+            rows = remaining
+        return result
 
     def _token_for(self, index):
         if self.participant_tokens is None:

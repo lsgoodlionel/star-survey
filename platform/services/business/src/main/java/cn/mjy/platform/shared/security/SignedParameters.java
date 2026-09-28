@@ -33,13 +33,19 @@ public final class SignedParameters {
 
     public static final String SIGNATURE_PARAM = "sig";
     public static final String EXPIRY_PARAM = "exp";
+    /**
+     * 作答者令牌的参数名（ADR 0019 决定 9）。它<b>不进签名参数集合</b>——
+     * 调用方在验签之前先把它摘出来，折进签名上下文的指纹里。保留它是为了
+     * 「谁也不能把 rt 当业务参数签进链接」：否则令牌就写死在链接里，票据又退回 bearer。
+     */
+    public static final String RESPONDENT_PARAM = "rt";
     /** 参数名只允许字母数字、下划线与连字符，长度 1–32；避免在查询串里出现需要特别处理的字符。 */
     public static final String NAME_REGEX = "[A-Za-z][A-Za-z0-9_-]{0,31}";
     /** 单个参数值的长度上限，防止链接被撑爆。 */
     public static final int MAX_VALUE_LENGTH = 256;
     public static final int MAX_PARAMETERS = 16;
 
-    private static final Set<String> RESERVED = Set.of(SIGNATURE_PARAM, EXPIRY_PARAM);
+    private static final Set<String> RESERVED = Set.of(SIGNATURE_PARAM, EXPIRY_PARAM, RESPONDENT_PARAM);
     private static final String ALGORITHM = "HmacSHA256";
 
     /** 校验结论；除 {@link #VALID} 外一律当作未签名参数处理。 */

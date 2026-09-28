@@ -63,6 +63,19 @@ public class AssetErrorHandler {
                 "the asset service is not available");
     }
 
+    /**
+     * 拉取作答者上传时网关/插件不可达或应答不可信：503，与"网关没配"同一类。
+     *
+     * <p>不能让它落到没人接的地方变成 500——状态码骗人正是上一轮独立审查抓到的那一类问题。
+     * 详细原因只进服务端日志。
+     */
+    @ExceptionHandler(ResponderUploadsUnavailableException.class)
+    ResponseEntity<AssetError> uploadsUnavailable(ResponderUploadsUnavailableException e) {
+        log.warn("responder uploads are unavailable: {}", e.getMessage());
+        return respond(HttpStatus.SERVICE_UNAVAILABLE, "responder_uploads_unavailable",
+                "responder uploads cannot be read right now");
+    }
+
     private static ResponseEntity<AssetError> respond(HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).body(new AssetError(code, message));
     }

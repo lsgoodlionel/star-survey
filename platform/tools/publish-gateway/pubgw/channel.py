@@ -271,3 +271,184 @@ def _urlopen(url: str) -> bytes:
     except (OSError, HTTPException) as error:
         raise ChannelError("extension answer channel transport failed ({})".format(
             type(error).__name__)) from None
+
+
+# ---------------------------------------------------------------- 附件取件
+
+#: 一次取一份附件的通道函数（ADR 0015 增补四，契约 plugin-channel-v1「附件取件」）。
+ATTACHMENT_FUNCTION = "attachmentFile"
+#: 转手附件字节时的块大小。整份文件**从不**进内存：客户端与端点都只持有这一块。
+ATTACHMENT_CHUNK_BYTES = 64 * 1024
+_ATTACHMENT_TIMEOUT_SECONDS = 120
+#: 整趟传输的绝对上限。套接字超时只管单次读，挡不住"每次都卡在超时线下一点"的慢速流。
+ATTACHMENT_TRANSFER_DEADLINE_SECONDS = 600
+
+_FIELD_NAME = re.compile(r"\A[A-Za-z0-9_#]{1,64}\Z")
+#: 引擎给上传文件起的存储名（``fu_…``）。只认这一套字符，且不含 ``..``——
+#: 它会被插件拼进上传目录的路径，语法这一关必须在发出之前就过。
+_STORED_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,254}\Z")
+
+Opener = Callable[..., Any]
+
+
+class AttachmentTooLarge(RuntimeError):
+    """这一份超出约定的单份上限。**永久**结论：调用方据此记下，不重试。"""
+
+
+class AttachmentStream:
+    """一份附件的字节流。``length`` 来自引擎的 Content-Length，``chunks()`` 一块一块给出。
+
+    自己也数一遍上限：插件本该先挡住超限的那一份，数到超出说明它没按契约办事——
+    那是**不可信**（ChannelError），不是「太大」，绝不能被当成一个可以记下来的永久结论。
+    """
+
+    def __init__(self, response: Any, length: int, max_bytes: int, deadline: Optional[float] = None):
+        self._response = response
+        self.length = length
+        self._max_bytes = max_bytes
+        self._deadline = deadline
+
+    def chunks(self):
+        seen = 0
+        try:
+            while True:
+                chunk = self._response.read(ATTACHMENT_CHUNK_BYTES)
+                if not chunk:
+                    return
+                seen += len(chunk)
+                if seen > self._max_bytes:
+                    raise ChannelError("attachment channel streamed more than the agreed limit")
+                # 套接字超时只管**单次** recv：每 119 秒滴一个字节的流永远不会触发它。
+                # 所以整趟传输另有一个绝对截止时间。
+                if self._deadline is not None and _monotonic() > self._deadline:
+                    raise ChannelError("attachment channel took longer than the transfer deadline")
+                yield chunk
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        try:
+            self._response.close()
+        except Exception:  # noqa: BLE001 — 关闭失败不改变已经取到的结论
+            pass
+
+
+class AttachmentClient:
+    """一个引擎实例的附件取件客户端。``opener`` 是测试用的注入点（与 ExtensionAnswerClient 同形）。"""
+
+    def __init__(
+        self,
+        index_url: str,
+        engine_instance_id: str,
+        secret: str,
+        opener: Optional[Opener] = None,
+        now: Optional[Callable[[], float]] = None,
+    ):
+        self._index_url = index_url.rstrip("/")
+        self._instance_id = engine_instance_id
+        self._secret = secret
+        self._opener = opener or _urlopen_stream
+        if now is None:
+            import time
+
+            now = time.time
+        self._now = now
+
+    @classmethod
+    def from_rpc_url(
+        cls,
+        rpc_url: str,
+        engine_instance_id: str,
+        secret: str,
+        opener: Optional[Opener] = None,
+        now: Optional[Callable[[], float]] = None,
+    ) -> Optional["AttachmentClient"]:
+        trimmed = rpc_url.rstrip("/")
+        if not trimmed.endswith(_RPC_SUFFIX):
+            return None
+        return cls(trimmed[: -len(_RPC_SUFFIX)], engine_instance_id, secret, opener=opener, now=now)
+
+    def open(
+        self,
+        survey_id: int,
+        generation: str,
+        response_id: int,
+        field: str,
+        stored_name: str,
+        max_bytes: int,
+    ) -> Optional[AttachmentStream]:
+        """取一份附件。返回 None ＝ 引擎里已经没有这一份（正常的缺，不是错误）。"""
+        params = {
+            "plugin": PLUGIN_NAME,
+            "function": ATTACHMENT_FUNCTION,
+            "sid": str(_positive(survey_id, "survey id")),
+            "generation": _check_generation(generation),
+            "responseId": str(_positive(response_id, "response id")),
+            "field": _check_field(field),
+            "storedName": _check_stored_name(stored_name),
+            "maxBytes": str(_positive(max_bytes, "max bytes")),
+            "ts": str(int(self._now())),
+        }
+        canonical = canonical_query(params)
+        signature = sign(self._secret, params["ts"], canonical)
+        url = "{}{}?{}&sig={}".format(self._index_url, DIRECT_PATH, canonical, signature)
+        return self._open(url, max_bytes)
+
+    def _open(self, url: str, max_bytes: int) -> Optional[AttachmentStream]:
+        try:
+            response = self._opener(url, timeout=_ATTACHMENT_TIMEOUT_SECONDS)
+        except ChannelError:
+            raise
+        except Exception as error:
+            status = getattr(error, "code", None)
+            if status == 404:
+                return None
+            if status == 413:
+                raise AttachmentTooLarge("attachment exceeds the agreed limit") from None
+            # 刻意不带 str(error)：它可能含完整 URL（内有 sig）。
+            raise ChannelError("attachment channel refused the read at {} ({})".format(
+                self._index_url, type(error).__name__)) from None
+        return AttachmentStream(response, _content_length(response), max_bytes,
+                                _monotonic() + ATTACHMENT_TRANSFER_DEADLINE_SECONDS)
+
+
+def _content_length(response: Any) -> int:
+    raw = response.headers.get("Content-Length") if hasattr(response, "headers") else None
+    if raw is None or not str(raw).isdigit():
+        # 没有长度就没法原样转手给平台（网关的应答也要带 Content-Length）。
+        # 应答形状不对一律不可信，不猜。
+        response.close()
+        raise ChannelError("attachment channel returned no content length")
+    return int(raw)
+
+
+def _positive(value: Any, what: str) -> int:
+    number = int(value)
+    if number <= 0:
+        raise InvalidChannelRequest("{} must be positive".format(what))
+    return number
+
+
+def _check_field(field: str) -> str:
+    if not _FIELD_NAME.match(str(field)):
+        raise InvalidChannelRequest("field name is outside the grammar")
+    return str(field)
+
+
+def _check_stored_name(stored_name: str) -> str:
+    name = str(stored_name)
+    if not _STORED_NAME.match(name) or ".." in name:
+        raise InvalidChannelRequest("stored name is outside the grammar")
+    return name
+
+
+def _monotonic() -> float:
+    import time
+
+    return time.monotonic()
+
+
+def _urlopen_stream(url: str, timeout: int = _ATTACHMENT_TIMEOUT_SECONDS) -> Any:
+    from urllib.request import Request, urlopen
+
+    return urlopen(Request(url, method="GET"), timeout=timeout)

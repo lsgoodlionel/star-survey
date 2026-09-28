@@ -44,6 +44,8 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     private const DEVICE_COOKIE_SECONDS = 31536000;
     private const DEVICE_PATTERN = '/\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/';
     private const STATUS_FUNCTION = 'policyStatus';
+    private const EXAM_STATUS_FUNCTION = 'examStatus';
+    private const EXAM_TIME_FUNCTION = 'examTime';
     private const CLOSED_ACCESS = 'C';
 
     protected $storage = 'DbStorage';
@@ -65,6 +67,12 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     /** @var string|null 本次请求的设备号（首次访问时新发） */
     private $deviceId;
 
+    /** @var MjyExamProctor|null */
+    private $proctor;
+
+    /** @var MjyRpcGate|null RemoteControl 写答卷闸门（ADR 0021） */
+    private $rpcGate;
+
     public function init()
     {
         $this->subscribe('beforeActivate');
@@ -72,6 +80,83 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
         $this->subscribe('afterSurveyComplete');
         $this->subscribe('cron');
         $this->subscribe('newDirectRequest');
+        // RemoteControl 的写答卷接口绕开 beforeSurveyPage（ADR 0021），在这里拦。
+        $this->subscribe('beforeControllerAction');
+    }
+
+    /**
+     * RemoteControl 写答卷接口的闸门（ADR 0021；P0 发现 12、21）。
+     *
+     * `add_response` / `update_response` 不经过 `SurveyIndex`，所以本插件的
+     * `beforeSurveyPage` 完全管不到它们：访问规则、按身份限次、服务端考试计时、
+     * 题型的服务端校验对那条路径一律失效。`beforeControllerAction`
+     * （`LSYii_Application.php:384`）是 RemoteControl 这条路上唯一早于
+     * `RemoteControl::run()` 的插件落脚点——把 `run` 设成 false 即可让动作不执行。
+     *
+     * 判定逻辑在 {@see MjyRpcGate}（无引擎依赖、可单元测试）；这里只做三件与请求
+     * 生命周期相关的事：读正文、写应答、把动作关掉。
+     *
+     * 失败即关闭：读不到正文时**不拦**（那样的请求也调不动任何方法，引擎自己会拒），
+     * 但正文里出现被禁方法名而我们解析不出结构时按拒处理（见 MjyRpcGate::isBlocked）。
+     */
+    public function beforeControllerAction()
+    {
+        $event = $this->getEvent();
+        $gate = $this->rpcGate();
+        if (!$gate->isRemoteControl($event->get('controller'), $event->get('action'))) {
+            return;
+        }
+        $body = $this->requestBody();
+        if ($body === '') {
+            return;
+        }
+        if (!$gate->isBlocked($body)) {
+            if ($gate->isOverrideEnabled() && $this->writesResponses($body)) {
+                Yii::log($gate->logLine($body, 'allowed by ' . MjyRpcGate::OVERRIDE_ENV),
+                    CLogger::LEVEL_WARNING, self::LOG_CATEGORY);
+            }
+            return;
+        }
+        Yii::log($gate->logLine($body, 'refused'), CLogger::LEVEL_WARNING, self::LOG_CATEGORY);
+        $this->refuseRpc($gate->refusalBody($body));
+        $event->set('run', false);
+    }
+
+    /** 被禁方法名出现在正文里（只用于"已放行但要记一笔"的日志判定）。 */
+    private function writesResponses(string $body): bool
+    {
+        return (new MjyRpcGate(false))->isBlocked($body);
+    }
+
+    private function rpcGate(): MjyRpcGate
+    {
+        if ($this->rpcGate === null) {
+            $configured = getenv(MjyRpcGate::OVERRIDE_ENV);
+            $this->rpcGate = MjyRpcGate::fromEnvironment($configured === false ? null : $configured);
+        }
+        return $this->rpcGate;
+    }
+
+    /**
+     * 这次请求的原始正文。RemoteControl 用 `application/json` / `text/xml`，
+     * 这类正文的 `php://input` 可以重复读取，因此引擎随后自己再读一遍不受影响
+     * （`multipart/form-data` 才是不可重读的那种，RemoteControl 不用它）。
+     */
+    private function requestBody(): string
+    {
+        $body = file_get_contents('php://input');
+        return $body === false ? '' : $body;
+    }
+
+    /** 写出 JSON-RPC 拒绝应答。状态码用 403：这是策略拒绝，不是请求格式错。 */
+    private function refuseRpc(string $payload): void
+    {
+        if (!headers_sent()) {
+            header('HTTP/1.1 403 Forbidden');
+            header('Content-Type: application/json; charset=utf-8');
+            header('Content-Length: ' . strlen($payload));
+        }
+        echo $payload;
     }
 
     public static function engineInstanceId(): string
@@ -133,6 +218,11 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
             $this->askForPassword($surveyId, $access[0]);
             return;
         }
+        if ($access !== null) {
+            // 判定之后、拒绝之前：记考场记录，到点的先把卷强制交掉。
+            // 顺序不能反——deny() 末尾是 App()->end()。
+            $this->proctorExam($surveyId, $access[1]);
+        }
         if ($access !== null && !$access[1]->isAllowed()) {
             $this->deny($surveyId, $access[1]);
             return;
@@ -145,19 +235,25 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     }
 
     /**
-     * 发布网关回读：`GET index.php/plugins/direct?plugin=MjyRuntimePolicy&function=policyStatus&sid=N`。
-     * 只回份数、能否解析与摘要，不回策略内容（密码哈希不出引擎）。
+     * 发布网关回读：`GET index.php/plugins/direct?plugin=MjyRuntimePolicy&function=<名字>&sid=N`。
+     *
+     * - `policyStatus`：访问策略的份数、能否解析与摘要（密码哈希不出引擎）；
+     * - `examStatus`：考试答案键的份数、能否解析、摘要与题数。
+     *
+     * **两个端点都只回摘要，绝不回内容。** 这条路由是公开的（没有鉴权），
+     * 把答案或密码哈希回出去等于换个地方下发。
      */
     public function newDirectRequest()
     {
         $event = $this->getEvent();
-        if ($event->get('target') !== self::$name || $event->get('function') !== self::STATUS_FUNCTION) {
+        $function = $event->get('function');
+        $known = [self::STATUS_FUNCTION, self::EXAM_STATUS_FUNCTION, self::EXAM_TIME_FUNCTION];
+        if ($event->get('target') !== self::$name || !in_array($function, $known, true)) {
             return;
         }
         $surveyId = (int) App()->getRequest()->getParam('sid');
         try {
-            $status = ['plugin' => self::$name, 'active' => true]
-                + $this->accessPolicies()->status($surveyId);
+            $status = ['plugin' => self::$name, 'active' => true] + $this->status($function, $surveyId);
         } catch (\Throwable $exception) {
             $this->logFailure($exception);
             $status = ['plugin' => self::$name, 'active' => true, 'surveyId' => $surveyId, 'error' => 'unavailable'];
@@ -166,6 +262,50 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
         header('Cache-Control: no-store');
         echo json_encode($status);
         App()->end();
+    }
+
+    private function status(string $function, int $surveyId): array
+    {
+        if ($function === self::EXAM_STATUS_FUNCTION) {
+            return $this->examKeys()->status($surveyId);
+        }
+        if ($function === self::EXAM_TIME_FUNCTION) {
+            return $this->examTime($surveyId);
+        }
+        return $this->accessPolicies()->status($surveyId);
+    }
+
+    /**
+     * 作答页问"还剩多少秒"（WP-09.2）。
+     *
+     * **答案永远由服务端算**：截止时刻是首次进场时按数据库时钟定死的，这里只拿
+     * 数据库时钟再减一次。请求里的任何时间字段、浏览器时钟都不是输入，改了没用。
+     * 页面上的倒计时只是展示，到底收不收这次提交由 beforeSurveyPage 另行判定。
+     *
+     * 身份取当前会话：换个浏览器问不到别人的剩余时间。
+     *
+     * @return array{surveyId: int, remainingSeconds: int, serverNow: string, expired: bool}|array{surveyId: int, timed: false}
+     */
+    private function examTime(int $surveyId): array
+    {
+        $policy = $this->accessPolicies()->find($surveyId);
+        if ($policy === null || $policy->maxDurationSeconds() === null) {
+            return ['surveyId' => $surveyId, 'timed' => false];
+        }
+        $this->readyEngine();
+        $this->proctor()->ensureSchema();
+        $attempt = (new MjyExamAttemptStore(App()->getDb(), self::engineInstanceId()))
+            ->find($surveyId, $this->sessionKey($surveyId));
+        if ($attempt === null) {
+            return ['surveyId' => $surveyId, 'timed' => false];
+        }
+        $timer = new MjyExamTimer($attempt['deadline_at'], $this->engine()->clock()->nowUtc());
+        return ['surveyId' => $surveyId] + $timer->toPayload();
+    }
+
+    public function examKeys(): MjyExamKeyStore
+    {
+        return new MjyExamKeyStore(App()->getDb(), (int) $this->id);
     }
 
     /**
@@ -178,11 +318,23 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
             if ($surveyId <= 0) {
                 return;
             }
-            $this->readyEngine()->confirmEntry($surveyId, $this->sessionKey($surveyId));
+            $sessionKey = $this->sessionKey($surveyId);
+            $this->readyEngine()->confirmEntry($surveyId, $sessionKey);
+            $now = $this->engine()->clock()->nowUtc();
             $policy = $this->accessPolicies()->find($surveyId);
             if ($policy !== null) {
-                $now = $this->engine()->clock()->nowUtc();
                 $this->accessGate()->confirm($policy, $this->accessRequest($surveyId, $policy), $now);
+                $this->proctor()->ensureSchema();
+                $this->proctor()->onComplete($surveyId, $sessionKey, $now);
+            }
+        });
+        // 判分与限时策略无关：没有限时的考试一样要判。单独 safely 一次，
+        // 判分失败不该把"确认名额"也一起吞掉。
+        $this->safely(function () {
+            $surveyId = (int) $this->getEvent()->get('surveyId');
+            $responseId = $this->currentResponseId($surveyId);
+            if ($surveyId > 0 && $responseId !== null) {
+                $this->gradeResponse($surveyId, $responseId);
             }
         });
     }
@@ -194,6 +346,9 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     {
         $this->safely(function () {
             $this->reapExpiredLeases();
+        });
+        $this->safely(function () {
+            $this->reapExpiredExams();
         });
     }
 
@@ -211,6 +366,112 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
             });
         }
         return $reaped;
+    }
+
+    /**
+     * 到点未交的卷由服务端强制交掉（WP-09.2）。
+     *
+     * 直接关掉浏览器的人不会再发请求，beforeSurveyPage 挂不上——这条是唯一的兜底。
+     *
+     * @return int 结掉了几份
+     */
+    public function reapExpiredExams(): int
+    {
+        $this->readyEngine();
+        $this->proctor()->ensureSchema();
+        $now = $this->engine()->clock()->nowUtc();
+        $settled = 0;
+        foreach (Survey::model()->findAllByAttributes(['active' => 'Y']) as $survey) {
+            $this->safely(function () use ($survey, $now, &$settled) {
+                $settled += $this->proctor()->reap((int) $survey->sid, $now);
+            });
+        }
+        return $settled;
+    }
+
+    public function proctor(): MjyExamProctor
+    {
+        if ($this->proctor === null) {
+            $this->proctor = (new MjyExamProctor(App()->getDb(), self::engineInstanceId()))
+                ->withGrading(function (int $surveyId, int $responseId): void {
+                    // 判分失败不能连累收卷：卷子已经交了，分数可以事后重判。
+                    $this->safely(function () use ($surveyId, $responseId) {
+                        $this->gradeResponse($surveyId, $responseId);
+                    });
+                });
+        }
+        return $this->proctor;
+    }
+
+    /**
+     * 判一份卷（WP-10）。
+     *
+     * 答案只从答卷表读，对错只在这里推——作答者提交不了"我答对了"，答卷表里
+     * 根本没有可以放对错的列。成绩写进插件表，不往答卷表加列（理由见
+     * MjyExamScoreStore 的说明）。
+     */
+    public function gradeResponse(int $surveyId, int $responseId): ?MjyExamResult
+    {
+        $key = $this->examKeys()->find($surveyId);
+        if ($key === null) {
+            return null; // 这份问卷不是考试
+        }
+        $survey = Survey::model()->findByPk($surveyId);
+        if ($survey === null) {
+            return null;
+        }
+        $row = App()->getDb()->createCommand()
+            ->select('*')->from('{{responses_' . $surveyId . '}}')
+            ->where('id = :id', [':id' => $responseId])
+            ->queryRow();
+        if ($row === false) {
+            return null;
+        }
+        $answers = (new MjyExamAnswerReader(createFieldMap($survey, 'full', false, false, $survey->language)))
+            ->read($row, $key->questionCodes());
+        $result = (new MjyExamGrader())->grade($key, $answers);
+
+        $scores = $this->examScores();
+        $scores->ensureSchema();
+        $scores->save($surveyId, $responseId, $result, $key->digest(), $this->engine()->clock()->nowUtc());
+        return $result;
+    }
+
+    public function examScores(): MjyExamScoreStore
+    {
+        return new MjyExamScoreStore(App()->getDb(), self::engineInstanceId());
+    }
+
+    /**
+     * 记考场记录，并在到点时先把卷强制交掉。
+     *
+     * 失败只写日志：记账坏了不该把还在考试的人挡在门外（与 ADR 0007 决定 6 一致——
+     * 闸门 fail closed，记账 fail open）。
+     */
+    private function proctorExam(int $surveyId, MjyPolicyDecision $decision): void
+    {
+        if ($decision->deadlineAt() === null) {
+            return; // 这份问卷没有限时
+        }
+        $this->safely(function () use ($surveyId, $decision) {
+            $this->proctor()->ensureSchema();
+            $this->proctor()->onPage(
+                $surveyId,
+                $this->sessionKey($surveyId),
+                $decision,
+                $this->currentResponseId($surveyId),
+                $this->engine()->clock()->nowUtc()
+            );
+        });
+    }
+
+    /**
+     * 引擎当前这次作答的答卷行号。第一页提交之前还没有。
+     */
+    private function currentResponseId(int $surveyId): ?int
+    {
+        $srid = $_SESSION['responses_' . $surveyId]['srid'] ?? null;
+        return is_numeric($srid) ? (int) $srid : null;
     }
 
     /**

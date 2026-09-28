@@ -95,11 +95,70 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
             $this->emit($this->dictionaryNodes()->handle($this->channelQuery()), 'dictionary node endpoint');
             return;
         }
+        if ($function === MjyUploadSessionEndpoint::FUNCTION_LIST
+            || $function === MjyUploadSessionEndpoint::FUNCTION_CONTENT) {
+            $this->emit($this->uploadChannel()->handle($this->channelQuery(), time()), 'upload session channel');
+        }
+
+        if ($function === MjyAttachmentFileEndpoint::FUNCTION_NAME) {
+            $outcome = $this->attachmentChannel()->handle($this->channelQuery(), time());
+            if ($outcome instanceof MjyChannelFile) {
+                $this->emitFile($outcome);
+            } else {
+                $this->emit($outcome, 'attachment file channel');
+            }
+            return;
+        }
         if ($function !== MjyExtensionAnswerEndpoint::FUNCTION_NAME) {
             return;
         }
         $response = $this->answerChannel()->handle($this->channelQuery(), time());
         $this->emit($response, 'extension answer channel');
+    }
+
+    /**
+     * 作答者上传的读取端点（ADR 0019 决定 8）。与 answerChannel() 同一条规矩：
+     * **装配过程一律不碰数据库、不碰磁盘**——它在验签之前就被构造。
+     */
+    public function uploadChannel(): MjyUploadSessionEndpoint
+    {
+        $instanceId = self::engineInstanceId();
+
+        return new MjyUploadSessionEndpoint(
+            new MjyChannelAuth(self::instanceSecrets(), $instanceId),
+            $this->uploadSessions(),
+            new MjyUploadFileReader((string) Yii::app()->getConfig('uploaddir')),
+            $this->channelRateLimit(),
+            $instanceId
+        );
+    }
+
+    /**
+     * 附件字节的出口：{@see readfile} 按块写出，**整份文件不进内存**（ADR 0015 增补四）。
+     *
+     * 先把输出缓冲**丢掉**（ob_end_clean 而不是 ob_end_flush）：缓冲区里此刻可能攒着
+     * 别处写的字节（开了 display_errors 时的警告、模板的空白行），冲出去就会垫在文件前面，
+     * 让调用方拿到一份**长度对不上、内容被污染**的附件——而它不会报错，只会悄悄坏掉。
+     * 丢掉的那些内容本来也不该出现在一条二进制端点上；真正的故障另有服务端日志。
+     * 留着缓冲同样不行：PHP 会替我们把整份文件攒起来，把这条端点唯一的内存保证抵消掉。
+     */
+    private function emitFile(MjyChannelFile $file): void
+    {
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        header('Content-Type: application/octet-stream', true, 200);
+        header('Content-Length: ' . $file->size());
+        header('Cache-Control: no-store');
+        header('X-Content-Type-Options: nosniff');
+        // 压住警告并自己判返回值：头与 Content-Length 已经发出去了，此时再让 PHP 把
+        // 「readfile(...): Failed to open stream」连同**服务器路径**喷进字节流，
+        // 等于在一份二进制附件后面追一段路径泄露。读不动就断在这里，调用方会因为
+        // 长度对不上而判这次取件失败并重试（那正是想要的结果）。
+        if (@readfile($file->path()) === false) {
+            Yii::log('attachment could not be streamed', CLogger::LEVEL_ERROR, self::LOG_CATEGORY);
+        }
+        App()->end();
     }
 
     /** 两条直连端点共用的出口：稳定原因码进日志，绝不带密钥、签名或作答值。 */
@@ -153,6 +212,20 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
             new MjyExtensionAnswerReader(App()->getDb(), $this->structuredAnswers()),
             $this->channelRateLimit(),
             $instanceId
+        );
+    }
+
+    /**
+     * 装配附件取件端点。与 {@see answerChannel()} 同样**一律不碰数据库**：
+     * 它在验签之前就被构造，任何在此查表的动作都会让未签名的请求逼出一次真实查询。
+     */
+    public function attachmentChannel(): MjyAttachmentFileEndpoint
+    {
+        return new MjyAttachmentFileEndpoint(
+            new MjyChannelAuth(self::instanceSecrets(), self::engineInstanceId()),
+            new MjyAttachmentLocator(App()->getDb(), $this->generations(),
+                (string) App()->getConfig('uploaddir')),
+            $this->channelRateLimit()
         );
     }
 

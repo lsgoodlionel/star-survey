@@ -6,12 +6,6 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.core.io.InputStreamResource;
-import org.springframework.http.CacheControl;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,18 +24,14 @@ import org.springframework.web.bind.annotation.RestController;
  * 主密钥未配置——以及之后的"资产或版本不存在"，一律返回<b>逐字节相同</b>的 404。
  * 唯一的例外是签名正确但已过期：410，因为走到这一步的人本来就持有过合法链接。
  * 原因只进服务端日志（ADR 0018 决定 5 的教训）。
+ *
+ * <p>本端点是 <b>bearer</b>：拿到链接的人能看到那张图，这与问卷媒体的语义相符。
+ * 作答者自己上传的内容<b>不走这条路</b>——它在 {@link AssetRespondentController} 上，
+ * 取件要同时出示那位作答者的令牌（决定 9）。这里读不到作答者资产，有用例钉着。
  */
 @RestController
 @RequestMapping("/a")
 class AssetPublicController {
-
-    /** 一切拒绝共用这一段应答体，逐字节相同。 */
-    private static final String NOT_FOUND_BODY = "{\"error\":\"not_found\"}";
-    private static final String GONE_BODY = "{\"error\":\"gone\"}";
-    /** 纵深防御：即便将来白名单被放宽错了，浏览器也不会把它当文档执行。 */
-    private static final String SANDBOX_CSP = "default-src 'none'; sandbox";
-    /** (资产, 版本) 的字节是不可变的，让浏览器缓存是对的；private 挡住共享缓存与 CDN。 */
-    private static final long CACHE_SECONDS = 3600;
 
     private static final Logger log = LoggerFactory.getLogger(AssetPublicController.class);
 
@@ -58,24 +48,22 @@ class AssetPublicController {
             @RequestParam Map<String, String> query) {
         Target target = parse(tenant, asset, version);
         if (target == null) {
-            return refuse("malformed path");
+            return AssetResponses.notFound(log, "malformed path");
         }
         AssetTickets.Verdict verdict = tickets.verify(target.tenant(), target.assetId(), target.versionNo(),
                 query, Instant.now());
         if (verdict == AssetTickets.Verdict.EXPIRED) {
             log.info("asset ticket expired for {} v{}", target.assetId(), target.versionNo());
-            return ResponseEntity.status(HttpStatus.GONE)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .header(HttpHeaders.CACHE_CONTROL, "no-store")
-                    .body(GONE_BODY);
+            return AssetResponses.gone();
         }
         if (verdict != AssetTickets.Verdict.VALID) {
-            return refuse("bad ticket");
+            return AssetResponses.notFound(log, "bad ticket");
         }
         try {
-            return serve(target, assets.open(target.tenant(), target.assetId(), target.versionNo()));
+            return AssetResponses.serve(target.assetId(), target.versionNo(),
+                    assets.open(target.tenant(), target.assetId(), target.versionNo()));
         } catch (AssetNotFoundException e) {
-            return refuse("no such asset version");
+            return AssetResponses.notFound(log, "no such asset version");
         }
     }
 
@@ -93,33 +81,5 @@ class AssetPublicController {
         } catch (IllegalArgumentException e) {
             return null;
         }
-    }
-
-    private static ResponseEntity<String> refuse(String reason) {
-        log.debug("asset fetch refused: {}", reason);
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .contentType(MediaType.APPLICATION_JSON)
-                .header(HttpHeaders.CACHE_CONTROL, "no-store")
-                .body(NOT_FOUND_BODY);
-    }
-
-    private static ResponseEntity<InputStreamResource> serve(Target target, AssetContent content) {
-        ContentDisposition disposition = ContentDisposition.inline()
-                .filename(target.assetId() + "-v" + target.versionNo() + extensionOf(content.contentType()))
-                .build();
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(content.contentType()))
-                .contentLength(content.byteSize())
-                .cacheControl(CacheControl.maxAge(java.time.Duration.ofSeconds(CACHE_SECONDS)).cachePrivate())
-                .header("X-Content-Type-Options", "nosniff")
-                .header("Content-Security-Policy", SANDBOX_CSP)
-                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
-                .body(new InputStreamResource(content.content()));
-    }
-
-    /** 扩展名只从白名单认出来的内容类型推，永远不来自上传时的文件名。 */
-    private static String extensionOf(String contentType) {
-        int slash = contentType.indexOf('/');
-        return slash < 0 ? "" : "." + contentType.substring(slash + 1);
     }
 }

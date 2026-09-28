@@ -48,6 +48,15 @@ class MjyChannelResponse
         return new self(429, '{"error":"rate_limited"}', 'rate_limited');
     }
 
+    /**
+     * 验签通过但这一份附件超出约定的单份上限（ADR 0015 增补四）。
+     * 与 pageTooLarge() 同一条规矩：绝不截断——半份文件比报错危险得多。
+     */
+    public static function tooLarge(): self
+    {
+        return new self(413, '{"error":"too_large"}', 'attachment_too_large');
+    }
+
     /** 验签通过但插件内部出错。原因只进服务端日志。 */
     public static function unavailable(string $reason): self
     {

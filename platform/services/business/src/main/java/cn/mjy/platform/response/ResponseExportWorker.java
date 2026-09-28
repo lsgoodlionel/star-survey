@@ -82,13 +82,14 @@ public class ResponseExportWorker {
     private final ResponseFieldPolicies fieldPolicies;
     private final ExportFileStore files;
     private final ExportFileAssembler assembler;
+    private final ExportAttachmentFetcher attachmentFetcher;
     private final ResponseExportProperties properties;
     private final JsonMapper json;
 
     ResponseExportWorker(TenantDirectory tenants, TenantScope tenantScope, ResponseExportRepository jobs,
             ResponseProjectionQuery projections, ResponseAnswerSource answers, AccessDecisionService access,
             ResponseFieldPolicies fieldPolicies, ExportFileStore files, ExportFileAssembler assembler,
-            ResponseExportProperties properties, JsonMapper json) {
+            ExportAttachmentFetcher attachmentFetcher, ResponseExportProperties properties, JsonMapper json) {
         this.tenants = tenants;
         this.tenantScope = tenantScope;
         this.jobs = jobs;
@@ -98,6 +99,7 @@ public class ResponseExportWorker {
         this.fieldPolicies = fieldPolicies;
         this.files = files;
         this.assembler = assembler;
+        this.attachmentFetcher = attachmentFetcher;
         this.properties = properties;
         this.json = json;
     }
@@ -154,6 +156,8 @@ public class ResponseExportWorker {
             tenantScope.run(tenant, () -> jobs.fail(jobId, token, e.code));
         } catch (ResponseAnswersUnavailableException e) {
             retryLater(run, "answers_unavailable", e);
+        } catch (ResponseAttachmentsUnavailableException e) {
+            retryLater(run, "attachments_unavailable", e);
         } catch (UncheckedIOException e) {
             retryLater(run, "storage_error", e);
         } catch (RuntimeException e) {
@@ -290,6 +294,11 @@ public class ResponseExportWorker {
         ResponseFieldPolicy policy = currentPolicy(run, job);
         Map<Integer, AnswerBatch> fetched = fetch(run.plan(), items);
         ExportRowEncoder.Encoded encoded = new ExportRowEncoder(run.layout(), policy).encode(items, fetched);
+        if (job.format().needsAttachmentBytes()) {
+            // 取件在写分片之前：分片落盘即意味着这一批的附件都已有结论（取到了，或者留了墓碑）。
+            // 暂时性失败在这里抛出，检查点不前移，整批稍后重来——重来时只补没取到的那些。
+            attachmentFetcher.fetch(run.tenant(), run.jobId(), run.plan(), encoded);
+        }
         writePart(partKey(run.tenant(), run.jobId(), job.nextSeq()), encoded);
         long next = items.getLast().seq() + 1;
         boolean mine = tenantScope.call(run.tenant(),
@@ -348,7 +357,7 @@ public class ResponseExportWorker {
         String key = fileKey(run.tenant(), run.jobId(), job.format().extension());
         List<String> parts = partKeys(run.tenant(), run.jobId(), job);
         ExportFileAssembler.Written written = assembler.assemble(key, job.format(), run.layout(),
-                job.revealSensitive(), parts);
+                job.revealSensitive(), parts, attachments(run.tenant(), run.jobId(), job.format()));
         boolean mine = tenantScope.call(run.tenant(), () -> {
             boolean ok = jobs.complete(run.jobId(), run.token(), key, written.size(), written.sha256());
             if (ok) {
@@ -369,6 +378,11 @@ public class ResponseExportWorker {
         log.info("response export {} of tenant {} completed: {} rows, {} bytes", run.jobId(), run.tenant(),
                 job.totalRows(), written.size());
         return Step.DONE;
+    }
+
+    /** 只有附件包格式才需要附件字节的取件口；其余格式只出清单，传 null。 */
+    private ExportAttachments attachments(TenantId tenant, UUID jobId, ExportFormat format) {
+        return format.needsAttachmentBytes() ? new ExportAttachments(files, jobPrefix(tenant, jobId)) : null;
     }
 
     private static List<String> partKeys(TenantId tenant, UUID jobId, ExportJob job) {

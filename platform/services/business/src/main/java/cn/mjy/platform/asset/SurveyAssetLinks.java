@@ -81,6 +81,14 @@ class SurveyAssetLinks implements SurveyAssetSource {
             problems.add("unknown asset: " + assetId);
             return;
         }
+        if (row.origin() != AssetOrigin.AUTHOR) {
+            // 这不是洁癖，是一条直通路：引用一旦成立，发布会把作答者上传的内容改写成一张
+            // **bearer** 取件票发到所有作答者的浏览器上，决定 9 那一整套当场被绕开。
+            // 理由不写进 problems：与"这个 id 根本没有"同一句话，免得作者靠报错分辨
+            // 「这个 UUID 是不是某位作答者的录音」。
+            problems.add("unknown asset: " + assetId);
+            return;
+        }
         if (row.status() != AssetStatus.ACTIVE) {
             problems.add("asset " + assetId + " is archived and cannot be used in a new publish");
             return;

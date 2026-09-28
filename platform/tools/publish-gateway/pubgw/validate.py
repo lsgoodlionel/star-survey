@@ -86,6 +86,8 @@ def validate_definition(definition: SurveyDefinition) -> ValidationReport:
     # 逻辑检查依赖本模块的 ValidationIssue，延迟导入以免循环引用。
     from .branding.schema import check_branding
     from .branding.translations import check_translations
+    from .exam.disclosure import check_disclosure
+    from .exam.schema import check_exam, parse_exam
     from .logic.check import check_logic, check_question_shape
     from .logic.scoring import check_scoring, expand_scoring
     from .policy.schema import check_policy
@@ -108,6 +110,11 @@ def validate_definition(definition: SurveyDefinition) -> ValidationReport:
             issues.extend(check_question_type(question, where))
     issues.extend(check_logic(expanded))
     issues.extend(check_policy(definition))
+    # 答案键先校验再查"会不会被下发"：答案键本身就不成立时，泄漏检查只会制造二次噪音。
+    exam_issues = check_exam(definition)
+    issues.extend(exam_issues)
+    if not exam_issues:
+        issues.extend(check_disclosure(definition, parse_exam(definition)))
     issues.extend(check_branding(definition))
     issues.extend(check_translations(definition))
     issues.extend(check_dictionaries(definition))

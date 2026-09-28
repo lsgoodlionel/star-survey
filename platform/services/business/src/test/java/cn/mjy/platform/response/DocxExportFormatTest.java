@@ -64,7 +64,7 @@ class DocxExportFormatTest {
             for (ExportRecord record : records) {
                 sink.accept(record);
             }
-        });
+        }, null);
     }
 
     private static byte[] write(ExportRecord... records) throws IOException {

@@ -9,13 +9,16 @@ import java.util.Objects;
  * <ul>
  *   <li>{@code sheets}：若干张表（答卷、字段字典、附件清单、扩展表作答），表格格式按表出列；</li>
  *   <li>{@code records}：逐份答卷的记录（答卷行＋属于它的附件与副表单元格），
- *       逐份成文的格式（Word / PDF）按它排版。</li>
+ *       逐份成文的格式（Word / PDF）按它排版；</li>
+ *   <li>{@code attachments}：附件字节的取件口，只有附件包格式（{@link ExportFormat#ATTACHMENTS}）用得上，
+ *       其余格式为 {@code null}——它们只出清单，不出文件本身。</li>
  * </ul>
  *
  * @param codes  答卷表表头第一行（列代码），与 {@link ExportRecord#cells()} 按下标对应
  * @param labels 答卷表表头第二行（中文标签），同上
  */
-record ExportContent(List<ExportSheet> sheets, List<String> codes, List<String> labels, ExportRecord.Source records) {
+record ExportContent(List<ExportSheet> sheets, List<String> codes, List<String> labels, ExportRecord.Source records,
+        ExportAttachments attachments) {
 
     ExportContent {
         sheets = List.copyOf(sheets);
@@ -24,9 +27,9 @@ record ExportContent(List<ExportSheet> sheets, List<String> codes, List<String> 
         Objects.requireNonNull(records, "records");
     }
 
-    /** 只有表、没有记录流：表格格式的单元测试用。 */
+    /** 只有表、没有记录流、没有附件字节：表格格式的单元测试用。 */
     static ExportContent ofSheets(List<ExportSheet> sheets) {
         return new ExportContent(sheets, List.of(), List.of(), sink -> {
-        });
+        }, null);
     }
 }
