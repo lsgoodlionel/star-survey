@@ -301,7 +301,8 @@ public class HttpResponseAnswerSource implements ResponseAnswerSource, Responden
         return new ResponseAnswersUnavailableException("untrusted gateway reply: " + reason);
     }
 
-    private static URI parseBase(String url) {
+    /** 网关地址；只认 http(s)，别的（或空）一律当成"没配"。附件取件共用这一份解析。 */
+    static URI parseBase(String url) {
         if (url == null || url.isBlank()) {
             return null;
         }

@@ -32,11 +32,14 @@ class ExportFileAssembler {
         this.files = files;
     }
 
+    /**
+     * @param attachments 附件字节的取件口；只有附件包格式用得上，其余格式传 {@code null}
+     */
     Written assemble(String key, ExportFormat format, ExportLayout layout, boolean revealSensitive,
-            List<String> parts) {
+            List<String> parts, ExportAttachments attachments) {
         List<List<String>> header = layout.responseHeader();
         ExportContent content = new ExportContent(sheets(layout, revealSensitive, parts), header.get(0),
-                header.get(1), sink -> readRecords(parts, sink));
+                header.get(1), sink -> readRecords(parts, sink), attachments);
         try (ExportFileStore.Upload upload = files.create(key)) {
             MessageDigest digest = sha256();
             CountingStream counted = new CountingStream(new DigestOutputStream(upload.stream(), digest));

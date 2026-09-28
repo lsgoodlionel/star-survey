@@ -19,6 +19,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param maxAttempts      单个作业累计失败次数上限，达到即 failed
  * @param backoff          失败后到下一次重试的等待
  * @param maxStepsPerRun   定时一轮里每个作业最多推进的步数，之后让出给其他作业
+ * @param attachmentMaxBytes 附件包里单份附件的字节上限；超出的那一份记为 absent(too_large) 而不是让整包失败
  */
 @ConfigurationProperties("platform.response.export")
 public record ResponseExportProperties(
@@ -32,7 +33,8 @@ public record ResponseExportProperties(
         @DefaultValue("PT5M") Duration lease,
         @DefaultValue("5") int maxAttempts,
         @DefaultValue("PT1M") Duration backoff,
-        @DefaultValue("200") int maxStepsPerRun) {
+        @DefaultValue("200") int maxStepsPerRun,
+        @DefaultValue("67108864") long attachmentMaxBytes) {
 
     /** 网关读取端点单次最多 500 个答卷号（契约 response-read-v1）。 */
     public static final int MAX_BATCH_SIZE = 500;
@@ -52,6 +54,9 @@ public record ResponseExportProperties(
         if (snapshotPageSize < 1 || maxAttempts < 1 || maxStepsPerRun < 1) {
             throw new IllegalArgumentException(
                     "platform.response.export snapshot-page-size, max-attempts and max-steps-per-run must be positive");
+        }
+        if (attachmentMaxBytes < 1) {
+            throw new IllegalArgumentException("platform.response.export.attachment-max-bytes must be positive");
         }
     }
 

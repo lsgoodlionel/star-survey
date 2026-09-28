@@ -35,6 +35,8 @@ public class ExportFixture {
     public static final String URL_FIELD = "U901";
 
     private static final AtomicInteger NEXT_SID = new AtomicInteger(990_000);
+    /** 追加上传题绑定时用的序号，排在发布器生成的那些之后。 */
+    private static final int UPLOAD_ORDINAL = 90;
 
     private final ResponseFixture responses;
     private final AccessFixture access;
@@ -242,6 +244,15 @@ public class ExportFixture {
             binding(p, version, 1, "33333333-0008-4111-8111-000000000008", "QURL", "S", URL_FIELD);
         });
         return sid;
+    }
+
+    /**
+     * 给某个已发布版本再挂一道文件上传题（题型 {@code |}）的绑定。
+     * 用来让既有场景的答卷带上附件，而不必新开一个版本、一套新答卷。
+     */
+    public void addUploadColumn(Published p, int version) {
+        tenantScope.run(p.tenant(), () -> binding(p, version, UPLOAD_ORDINAL,
+                "33333333-0090-4111-8111-000000000090", "QFILE", "|", UPLOAD_FIELD));
     }
 
     private void binding(Published p, int version, int ordinal, String uuid, String code, String type,

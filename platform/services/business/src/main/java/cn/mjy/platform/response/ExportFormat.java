@@ -26,7 +26,9 @@ public enum ExportFormat {
     SAV("sav", "application/zip", "sav.zip", new SavExportWriter()),
     /** 逐份答卷成文的 Word 文档：每份答卷一页，题目与作答成对呈现（R06-05 / R06-06）。 */
     DOCX("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx",
-            new DocxExportWriter());
+            new DocxExportWriter()),
+    /** 附件包：清单、打包结果索引，以及上传的文件本身（R06-07，ADR 0015 增补四）。 */
+    ATTACHMENTS("attachments", "application/zip", "zip", new AttachmentsExportWriter());
 
     /** 把导出内容写成一个文件；只写 out，不关闭它。 */
     interface Writer {
@@ -36,6 +38,11 @@ public enum ExportFormat {
         default long maxDataRows() {
             return Long.MAX_VALUE;
         }
+    }
+
+    /** 这种格式要不要把附件的**字节**也取回来（只有附件包要；其余格式只出清单）。 */
+    boolean needsAttachmentBytes() {
+        return this == ATTACHMENTS;
     }
 
     private final String code;

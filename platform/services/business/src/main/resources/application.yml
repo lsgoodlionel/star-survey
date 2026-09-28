@@ -105,12 +105,28 @@ platform:
     link-ttl: ${PLATFORM_DELIVERY_LINK_TTL:P30D}
     # 短链 /d/s/{code}、退订 /d/u/{token}、回执 /d/receipts/{租户}/{渠道商} 都挂在它下面。
     public-base-url: ${PLATFORM_PUBLIC_BASE_URL:}
-  # 答卷导出作业（ADR 0015）。文件先落本地目录（多副本需共享卷，生产换对象存储实现），到期即删。
+  # 平台字节存储的**唯一**一份配置：导出文件与资产字节共用它（ADR 0015 增补五）。
+  # kind=local（缺省）时各模块按自己的 storage-dir 落本地盘，多副本需要共享卷；
+  # kind=s3 时两处**一起**切到对象存储，在同一个桶里各占一个键前缀（exports/、assets/），
+  # 各自的 storage-dir 不再使用。配了一半（缺桶、缺密钥）一律拒绝启动，绝不悄悄退回本地卷。
+  storage:
+    kind: ${PLATFORM_STORAGE_KIND:local}
+    endpoint: ${PLATFORM_STORAGE_ENDPOINT:}
+    region: ${PLATFORM_STORAGE_REGION:us-east-1}
+    bucket: ${PLATFORM_STORAGE_BUCKET:}
+    # 密钥只从环境变量来，不写进配置文件、不进日志。
+    access-key-id: ${PLATFORM_STORAGE_ACCESS_KEY_ID:}
+    secret-access-key: ${PLATFORM_STORAGE_SECRET_ACCESS_KEY:}
+    # true ＝ <endpoint>/<bucket>/<key>（MinIO 与多数私有化部署）。
+    path-style: ${PLATFORM_STORAGE_PATH_STYLE:true}
+    timeout: ${PLATFORM_STORAGE_TIMEOUT:PT60S}
+  # 答卷导出作业（ADR 0015）。文件落 platform.storage 指定的地方（缺省本地目录），到期即删。
   response:
     export:
       enabled: ${PLATFORM_RESPONSE_EXPORT_ENABLED:true}
       interval: ${PLATFORM_RESPONSE_EXPORT_INTERVAL:PT10S}
       initial-delay: PT20S
+      # 只在 platform.storage.kind=local 时使用。
       storage-dir: ${PLATFORM_RESPONSE_EXPORT_DIR:}
       retention: ${PLATFORM_RESPONSE_EXPORT_RETENTION:PT72H}
       batch-size: 500
@@ -118,10 +134,11 @@ platform:
       max-attempts: 5
       backoff: PT1M
   # 平台资产服务（ADR 0019）。作者上传的图片 / 音频 / 视频，取代题型里作者填 URL 的临时做法。
-  # 字节先落本地目录（多副本需共享卷，生产换对象存储实现，与导出共用 BlobStore）。
+  # 字节落 platform.storage 指定的地方，与导出**同一个开关**（共用 BlobStore）。
   # 取件票按 PLATFORM_ASSET_SECRET（至少 32 字节）按租户派生；缺失时应用照常启动，
   # 但签发与验签一律拒绝——带资产引用的问卷因此发不出去（失败即关闭）。
   asset:
+    # 只在 platform.storage.kind=local 时使用。
     storage-dir: ${PLATFORM_ASSET_DIR:}
     max-bytes: ${PLATFORM_ASSET_MAX_BYTES:16777216}
     # 票据随定义快照固化，到期只能靠改版再发布刷新（ADR 0019 已知限制 1）。
