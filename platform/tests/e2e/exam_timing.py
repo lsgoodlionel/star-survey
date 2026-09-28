@@ -44,7 +44,9 @@ from pubgw.model import SurveyDefinition  # noqa: E402
 from pubgw.policy.probe import HttpPolicyProbe  # noqa: E402
 from pubgw.publish import Publisher  # noqa: E402
 from pubgw.rpc import RemoteControlClient  # noqa: E402
-from exam_support import response_fields  # noqa: E402
+from exam_support import (  # noqa: E402
+    exam_attempt, exam_responses, exam_submitdate, response_fields,
+)
 
 RESPONDER = "platform/tests/e2e/access_respond.php"
 PLUGIN = "MjyRuntimePolicy"
@@ -100,19 +102,10 @@ class Context:
             raise RuntimeError("examTime 没有返回 JSON：" + body[:300])
 
     def attempt(self, survey_id: int, token: str) -> Dict[str, str]:
-        """考场记录里这位考生那一行：答卷行号与截止时刻都以它为准，
-        不靠答卷表的下标去猜（进场就会建行，下标对不上人）。"""
-        rows = self.db.rows(
-            "SELECT response_id, deadline_at, state FROM lime_mjyruntimepolicy_exam_attempt "
-            "WHERE survey_id = {} AND session_key = 'token:{}'".format(survey_id, token))
-        if not rows:
-            return {}
-        return {"response_id": rows[0][0], "deadline_at": rows[0][1], "state": rows[0][2]}
+        return exam_attempt(self.db, survey_id, token)
 
     def submitdate_of(self, survey_id: int, response_id: str) -> Optional[str]:
-        value = self.db.value(
-            "SELECT submitdate FROM lime_responses_{} WHERE id = {}".format(survey_id, response_id))
-        return None if value in ("", "NULL", None) else value[:19]
+        return exam_submitdate(self.db, survey_id, response_id)
 
     def score_of(self, survey_id: int, response_id: str) -> Optional[List[str]]:
         rows = self.db.rows(
@@ -121,8 +114,7 @@ class Context:
         return rows[0] if rows else None
 
     def responses(self, survey_id: int) -> List[List[str]]:
-        return self.db.rows(
-            "SELECT id, submitdate FROM lime_responses_{} ORDER BY id".format(survey_id))
+        return exam_responses(self.db, survey_id)
 
     def submitted_count(self, survey_id: int) -> int:
         return int(self.db.value(
@@ -330,7 +322,7 @@ def scenario_replayed_session(context: Context, state: Dict[str, Any]) -> None:
     # 写进去的必须是截止时刻，而不是"收卷动作碰巧跑起来的时刻"——
     # 作答者的时间就是在截止时刻用完的，这样结果也与收卷时机无关。
     context.check("T6: submitdate 正是截止时刻，不是收卷时刻",
-                  submitted_at == attempt_a["deadline_at"][:19],
+                  submitted_at == attempt_a["deadline_at"],
                   {"submitdate": submitted_at, "deadline": attempt_a["deadline_at"]})
     context.check("T6: 考场记录记成了强制交卷", attempt_a["state"] == "forced", attempt_a)
 
@@ -381,7 +373,7 @@ def scenario_cron_collects(context: Context, state: Dict[str, Any]) -> None:
     submitted_c = context.submitdate_of(sid, attempt_c["response_id"])
     context.check("T9: 关掉浏览器的那份卷也被收了", submitted_c is not None, attempt_c)
     context.check("T9: 收上来的 submitdate 同样是截止时刻",
-                  submitted_c == attempt_c["deadline_at"][:19],
+                  submitted_c == attempt_c["deadline_at"],
                   {"submitdate": submitted_c, "deadline": attempt_c["deadline_at"]})
     graded_c = context.score_of(sid, attempt_c["response_id"])
     context.check("T9: cron 收上来的卷子也判了分（WP-10）",
