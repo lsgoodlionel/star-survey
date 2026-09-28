@@ -9,7 +9,9 @@ import cn.mjy.platform.survey.gateway.GatewayInvitation;
 import cn.mjy.platform.survey.gateway.GatewayOutcome;
 import cn.mjy.platform.survey.gateway.GatewayRequest;
 import cn.mjy.platform.survey.gateway.GatewayResult;
+import cn.mjy.platform.survey.gateway.GatewayRevokeRequest;
 import cn.mjy.platform.survey.gateway.PublishGatewayClient;
+import cn.mjy.platform.survey.gateway.RevokeOutcome;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +51,9 @@ public class FakePublishGateway implements PublishGatewayClient {
     private final Map<UUID, CountDownLatch> entered = new ConcurrentHashMap<>();
     private final List<GatewayCloseRequest> closeCalls = new CopyOnWriteArrayList<>();
     private final Set<Integer> failingCloses = ConcurrentHashMap.newKeySet();
+    private final List<GatewayRevokeRequest> revokeCalls = new CopyOnWriteArrayList<>();
+    private final Set<String> failingRevokes = ConcurrentHashMap.newKeySet();
+    private final Set<String> absentRevokes = ConcurrentHashMap.newKeySet();
     private final List<GatewayDriftRequest> driftCalls = new CopyOnWriteArrayList<>();
     private final Map<Integer, Function<GatewayDriftRequest, DriftOutcome>> driftScripts = new ConcurrentHashMap<>();
 
@@ -102,6 +107,37 @@ public class FakePublishGateway implements PublishGatewayClient {
             return script.apply(request);
         }
         return new DriftOutcome.Checked(false, request.expectedFingerprint(), "Y", List.of(), List.of());
+    }
+
+    /**
+     * 撤销邀请码（契约 v1.4）：记录调用；被 {@link #failRevoke} 标记的令牌返回"没撤销"，
+     * 其余一律确认撤销。真网关删的是引擎里那一行参与者。
+     */
+    @Override
+    public RevokeOutcome revokeParticipant(GatewayRevokeRequest request) {
+        revokeCalls.add(request);
+        if (failingRevokes.contains(request.participantToken())) {
+            return new RevokeOutcome.NotRevoked("http 502 engine_error");
+        }
+        return new RevokeOutcome.Revoked(absentRevokes.contains(request.participantToken()));
+    }
+
+    /** 让这个令牌的撤销失败（引擎失败、超时、网关未配置都归此类）。 */
+    public void failRevoke(String participantToken) {
+        failingRevokes.add(participantToken);
+    }
+
+    public void allowRevoke(String participantToken) {
+        failingRevokes.remove(participantToken);
+    }
+
+    /** 引擎里本来就没有这个码：仍然算撤销成功，只是 alreadyAbsent 为真。 */
+    public void revokeFindsNothing(String participantToken) {
+        absentRevokes.add(participantToken);
+    }
+
+    public List<GatewayRevokeRequest> revokeCalls() {
+        return List.copyOf(revokeCalls);
     }
 
     public void failClose(int sid) {

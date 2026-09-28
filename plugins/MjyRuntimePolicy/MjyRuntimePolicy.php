@@ -70,6 +70,9 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
     /** @var MjyExamProctor|null */
     private $proctor;
 
+    /** @var MjyRpcGate|null RemoteControl 写答卷闸门（ADR 0021） */
+    private $rpcGate;
+
     public function init()
     {
         $this->subscribe('beforeActivate');
@@ -77,6 +80,83 @@ class MjyRuntimePolicy extends \LimeSurvey\PluginManager\PluginBase
         $this->subscribe('afterSurveyComplete');
         $this->subscribe('cron');
         $this->subscribe('newDirectRequest');
+        // RemoteControl 的写答卷接口绕开 beforeSurveyPage（ADR 0021），在这里拦。
+        $this->subscribe('beforeControllerAction');
+    }
+
+    /**
+     * RemoteControl 写答卷接口的闸门（ADR 0021；P0 发现 12、21）。
+     *
+     * `add_response` / `update_response` 不经过 `SurveyIndex`，所以本插件的
+     * `beforeSurveyPage` 完全管不到它们：访问规则、按身份限次、服务端考试计时、
+     * 题型的服务端校验对那条路径一律失效。`beforeControllerAction`
+     * （`LSYii_Application.php:384`）是 RemoteControl 这条路上唯一早于
+     * `RemoteControl::run()` 的插件落脚点——把 `run` 设成 false 即可让动作不执行。
+     *
+     * 判定逻辑在 {@see MjyRpcGate}（无引擎依赖、可单元测试）；这里只做三件与请求
+     * 生命周期相关的事：读正文、写应答、把动作关掉。
+     *
+     * 失败即关闭：读不到正文时**不拦**（那样的请求也调不动任何方法，引擎自己会拒），
+     * 但正文里出现被禁方法名而我们解析不出结构时按拒处理（见 MjyRpcGate::isBlocked）。
+     */
+    public function beforeControllerAction()
+    {
+        $event = $this->getEvent();
+        $gate = $this->rpcGate();
+        if (!$gate->isRemoteControl($event->get('controller'), $event->get('action'))) {
+            return;
+        }
+        $body = $this->requestBody();
+        if ($body === '') {
+            return;
+        }
+        if (!$gate->isBlocked($body)) {
+            if ($gate->isOverrideEnabled() && $this->writesResponses($body)) {
+                Yii::log($gate->logLine($body, 'allowed by ' . MjyRpcGate::OVERRIDE_ENV),
+                    CLogger::LEVEL_WARNING, self::LOG_CATEGORY);
+            }
+            return;
+        }
+        Yii::log($gate->logLine($body, 'refused'), CLogger::LEVEL_WARNING, self::LOG_CATEGORY);
+        $this->refuseRpc($gate->refusalBody($body));
+        $event->set('run', false);
+    }
+
+    /** 被禁方法名出现在正文里（只用于"已放行但要记一笔"的日志判定）。 */
+    private function writesResponses(string $body): bool
+    {
+        return (new MjyRpcGate(false))->isBlocked($body);
+    }
+
+    private function rpcGate(): MjyRpcGate
+    {
+        if ($this->rpcGate === null) {
+            $configured = getenv(MjyRpcGate::OVERRIDE_ENV);
+            $this->rpcGate = MjyRpcGate::fromEnvironment($configured === false ? null : $configured);
+        }
+        return $this->rpcGate;
+    }
+
+    /**
+     * 这次请求的原始正文。RemoteControl 用 `application/json` / `text/xml`，
+     * 这类正文的 `php://input` 可以重复读取，因此引擎随后自己再读一遍不受影响
+     * （`multipart/form-data` 才是不可重读的那种，RemoteControl 不用它）。
+     */
+    private function requestBody(): string
+    {
+        $body = file_get_contents('php://input');
+        return $body === false ? '' : $body;
+    }
+
+    /** 写出 JSON-RPC 拒绝应答。状态码用 403：这是策略拒绝，不是请求格式错。 */
+    private function refuseRpc(string $payload): void
+    {
+        if (!headers_sent()) {
+            header('HTTP/1.1 403 Forbidden');
+            header('Content-Type: application/json; charset=utf-8');
+            header('Content-Length: ' . strlen($payload));
+        }
+        echo $payload;
     }
 
     public static function engineInstanceId(): string
