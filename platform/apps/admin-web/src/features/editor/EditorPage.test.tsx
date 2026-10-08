@@ -9,8 +9,10 @@ import { AppProviders } from '../../app/App';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
+import { surveyDetailQueryKey, surveyDraftQueryKey } from '../../shared/api/surveys';
 import gatewayFixture from '../../test/fixtures/publish-gateway.json';
 import { server } from '../../test/server';
+import { ImportPage } from '../import/ImportPage';
 import { EditorPage } from './EditorPage';
 import { captureEditorRecovery } from './recovery';
 
@@ -268,6 +270,93 @@ describe('EditorPage', () => {
     expect(writes.map((body) => body.expectedVersion)).toEqual([4, 5]);
   });
 
+  test('usesTheSavedVersionWhenImportMountsAgainstTheProductionFreshCache', async () => {
+    let importRequest: ApiRequest<unknown> | undefined;
+    let savedDefinition: unknown = structuredClone(gatewayFixture);
+    const api = apiFrom((request) => {
+      const key = `${request.method ?? 'GET'} ${request.path}`;
+      if (key === `GET /v1/surveys/${surveyId}`) return { ...overview, draftVersion: 1 };
+      if (key === `GET /v1/surveys/${surveyId}/draft`) {
+        return { surveyId, version: 1, definition: structuredClone(gatewayFixture) };
+      }
+      if (key === `GET /v1/resource-capabilities?resourceId=${surveyId}`) {
+        return editableCapabilities;
+      }
+      if (key === `PUT /v1/surveys/${surveyId}/draft`) {
+        savedDefinition = (request.body as Record<string, unknown>).definition;
+        return { surveyId, version: 2, definition: savedDefinition };
+      }
+      if (key === `POST /v1/surveys/${surveyId}/import/preview`) {
+        return {
+          lineCount: 1,
+          questions: [{
+            index: 0,
+            line: 1,
+            code: 'Q1',
+            type: 'S',
+            typeName: '填空',
+            typeInferred: false,
+            text: '跨页导入题',
+            mandatory: false,
+            options: [],
+            importable: true,
+            problems: [],
+          }],
+          problems: [],
+        };
+      }
+      if (key === `POST /v1/surveys/${surveyId}/import`) {
+        importRequest = request;
+        return { surveyId, version: 3, definition: savedDefinition };
+      }
+      throw new Error(`Unhandled request: ${key}`);
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 30_000 },
+        mutations: { retry: false },
+      },
+    });
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/surveys/:surveyId/edit',
+          element: <EditorPage api={api} surveyId={surveyId} tenantId="tenant-a" />,
+        },
+        {
+          path: '/surveys/:surveyId/import',
+          element: <ImportPage api={api} surveyId={surveyId} tenantId="tenant-a" />,
+        },
+      ],
+      { initialEntries: [`/surveys/${surveyId}/edit?question=${singleUuid}`] },
+    );
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(await screen.findByLabelText('题目文本'), {
+      target: { value: '保存后进入导入' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    expect(await screen.findByText('已保存版本 2')).toBeInTheDocument();
+    expect(queryClient.getQueryData(surveyDetailQueryKey('tenant-a', surveyId))).toMatchObject({
+      draftVersion: 2,
+      title: overview.title,
+    });
+
+    fireEvent.click(screen.getByRole('link', { name: '批量导入' }));
+    expect(await screen.findByText('当前草稿版本 2')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('待导入文本'), { target: { value: '1. 跨页导入题[填空]' } });
+    fireEvent.click(screen.getByRole('button', { name: '预览导入' }));
+    await screen.findByText('跨页导入题');
+    fireEvent.click(screen.getByRole('button', { name: '确认导入 1 道题' }));
+
+    await waitFor(() => expect(importRequest).toBeDefined());
+    expect(importRequest?.body).toMatchObject({ expectedVersion: 2 });
+  });
+
   test('keepsNewerLocalEditsWhenAnEarlierSaveResponseArrives', async () => {
     const firstSave = createDeferred<{
       surveyId: string;
@@ -283,7 +372,7 @@ describe('EditorPage', () => {
         return { surveyId, version: 6, definition: body.definition };
       },
     });
-    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    const rendered = renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
 
     fireEvent.change(await screen.findByLabelText('题目文本'), {
       target: { value: '已发送到版本 5 的文本' },
@@ -306,6 +395,11 @@ describe('EditorPage', () => {
     expect(await screen.findByText('已保存版本 5')).toBeInTheDocument();
     expect(screen.getByLabelText('题目文本')).toHaveValue('请求期间产生的更新文本');
     expect(screen.getByRole('button', { name: '保存草稿' })).toBeEnabled();
+    expect(rendered.queryClient.getQueryData(surveyDraftQueryKey('tenant-a', surveyId))).toEqual({
+      surveyId,
+      version: 5,
+      definition: writes[0].definition,
+    });
 
     fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
     expect(await screen.findByText('已保存版本 6')).toBeInTheDocument();
@@ -338,6 +432,41 @@ describe('EditorPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '导出本地草稿' }));
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
+  });
+
+  test('writesAReloadedDraftBackToTheCanonicalCache', async () => {
+    let draftReads = 0;
+    const reloadedDefinition = structuredClone(gatewayFixture);
+    reloadedDefinition.groups[0].questions[0].text = '服务器重新载入的题目';
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => {
+        draftReads += 1;
+        return draftReads === 1
+          ? { surveyId, version: 4, definition: structuredClone(gatewayFixture) }
+          : { surveyId, version: 9, definition: reloadedDefinition };
+      },
+      [`PUT /v1/surveys/${surveyId}/draft`]: () => {
+        throw new ApiError('conflict', '草稿已被其他人修改，本地内容未被覆盖', 409);
+      },
+    });
+    const rendered = renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+
+    fireEvent.change(await screen.findByLabelText('题目文本'), {
+      target: { value: '触发冲突' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(await screen.findByRole('button', { name: '重新载入' }));
+
+    expect(await screen.findByLabelText('题目文本')).toHaveValue('服务器重新载入的题目');
+    expect(rendered.queryClient.getQueryData(surveyDraftQueryKey('tenant-a', surveyId))).toEqual({
+      surveyId,
+      version: 9,
+      definition: reloadedDefinition,
+    });
+    expect(rendered.queryClient.getQueryData(surveyDetailQueryKey('tenant-a', surveyId))).toMatchObject({
+      draftVersion: 9,
+      title: overview.title,
+    });
   });
 
   test('recoversTheInMemoryDraftAfterReauthentication', async () => {

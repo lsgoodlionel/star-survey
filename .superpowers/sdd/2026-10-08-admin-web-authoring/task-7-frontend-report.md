@@ -76,3 +76,12 @@
 - RED: the focused browser contract produced one expected failure requiring the question assertion to be scoped to the accessible `解析结果` region; the other nine contracts passed.
 - The desktop E2E now resolves the import preview region first and asserts the exact question text within it, leaving the product and stack unchanged.
 - Node 22.23.2 verification: focused browser contracts 10/10, lint, and typecheck passed. With `ADMIN_WEB_BASE_URL=http://127.0.0.1:1`, `playwright --list` reports the same two desktop/mobile scenarios. The real stack was not rerun.
+
+## Browser integration fix round 5
+
+- Real attempt 4 completed import preview but confirm returned 409. The editor adopted the saved version only in component state, while the production 30-second `staleTime` let Import reuse the still-fresh canonical draft cache at the previous version.
+- RED: three focused regressions failed with stale cache evidence: the cross-page detail remained at version 1, the save-race cache remained at version 4, and reload left the cache at version 4.
+- Every successful save now writes the server `DraftView` snapshot to `surveyDraftQueryKey(tenantId, surveyId)` and updates only `draftVersion` in the existing survey detail cache. A save response received after newer local edits updates the canonical server snapshot/version without replacing the newer local definition or clearing dirty state.
+- Explicit draft reload now performs the same canonical draft/detail cache synchronization before updating editor state.
+- The production-staleTime regression saves version 1 to 2, mounts Import with the same `QueryClient`, completes preview/confirm, and verifies `expectedVersion: 2`. The existing save-race behavior remains covered.
+- Node 22.23.2 verification: focused Editor tests 15/15; full frontend Vitest 13 files and 129/129; lint and typecheck passed. Standard and E2E builds plus both bundle assertions passed, and the standard production bundle was restored last. The real stack was not rerun.
