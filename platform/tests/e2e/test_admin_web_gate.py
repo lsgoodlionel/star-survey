@@ -304,6 +304,122 @@ class AdminWebGateTest(unittest.TestCase):
 
             self.assertTrue(blocked.exists())
 
+    def test_artifact_scan_fails_when_a_nested_directory_cannot_be_opened(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            artifacts = root / "test-results"
+            blocked = artifacts / "blocked"
+            gate.write_private(secret, "header.payload.signature")
+            blocked.mkdir(parents=True)
+            real_scandir = os.scandir
+
+            def scandir(path):
+                if Path(path) == blocked:
+                    raise PermissionError("simulated unreadable directory")
+                return real_scandir(path)
+
+            with mock.patch.object(gate.os, "scandir", side_effect=scandir):
+                with self.assertRaises(gate.StepFailed):
+                    gate.scrub_sensitive_artifacts(secret, [artifacts], remove_media=False)
+
+    def test_artifact_scan_fails_when_directory_iteration_is_interrupted(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            artifacts = root / "test-results"
+            gate.write_private(secret, "header.payload.signature")
+            artifacts.mkdir()
+            real_scandir = os.scandir
+
+            class InterruptedScandir:
+                def __enter__(self):
+                    def entries():
+                        if False:
+                            yield None
+                        raise PermissionError("simulated traversal interruption")
+
+                    return entries()
+
+                def __exit__(self, *_args):
+                    return False
+
+            def scandir(path):
+                if Path(path) == artifacts:
+                    return InterruptedScandir()
+                return real_scandir(path)
+
+            with mock.patch.object(gate.os, "scandir", side_effect=scandir):
+                with self.assertRaises(gate.StepFailed):
+                    gate.scrub_sensitive_artifacts(secret, [artifacts], remove_media=False)
+
+    def test_artifact_scan_fails_when_an_entry_cannot_be_statted(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            artifacts = root / "test-results"
+            artifact = artifacts / "network.txt"
+            gate.write_private(secret, "header.payload.signature")
+            artifacts.mkdir()
+            artifact.write_text("redacted network metadata", encoding="utf-8")
+            real_scandir = os.scandir
+
+            class EntryWithBrokenStat:
+                def __init__(self, entry):
+                    self._entry = entry
+                    self.name = entry.name
+                    self.path = entry.path
+
+                def is_dir(self, *, follow_symlinks=True):
+                    return self._entry.is_dir(follow_symlinks=follow_symlinks)
+
+                def stat(self, *, follow_symlinks=True):
+                    raise PermissionError("simulated entry stat failure")
+
+            class WrappedScandir:
+                def __init__(self, scanner):
+                    self._scanner = scanner
+
+                def __enter__(self):
+                    return (EntryWithBrokenStat(entry) for entry in self._scanner)
+
+                def __exit__(self, *args):
+                    return self._scanner.__exit__(*args)
+
+            def scandir(path):
+                scanner = real_scandir(path)
+                if Path(path) == artifacts:
+                    return WrappedScandir(scanner)
+                return scanner
+
+            with mock.patch.object(gate.os, "scandir", side_effect=scandir):
+                with self.assertRaises(gate.StepFailed):
+                    gate.scrub_sensitive_artifacts(secret, [artifacts], remove_media=False)
+
+    def test_artifact_scan_finds_a_secret_in_a_nested_directory(self):
+        gate = load_gate()
+        token = "header.payload.nested-signature"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            artifacts = root / "test-results"
+            leak = artifacts / "desktop" / "trace" / "network.txt"
+            safe = artifacts / "mobile" / "summary.txt"
+            gate.write_private(secret, token)
+            leak.parent.mkdir(parents=True)
+            safe.parent.mkdir(parents=True)
+            leak.write_text("Authorization: Bearer " + token, encoding="utf-8")
+            safe.write_text("redacted", encoding="utf-8")
+
+            with self.assertRaises(gate.StepFailed):
+                gate.scrub_sensitive_artifacts(secret, [artifacts], remove_media=False)
+
+            self.assertFalse(leak.exists())
+            self.assertTrue(safe.exists())
+
     def test_failure_scrub_fails_when_media_cannot_be_deleted(self):
         gate = load_gate()
         with tempfile.TemporaryDirectory() as directory:

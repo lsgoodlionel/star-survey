@@ -49,7 +49,10 @@ No file under `platform/apps/admin-web/**` was modified by this slice.
   `platform/apps/admin-web/test-results` directory. On Playwright failure,
   retained image/video/trace media are deleted before any read attempt because
   pixel content cannot be safely validated without OCR. Any artifact read or
-  delete failure fails closed with `StepFailed`.
+  delete failure fails closed with `StepFailed`. Directory traversal is
+  explicit and fail-closed: every existing root and directory entry is statted,
+  every directory is scanned, and traversal, stat, read or delete errors become
+  `StepFailed`.
 
 ## TDD evidence
 
@@ -168,6 +171,32 @@ PASS
 
 python3 -m py_compile platform/tests/e2e/admin_web_gate.py platform/tests/e2e/test_admin_web_gate.py
 PASS (with PYTHONPYCACHEPREFIX under /private/tmp)
+```
+
+## Review fix round 3
+
+The review finding was reproduced before changes: `Path.rglob()` silently
+ignored mocked failures while opening a nested directory, iterating its entries
+and statting an entry, so all three scans incorrectly returned success.
+
+Fixes:
+
+- Replaced `Path.rglob()` with an explicit recursive `os.scandir()` traversal.
+- Fully consumes each directory iterator under `OSError` handling, then calls
+  `DirEntry.stat(follow_symlinks=False)` for every entry before deciding whether
+  to recurse or scan the file.
+- Converts root stat, directory open/iteration and entry stat errors to
+  `StepFailed`; unsupported entry types also fail closed.
+- Preserved failure-mode media deletion before any content read.
+- Added deterministic mock tests for unreadable nested directories, interrupted
+  directory iteration and entry stat failures, plus a normal nested-directory
+  secret scan.
+
+Round 3 GREEN:
+
+```text
+python3 -m unittest discover -s platform/tests/e2e -p 'test_admin_web_gate.py' -v
+Ran 23 tests ... OK
 ```
 
 ## Integration status and concerns
