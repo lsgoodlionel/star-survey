@@ -127,7 +127,7 @@ jobs:
         run: platform/deploy/test/run-admin-web-e2e.sh --fresh
 
       - name: 上传脱敏失败证据
-        if: steps.admin_web_e2e.outcome == 'failure'
+        if: "${{ failure() && steps.admin_web_e2e.outcome == 'failure' }}"
         uses: actions/upload-artifact@v4
         with:
           name: admin-web-e2e-sanitized-failure
