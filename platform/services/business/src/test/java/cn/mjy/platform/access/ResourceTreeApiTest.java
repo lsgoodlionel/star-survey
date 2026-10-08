@@ -125,6 +125,38 @@ class ResourceTreeApiTest {
     }
 
     @Test
+    void capabilitiesAreReadOnlyAuthoritativeAndPreserveNotFoundPrivacy() throws Exception {
+        String projectA = idOf(createProject(ownerA, "A 的项目"));
+        String folderA = idOf(createFolder(ownerA, projectA, "A 的文件夹"));
+        TenantContext editor = fixture.member(ownerA, "editor", "editor", UUID.fromString(projectA));
+        TenantContext viewer = fixture.member(ownerA, "viewer", "statistics_viewer", UUID.fromString(projectA));
+        String projectB = idOf(createProject(ownerB, "B 的项目"));
+
+        mvc.perform(get("/v1/resource-capabilities").param("resourceId", folderA)
+                        .header("Authorization", bearer(editor)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canCreateProject").value(false))
+                .andExpect(jsonPath("$.canCreateChildren").value(true))
+                .andExpect(jsonPath("$.canEdit").value(true))
+                .andExpect(jsonPath("$.canSubmitApproval").value(true))
+                .andExpect(jsonPath("$.canPublishDirectly").value(false))
+                .andExpect(jsonPath("$.canApprovePublish").value(false));
+        mvc.perform(get("/v1/resource-capabilities").param("resourceId", folderA)
+                        .header("Authorization", bearer(viewer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canCreateChildren").value(false))
+                .andExpect(jsonPath("$.canEdit").value(false));
+        mvc.perform(get("/v1/resource-capabilities").param("resourceId", projectB)
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+        mvc.perform(get("/v1/resource-capabilities").param("resourceId", UUID.randomUUID().toString())
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+    }
+
+    @Test
     void theListPagesWithAnOpaqueCursorAndRejectsBadParameters() throws Exception {
         for (int i = 0; i < 3; i++) {
             createProject(ownerA, "P" + i).andExpect(status().isCreated());

@@ -68,6 +68,11 @@ public class ResourceTreeController {
         return tree.get(currentTenant.require(), id);
     }
 
+    @GetMapping("/resource-capabilities")
+    public ResourceCapabilities capabilities(@RequestParam(required = false) UUID resourceId) {
+        return tree.capabilities(currentTenant.require(), resourceId);
+    }
+
     @PatchMapping("/resources/{id}")
     public ResourceView rename(@PathVariable UUID id, @Valid @RequestBody Rename request) {
         return tree.rename(currentTenant.require(), id, request.name());

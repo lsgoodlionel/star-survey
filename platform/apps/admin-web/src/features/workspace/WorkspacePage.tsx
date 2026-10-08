@@ -1,37 +1,80 @@
-import { useCallback, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FolderPlus, FilePlus2, Plus } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
-import { createFolder, createProject, type ResourceView } from '../../shared/api/resources';
+import {
+  createFolder,
+  createProject,
+  getResourceCapabilities,
+  getResourcePath,
+  resourceQueryKey,
+  type ResourceView,
+} from '../../shared/api/resources';
 import { createSurvey } from '../../shared/api/surveys';
 import { CreateResourceDialog, type CreateResourceKind } from './CreateResourceDialog';
 import { ResourceTree, rootKey } from './ResourceTree';
 import './workspace.css';
 
-const projectCreators = new Set(['tenant_owner', 'org_admin']);
-const editors = new Set(['tenant_owner', 'org_admin', 'project_manager', 'editor']);
-
 export function WorkspacePage() {
   const { api, session } = useAuth();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get('resource');
-  const [selectedResource, setSelectedResource] = useState<ResourceView | null>(null);
+  const tenantId = session?.me.tenantId ?? '';
+  const [localSelection, setLocalSelection] = useState<{
+    tenantId: string;
+    resource: ResourceView;
+  } | null>(null);
   const [dialog, setDialog] = useState<CreateResourceKind | null>(null);
+  const [dialogTrigger, setDialogTrigger] = useState<HTMLElement | null>(null);
   const [expandedIds, setExpandedIds] = useState(() => new Set<string>());
   const [createdResources, setCreatedResources] = useState<Record<string, ResourceView[]>>({});
-  const roles = session?.me.roles ?? [];
-  const canCreateProject = roles.some((role) => projectCreators.has(role));
-  const canEdit = roles.some((role) => editors.has(role));
+  const pathQuery = useQuery({
+    queryKey: ['resource-path', tenantId, selectedId],
+    queryFn: ({ signal }) => getResourcePath(api, selectedId!, signal),
+    enabled: Boolean(
+      tenantId &&
+        selectedId &&
+        !(localSelection?.tenantId === tenantId && localSelection.resource.id === selectedId),
+    ),
+    retry: false,
+  });
+  const resolvedPath = useMemo(() => pathQuery.data ?? [], [pathQuery.data]);
+  const resolvedResource = resolvedPath.at(-1) ?? null;
+  const selectedResource =
+    resolvedResource ??
+    (localSelection?.tenantId === tenantId && localSelection.resource.id === selectedId
+      ? localSelection.resource
+      : null);
+  const effectiveExpandedIds = useMemo(() => {
+    const next = new Set(expandedIds);
+    for (const resource of resolvedPath.slice(0, -1)) next.add(resource.id);
+    return next;
+  }, [expandedIds, resolvedPath]);
+  const tenantCapabilities = useQuery({
+    queryKey: ['resource-capabilities', tenantId, null],
+    queryFn: ({ signal }) => getResourceCapabilities(api, undefined, signal),
+    enabled: Boolean(tenantId),
+    retry: false,
+  });
+  const selectedCapabilities = useQuery({
+    queryKey: ['resource-capabilities', tenantId, selectedId],
+    queryFn: ({ signal }) => getResourceCapabilities(api, selectedId!, signal),
+    enabled: Boolean(tenantId && selectedId),
+    retry: false,
+  });
+  const canCreateProject = tenantCapabilities.data?.canCreateProject === true;
+  const canCreateChildren = selectedCapabilities.data?.canCreateChildren === true;
   const selectedContainer = selectedResource?.kind === 'project' || selectedResource?.kind === 'folder';
 
   const selectResource = useCallback(
     (resource: ResourceView) => {
-      setSelectedResource(resource);
+      setLocalSelection({ tenantId, resource });
       setSearchParams({ resource: resource.id }, { replace: true });
     },
-    [setSearchParams],
+    [setSearchParams, tenantId],
   );
 
   const createMutation = useMutation({
@@ -43,7 +86,9 @@ export function WorkspacePage() {
       }
       return { kind, survey: await createSurvey(api, selectedResource.id, value) };
     },
-    onSuccess: (created) => {
+    onSuccess: async (created) => {
+      const parentId = created.kind === 'survey' ? selectedResource?.id ?? null : created.resource?.parentId ?? null;
+      await queryClient.invalidateQueries({ queryKey: resourceQueryKey(tenantId, parentId), exact: true });
       setDialog(null);
       if (created.kind === 'survey' && created.survey) {
         void navigate(`/surveys/${created.survey.id}/edit`);
@@ -73,22 +118,33 @@ export function WorkspacePage() {
 
   return (
     <section className="workspace-page">
-      <aside className="workspace-sidebar" aria-label="工作区资源">
+      <aside className="workspace-sidebar" aria-label="工作区资源" inert={dialog ? true : undefined}>
         <div className="workspace-sidebar-heading">
           <h1>问卷工作台</h1>
           <div className="workspace-actions">
             {canCreateProject ? (
-              <button type="button" title="新建项目" aria-label="新建项目" onClick={() => setDialog('project')}>
+              <button
+                type="button"
+                title="新建项目"
+                aria-label="新建项目"
+                onClick={(event) => {
+                  setDialogTrigger(event.currentTarget);
+                  setDialog('project');
+                }}
+              >
                 <Plus aria-hidden="true" />
               </button>
             ) : null}
-            {canEdit && selectedContainer ? (
+            {canCreateChildren && selectedContainer ? (
               <>
                 <button
                   type="button"
                   title="新建文件夹"
                   aria-label="新建文件夹"
-                  onClick={() => setDialog('folder')}
+                  onClick={(event) => {
+                    setDialogTrigger(event.currentTarget);
+                    setDialog('folder');
+                  }}
                 >
                   <FolderPlus aria-hidden="true" />
                 </button>
@@ -96,7 +152,10 @@ export function WorkspacePage() {
                   type="button"
                   title="新建问卷"
                   aria-label="新建问卷"
-                  onClick={() => setDialog('survey')}
+                  onClick={(event) => {
+                    setDialogTrigger(event.currentTarget);
+                    setDialog('survey');
+                  }}
                 >
                   <FilePlus2 aria-hidden="true" />
                 </button>
@@ -106,16 +165,20 @@ export function WorkspacePage() {
         </div>
         <ResourceTree
           api={api}
+          tenantId={tenantId}
           createdResources={createdResources}
-          expandedIds={expandedIds}
+          expandedIds={effectiveExpandedIds}
           selectedId={selectedId}
           onExpandedChange={setExpanded}
-          onResourceResolved={setSelectedResource}
           onSelect={selectResource}
         />
       </aside>
-      <div className="workspace-main">
-        {selectedResource ? (
+      <div className="workspace-main" inert={dialog ? true : undefined}>
+        {pathQuery.isError ? (
+          <p role="alert">
+            {pathQuery.error instanceof Error ? pathQuery.error.message : '操作失败，请稍后重试'}
+          </p>
+        ) : selectedResource ? (
           <>
             <p className="workspace-kind">{kindLabel(selectedResource.kind)}</p>
             <h2>{selectedResource.name}</h2>
@@ -132,6 +195,7 @@ export function WorkspacePage() {
           kind={dialog}
           pending={createMutation.isPending}
           error={createMutation.error instanceof Error ? createMutation.error.message : undefined}
+          returnFocus={dialogTrigger}
           onClose={() => setDialog(null)}
           onSubmit={(value) => createMutation.mutate({ kind: dialog, value })}
         />

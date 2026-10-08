@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { ReactNode } from 'react';
@@ -8,7 +8,7 @@ import { expect, test, vi } from 'vitest';
 import { createAppRoutes } from '../../app/router';
 import { server } from '../../test/server';
 
-const authState = vi.hoisted(() => ({ roles: ['tenant_owner'] as string[] }));
+const authState = vi.hoisted(() => ({ tenantId: 'tenant-a', roles: ['tenant_owner'] as string[] }));
 
 vi.mock('../auth/AuthProvider', async () => {
   const { createApiClient } = await import('../../shared/api/http');
@@ -21,7 +21,7 @@ vi.mock('../auth/AuthProvider', async () => {
       session: {
         token: 'workspace-token',
         expiresAt: Date.now() + 60_000,
-        me: { tenantId: 'tenant-a', actorId: 'author-7', roles: authState.roles },
+        me: { tenantId: authState.tenantId, actorId: 'author-7', roles: authState.roles },
       },
     }),
   };
@@ -36,18 +36,45 @@ function resource(id: string, kind: 'project' | 'folder' | 'survey', parentId: s
   return { id, kind, parentId, name, createdAt: '2026-10-08T08:00:00Z' };
 }
 
-function renderWorkspace(initialEntry = '/workspace', roles = ['tenant_owner']) {
+interface CapabilityFixture {
+  canCreateProject: boolean;
+  canCreateChildren: boolean;
+  canEdit: boolean;
+  canSubmitApproval: boolean;
+  canPublishDirectly: boolean;
+  canApprovePublish: boolean;
+}
+
+const allCapabilities: CapabilityFixture = {
+  canCreateProject: true,
+  canCreateChildren: true,
+  canEdit: true,
+  canSubmitApproval: true,
+  canPublishDirectly: true,
+  canApprovePublish: true,
+};
+
+function renderWorkspace(
+  initialEntry = '/workspace',
+  options: { roles?: string[]; capabilities?: CapabilityFixture; queryClient?: QueryClient } = {},
+) {
+  const { roles = ['tenant_owner'], capabilities = allCapabilities } = options;
+  authState.tenantId = 'tenant-a';
   authState.roles = roles;
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  server.use(http.get('/v1/resource-capabilities', () => HttpResponse.json(capabilities)));
+  const queryClient =
+    options.queryClient ??
+    new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
   const router = createMemoryRouter(createAppRoutes(false), { initialEntries: [initialEntry] });
-  const result = render(
+  const view = () => (
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
+      <RouterProvider key={authState.tenantId} router={router} />
+    </QueryClientProvider>
   );
-  return { ...result, queryClient, router };
+  const result = render(view());
+  return { ...result, queryClient, router, rerenderAuth: () => result.rerender(view()) };
 }
 
 test('loadsOnlyTheSelectedBranchAndFollowsOpaqueCursors', async () => {
@@ -72,35 +99,76 @@ test('loadsOnlyTheSelectedBranchAndFollowsOpaqueCursors', async () => {
   const user = userEvent.setup();
   renderWorkspace();
 
-  expect(await screen.findByRole('treeitem', { name: '项目甲' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: '项目甲' })).toBeInTheDocument();
   expect(requests).toEqual([{ parentId: null, cursor: null }]);
 
   await user.click(screen.getByRole('button', { name: '展开 项目甲' }));
-  expect(await screen.findByRole('treeitem', { name: '调研资料' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: '调研资料' })).toBeInTheDocument();
   expect(requests).toEqual([
     { parentId: null, cursor: null },
     { parentId: projectA.id, cursor: null },
   ]);
 
   await user.click(screen.getByRole('button', { name: '加载更多 项目甲' }));
-  expect(await screen.findByRole('treeitem', { name: '客户反馈' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: '客户反馈' })).toBeInTheDocument();
   expect(requests.at(-1)).toEqual({ parentId: projectA.id, cursor: opaqueCursor });
   expect(requests.some((request) => request.parentId === projectB.id)).toBe(false);
 });
 
-test('restoresTheSelectedResourceFromTheUrl', async () => {
+test('resolvesADeepUrlTargetAndExpandsEveryAncestor', async () => {
+  const gets: string[] = [];
   server.use(
-    http.get('/v1/resources', () => HttpResponse.json({ items: [projectA, projectB], nextCursor: null })),
+    http.get('/v1/resources/:id', ({ params }) => {
+      gets.push(String(params.id));
+      const found = [projectA, folderA, surveyA].find((item) => item.id === params.id);
+      return found ? HttpResponse.json(found) : HttpResponse.json({}, { status: 404 });
+    }),
+    http.get('/v1/resources', ({ request }) => {
+      const parentId = new URL(request.url).searchParams.get('parentId');
+      if (!parentId) return HttpResponse.json({ items: [projectA, projectB], nextCursor: null });
+      if (parentId === projectA.id) return HttpResponse.json({ items: [folderA], nextCursor: null });
+      if (parentId === folderA.id) return HttpResponse.json({ items: [surveyA], nextCursor: null });
+      return HttpResponse.json({ items: [], nextCursor: null });
+    }),
   );
   const user = userEvent.setup();
-  const { router } = renderWorkspace(`/workspace?resource=${projectA.id}`);
+  const { router } = renderWorkspace(`/workspace?resource=${surveyA.id}`);
 
-  const selected = await screen.findByRole('treeitem', { name: '项目甲' });
+  const selected = await screen.findByRole('button', { name: '客户反馈' });
   expect(selected).toHaveAttribute('aria-current', 'true');
-  expect(screen.getByRole('heading', { name: '项目甲' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '客户反馈' })).toBeInTheDocument();
+  expect(gets).toEqual([surveyA.id, folderA.id, projectA.id]);
+  expect(screen.getByRole('button', { name: '收起 项目甲' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '收起 调研资料' })).toBeInTheDocument();
 
-  await user.click(screen.getByRole('treeitem', { name: '项目乙' }));
+  await user.click(screen.getByRole('button', { name: '项目乙' }));
   await waitFor(() => expect(router.state.location.search).toBe(`?resource=${projectB.id}`));
+});
+
+test('isolatesResourceQueriesWhenTheSessionTenantChanges', async () => {
+  const requests: string[] = [];
+  let activeTenant = 'tenant-a';
+  server.use(
+    http.get('/v1/resources', () => {
+      requests.push(activeTenant);
+      return HttpResponse.json({
+        items: [activeTenant === 'tenant-a' ? projectA : projectB],
+        nextCursor: null,
+      });
+    }),
+  );
+  authState.tenantId = 'tenant-a';
+  const rendered = renderWorkspace();
+  expect(await screen.findByRole('button', { name: '项目甲' })).toBeInTheDocument();
+
+  activeTenant = 'tenant-b';
+  authState.tenantId = 'tenant-b';
+  rendered.rerenderAuth();
+
+  expect(await screen.findByRole('button', { name: '项目乙' })).toBeInTheDocument();
+  expect(requests).toEqual(['tenant-a', 'tenant-b']);
+  expect(rendered.queryClient.getQueryData(['resources', 'tenant-a', null])).toBeDefined();
+  expect(rendered.queryClient.getQueryData(['resources', 'tenant-b', null])).toBeDefined();
 });
 
 test('createsAProjectFolderAndBlankSurveyWithChineseDefaults', async () => {
@@ -113,14 +181,22 @@ test('createsAProjectFolderAndBlankSurveyWithChineseDefaults', async () => {
   );
   const createdSurveyId = '30000000-0000-4000-8000-000000000009';
   const bodies: Record<string, unknown>[] = [];
+  const children = new Map<string, ReturnType<typeof resource>[]>([['root', []]]);
+  const resourceGets: Array<string | null> = [];
   server.use(
-    http.get('/v1/resources', () => HttpResponse.json({ items: [], nextCursor: null })),
+    http.get('/v1/resources', ({ request }) => {
+      const parentId = new URL(request.url).searchParams.get('parentId');
+      resourceGets.push(parentId);
+      return HttpResponse.json({ items: children.get(parentId ?? 'root') ?? [], nextCursor: null });
+    }),
     http.post('/v1/projects', async ({ request }) => {
       bodies.push((await request.json()) as Record<string, unknown>);
+      children.set('root', [createdProject]);
       return HttpResponse.json(createdProject, { status: 201 });
     }),
     http.post('/v1/folders', async ({ request }) => {
       bodies.push((await request.json()) as Record<string, unknown>);
+      children.set(createdProject.id, [createdFolder]);
       return HttpResponse.json(createdFolder, { status: 201 });
     }),
     http.post('/v1/surveys', async ({ request }) => {
@@ -140,21 +216,21 @@ test('createsAProjectFolderAndBlankSurveyWithChineseDefaults', async () => {
   );
   const user = userEvent.setup();
   const { router } = renderWorkspace();
-  await screen.findByRole('heading', { name: '问卷工作台' });
-
-  await user.click(screen.getByRole('button', { name: '新建项目' }));
+  await user.click(await screen.findByRole('button', { name: '新建项目' }));
   let dialog = screen.getByRole('dialog', { name: '新建项目' });
   await user.type(within(dialog).getByLabelText('名称'), '年度调研');
   await user.click(within(dialog).getByRole('button', { name: '创建项目' }));
-  expect(await screen.findByRole('treeitem', { name: '年度调研' })).toHaveAttribute('aria-current', 'true');
+  expect(await screen.findByRole('button', { name: '年度调研' })).toHaveAttribute('aria-current', 'true');
+  expect(resourceGets.filter((parentId) => parentId === null)).toHaveLength(2);
 
-  await user.click(screen.getByRole('button', { name: '新建文件夹' }));
+  await user.click(await screen.findByRole('button', { name: '新建文件夹' }));
   dialog = screen.getByRole('dialog', { name: '新建文件夹' });
   await user.type(within(dialog).getByLabelText('名称'), '客户组');
   await user.click(within(dialog).getByRole('button', { name: '创建文件夹' }));
-  expect(await screen.findByRole('treeitem', { name: '客户组' })).toHaveAttribute('aria-current', 'true');
+  expect(await screen.findByRole('button', { name: '客户组' })).toHaveAttribute('aria-current', 'true');
+  expect(resourceGets.filter((parentId) => parentId === createdProject.id)).toHaveLength(1);
 
-  await user.click(screen.getByRole('button', { name: '新建问卷' }));
+  await user.click(await screen.findByRole('button', { name: '新建问卷' }));
   dialog = screen.getByRole('dialog', { name: '新建问卷' });
   await user.type(within(dialog).getByLabelText('标题'), '满意度调查');
   await user.click(within(dialog).getByRole('button', { name: '创建问卷' }));
@@ -178,13 +254,23 @@ test('createsAProjectFolderAndBlankSurveyWithChineseDefaults', async () => {
   });
 });
 
-test('keepsForbiddenActionsOutOfTheTabOrder', async () => {
+test('usesServerCapabilitiesInsteadOfTokenRolesForAvailableActions', async () => {
   server.use(
     http.get('/v1/resources', () => HttpResponse.json({ items: [projectA], nextCursor: null })),
   );
-  renderWorkspace('/workspace', ['statistics_viewer']);
+  renderWorkspace('/workspace', {
+    roles: ['tenant_owner'],
+    capabilities: {
+      canCreateProject: false,
+      canCreateChildren: false,
+      canEdit: false,
+      canSubmitApproval: false,
+      canPublishDirectly: false,
+      canApprovePublish: false,
+    },
+  });
 
-  expect(await screen.findByRole('treeitem', { name: '项目甲' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: '项目甲' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '新建项目' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '新建文件夹' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '新建问卷' })).not.toBeInTheDocument();
@@ -192,7 +278,8 @@ test('keepsForbiddenActionsOutOfTheTabOrder', async () => {
 
 test('shows404AsUnavailableWithoutRevealingAnotherTenant', async () => {
   server.use(
-    http.get('/v1/resources', () =>
+    http.get('/v1/resources', () => HttpResponse.json({ items: [], nextCursor: null })),
+    http.get('/v1/resources/:id', () =>
       HttpResponse.json(
         { error: 'resource_belongs_to_another_tenant', ownerTenant: 'tenant-secret' },
         { status: 404 },
@@ -203,4 +290,68 @@ test('shows404AsUnavailableWithoutRevealingAnotherTenant', async () => {
 
   expect(await screen.findByRole('alert')).toHaveTextContent('资源不存在或不可访问');
   expect(screen.queryByText(/tenant-secret|另一个租户|resource_belongs/)).not.toBeInTheDocument();
+});
+
+test('containsDialogFocusClosesOnEscapeAndRestoresTheTrigger', async () => {
+  server.use(http.get('/v1/resources', () => HttpResponse.json({ items: [], nextCursor: null })));
+  const user = userEvent.setup();
+  renderWorkspace();
+  const trigger = await screen.findByRole('button', { name: '新建项目' });
+
+  await user.click(trigger);
+  const dialog = screen.getByRole('dialog', { name: '新建项目' });
+  expect(dialog.tagName).toBe('DIALOG');
+  expect(screen.getByRole('complementary', { name: '工作区资源' }).closest('[inert]')).not.toBeNull();
+  const input = within(dialog).getByLabelText('名称');
+  const cancel = within(dialog).getByRole('button', { name: '取消' });
+  const submit = within(dialog).getByRole('button', { name: '创建项目' });
+  expect(input).toHaveFocus();
+
+  submit.focus();
+  await user.tab();
+  expect(input).toHaveFocus();
+  input.focus();
+  await user.tab({ shift: true });
+  expect(submit).toHaveFocus();
+  expect(cancel).toBeInTheDocument();
+
+  await user.keyboard('{Escape}');
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+});
+
+test('preventsDuplicateNextPageRequestsFromSynchronousActivation', async () => {
+  let nextPageRequests = 0;
+  let releaseNextPage!: () => void;
+  const nextPageGate = new Promise<void>((resolve) => {
+    releaseNextPage = resolve;
+  });
+  server.use(
+    http.get('/v1/resources', async ({ request }) => {
+      const cursor = new URL(request.url).searchParams.get('cursor');
+      if (!cursor) return HttpResponse.json({ items: [projectA], nextCursor: 'opaque-next' });
+      nextPageRequests += 1;
+      await nextPageGate;
+      return HttpResponse.json({ items: [projectB], nextCursor: null });
+    }),
+  );
+  renderWorkspace();
+  const loadMore = await screen.findByRole('button', { name: '加载更多' });
+
+  fireEvent.click(loadMore);
+  fireEvent.click(loadMore);
+  await waitFor(() => expect(nextPageRequests).toBe(1));
+  releaseNextPage();
+  expect(await screen.findByRole('button', { name: '项目乙' })).toBeInTheDocument();
+});
+
+test('usesHonestNestedListSemanticsInsteadOfAnIncompleteAriaTree', async () => {
+  server.use(
+    http.get('/v1/resources', () => HttpResponse.json({ items: [projectA], nextCursor: null })),
+  );
+  renderWorkspace();
+
+  expect(await screen.findByRole('list', { name: '资源列表' })).toBeInTheDocument();
+  expect(screen.queryByRole('tree')).not.toBeInTheDocument();
+  expect(screen.queryByRole('treeitem')).not.toBeInTheDocument();
 });
