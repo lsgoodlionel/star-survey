@@ -107,9 +107,10 @@ const validationMessages: Record<string, string> = {
 const validationFailurePattern = /^([A-Z][A-Z0-9_]{1,63})(?: ([^ :\r\n]{1,160}): ([^\r\n]{1,300}))?$/;
 const validationPathPattern = /^(?:[A-Za-z_][A-Za-z0-9_]{0,31})(?:\[(?:(?:0|[1-9][0-9]{0,5})|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?\])?(?:\.(?:[A-Za-z_][A-Za-z0-9_]{0,31})(?:\[(?:(?:0|[1-9][0-9]{0,5})|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?\])?)*$/;
 const sensitiveFailureContent = /authorization|bearer|password|secret|stack\s*trace|traceback|exception|api[_-]?key|private[_-]?key/i;
+const lineSeparator = /[\r\n\u0085\u2028\u2029]/;
 
 function validationMessage(value: string) {
-  if (value.length > 512 || sensitiveFailureContent.test(value)) return null;
+  if (value.length > 512 || lineSeparator.test(value) || sensitiveFailureContent.test(value)) return null;
   const match = validationFailurePattern.exec(value);
   if (!match) return null;
   const message = validationMessages[match[1]];
