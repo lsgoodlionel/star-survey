@@ -53,6 +53,10 @@ export function unexpectedApiError(): ApiError {
   return new ApiError('unexpected', kindMessages.unexpected);
 }
 
+export function invalidApiUrlError(): ApiError {
+  return new ApiError('unexpected', '请求地址无效');
+}
+
 function readTraceId(payload: unknown): string | undefined {
   if (!payload || typeof payload !== 'object') return undefined;
   const traceId = Reflect.get(payload, 'traceId');

@@ -1,5 +1,11 @@
 import type { ZodType } from 'zod';
-import { ApiError, apiErrorForStatus, unavailableApiError, unexpectedApiError } from './errors';
+import {
+  ApiError,
+  apiErrorForStatus,
+  invalidApiUrlError,
+  unavailableApiError,
+  unexpectedApiError,
+} from './errors';
 
 export interface ApiRequest<T> {
   path: string;
@@ -15,21 +21,24 @@ export interface ApiClient {
 }
 
 interface ApiClientOptions {
-  baseUrl?: string;
   fetchImpl?: typeof fetch;
   getToken?: () => string | null;
-  onUnauthorized?: () => void | Promise<void>;
+  locationOrigin?: string;
+  onUnauthorized?: (requestToken: string | null) => void | Promise<void>;
 }
 
 export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const locationOrigin = new URL(options.locationOrigin ?? window.location.origin).origin;
 
   return {
     request: async <T>(request: ApiRequest<T>) => {
+      const requestPath = resolveApiPath(request.path, locationOrigin);
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), request.timeoutMs ?? 15_000);
       const abort = () => controller.abort();
-      request.signal?.addEventListener('abort', abort, { once: true });
+      if (request.signal?.aborted) controller.abort();
+      else request.signal?.addEventListener('abort', abort, { once: true });
 
       try {
         const token = options.getToken?.();
@@ -37,16 +46,15 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         if (request.body !== undefined) headers.set('Content-Type', 'application/json');
         if (token) headers.set('Authorization', `Bearer ${token}`);
 
-        const response = await fetchImpl(`${options.baseUrl ?? ''}${request.path}`, {
+        const response = await fetchImpl(requestPath, {
           method: request.method ?? 'GET',
           headers,
           body: request.body === undefined ? undefined : JSON.stringify(request.body),
           credentials: 'same-origin',
           signal: controller.signal,
         });
-        const payload = await readPayload(response);
-
-        if (response.status === 401) await options.onUnauthorized?.();
+        if (response.status === 401) await options.onUnauthorized?.(token ?? null);
+        const payload = response.ok ? await readPayload(response) : await readErrorPayload(response);
         if (response.status === 202 || !response.ok) throw apiErrorForStatus(response.status, payload);
 
         return request.schema.parse(payload);
@@ -63,9 +71,32 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   };
 }
 
+function resolveApiPath(path: string, locationOrigin: string): string {
+  if (path.startsWith('//')) throw invalidApiUrlError();
+
+  let url: URL;
+  try {
+    url = new URL(path, locationOrigin);
+  } catch {
+    throw invalidApiUrlError();
+  }
+
+  const isApiPath = url.pathname === '/v1' || url.pathname.startsWith('/v1/');
+  if (url.origin !== locationOrigin || !isApiPath || url.hash) throw invalidApiUrlError();
+  return `${url.pathname}${url.search}`;
+}
+
 async function readPayload(response: Response): Promise<unknown> {
   if (response.status === 204) return undefined;
   const contentType = response.headers.get('Content-Type');
   if (!contentType?.includes('application/json')) return undefined;
   return response.json();
+}
+
+async function readErrorPayload(response: Response): Promise<unknown> {
+  try {
+    return await readPayload(response);
+  } catch {
+    return undefined;
+  }
 }
