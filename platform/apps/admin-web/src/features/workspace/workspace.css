@@ -138,6 +138,30 @@
   font-size: 14px;
 }
 
+.workspace-edit-link {
+  width: fit-content;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 7px 12px;
+  color: #fff;
+  text-decoration: none;
+  background: #166534;
+  border: 1px solid #14532d;
+  border-radius: 4px;
+}
+
+.workspace-edit-link:hover {
+  background: #14532d;
+}
+
+.workspace-edit-link:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 2px;
+}
+
 .workspace-welcome {
   max-width: 620px;
 }
