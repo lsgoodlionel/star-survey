@@ -1,0 +1,224 @@
+import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Send, ShieldCheck, Undo2, XCircle } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { useAuth } from '../auth/AuthProvider';
+import { ApiError } from '../../shared/api/errors';
+import type { ApiClient } from '../../shared/api/http';
+import {
+  approvalRequestsQueryKey,
+  approveRequest,
+  getSurveyOverview,
+  listApprovalRequests,
+  listPublishedVersions,
+  publishSurvey,
+  rejectRequest,
+  submitApproval,
+  surveyOverviewQueryKey,
+  versionsQueryKey,
+  withdrawRequest,
+  type ApprovalRequest,
+  type SurveyOverview,
+} from '../../shared/api/approvals';
+import { ApprovalTimeline } from './ApprovalTimeline';
+import { PublishStatus } from './PublishStatus';
+import './publish.css';
+
+interface PublishPageProps {
+  api: ApiClient;
+  surveyId: string;
+}
+
+type ApprovalAction =
+  | { kind: 'submit'; draftVersion: number }
+  | { kind: 'approve' | 'withdraw'; approvalId: string }
+  | { kind: 'reject'; approvalId: string; reason: string };
+
+export function PublishPage({ api, surveyId }: PublishPageProps) {
+  const queryClient = useQueryClient();
+  const visible = useDocumentVisibility();
+  const [actionError, setActionError] = useState<ApiError | null>(null);
+  const [awaitingPublishResult, setAwaitingPublishResult] = useState(false);
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+
+  const overview = useQuery({
+    queryKey: surveyOverviewQueryKey(surveyId),
+    queryFn: ({ signal }) => getSurveyOverview(api, surveyId, signal),
+    refetchInterval: (query) => shouldPoll(query.state.data, awaitingPublishResult, visible) ? 2_000 : false,
+  });
+  const approvals = useQuery({
+    queryKey: approvalRequestsQueryKey(surveyId),
+    queryFn: ({ signal }) => listApprovalRequests(api, surveyId, signal),
+  });
+  const versions = useQuery({
+    queryKey: versionsQueryKey(surveyId),
+    queryFn: ({ signal }) => listPublishedVersions(api, surveyId, signal),
+  });
+
+  const latestApproval = useMemo(() => approvals.data?.at(-1) ?? null, [approvals.data]);
+
+  useEffect(() => () => {
+    void queryClient.cancelQueries({ queryKey: surveyOverviewQueryKey(surveyId), exact: true });
+  }, [queryClient, surveyId]);
+
+  const approvalMutation = useMutation({
+    mutationFn: (action: ApprovalAction) => runApprovalAction(api, surveyId, action),
+    onMutate: () => {
+      setActionError(null);
+      setAwaitingPublishResult(false);
+    },
+    onSuccess: () => invalidatePublishQueries(queryClient, surveyId),
+    onError: (error) => setActionError(publicApiError(error)),
+  });
+
+  const publishMutation = useMutation({
+    mutationFn: () => publishSurvey(api, surveyId),
+    onMutate: () => {
+      setActionError(null);
+      setAwaitingPublishResult(false);
+    },
+    onError: (error) => {
+      const apiError = publicApiError(error);
+      if (apiError.kind === 'pending') setAwaitingPublishResult(true);
+      else setActionError(apiError);
+    },
+    onSettled: () => invalidatePublishQueries(queryClient, surveyId),
+  });
+
+  if (overview.isPending || approvals.isPending || versions.isPending) return <p className="publish-loading">正在加载发布信息</p>;
+  if (overview.error || approvals.error || versions.error || !overview.data || !approvals.data) {
+    return <p role="alert">发布信息暂时不可用，请稍后重试。</p>;
+  }
+
+  const busy = approvalMutation.isPending || publishMutation.isPending;
+
+  return (
+    <main className="publish-page">
+      <header className="publish-page__header">
+        <div><p className="publish-eyebrow">问卷发布</p><h1>{overview.data.title}</h1></div>
+        <span className="publish-version-count">已发布 {versions.data?.length ?? 0} 个版本</span>
+      </header>
+
+      <PublishStatus survey={overview.data} awaitingPublishResult={awaitingPublishResult} />
+
+      {actionError ? (
+        <p className="publish-action-error" role="alert">
+          {actionError.message}{actionError.traceId ? `（追踪编号：${actionError.traceId}）` : ''}
+        </p>
+      ) : null}
+
+      <section className="publish-actions" aria-labelledby="publish-actions-title">
+        <div><h2 id="publish-actions-title">可执行操作</h2><p>最终授权由服务端判定。</p></div>
+        <div className="publish-actions__buttons">
+          <ApprovalButtons
+            approval={latestApproval}
+            busy={busy}
+            draftVersion={overview.data.draftVersion}
+            onAction={(action) => approvalMutation.mutate(action)}
+            onReject={() => setShowRejectForm(true)}
+            onPublish={() => publishMutation.mutate()}
+          />
+        </div>
+      </section>
+
+      {showRejectForm && latestApproval?.status === 'pending' ? (
+        <form
+          className="reject-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const reason = rejectReason.trim();
+            if (!reason) return;
+            approvalMutation.mutate({ kind: 'reject', approvalId: latestApproval.id, reason });
+            setShowRejectForm(false);
+          }}
+        >
+          <label htmlFor="reject-reason">驳回原因</label>
+          <input id="reject-reason" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} required maxLength={500} />
+          <button type="submit" disabled={busy}>确认驳回</button>
+          <button type="button" onClick={() => setShowRejectForm(false)}>取消</button>
+        </form>
+      ) : null}
+
+      <section className="approval-section" aria-labelledby="approval-history-title">
+        <h2 id="approval-history-title">审批记录</h2>
+        <ApprovalTimeline approvals={approvals.data} />
+      </section>
+    </main>
+  );
+}
+
+export function PublishRoutePage() {
+  const { api } = useAuth();
+  const { surveyId } = useParams();
+  if (!surveyId) return <p role="alert">问卷标识无效</p>;
+  return <PublishPage api={api} surveyId={surveyId} />;
+}
+
+function ApprovalButtons({ approval, busy, draftVersion, onAction, onReject, onPublish }: {
+  approval: ApprovalRequest | null;
+  busy: boolean;
+  draftVersion: number;
+  onAction: (action: ApprovalAction) => void;
+  onReject: () => void;
+  onPublish: () => void;
+}) {
+  if (approval?.status === 'pending') {
+    return <>
+      <button type="button" disabled={busy} onClick={() => onAction({ kind: 'approve', approvalId: approval.id })}><ShieldCheck size={17} aria-hidden="true" />批准申请</button>
+      <button type="button" disabled={busy} onClick={onReject}><XCircle size={17} aria-hidden="true" />驳回申请</button>
+      <button type="button" disabled={busy} onClick={() => onAction({ kind: 'withdraw', approvalId: approval.id })}><Undo2 size={17} aria-hidden="true" />撤回申请</button>
+    </>;
+  }
+  if (approval?.status === 'approved') {
+    return <>
+      <button type="button" disabled={busy} onClick={onPublish}><Send size={17} aria-hidden="true" />发布问卷</button>
+      <button type="button" disabled={busy} onClick={() => onAction({ kind: 'withdraw', approvalId: approval.id })}><Undo2 size={17} aria-hidden="true" />撤回申请</button>
+    </>;
+  }
+  return <>
+    <button type="button" disabled={busy} onClick={() => onAction({ kind: 'submit', draftVersion })}><ShieldCheck size={17} aria-hidden="true" />提交审批</button>
+    <button type="button" disabled={busy} onClick={onPublish}><Send size={17} aria-hidden="true" />发布问卷</button>
+  </>;
+}
+
+function runApprovalAction(api: ApiClient, surveyId: string, action: ApprovalAction) {
+  switch (action.kind) {
+    case 'submit': return submitApproval(api, surveyId, action.draftVersion);
+    case 'approve': return approveRequest(api, action.approvalId);
+    case 'reject': return rejectRequest(api, action.approvalId, action.reason);
+    case 'withdraw': return withdrawRequest(api, action.approvalId);
+  }
+}
+
+async function invalidatePublishQueries(queryClient: ReturnType<typeof useQueryClient>, surveyId: string) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: surveyOverviewQueryKey(surveyId), exact: true }),
+    queryClient.invalidateQueries({ queryKey: approvalRequestsQueryKey(surveyId), exact: true }),
+    queryClient.invalidateQueries({ queryKey: versionsQueryKey(surveyId), exact: true }),
+  ]);
+}
+
+function publicApiError(error: unknown) {
+  return error instanceof ApiError ? error : new ApiError('unexpected', '操作失败，请稍后重试');
+}
+
+function shouldPoll(survey: SurveyOverview | undefined, awaiting: boolean, visible: boolean) {
+  if (!visible || survey?.lastPublish?.manualReviewAt) return false;
+  if (survey && isPollingTerminal(survey)) return false;
+  return awaiting || survey?.status === 'publishing' || survey?.status === 'pending_reconciliation';
+}
+
+function isPollingTerminal(survey: SurveyOverview) {
+  return survey.status === 'published' || survey.status === 'publish_failed' || survey.lastPublish?.manualReviewAt != null;
+}
+
+function useDocumentVisibility() {
+  const [visible, setVisible] = useState(() => document.visibilityState !== 'hidden');
+  useEffect(() => {
+    const update = () => setVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', update);
+    return () => document.removeEventListener('visibilitychange', update);
+  }, []);
+  return visible;
+}
