@@ -35,6 +35,7 @@ RESULT_FIELDS = {
     "version",
     "network",
 }
+SENSITIVE_MEDIA_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".zip", ".webm"}
 
 
 class StepFailed(Exception):
@@ -127,18 +128,34 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def write_prepare_artifacts(
-    jwt_path: Path,
-    metadata_path: Path,
-    token: str,
-    metadata: Dict[str, Any],
-) -> None:
-    expect("jwt" not in {key.lower() for key in metadata}, "metadata excludes JWT fields")
-    serialized = json.dumps(metadata, ensure_ascii=False)
-    expect(token not in serialized, "metadata excludes token value")
-    write_private(jwt_path, token)
-    _write_json(metadata_path, metadata)
-    print("  [ok] private browser credential prepared (value withheld)", file=sys.stderr)
+def scrub_sensitive_artifacts(secret_file: Path, paths: List[Path], remove_media: bool) -> None:
+    try:
+        secret = secret_file.read_bytes().strip()
+    except OSError as error:
+        raise StepFailed("browser credential is unavailable for artifact scanning") from error
+    if not secret:
+        raise StepFailed("browser credential is empty during artifact scanning")
+
+    removed_sensitive = False
+    secret_path = secret_file.resolve()
+    for root in paths:
+        candidates = root.rglob("*") if root.is_dir() else (root,)
+        for candidate in candidates:
+            if not candidate.is_file() or candidate.resolve() == secret_path:
+                continue
+            try:
+                contains_secret = secret in candidate.read_bytes()
+            except OSError:
+                continue
+            remove_for_failure = remove_media and candidate.suffix.lower() in SENSITIVE_MEDIA_SUFFIXES
+            if contains_secret or remove_for_failure:
+                try:
+                    candidate.unlink()
+                except OSError as error:
+                    raise StepFailed("sensitive test artifact could not be removed") from error
+                removed_sensitive = removed_sensitive or contains_secret
+    if removed_sensitive:
+        raise StepFailed("sensitive test artifact was removed")
 
 
 def _load_object(path: Path, label: str) -> Dict[str, Any]:
@@ -292,13 +309,28 @@ def cmd_prepare(args: argparse.Namespace) -> None:
            "operator issues the engine event secret (value withheld)", "http {}".format(status))
     write_private(Path(args.event_secret_file), event_secret)
 
-    owner_token = mint_token(secret, OWNER_ACTOR, tenant_id, [])
-    write_prepare_artifacts(Path(args.jwt_file), Path(args.metadata_file), owner_token, {
+    _write_json(Path(args.metadata_file), {
         "schemaVersion": 1,
         "tenantId": tenant_id,
         "actorId": OWNER_ACTOR,
         "engineInstanceId": args.instance,
     })
+    print("  [ok] non-sensitive browser metadata prepared", file=sys.stderr)
+
+
+def cmd_issue_browser_token(args: argparse.Namespace) -> None:
+    metadata = validate_metadata(_load_object(Path(args.metadata_file), "metadata"))
+    owner_token = mint_token(jwt_secret(), metadata["actorId"], metadata["tenantId"], [])
+    write_private(Path(args.jwt_file), owner_token)
+    print("  [ok] short-lived browser credential issued (value withheld)", file=sys.stderr)
+
+
+def cmd_scan_artifacts(args: argparse.Namespace) -> None:
+    scrub_sensitive_artifacts(
+        Path(args.jwt_file),
+        [Path(path) for path in args.path],
+        remove_media=args.remove_media,
+    )
 
 
 def _run(command: List[str], input_text: Optional[str] = None) -> str:
@@ -418,10 +450,20 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--instance", required=True)
     prepare.add_argument("--engine-base-url", required=True)
-    prepare.add_argument("--jwt-file", required=True)
     prepare.add_argument("--metadata-file", required=True)
     prepare.add_argument("--event-secret-file", required=True)
     prepare.set_defaults(handler=cmd_prepare)
+
+    issue = commands.add_parser("issue-browser-token")
+    issue.add_argument("--metadata-file", required=True)
+    issue.add_argument("--jwt-file", required=True)
+    issue.set_defaults(handler=cmd_issue_browser_token)
+
+    scan = commands.add_parser("scan-artifacts")
+    scan.add_argument("--jwt-file", required=True)
+    scan.add_argument("--path", action="append", required=True)
+    scan.add_argument("--remove-media", action="store_true")
+    scan.set_defaults(handler=cmd_scan_artifacts)
 
     verify = commands.add_parser("verify")
     verify.add_argument("--metadata-file", required=True)
