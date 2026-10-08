@@ -47,12 +47,16 @@ SANITIZED_TRACE_FIELDS = {
     "status",
     "durationMs",
     "lastPath",
+    "network",
 }
 SANITIZED_PROJECT_TESTS = {
     "chromium-desktop": "desktop-authoring",
     "chromium-mobile": "mobile-responsive-editor",
 }
 SANITIZED_STATUSES = {"failed", "timedOut", "interrupted"}
+SANITIZED_NETWORK_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+MAX_SANITIZED_NETWORK_EVENTS = 25
+MAX_SANITIZED_NETWORK_URL_LENGTH = 768
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 UUID_PATH = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 ADMIN_WEB_PATH = re.compile(
@@ -281,6 +285,46 @@ def _value_contains_secret(value: Any, secret: bytes) -> bool:
     return False
 
 
+def _validate_sanitized_network(network: Any) -> List[Dict[str, Any]]:
+    if not isinstance(network, list) or len(network) > MAX_SANITIZED_NETWORK_EVENTS:
+        raise StepFailed("sanitized network sequence exceeds its allowlisted shape")
+    for event in network:
+        if not isinstance(event, dict) or set(event) != {"method", "status", "url"}:
+            raise StepFailed("sanitized network event uses an unexpected schema")
+        method = event.get("method")
+        status_code = event.get("status")
+        url = event.get("url")
+        if (
+            method not in SANITIZED_NETWORK_METHODS
+            or not isinstance(status_code, int)
+            or isinstance(status_code, bool)
+            or not 100 <= status_code <= 599
+            or not isinstance(url, str)
+            or len(url) > MAX_SANITIZED_NETWORK_URL_LENGTH
+            or "%" in url
+            or "\\" in url
+        ):
+            raise StepFailed("sanitized network event contains a non-allowlisted value")
+        try:
+            parsed = urlsplit(url)
+        except ValueError as error:
+            raise StepFailed("sanitized network event URL is invalid") from error
+        path_segments = parsed.path.split("/")
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or bool(parsed.query)
+            or bool(parsed.fragment)
+            or not parsed.path.startswith("/")
+            or any(segment in {".", ".."} for segment in path_segments)
+        ):
+            raise StepFailed("sanitized network event URL is not allowlisted")
+    return network
+
+
 def _validate_sanitized_trace(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise StepFailed("sanitized trace summary must be a JSON object")
@@ -304,6 +348,7 @@ def _validate_sanitized_trace(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not valid:
         raise StepFailed("sanitized trace summary contains a non-allowlisted value")
+    _validate_sanitized_network(payload.get("network"))
     return payload
 
 

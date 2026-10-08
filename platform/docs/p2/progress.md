@@ -677,13 +677,15 @@ SURVEY_TEST_PREFIX=adminweb-final COMPOSE_PROJECT_NAME=adminweb-final TEST_DB=my
 
 验证证据：平台 **1422 cases / 177 test classes**；发布网关 **1180 tests**；需求追溯工具
 **72 tests**，登记 **305** 条需求、**85** 条证据、覆盖 **37** 条需求、源码引用 **95** 个编号，
-matrix check passed；管理端 **13 files / 131 tests**，生产构建 **2080 modules**，production bundle
+matrix check passed；管理端 **13 files / 132 tests**，生产构建 **2080 modules**，production bundle
 assertion 检查 **13 files**；真实 E2E **3 passed (7.0s)**，覆盖桌面完整创作、移动端响应式编辑与真实 Chromium 敏感控件遮蔽。
 CI 的失败证据先在私有目录生成，再由 gate 按固定 schema 和文件名白名单导出到 ignored 目录；仅上传已遮蔽
-截图与 `sanitized-trace-summary.json`。该 JSON 是只含 project、固定 test id、状态、耗时和真实管理端路由
-白名单路径的结构化排障摘要，不是 Playwright raw trace；gate 在 JSON 解码、percent decode、NFKC 规范化后
-扫描所有字符串并复扫最终输出 bytes。JWT、临时元数据、raw trace 和原始截图均不上传并随私有目录清理；
-独立 Playwright 用例以真实 Chromium DOM 验证敏感控件清空、隐藏后才执行内存截图，不持久化该截图。
+截图与 `sanitized-trace-summary.json`。该 JSON 是只含 project、固定 test id、状态、耗时、真实管理端路由
+白名单路径，以及最近最多 25 条 method/status/无 query URL 网络事件的结构化排障摘要，不是 Playwright raw
+trace；gate 对事件字段、类型、URL 与长度做严格校验，并在 JSON 解码、percent decode、NFKC 规范化后扫描所有
+字符串及最终输出 bytes。JWT、headers、body、临时元数据、raw trace 和原始截图均不上传并随私有目录清理；
+独立 Playwright 用例以真实 Chromium DOM 验证失败响应在截图前已脱敏收集，敏感控件清空、隐藏后才执行内存
+截图，不持久化该截图。
 
 ### 明确保留的未交付项
 
