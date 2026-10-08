@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Download, RefreshCw, Save } from 'lucide-react';
 import { useBlocker, useParams, useSearchParams } from 'react-router-dom';
@@ -22,30 +22,23 @@ import {
   type EditableSurveyDefinition,
 } from './model/definition';
 import { moveQuestion, updateQuestion, validateDefinition } from './model/operations';
+import {
+  clearActiveEditorRecovery,
+  discardEditorRecovery,
+  registerActiveEditorRecovery,
+  takeEditorRecovery,
+} from './recovery';
 import './editor.css';
 
 interface EditorPageProps {
   api: ApiClient;
   surveyId: string;
-}
-
-interface RecoveryPayload {
-  definition: unknown;
-  selectedQuestionUuid: string | null;
-  surveyId: string;
-  version: number;
+  tenantId: string;
 }
 
 type MobilePanel = 'outline' | 'editor' | 'properties';
 
-let activeRecovery: RecoveryPayload | null = null;
-const savedRecoveries = new Map<string, RecoveryPayload>();
-
-export function captureEditorRecovery() {
-  if (activeRecovery) savedRecoveries.set(activeRecovery.surveyId, structuredClone(activeRecovery));
-}
-
-export function EditorPage({ api, surveyId }: EditorPageProps) {
+export function EditorPage({ api, surveyId, tenantId }: EditorPageProps) {
   const surveyQuery = useQuery({
     queryKey: ['survey', surveyId],
     queryFn: ({ signal }) => getSurvey(api, surveyId, signal),
@@ -67,9 +60,10 @@ export function EditorPage({ api, surveyId }: EditorPageProps) {
 
   return (
     <LoadedEditor
-      key={surveyId}
+      key={`${tenantId}:${surveyId}`}
       api={api}
       surveyId={surveyId}
+      tenantId={tenantId}
       surveyTitle={surveyQuery.data?.title ?? ''}
       initialDraft={draftQuery.data}
       canEdit={capabilitiesQuery.data?.canEdit === true}
@@ -83,11 +77,10 @@ interface LoadedEditorProps extends EditorPageProps {
   surveyTitle: string;
 }
 
-function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle }: LoadedEditorProps) {
+function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenantId }: LoadedEditorProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [initialState] = useState(() => {
-    const recovered = savedRecoveries.get(surveyId);
-    if (recovered) savedRecoveries.delete(surveyId);
+    const recovered = takeEditorRecovery(tenantId, surveyId);
     return {
       definition: parseDefinition(recovered?.definition ?? initialDraft.definition),
       dirty: Boolean(recovered),
@@ -102,9 +95,13 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle }: Loa
   const [conflict, setConflict] = useState(false);
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>('outline');
+  const revisionRef = useRef(0);
   const narrow = useNarrowViewport();
   const leaveBlocker = useBlocker(
-    ({ nextLocation }) => dirty && !isAuthenticationPath(nextLocation.pathname),
+    ({ currentLocation, nextLocation }) =>
+      dirty &&
+      !isAuthenticationPath(nextLocation.pathname) &&
+      !isQuestionSelectionNavigation(currentLocation, nextLocation),
   );
   const requestedQuestionUuid = searchParams.get('question');
   const selectedQuestionUuid =
@@ -116,19 +113,20 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle }: Loa
 
   useEffect(() => {
     if (!dirty) {
-      if (activeRecovery?.surveyId === surveyId) activeRecovery = null;
+      clearActiveEditorRecovery(tenantId, surveyId);
       return;
     }
-    activeRecovery = {
+    registerActiveEditorRecovery({
       definition: serializeDefinition(definition),
       selectedQuestionUuid,
       surveyId,
+      tenantId,
       version,
-    };
+    });
     return () => {
-      if (activeRecovery?.surveyId === surveyId) activeRecovery = null;
+      clearActiveEditorRecovery(tenantId, surveyId);
     };
-  }, [definition, dirty, selectedQuestionUuid, surveyId, version]);
+  }, [definition, dirty, selectedQuestionUuid, surveyId, tenantId, version]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -156,13 +154,17 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle }: Loa
         throw new Error('请先修正草稿中的问题');
       }
       setValidationMessages([]);
-      return saveDraft(api, surveyId, version, serializeDefinition(definition));
+      const submittedRevision = revisionRef.current;
+      const saved = await saveDraft(api, surveyId, version, serializeDefinition(definition));
+      return { saved, submittedRevision };
     },
-    onSuccess: (saved) => {
-      setDefinition(parseDefinition(saved.definition));
+    onSuccess: ({ saved, submittedRevision }) => {
       setVersion(saved.version);
       setSavedVersion(saved.version);
-      setDirty(false);
+      if (revisionRef.current === submittedRevision) {
+        setDefinition(parseDefinition(saved.definition));
+        setDirty(false);
+      }
       setConflict(false);
     },
     onError: (error) => {
@@ -171,6 +173,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle }: Loa
   });
 
   function changeDefinition(next: EditableSurveyDefinition) {
+    revisionRef.current += 1;
     setDefinition(next);
     setDirty(true);
     setSavedVersion(null);
@@ -179,7 +182,8 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle }: Loa
 
   async function reloadDraft() {
     const result = await getSurveyDraft(api, surveyId);
-    savedRecoveries.delete(surveyId);
+    discardEditorRecovery(tenantId, surveyId);
+    revisionRef.current += 1;
     setDefinition(parseDefinition(result.definition));
     setVersion(result.version);
     setDirty(false);
@@ -327,10 +331,10 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle }: Loa
 }
 
 export function EditorRoutePage() {
-  const { api } = useAuth();
+  const { api, session } = useAuth();
   const surveyId = z.string().uuid().safeParse(useParams().surveyId);
-  if (!surveyId.success) return <p role="alert">问卷标识无效</p>;
-  return <EditorPage api={api} surveyId={surveyId.data} />;
+  if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
+  return <EditorPage api={api} surveyId={surveyId.data} tenantId={session.me.tenantId} />;
 }
 
 function hasQuestion(definition: EditableSurveyDefinition, uuid: string) {
@@ -346,7 +350,33 @@ function panelLabel(panel: MobilePanel) {
 }
 
 function isAuthenticationPath(pathname: string) {
-  return pathname === '/login' || pathname === '/dev/token' || pathname === '/auth/callback';
+  return (
+    pathname === '/login' ||
+    pathname === '/auth/callback' ||
+    (import.meta.env.DEV && pathname === '/dev/token')
+  );
+}
+
+interface RouteLocation {
+  hash: string;
+  pathname: string;
+  search: string;
+}
+
+function isQuestionSelectionNavigation(current: RouteLocation, next: RouteLocation) {
+  if (current.pathname !== next.pathname || current.hash !== next.hash) return false;
+
+  const currentParams = new URLSearchParams(current.search);
+  const nextParams = new URLSearchParams(next.search);
+  const questionChanged = currentParams.get('question') !== nextParams.get('question');
+  currentParams.delete('question');
+  nextParams.delete('question');
+
+  return questionChanged && normalizedSearch(currentParams) === normalizedSearch(nextParams);
+}
+
+function normalizedSearch(params: URLSearchParams) {
+  return JSON.stringify([...params.entries()].sort(([left], [right]) => left.localeCompare(right)));
 }
 
 function useNarrowViewport() {
