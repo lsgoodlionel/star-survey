@@ -12,8 +12,17 @@ import {
   previewSurveyImport,
   type ImportPreview,
 } from '../../shared/api/imports';
+import {
+  approvalRequestsQueryKey,
+  surveyOverviewQueryKey,
+  versionsQueryKey,
+} from '../../shared/api/approvals';
 import { getResourceCapabilities } from '../../shared/api/resources';
-import { getSurveyDraft } from '../../shared/api/surveys';
+import {
+  getSurveyDraft,
+  surveyCapabilitiesQueryKey,
+  surveyDraftQueryKey,
+} from '../../shared/api/surveys';
 import { ImportPreviewTable } from './ImportPreviewTable';
 import './import.css';
 
@@ -44,11 +53,11 @@ function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
   const sourceRevisionRef = useRef(0);
   const identity = `${tenantId}:${surveyId}`;
   const draftQuery = useQuery({
-    queryKey: ['survey-draft', tenantId, surveyId],
+    queryKey: surveyDraftQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurveyDraft(api, surveyId, signal),
   });
   const capabilitiesQuery = useQuery({
-    queryKey: ['resource-capabilities', tenantId, surveyId],
+    queryKey: surveyCapabilitiesQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getResourceCapabilities(api, surveyId, signal),
   });
   const definition = useMemo(() => {
@@ -86,13 +95,17 @@ function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
       });
     },
     onSuccess: async (updatedDraft) => {
-      queryClient.setQueryData(['survey-draft', tenantId, surveyId], updatedDraft);
-      // Task 4 still consumes this legacy key; keep the post-import navigation lossless.
-      queryClient.setQueryData(['survey-draft', surveyId], updatedDraft);
+      queryClient.setQueryData(surveyDraftQueryKey(tenantId, surveyId), updatedDraft);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['survey', tenantId, surveyId], exact: true }),
-        queryClient.invalidateQueries({ queryKey: ['survey', tenantId, surveyId, 'approvals'], exact: true }),
-        queryClient.invalidateQueries({ queryKey: ['survey', tenantId, surveyId, 'versions'], exact: true }),
+        queryClient.invalidateQueries({
+          queryKey: surveyOverviewQueryKey(tenantId, surveyId),
+          exact: true,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: approvalRequestsQueryKey(tenantId, surveyId),
+          exact: true,
+        }),
+        queryClient.invalidateQueries({ queryKey: versionsQueryKey(tenantId, surveyId) }),
       ]);
       navigate(`/surveys/${surveyId}/edit`, { replace: true });
     },

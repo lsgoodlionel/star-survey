@@ -74,4 +74,41 @@
 
 ### Remaining concern
 
-- Task 4 editor and the existing publish flow still use tenant-less cache keys. This fix does not widen scope into those modules; the import success compatibility write is deliberate and relies on the existing authentication provider clearing the query cache when sessions change. A repository-wide canonical query-key migration should be handled as a separate cross-module change.
+- Resolved in Review Fix Round 2: the approved scope expansion migrated Task 4 editor and the publish/version flow to the same canonical tenant-aware keys. The temporary legacy draft compatibility write was removed.
+
+## Review Fix Round 2
+
+### Approved scope expansion
+
+- Expanded beyond the original Task 5 modules to the frontend editor, publish workflow, immutable version detail, and shared survey/approval API key factories.
+- No Task 7 files, authentication cache-clearing behavior, backend code, or generated output were changed.
+
+### Findings addressed
+
+- Added canonical `surveyDetailQueryKey`, `surveyDraftQueryKey`, and `surveyCapabilitiesQueryKey` factories with mandatory `tenantId` and `surveyId` parameters.
+- Migrated publish overview, approval requests, versions, and version-detail factories to mandatory tenant-aware signatures; removed the old publish capability key and all tenant-less aliases.
+- Updated EditorPage, ImportPage, PreviewPage, PublishPage, and VersionDetailPage to consume canonical factories. Route pages pass `session.me.tenantId` through to publish/version consumers.
+- Removed ImportPage's legacy `['survey-draft', surveyId]` write. Import success now writes the exact canonical draft key consumed by EditorPage and invalidates the exact overview, approval-request, and versions keys consumed by PublishPage.
+- Preserved editor recovery isolation by leaving the existing `tenantId + surveyId` recovery registry contract unchanged.
+
+### TDD evidence
+
+- RED: focused tests had four expected failures: Editor and Publish reused fresh tenant A data after switching to tenant B with production `staleTime`, while import success missed the new canonical draft and publish cache keys.
+- GREEN: import, preview, editor, and publish focused suites passed: 6 files, 78 tests.
+- Added two production-configuration regressions using `staleTime: 30_000`: same survey UUID across tenants in EditorPage and PublishPage cannot display or consume tenant A data in tenant B.
+- Strengthened import success coverage to pre-populate real factory keys and assert overview, approval requests, versions, and nested version detail invalidation plus canonical editor draft handoff.
+
+### Verification (Node 22.23.2)
+
+- `npm test -- --run src/features/import src/features/preview src/features/editor src/features/publish`: 78/78 passed.
+- `npm test -- --run`: 105/105 passed across 10 files.
+- `npm run lint`: passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed; Vite transformed 2080 modules.
+- `npm run assert:production-bundle`: passed; 12 generated files checked.
+- `git diff --check`: passed.
+
+### Remaining concerns
+
+- No remaining cache-isolation concern within the approved frontend scope. Query cache isolation no longer relies on AuthProvider clearing data between tenants.
+- The previously documented 422 diagnostic fallback remains: because the shared API error model does not expose structured validation problems, ImportPage performs one additional read-only preview request to recover line details.

@@ -98,6 +98,63 @@ afterEach(() => {
 });
 
 describe('EditorPage', () => {
+  test('doesNotConsumeAFreshDraftCachedForAnotherTenant', async () => {
+    function tenantApi(tenantName: string, questionText: string) {
+      return apiFrom((request) => {
+        const key = `${request.method ?? 'GET'} ${request.path}`;
+        if (key === `GET /v1/surveys/${surveyId}`) {
+          return { ...overview, title: `${tenantName} 问卷` };
+        }
+        if (key === `GET /v1/surveys/${surveyId}/draft`) {
+          const definition = structuredClone(gatewayFixture);
+          definition.groups[0].questions[0].text = questionText;
+          return { surveyId, version: 4, definition };
+        }
+        if (key === `GET /v1/resource-capabilities?resourceId=${surveyId}`) {
+          return editableCapabilities;
+        }
+        throw new Error(`Unhandled request: ${key}`);
+      });
+    }
+    const apiA = tenantApi('租户 A', '租户 A 题目');
+    const apiB = tenantApi('租户 B', '租户 B 题目');
+    function TenantEditorHarness() {
+      const [tenantId, setTenantId] = useState('tenant-a');
+      return (
+        <>
+          <button type="button" onClick={() => setTenantId('tenant-b')}>切换到租户 B</button>
+          <EditorPage
+            api={tenantId === 'tenant-a' ? apiA : apiB}
+            surveyId={surveyId}
+            tenantId={tenantId}
+          />
+        </>
+      );
+    }
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 30_000 },
+        mutations: { retry: false },
+      },
+    });
+    const router = createMemoryRouter(
+      [{ path: '*', element: <TenantEditorHarness /> }],
+      { initialEntries: [`/surveys/${surveyId}/edit`] },
+    );
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '租户 A 问卷' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '切换到租户 B' }));
+
+    expect(await screen.findByRole('heading', { name: '租户 B 问卷' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /租户 B 题目/ })).toBeInTheDocument();
+    expect(screen.queryByText('租户 A 问卷')).not.toBeInTheDocument();
+  });
+
   test('keepsTheSelectedQuestionAcrossRouteChanges', async () => {
     const { router } = renderEditor(
       editorApi(),

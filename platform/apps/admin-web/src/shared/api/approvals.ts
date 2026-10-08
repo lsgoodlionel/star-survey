@@ -95,14 +95,17 @@ export type ApprovalDetail = z.infer<typeof approvalDetailSchema>;
 export type SurveyOverview = z.infer<typeof surveyOverviewSchema>;
 export type PublishedVersion = z.infer<typeof publishedVersionSchema>;
 
-export const surveyOverviewQueryKey = (surveyId: string) => ['survey', surveyId, 'overview'] as const;
-export const approvalRequestsQueryKey = (surveyId: string) =>
-  ['survey', surveyId, 'approval-requests'] as const;
-export const versionsQueryKey = (surveyId: string) => ['survey', surveyId, 'versions'] as const;
-export const versionQueryKey = (surveyId: string, version: number) =>
-  ['survey', surveyId, 'versions', version] as const;
-export const publishCapabilitiesQueryKey = (surveyId: string) =>
-  ['resource', surveyId, 'publish-capabilities'] as const;
+const publishQueryRoot = (tenantId: string, surveyId: string) =>
+  ['survey', tenantId, surveyId] as const;
+
+export const surveyOverviewQueryKey = (tenantId: string, surveyId: string) =>
+  [...publishQueryRoot(tenantId, surveyId), 'overview'] as const;
+export const approvalRequestsQueryKey = (tenantId: string, surveyId: string) =>
+  [...publishQueryRoot(tenantId, surveyId), 'approval-requests'] as const;
+export const versionsQueryKey = (tenantId: string, surveyId: string) =>
+  [...publishQueryRoot(tenantId, surveyId), 'versions'] as const;
+export const versionQueryKey = (tenantId: string, surveyId: string, version: number) =>
+  [...versionsQueryKey(tenantId, surveyId), version] as const;
 
 export function getSurveyOverview(api: ApiClient, surveyId: string, signal?: AbortSignal) {
   return api.request({ path: `/v1/surveys/${encodeURIComponent(surveyId)}`, schema: surveyOverviewSchema, signal });
