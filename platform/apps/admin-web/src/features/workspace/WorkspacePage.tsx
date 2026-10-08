@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FolderPlus, FilePlus2, Plus } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -27,13 +27,21 @@ export function WorkspacePage() {
     tenantId: string;
     resource: ResourceView;
   } | null>(null);
-  const [dialog, setDialog] = useState<CreateResourceKind | null>(null);
-  const [dialogTrigger, setDialogTrigger] = useState<HTMLElement | null>(null);
+  const [dialogState, setDialogState] = useState<{
+    tenantId: string;
+    kind: CreateResourceKind;
+    trigger: HTMLElement;
+  } | null>(null);
   const [expandedIds, setExpandedIds] = useState(() => new Set<string>());
   const [createdResourcesByTenant, setCreatedResourcesByTenant] = useState<
     Record<string, Record<string, ResourceView[]>>
   >({});
   const createdResources = createdResourcesByTenant[tenantId] ?? {};
+  const activeDialog = dialogState?.tenantId === tenantId ? dialogState : null;
+  const currentTenantId = useRef(tenantId);
+  useLayoutEffect(() => {
+    currentTenantId.current = tenantId;
+  }, [tenantId]);
   const pathQuery = useQuery({
     queryKey: ['resource-path', tenantId, selectedId],
     queryFn: ({ signal }) => getResourcePath(api, selectedId!, signal),
@@ -115,8 +123,10 @@ export function WorkspacePage() {
         queryKey: resourceQueryKey(created.mutationTenantId, created.parentId),
         exact: true,
       });
-      setDialog(null);
-      if (created.mutationTenantId !== tenantId) return;
+      if (created.mutationTenantId !== currentTenantId.current) return;
+      setDialogState((current) =>
+        current?.tenantId === created.mutationTenantId ? null : current,
+      );
       if (created.kind === 'survey' && created.survey) {
         void navigate(`/surveys/${created.survey.id}/edit`);
         return;
@@ -140,6 +150,18 @@ export function WorkspacePage() {
     },
   });
 
+  const mutationBelongsToTenant = createMutation.variables?.mutationTenantId === tenantId;
+
+  function openDialog(kind: CreateResourceKind, trigger: HTMLElement) {
+    createMutation.reset();
+    setDialogState({ tenantId, kind, trigger });
+  }
+
+  function closeDialog() {
+    createMutation.reset();
+    setDialogState((current) => (current?.tenantId === tenantId ? null : current));
+  }
+
   function setExpanded(id: string, expanded: boolean) {
     setExpandedIds((current) => {
       const next = new Set(current);
@@ -151,7 +173,11 @@ export function WorkspacePage() {
 
   return (
     <section className="workspace-page">
-      <aside className="workspace-sidebar" aria-label="工作区资源" inert={dialog ? true : undefined}>
+      <aside
+        className="workspace-sidebar"
+        aria-label="工作区资源"
+        inert={activeDialog ? true : undefined}
+      >
         <div className="workspace-sidebar-heading">
           <h1>问卷工作台</h1>
           <div className="workspace-actions">
@@ -160,10 +186,7 @@ export function WorkspacePage() {
                 type="button"
                 title="新建项目"
                 aria-label="新建项目"
-                onClick={(event) => {
-                  setDialogTrigger(event.currentTarget);
-                  setDialog('project');
-                }}
+                onClick={(event) => openDialog('project', event.currentTarget)}
               >
                 <Plus aria-hidden="true" />
               </button>
@@ -174,10 +197,7 @@ export function WorkspacePage() {
                   type="button"
                   title="新建文件夹"
                   aria-label="新建文件夹"
-                  onClick={(event) => {
-                    setDialogTrigger(event.currentTarget);
-                    setDialog('folder');
-                  }}
+                  onClick={(event) => openDialog('folder', event.currentTarget)}
                 >
                   <FolderPlus aria-hidden="true" />
                 </button>
@@ -185,10 +205,7 @@ export function WorkspacePage() {
                   type="button"
                   title="新建问卷"
                   aria-label="新建问卷"
-                  onClick={(event) => {
-                    setDialogTrigger(event.currentTarget);
-                    setDialog('survey');
-                  }}
+                  onClick={(event) => openDialog('survey', event.currentTarget)}
                 >
                   <FilePlus2 aria-hidden="true" />
                 </button>
@@ -207,7 +224,7 @@ export function WorkspacePage() {
           onSelect={selectResource}
         />
       </aside>
-      <div className="workspace-main" inert={dialog ? true : undefined}>
+      <div className="workspace-main" inert={activeDialog ? true : undefined}>
         {pathQuery.isError ? (
           <p role="alert">
             {pathQuery.error instanceof Error ? pathQuery.error.message : '操作失败，请稍后重试'}
@@ -224,15 +241,19 @@ export function WorkspacePage() {
           </div>
         )}
       </div>
-      {dialog ? (
+      {activeDialog ? (
         <CreateResourceDialog
-          kind={dialog}
-          pending={createMutation.isPending}
-          error={createMutation.error instanceof Error ? createMutation.error.message : undefined}
-          returnFocus={dialogTrigger}
-          onClose={() => setDialog(null)}
+          kind={activeDialog.kind}
+          pending={mutationBelongsToTenant && createMutation.isPending}
+          error={
+            mutationBelongsToTenant && createMutation.error instanceof Error
+              ? createMutation.error.message
+              : undefined
+          }
+          returnFocus={activeDialog.trigger}
+          onClose={closeDialog}
           onSubmit={(value) =>
-            createMutation.mutate({ kind: dialog, value, mutationTenantId: tenantId })
+            createMutation.mutate({ kind: activeDialog.kind, value, mutationTenantId: tenantId })
           }
         />
       ) : null}
