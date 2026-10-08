@@ -29,8 +29,10 @@ No file under `platform/apps/admin-web/**` was modified by this slice.
   has exactly `exp - iat = 600`, is written with mode `0600`, and is never
   printed or included in metadata.
 - The runner exports `ADMIN_WEB_BASE_URL`, `ADMIN_WEB_JWT_FILE`,
-  `ADMIN_WEB_METADATA_FILE` and `ADMIN_WEB_RESULT_FILE`, then invokes the Node 22
-  desktop and mobile Playwright projects from `platform/apps/admin-web`.
+  `ADMIN_WEB_METADATA_FILE`, `ADMIN_WEB_RESULT_FILE` and
+  `ADMIN_WEB_TEST_RESULTS_DIR`, then invokes the Node 22 desktop and mobile
+  Playwright projects from `platform/apps/admin-web`. The results directory is
+  `$WORK_DIR/test-results`, private to this run.
 - Node 22 is accepted from the caller, `NODE22_BIN`, or an installed NVM
   `v22*/bin`, so the documented one-line command works on the current host even
   though its default Node is 24.
@@ -41,10 +43,13 @@ No file under `platform/apps/admin-web/**` was modified by this slice.
 - The EXIT trap always removes the complete private work directory, including
   JWT, metadata, event-secret, engine config and result, even when
   `ADMIN_WEB_E2E_KEEP=1`; KEEP preserves only Compose resources.
-- Result and `test-results` files are scanned byte-for-byte for the JWT. Matches
-  are deleted and fail the gate without printing the credential. On Playwright
-  failure, retained image/video/trace media are also removed because pixel
-  content cannot be safely validated without OCR.
+- Result and this run's private `test-results` files are scanned byte-for-byte
+  for the JWT. Matches are deleted and fail the gate without printing the
+  credential. The runner never scans or deletes the shared
+  `platform/apps/admin-web/test-results` directory. On Playwright failure,
+  retained image/video/trace media are deleted before any read attempt because
+  pixel content cannot be safely validated without OCR. Any artifact read or
+  delete failure fails closed with `StepFailed`.
 
 ## TDD evidence
 
@@ -111,6 +116,46 @@ Round 1 GREEN:
 ```text
 python3 -m unittest discover -s platform/tests/e2e -p 'test_admin_web_gate.py' -q
 Ran 15 tests ... OK
+
+shellcheck -x platform/deploy/test/run-admin-web-e2e.sh
+PASS
+
+bash -n platform/deploy/test/run-admin-web-e2e.sh
+PASS
+
+docker compose ... config --quiet
+PASS
+
+python3 -m py_compile platform/tests/e2e/admin_web_gate.py platform/tests/e2e/test_admin_web_gate.py
+PASS (with PYTHONPYCACHEPREFIX under /private/tmp)
+```
+
+## Review fix round 2
+
+Review findings were reproduced before changes:
+
+- The runner scanned `platform/apps/admin-web/test-results`, so concurrent E2E
+  lanes could inspect or delete each other's artifacts.
+- A file read `OSError` was ignored with `continue`, allowing an unreadable
+  artifact to be reported as safe.
+- Failure media was read before deletion, although visual secrets cannot be
+  ruled out by a byte scan.
+
+Fixes:
+
+- Added the `ADMIN_WEB_TEST_RESULTS_DIR=$WORK_DIR/test-results` interface and
+  restricted every scan and cleanup to that directory plus this run's result.
+  Frontend consumption of the interface is owned by the parallel frontend slice.
+- Made non-media read failures and every deletion failure raise `StepFailed`.
+- In failure mode, media is deleted first and is never read.
+- Added fault-injection tests for read/delete errors and an executable two-lane
+  isolation test proving another results directory is untouched.
+
+Round 2 GREEN:
+
+```text
+python3 -m unittest discover -s platform/tests/e2e -p 'test_admin_web_gate.py' -q
+Ran 19 tests ... OK
 
 shellcheck -x platform/deploy/test/run-admin-web-e2e.sh
 PASS

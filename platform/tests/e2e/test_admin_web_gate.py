@@ -209,6 +209,7 @@ class AdminWebGateTest(unittest.TestCase):
             "ADMIN_WEB_JWT_FILE",
             "ADMIN_WEB_METADATA_FILE",
             "ADMIN_WEB_RESULT_FILE",
+            "ADMIN_WEB_TEST_RESULTS_DIR",
         ):
             self.assertIn("export " + name, text)
         self.assertIn("--project=chromium-desktop", text)
@@ -282,6 +283,106 @@ class AdminWebGateTest(unittest.TestCase):
             self.assertFalse(screenshot.exists())
             self.assertTrue(text_log.exists())
 
+    def test_artifact_scan_fails_when_a_non_media_file_cannot_be_read(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            blocked = root / "blocked.txt"
+            gate.write_private(secret, "header.payload.signature")
+            blocked.write_text("network metadata", encoding="utf-8")
+            original_read_bytes = Path.read_bytes
+
+            def read_bytes(path):
+                if path == blocked:
+                    raise PermissionError("simulated unreadable artifact")
+                return original_read_bytes(path)
+
+            with mock.patch.object(Path, "read_bytes", read_bytes):
+                with self.assertRaises(gate.StepFailed):
+                    gate.scrub_sensitive_artifacts(secret, [blocked], remove_media=False)
+
+            self.assertTrue(blocked.exists())
+
+    def test_failure_scrub_fails_when_media_cannot_be_deleted(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            screenshot = root / "failure.png"
+            gate.write_private(secret, "header.payload.signature")
+            screenshot.write_bytes(b"opaque screenshot pixels")
+            original_unlink = Path.unlink
+
+            def unlink(path, *args, **kwargs):
+                if path == screenshot:
+                    raise PermissionError("simulated deletion failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "unlink", unlink):
+                with self.assertRaises(gate.StepFailed):
+                    gate.scrub_sensitive_artifacts(secret, [screenshot], remove_media=True)
+
+            self.assertTrue(screenshot.exists())
+
+    def test_failure_scrub_deletes_media_before_attempting_to_read_it(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            screenshot = root / "failure.png"
+            gate.write_private(secret, "header.payload.signature")
+            screenshot.write_bytes(b"opaque screenshot pixels")
+            original_read_bytes = Path.read_bytes
+
+            def read_bytes(path):
+                if path == screenshot:
+                    raise PermissionError("media must be deleted before reading")
+                return original_read_bytes(path)
+
+            with mock.patch.object(Path, "read_bytes", read_bytes):
+                gate.scrub_sensitive_artifacts(secret, [screenshot], remove_media=True)
+
+            self.assertFalse(screenshot.exists())
+
+    def test_runner_scans_only_its_private_results_directory(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = root / "app"
+            shared = app / "test-results"
+            private = root / "private-results"
+            shared.mkdir(parents=True)
+            private.mkdir()
+            jwt = root / "owner.jwt"
+            result = root / "result.json"
+            token = "header.payload.parallel-isolation-signature"
+            jwt.write_text(token, encoding="utf-8")
+            shared_leak = shared / "other-run.txt"
+            private_leak = private / "this-run.txt"
+            shared_leak.write_text(token, encoding="utf-8")
+            private_leak.write_text(token, encoding="utf-8")
+            script = r'''
+source "$RUNNER"
+ADMIN_WEB_DIR="$APP"
+ADMIN_WEB_JWT_FILE="$JWT"
+ADMIN_WEB_RESULT_FILE="$RESULT"
+ADMIN_WEB_TEST_RESULTS_DIR="$PRIVATE_RESULTS"
+sanitize_test_artifacts false
+'''
+            completed = run_bash(script, {
+                "RUNNER": str(runner),
+                "APP": str(app),
+                "JWT": str(jwt),
+                "RESULT": str(result),
+                "PRIVATE_RESULTS": str(private),
+            })
+
+            self.assertNotEqual(0, completed.returncode)
+            self.assertFalse(private_leak.exists())
+            self.assertTrue(shared_leak.exists())
+            self.assertNotIn(token, completed.stdout + completed.stderr)
+
     def test_keep_mode_still_removes_private_work_directory(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
         with tempfile.TemporaryDirectory() as directory:
@@ -311,12 +412,14 @@ test ! -e "$PRIVATE_DIR"
             trace = Path(directory, "trace")
             jwt = Path(directory, "owner.jwt")
             result = Path(directory, "result.json")
+            test_results = Path(directory, "test-results")
             app = Path(directory, "app")
             app.mkdir()
             script = """
 source "$RUNNER"
 ADMIN_WEB_JWT_FILE="$JWT"
 ADMIN_WEB_RESULT_FILE="$RESULT"
+ADMIN_WEB_TEST_RESULTS_DIR="$TEST_RESULTS"
 ADMIN_WEB_DIR="$APP"
 issue_browser_token() { echo issue >>"$TRACE"; printf token >"$JWT"; chmod 600 "$JWT"; }
 run_playwright() { echo playwright >>"$TRACE"; printf '{}' >"$RESULT"; }
@@ -328,6 +431,7 @@ run_browser_tests
                 "TRACE": str(trace),
                 "JWT": str(jwt),
                 "RESULT": str(result),
+                "TEST_RESULTS": str(test_results),
                 "APP": str(app),
             })
 
@@ -397,7 +501,7 @@ main --fresh
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             app = root / "app"
-            results = app / "test-results"
+            results = root / "private-results"
             results.mkdir(parents=True)
             jwt = root / "owner.jwt"
             result = root / "result.json"
@@ -407,11 +511,12 @@ source "$RUNNER"
 ADMIN_WEB_DIR="$APP"
 ADMIN_WEB_JWT_FILE="$JWT"
 ADMIN_WEB_RESULT_FILE="$RESULT"
+ADMIN_WEB_TEST_RESULTS_DIR="$PRIVATE_RESULTS"
 issue_browser_token() { printf '%s' "$TOKEN" >"$JWT"; chmod 600 "$JWT"; }
 run_playwright() {
   printf '%s' "$TOKEN" >"$RESULT"
-  printf '%s' "$TOKEN" >"$APP/test-results/leak.txt"
-  printf 'opaque screenshot pixels' >"$APP/test-results/failure.png"
+  printf '%s' "$TOKEN" >"$PRIVATE_RESULTS/leak.txt"
+  printf 'opaque screenshot pixels' >"$PRIVATE_RESULTS/failure.png"
   return 1
 }
 run_browser_tests
@@ -421,6 +526,7 @@ run_browser_tests
                 "APP": str(app),
                 "JWT": str(jwt),
                 "RESULT": str(result),
+                "PRIVATE_RESULTS": str(results),
                 "TOKEN": token,
             })
 

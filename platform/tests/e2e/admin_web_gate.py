@@ -143,12 +143,18 @@ def scrub_sensitive_artifacts(secret_file: Path, paths: List[Path], remove_media
         for candidate in candidates:
             if not candidate.is_file() or candidate.resolve() == secret_path:
                 continue
+            remove_for_failure = remove_media and candidate.suffix.lower() in SENSITIVE_MEDIA_SUFFIXES
+            if remove_for_failure:
+                try:
+                    candidate.unlink()
+                except OSError as error:
+                    raise StepFailed("sensitive test artifact could not be removed") from error
+                continue
             try:
                 contains_secret = secret in candidate.read_bytes()
-            except OSError:
-                continue
-            remove_for_failure = remove_media and candidate.suffix.lower() in SENSITIVE_MEDIA_SUFFIXES
-            if contains_secret or remove_for_failure:
+            except OSError as error:
+                raise StepFailed("test artifact could not be read safely") from error
+            if contains_secret:
                 try:
                     candidate.unlink()
                 except OSError as error:
