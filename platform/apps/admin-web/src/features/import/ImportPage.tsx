@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileSearch, Import } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -20,9 +20,20 @@ import './import.css';
 interface ImportPageProps {
   api: ApiClient;
   surveyId: string;
+  tenantId: string;
 }
 
-export function ImportPage({ api, surveyId }: ImportPageProps) {
+interface PreviewRequest {
+  identity: string;
+  revision: number;
+  text: string;
+}
+
+export function ImportPage(props: ImportPageProps) {
+  return <ImportPageInstance key={`${props.tenantId}:${props.surveyId}`} {...props} />;
+}
+
+function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [text, setText] = useState('');
@@ -30,12 +41,14 @@ export function ImportPage({ api, surveyId }: ImportPageProps) {
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [groupUuid, setGroupUuid] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
+  const sourceRevisionRef = useRef(0);
+  const identity = `${tenantId}:${surveyId}`;
   const draftQuery = useQuery({
-    queryKey: ['survey-draft', surveyId],
+    queryKey: ['survey-draft', tenantId, surveyId],
     queryFn: ({ signal }) => getSurveyDraft(api, surveyId, signal),
   });
   const capabilitiesQuery = useQuery({
-    queryKey: ['resource-capabilities', surveyId],
+    queryKey: ['resource-capabilities', tenantId, surveyId],
     queryFn: ({ signal }) => getResourceCapabilities(api, surveyId, signal),
   });
   const definition = useMemo(() => {
@@ -49,13 +62,17 @@ export function ImportPage({ api, surveyId }: ImportPageProps) {
   const canEdit = capabilitiesQuery.data?.canEdit === true;
 
   const previewMutation = useMutation({
-    mutationFn: () => previewSurveyImport(api, surveyId, text),
-    onSuccess: (result) => {
+    mutationFn: (request: PreviewRequest) => previewSurveyImport(api, surveyId, request.text),
+    onSuccess: (result, request) => {
+      if (request.identity !== identity || request.revision !== sourceRevisionRef.current) return;
       setPreview(result);
       setSelected(new Set(result.questions.filter((question) => question.importable).map((question) => question.index)));
       setActionError(null);
     },
-    onError: (error) => setActionError(messageFor(error, '预览失败，请稍后重试')),
+    onError: (error, request) => {
+      if (request.identity !== identity || request.revision !== sourceRevisionRef.current) return;
+      setActionError(messageFor(error, '预览失败，请稍后重试'));
+    },
   });
 
   const importMutation = useMutation({
@@ -69,11 +86,13 @@ export function ImportPage({ api, surveyId }: ImportPageProps) {
       });
     },
     onSuccess: async (updatedDraft) => {
+      queryClient.setQueryData(['survey-draft', tenantId, surveyId], updatedDraft);
+      // Task 4 still consumes this legacy key; keep the post-import navigation lossless.
       queryClient.setQueryData(['survey-draft', surveyId], updatedDraft);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['survey', surveyId], exact: true }),
-        queryClient.invalidateQueries({ queryKey: ['survey', surveyId, 'approvals'], exact: true }),
-        queryClient.invalidateQueries({ queryKey: ['survey', surveyId, 'versions'], exact: true }),
+        queryClient.invalidateQueries({ queryKey: ['survey', tenantId, surveyId], exact: true }),
+        queryClient.invalidateQueries({ queryKey: ['survey', tenantId, surveyId, 'approvals'], exact: true }),
+        queryClient.invalidateQueries({ queryKey: ['survey', tenantId, surveyId, 'versions'], exact: true }),
       ]);
       navigate(`/surveys/${surveyId}/edit`, { replace: true });
     },
@@ -115,16 +134,22 @@ export function ImportPage({ api, surveyId }: ImportPageProps) {
           value={text}
           disabled={!canEdit || importMutation.isPending}
           onChange={(event) => {
+            sourceRevisionRef.current += 1;
             setText(event.target.value);
             setPreview(null);
             setSelected(new Set());
             setActionError(null);
+            previewMutation.reset();
           }}
         />
         <button
           type="button"
           disabled={!canEdit || !text.trim() || previewMutation.isPending || importMutation.isPending}
-          onClick={() => previewMutation.mutate()}
+          onClick={() => previewMutation.mutate({
+            identity,
+            revision: sourceRevisionRef.current,
+            text,
+          })}
         >
           <FileSearch aria-hidden="true" />
           {previewMutation.isPending ? '正在解析' : '预览导入'}
@@ -187,7 +212,13 @@ export function ImportRoutePage() {
   const { api, session } = useAuth();
   const surveyId = z.string().uuid().safeParse(useParams().surveyId);
   if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
-  return <ImportPage api={api} surveyId={surveyId.data} />;
+  return (
+    <ImportPage
+      api={api}
+      surveyId={surveyId.data}
+      tenantId={session.me.tenantId}
+    />
+  );
 }
 
 function messageFor(error: unknown, fallback: string) {

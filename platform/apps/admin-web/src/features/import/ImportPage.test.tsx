@@ -1,12 +1,23 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
+import {
+  createMemoryRouter,
+  MemoryRouter,
+  Route,
+  RouterProvider,
+  Routes,
+  useParams,
+} from 'react-router-dom';
 import { describe, expect, test } from 'vitest';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
 import { ImportPage } from './ImportPage';
 
 const surveyId = '11111111-1111-4111-8111-111111111111';
+const surveyBId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const tenantA = 'tenant-a';
+const tenantB = 'tenant-b';
 const groupOne = '22222222-2222-4222-8222-222222222222';
 const groupTwo = '33333333-3333-4333-8333-333333333333';
 const sourceText = '1. 工作满意吗？[单选]\nA. 满意\nB. 不满意\n\n2. 请说明原因[填空]';
@@ -86,7 +97,7 @@ function standardApi(overrides: Partial<Record<string, RequestHandler>> = {}) {
   });
 }
 
-function renderImport(api: ApiClient) {
+function renderImport(api: ApiClient, tenantId = tenantA) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -96,7 +107,10 @@ function renderImport(api: ApiClient) {
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[`/surveys/${surveyId}/import`]}>
           <Routes>
-            <Route path="/surveys/:surveyId/import" element={<ImportPage api={api} surveyId={surveyId} />} />
+            <Route
+              path="/surveys/:surveyId/import"
+              element={<ImportPage api={api} surveyId={surveyId} tenantId={tenantId} />}
+            />
             <Route path="/surveys/:surveyId/edit" element={<p>已返回编辑器</p>} />
           </Routes>
         </MemoryRouter>
@@ -112,6 +126,23 @@ async function enterAndPreview(api: ApiClient) {
   fireEvent.click(screen.getByRole('button', { name: '预览导入' }));
   await screen.findByText('工作满意吗？');
   return input;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function previewWithText(text: string) {
+  return {
+    ...preview,
+    questions: preview.questions.map((question, index) =>
+      index === 0 ? { ...question, text } : question,
+    ),
+  };
 }
 
 describe('ImportPage', () => {
@@ -148,6 +179,86 @@ describe('ImportPage', () => {
     expect(screen.queryByRole('button', { name: /确认导入/ })).not.toBeInTheDocument();
   });
 
+  test('ignoresADeferredPreviewResponseAfterTheSourceRevisionChanges', async () => {
+    const first = deferred<typeof preview>();
+    let previewReads = 0;
+    const api = standardApi({
+      [`POST /v1/surveys/${surveyId}/import/preview`]: () => {
+        previewReads += 1;
+        return previewReads === 1 ? first.promise : previewWithText('B 的预览题目');
+      },
+    });
+    renderImport(api);
+    const input = await screen.findByLabelText('待导入文本');
+    fireEvent.change(input, { target: { value: 'A 原文' } });
+    fireEvent.click(screen.getByRole('button', { name: '预览导入' }));
+    await waitFor(() => expect(previewReads).toBe(1));
+
+    fireEvent.change(input, { target: { value: 'B 原文' } });
+    await act(async () => first.resolve(previewWithText('A 的预览题目')));
+
+    expect(screen.queryByText('A 的预览题目')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /确认导入/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '预览导入' }));
+    expect(await screen.findByText('B 的预览题目')).toBeInTheDocument();
+  });
+
+  test('isolatesLocalStateAndDeferredResponsesWhenTheSurveyRouteChanges', async () => {
+    const delayedA = deferred<typeof preview>();
+    let previewReads = 0;
+    const api = apiFrom((request) => {
+      const key = `${request.method ?? 'GET'} ${request.path}`;
+      if (key === `GET /v1/surveys/${surveyId}/draft`) return draft;
+      if (key === `GET /v1/surveys/${surveyBId}/draft`) {
+        return { ...draft, surveyId: surveyBId, version: 3 };
+      }
+      if (key.startsWith('GET /v1/resource-capabilities?resourceId=')) return capabilities;
+      if (key === `POST /v1/surveys/${surveyId}/import/preview`) {
+        previewReads += 1;
+        return previewReads === 1 ? preview : delayedA.promise;
+      }
+      if (key === `POST /v1/surveys/${surveyBId}/import/preview`) {
+        return previewWithText('B 路由预览');
+      }
+      throw new Error(`Unhandled request: ${key}`);
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    function RouteHarness() {
+      const currentSurveyId = useParams().surveyId ?? '';
+      return <ImportPage api={api} surveyId={currentSurveyId} tenantId={tenantA} />;
+    }
+    const router = createMemoryRouter(
+      [{ path: '/surveys/:surveyId/import', element: <RouteHarness /> }],
+      { initialEntries: [`/surveys/${surveyId}/import`] },
+    );
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    const input = await screen.findByLabelText('待导入文本');
+    fireEvent.change(input, { target: { value: sourceText } });
+    fireEvent.click(screen.getByRole('button', { name: '预览导入' }));
+    await screen.findByText('工作满意吗？');
+    fireEvent.click(screen.getByRole('checkbox', { name: /Q2 请说明原因/ }));
+    fireEvent.change(screen.getByLabelText('导入到题组'), { target: { value: groupTwo } });
+    fireEvent.click(screen.getByRole('button', { name: '预览导入' }));
+    await waitFor(() => expect(previewReads).toBe(2));
+
+    await act(async () => router.navigate(`/surveys/${surveyBId}/import`));
+    expect(await screen.findByText('当前草稿版本 3')).toBeInTheDocument();
+    expect(screen.getByLabelText('待导入文本')).toHaveValue('');
+    expect(screen.queryByRole('heading', { name: '解析结果' })).not.toBeInTheDocument();
+    await act(async () => delayedA.resolve(previewWithText('A 延迟预览')));
+    expect(screen.queryByText('A 延迟预览')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /确认导入/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('待导入文本'), { target: { value: 'B 原文' } });
+    fireEvent.click(screen.getByRole('button', { name: '预览导入' }));
+    expect(await screen.findByText('B 路由预览')).toBeInTheDocument();
+    expect(screen.getByLabelText('导入到题组')).toHaveValue('');
+    expect(screen.getByRole('checkbox', { name: /Q2 请说明原因/ })).toBeChecked();
+  });
+
   test('importsOnlyTheCheckedOrdinalsIntoTheChosenGroupAndRefreshesTheDraft', async () => {
     let importRequest: ApiRequest<unknown> | undefined;
     const importedDraft = {
@@ -169,7 +280,7 @@ describe('ImportPage', () => {
       },
     });
     const rendered = renderImport(api);
-    rendered.queryClient.setQueryData(['survey', surveyId], { id: surveyId, draftVersion: 7 });
+    rendered.queryClient.setQueryData(['survey', tenantA, surveyId], { id: surveyId, draftVersion: 7 });
     const input = await screen.findByLabelText('待导入文本');
     fireEvent.change(input, { target: { value: sourceText } });
     fireEvent.click(screen.getByRole('button', { name: '预览导入' }));
@@ -184,8 +295,9 @@ describe('ImportPage', () => {
       method: 'POST',
       body: { expectedVersion: 7, text: sourceText, accept: [0], groupUuid: groupTwo },
     });
+    expect(rendered.queryClient.getQueryData(['survey-draft', tenantA, surveyId])).toEqual(importedDraft);
     expect(rendered.queryClient.getQueryData(['survey-draft', surveyId])).toEqual(importedDraft);
-    expect(rendered.queryClient.getQueryState(['survey', surveyId])?.isInvalidated).toBe(true);
+    expect(rendered.queryClient.getQueryState(['survey', tenantA, surveyId])?.isInvalidated).toBe(true);
   });
 
   test('preservesTheLocalTextAndCheckedQuestionsWhenImportConflicts', async () => {
@@ -226,5 +338,37 @@ describe('ImportPage', () => {
     expect(await screen.findByText('第 5 行')).toBeInTheDocument();
     expect(screen.getByText('此行内容无法识别')).toBeInTheDocument();
     expect(previewReads).toBe(2);
+  });
+
+  test('doesNotReuseTheSameSurveyCacheAcrossTenants', async () => {
+    const apiA = standardApi();
+    const apiB = standardApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ ...draft, version: 12 }),
+    });
+    function TenantHarness() {
+      const [tenant, setTenant] = useState(tenantA);
+      const currentApi = tenant === tenantA ? apiA : apiB;
+      return (
+        <>
+          <button type="button" onClick={() => setTenant(tenantB)}>切换租户</button>
+          <ImportPage api={currentApi} surveyId={surveyId} tenantId={tenant} />
+        </>
+      );
+    }
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter><TenantHarness /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText('当前草稿版本 7')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('待导入文本'), { target: { value: '租户 A 原文' } });
+    fireEvent.click(screen.getByRole('button', { name: '切换租户' }));
+
+    expect(await screen.findByText('当前草稿版本 12')).toBeInTheDocument();
+    expect(screen.getByLabelText('待导入文本')).toHaveValue('');
+    expect(queryClient.getQueryData(['survey-draft', tenantA, surveyId])).toEqual(draft);
+    expect(queryClient.getQueryData(['survey-draft', tenantB, surveyId])).toEqual({ ...draft, version: 12 });
   });
 });

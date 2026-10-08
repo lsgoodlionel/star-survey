@@ -51,7 +51,7 @@
   border-left: 1px solid #79919a;
 }
 
-.preview-segments button[aria-selected='true'] {
+.preview-segments button[aria-pressed='true'] {
   color: #fff;
   background: #166534;
 }
