@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import type { ApiClient } from '../../shared/api/http';
 import { getPublishedVersion, versionQueryKey } from '../../shared/api/approvals';
+import { parsePositiveIntegerParam, parseSurveyIdParam } from './routeParams';
 import './publish.css';
 
 interface VersionDetailPageProps {
@@ -57,9 +58,10 @@ export function VersionDetailPage({ api, surveyId, version }: VersionDetailPageP
 
 export function VersionDetailRoutePage() {
   const { api } = useAuth();
-  const { surveyId, version } = useParams();
-  const versionNumber = Number(version);
-  if (!surveyId || !Number.isInteger(versionNumber) || versionNumber <= 0) return <p role="alert">版本标识无效</p>;
+  const params = useParams();
+  const surveyId = parseSurveyIdParam(params.surveyId);
+  const versionNumber = parsePositiveIntegerParam(params.version);
+  if (!surveyId || versionNumber == null) return <p role="alert">版本标识无效</p>;
   return <VersionDetailPage api={api} surveyId={surveyId} version={versionNumber} />;
 }
 

@@ -37,7 +37,12 @@ export function PublishStatus({ survey, awaitingPublishResult = false }: Publish
 
   return (
     <section className="publish-status" aria-labelledby="publish-status-title">
-      <div className={`publish-status__summary publish-status__summary--${status}`}>
+      <div
+        aria-atomic="true"
+        aria-live="polite"
+        className={`publish-status__summary publish-status__summary--${status}`}
+        role="status"
+      >
         <Icon aria-hidden="true" size={20} />
         <div>
           <h2 id="publish-status-title">{statusLabels[status]}</h2>
@@ -62,27 +67,49 @@ export function PublishStatus({ survey, awaitingPublishResult = false }: Publish
       {attempt?.failedStage ? (
         <div className="publish-failure">
           <h3>{safeStageLabel(attempt.failedStage)}</h3>
-          {attempt.failures.length > 0 ? (
-            <ul>{attempt.failures.map((failure, index) => <li key={index}>{sanitizeFailure(failure)}</li>)}</ul>
-          ) : <p>发布未完成，请稍后重试或联系管理员。</p>}
+          <FailureDetails
+            failures={attempt.failures}
+            gatewayStatus={attempt.gatewayStatus}
+            stage={attempt.failedStage}
+          />
         </div>
       ) : null}
     </section>
   );
 }
 
-export function sanitizeFailure(value: string) {
-  const unsafe = /authorization|bearer\s|password|secret|token|exception|stack\s*trace|\bat\s+[\w.$]+\s*\(/i;
-  if (unsafe.test(value)) return '详细错误已隐藏，请联系管理员。';
-  const firstLine = Array.from(value.split(/\r?\n/, 1)[0] ?? '')
-    .filter((character) => {
-      const code = character.charCodeAt(0);
-      return code >= 32 && code !== 127;
-    })
-    .join('')
-    .trim();
-  if (!firstLine) return '发布服务返回了空错误详情。';
-  return firstLine.length > 180 ? `${firstLine.slice(0, 177)}...` : firstLine;
+function FailureDetails({ failures, gatewayStatus, stage }: {
+  failures: string[];
+  gatewayStatus: number | null;
+  stage: string;
+}) {
+  const messages = gatewayStatus === 422 && (stage === 'validate' || stage === 'validation')
+    ? failures.map(validationMessage).filter((message): message is string => message != null)
+    : [];
+  if (messages.length === 0) return <p>发布失败，详细信息已隐藏。</p>;
+  return <ul>{messages.map((message, index) => <li key={`${message}-${index}`}>{message}</li>)}</ul>;
+}
+
+const validationMessages: Record<string, string> = {
+  E_ANSWER_CODE_DUPLICATE: '选项代码重复',
+  E_ANSWER_CODE_INVALID: '选项代码格式不正确',
+  E_DUPLICATE_UUID: '题目或题组标识重复',
+  E_EMPTY_GROUP: '题组内没有题目',
+  E_EMPTY_SURVEY: '问卷内没有题目',
+  E_MISSING_ANSWERS: '题目缺少选项',
+  E_MISSING_SUBQUESTIONS: '题目缺少子题',
+  E_QUESTION_CODE_DUPLICATE: '题目代码重复',
+  E_QUESTION_CODE_INVALID: '题目代码格式不正确',
+  E_QUESTION_CODE_TOO_LONG: '题目代码过长',
+  E_UNSUPPORTED_TYPE: '包含不支持的题型',
+};
+
+function validationMessage(value: string) {
+  const match = /^([A-Z][A-Z0-9_]*)(?: ([A-Z][A-Z0-9_]{0,31}))?$/.exec(value);
+  if (!match) return null;
+  const message = validationMessages[match[1]];
+  if (!message) return null;
+  return match[2] ? `${message}（${match[2]}）` : message;
 }
 
 function safeStageLabel(stage: string) {
