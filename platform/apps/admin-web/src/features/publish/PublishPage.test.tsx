@@ -2,10 +2,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '@testing-library/react';
 import { useState } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
-import { versionQueryKey } from '../../shared/api/approvals';
+import { publishSurvey, versionQueryKey } from '../../shared/api/approvals';
 import { renderWithQuery } from '../../test/render';
 import { createAppRoutes } from '../../app/router';
 import { PublishPage } from './PublishPage';
@@ -105,6 +106,27 @@ afterEach(() => {
 });
 
 describe('PublishPage', () => {
+  test('usesAnEngineSafeTimeoutForThePublishRequest', async () => {
+    const request = vi.fn().mockResolvedValue(undefined);
+
+    await publishSurvey({ request }, surveyId);
+
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 180_000 }));
+  });
+
+  test('linksEveryPublishedVersionToItsImmutableDetailPage', async () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <PublishPage actorId="author-1" api={standardApi()} surveyId={surveyId} tenantId="tenant-a" />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('link', { name: '查看版本 2' })).toHaveAttribute(
+      'href',
+      `/surveys/${surveyId}/versions/2`,
+    );
+  });
+
   test('doesNotConsumeFreshPublishDataCachedForAnotherTenant', async () => {
     const tenantApi = (title: string) => standardApi({
       [`GET /v1/surveys/${surveyId}`]: () => ({ ...baseSurvey, title }),

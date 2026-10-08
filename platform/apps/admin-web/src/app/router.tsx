@@ -21,7 +21,8 @@ const PreviewRoutePage = lazy(() =>
   import('../features/preview/PreviewPage').then((module) => ({ default: module.PreviewRoutePage })),
 );
 
-const DevelopmentTokenPage = import.meta.env.DEV
+const testTokenEnabled = import.meta.env.DEV || import.meta.env.VITE_E2E === 'true';
+const DevelopmentTokenPage = testTokenEnabled
   ? lazy(() =>
       import('../features/auth/DevTokenPage').then((module) => ({ default: module.DevTokenPage })),
     )
@@ -29,7 +30,7 @@ const DevelopmentTokenPage = import.meta.env.DEV
 
 function ProtectedRoute() {
   const { session } = useAuth();
-  if (!session) return <Navigate to={import.meta.env.DEV ? '/dev/token' : '/login'} replace />;
+  if (!session) return <Navigate to={testTokenEnabled ? '/dev/token' : '/login'} replace />;
   return <Outlet />;
 }
 
@@ -50,14 +51,14 @@ function NotFoundPage() {
   );
 }
 
-export function createAppRoutes(isDevelopment: boolean): RouteObject[] {
+export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObject[] {
   const developmentRoutes: RouteObject[] = [];
-  if (isDevelopment && DevelopmentTokenPage) {
+  if ((isDevelopment || isE2E) && DevelopmentTokenPage) {
     developmentRoutes.push({
       path: '/dev/token',
       element: (
         <Suspense fallback={<p>正在加载</p>}>
-          <DevelopmentTokenPage />
+          <DevelopmentTokenPage mode={isE2E ? 'e2e' : 'development'} />
         </Suspense>
       ),
     });
@@ -117,5 +118,7 @@ export function createAppRoutes(isDevelopment: boolean): RouteObject[] {
 }
 
 export function createAppRouter() {
-  return createBrowserRouter(createAppRoutes(import.meta.env.DEV));
+  return createBrowserRouter(
+    createAppRoutes(import.meta.env.DEV, import.meta.env.VITE_E2E === 'true'),
+  );
 }

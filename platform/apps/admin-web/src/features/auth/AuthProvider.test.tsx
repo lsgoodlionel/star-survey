@@ -246,3 +246,11 @@ test('doesNotRenderTheDevTokenEntryInAProductionBuild', async () => {
   await waitFor(() => expect(screen.getByRole('heading', { name: '页面不存在' })).toBeInTheDocument());
   expect(screen.queryByLabelText('开发令牌')).not.toBeInTheDocument();
 });
+
+test('rendersTheMemoryOnlyTokenEntryInAnE2eBuild', async () => {
+  const router = createMemoryRouter(createAppRoutes(false, true), { initialEntries: ['/dev/token'] });
+  renderAuth(<RouterProvider router={router} />);
+
+  expect(await screen.findByRole('heading', { name: '端到端测试登录' })).toBeInTheDocument();
+  expect(screen.getByLabelText('测试令牌')).toBeInTheDocument();
+});

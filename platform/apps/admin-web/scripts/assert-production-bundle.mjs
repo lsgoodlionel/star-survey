@@ -3,7 +3,7 @@ import { extname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
 
-const forbidden = ['/dev/token', '开发令牌', '开发环境登录'];
+const forbidden = ['/dev/token', '开发令牌', '开发环境登录', '测试令牌', '端到端测试登录'];
 const textExtensions = new Set(['.css', '.html', '.js', '.json', '.map', '.svg', '.txt']);
 
 async function listFiles(directory) {

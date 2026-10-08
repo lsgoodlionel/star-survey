@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Send, ShieldCheck, Undo2, XCircle } from 'lucide-react';
-import { useParams } from 'react-router-dom';
+import { Link, useInRouterContext, useParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
@@ -185,8 +185,32 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
         <h2 id="approval-history-title">审批记录</h2>
         <ApprovalTimeline approvals={approvals.data} />
       </section>
+
+      <section className="published-versions" aria-labelledby="published-versions-title">
+        <h2 id="published-versions-title">已发布版本</h2>
+        {versions.data?.length ? (
+          <ol>
+            {versions.data.map((version) => (
+              <li key={version.version}>
+                <div>
+                  <strong>版本 {version.version}</strong>
+                  <span>{version.live ? '当前在线' : '历史版本'}</span>
+                </div>
+                <VersionLink surveyId={surveyId} version={version.version} />
+              </li>
+            ))}
+          </ol>
+        ) : <p className="publish-empty">尚无已发布版本</p>}
+      </section>
     </main>
   );
+}
+
+function VersionLink({ surveyId, version }: { surveyId: string; version: number }) {
+  const inRouter = useInRouterContext();
+  const href = `/surveys/${surveyId}/versions/${version}`;
+  if (inRouter) return <Link to={href}>查看版本 {version}</Link>;
+  return <a href={href}>查看版本 {version}</a>;
 }
 
 export function PublishRoutePage() {

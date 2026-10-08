@@ -7,7 +7,7 @@ interface DevTokenForm {
   token: string;
 }
 
-export function DevTokenPage() {
+export function DevTokenPage({ mode = 'development' }: { mode?: 'development' | 'e2e' }) {
   const { authenticateWithToken } = useAuth();
   const navigate = useNavigate();
   const { formState, handleSubmit, register, setError } = useForm<DevTokenForm>();
@@ -24,8 +24,8 @@ export function DevTokenPage() {
   return (
     <main className="auth-page">
       <form onSubmit={(event) => void submit(event)}>
-        <h1>开发环境登录</h1>
-        <label htmlFor="dev-token">开发令牌</label>
+        <h1>{mode === 'e2e' ? '端到端测试登录' : '开发环境登录'}</h1>
+        <label htmlFor="dev-token">{mode === 'e2e' ? '测试令牌' : '开发令牌'}</label>
         <textarea
           id="dev-token"
           aria-describedby={formState.errors.token ? 'dev-token-error' : undefined}
