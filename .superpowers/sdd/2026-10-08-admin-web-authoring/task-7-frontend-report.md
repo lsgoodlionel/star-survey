@@ -18,7 +18,7 @@
 - Added Node 22 multi-stage Docker image and nginx runtime. Runtime receives only `dist`, serves SPA fallback and cached static assets, emits security headers, and proxies only `/v1` plus `/actuator/health` to `PLATFORM_UPSTREAM`.
 - Added an E2E-only in-memory token route gated by `VITE_E2E=true`. Standard production output rejects all development/E2E token markers; E2E output requires them.
 - Set publish request timeout to 180 seconds and added UI links for each immutable published version.
-- Added Playwright desktop/mobile projects with trace and video disabled. Failure screenshots remain enabled. Recorded network evidence contains only method, URL, and status; no headers, bodies, or token are written.
+- Added Playwright desktop/mobile projects with trace, video, and automatic screenshots disabled. A failed test first clears and hides sensitive controls, then takes one manual screenshot; if the page cannot be sanitized, no screenshot is written. Recorded network evidence contains only method, URL, and status; no headers, bodies, or token are written.
 - Desktop journey uses business pages for login, project/folder/survey creation, editing, import, preview, approval, publishing, and UI navigation into version details. Mobile creates its own survey through the UI and checks tabs, focus outline, primary action reachability, and horizontal overflow.
 
 ## Verification
@@ -35,3 +35,13 @@
 ## Remaining integration concern
 
 - The real browser journey is pending the stack slice and Chromium availability. The controller must install the pinned Playwright Chromium revision and run the shared-stack command; this slice intentionally did not download a browser or alter stack-owned files.
+
+## Review fix round 1
+
+- RED: `browserGateHardening.test.ts` produced four expected failures for automatic screenshots, a visible token control, the broad `/v1` nginx prefix, and non-interactive mobile tab checks.
+- Screenshot hardening: Playwright automatic screenshots remain off; failure capture sanitizes before manually taking a screenshot and skips capture when sanitization cannot complete. Login always clears the token in `finally`, the UI uses a password input, URLs redact raw and encoded token forms, and result writing rejects any remaining token.
+- Proxy hardening: nginx now has separate `location = /v1` and `location ^~ /v1/` proxy blocks. `/v1evil` is handled by the SPA and cannot reach the platform upstream.
+- Mobile hardening: the test clicks all three tabs, verifies `aria-selected` and each named panel, checks the tab/panel/control/save action in the viewport with non-zero dimensions, checks center-point occlusion, uses keyboard focus, and rechecks horizontal overflow after every panel.
+- Node 22.23.2 focused contracts: 8/8 passed. Full Vitest: 12 files and 116/116 passed. Lint and typecheck passed.
+- Standard and E2E builds plus their bundle assertions passed; standard `dist` was restored last.
+- Docker image build and `nginx -t` passed. Container curl evidence: `/` 200, `/v1` 502, `/v1/probe` 502, `/v1evil` 200 with the configured security headers. The 502 responses are expected because the verification upstream was deliberately set to closed `127.0.0.1:9`.

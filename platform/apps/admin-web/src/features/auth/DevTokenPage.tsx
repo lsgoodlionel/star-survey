@@ -26,11 +26,12 @@ export function DevTokenPage({ mode = 'development' }: { mode?: 'development' | 
       <form onSubmit={(event) => void submit(event)}>
         <h1>{mode === 'e2e' ? '端到端测试登录' : '开发环境登录'}</h1>
         <label htmlFor="dev-token">{mode === 'e2e' ? '测试令牌' : '开发令牌'}</label>
-        <textarea
+        <input
           id="dev-token"
+          type="password"
+          data-sensitive="token"
           aria-describedby={formState.errors.token ? 'dev-token-error' : undefined}
           autoComplete="off"
-          rows={5}
           {...register('token', { required: '请输入开发令牌' })}
         />
         {formState.errors.token ? (

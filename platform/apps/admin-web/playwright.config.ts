@@ -14,7 +14,7 @@ export default defineConfig({
   reporter: [['line']],
   use: {
     baseURL,
-    screenshot: 'only-on-failure',
+    screenshot: 'off',
     trace: 'off',
     video: 'off',
   },

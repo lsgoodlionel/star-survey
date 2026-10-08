@@ -89,7 +89,8 @@ input:focus-visible {
   gap: 12px;
 }
 
-.auth-page textarea {
+.auth-page textarea,
+.auth-page input {
   width: 100%;
   resize: vertical;
   padding: 10px;
