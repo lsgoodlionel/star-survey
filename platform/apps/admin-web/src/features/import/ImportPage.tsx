@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileSearch, Import } from 'lucide-react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, FileSearch, Import } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { z } from 'zod';
 import { useAuth } from '../auth/AuthProvider';
 import { parseDefinition } from '../editor/model/definition';
@@ -134,7 +134,13 @@ function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
           <p>问卷编辑</p>
           <h1>批量文本导入</h1>
         </div>
-        <span>当前草稿版本 {draftQuery.data.version}</span>
+        <div className="import-header-actions">
+          <span>当前草稿版本 {draftQuery.data.version}</span>
+          <Link to={`/surveys/${surveyId}/edit`}>
+            <ArrowLeft aria-hidden="true" />
+            返回编辑
+          </Link>
+        </div>
       </header>
 
       {!canEdit ? <p role="alert">当前账号仅可查看此问卷，不能导入题目。</p> : null}

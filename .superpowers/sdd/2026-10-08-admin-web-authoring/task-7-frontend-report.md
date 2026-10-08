@@ -59,3 +59,13 @@
 - `chromium-mobile` now depends on `chromium-desktop`. Desktop alone creates and publishes the survey, writes `ADMIN_WEB_RESULT_FILE` only after all version assertions pass, and mobile reads that completed result without overwriting it.
 - Failed-test screenshot work gets at most seven additional seconds, returns immediately for a closed page, budgets sanitization at 1.5 seconds and screenshot capture at 2 seconds, and emits no screenshot when sanitization fails.
 - Node 22.23.2 verification: focused contracts 10/10, full Vitest 13 files and 121/121, lint, typecheck, standard/E2E builds and both bundle assertions passed. `playwright --list` reports exactly two projects and two scenarios.
+
+## Real-stack debugging fix round 3
+
+- Real-stack root cause: the desktop journey reached and saved the editor, then a full-page `page.goto` to the import route recreated the application and discarded the intentionally memory-only token session.
+- RED: focused tests produced five expected failures for the missing editor workflow links, missing import/preview return links, full-reload E2E navigation, mobile survey entry, and unbounded action waits. The remaining 31 focused tests passed.
+- The editor now exposes compact, accessible Lucide icon and text links for batch import, draft preview, and publishing. Import and preview expose a `返回编辑` link. These are React Router links, so the authenticated application remains mounted.
+- The desktop journey clicks the real workflow links. Import still returns to the editor after confirmation; preview explicitly returns to the editor before publishing. No business route uses `page.goto`.
+- Mobile reads the desktop result and uses same-origin History API navigation to enter that survey without reloading. All tab and editor checks continue through real UI controls.
+- Every Playwright click/fill now first requires its locator to be visible and enabled within 15 seconds. The existing 210-second publish completion budget remains unchanged.
+- Node 22.23.2 verification: focused tests 36/36, full Vitest 13 files and 126/126, lint, and typecheck passed. Standard and E2E builds plus both bundle assertions passed; the standard production bundle was restored last and excludes the token UI. With `ADMIN_WEB_BASE_URL=http://127.0.0.1:1`, `playwright --list` reports exactly the desktop and mobile scenarios. The real stack was not rerun in this slice.

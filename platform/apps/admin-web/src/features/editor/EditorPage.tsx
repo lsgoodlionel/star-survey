@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Download, RefreshCw, Save } from 'lucide-react';
-import { useBlocker, useParams, useSearchParams } from 'react-router-dom';
+import { Download, Eye, FileInput, RefreshCw, Rocket, Save } from 'lucide-react';
+import { Link, useBlocker, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
@@ -241,18 +241,34 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
           <p>问卷编辑</p>
           <h1>{surveyTitle || definition.title}</h1>
         </div>
-        <div className="survey-editor-save">
-          {!canEdit ? <span>当前账号仅可查看此问卷</span> : null}
-          {savedVersion ? <span>已保存版本 {savedVersion}</span> : null}
-          <button
-            type="button"
-            aria-label="保存草稿"
-            disabled={!canEdit || !dirty || saveMutation.isPending}
-            onClick={() => saveMutation.mutate()}
-          >
-            <Save aria-hidden="true" />
-            保存
-          </button>
+        <div className="survey-editor-actions">
+          <nav className="survey-editor-nav" aria-label="问卷工作流">
+            <Link to={`/surveys/${surveyId}/import`}>
+              <FileInput aria-hidden="true" />
+              批量导入
+            </Link>
+            <Link to={`/surveys/${surveyId}/preview`}>
+              <Eye aria-hidden="true" />
+              草稿预览
+            </Link>
+            <Link to={`/surveys/${surveyId}/publish`}>
+              <Rocket aria-hidden="true" />
+              发布管理
+            </Link>
+          </nav>
+          <div className="survey-editor-save">
+            {!canEdit ? <span>当前账号仅可查看此问卷</span> : null}
+            {savedVersion ? <span>已保存版本 {savedVersion}</span> : null}
+            <button
+              type="button"
+              aria-label="保存草稿"
+              disabled={!canEdit || !dirty || saveMutation.isPending}
+              onClick={() => saveMutation.mutate()}
+            >
+              <Save aria-hidden="true" />
+              保存
+            </button>
+          </div>
         </div>
       </header>
 

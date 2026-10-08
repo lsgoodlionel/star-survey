@@ -34,6 +34,31 @@
   font-size: 20px;
 }
 
+.import-header-actions,
+.import-header-actions a {
+  display: inline-flex;
+  align-items: center;
+}
+
+.import-header-actions {
+  gap: 14px;
+}
+
+.import-header-actions a {
+  min-height: 34px;
+  gap: 6px;
+  padding: 6px 9px;
+  color: #244b58;
+  text-decoration: none;
+  border: 1px solid #a9c1c8;
+  border-radius: 4px;
+}
+
+.import-header-actions svg {
+  width: 17px;
+  height: 17px;
+}
+
 .import-source,
 .import-preview,
 .import-error,
@@ -181,6 +206,10 @@
   .import-preview-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .import-header-actions {
+    justify-content: space-between;
   }
 
   .import-source,

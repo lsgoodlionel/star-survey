@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Monitor, Smartphone } from 'lucide-react';
-import { useParams } from 'react-router-dom';
+import { ArrowLeft, Monitor, Smartphone } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
 import { z } from 'zod';
 import { useAuth } from '../auth/AuthProvider';
 import { parseDefinition } from '../editor/model/definition';
@@ -46,23 +46,29 @@ function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
           <p>只读视图</p>
           <h1>草稿预览</h1>
         </div>
-        <div className="preview-segments" role="group" aria-label="预览设备">
-          <button
-            type="button"
-            aria-pressed={mode === 'desktop'}
-            onClick={() => setMode('desktop')}
-          >
-            <Monitor aria-hidden="true" />
-            桌面端
-          </button>
-          <button
-            type="button"
-            aria-pressed={mode === 'mobile'}
-            onClick={() => setMode('mobile')}
-          >
-            <Smartphone aria-hidden="true" />
-            移动端
-          </button>
+        <div className="preview-toolbar-actions">
+          <Link to={`/surveys/${surveyId}/edit`}>
+            <ArrowLeft aria-hidden="true" />
+            返回编辑
+          </Link>
+          <div className="preview-segments" role="group" aria-label="预览设备">
+            <button
+              type="button"
+              aria-pressed={mode === 'desktop'}
+              onClick={() => setMode('desktop')}
+            >
+              <Monitor aria-hidden="true" />
+              桌面端
+            </button>
+            <button
+              type="button"
+              aria-pressed={mode === 'mobile'}
+              onClick={() => setMode('mobile')}
+            >
+              <Smartphone aria-hidden="true" />
+              移动端
+            </button>
+          </div>
         </div>
       </header>
       <div className="preview-stage">

@@ -24,6 +24,8 @@ interface JourneyResult {
   version: number;
 }
 
+const ACTION_TIMEOUT_MS = 15_000;
+
 const importText = [
   '1. 您的性别？[单选]',
   'A. 男',
@@ -64,39 +66,41 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
   await expect(page).toHaveURL(/\/surveys\/[0-9a-f-]{36}\/edit/);
   const surveyId = surveyIdFrom(page.url());
 
-  await page.getByLabel('题目文本').fill('这是一份真实浏览器验收问卷');
-  await page.getByLabel('标题').fill(`作者工作台验收 ${suffix}`);
+  await fillAction(page.getByLabel('题目文本'), '这是一份真实浏览器验收问卷');
+  await fillAction(page.getByLabel('标题'), `作者工作台验收 ${suffix}`);
   const saveResponse = page.waitForResponse((response) =>
     response.url().includes(`/v1/surveys/${surveyId}/draft`) && response.request().method() === 'PUT',
   );
-  await page.getByRole('button', { name: '保存草稿' }).click();
+  await clickAction(page.getByRole('button', { name: '保存草稿' }));
   expect((await saveResponse).status()).toBe(200);
   await expect(page.getByText(/已保存版本 \d+/)).toBeVisible();
 
-  await page.goto(`/surveys/${surveyId}/import`);
-  await page.getByLabel('待导入文本').fill(importText);
-  await page.getByRole('button', { name: '预览导入' }).click();
+  await clickAction(page.getByRole('link', { name: '批量导入' }));
+  await fillAction(page.getByLabel('待导入文本'), importText);
+  await clickAction(page.getByRole('button', { name: '预览导入' }));
   await expect(page.getByText('第 4 行')).toBeVisible();
   await expect(page.getByText('您的性别？')).toBeVisible();
-  await page.getByRole('button', { name: '确认导入 1 道题' }).click();
+  await clickAction(page.getByRole('button', { name: '确认导入 1 道题' }));
   await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
 
-  await page.goto(`/surveys/${surveyId}/preview`);
+  await clickAction(page.getByRole('link', { name: '草稿预览' }));
   await expect(page.getByRole('heading', { name: '草稿预览' })).toBeVisible();
   await expect(page.getByText('您的性别？')).toBeVisible();
+  await clickAction(page.getByRole('link', { name: '返回编辑' }));
+  await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
 
-  await page.goto(`/surveys/${surveyId}/publish`);
-  await page.getByRole('button', { name: '提交审批' }).click();
+  await clickAction(page.getByRole('link', { name: '发布管理' }));
+  await clickAction(page.getByRole('button', { name: '提交审批' }));
   await expect(page.getByRole('button', { name: '批准申请' })).toBeVisible();
-  await page.getByRole('button', { name: '批准申请' }).click();
+  await clickAction(page.getByRole('button', { name: '批准申请' }));
   await expect(page.getByRole('button', { name: '发布问卷' })).toBeVisible();
-  await page.getByRole('button', { name: '发布问卷' }).click();
+  await clickAction(page.getByRole('button', { name: '发布问卷' }));
   await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
 
   const versionLink = page.getByRole('link', { name: /查看版本 \d+/ }).first();
   const version = Number((await versionLink.textContent())?.match(/\d+/)?.[0]);
   expect(version).toBeGreaterThan(0);
-  await versionLink.click();
+  await clickAction(versionLink);
   await expect(page.getByRole('heading', { name: `已发布版本 ${version}` })).toBeVisible();
   await expect(page.getByText('当前在线')).toBeVisible();
   await expect(page.getByText('字段映射')).toBeVisible();
@@ -109,7 +113,8 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
   const token = await readToken();
   await login(page, token, metadata);
   const result = await readResult();
-  await page.goto(`/surveys/${result.surveyId}/edit`);
+  await navigateWithinApp(page, `/surveys/${result.surveyId}/edit`);
+  await expect(page).toHaveURL(new RegExp(`/surveys/${result.surveyId}/edit$`));
 
   const tabs = page.getByRole('tablist', { name: '编辑区域' });
   await expect(tabs).toBeVisible();
@@ -120,7 +125,7 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
   ];
   for (const { name, control } of panels) {
     const tab = page.getByRole('tab', { name });
-    await tab.click();
+    await clickAction(tab);
     await expect(tab).toHaveAttribute('aria-selected', 'true');
     const panel = page.getByRole('tabpanel', { name });
     await expect(panel).toBeVisible();
@@ -136,10 +141,10 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
 });
 
 async function createResource(page: Page, trigger: string, submit: string, value: string) {
-  await page.getByRole('button', { name: trigger }).click();
+  await clickAction(page.getByRole('button', { name: trigger }));
   const dialog = page.getByRole('dialog', { name: trigger });
-  await dialog.getByRole('textbox').fill(value);
-  await dialog.getByRole('button', { name: submit }).click();
+  await fillAction(dialog.getByRole('textbox'), value);
+  await clickAction(dialog.getByRole('button', { name: submit }));
   await expect(dialog).toBeHidden();
 }
 
@@ -150,8 +155,8 @@ async function login(page: Page, token: string, metadata: TestMetadata) {
     const meResponsePromise = page.waitForResponse((response) =>
       response.url().includes('/v1/me') && response.request().method() === 'GET',
     );
-    await tokenInput.fill(token);
-    await page.getByRole('button', { name: '登录' }).click();
+    await fillAction(tokenInput, token);
+    await clickAction(page.getByRole('button', { name: '登录' }));
     const meResponse = await meResponsePromise;
     expect(meResponse.status()).toBe(200);
     const payload: unknown = await meResponse.json();
@@ -165,6 +170,28 @@ async function login(page: Page, token: string, metadata: TestMetadata) {
       await withTimeout(redactSensitiveInputs(page), 1_500).catch(() => undefined);
     }
   }
+}
+
+async function navigateWithinApp(page: Page, path: string) {
+  await page.evaluate((path) => {
+    window.history.pushState({}, '', path);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, path);
+}
+
+async function expectActionable(locator: Locator) {
+  await expect(locator).toBeVisible({ timeout: ACTION_TIMEOUT_MS });
+  await expect(locator).toBeEnabled({ timeout: ACTION_TIMEOUT_MS });
+}
+
+async function clickAction(locator: Locator) {
+  await expectActionable(locator);
+  await locator.click();
+}
+
+async function fillAction(locator: Locator, value: string) {
+  await expectActionable(locator);
+  await locator.fill(value);
 }
 
 async function readToken() {

@@ -98,6 +98,24 @@ afterEach(() => {
 });
 
 describe('EditorPage', () => {
+  test('linksTheEditorToolbarToTheAuthoringWorkflow', async () => {
+    renderEditor();
+
+    await screen.findByRole('heading', { name: gatewayFixture.title });
+    expect(screen.getByRole('link', { name: '批量导入' })).toHaveAttribute(
+      'href',
+      `/surveys/${surveyId}/import`,
+    );
+    expect(screen.getByRole('link', { name: '草稿预览' })).toHaveAttribute(
+      'href',
+      `/surveys/${surveyId}/preview`,
+    );
+    expect(screen.getByRole('link', { name: '发布管理' })).toHaveAttribute(
+      'href',
+      `/surveys/${surveyId}/publish`,
+    );
+  });
+
   test('doesNotConsumeAFreshDraftCachedForAnotherTenant', async () => {
     function tenantApi(tenantName: string, questionText: string) {
       return apiFrom((request) => {
