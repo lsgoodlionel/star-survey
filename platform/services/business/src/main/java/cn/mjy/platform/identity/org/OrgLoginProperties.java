@@ -40,6 +40,7 @@ public record OrgLoginProperties(
         requirePositive(tokenTtl, "token-ttl");
         requirePositive(httpTimeout, "http-timeout");
         validateAdminWebBaseUrl(adminWebBaseUrl);
+        validateSameOrigin(callbackBaseUrl, adminWebBaseUrl);
     }
 
     boolean isCallbackConfigured() {
@@ -74,6 +75,40 @@ public record OrgLoginProperties(
             throw new IllegalArgumentException(
                     "platform.identity.org-login.admin-web-base-url must be HTTPS (or http://127.0.0.1 for tests)");
         }
+    }
+
+    private static void validateSameOrigin(String callbackBaseUrl, String adminWebBaseUrl) {
+        if (callbackBaseUrl == null || callbackBaseUrl.isBlank()
+                || adminWebBaseUrl == null || adminWebBaseUrl.isBlank()) {
+            return;
+        }
+        URI callback;
+        URI admin;
+        try {
+            callback = URI.create(callbackBaseUrl);
+            admin = URI.create(adminWebBaseUrl);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                    "platform.identity.org-login callback and admin web base URLs must have the same origin", e);
+        }
+        if (!same(callback.getScheme(), admin.getScheme())
+                || !same(callback.getHost(), admin.getHost())
+                || effectivePort(callback) != effectivePort(admin)) {
+            throw new IllegalArgumentException(
+                    "platform.identity.org-login callback and admin web base URLs must have the same origin");
+        }
+    }
+
+    private static boolean same(String left, String right) {
+        return left != null && right != null && left.equalsIgnoreCase(right);
+    }
+
+    private static int effectivePort(URI uri) {
+        if (uri.getPort() >= 0) {
+            return uri.getPort();
+        }
+        return "https".equalsIgnoreCase(uri.getScheme()) ? 443
+                : "http".equalsIgnoreCase(uri.getScheme()) ? 80 : -1;
     }
 
     private static void requirePositive(Duration value, String name) {

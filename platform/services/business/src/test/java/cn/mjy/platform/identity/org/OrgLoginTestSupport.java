@@ -42,7 +42,7 @@ abstract class OrgLoginTestSupport {
 
     static final String OWNER = "owner";
     static final String CALLBACK_BASE = "https://survey.example.test";
-    static final String ADMIN_WEB_BASE = "https://admin.example.test";
+    static final String ADMIN_WEB_BASE = CALLBACK_BASE + "/admin";
 
     static final FakeOrgPlatforms FAKE = FakeOrgPlatforms.get();
 

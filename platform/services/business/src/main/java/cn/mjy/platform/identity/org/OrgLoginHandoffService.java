@@ -2,8 +2,6 @@ package cn.mjy.platform.identity.org;
 
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
@@ -52,14 +50,9 @@ class OrgLoginHandoffService {
         }
         Instant now = clock.instant();
         OrgLoginHandoffRepository.PendingHandoff pending = tenantScope.call(tenant,
-                () -> handoffs.consume(tenant, OrgLoginService.sha256(opaqueHandoff), now))
+                () -> handoffs.consume(tenant, OrgLoginService.sha256(opaqueHandoff),
+                        OrgLoginService.sha256(browserNonce), now))
                 .orElseThrow(OrgLoginException::invalidState);
-        boolean sameBrowser = MessageDigest.isEqual(
-                pending.browserHash().getBytes(StandardCharsets.US_ASCII),
-                OrgLoginService.sha256(browserNonce).getBytes(StandardCharsets.US_ASCII));
-        if (!sameBrowser) {
-            throw OrgLoginException.invalidState();
-        }
         return login.issue(new OrgLoginService.Authenticated(tenant, pending.principalId(), pending.connectionId(),
                 pending.provider()), java.util.UUID.randomUUID().toString());
     }

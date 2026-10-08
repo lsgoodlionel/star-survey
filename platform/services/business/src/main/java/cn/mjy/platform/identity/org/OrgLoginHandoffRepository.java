@@ -11,8 +11,7 @@ import org.springframework.stereotype.Repository;
 @Repository
 class OrgLoginHandoffRepository {
 
-    record PendingHandoff(String browserHash, UUID principalId, UUID connectionId, OrgProvider provider,
-            Instant expiresAt) {
+    record PendingHandoff(UUID principalId, UUID connectionId, OrgProvider provider, Instant expiresAt) {
     }
 
     private final JdbcClient jdbc;
@@ -38,13 +37,13 @@ class OrgLoginHandoffRepository {
                 .update();
     }
 
-    Optional<PendingHandoff> consume(TenantId tenant, String handoffHash, Instant now) {
-        return jdbc.sql("SELECT * FROM org_login_handoff_consume(:tenant, :handoff, :now)")
+    Optional<PendingHandoff> consume(TenantId tenant, String handoffHash, String browserHash, Instant now) {
+        return jdbc.sql("SELECT * FROM org_login_handoff_consume(:tenant, :handoff, :browser, :now)")
                 .param("tenant", tenant.value())
                 .param("handoff", handoffHash)
+                .param("browser", browserHash)
                 .param("now", java.sql.Timestamp.from(now))
                 .query((rs, n) -> new PendingHandoff(
-                        rs.getString("browser_hash"),
                         rs.getObject("principal_id", UUID.class),
                         rs.getObject("connection_id", UUID.class),
                         OrgProvider.fromCode(rs.getString("provider")).orElseThrow(),
