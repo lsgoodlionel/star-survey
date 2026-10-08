@@ -29,6 +29,17 @@ class OrgTablesIsolationTest extends OrgLoginTestSupport {
                         VALUES (:p, :t, 'admin', 'test')
                         """)
                 .param("p", UUID.fromString(subject(token))).param("t", tenantA.value()).update());
+        String handoffHash = UUID.randomUUID().toString().replace("-", "")
+                + UUID.randomUUID().toString().replace("-", "");
+        String browserHash = UUID.randomUUID().toString().replace("-", "")
+                + UUID.randomUUID().toString().replace("-", "");
+        tenantScope.run(tenantA, () -> jdbc.sql("""
+                        INSERT INTO org_login_handoff
+                            (handoff_hash, browser_hash, tenant_id, principal_id, connection_id, provider, expires_at)
+                        VALUES (:h, :b, :t, :p, :c, 'wecom', now() + interval '1 minute')
+                        """)
+                .param("h", handoffHash).param("b", browserHash).param("t", tenantA.value())
+                .param("p", UUID.fromString(subject(token))).param("c", orgA.connectionId()).update());
     }
 
     private long count(TenantId scope, String table) {
@@ -36,7 +47,8 @@ class OrgTablesIsolationTest extends OrgLoginTestSupport {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"org_connection", "org_login_state", "org_login_session", "identity_binding_revocation"})
+    @ValueSource(strings = {"org_connection", "org_login_state", "org_login_session",
+            "identity_binding_revocation"})
     void tenantBCannotReadTenantAsRows(String table) {
         assertThat(count(tenantA, table)).isPositive();
         assertThat(count(tenantB, table)).isZero();
@@ -63,6 +75,14 @@ class OrgTablesIsolationTest extends OrgLoginTestSupport {
                 .param("s", "a".repeat(40)).param("t", tenantA.value()).param("c", orgA.connectionId())
                 .param("h", "0".repeat(64)).update()))
                 .rootCause().hasMessageContaining("row-level security");
+        assertThatThrownBy(() -> tenantScope.run(tenantB, () -> jdbc.sql("""
+                        INSERT INTO org_login_handoff
+                            (handoff_hash, browser_hash, tenant_id, principal_id, connection_id, provider, expires_at)
+                        VALUES (:h, :b, :t, :p, :c, 'wecom', now() + interval '1 minute')
+                        """)
+                .param("h", "c".repeat(64)).param("b", "d".repeat(64)).param("t", tenantA.value())
+                .param("p", UUID.randomUUID()).param("c", orgA.connectionId()).update()))
+                .rootCause().hasMessageContaining("row-level security");
     }
 
     @Test
@@ -83,6 +103,14 @@ class OrgTablesIsolationTest extends OrgLoginTestSupport {
                         """)
                 .param("id", UUID.randomUUID()).param("t", tenantB.value()).param("p", principalOfA)
                 .param("c", orgA.connectionId()).update()))
+                .rootCause().hasMessageContaining("foreign key");
+        assertThatThrownBy(() -> tenantScope.run(tenantB, () -> jdbc.sql("""
+                        INSERT INTO org_login_handoff
+                            (handoff_hash, browser_hash, tenant_id, principal_id, connection_id, provider, expires_at)
+                        VALUES (:h, :b, :t, :p, :c, 'wecom', now() + interval '1 minute')
+                        """)
+                .param("h", "e".repeat(64)).param("b", "f".repeat(64)).param("t", tenantB.value())
+                .param("p", principalOfA).param("c", orgA.connectionId()).update()))
                 .rootCause().hasMessageContaining("foreign key");
     }
 
@@ -110,6 +138,15 @@ class OrgTablesIsolationTest extends OrgLoginTestSupport {
                 .rootCause().hasMessageContaining("permission denied");
         assertThatThrownBy(() -> tenantScope.run(tenantA, () -> jdbc
                 .sql("DELETE FROM org_connection").update()))
+                .rootCause().hasMessageContaining("permission denied");
+        assertThatThrownBy(() -> tenantScope.run(tenantA, () -> jdbc
+                .sql("SELECT * FROM org_login_handoff").query().listOfRows()))
+                .rootCause().hasMessageContaining("permission denied");
+        assertThatThrownBy(() -> tenantScope.run(tenantA, () -> jdbc
+                .sql("UPDATE org_login_handoff SET consumed_at = now()").update()))
+                .rootCause().hasMessageContaining("permission denied");
+        assertThatThrownBy(() -> tenantScope.run(tenantA, () -> jdbc
+                .sql("DELETE FROM org_login_handoff").update()))
                 .rootCause().hasMessageContaining("permission denied");
     }
 }

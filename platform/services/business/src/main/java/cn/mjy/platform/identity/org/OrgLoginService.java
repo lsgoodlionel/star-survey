@@ -56,6 +56,9 @@ public class OrgLoginService {
     record SignedIn(String accessToken, long expiresIn, UUID principalId, TenantId tenantId) {
     }
 
+    record Authenticated(TenantId tenantId, UUID principalId, UUID connectionId, OrgProvider provider) {
+    }
+
     private final OrgLoginProperties properties;
     private final TenantScope tenantScope;
     private final TenantDirectory tenants;
@@ -95,31 +98,48 @@ public class OrgLoginService {
 
     /** 须在开放平台登记的回调地址；未配置平台对外地址时为空。 */
     String redirectUri(TenantId tenant, UUID connectionId) {
+        return redirectUri(tenant, connectionId, false);
+    }
+
+    private String redirectUri(TenantId tenant, UUID connectionId, boolean adminWeb) {
         if (!properties.isCallbackConfigured()) {
             return null;
         }
         String base = properties.callbackBaseUrl().replaceAll("/+$", "");
-        return base + "/v1/auth/org/" + tenant + "/" + connectionId + "/callback";
+        String callback = base + "/v1/auth/org/" + tenant + "/" + connectionId + "/callback";
+        return adminWeb ? callback + "?client=admin_web" : callback;
     }
 
     Started start(TenantId tenant, UUID connectionId, boolean qr) {
+        return start(tenant, connectionId, qr, false);
+    }
+
+    Started start(TenantId tenant, UUID connectionId, boolean qr, boolean adminWeb) {
         requireActiveTenant(tenant);
         OrgConnection connection = enabledConnection(tenant, connectionId);
         if (!properties.isCallbackConfigured()) {
             throw OrgLoginException.notConfigured("platform.identity.org-login.callback-base-url");
         }
-        String state = HexFormat.of().formatHex(randomBytes());
+        if (adminWeb && !properties.isAdminWebConfigured()) {
+            throw OrgLoginException.notConfigured("platform.identity.org-login.admin-web-base-url");
+        }
+        String state = (adminWeb ? "A" : "") + HexFormat.of().formatHex(randomBytes());
         String nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes());
         Instant expiresAt = clock.instant().plus(properties.stateTtl());
         tenantScope.run(tenant, () -> {
             states.purgeStale();
             states.insert(tenant, state, connectionId, sha256(nonce), expiresAt);
         });
-        URI url = client(connection).authorizeUrl(connection, redirectUri(tenant, connectionId), state, qr);
+        URI url = client(connection).authorizeUrl(connection, redirectUri(tenant, connectionId, adminWeb), state, qr);
         return new Started(url, nonce);
     }
 
     SignedIn complete(TenantId tenant, UUID connectionId, String code, String state, String browserNonce) {
+        String trace = UUID.randomUUID().toString();
+        return issue(authenticate(tenant, connectionId, code, state, browserNonce), trace);
+    }
+
+    Authenticated authenticate(TenantId tenant, UUID connectionId, String code, String state, String browserNonce) {
         String trace = UUID.randomUUID().toString();
         requireActiveTenant(tenant);
         requireValidState(tenant, connectionId, state, browserNonce);
@@ -130,15 +150,15 @@ public class OrgLoginService {
             throw new OrgLoginException(HttpStatus.UNAUTHORIZED, OrgLoginException.PROVIDER_REJECTED,
                     "authorisation was not granted");
         }
-        OrgPlatformClient.ProviderUser user = exchange(connection, secret, code, redirectUri(tenant, connectionId),
-                trace);
+        OrgPlatformClient.ProviderUser user = exchange(connection, secret, code,
+                redirectUri(tenant, connectionId, isAdminWebState(state)), trace);
         if (!connection.corpId().equals(user.corpId())) {
             deny(connection, user.userId(), "wrong_organisation", trace);
             throw new OrgLoginException(HttpStatus.FORBIDDEN, OrgLoginException.WRONG_ORGANISATION,
                     "authorised in a different organisation");
         }
         UUID principal = resolvePrincipal(connection, user.userId(), trace);
-        return issue(connection, principal, trace);
+        return new Authenticated(tenant, principal, connectionId, connection.provider());
     }
 
     /** 登出：撤销当前会话；令牌里没有会话（非免登签发）时什么都不做。 */
@@ -158,13 +178,14 @@ public class OrgLoginService {
         if (state == null || !state.matches("[A-Za-z0-9]{32,128}") || browserNonce == null) {
             throw OrgLoginException.invalidState();
         }
-        OrgLoginStateRepository.ConsumedState consumed = tenantScope.call(tenant, () -> states.consume(state))
+        Instant now = clock.instant();
+        OrgLoginStateRepository.ConsumedState consumed = tenantScope.call(tenant, () -> states.consume(state, now))
                 .orElseThrow(OrgLoginException::invalidState);
         boolean sameBrowser = MessageDigest.isEqual(
                 consumed.browserHash().getBytes(StandardCharsets.US_ASCII),
                 sha256(browserNonce).getBytes(StandardCharsets.US_ASCII));
         boolean valid = consumed.connectionId().equals(connectionId) && sameBrowser
-                && consumed.expiresAt().isAfter(clock.instant());
+                && consumed.expiresAt().isAfter(now);
         if (!valid) {
             throw OrgLoginException.invalidState();
         }
@@ -213,18 +234,22 @@ public class OrgLoginService {
         return principal;
     }
 
-    private SignedIn issue(OrgConnection connection, UUID principal, String trace) {
-        TenantId tenant = connection.tenantId();
+    SignedIn issue(Authenticated authenticated, String trace) {
+        TenantId tenant = authenticated.tenantId();
+        requireActiveTenant(tenant);
         UUID sessionId = UUID.randomUUID();
         Instant now = clock.instant();
         Instant expiresAt = now.plus(properties.tokenTtl());
         tenantScope.run(tenant, () -> {
-            sessions.insert(sessionId, tenant, principal, connection.id(), now, expiresAt);
-            audit.record(tenant, principal.toString(), ACTION_LOGIN, "session/" + sessionId + " connection/"
-                    + connection.id() + " provider=" + connection.provider().code(), trace);
+            sessions.insert(sessionId, tenant, authenticated.principalId(), authenticated.connectionId(), now,
+                    expiresAt);
+            audit.record(tenant, authenticated.principalId().toString(), ACTION_LOGIN,
+                    "session/" + sessionId + " connection/" + authenticated.connectionId() + " provider="
+                            + authenticated.provider().code(), trace);
         });
-        String token = tokens.issue(tenant, principal, sessionId, connection.provider(), now, expiresAt);
-        return new SignedIn(token, properties.tokenTtl().toSeconds(), principal, tenant);
+        String token = tokens.issue(tenant, authenticated.principalId(), sessionId, authenticated.provider(), now,
+                expiresAt);
+        return new SignedIn(token, properties.tokenTtl().toSeconds(), authenticated.principalId(), tenant);
     }
 
     private OrgLoginException denied(OrgConnection connection, String userId, String reason, String trace) {
@@ -271,5 +296,9 @@ public class OrgLoginService {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 unavailable", e);
         }
+    }
+
+    static boolean isAdminWebState(String state) {
+        return state != null && state.startsWith("A");
     }
 }

@@ -1,5 +1,7 @@
 package cn.mjy.platform.identity.org;
 
+import cn.mjy.platform.shared.TenantId;
+import java.net.URI;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
@@ -10,6 +12,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * @param callbackBaseUrl 平台对外的 HTTPS 基础地址；回调地址 = 它 + /v1/auth/org/{租户}/{连接}/callback，
  *                        须在各开放平台登记（企业微信可信域名、钉钉/飞书重定向 URL）。为空时免登一律 503
+ * @param adminWebBaseUrl 管理端固定基础地址；必须是 HTTPS，测试可用 http://127.0.0.1
  * @param stateTtl        state 有效期（开放平台授权码本身 5 分钟有效）
  * @param tokenTtl        平台令牌有效期；每次请求另有会话撤销检查
  * @param httpTimeout     调用开放平台的超时
@@ -18,6 +21,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 @ConfigurationProperties("platform.identity.org-login")
 public record OrgLoginProperties(
         @DefaultValue("") String callbackBaseUrl,
+        @DefaultValue("") String adminWebBaseUrl,
         @DefaultValue("PT5M") Duration stateTtl,
         @DefaultValue("PT10M") Duration tokenTtl,
         @DefaultValue("PT10S") Duration httpTimeout,
@@ -35,10 +39,41 @@ public record OrgLoginProperties(
         requirePositive(stateTtl, "state-ttl");
         requirePositive(tokenTtl, "token-ttl");
         requirePositive(httpTimeout, "http-timeout");
+        validateAdminWebBaseUrl(adminWebBaseUrl);
     }
 
     boolean isCallbackConfigured() {
         return callbackBaseUrl != null && !callbackBaseUrl.isBlank();
+    }
+
+    boolean isAdminWebConfigured() {
+        return adminWebBaseUrl != null && !adminWebBaseUrl.isBlank();
+    }
+
+    String adminWebCallbackUrl(TenantId tenant, String handoff) {
+        if (!isAdminWebConfigured()) {
+            throw OrgLoginException.notConfigured("platform.identity.org-login.admin-web-base-url");
+        }
+        return adminWebBaseUrl.replaceAll("/+$", "") + "/auth/callback?tenant=" + tenant + "&handoff=" + handoff;
+    }
+
+    private static void validateAdminWebBaseUrl(String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        URI uri;
+        try {
+            uri = URI.create(value);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("platform.identity.org-login.admin-web-base-url must be a URL", e);
+        }
+        boolean https = "https".equalsIgnoreCase(uri.getScheme());
+        boolean loopbackTest = "http".equalsIgnoreCase(uri.getScheme()) && "127.0.0.1".equals(uri.getHost());
+        if ((!https && !loopbackTest) || uri.getHost() == null || uri.getUserInfo() != null
+                || uri.getQuery() != null || uri.getFragment() != null) {
+            throw new IllegalArgumentException(
+                    "platform.identity.org-login.admin-web-base-url must be HTTPS (or http://127.0.0.1 for tests)");
+        }
     }
 
     private static void requirePositive(Duration value, String name) {
