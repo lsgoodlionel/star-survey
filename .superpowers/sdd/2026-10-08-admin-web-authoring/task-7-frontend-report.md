@@ -45,3 +45,9 @@
 - Node 22.23.2 focused contracts: 8/8 passed. Full Vitest: 12 files and 116/116 passed. Lint and typecheck passed.
 - Standard and E2E builds plus their bundle assertions passed; standard `dist` was restored last.
 - Docker image build and `nginx -t` passed. Container curl evidence: `/` 200, `/v1` 502, `/v1/probe` 502, `/v1evil` 200 with the configured security headers. The 502 responses are expected because the verification upstream was deliberately set to closed `127.0.0.1:9`.
+
+## Integration fix
+
+- RED: the Playwright configuration test proved a runner-provided `ADMIN_WEB_TEST_RESULTS_DIR=/private/tmp/admin-web-run-42/test-results` was ignored in favor of the shared local directory.
+- Playwright now passes `ADMIN_WEB_TEST_RESULTS_DIR` through unchanged as `outputDir`; local runs without the variable retain `./test-results`.
+- The focused configuration tests cover both the isolated runner path and the local fallback.
