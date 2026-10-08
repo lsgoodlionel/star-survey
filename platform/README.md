@@ -8,7 +8,7 @@
 
 ## 1. 当前状态
 
-分支 `feat/admin-web-authoring` · 更新 2026-10-08
+分支 `feat/admin-web-authoring` · 更新 2026-10-09
 
 | 阶段 | 状态 |
 |---|---|
@@ -22,18 +22,18 @@
 
 | 套件 | 数量 | 说明 |
 |---|---|---|
-| 平台 Java | **1422 通过 / 177 类** | 0 失败 0 错误 0 跳过 |
+| 平台 Java | **1403 通过 / 175 类** | 0 失败 0 错误 0 跳过 |
 | 发布网关 Python | **1180 通过** | 0 失败 |
-| 需求追溯工具 | **72 通过** | 305 条需求、85 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
-| 管理端 Vitest | **13 个文件 / 132 通过** | lint、typecheck 同步通过 |
+| 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
+| 管理端 Vitest | **13 个文件 / 134 通过** | lint、typecheck 同步通过 |
 | 管理端生产构建 | **2080 modules / 13 个产物文件检查** | production bundle 不含开发令牌入口 |
-| 管理端真实 E2E | **3 通过（7.0s）** | 桌面完整创作、移动端响应式编辑、真实 Chromium 敏感控件遮蔽 |
+| 管理端真实 E2E | **3 通过（7.6s）** | 桌面完整创作、移动端响应式编辑、真实 Chromium 敏感控件遮蔽 |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
 
-**代码规模**（2026-10-08，可复现口径）：`platform/services/business/src/main/**/*.java` **563** 个，
-`platform/services/business/src/main/resources/db/migration/V*.sql` Flyway 迁移 **46** 个，
+**代码规模**（2026-10-09，可复现口径）：`platform/services/business/src/main/**/*.java` **558** 个，
+`platform/services/business/src/main/resources/db/migration/V*.sql` Flyway 迁移 **45** 个，
 `platform/tools/publish-gateway/pubgw/**/*.py` 发布网关生产包 **70** 个（不含 `tests/`）；另有自研插件
 3 个、自研作答主题 15 套。前三项分别可用对应目录下的 `rg --files -g '*.java'`、
 `rg --files -g 'V*.sql'`、`rg --files -g '*.py'` 复核。
