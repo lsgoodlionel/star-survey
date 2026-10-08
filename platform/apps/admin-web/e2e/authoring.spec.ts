@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page, type Response } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Response, type TestInfo } from '@playwright/test';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { assertArtifactContainsNoSecret, redactSecret } from './artifacts';
@@ -37,12 +37,13 @@ const importText = [
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === testInfo.expectedStatus) return;
   testInfo.setTimeout(testInfo.timeout + 7_000);
+  await writeSanitizedTraceSummary(page, testInfo);
   if (page.isClosed()) return;
   try {
     await withTimeout(redactSensitiveInputs(page), 1_500);
     if (page.isClosed()) return;
     await page.screenshot({
-      path: testInfo.outputPath('failure.png'),
+      path: testInfo.outputPath('sanitized-failure.png'),
       fullPage: true,
       timeout: 2_000,
     });
@@ -50,6 +51,35 @@ test.afterEach(async ({ page }, testInfo) => {
     // A crashed or inaccessible page is safer without a screenshot than with an unredacted one.
   }
 });
+
+async function writeSanitizedTraceSummary(page: Page, testInfo: TestInfo) {
+  const testId = testInfo.project.name === 'chromium-mobile'
+    ? 'mobile-responsive-editor'
+    : 'desktop-authoring';
+  let lastPath = '/';
+  if (!page.isClosed()) {
+    try {
+      const url = new URL(page.url());
+      lastPath = url.protocol === 'http:' || url.protocol === 'https:' ? url.pathname : '/';
+    } catch {
+      lastPath = '/';
+    }
+  }
+  const summary = {
+    schemaVersion: 1,
+    kind: 'sanitized-playwright-trace-summary',
+    project: testInfo.project.name,
+    testId,
+    status: testInfo.status,
+    durationMs: Math.max(0, Math.round(testInfo.duration)),
+    lastPath,
+  };
+  await writeFile(
+    testInfo.outputPath('sanitized-trace-summary.json'),
+    `${JSON.stringify(summary, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+}
 
 test('author creates, imports, approves and publishes a survey', async ({ page }) => {
   const metadata = await readMetadata();

@@ -130,6 +130,15 @@ sanitize_test_artifacts() {
   python3 "$GATE" "${arguments[@]}"
 }
 
+export_failure_artifacts() {
+  [[ -n "${ADMIN_WEB_CI_ARTIFACT_DIR:-}" ]] || return 0
+  python3 "$GATE" --base-url "${PLATFORM_URL:-http://127.0.0.1}" export-sanitized-evidence \
+    --jwt-file "$ADMIN_WEB_JWT_FILE" \
+    --source-dir "$ADMIN_WEB_TEST_RESULTS_DIR" \
+    --output-dir "$ADMIN_WEB_CI_ARTIFACT_DIR" \
+    --allowed-root "$ADMIN_WEB_DIR/test-results"
+}
+
 run_playwright() {
   (
     cd "$ADMIN_WEB_DIR"
@@ -142,6 +151,7 @@ run_browser_tests() {
   mkdir -p "$ADMIN_WEB_TEST_RESULTS_DIR"
   issue_browser_token
   if ! run_playwright; then
+    export_failure_artifacts || true
     sanitize_test_artifacts true || true
     return 1
   fi
@@ -170,6 +180,9 @@ export ADMIN_WEB_JWT_FILE="$WORK_DIR/owner.jwt"
 export ADMIN_WEB_METADATA_FILE="$WORK_DIR/metadata.json"
 export ADMIN_WEB_RESULT_FILE="$WORK_DIR/result.json"
 export ADMIN_WEB_TEST_RESULTS_DIR="$WORK_DIR/test-results"
+if [[ -n "${ADMIN_WEB_CI_ARTIFACT_DIR:-}" && "$ADMIN_WEB_CI_ARTIFACT_DIR" != /* ]]; then
+  export ADMIN_WEB_CI_ARTIFACT_DIR="$REPO_ROOT/$ADMIN_WEB_CI_ARTIFACT_DIR"
+fi
 EVENT_SECRET_FILE="$WORK_DIR/event-secret"
 
 export PLATFORM_JWT_HMAC_SECRET PLATFORM_ENGINE_EVENTS_SECRET PUBGW_SHARED_SECRET PLATFORM_PUBGW_SECRET

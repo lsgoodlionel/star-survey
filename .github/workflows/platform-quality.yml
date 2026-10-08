@@ -98,6 +98,7 @@ jobs:
       TEST_DB: mysql
       SURVEY_TEST_PREFIX: adminweb-ci
       COMPOSE_PROJECT_NAME: adminweb-ci
+      ADMIN_WEB_CI_ARTIFACT_DIR: platform/apps/admin-web/test-results/ci-artifacts
     steps:
       - uses: actions/checkout@v5
 
@@ -119,10 +120,19 @@ jobs:
         working-directory: platform/apps/admin-web
         run: npx playwright install --with-deps chromium
 
-      # runner 把 JWT、元数据和 Playwright 输出放在本次私有临时目录；失败时先删媒体，
-      # 再扫描非媒体文件，最后总是删除整个目录。因此这里没有可安全留存的失败产物可上传。
+      # runner 只把固定字段的结构化摘要和已遮蔽截图导出到 ignored 目录；JWT、元数据、
+      # raw trace 和原始截图仍留在私有临时目录并在退出时删除。
       - name: 管理端真实浏览器纵向验收
         run: platform/deploy/test/run-admin-web-e2e.sh --fresh
+
+      - name: 上传脱敏失败证据
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-web-e2e-sanitized-failure
+          path: platform/apps/admin-web/test-results/ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 7
 
   gateway-parity-e2e:
     name: 双执行比对 (${{ matrix.db }})

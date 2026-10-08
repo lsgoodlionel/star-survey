@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -36,6 +37,21 @@ RESULT_FIELDS = {
     "network",
 }
 SENSITIVE_MEDIA_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".zip", ".webm"}
+SANITIZED_TRACE_FIELDS = {
+    "schemaVersion",
+    "kind",
+    "project",
+    "testId",
+    "status",
+    "durationMs",
+    "lastPath",
+}
+SANITIZED_PROJECT_TESTS = {
+    "chromium-desktop": "desktop-authoring",
+    "chromium-mobile": "mobile-responsive-editor",
+}
+SANITIZED_STATUSES = {"failed", "timedOut", "interrupted"}
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 class StepFailed(Exception):
@@ -200,6 +216,111 @@ def scrub_sensitive_artifacts(secret_file: Path, paths: List[Path], remove_media
                 removed_sensitive = removed_sensitive or contains_secret
     if removed_sensitive:
         raise StepFailed("sensitive test artifact was removed")
+
+
+def _artifact_destination(destination: Path, allowed_root: Path) -> Path:
+    resolved_root = allowed_root.resolve()
+    resolved_destination = destination.resolve()
+    if (
+        resolved_destination.parent != resolved_root
+        or resolved_destination.name != "ci-artifacts"
+    ):
+        raise StepFailed("sanitized evidence destination is outside the allowlisted root")
+    return resolved_destination
+
+
+def _clear_sanitized_evidence(destination: Path, allowed_root: Path) -> Path:
+    resolved_destination = _artifact_destination(destination, allowed_root)
+    if resolved_destination.exists():
+        shutil.rmtree(resolved_destination)
+    return resolved_destination
+
+
+def _validate_sanitized_trace(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise StepFailed("sanitized trace summary must be a JSON object")
+    if set(payload) != SANITIZED_TRACE_FIELDS:
+        raise StepFailed("sanitized trace summary uses an unexpected schema")
+    project = payload.get("project")
+    test_id = payload.get("testId")
+    duration = payload.get("durationMs")
+    last_path = payload.get("lastPath")
+    valid = (
+        payload.get("schemaVersion") == 1
+        and payload.get("kind") == "sanitized-playwright-trace-summary"
+        and project in SANITIZED_PROJECT_TESTS
+        and SANITIZED_PROJECT_TESTS.get(project) == test_id
+        and payload.get("status") in SANITIZED_STATUSES
+        and isinstance(duration, int)
+        and not isinstance(duration, bool)
+        and duration >= 0
+        and isinstance(last_path, str)
+        and last_path.startswith("/")
+        and len(last_path) <= 512
+        and not any(character in last_path for character in ("?", "#", "\\"))
+    )
+    if not valid:
+        raise StepFailed("sanitized trace summary contains a non-allowlisted value")
+    return payload
+
+
+def export_sanitized_failure_evidence(
+    secret_file: Path,
+    source: Path,
+    destination: Path,
+    allowed_root: Path,
+) -> int:
+    resolved_destination = _clear_sanitized_evidence(destination, allowed_root)
+    try:
+        secret = secret_file.read_bytes().strip()
+    except OSError as error:
+        raise StepFailed("browser credential is unavailable for evidence export") from error
+    if not secret:
+        raise StepFailed("browser credential is empty during evidence export")
+
+    summaries: List[Tuple[Path, Dict[str, Any]]] = []
+    seen = set()
+    try:
+        for candidate in _walk_artifact_files(source):
+            if candidate.name != "sanitized-trace-summary.json":
+                continue
+            raw = candidate.read_bytes()
+            if secret in raw:
+                raise StepFailed("sanitized trace summary contains the browser credential")
+            payload = _validate_sanitized_trace(json.loads(raw.decode("utf-8")))
+            identity = (payload["project"], payload["testId"])
+            if identity in seen:
+                raise StepFailed("sanitized trace summary identity is duplicated")
+            seen.add(identity)
+            summaries.append((candidate, payload))
+
+        exports: List[Tuple[str, bytes | Dict[str, Any]]] = []
+        for summary_path, payload in summaries:
+            prefix = "{}-{}".format(payload["project"], payload["testId"])
+            exports.append((prefix + "-sanitized-trace-summary.json", payload))
+            screenshot = summary_path.parent / "sanitized-failure.png"
+            if screenshot.is_file():
+                screenshot_bytes = screenshot.read_bytes()
+                if not screenshot_bytes.startswith(PNG_SIGNATURE) or secret in screenshot_bytes:
+                    raise StepFailed("sanitized failure screenshot did not pass validation")
+                exports.append((prefix + "-sanitized-failure.png", screenshot_bytes))
+
+        if not exports:
+            return 0
+        resolved_destination.mkdir(parents=True, exist_ok=False)
+        for filename, content in exports:
+            output = resolved_destination / filename
+            if isinstance(content, dict):
+                _write_json(output, content)
+            else:
+                output.write_bytes(content)
+        return len(exports)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        _clear_sanitized_evidence(destination, allowed_root)
+        raise StepFailed("sanitized failure evidence could not be validated") from error
+    except StepFailed:
+        _clear_sanitized_evidence(destination, allowed_root)
+        raise
 
 
 def _load_object(path: Path, label: str) -> Dict[str, Any]:
@@ -377,6 +498,16 @@ def cmd_scan_artifacts(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_export_sanitized_evidence(args: argparse.Namespace) -> None:
+    count = export_sanitized_failure_evidence(
+        Path(args.jwt_file),
+        Path(args.source_dir),
+        Path(args.output_dir),
+        Path(args.allowed_root),
+    )
+    print("  [ok] exported {} sanitized failure evidence files".format(count), file=sys.stderr)
+
+
 def _run(command: List[str], input_text: Optional[str] = None) -> str:
     completed = subprocess.run(
         command,
@@ -508,6 +639,13 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     scan.add_argument("--path", action="append", required=True)
     scan.add_argument("--remove-media", action="store_true")
     scan.set_defaults(handler=cmd_scan_artifacts)
+
+    export = commands.add_parser("export-sanitized-evidence")
+    export.add_argument("--jwt-file", required=True)
+    export.add_argument("--source-dir", required=True)
+    export.add_argument("--output-dir", required=True)
+    export.add_argument("--allowed-root", required=True)
+    export.set_defaults(handler=cmd_export_sanitized_evidence)
 
     verify = commands.add_parser("verify")
     verify.add_argument("--metadata-file", required=True)
