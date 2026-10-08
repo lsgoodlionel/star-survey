@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { ReactNode } from 'react';
@@ -8,22 +8,40 @@ import { expect, test, vi } from 'vitest';
 import { createAppRoutes } from '../../app/router';
 import { server } from '../../test/server';
 
-const authState = vi.hoisted(() => ({ tenantId: 'tenant-a', roles: ['tenant_owner'] as string[] }));
+const authState = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  return {
+    tenantId: 'tenant-a',
+    roles: ['tenant_owner'] as string[],
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    setTenantId(tenantId: string) {
+      authState.tenantId = tenantId;
+      listeners.forEach((listener) => listener());
+    },
+  };
+});
 
 vi.mock('../auth/AuthProvider', async () => {
+  const { useSyncExternalStore } = await import('react');
   const { createApiClient } = await import('../../shared/api/http');
   let api: ReturnType<typeof createApiClient> | undefined;
   return {
     AuthProvider: ({ children }: { children: ReactNode }) => children,
-    useAuth: () => ({
-      api: (api ??= createApiClient()),
-      logout: vi.fn(),
-      session: {
-        token: 'workspace-token',
-        expiresAt: Date.now() + 60_000,
-        me: { tenantId: authState.tenantId, actorId: 'author-7', roles: authState.roles },
-      },
-    }),
+    useAuth: () => {
+      const tenantId = useSyncExternalStore(authState.subscribe, () => authState.tenantId);
+      return {
+        api: (api ??= createApiClient()),
+        logout: vi.fn(),
+        session: {
+          token: 'workspace-token',
+          expiresAt: Date.now() + 60_000,
+          me: { tenantId, actorId: 'author-7', roles: authState.roles },
+        },
+      };
+    },
   };
 });
 
@@ -70,11 +88,16 @@ function renderWorkspace(
   const router = createMemoryRouter(createAppRoutes(false), { initialEntries: [initialEntry] });
   const view = () => (
     <QueryClientProvider client={queryClient}>
-      <RouterProvider key={authState.tenantId} router={router} />
+      <RouterProvider router={router} />
     </QueryClientProvider>
   );
   const result = render(view());
-  return { ...result, queryClient, router, rerenderAuth: () => result.rerender(view()) };
+  return {
+    ...result,
+    queryClient,
+    router,
+    switchTenant: (tenantId: string) => act(() => authState.setTenantId(tenantId)),
+  };
 }
 
 test('loadsOnlyTheSelectedBranchAndFollowsOpaqueCursors', async () => {
@@ -162,13 +185,81 @@ test('isolatesResourceQueriesWhenTheSessionTenantChanges', async () => {
   expect(await screen.findByRole('button', { name: '项目甲' })).toBeInTheDocument();
 
   activeTenant = 'tenant-b';
-  authState.tenantId = 'tenant-b';
-  rendered.rerenderAuth();
+  rendered.switchTenant('tenant-b');
 
   expect(await screen.findByRole('button', { name: '项目乙' })).toBeInTheDocument();
   expect(requests).toEqual(['tenant-a', 'tenant-b']);
   expect(rendered.queryClient.getQueryData(['resources', 'tenant-a', null])).toBeDefined();
   expect(rendered.queryClient.getQueryData(['resources', 'tenant-b', null])).toBeDefined();
+});
+
+test('doesNotMergeTenantALocalCreationsIntoTenantBAfterSessionSwitch', async () => {
+  const createdInA = resource('10000000-0000-4000-8000-000000000099', 'project', null, '租户甲本地项目');
+  let activeTenant = 'tenant-a';
+  server.use(
+    http.get('/v1/resources', () =>
+      HttpResponse.json({ items: activeTenant === 'tenant-b' ? [projectB] : [], nextCursor: null }),
+    ),
+    http.post('/v1/projects', () => HttpResponse.json(createdInA, { status: 201 })),
+    http.get('/v1/resources/:id', () => HttpResponse.json({}, { status: 404 })),
+  );
+  const user = userEvent.setup();
+  const rendered = renderWorkspace();
+  await user.click(await screen.findByRole('button', { name: '新建项目' }));
+  const dialog = screen.getByRole('dialog', { name: '新建项目' });
+  await user.type(within(dialog).getByLabelText('名称'), createdInA.name);
+  await user.click(within(dialog).getByRole('button', { name: '创建项目' }));
+  expect(await screen.findByRole('button', { name: createdInA.name })).toBeInTheDocument();
+
+  activeTenant = 'tenant-b';
+  rendered.switchTenant('tenant-b');
+
+  expect(await screen.findByRole('button', { name: '项目乙' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: createdInA.name })).not.toBeInTheDocument();
+});
+
+test('pinsResolvedDeepPathNodesMissingFromFirstPagesWithoutExhaustingOpaqueCursors', async () => {
+  const otherFolder = resource('20000000-0000-4000-8000-000000000002', 'folder', projectA.id, '其他文件夹');
+  const otherSurvey = resource('30000000-0000-4000-8000-000000000002', 'survey', folderA.id, '其他问卷');
+  const requests: Array<{ parentId: string | null; cursor: string | null }> = [];
+  server.use(
+    http.get('/v1/resources/:id', ({ params }) => {
+      const found = [projectA, folderA, surveyA].find((item) => item.id === params.id);
+      return found ? HttpResponse.json(found) : HttpResponse.json({}, { status: 404 });
+    }),
+    http.get('/v1/resources', ({ request }) => {
+      const url = new URL(request.url);
+      const parentId = url.searchParams.get('parentId');
+      const cursor = url.searchParams.get('cursor');
+      requests.push({ parentId, cursor });
+      if (!parentId && !cursor) {
+        return HttpResponse.json({ items: [projectB], nextCursor: 'opaque-root-next' });
+      }
+      if (!parentId && cursor === 'opaque-root-next') {
+        return HttpResponse.json({ items: [], nextCursor: null });
+      }
+      if (parentId === projectA.id) {
+        return HttpResponse.json({ items: [otherFolder], nextCursor: null });
+      }
+      if (parentId === folderA.id) {
+        return HttpResponse.json({ items: [otherSurvey], nextCursor: null });
+      }
+      return HttpResponse.json({ items: [], nextCursor: null });
+    }),
+  );
+  const user = userEvent.setup();
+  renderWorkspace(`/workspace?resource=${surveyA.id}`);
+
+  expect(await screen.findByRole('button', { name: surveyA.name })).toHaveAttribute('aria-current', 'true');
+  expect(screen.getByRole('button', { name: projectA.name })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: folderA.name })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: projectB.name })).toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: '加载更多' }));
+  await waitFor(() =>
+    expect(requests).toContainEqual({ parentId: null, cursor: 'opaque-root-next' }),
+  );
+  expect(requests.filter((request) => request.cursor !== null)).toHaveLength(1);
 });
 
 test('createsAProjectFolderAndBlankSurveyWithChineseDefaults', async () => {

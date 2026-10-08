@@ -15,6 +15,7 @@ interface ResourceTreeProps {
   api: ApiClient;
   tenantId: string;
   createdResources: Record<string, ResourceView[]>;
+  pinnedResources: ResourceView[];
   expandedIds: Set<string>;
   selectedId: string | null;
   onExpandedChange(id: string, expanded: boolean): void;
@@ -39,6 +40,7 @@ function ResourceBranch({
   api,
   tenantId,
   createdResources,
+  pinnedResources,
   expandedIds,
   selectedId,
   onExpandedChange,
@@ -58,7 +60,8 @@ function ResourceBranch({
   });
   const fetched = query.data?.pages.flatMap((page) => page.items) ?? [];
   const created = createdResources[parentId ?? rootKey] ?? [];
-  const resources = [...fetched, ...created].filter(
+  const pinned = pinnedResources.filter((resource) => resource.parentId === parentId);
+  const resources = [...fetched, ...created, ...pinned].filter(
     (resource, index, all) => all.findIndex((candidate) => candidate.id === resource.id) === index,
   );
 
@@ -108,6 +111,7 @@ function ResourceBranch({
                   api={api}
                   tenantId={tenantId}
                   createdResources={createdResources}
+                  pinnedResources={pinnedResources}
                   expandedIds={expandedIds}
                   selectedId={selectedId}
                   onExpandedChange={onExpandedChange}

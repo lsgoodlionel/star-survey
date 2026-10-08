@@ -30,7 +30,10 @@ export function WorkspacePage() {
   const [dialog, setDialog] = useState<CreateResourceKind | null>(null);
   const [dialogTrigger, setDialogTrigger] = useState<HTMLElement | null>(null);
   const [expandedIds, setExpandedIds] = useState(() => new Set<string>());
-  const [createdResources, setCreatedResources] = useState<Record<string, ResourceView[]>>({});
+  const [createdResourcesByTenant, setCreatedResourcesByTenant] = useState<
+    Record<string, Record<string, ResourceView[]>>
+  >({});
+  const createdResources = createdResourcesByTenant[tenantId] ?? {};
   const pathQuery = useQuery({
     queryKey: ['resource-path', tenantId, selectedId],
     queryFn: ({ signal }) => getResourcePath(api, selectedId!, signal),
@@ -78,28 +81,58 @@ export function WorkspacePage() {
   );
 
   const createMutation = useMutation({
-    mutationFn: async ({ kind, value }: { kind: CreateResourceKind; value: string }) => {
-      if (kind === 'project') return { kind, resource: await createProject(api, value) };
-      if (!selectedResource || selectedResource.kind === 'survey') throw new Error('请先选择项目或文件夹');
-      if (kind === 'folder') {
-        return { kind, resource: await createFolder(api, selectedResource.id, value) };
+    mutationFn: async ({
+      kind,
+      value,
+      mutationTenantId,
+    }: {
+      kind: CreateResourceKind;
+      value: string;
+      mutationTenantId: string;
+    }) => {
+      if (kind === 'project') {
+        return { kind, mutationTenantId, parentId: null, resource: await createProject(api, value) };
       }
-      return { kind, survey: await createSurvey(api, selectedResource.id, value) };
+      if (!selectedResource || selectedResource.kind === 'survey') throw new Error('请先选择项目或文件夹');
+      const parentId = selectedResource.id;
+      if (kind === 'folder') {
+        return {
+          kind,
+          mutationTenantId,
+          parentId,
+          resource: await createFolder(api, parentId, value),
+        };
+      }
+      return {
+        kind,
+        mutationTenantId,
+        parentId,
+        survey: await createSurvey(api, parentId, value),
+      };
     },
     onSuccess: async (created) => {
-      const parentId = created.kind === 'survey' ? selectedResource?.id ?? null : created.resource?.parentId ?? null;
-      await queryClient.invalidateQueries({ queryKey: resourceQueryKey(tenantId, parentId), exact: true });
+      await queryClient.invalidateQueries({
+        queryKey: resourceQueryKey(created.mutationTenantId, created.parentId),
+        exact: true,
+      });
       setDialog(null);
+      if (created.mutationTenantId !== tenantId) return;
       if (created.kind === 'survey' && created.survey) {
         void navigate(`/surveys/${created.survey.id}/edit`);
         return;
       }
       if (!created.resource) return;
       const key = created.resource.parentId ?? rootKey;
-      setCreatedResources((current) => ({
-        ...current,
-        [key]: [...(current[key] ?? []), created.resource!],
-      }));
+      setCreatedResourcesByTenant((current) => {
+        const tenantResources = current[created.mutationTenantId] ?? {};
+        return {
+          ...current,
+          [created.mutationTenantId]: {
+            ...tenantResources,
+            [key]: [...(tenantResources[key] ?? []), created.resource!],
+          },
+        };
+      });
       if (created.resource.parentId) {
         setExpandedIds((current) => new Set(current).add(created.resource!.parentId!));
       }
@@ -167,6 +200,7 @@ export function WorkspacePage() {
           api={api}
           tenantId={tenantId}
           createdResources={createdResources}
+          pinnedResources={resolvedPath}
           expandedIds={effectiveExpandedIds}
           selectedId={selectedId}
           onExpandedChange={setExpanded}
@@ -197,7 +231,9 @@ export function WorkspacePage() {
           error={createMutation.error instanceof Error ? createMutation.error.message : undefined}
           returnFocus={dialogTrigger}
           onClose={() => setDialog(null)}
-          onSubmit={(value) => createMutation.mutate({ kind: dialog, value })}
+          onSubmit={(value) =>
+            createMutation.mutate({ kind: dialog, value, mutationTenantId: tenantId })
+          }
         />
       ) : null}
     </section>
