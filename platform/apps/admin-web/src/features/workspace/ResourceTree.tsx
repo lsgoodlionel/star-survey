@@ -1,24 +1,29 @@
-import { useEffect } from 'react';
+import { useRef, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Folder, FolderKanban, FileText } from 'lucide-react';
 import type { ApiClient } from '../../shared/api/http';
-import { listResources, type ResourceKind, type ResourceView } from '../../shared/api/resources';
+import {
+  listResources,
+  resourceQueryKey,
+  type ResourceKind,
+  type ResourceView,
+} from '../../shared/api/resources';
 
 const rootKey = '__root__';
 
 interface ResourceTreeProps {
   api: ApiClient;
+  tenantId: string;
   createdResources: Record<string, ResourceView[]>;
   expandedIds: Set<string>;
   selectedId: string | null;
   onExpandedChange(id: string, expanded: boolean): void;
-  onResourceResolved(resource: ResourceView): void;
   onSelect(resource: ResourceView): void;
 }
 
 export function ResourceTree(props: ResourceTreeProps) {
   return (
-    <ul role="tree" aria-label="资源树" className="resource-tree">
+    <ul aria-label="资源列表" className="resource-tree">
       <ResourceBranch {...props} parentId={null} enabled />
     </ul>
   );
@@ -32,18 +37,20 @@ interface ResourceBranchProps extends ResourceTreeProps {
 
 function ResourceBranch({
   api,
+  tenantId,
   createdResources,
   expandedIds,
   selectedId,
   onExpandedChange,
-  onResourceResolved,
   onSelect,
   parentId,
   branchLabel,
   enabled,
 }: ResourceBranchProps) {
+  const loadingMoreRef = useRef(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const query = useInfiniteQuery({
-    queryKey: ['resources', parentId],
+    queryKey: resourceQueryKey(tenantId, parentId),
     queryFn: ({ pageParam, signal }) => listResources(api, { parentId, cursor: pageParam, signal }),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
@@ -54,11 +61,6 @@ function ResourceBranch({
   const resources = [...fetched, ...created].filter(
     (resource, index, all) => all.findIndex((candidate) => candidate.id === resource.id) === index,
   );
-
-  useEffect(() => {
-    const selected = resources.find((resource) => resource.id === selectedId);
-    if (selected) onResourceResolved(selected);
-  }, [onResourceResolved, resources, selectedId]);
 
   if (query.isError) {
     const message = query.error instanceof Error ? query.error.message : '操作失败，请稍后重试';
@@ -75,7 +77,7 @@ function ResourceBranch({
         const expandable = resource.kind !== 'survey';
         const expanded = expandedIds.has(resource.id);
         return (
-          <li key={resource.id} role="none" className="resource-tree-node">
+          <li key={resource.id} className="resource-tree-node">
             <div className="resource-tree-row">
               {expandable ? (
                 <button
@@ -91,7 +93,6 @@ function ResourceBranch({
               )}
               <button
                 type="button"
-                role="treeitem"
                 aria-current={selectedId === resource.id ? 'true' : undefined}
                 aria-expanded={expandable ? expanded : undefined}
                 className="resource-tree-item"
@@ -102,14 +103,14 @@ function ResourceBranch({
               </button>
             </div>
             {expanded ? (
-              <ul role="group">
+              <ul>
                 <ResourceBranch
                   api={api}
+                  tenantId={tenantId}
                   createdResources={createdResources}
                   expandedIds={expandedIds}
                   selectedId={selectedId}
                   onExpandedChange={onExpandedChange}
-                  onResourceResolved={onResourceResolved}
                   onSelect={onSelect}
                   parentId={resource.id}
                   branchLabel={resource.name}
@@ -121,9 +122,23 @@ function ResourceBranch({
         );
       })}
       {query.hasNextPage ? (
-        <li role="none" className="resource-tree-more">
-          <button type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>
-            {query.isFetchingNextPage ? '正在加载' : `加载更多${branchLabel ? ` ${branchLabel}` : ''}`}
+        <li className="resource-tree-more">
+          <button
+            type="button"
+            onClick={() => {
+              if (loadingMoreRef.current) return;
+              loadingMoreRef.current = true;
+              setLoadingMore(true);
+              void query.fetchNextPage().finally(() => {
+                loadingMoreRef.current = false;
+                setLoadingMore(false);
+              });
+            }}
+            disabled={loadingMore || query.isFetchingNextPage}
+          >
+            {loadingMore || query.isFetchingNextPage
+              ? '正在加载'
+              : `加载更多${branchLabel ? ` ${branchLabel}` : ''}`}
           </button>
         </li>
       ) : null}

@@ -26,6 +26,9 @@ class ResourceTreeTest {
     private AccessDecisionService access;
 
     @Autowired
+    private AccessSettingsService settings;
+
+    @Autowired
     private GrantService grants;
 
     @Autowired
@@ -171,6 +174,37 @@ class ResourceTreeTest {
         assertThat(tree.get(admin, project).name()).isEqualTo("项目");
         assertThatThrownBy(() -> tree.get(outsider, project)).isInstanceOf(ResourceAccessDeniedException.class);
         assertThatThrownBy(() -> tree.get(admin, UUID.randomUUID())).isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void capabilitiesUseInheritedDecisionsForEditorsAndViewers() {
+        UUID project = tree.createProject(admin, "项目").id();
+        UUID folder = tree.createFolder(admin, project, "文件夹").id();
+        UUID survey = fixture.survey(owner.tenantId(), folder);
+        TenantContext editor = fixture.member(owner, "editor", "editor", project);
+        TenantContext viewer = fixture.member(owner, "viewer", "statistics_viewer", project);
+        TenantContext reviewer = fixture.member(owner, "reviewer", "publish_reviewer", project);
+        settings.setPublishApprovalRequired(owner, true);
+
+        assertThat(tree.capabilities(editor, survey))
+                .isEqualTo(new ResourceCapabilities(false, false, true, true, false, false));
+        assertThat(tree.capabilities(viewer, survey))
+                .isEqualTo(new ResourceCapabilities(false, false, false, false, false, false));
+        assertThat(tree.capabilities(reviewer, survey))
+                .isEqualTo(new ResourceCapabilities(false, false, false, false, false, true));
+        assertThat(tree.capabilities(editor, folder).canCreateChildren()).isTrue();
+        assertThat(tree.capabilities(admin, null).canCreateProject()).isTrue();
+    }
+
+    @Test
+    void capabilitiesDoNotRevealCrossTenantOrUnknownResources() {
+        TenantContext otherOwner = fixture.newTenant();
+        UUID otherProject = tree.createProject(otherOwner, "别的租户").id();
+
+        assertThatThrownBy(() -> tree.capabilities(admin, otherProject))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> tree.capabilities(admin, UUID.randomUUID()))
+                .isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test
