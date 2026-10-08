@@ -35,6 +35,16 @@ describe('browser gate security contract', () => {
     expect(spec).not.toContain('testInfo.error');
   });
 
+  test('runs the real redaction page test and uploads only when the e2e step fails', async () => {
+    const config = await source('playwright.config.ts');
+    const workflow = await source('../../../.github/workflows/platform-quality.yml');
+
+    expect(config).toContain("testMatch: [/authoring\\.spec\\.ts/, /redaction\\.spec\\.ts/]");
+    expect(workflow).toContain('id: admin_web_e2e');
+    expect(workflow).toContain("if: steps.admin_web_e2e.outcome == 'failure'");
+    expect(workflow).not.toContain('if: failure()');
+  });
+
   test('uses a password control for defense in depth', async () => {
     const page = await source('src/features/auth/DevTokenPage.tsx');
     expect(page).toContain('type="password"');

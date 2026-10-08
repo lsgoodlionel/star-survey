@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page, type Response, type TestInfo } f
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { assertArtifactContainsNoSecret, redactSecret } from './artifacts';
+import { redactSensitiveInputs } from './redaction';
 
 interface TestMetadata {
   actorId?: string;
@@ -268,18 +269,6 @@ function networkRecord(response: Response, token: string): NetworkRecord {
     status: response.status(),
     url: redactSecret(`${url.origin}${url.pathname}${url.search}`, token),
   };
-}
-
-async function redactSensitiveInputs(page: Page) {
-  await page.evaluate(() => {
-    const elements = document.querySelectorAll('[data-sensitive="token"], input[type="password"]');
-    for (const element of elements) {
-      if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
-        element.value = '';
-      }
-      (element as HTMLElement).style.visibility = 'hidden';
-    }
-  });
 }
 
 async function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {

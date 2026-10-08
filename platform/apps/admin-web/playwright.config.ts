@@ -23,7 +23,7 @@ export default defineConfig({
     {
       name: 'chromium-desktop',
       use: { ...devices['Desktop Chrome'] },
-      testMatch: /authoring\.spec\.ts/,
+      testMatch: [/authoring\.spec\.ts/, /redaction\.spec\.ts/],
       grepInvert: /@mobile/,
     },
     {
