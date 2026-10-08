@@ -14,6 +14,12 @@ const VersionDetailRoutePage = lazy(() =>
     default: module.VersionDetailRoutePage,
   })),
 );
+const ImportRoutePage = lazy(() =>
+  import('../features/import/ImportPage').then((module) => ({ default: module.ImportRoutePage })),
+);
+const PreviewRoutePage = lazy(() =>
+  import('../features/preview/PreviewPage').then((module) => ({ default: module.PreviewRoutePage })),
+);
 
 const DevelopmentTokenPage = import.meta.env.DEV
   ? lazy(() =>
@@ -70,6 +76,22 @@ export function createAppRoutes(isDevelopment: boolean): RouteObject[] {
             { index: true, element: <Navigate to="/workspace" replace /> },
             { path: 'workspace', element: <WorkspacePage /> },
             { path: 'surveys/:surveyId/edit', element: <EditorRoutePage /> },
+            {
+              path: 'surveys/:surveyId/import',
+              element: (
+                <Suspense fallback={<p>正在加载导入工具</p>}>
+                  <ImportRoutePage />
+                </Suspense>
+              ),
+            },
+            {
+              path: 'surveys/:surveyId/preview',
+              element: (
+                <Suspense fallback={<p>正在加载草稿预览</p>}>
+                  <PreviewRoutePage />
+                </Suspense>
+              ),
+            },
             {
               path: 'surveys/:surveyId/publish',
               element: (
