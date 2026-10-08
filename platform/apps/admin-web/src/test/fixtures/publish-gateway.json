@@ -1,0 +1,89 @@
+{
+  "definitionVersion": 1,
+  "uuid": "11111111-1111-4111-8111-111111111111",
+  "title": "P0-00.8 发布网关样例问卷",
+  "description": "端到端验证用：覆盖单选（带其他）、多选带评论、数组双尺度、短文本与说明文字。",
+  "language": "en",
+  "theme": "fruity_twentythree",
+  "settings": {
+    "anonymized": "N",
+    "datestamp": "Y",
+    "savetimings": "N",
+    "ipaddr": "N",
+    "refurl": "N",
+    "allowsave": "Y",
+    "allowprev": "Y",
+    "alloweditaftercompletion": "Y",
+    "format": "G",
+    "questionindex": "0",
+    "usecaptcha": "N",
+    "shownoanswer": "N"
+  },
+  "groups": [
+    {
+      "uuid": "22222222-0001-4111-8111-000000000001",
+      "title": "Basics",
+      "description": "第一组：单选与文本。",
+      "questions": [
+        {
+          "uuid": "33333333-0001-4111-8111-000000000001",
+          "code": "QSINGLE",
+          "type": "L",
+          "text": "Pick exactly one",
+          "mandatory": true,
+          "other": true,
+          "answers": [
+            { "code": "A1", "text": "First" },
+            { "code": "A2", "text": "Second" },
+            { "code": "A3", "text": "Third" }
+          ]
+        },
+        {
+          "uuid": "33333333-0002-4111-8111-000000000002",
+          "code": "QTEXT",
+          "type": "S",
+          "text": "Say something short",
+          "attributes": { "maximum_chars": "200" }
+        },
+        {
+          "uuid": "33333333-0003-4111-8111-000000000003",
+          "code": "QNOTE",
+          "type": "X",
+          "text": "This block of text has no answer column at all."
+        }
+      ]
+    },
+    {
+      "uuid": "22222222-0002-4111-8111-000000000002",
+      "title": "Ratings",
+      "questions": [
+        {
+          "uuid": "33333333-0004-4111-8111-000000000004",
+          "code": "QMULTI",
+          "type": "P",
+          "text": "Pick any, add a comment",
+          "subquestions": [
+            { "uuid": "44444444-0001-4111-8111-000000000001", "code": "SQ001", "text": "Speed" },
+            { "uuid": "44444444-0002-4111-8111-000000000002", "code": "SQ002", "text": "Price" }
+          ]
+        },
+        {
+          "uuid": "33333333-0005-4111-8111-000000000005",
+          "code": "QDUAL",
+          "type": "1",
+          "text": "Rate on both scales",
+          "subquestions": [
+            { "uuid": "44444444-0003-4111-8111-000000000003", "code": "SQ001", "text": "Support" },
+            { "uuid": "44444444-0004-4111-8111-000000000004", "code": "SQ002", "text": "Delivery" }
+          ],
+          "answers": [
+            { "code": "L1", "text": "Low", "scale": 0 },
+            { "code": "L2", "text": "High", "scale": 0 },
+            { "code": "R1", "text": "Rare", "scale": 1 },
+            { "code": "R2", "text": "Often", "scale": 1 }
+          ]
+        }
+      ]
+    }
+  ]
+}

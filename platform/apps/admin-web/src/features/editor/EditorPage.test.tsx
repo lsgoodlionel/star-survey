@@ -1,0 +1,312 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
+import { useState } from 'react';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { z } from 'zod';
+import { AuthProvider, useAuth } from '../auth/AuthProvider';
+import { ApiError } from '../../shared/api/errors';
+import type { ApiClient, ApiRequest } from '../../shared/api/http';
+import gatewayFixture from '../../test/fixtures/publish-gateway.json';
+import { server } from '../../test/server';
+import { captureEditorRecovery, EditorPage } from './EditorPage';
+
+const surveyId = '11111111-1111-4111-8111-111111111111';
+const singleUuid = '33333333-0001-4111-8111-000000000001';
+const textUuid = '33333333-0002-4111-8111-000000000002';
+const noteUuid = '33333333-0003-4111-8111-000000000003';
+
+const overview = {
+  id: surveyId,
+  title: gatewayFixture.title,
+  status: 'draft',
+  draftVersion: 4,
+  publishedVersion: null,
+  lastPublish: null,
+};
+
+const editableCapabilities = {
+  canCreateProject: false,
+  canCreateChildren: false,
+  canEdit: true,
+  canSubmitApproval: true,
+  canPublishDirectly: false,
+  canApprovePublish: false,
+};
+
+type RequestHandler = (request: ApiRequest<unknown>) => unknown | Promise<unknown>;
+
+function apiFrom(handler: RequestHandler): ApiClient {
+  return {
+    request: (request) => Promise.resolve(handler(request as ApiRequest<unknown>)) as never,
+  };
+}
+
+function editorApi(overrides: Partial<Record<string, RequestHandler>> = {}) {
+  return apiFrom((request) => {
+    const key = `${request.method ?? 'GET'} ${request.path}`;
+    const override = overrides[key];
+    if (override) return override(request);
+    if (key === `GET /v1/surveys/${surveyId}`) return overview;
+    if (key === `GET /v1/surveys/${surveyId}/draft`) {
+      return { surveyId, version: 4, definition: structuredClone(gatewayFixture) };
+    }
+    if (key === `GET /v1/resource-capabilities?resourceId=${surveyId}`) {
+      return editableCapabilities;
+    }
+    throw new Error(`Unhandled request: ${key}`);
+  });
+}
+
+function renderEditor(
+  api: ApiClient = editorApi(),
+  initialEntry = `/surveys/${surveyId}/edit`,
+) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const router = createMemoryRouter(
+    [
+      { path: '/surveys/:surveyId/edit', element: <EditorPage api={api} surveyId={surveyId} /> },
+      { path: '/workspace', element: <p>工作区</p> },
+      { path: '/login', element: <p>登录页</p> },
+      { path: '/dev/token', element: <p>开发登录页</p> },
+    ],
+    { initialEntries: [initialEntry] },
+  );
+  return {
+    queryClient,
+    router,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe('EditorPage', () => {
+  test('keepsTheSelectedQuestionAcrossRouteChanges', async () => {
+    const { router } = renderEditor(
+      editorApi(),
+      `/surveys/${surveyId}/edit?question=${textUuid}`,
+    );
+
+    expect(await screen.findByLabelText('题目文本')).toHaveValue('Say something short');
+    expect(screen.getByRole('button', { name: 'QTEXT Say something short' })).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'QNOTE This block of text has no answer column at all.',
+      }),
+    );
+
+    await waitFor(() => expect(router.state.location.search).toBe(`?question=${noteUuid}`));
+    expect(screen.getByLabelText('题目文本')).toHaveValue(
+      'This block of text has no answer column at all.',
+    );
+  });
+
+  test('warnsBeforeLeavingWithUnsavedChanges', async () => {
+    const { router } = renderEditor(
+      editorApi(),
+      `/surveys/${surveyId}/edit?question=${singleUuid}`,
+    );
+    const text = await screen.findByLabelText('题目文本');
+    fireEvent.change(text, { target: { value: '尚未保存的题目' } });
+
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+
+    void router.navigate('/workspace');
+    expect(await screen.findByRole('dialog', { name: '未保存的修改' })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe(`/surveys/${surveyId}/edit`);
+
+    fireEvent.click(screen.getByRole('button', { name: '放弃修改并离开' }));
+    expect(await screen.findByText('工作区')).toBeInTheDocument();
+  });
+
+  test('savesWithTheCurrentDraftVersionAndAdoptsTheReturnedVersion', async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    const api = editorApi({
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        const body = request.body as Record<string, unknown>;
+        writes.push(body);
+        return {
+          surveyId,
+          version: Number(body.expectedVersion) + 1,
+          definition: body.definition,
+        };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+
+    const text = await screen.findByLabelText('题目文本');
+    fireEvent.change(text, { target: { value: '第一次修改' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    expect(await screen.findByText('已保存版本 5')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('题目文本'), { target: { value: '第二次修改' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    expect(await screen.findByText('已保存版本 6')).toBeInTheDocument();
+
+    expect(writes.map((body) => body.expectedVersion)).toEqual([4, 5]);
+  });
+
+  test('keepsLocalChangesWhenTheServerReturns409', async () => {
+    const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:local-draft');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    const api = editorApi({
+      [`PUT /v1/surveys/${surveyId}/draft`]: () => {
+        throw new ApiError('conflict', '草稿已被其他人修改，本地内容未被覆盖', 409);
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    const text = await screen.findByLabelText('题目文本');
+    fireEvent.change(text, { target: { value: '必须保留的本地题目' } });
+
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    expect(await screen.findByRole('dialog', { name: '草稿版本冲突' })).toBeInTheDocument();
+    expect(screen.getByLabelText('题目文本')).toHaveValue('必须保留的本地题目');
+    expect(screen.getByRole('button', { name: '重新载入' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '导出本地草稿' })).toBeInTheDocument();
+    expect(createObjectUrl).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '导出本地草稿' }));
+    expect(createObjectUrl).toHaveBeenCalledTimes(1);
+  });
+
+  test('recoversTheInMemoryDraftAfterReauthentication', async () => {
+    const persistentWrite = vi.spyOn(Storage.prototype, 'setItem');
+    server.use(
+      http.get('/v1/me', () =>
+        HttpResponse.json({ tenantId: 'tenant-a', actorId: 'author-1', roles: ['editor'] }),
+      ),
+      http.get(`/v1/surveys/${surveyId}`, () => HttpResponse.json(overview)),
+      http.get(`/v1/surveys/${surveyId}/draft`, () =>
+        HttpResponse.json({ surveyId, version: 4, definition: gatewayFixture }),
+      ),
+      http.get('/v1/resource-capabilities', () => HttpResponse.json(editableCapabilities)),
+      http.get('/v1/expired', () => new HttpResponse(null, { status: 401 })),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/surveys/:surveyId/edit',
+          element: (
+            <AuthProvider beforeSessionClear={captureEditorRecovery}>
+              <RecoveryHarness />
+            </AuthProvider>
+          ),
+        },
+      ],
+      { initialEntries: [`/surveys/${surveyId}/edit?question=${singleUuid}`] },
+    );
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '重新认证' }));
+    const text = await screen.findByLabelText('题目文本');
+    fireEvent.change(text, { target: { value: '登录失效也不能丢失' } });
+    fireEvent.click(screen.getByRole('button', { name: '触发 401' }));
+    expect(await screen.findByText('当前未认证')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '重新认证' }));
+    expect(await screen.findByLabelText('题目文本')).toHaveValue('登录失效也不能丢失');
+    expect(persistentWrite).not.toHaveBeenCalled();
+  });
+
+  test('allowsAuthenticationRecoveryNavigationWithUnsavedChanges', async () => {
+    const { router } = renderEditor(
+      editorApi(),
+      `/surveys/${surveyId}/edit?question=${singleUuid}`,
+    );
+    fireEvent.change(await screen.findByLabelText('题目文本'), {
+      target: { value: '等待重新认证的本地修改' },
+    });
+
+    void router.navigate('/login');
+
+    expect(await screen.findByText('登录页')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '未保存的修改' })).not.toBeInTheDocument();
+  });
+
+  test('switchesOutlineEditorAndPropertiesAsTabsOnNarrowScreens', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 760px)',
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    renderEditor(editorApi(), `/surveys/${surveyId}/edit?question=${singleUuid}`);
+
+    expect(await screen.findByRole('tablist', { name: '编辑区域' })).toBeInTheDocument();
+    expect(screen.getByRole('tabpanel', { name: '大纲' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: '编辑' }));
+    expect(screen.getByRole('tabpanel', { name: '编辑' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: '属性' }));
+    expect(screen.getByRole('tabpanel', { name: '属性' })).toBeInTheDocument();
+  });
+
+  test('gatesEditingAndSavingWithAuthoritativeResourceCapabilities', async () => {
+    const api = editorApi({
+      [`GET /v1/resource-capabilities?resourceId=${surveyId}`]: () => ({
+        ...editableCapabilities,
+        canEdit: false,
+      }),
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+
+    expect(await screen.findByLabelText('题目文本')).toBeDisabled();
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+    expect(screen.getByText('当前账号仅可查看此问卷')).toBeInTheDocument();
+  });
+});
+
+function RecoveryHarness() {
+  const { api, authenticateWithToken, session } = useAuth();
+  const [requestDone, setRequestDone] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => void authenticateWithToken('memory-token', 600)}>
+        重新认证
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          void api
+            .request({ path: '/v1/expired', schema: z.unknown() })
+            .catch(() => undefined)
+            .finally(() => setRequestDone(true));
+        }}
+      >
+        触发 401
+      </button>
+      {requestDone ? <span>请求结束</span> : null}
+      {session ? <EditorPage api={api} surveyId={surveyId} /> : <p>当前未认证</p>}
+    </>
+  );
+}

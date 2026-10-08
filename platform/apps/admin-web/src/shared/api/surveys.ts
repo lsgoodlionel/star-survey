@@ -12,6 +12,14 @@ export const surveyViewSchema = z.object({
 
 export type SurveyView = z.infer<typeof surveyViewSchema>;
 
+export const draftViewSchema = z.object({
+  surveyId: z.string().uuid(),
+  version: z.number().int().positive(),
+  definition: z.unknown(),
+});
+
+export type DraftView = z.infer<typeof draftViewSchema>;
+
 export function createBlankDefinition(title: string): Record<string, unknown> {
   return {
     definitionVersion: 2,
@@ -56,5 +64,37 @@ export function createSurvey(api: ApiClient, parentId: string, title: string) {
     method: 'POST',
     body: { parentId, definition: createBlankDefinition(title) },
     schema: surveyViewSchema,
+  });
+}
+
+export function getSurvey(api: ApiClient, id: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/surveys/${encodeURIComponent(id)}`,
+    schema: surveyViewSchema,
+    signal,
+  });
+}
+
+export function getSurveyDraft(api: ApiClient, id: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/surveys/${encodeURIComponent(id)}/draft`,
+    schema: draftViewSchema,
+    signal,
+  });
+}
+
+export function saveDraft(
+  api: ApiClient,
+  id: string,
+  expectedVersion: number,
+  definition: unknown,
+  signal?: AbortSignal,
+) {
+  return api.request({
+    path: `/v1/surveys/${encodeURIComponent(id)}/draft`,
+    method: 'PUT',
+    body: { expectedVersion, definition },
+    schema: draftViewSchema,
+    signal,
   });
 }
