@@ -531,6 +531,97 @@ class AdminWebGateTest(unittest.TestCase):
 
             self.assertFalse(destination.exists())
 
+    def test_export_rejects_encoded_or_normalized_credentials_and_clears_output(self):
+        gate = load_gate()
+        token = "Header.Payload.Signature"
+        escaped = "".join("\\u{:04x}".format(ord(character)) for character in token)
+        encoded = "%48%65%61%64%65%72%2e%50%61%79%6c%6f%61%64%2e%53%69%67%6e%61%74%75%72%65"
+        fullwidth = "Ｈｅａｄｅｒ．Ｐａｙｌｏａｄ．Ｓｉｇｎａｔｕｒｅ"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, token)
+            source.mkdir()
+
+            payloads = (
+                '{"schemaVersion":1,"kind":"sanitized-playwright-trace-summary",'
+                '"project":"chromium-desktop","testId":"desktop-authoring",'
+                '"status":"failed","durationMs":1,"lastPath":"/workspace/' + escaped + '"}',
+                json.dumps({
+                    "schemaVersion": 1,
+                    "kind": "sanitized-playwright-trace-summary",
+                    "project": "chromium-desktop",
+                    "testId": "desktop-authoring",
+                    "status": "failed",
+                    "durationMs": 1,
+                    "lastPath": "/workspace/" + encoded,
+                }),
+                json.dumps({
+                    "schemaVersion": 1,
+                    "kind": "sanitized-playwright-trace-summary",
+                    "project": "chromium-desktop",
+                    "testId": "desktop-authoring",
+                    "status": "failed",
+                    "durationMs": 1,
+                    "lastPath": "/workspace/" + fullwidth,
+                }, ensure_ascii=False),
+            )
+            for serialized in payloads:
+                with self.subTest(serialized=serialized[-80:]):
+                    destination.mkdir(parents=True, exist_ok=True)
+                    (destination / "stale.txt").write_text("old run", encoding="utf-8")
+                    (source / "sanitized-trace-summary.json").write_text(
+                        serialized, encoding="utf-8"
+                    )
+
+                    with self.assertRaises(gate.StepFailed):
+                        gate.export_sanitized_failure_evidence(
+                            secret, source, destination, allowed_root
+                        )
+
+                    self.assertFalse(destination.exists())
+
+    def test_export_accepts_only_real_admin_web_routes(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, "header.payload.signature")
+            source.mkdir()
+            invalid_paths = (
+                "/workspace?token=hidden",
+                "/workspace#hidden",
+                "/workspace/%2e%2e/dev/token",
+                "/workspace/../dev/token",
+                "/not-an-admin-route",
+            )
+            for path in invalid_paths:
+                with self.subTest(path=path):
+                    destination.mkdir(parents=True, exist_ok=True)
+                    (destination / "stale.txt").write_text("old run", encoding="utf-8")
+                    (source / "sanitized-trace-summary.json").write_text(json.dumps({
+                        "schemaVersion": 1,
+                        "kind": "sanitized-playwright-trace-summary",
+                        "project": "chromium-desktop",
+                        "testId": "desktop-authoring",
+                        "status": "failed",
+                        "durationMs": 1,
+                        "lastPath": path,
+                    }), encoding="utf-8")
+
+                    with self.assertRaises(gate.StepFailed):
+                        gate.export_sanitized_failure_evidence(
+                            secret, source, destination, allowed_root
+                        )
+
+                    self.assertFalse(destination.exists())
+
     def test_export_rejects_a_destination_outside_the_ignored_results_root(self):
         gate = load_gate()
         with tempfile.TemporaryDirectory() as directory:

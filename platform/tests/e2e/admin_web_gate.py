@@ -12,16 +12,18 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 from urllib.error import HTTPError
-from urllib.parse import urlsplit
+from urllib.parse import unquote_to_bytes, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -52,6 +54,12 @@ SANITIZED_PROJECT_TESTS = {
 }
 SANITIZED_STATUSES = {"failed", "timedOut", "interrupted"}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+UUID_PATH = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+ADMIN_WEB_PATH = re.compile(
+    r"^(?:/|/workspace|/login|/auth/callback|/dev/token|"
+    r"/surveys/" + UUID_PATH + r"/(?:edit|import|preview|publish)|"
+    r"/surveys/" + UUID_PATH + r"/versions/[1-9][0-9]*)$"
+)
 
 
 class StepFailed(Exception):
@@ -236,6 +244,43 @@ def _clear_sanitized_evidence(destination: Path, allowed_root: Path) -> Path:
     return resolved_destination
 
 
+def _decoded_bytes(raw: bytes) -> Iterator[bytes]:
+    current = raw
+    yield current
+    for _ in range(3):
+        decoded = unquote_to_bytes(current)
+        if decoded == current:
+            break
+        current = decoded
+        yield current
+
+
+def _bytes_contain_secret(raw: bytes, secret: bytes) -> bool:
+    for candidate in _decoded_bytes(raw):
+        if secret in candidate:
+            return True
+        try:
+            normalized = unicodedata.normalize("NFKC", candidate.decode("utf-8")).encode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if secret in normalized:
+            return True
+    return False
+
+
+def _value_contains_secret(value: Any, secret: bytes) -> bool:
+    if isinstance(value, str):
+        return _bytes_contain_secret(value.encode("utf-8"), secret)
+    if isinstance(value, dict):
+        return any(
+            _value_contains_secret(key, secret) or _value_contains_secret(item, secret)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_value_contains_secret(item, secret) for item in value)
+    return False
+
+
 def _validate_sanitized_trace(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise StepFailed("sanitized trace summary must be a JSON object")
@@ -255,9 +300,7 @@ def _validate_sanitized_trace(payload: Dict[str, Any]) -> Dict[str, Any]:
         and not isinstance(duration, bool)
         and duration >= 0
         and isinstance(last_path, str)
-        and last_path.startswith("/")
-        and len(last_path) <= 512
-        and not any(character in last_path for character in ("?", "#", "\\"))
+        and ADMIN_WEB_PATH.fullmatch(last_path) is not None
     )
     if not valid:
         raise StepFailed("sanitized trace summary contains a non-allowlisted value")
@@ -285,9 +328,11 @@ def export_sanitized_failure_evidence(
             if candidate.name != "sanitized-trace-summary.json":
                 continue
             raw = candidate.read_bytes()
-            if secret in raw:
+            if _bytes_contain_secret(raw, secret):
                 raise StepFailed("sanitized trace summary contains the browser credential")
             payload = _validate_sanitized_trace(json.loads(raw.decode("utf-8")))
+            if _value_contains_secret(payload, secret):
+                raise StepFailed("decoded sanitized trace summary contains the browser credential")
             identity = (payload["project"], payload["testId"])
             if identity in seen:
                 raise StepFailed("sanitized trace summary identity is duplicated")
@@ -301,7 +346,10 @@ def export_sanitized_failure_evidence(
             screenshot = summary_path.parent / "sanitized-failure.png"
             if screenshot.is_file():
                 screenshot_bytes = screenshot.read_bytes()
-                if not screenshot_bytes.startswith(PNG_SIGNATURE) or secret in screenshot_bytes:
+                if (
+                    not screenshot_bytes.startswith(PNG_SIGNATURE)
+                    or _bytes_contain_secret(screenshot_bytes, secret)
+                ):
                     raise StepFailed("sanitized failure screenshot did not pass validation")
                 exports.append((prefix + "-sanitized-failure.png", screenshot_bytes))
 
@@ -314,6 +362,8 @@ def export_sanitized_failure_evidence(
                 _write_json(output, content)
             else:
                 output.write_bytes(content)
+            if _bytes_contain_secret(output.read_bytes(), secret):
+                raise StepFailed("final sanitized evidence contains the browser credential")
         return len(exports)
     except (OSError, UnicodeDecodeError, ValueError) as error:
         _clear_sanitized_evidence(destination, allowed_root)

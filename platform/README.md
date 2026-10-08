@@ -25,7 +25,7 @@
 | 平台 Java | **1422 通过 / 177 类** | 0 失败 0 错误 0 跳过 |
 | 发布网关 Python | **1180 通过** | 0 失败 |
 | 需求追溯工具 | **72 通过** | 305 条需求、85 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
-| 管理端 Vitest | **13 个文件 / 130 通过** | lint、typecheck 同步通过 |
+| 管理端 Vitest | **13 个文件 / 131 通过** | lint、typecheck 同步通过 |
 | 管理端生产构建 | **2080 modules / 13 个产物文件检查** | production bundle 不含开发令牌入口 |
 | 管理端真实 E2E | **2 通过（6.7s）** | 桌面完整创作与移动端响应式编辑 |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
@@ -151,7 +151,8 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 
 CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中经 gate 白名单重写的
 `*-sanitized-failure.png` 与 `*-sanitized-trace-summary.json`。后者只含 project、固定 test id、状态、耗时和
-不带查询参数的路径，是排障摘要而非 Playwright raw trace；JWT、临时元数据、raw trace 和原始截图不会上传。
+真实管理端路由白名单内的路径，是排障摘要而非 Playwright raw trace。gate 会在 JSON 解码、percent decode、
+NFKC 规范化后检查所有字符串，并复扫最终输出 bytes；JWT、临时元数据、raw trace 和原始截图不会上传。
 
 ### 跑测试的三条硬规矩（都是真实踩出来的）
 
