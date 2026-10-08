@@ -18,7 +18,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -128,6 +128,45 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _walk_artifact_files(root: Path) -> Iterator[Path]:
+    try:
+        root_stat = root.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise StepFailed("test artifact root could not be statted safely") from error
+
+    if stat.S_ISREG(root_stat.st_mode):
+        yield root
+        return
+    if not stat.S_ISDIR(root_stat.st_mode):
+        raise StepFailed("test artifact root has an unsupported file type")
+
+    yield from _walk_artifact_directory(root)
+
+
+def _walk_artifact_directory(directory: Path) -> Iterator[Path]:
+    try:
+        with os.scandir(directory) as scanner:
+            entries = list(scanner)
+    except OSError as error:
+        raise StepFailed("test artifact directory could not be traversed safely") from error
+
+    for entry in entries:
+        try:
+            entry_stat = entry.stat(follow_symlinks=False)
+        except OSError as error:
+            raise StepFailed("test artifact entry could not be statted safely") from error
+
+        path = Path(entry.path)
+        if stat.S_ISDIR(entry_stat.st_mode):
+            yield from _walk_artifact_directory(path)
+        elif stat.S_ISREG(entry_stat.st_mode):
+            yield path
+        else:
+            raise StepFailed("test artifact entry has an unsupported file type")
+
+
 def scrub_sensitive_artifacts(secret_file: Path, paths: List[Path], remove_media: bool) -> None:
     try:
         secret = secret_file.read_bytes().strip()
@@ -137,11 +176,10 @@ def scrub_sensitive_artifacts(secret_file: Path, paths: List[Path], remove_media
         raise StepFailed("browser credential is empty during artifact scanning")
 
     removed_sensitive = False
-    secret_path = secret_file.resolve()
+    secret_path = Path(os.path.abspath(secret_file))
     for root in paths:
-        candidates = root.rglob("*") if root.is_dir() else (root,)
-        for candidate in candidates:
-            if not candidate.is_file() or candidate.resolve() == secret_path:
+        for candidate in _walk_artifact_files(root):
+            if Path(os.path.abspath(candidate)) == secret_path:
                 continue
             remove_for_failure = remove_media and candidate.suffix.lower() in SENSITIVE_MEDIA_SUFFIXES
             if remove_for_failure:
