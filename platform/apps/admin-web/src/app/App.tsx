@@ -3,6 +3,7 @@ import { LogOut } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from '../features/auth/AuthProvider';
+import { captureEditorRecovery } from '../features/editor/recovery';
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -17,7 +18,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>{children}</AuthProvider>
+      <AuthProvider beforeSessionClear={captureEditorRecovery}>{children}</AuthProvider>
     </QueryClientProvider>
   );
 }

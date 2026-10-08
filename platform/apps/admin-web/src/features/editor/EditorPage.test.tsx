@@ -1,18 +1,21 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { z } from 'zod';
+import { AppProviders } from '../../app/App';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
 import gatewayFixture from '../../test/fixtures/publish-gateway.json';
 import { server } from '../../test/server';
-import { captureEditorRecovery, EditorPage } from './EditorPage';
+import { EditorPage } from './EditorPage';
+import { captureEditorRecovery } from './recovery';
 
 const surveyId = '11111111-1111-4111-8111-111111111111';
+const otherSurveyId = '22222222-2222-4222-8222-222222222222';
 const singleUuid = '33333333-0001-4111-8111-000000000001';
 const textUuid = '33333333-0002-4111-8111-000000000002';
 const noteUuid = '33333333-0003-4111-8111-000000000003';
@@ -68,7 +71,10 @@ function renderEditor(
   });
   const router = createMemoryRouter(
     [
-      { path: '/surveys/:surveyId/edit', element: <EditorPage api={api} surveyId={surveyId} /> },
+      {
+        path: '/surveys/:surveyId/edit',
+        element: <EditorPage api={api} surveyId={surveyId} tenantId="tenant-a" />,
+      },
       { path: '/workspace', element: <p>工作区</p> },
       { path: '/login', element: <p>登录页</p> },
       { path: '/dev/token', element: <p>开发登录页</p> },
@@ -114,6 +120,29 @@ describe('EditorPage', () => {
     expect(screen.getByLabelText('题目文本')).toHaveValue(
       'This block of text has no answer column at all.',
     );
+  });
+
+  test('allowsDirtyQuestionSelectionWithoutConfirmingOrLosingData', async () => {
+    const { router } = renderEditor(
+      editorApi(),
+      `/surveys/${surveyId}/edit?question=${singleUuid}`,
+    );
+    fireEvent.change(await screen.findByLabelText('题目文本'), {
+      target: { value: '切题后仍要保留' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'QTEXT Say something short' }));
+    await waitFor(() => expect(router.state.location.search).toBe(`?question=${textUuid}`));
+    expect(screen.queryByRole('dialog', { name: '未保存的修改' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'QSINGLE 切题后仍要保留' }));
+    await waitFor(() => expect(router.state.location.search).toBe(`?question=${singleUuid}`));
+    expect(screen.getByLabelText('题目文本')).toHaveValue('切题后仍要保留');
+
+    void router.navigate(
+      `/surveys/${surveyId}/edit?question=${singleUuid}&mode=unrelated`,
+    );
+    expect(await screen.findByRole('dialog', { name: '未保存的修改' })).toBeInTheDocument();
   });
 
   test('warnsBeforeLeavingWithUnsavedChanges', async () => {
@@ -162,6 +191,53 @@ describe('EditorPage', () => {
     expect(await screen.findByText('已保存版本 6')).toBeInTheDocument();
 
     expect(writes.map((body) => body.expectedVersion)).toEqual([4, 5]);
+  });
+
+  test('keepsNewerLocalEditsWhenAnEarlierSaveResponseArrives', async () => {
+    const firstSave = createDeferred<{
+      surveyId: string;
+      version: number;
+      definition: unknown;
+    }>();
+    const writes: Array<Record<string, unknown>> = [];
+    const api = editorApi({
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        const body = request.body as Record<string, unknown>;
+        writes.push(body);
+        if (writes.length === 1) return firstSave.promise;
+        return { surveyId, version: 6, definition: body.definition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+
+    fireEvent.change(await screen.findByLabelText('题目文本'), {
+      target: { value: '已发送到版本 5 的文本' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    fireEvent.change(screen.getByLabelText('题目文本'), {
+      target: { value: '请求期间产生的更新文本' },
+    });
+
+    await act(async () => {
+      firstSave.resolve({
+        surveyId,
+        version: 5,
+        definition: writes[0].definition,
+      });
+      await firstSave.promise;
+    });
+
+    expect(await screen.findByText('已保存版本 5')).toBeInTheDocument();
+    expect(screen.getByLabelText('题目文本')).toHaveValue('请求期间产生的更新文本');
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    expect(await screen.findByText('已保存版本 6')).toBeInTheDocument();
+    expect(writes.map((body) => body.expectedVersion)).toEqual([4, 5]);
+    expect(
+      (((writes[1].definition as typeof gatewayFixture).groups[0].questions[0]).text),
+    ).toBe('请求期间产生的更新文本');
   });
 
   test('keepsLocalChangesWhenTheServerReturns409', async () => {
@@ -232,6 +308,62 @@ describe('EditorPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '重新认证' }));
     expect(await screen.findByLabelText('题目文本')).toHaveValue('登录失效也不能丢失');
+    expect(persistentWrite).not.toHaveBeenCalled();
+  });
+
+  test('productionCompositionRecoversOnlyTheMatchingTenantAndSurveyAfter401', async () => {
+    const persistentWrite = vi.spyOn(Storage.prototype, 'setItem');
+    server.use(
+      http.get('/v1/me', ({ request }) => {
+        const tenantId = request.headers.get('Authorization') === 'Bearer tenant-b-token'
+          ? 'tenant-b'
+          : 'tenant-a';
+        return HttpResponse.json({ tenantId, actorId: `${tenantId}-author`, roles: ['editor'] });
+      }),
+      http.get(`/v1/surveys/${surveyId}`, () => HttpResponse.json(overview)),
+      http.get(`/v1/surveys/${surveyId}/draft`, () =>
+        HttpResponse.json({ surveyId, version: 4, definition: gatewayFixture }),
+      ),
+      http.get(`/v1/surveys/${otherSurveyId}`, () =>
+        HttpResponse.json({ ...overview, id: otherSurveyId }),
+      ),
+      http.get(`/v1/surveys/${otherSurveyId}/draft`, () =>
+        HttpResponse.json({ surveyId: otherSurveyId, version: 4, definition: gatewayFixture }),
+      ),
+      http.get('/v1/resource-capabilities', () => HttpResponse.json(editableCapabilities)),
+      http.get('/v1/expired', () => new HttpResponse(null, { status: 401 })),
+    );
+    const router = createMemoryRouter(
+      [{ path: '/surveys/:surveyId/edit', element: <ProductionRecoveryHarness /> }],
+      { initialEntries: [`/surveys/${surveyId}/edit?question=${singleUuid}`] },
+    );
+    render(
+      <AppProviders>
+        <RouterProvider router={router} />
+      </AppProviders>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '认证租户 A' }));
+    fireEvent.change(await screen.findByLabelText('题目文本'), {
+      target: { value: '仅属于租户 A 的本地修改' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '触发生产 401' }));
+    expect(await screen.findByText('生产组合未认证')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '切换问卷' }));
+    fireEvent.click(screen.getByRole('button', { name: '认证租户 A' }));
+    expect(await screen.findByLabelText('题目文本')).toHaveValue('Pick exactly one');
+    fireEvent.click(screen.getByRole('button', { name: '触发生产 401' }));
+    expect(await screen.findByText('生产组合未认证')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '切换问卷' }));
+    fireEvent.click(screen.getByRole('button', { name: '认证租户 B' }));
+    expect(await screen.findByLabelText('题目文本')).toHaveValue('Pick exactly one');
+    fireEvent.click(screen.getByRole('button', { name: '触发生产 401' }));
+    expect(await screen.findByText('生产组合未认证')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '认证租户 A' }));
+    expect(await screen.findByLabelText('题目文本')).toHaveValue('仅属于租户 A 的本地修改');
     expect(persistentWrite).not.toHaveBeenCalled();
   });
 
@@ -306,7 +438,52 @@ function RecoveryHarness() {
         触发 401
       </button>
       {requestDone ? <span>请求结束</span> : null}
-      {session ? <EditorPage api={api} surveyId={surveyId} /> : <p>当前未认证</p>}
+      {session ? (
+        <EditorPage api={api} surveyId={surveyId} tenantId={session.me.tenantId} />
+      ) : (
+        <p>当前未认证</p>
+      )}
     </>
   );
+}
+
+function ProductionRecoveryHarness() {
+  const { api, authenticateWithToken, session } = useAuth();
+  const [selectedSurveyId, setSelectedSurveyId] = useState(surveyId);
+  return (
+    <>
+      <button type="button" onClick={() => void authenticateWithToken('tenant-a-token', 600)}>
+        认证租户 A
+      </button>
+      <button type="button" onClick={() => void authenticateWithToken('tenant-b-token', 600)}>
+        认证租户 B
+      </button>
+      <button
+        type="button"
+        onClick={() => setSelectedSurveyId((current) =>
+          current === surveyId ? otherSurveyId : surveyId)}
+      >
+        切换问卷
+      </button>
+      <button
+        type="button"
+        onClick={() => void api.request({ path: '/v1/expired', schema: z.unknown() }).catch(() => undefined)}
+      >
+        触发生产 401
+      </button>
+      {session ? (
+        <EditorPage api={api} surveyId={selectedSurveyId} tenantId={session.me.tenantId} />
+      ) : (
+        <p>生产组合未认证</p>
+      )}
+    </>
+  );
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
