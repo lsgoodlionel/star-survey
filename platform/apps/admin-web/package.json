@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "assert:production-bundle": "node scripts/assert-production-bundle.mjs",
     "lint": "eslint .",
     "test": "vitest",
     "typecheck": "tsc -b --pretty false"

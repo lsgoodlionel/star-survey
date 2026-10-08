@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { expect, test, vi } from 'vitest';
 import { z } from 'zod';
@@ -16,7 +17,7 @@ const me = {
 };
 
 function SessionProbe() {
-  const { api, authenticateWithToken, session } = useAuth();
+  const { api, authenticateWithToken, logout, session } = useAuth();
   const [requestFinished, setRequestFinished] = useState(false);
 
   return (
@@ -24,6 +25,12 @@ function SessionProbe() {
       <output aria-label="会话状态">{session?.me.actorId ?? '未登录'}</output>
       <button type="button" onClick={() => void authenticateWithToken('memory-token', 600)}>
         建立会话
+      </button>
+      <button type="button" onClick={() => void authenticateWithToken('new-token', 600)}>
+        建立新会话
+      </button>
+      <button type="button" onClick={() => void logout()}>
+        退出登录
       </button>
       <button
         type="button"
@@ -36,9 +43,43 @@ function SessionProbe() {
       >
         请求过期接口
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          void Promise.allSettled([
+            api.request({ path: '/v1/expired/one', schema: z.unknown() }),
+            api.request({ path: '/v1/expired/two', schema: z.unknown() }),
+          ]).finally(() => setRequestFinished(true));
+        }}
+      >
+        并发请求过期接口
+      </button>
       {requestFinished ? <span>请求结束</span> : null}
     </>
   );
+}
+
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function renderAuth(
+  children: ReactNode,
+  options: { beforeSessionClear?: () => void | Promise<void>; queryClient?: QueryClient } = {},
+) {
+  const queryClient = options.queryClient ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return {
+    queryClient,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider beforeSessionClear={options.beforeSessionClear}>{children}</AuthProvider>
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 function installMeHandler() {
@@ -55,22 +96,14 @@ function installMeHandler() {
 test('keepsTheJwtOnlyInTheProviderMemory', async () => {
   installMeHandler();
   const persistentWrite = vi.spyOn(Storage.prototype, 'setItem');
-  const first = render(
-    <AuthProvider>
-      <SessionProbe />
-    </AuthProvider>,
-  );
+  const first = renderAuth(<SessionProbe />);
 
   fireEvent.click(screen.getByRole('button', { name: '建立会话' }));
   expect(await screen.findByText('author-7')).toBeInTheDocument();
   expect(persistentWrite).not.toHaveBeenCalled();
 
   first.unmount();
-  render(
-    <AuthProvider>
-      <SessionProbe />
-    </AuthProvider>,
-  );
+  renderAuth(<SessionProbe />);
   expect(screen.getByLabelText('会话状态')).toHaveTextContent('未登录');
 });
 
@@ -79,16 +112,12 @@ test('clearsTheSessionOn401ButPreservesTheEditorRecoveryPayload', async () => {
   server.use(http.get('/v1/expired', () => HttpResponse.json({}, { status: 401 })));
   let recoveryPayload: unknown;
 
-  render(
-    <AuthProvider
-      beforeSessionClear={() => {
+  renderAuth(<SessionProbe />, {
+    beforeSessionClear: () => {
         expect(screen.getByLabelText('会话状态')).toHaveTextContent('author-7');
         recoveryPayload = { title: '未保存问卷', questions: 3 };
-      }}
-    >
-      <SessionProbe />
-    </AuthProvider>,
-  );
+      },
+  });
 
   fireEvent.click(screen.getByRole('button', { name: '建立会话' }));
   expect(await screen.findByText('author-7')).toBeInTheDocument();
@@ -101,7 +130,7 @@ test('clearsTheSessionOn401ButPreservesTheEditorRecoveryPayload', async () => {
 
 test('maps403404409422And202ToChineseDomainStates', async () => {
   server.use(
-    http.get('/status/:status', ({ params }) =>
+    http.get('/v1/status/:status', ({ params }) =>
       HttpResponse.json({ traceId: `trace-${params.status}` }, { status: Number(params.status) }),
     ),
   );
@@ -116,18 +145,103 @@ test('maps403404409422And202ToChineseDomainStates', async () => {
 
   for (const [status, kind, message] of cases) {
     await expect(
-      api.request({ path: `/status/${status}`, schema: z.unknown() }),
+      api.request({ path: `/v1/status/${status}`, schema: z.unknown() }),
     ).rejects.toMatchObject({ kind, message, status, traceId: `trace-${status}` });
   }
 });
 
+test('ignoresAStale401AfterANewTokenEstablishesTheSession', async () => {
+  const staleResponse = createDeferred();
+  const beforeSessionClear = vi.fn();
+  server.use(
+    http.get('/v1/me', ({ request }) => {
+      const token = request.headers.get('Authorization');
+      return HttpResponse.json({
+        tenantId: 'tenant-a',
+        actorId: token === 'Bearer new-token' ? 'new-user' : 'old-user',
+        roles: ['editor'],
+      });
+    }),
+    http.get('/v1/expired', async () => {
+      await staleResponse.promise;
+      return new HttpResponse(null, { status: 401 });
+    }),
+  );
+  renderAuth(<SessionProbe />, { beforeSessionClear });
+
+  fireEvent.click(screen.getByRole('button', { name: '建立会话' }));
+  expect(await screen.findByText('old-user')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '请求过期接口' }));
+  fireEvent.click(screen.getByRole('button', { name: '建立新会话' }));
+  expect(await screen.findByText('new-user')).toBeInTheDocument();
+  staleResponse.resolve();
+
+  expect(await screen.findByText('请求结束')).toBeInTheDocument();
+  expect(screen.getByLabelText('会话状态')).toHaveTextContent('new-user');
+  expect(beforeSessionClear).not.toHaveBeenCalled();
+});
+
+test('singleFlightsConcurrent401RecoveryAndClearsQueriesBeforeTheSession', async () => {
+  installMeHandler();
+  server.use(http.get('/v1/expired/:id', () => new HttpResponse(null, { status: 401 })));
+  const recovery = createDeferred();
+  const beforeSessionClear = vi.fn(() => recovery.promise);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const originalClear = queryClient.clear.bind(queryClient);
+  const clear = vi.spyOn(queryClient, 'clear').mockImplementation(() => {
+    expect(screen.getByLabelText('会话状态')).toHaveTextContent('author-7');
+    originalClear();
+  });
+  renderAuth(<SessionProbe />, { beforeSessionClear, queryClient });
+
+  fireEvent.click(screen.getByRole('button', { name: '建立会话' }));
+  expect(await screen.findByText('author-7')).toBeInTheDocument();
+  queryClient.setQueryData(['private-profile'], { owner: 'author-7' });
+  fireEvent.click(screen.getByRole('button', { name: '并发请求过期接口' }));
+  await waitFor(() => expect(beforeSessionClear).toHaveBeenCalledTimes(1));
+  expect(clear).not.toHaveBeenCalled();
+
+  recovery.resolve();
+  expect(await screen.findByText('请求结束')).toBeInTheDocument();
+  expect(clear).toHaveBeenCalledTimes(1);
+  expect(queryClient.getQueryData(['private-profile'])).toBeUndefined();
+  expect(screen.getByLabelText('会话状态')).toHaveTextContent('未登录');
+});
+
+test('logoutClearsPriorUserQueriesBeforeCrossUserRelogin', async () => {
+  server.use(
+    http.get('/v1/me', ({ request }) =>
+      HttpResponse.json({
+        tenantId: 'tenant-a',
+        actorId: request.headers.get('Authorization') === 'Bearer new-token' ? 'new-user' : 'old-user',
+        roles: ['editor'],
+      }),
+    ),
+    http.post('/v1/auth/logout', () => new HttpResponse(null, { status: 204 })),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const originalClear = queryClient.clear.bind(queryClient);
+  const clear = vi.spyOn(queryClient, 'clear').mockImplementation(() => {
+    expect(screen.getByLabelText('会话状态')).toHaveTextContent('old-user');
+    originalClear();
+  });
+  renderAuth(<SessionProbe />, { queryClient });
+
+  fireEvent.click(screen.getByRole('button', { name: '建立会话' }));
+  expect(await screen.findByText('old-user')).toBeInTheDocument();
+  queryClient.setQueryData(['private-profile'], { owner: 'old-user' });
+  fireEvent.click(screen.getByRole('button', { name: '退出登录' }));
+  await waitFor(() => expect(screen.getByLabelText('会话状态')).toHaveTextContent('未登录'));
+  expect(clear).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole('button', { name: '建立新会话' }));
+  expect(await screen.findByText('new-user')).toBeInTheDocument();
+  expect(queryClient.getQueryData(['private-profile'])).toBeUndefined();
+});
+
 test('doesNotRenderTheDevTokenEntryInAProductionBuild', async () => {
   const router = createMemoryRouter(createAppRoutes(false), { initialEntries: ['/dev/token'] });
-  render(
-    <AuthProvider>
-      <RouterProvider router={router} />
-    </AuthProvider>,
-  );
+  renderAuth(<RouterProvider router={router} />);
 
   await waitFor(() => expect(screen.getByRole('heading', { name: '页面不存在' })).toBeInTheDocument());
   expect(screen.queryByLabelText('开发令牌')).not.toBeInTheDocument();
