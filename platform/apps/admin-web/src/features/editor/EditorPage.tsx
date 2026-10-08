@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Eye, FileInput, RefreshCw, Rocket, Save } from 'lucide-react';
 import { Link, useBlocker, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
@@ -15,6 +15,7 @@ import {
   surveyDetailQueryKey,
   surveyDraftQueryKey,
   type DraftView,
+  type SurveyView,
 } from '../../shared/api/surveys';
 import { Outline } from './Outline';
 import { PropertiesPanel } from './PropertiesPanel';
@@ -81,6 +82,7 @@ interface LoadedEditorProps extends EditorPageProps {
 }
 
 function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenantId }: LoadedEditorProps) {
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [initialState] = useState(() => {
     const recovered = takeEditorRecovery(tenantId, surveyId);
@@ -162,6 +164,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       return { saved, submittedRevision };
     },
     onSuccess: ({ saved, submittedRevision }) => {
+      synchronizeDraftCache(saved);
       setVersion(saved.version);
       setSavedVersion(saved.version);
       if (revisionRef.current === submittedRevision) {
@@ -175,6 +178,16 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
     },
   });
 
+  function synchronizeDraftCache(saved: DraftView) {
+    queryClient.setQueryData(surveyDraftQueryKey(tenantId, surveyId), saved);
+    queryClient.setQueryData<SurveyView>(
+      surveyDetailQueryKey(tenantId, surveyId),
+      (current) => current
+        ? { ...current, draftVersion: saved.version }
+        : current,
+    );
+  }
+
   function changeDefinition(next: EditableSurveyDefinition) {
     revisionRef.current += 1;
     setDefinition(next);
@@ -185,6 +198,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
 
   async function reloadDraft() {
     const result = await getSurveyDraft(api, surveyId);
+    synchronizeDraftCache(result);
     discardEditorRecovery(tenantId, surveyId);
     revisionRef.current += 1;
     setDefinition(parseDefinition(result.definition));
