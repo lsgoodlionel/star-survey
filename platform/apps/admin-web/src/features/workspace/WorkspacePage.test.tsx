@@ -264,6 +264,59 @@ test('ignoresAnInflightTenantACreateAfterTenantBOpensItsOwnDialog', async () => 
   expect(rendered.router.state.location.search).toBe('');
 });
 
+test('ignoresAnInflightTenantACreateFailureAfterTenantBOpensItsOwnDialog', async () => {
+  const attemptedInA = resource(
+    '10000000-0000-4000-8000-000000000097',
+    'project',
+    null,
+    '租户甲失败项目',
+  );
+  let activeTenant = 'tenant-a';
+  let releaseFailure!: () => void;
+  const createGate = new Promise<void>((resolve) => {
+    releaseFailure = resolve;
+  });
+  server.use(
+    http.get('/v1/resources', () =>
+      HttpResponse.json({ items: activeTenant === 'tenant-b' ? [projectB] : [], nextCursor: null }),
+    ),
+    http.post('/v1/projects', async () => {
+      await createGate;
+      return HttpResponse.json({ traceId: 'tenant-a-create-failure' }, { status: 503 });
+    }),
+  );
+  const user = userEvent.setup();
+  const rendered = renderWorkspace();
+
+  await user.click(await screen.findByRole('button', { name: '新建项目' }));
+  let dialog = screen.getByRole('dialog', { name: '新建项目' });
+  await user.type(within(dialog).getByLabelText('名称'), attemptedInA.name);
+  await user.click(within(dialog).getByRole('button', { name: '创建项目' }));
+
+  activeTenant = 'tenant-b';
+  rendered.switchTenant('tenant-b');
+  expect(await screen.findByRole('button', { name: projectB.name })).toBeInTheDocument();
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: '新建项目' }));
+  dialog = screen.getByRole('dialog', { name: '新建项目' });
+  const tenantBInput = within(dialog).getByLabelText('名称');
+  await user.type(tenantBInput, '租户乙草稿');
+
+  releaseFailure();
+  await waitFor(() =>
+    expect(rendered.queryClient.getMutationCache().getAll().at(-1)?.state.status).toBe('error'),
+  );
+  expect(tenantBInput).toBeEnabled();
+  expect(tenantBInput).toHaveValue('租户乙草稿');
+  expect(within(dialog).getByRole('button', { name: '创建项目' })).toBeEnabled();
+  expect(screen.getByRole('dialog', { name: '新建项目' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: attemptedInA.name })).not.toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(rendered.router.state.location.pathname).toBe('/workspace');
+  expect(rendered.router.state.location.search).toBe('');
+});
+
 test('pinsResolvedDeepPathNodesMissingFromFirstPagesWithoutExhaustingOpaqueCursors', async () => {
   const otherFolder = resource('20000000-0000-4000-8000-000000000002', 'folder', projectA.id, '其他文件夹');
   const otherSurvey = resource('30000000-0000-4000-8000-000000000002', 'survey', folderA.id, '其他问卷');
