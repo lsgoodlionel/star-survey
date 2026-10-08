@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate, Outlet, type RouteObject } from 'react-r
 import { AppShell } from './App';
 import { AuthCallbackPage } from '../features/auth/AuthCallbackPage';
 import { useAuth } from '../features/auth/AuthProvider';
+import { WorkspacePage } from '../features/workspace/WorkspacePage';
 
 const DevelopmentTokenPage = import.meta.env.DEV
   ? lazy(() =>
@@ -14,15 +15,6 @@ function ProtectedRoute() {
   const { session } = useAuth();
   if (!session) return <Navigate to={import.meta.env.DEV ? '/dev/token' : '/login'} replace />;
   return <Outlet />;
-}
-
-function HomePage() {
-  return (
-    <section className="workspace-empty">
-      <h1>问卷工作台</h1>
-      <p>从资源树选择或创建问卷。</p>
-    </section>
-  );
 }
 
 function LoginPage() {
@@ -64,7 +56,10 @@ export function createAppRoutes(isDevelopment: boolean): RouteObject[] {
       children: [
         {
           element: <AppShell />,
-          children: [{ index: true, element: <HomePage /> }],
+          children: [
+            { index: true, element: <Navigate to="/workspace" replace /> },
+            { path: 'workspace', element: <WorkspacePage /> },
+          ],
         },
       ],
     },
