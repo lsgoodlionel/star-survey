@@ -84,6 +84,14 @@ describe('browser gate security contract', () => {
     expect(spec).toContain('const ACTION_TIMEOUT_MS = 15_000');
     expect(spec).not.toMatch(/await page\.getBy[^;]+\.(?:click|fill)\(/);
   });
+
+  test('scopes the imported question assertion to the preview results', async () => {
+    const spec = await source('e2e/authoring.spec.ts');
+
+    expect(spec).toContain("const importPreview = page.getByRole('region', { name: '解析结果' })");
+    expect(spec).toContain("importPreview.getByText('您的性别？', { exact: true })");
+    expect(spec).not.toContain("page.getByText('您的性别？')).toBeVisible()\n  await clickAction");
+  });
 });
 
 test('resolves the app root used by this contract', () => {
