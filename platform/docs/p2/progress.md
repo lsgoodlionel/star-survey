@@ -640,9 +640,12 @@ Java 三次都是「标题少了 `[结构化作答]`」）。**一处例外**：
 只能为每一个候选答卷经网关取一次作答——一次列表请求会放大成一次全量导出，
 还要把游标语义从"上一页最后一行"改成"上一次扫到哪"，并把网关不可达的 503 面扩大到整个列表。
 该走的路是 06.2 导出作业（已有快照水位线与可恢复分批）。
-## 管理端创作链路第一阶段（分支 `feat/admin-web-authoring`）
+## 管理端创作链路第一阶段（已合并 [PR #8](https://github.com/lsgoodlionel/star-survey/pull/8)）
 
-日期：2026-10-08。新增 `platform/apps/admin-web/` React 19 / TypeScript / Vite SPA，浏览器只访问
+日期：2026-10-08，2026-10-09 合并至 `main`（merge commit `4206f24a`）。
+[GitHub Actions run 37861261899](https://github.com/lsgoodlionel/star-survey/actions/runs/37861261899)
+九组质量闸门全部通过，管理端真实浏览器纵向验收用时 6m32s；Node.js 20 运行时迁移和
+`setup-java@v4` 弃用提示为非阻断维护项。新增 `platform/apps/admin-web/` React 19 / TypeScript / Vite SPA，浏览器只访问
 同源 `/v1`，平台继续承担租户、权限、定义校验和发布状态机；发布网关与 LimeSurvey 管理接口不暴露给
 浏览器。认证采用 60 秒、单次使用、绑定 HttpOnly Cookie 的组织登录 `handoff`，交换成功后才创建平台
 会话并签发 JWT；前端会话只驻留页面内存，生产 bundle 不包含开发令牌入口。
