@@ -272,7 +272,11 @@ test('ignoresAnInflightTenantACreateFailureAfterTenantBOpensItsOwnDialog', async
     '租户甲失败项目',
   );
   let activeTenant = 'tenant-a';
+  let signalRequestStarted!: () => void;
   let releaseFailure!: () => void;
+  const requestStarted = new Promise<void>((resolve) => {
+    signalRequestStarted = resolve;
+  });
   const createGate = new Promise<void>((resolve) => {
     releaseFailure = resolve;
   });
@@ -281,6 +285,7 @@ test('ignoresAnInflightTenantACreateFailureAfterTenantBOpensItsOwnDialog', async
       HttpResponse.json({ items: activeTenant === 'tenant-b' ? [projectB] : [], nextCursor: null }),
     ),
     http.post('/v1/projects', async () => {
+      signalRequestStarted();
       await createGate;
       return HttpResponse.json({ traceId: 'tenant-a-create-failure' }, { status: 503 });
     }),
@@ -292,6 +297,7 @@ test('ignoresAnInflightTenantACreateFailureAfterTenantBOpensItsOwnDialog', async
   let dialog = screen.getByRole('dialog', { name: '新建项目' });
   await user.type(within(dialog).getByLabelText('名称'), attemptedInA.name);
   await user.click(within(dialog).getByRole('button', { name: '创建项目' }));
+  await requestStarted;
 
   activeTenant = 'tenant-b';
   rendered.switchTenant('tenant-b');
@@ -311,6 +317,7 @@ test('ignoresAnInflightTenantACreateFailureAfterTenantBOpensItsOwnDialog', async
   expect(tenantBInput).toHaveValue('租户乙草稿');
   expect(within(dialog).getByRole('button', { name: '创建项目' })).toBeEnabled();
   expect(screen.getByRole('dialog', { name: '新建项目' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: projectB.name })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: attemptedInA.name })).not.toBeInTheDocument();
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(rendered.router.state.location.pathname).toBe('/workspace');
