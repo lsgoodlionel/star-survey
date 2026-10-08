@@ -39,6 +39,40 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
 `requirement=`，凡是声明了需求归属的主题，本表里必须有它的测试证据——新加主题而不补证据，
 校验直接红。
 
+截至 2026-10-08，校验器自身 **72 tests** 通过；索引含 **305** 条需求，机器登记 **85** 条证据、
+覆盖 **37** 条需求，自有源码引用 **95** 个需求编号，并已与 02 矩阵对账通过。
+
+### 管理端首期的局部断言索引
+
+当前定位符校验器只解析 `.py`、`.java`、`.php` 和 `.sh`，尚不能把 Vitest 的 `.ts/.tsx` 符号加入
+上面的 85 条机器登记。下列补充索引给出可直接核对的测试名，并明确只证明复合需求中的局部断言：
+
+- `R01-01`：`WorkspacePage.test.tsx` 的 `createsAProjectFolderAndBlankSurveyWithChineseDefaults`，以及
+  `e2e/authoring.spec.ts` 桌面场景，证明从管理端创建空白中文问卷并进入编辑器；不证明所有应用类型。
+- `R01-02`：`ImportPage.test.tsx` 的 `previewsWithoutWritingAndSelectsValidQuestionsByDefault`、
+  `keepsBadLinesVisibleWithTheirOriginalLineNumbers`、`importsOnlyTheCheckedOrdinalsIntoTheChosenGroupAndRefreshesTheDraft`
+  和桌面 E2E，证明“先预览、坏行定位、选择后导入”子链路。
+- `R01-04`：`definition.test.ts` 的 `editsOnlyTheSelectedBasicQuestion`、
+  `keepsQuestionAndGroupUuidsStableWhileReordering`，证明基础字段编辑与稳定排序；不证明拖拽排序或高级题型编辑。
+- `R01-07`：`PreviewPage.test.tsx` 的 `labelsTheRendererAsDraftPreviewAndNeverCallsTheAnswerEngine`，以及桌面
+  E2E 的草稿预览、发布成功和不可变版本查看，证明这些子项；不证明真实 LimeSurvey 运行时预览或关闭问卷。
+- `R01-08`：`EditorPage.test.tsx` 的 `savesWithTheCurrentDraftVersionAndAdoptsTheReturnedVersion`、
+  `keepsLocalChangesWhenTheServerReturns409`、`recoversTheInMemoryDraftAfterReauthentication`，证明版本保存、
+  冲突不覆盖与同页内存恢复；不证明多人实时协同或字段级合并。
+- `R01-09`：`PublishPage.test.tsx` 的 `showsOnlyActionsAllowedByTheCurrentApprovalState` 和桌面 E2E，证明提交、
+  批准和按获批版本发布的浏览器链路；其他审批状态由组件测试覆盖，不据此宣称整条需求 Accepted。
+- `R19-04`：`WorkspacePage.test.tsx` 的 `usesServerCapabilitiesInsteadOfTokenRolesForAvailableActions`、平台
+  `ResourceTreeApiTest.capabilitiesAreReadOnlyAuthoritativeAndPreserveNotFoundPrivacy` 和桌面 E2E，证明文件夹创建、
+  资源能力与不可见性子项；不证明协作员生命周期全部完成。
+- `R23-03`：`OrgLoginHandoffTest` 的无 JWT 重定向、单次交换、过期／换浏览器／跨租户拒绝用例，以及
+  `AuthProvider.test.tsx` 的内存会话用例，证明管理端可信身份交接子项；不替代整套服务权限验收。
+- `R23-08`：`test_admin_web_gate.py` 的 `test_issue_browser_token_never_prints_the_jwt`、
+  `test_failure_scrub_removes_media_even_when_token_is_only_visual` 和 `test_keep_mode_still_removes_private_work_directory`
+  证明真实浏览器门禁不打印 JWT、失败媒体不留存、临时凭据总是清理；不代表完整安全供应链与审计要求。
+- `R23-12`：`platform/deploy/test/run-admin-web-e2e.sh` 串起浏览器、平台、平台库、发布网关和引擎库，并由
+  `AdminWebGateTest.test_verify_evidence_rejects_a_platform_or_engine_mismatch` 反向证明任一段不一致会失败；这是
+  管理端首期纵向验收证据，不把 305 条需求整体视为完成。
+
 ## WP-01 创建与编辑
 
 | 需求ID | 层级 | 证据定位符 | 说明 |
