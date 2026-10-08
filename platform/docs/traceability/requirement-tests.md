@@ -71,10 +71,12 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
   `test_export_rejects_unknown_trace_fields_and_leaves_no_stale_output`、
   `test_export_rejects_encoded_or_normalized_credentials_and_clears_output`、
   `test_export_accepts_only_real_admin_web_routes`、
+  `test_export_preserves_a_bounded_sanitized_network_sequence`、
+  `test_export_rejects_unsafe_network_sequences_and_clears_old_output`、
   `test_playwright_failure_exports_only_sanitized_ci_evidence` 和
-  `redaction.spec.ts` 的真实 Chromium DOM 截图用例，证明真实浏览器门禁不打印 JWT，只导出白名单脱敏失败证据，
-  拒绝未知字段、编码或规范化后的凭据与非管理端路由，并在截图前实际隐藏敏感控件；不代表完整安全供应链与
-  审计要求。
+  `redaction.spec.ts` 的真实 Chromium DOM/网络/截图用例，证明真实浏览器门禁不打印 JWT，只导出白名单脱敏
+  失败证据，拒绝未知字段、编码或规范化后的凭据、非管理端路由与不安全网络事件，并在截图前收集脱敏响应和
+  隐藏敏感控件；不代表完整安全供应链与审计要求。
 - `R23-12`：`platform/deploy/test/run-admin-web-e2e.sh` 串起浏览器、平台、平台库、发布网关和引擎库，并由
   `AdminWebGateTest.test_verify_evidence_rejects_a_platform_or_engine_mismatch` 反向证明任一段不一致会失败；这是
   管理端首期纵向验收证据，不把 305 条需求整体视为完成。

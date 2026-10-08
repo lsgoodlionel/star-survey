@@ -32,6 +32,7 @@ describe('browser gate security contract', () => {
     expect(spec).toContain("testInfo.outputPath('sanitized-failure.png')");
     expect(spec).toContain("testInfo.outputPath('sanitized-trace-summary.json')");
     expect(spec).toContain("kind: 'sanitized-playwright-trace-summary'");
+    expect(spec).toContain('network: recentSanitizedNetworkEvents(page)');
     expect(spec).not.toContain('testInfo.error');
   });
 

@@ -484,6 +484,7 @@ class AdminWebGateTest(unittest.TestCase):
                 "status": "failed",
                 "durationMs": 123,
                 "lastPath": "/surveys/00000000-0000-4000-8000-000000000000/edit",
+                "network": [],
             }), encoding="utf-8")
             (case / "trace.zip").write_bytes(b"raw playwright trace")
             (case / "raw-failure.png").write_bytes(b"\x89PNG\r\n\x1a\nraw")
@@ -500,6 +501,84 @@ class AdminWebGateTest(unittest.TestCase):
             }, {path.name for path in destination.iterdir()})
             for artifact in destination.iterdir():
                 self.assertNotIn(token.encode("ascii"), artifact.read_bytes())
+
+    def test_export_preserves_a_bounded_sanitized_network_sequence(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, "header.payload.signature")
+            source.mkdir()
+            network = [
+                {"method": "GET", "status": 200, "url": "http://127.0.0.1:4173/v1/me"},
+                {"method": "POST", "status": 503, "url": "http://127.0.0.1:4173/v1/surveys"},
+            ]
+            (source / "sanitized-trace-summary.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "kind": "sanitized-playwright-trace-summary",
+                "project": "chromium-desktop",
+                "testId": "desktop-authoring",
+                "status": "failed",
+                "durationMs": 123,
+                "lastPath": "/workspace",
+                "network": network,
+            }), encoding="utf-8")
+
+            exported = gate.export_sanitized_failure_evidence(
+                secret, source, destination, allowed_root
+            )
+
+            self.assertEqual(1, exported)
+            summary = json.loads(next(destination.glob("*.json")).read_text(encoding="utf-8"))
+            self.assertEqual(network, summary["network"])
+
+    def test_export_rejects_unsafe_network_sequences_and_clears_old_output(self):
+        gate = load_gate()
+        token = "Header.Payload.Signature"
+        safe_event = {"method": "GET", "status": 200, "url": "http://127.0.0.1:4173/v1/me"}
+        unsafe_sequences = {
+            "unknown field": [{**safe_event, "headers": {"authorization": "withheld"}}],
+            "query": [{**safe_event, "url": "http://127.0.0.1:4173/v1/me?debug=true"}],
+            "encoded secret": [{
+                **safe_event,
+                "url": "http://127.0.0.1:4173/v1/%48%65%61%64%65%72%2e%50%61%79%6c%6f%61%64%2e%53%69%67%6e%61%74%75%72%65",
+            }],
+            "too many": [safe_event] * 26,
+            "url too long": [{**safe_event, "url": "http://127.0.0.1:4173/v1/" + "a" * 800}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, token)
+            source.mkdir()
+
+            for label, network in unsafe_sequences.items():
+                with self.subTest(label=label):
+                    destination.mkdir(parents=True, exist_ok=True)
+                    (destination / "stale.txt").write_text("old run", encoding="utf-8")
+                    (source / "sanitized-trace-summary.json").write_text(json.dumps({
+                        "schemaVersion": 1,
+                        "kind": "sanitized-playwright-trace-summary",
+                        "project": "chromium-desktop",
+                        "testId": "desktop-authoring",
+                        "status": "failed",
+                        "durationMs": 123,
+                        "lastPath": "/workspace",
+                        "network": network,
+                    }), encoding="utf-8")
+
+                    with self.assertRaises(gate.StepFailed):
+                        gate.export_sanitized_failure_evidence(
+                            secret, source, destination, allowed_root
+                        )
+
+                    self.assertFalse(destination.exists())
 
     def test_export_rejects_unknown_trace_fields_and_leaves_no_stale_output(self):
         gate = load_gate()
@@ -521,6 +600,7 @@ class AdminWebGateTest(unittest.TestCase):
                 "status": "failed",
                 "durationMs": 123,
                 "lastPath": "/workspace",
+                "network": [],
                 "jwt": "must be rejected",
             }), encoding="utf-8")
 
@@ -549,7 +629,7 @@ class AdminWebGateTest(unittest.TestCase):
             payloads = (
                 '{"schemaVersion":1,"kind":"sanitized-playwright-trace-summary",'
                 '"project":"chromium-desktop","testId":"desktop-authoring",'
-                '"status":"failed","durationMs":1,"lastPath":"/workspace/' + escaped + '"}',
+                '"status":"failed","durationMs":1,"lastPath":"/workspace/' + escaped + '","network":[]}',
                 json.dumps({
                     "schemaVersion": 1,
                     "kind": "sanitized-playwright-trace-summary",
@@ -558,6 +638,7 @@ class AdminWebGateTest(unittest.TestCase):
                     "status": "failed",
                     "durationMs": 1,
                     "lastPath": "/workspace/" + encoded,
+                    "network": [],
                 }),
                 json.dumps({
                     "schemaVersion": 1,
@@ -567,6 +648,7 @@ class AdminWebGateTest(unittest.TestCase):
                     "status": "failed",
                     "durationMs": 1,
                     "lastPath": "/workspace/" + fullwidth,
+                    "network": [],
                 }, ensure_ascii=False),
             )
             for serialized in payloads:
@@ -613,6 +695,7 @@ class AdminWebGateTest(unittest.TestCase):
                         "status": "failed",
                         "durationMs": 1,
                         "lastPath": path,
+                        "network": [],
                     }), encoding="utf-8")
 
                     with self.assertRaises(gate.StepFailed):
@@ -697,7 +780,7 @@ issue_browser_token() { printf '%s' "$TOKEN" >"$JWT"; chmod 600 "$JWT"; }
 run_playwright() {
   mkdir -p "$PRIVATE_RESULTS/case"
   printf '\211PNG\r\n\032\nsafe-pixels' >"$PRIVATE_RESULTS/case/sanitized-failure.png"
-  printf '%s\n' '{"schemaVersion":1,"kind":"sanitized-playwright-trace-summary","project":"chromium-desktop","testId":"desktop-authoring","status":"failed","durationMs":25,"lastPath":"/workspace"}' >"$PRIVATE_RESULTS/case/sanitized-trace-summary.json"
+  printf '%s\n' '{"schemaVersion":1,"kind":"sanitized-playwright-trace-summary","project":"chromium-desktop","testId":"desktop-authoring","status":"failed","durationMs":25,"lastPath":"/workspace","network":[]}' >"$PRIVATE_RESULTS/case/sanitized-trace-summary.json"
   printf 'raw trace' >"$PRIVATE_RESULTS/case/trace.zip"
   printf '%s' "$TOKEN" >"$PRIVATE_RESULTS/case/leak.txt"
   return 1

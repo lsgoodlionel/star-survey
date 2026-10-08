@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page, type Response, type TestInfo } f
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { assertArtifactContainsNoSecret, redactSecret } from './artifacts';
+import { recentSanitizedNetworkEvents, trackSanitizedNetworkEvents } from './networkEvidence';
 import { redactSensitiveInputs } from './redaction';
 
 interface TestMetadata {
@@ -34,6 +35,10 @@ const importText = [
   '这一行认不出来',
   '2. 单选却没有选项[单选]',
 ].join('\n');
+
+test.beforeEach(async ({ page }) => {
+  trackSanitizedNetworkEvents(page);
+});
 
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === testInfo.expectedStatus) return;
@@ -74,6 +79,7 @@ async function writeSanitizedTraceSummary(page: Page, testInfo: TestInfo) {
     status: testInfo.status,
     durationMs: Math.max(0, Math.round(testInfo.duration)),
     lastPath,
+    network: recentSanitizedNetworkEvents(page),
   };
   await writeFile(
     testInfo.outputPath('sanitized-trace-summary.json'),
