@@ -27,6 +27,31 @@
   letter-spacing: 0;
 }
 
+.preview-toolbar-actions,
+.preview-toolbar-actions > a {
+  display: flex;
+  align-items: center;
+}
+
+.preview-toolbar-actions {
+  gap: 12px;
+}
+
+.preview-toolbar-actions > a {
+  min-height: 36px;
+  gap: 6px;
+  padding: 6px 9px;
+  color: #244b58;
+  text-decoration: none;
+  border: 1px solid #a9c1c8;
+  border-radius: 4px;
+}
+
+.preview-toolbar-actions > a svg {
+  width: 17px;
+  height: 17px;
+}
+
 .preview-segments {
   display: grid;
   grid-template-columns: repeat(2, 116px);
@@ -190,6 +215,15 @@
   .preview-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .preview-toolbar-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .preview-toolbar-actions > a {
+    justify-content: center;
   }
 
   .preview-segments {

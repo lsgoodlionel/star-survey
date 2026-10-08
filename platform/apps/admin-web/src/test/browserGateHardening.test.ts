@@ -37,7 +37,7 @@ describe('browser gate security contract', () => {
 
   test('requires real mobile tab interaction and viewport geometry assertions', async () => {
     const spec = await source('e2e/authoring.spec.ts');
-    expect(spec).toContain('await tab.click()');
+    expect(spec).toContain('await clickAction(tab)');
     expect(spec).toContain("toHaveAttribute('aria-selected', 'true')");
     expect(spec).toContain('toBeInViewport()');
     expect(spec).toContain('boundingBox()');
@@ -60,6 +60,29 @@ describe('browser gate security contract', () => {
     expect(spec).toContain('testInfo.setTimeout(testInfo.timeout + 7_000)');
     expect(spec).toContain('withTimeout(redactSensitiveInputs(page), 1_500)');
     expect(spec).toContain("timeout: 2_000");
+  });
+
+  test('keeps authenticated authoring navigation inside the SPA', async () => {
+    const spec = await source('e2e/authoring.spec.ts');
+
+    expect(spec).not.toMatch(/page\.goto\(`\/surveys\//);
+    expect(spec).toContain("getByRole('link', { name: '批量导入' })");
+    expect(spec).toContain("getByRole('link', { name: '草稿预览' })");
+    expect(spec).toContain("getByRole('link', { name: '返回编辑' })");
+    expect(spec).toContain("getByRole('link', { name: '发布管理' })");
+    expect(spec).toContain('await navigateWithinApp(page, `/surveys/${result.surveyId}/edit`)');
+    expect(spec).toContain("window.history.pushState({}, '', path)");
+    expect(spec).toContain("window.dispatchEvent(new PopStateEvent('popstate'))");
+  });
+
+  test('checks every browser action before interacting', async () => {
+    const spec = await source('e2e/authoring.spec.ts');
+
+    expect(spec).toContain('async function expectActionable(locator: Locator)');
+    expect(spec).toContain('toBeVisible({ timeout: ACTION_TIMEOUT_MS })');
+    expect(spec).toContain('toBeEnabled({ timeout: ACTION_TIMEOUT_MS })');
+    expect(spec).toContain('const ACTION_TIMEOUT_MS = 15_000');
+    expect(spec).not.toMatch(/await page\.getBy[^;]+\.(?:click|fill)\(/);
   });
 });
 

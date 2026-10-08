@@ -1,4 +1,5 @@
 import { fireEvent, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, test } from 'vitest';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
 import { renderWithQuery } from '../../test/render';
@@ -43,7 +44,25 @@ const draft = {
   },
 };
 
+function renderPreview(api: ApiClient) {
+  return renderWithQuery(
+    <MemoryRouter>
+      <PreviewPage api={api} surveyId={surveyId} tenantId={tenantId} />
+    </MemoryRouter>,
+  );
+}
+
 describe('PreviewPage', () => {
+  test('linksBackToTheEditorWithoutReloadingTheSession', async () => {
+    const api: ApiClient = { request: () => Promise.resolve(draft) as never };
+    renderPreview(api);
+
+    expect(await screen.findByRole('link', { name: '返回编辑' })).toHaveAttribute(
+      'href',
+      `/surveys/${surveyId}/edit`,
+    );
+  });
+
   test('labelsTheRendererAsDraftPreviewAndNeverCallsTheAnswerEngine', async () => {
     const requests: ApiRequest<unknown>[] = [];
     const api: ApiClient = {
@@ -53,7 +72,7 @@ describe('PreviewPage', () => {
       },
     };
 
-    renderWithQuery(<PreviewPage api={api} surveyId={surveyId} tenantId={tenantId} />);
+    renderPreview(api);
 
     expect(await screen.findByRole('heading', { name: '草稿预览' })).toBeInTheDocument();
     expect(screen.getByText('员工体验调查')).toBeInTheDocument();
@@ -64,7 +83,7 @@ describe('PreviewPage', () => {
 
   test('rendersBasicQuestionsReadOnlyAndUnsupportedQuestionsAsReadablePlaceholders', async () => {
     const api: ApiClient = { request: () => Promise.resolve(draft) as never };
-    renderWithQuery(<PreviewPage api={api} surveyId={surveyId} tenantId={tenantId} />);
+    renderPreview(api);
 
     expect(await screen.findByText('请选择一项')).toBeInTheDocument();
     expect(screen.getByText('请选择多项')).toBeInTheDocument();
@@ -80,7 +99,7 @@ describe('PreviewPage', () => {
 
   test('switchesBetweenStableDesktopAndMobilePreviewWidths', async () => {
     const api: ApiClient = { request: () => Promise.resolve(draft) as never };
-    renderWithQuery(<PreviewPage api={api} surveyId={surveyId} tenantId={tenantId} />);
+    renderPreview(api);
 
     const frame = await screen.findByTestId('draft-preview-frame');
     expect(frame).toHaveAttribute('data-preview-mode', 'desktop');

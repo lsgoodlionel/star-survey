@@ -153,6 +153,15 @@ function previewWithText(text: string) {
 }
 
 describe('ImportPage', () => {
+  test('linksBackToTheEditorWithoutReloadingTheSession', async () => {
+    renderImport(standardApi());
+
+    expect(await screen.findByRole('link', { name: '返回编辑' })).toHaveAttribute(
+      'href',
+      `/surveys/${surveyId}/edit`,
+    );
+  });
+
   test('previewsWithoutWritingAndSelectsValidQuestionsByDefault', async () => {
     const requests: ApiRequest<unknown>[] = [];
     const api = standardApi({
