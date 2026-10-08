@@ -430,6 +430,9 @@ describe('PublishPage', () => {
     { name: 'malformed validation path', failedStage: 'validate', failure: 'E_MISSING_ANSWERS groups[0]..questions[1].answers: 至少需要一个选项' },
     { name: 'overlong validation path', failedStage: 'validate', failure: `E_MISSING_ANSWERS groups[0].${'questions.'.repeat(30)}answers: 至少需要一个选项` },
     { name: 'extra line structure', failedStage: 'validate', failure: 'E_MISSING_ANSWERS groups[0].questions[1].answers: 至少需要一个选项\nRAW_GATEWAY_SECRET' },
+    { name: 'NEL U+0085 separator', failedStage: 'validate', failure: 'E_MISSING_ANSWERS groups[0].questions[1].answers: 第一行\u0085第二行' },
+    { name: 'line separator U+2028', failedStage: 'validate', failure: 'E_MISSING_ANSWERS groups[0].questions[1].answers: 第一行\u2028第二行' },
+    { name: 'paragraph separator U+2029', failedStage: 'validate', failure: 'E_MISSING_ANSWERS groups[0].questions[1].answers: 第一行\u2029第二行' },
     { name: 'secret-like validation content', failedStage: 'validate', failure: 'E_MISSING_ANSWERS groups[0].questions[1].answers: bearer gateway-secret' },
     { name: 'allowlisted code at a non-validation stage', failedStage: 'compile', failure: 'E_MISSING_ANSWERS groups[0].questions[1].answers: 至少需要一个选项' },
   ])('hides $name', async ({ failedStage, failure }) => {
