@@ -1,6 +1,7 @@
-import { expect, test, type Page, type Response } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Response } from '@playwright/test';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { assertArtifactContainsNoSecret, redactSecret } from './artifacts';
 
 interface TestMetadata {
   actorId?: string;
@@ -21,22 +22,23 @@ const importText = [
   '2. 单选却没有选项[单选]',
 ].join('\n');
 
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  try {
+    await redactSensitiveInputs(page);
+    await page.screenshot({ path: testInfo.outputPath('failure.png'), fullPage: true });
+  } catch {
+    // A crashed or inaccessible page is safer without a screenshot than with an unredacted one.
+  }
+});
+
 test('author creates, imports, approves and publishes a survey', async ({ page }) => {
   const metadata = await readMetadata();
   const token = await readToken();
   const network: NetworkRecord[] = [];
-  page.on('response', (response) => network.push(networkRecord(response)));
+  page.on('response', (response) => network.push(networkRecord(response, token)));
 
-  await page.goto('/dev/token');
-  const meResponse = page.waitForResponse((response) =>
-    response.url().includes('/v1/me') && response.request().method() === 'GET',
-  );
-  const tokenInput = page.getByLabel('测试令牌');
-  await tokenInput.fill(token);
-  await page.getByRole('button', { name: '登录' }).click();
-  await tokenInput.fill('').catch(() => undefined);
-  expect((await meResponse).status()).toBe(200);
-  await expect(page).toHaveURL(/\/workspace$/);
+  await login(page, token);
   if (metadata.actorId) await expect(page.getByText(metadata.actorId, { exact: true })).toBeVisible();
 
   const suffix = Date.now().toString(36);
@@ -83,7 +85,7 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
   await expect(page.getByText('当前在线')).toBeVisible();
   await expect(page.getByText('字段映射')).toBeVisible();
 
-  await writeResult({ network, surveyId, tenantId: metadata.tenantId, version });
+  await writeResult({ network, surveyId, tenantId: metadata.tenantId, version }, token);
 });
 
 test('@mobile editor keeps tabs and primary actions usable without horizontal overflow', async ({ page }) => {
@@ -97,14 +99,26 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
 
   const tabs = page.getByRole('tablist', { name: '编辑区域' });
   await expect(tabs).toBeVisible();
-  for (const name of ['大纲', '编辑', '属性']) {
+  const panels = [
+    { name: '大纲', control: page.getByRole('button', { name: /QNOTE/ }).first() },
+    { name: '编辑', control: page.getByLabel('题目文本') },
+    { name: '属性', control: page.getByLabel('标题') },
+  ];
+  for (const { name, control } of panels) {
     const tab = page.getByRole('tab', { name });
-    await expect(tab).toBeVisible();
-    await tab.focus();
-    expect(await tab.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe('none');
+    await tab.click();
+    await expect(tab).toHaveAttribute('aria-selected', 'true');
+    const panel = page.getByRole('tabpanel', { name });
+    await expect(panel).toBeVisible();
+    await assertUsable(tab);
+    await assertUsable(panel);
+    await assertUsable(control);
+    await page.keyboard.press('Tab');
+    expect(await page.locator(':focus').evaluate((element) => getComputedStyle(element).outlineStyle))
+      .not.toBe('none');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
-  await expect(page.getByRole('button', { name: '保存草稿' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await assertUsable(page.getByRole('button', { name: '保存草稿' }));
 });
 
 async function createResource(page: Page, trigger: string, submit: string, value: string) {
@@ -118,10 +132,17 @@ async function createResource(page: Page, trigger: string, submit: string, value
 async function login(page: Page, token: string) {
   await page.goto('/dev/token');
   const tokenInput = page.getByLabel('测试令牌');
-  await tokenInput.fill(token);
-  await page.getByRole('button', { name: '登录' }).click();
-  await tokenInput.fill('').catch(() => undefined);
-  await expect(page).toHaveURL(/\/workspace$/);
+  try {
+    const meResponse = page.waitForResponse((response) =>
+      response.url().includes('/v1/me') && response.request().method() === 'GET',
+    );
+    await tokenInput.fill(token);
+    await page.getByRole('button', { name: '登录' }).click();
+    expect((await meResponse).status()).toBe(200);
+    await expect(page).toHaveURL(/\/workspace$/);
+  } finally {
+    await redactSensitiveInputs(page).catch(() => undefined);
+  }
 }
 
 async function readToken() {
@@ -138,19 +159,46 @@ async function readMetadata(): Promise<TestMetadata> {
   return path ? JSON.parse(await readFile(path, 'utf8')) as TestMetadata : {};
 }
 
-async function writeResult(result: Record<string, unknown>) {
+async function writeResult(result: Record<string, unknown>, token: string) {
+  assertArtifactContainsNoSecret(result, token);
   const path = requiredEnv('ADMIN_WEB_RESULT_FILE');
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
 }
 
-function networkRecord(response: Response): NetworkRecord {
+function networkRecord(response: Response, token: string): NetworkRecord {
   const url = new URL(response.url());
   return {
     method: response.request().method(),
     status: response.status(),
-    url: `${url.origin}${url.pathname}${url.search}`,
+    url: redactSecret(`${url.origin}${url.pathname}${url.search}`, token),
   };
+}
+
+async function redactSensitiveInputs(page: Page) {
+  const sensitive = page.locator('[data-sensitive="token"], input[type="password"]');
+  await sensitive.fill('').catch(() => undefined);
+  await sensitive.evaluateAll((elements) => {
+    for (const element of elements) {
+      if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+        element.value = '';
+      }
+      (element as HTMLElement).style.visibility = 'hidden';
+    }
+  });
+}
+
+async function assertUsable(locator: Locator) {
+  await expect(locator).toBeVisible();
+  await expect(locator).toBeInViewport();
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.width).toBeGreaterThanOrEqual(24);
+  expect(box!.height).toBeGreaterThanOrEqual(24);
+  expect(await locator.evaluate((element, point) => {
+    const hit = document.elementFromPoint(point.x, point.y);
+    return hit === element || (hit !== null && element.contains(hit));
+  }, { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 })).toBe(true);
 }
 
 function surveyIdFrom(url: string) {
