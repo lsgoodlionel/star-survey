@@ -43,6 +43,24 @@ describe('browser gate security contract', () => {
     expect(spec).toContain('boundingBox()');
     expect(spec).toContain('elementFromPoint');
   });
+
+  test('validates the authenticated API identity instead of relying on shell text', async () => {
+    const spec = await source('e2e/authoring.spec.ts');
+    expect(spec).toContain('await meResponse.json()');
+    expect(spec).toContain('expect(me.actorId).toBe(metadata.actorId)');
+    expect(spec).toContain('expect(me.tenantId).toBe(metadata.tenantId)');
+    expect(spec).not.toContain('getByText(metadata.actorId');
+  });
+
+  test('reuses the desktop survey for mobile and bounds failure artifact work', async () => {
+    const spec = await source('e2e/authoring.spec.ts');
+    expect(spec).toContain('const result = await readResult()');
+    expect(spec.match(/await createResource\(page/g)).toHaveLength(3);
+    expect(spec).toContain('if (page.isClosed()) return');
+    expect(spec).toContain('testInfo.setTimeout(testInfo.timeout + 7_000)');
+    expect(spec).toContain('withTimeout(redactSensitiveInputs(page), 1_500)');
+    expect(spec).toContain("timeout: 2_000");
+  });
 });
 
 test('resolves the app root used by this contract', () => {
