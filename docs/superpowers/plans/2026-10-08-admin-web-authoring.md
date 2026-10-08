@@ -216,6 +216,8 @@ git commit -m "feat: bootstrap the survey admin web app"
 - Create: `platform/apps/admin-web/src/features/workspace/CreateResourceDialog.tsx`
 - Create: `platform/apps/admin-web/src/features/workspace/workspace.css`
 - Create: `platform/apps/admin-web/src/features/workspace/WorkspacePage.test.tsx`
+- Create: `platform/apps/admin-web/src/shared/api/surveys.ts`
+- Modify: `platform/apps/admin-web/src/app/router.tsx`
 
 **Interfaces:**
 - Consumes: `GET /v1/resources`、`POST /v1/projects`、`POST /v1/folders`、`POST /v1/surveys`。
@@ -256,14 +258,15 @@ Expected: PASS。
 - [ ] **Step 6: 提交工作区**
 
 ```bash
-git add platform/apps/admin-web/src/features/workspace platform/apps/admin-web/src/shared/api/resources.ts
+git add platform/apps/admin-web/src/features/workspace platform/apps/admin-web/src/shared/api/resources.ts \
+  platform/apps/admin-web/src/shared/api/surveys.ts platform/apps/admin-web/src/app/router.tsx
 git commit -m "feat: add the author workspace resource tree"
 ```
 
 ### Task 4: 无损问卷定义模型与基础编辑器
 
 **Files:**
-- Create: `platform/apps/admin-web/src/shared/api/surveys.ts`
+- Modify: `platform/apps/admin-web/src/shared/api/surveys.ts`
 - Create: `platform/apps/admin-web/src/features/editor/model/definition.ts`
 - Create: `platform/apps/admin-web/src/features/editor/model/operations.ts`
 - Create: `platform/apps/admin-web/src/features/editor/model/definition.test.ts`
@@ -275,6 +278,7 @@ git commit -m "feat: add the author workspace resource tree"
 - Create: `platform/apps/admin-web/src/features/editor/ReadOnlyQuestion.tsx`
 - Create: `platform/apps/admin-web/src/features/editor/editor.css`
 - Create: `platform/apps/admin-web/src/features/editor/EditorPage.test.tsx`
+- Modify: `platform/apps/admin-web/src/app/router.tsx`
 
 **Interfaces:**
 - Consumes: `GET /v1/surveys/{id}`、`GET /v1/surveys/{id}/draft`、`PUT /v1/surveys/{id}/draft`。
@@ -338,7 +342,8 @@ Expected: 全部通过。
 - [ ] **Step 8: 提交基础编辑器**
 
 ```bash
-git add platform/apps/admin-web/src/features/editor platform/apps/admin-web/src/shared/api/surveys.ts
+git add platform/apps/admin-web/src/features/editor platform/apps/admin-web/src/shared/api/surveys.ts \
+  platform/apps/admin-web/src/test/fixtures/publish-gateway.json platform/apps/admin-web/src/app/router.tsx
 git commit -m "feat: add lossless basic survey editing"
 ```
 
@@ -353,6 +358,7 @@ git commit -m "feat: add lossless basic survey editing"
 - Create: `platform/apps/admin-web/src/features/preview/DraftRenderer.tsx`
 - Create: `platform/apps/admin-web/src/features/preview/preview.css`
 - Create: `platform/apps/admin-web/src/features/preview/PreviewPage.test.tsx`
+- Modify: `platform/apps/admin-web/src/app/router.tsx`
 
 **Interfaces:**
 - Consumes: `POST /v1/surveys/{id}/import/preview`、`POST /v1/surveys/{id}/import`、Task 4 草稿查询和定义模型。
@@ -397,7 +403,7 @@ Expected: PASS。
 
 ```bash
 git add platform/apps/admin-web/src/features/import platform/apps/admin-web/src/features/preview \
-  platform/apps/admin-web/src/shared/api/imports.ts
+  platform/apps/admin-web/src/shared/api/imports.ts platform/apps/admin-web/src/app/router.tsx
 git commit -m "feat: add survey import and draft preview"
 ```
 
@@ -411,6 +417,7 @@ git commit -m "feat: add survey import and draft preview"
 - Create: `platform/apps/admin-web/src/features/publish/VersionDetailPage.tsx`
 - Create: `platform/apps/admin-web/src/features/publish/publish.css`
 - Create: `platform/apps/admin-web/src/features/publish/PublishPage.test.tsx`
+- Modify: `platform/apps/admin-web/src/app/router.tsx`
 
 **Interfaces:**
 - Consumes: 现有 approval、publish、survey、versions API。
@@ -456,7 +463,8 @@ Expected: PASS。
 - [ ] **Step 6: 提交发布工作区**
 
 ```bash
-git add platform/apps/admin-web/src/features/publish platform/apps/admin-web/src/shared/api/approvals.ts
+git add platform/apps/admin-web/src/features/publish platform/apps/admin-web/src/shared/api/approvals.ts \
+  platform/apps/admin-web/src/app/router.tsx
 git commit -m "feat: add approval and publish tracking"
 ```
 
