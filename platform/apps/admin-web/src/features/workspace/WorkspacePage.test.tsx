@@ -160,6 +160,10 @@ test('resolvesADeepUrlTargetAndExpandsEveryAncestor', async () => {
   const selected = await screen.findByRole('button', { name: '客户反馈' });
   expect(selected).toHaveAttribute('aria-current', 'true');
   expect(screen.getByRole('heading', { name: '客户反馈' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: '编辑问卷' })).toHaveAttribute(
+    'href',
+    `/surveys/${surveyA.id}/edit`,
+  );
   expect(gets).toEqual([surveyA.id, folderA.id, projectA.id]);
   expect(screen.getByRole('button', { name: '收起 项目甲' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '收起 调研资料' })).toBeInTheDocument();

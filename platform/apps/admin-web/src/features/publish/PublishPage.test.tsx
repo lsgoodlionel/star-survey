@@ -599,6 +599,26 @@ describe('PublishPage', () => {
     for (const name of hidden) expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
   });
 
+  test('allowsSubmittingANewDraftAfterThePreviousDraftWasPublished', async () => {
+    const api = standardApi({
+      [`GET /v1/surveys/${surveyId}`]: () => ({ ...baseSurvey, draftVersion: 5 }),
+      [`GET /v1/resource-capabilities?resourceId=${surveyId}`]: () => ({
+        ...baseCapabilities,
+        canApprovePublish: false,
+      }),
+      [`GET /v1/surveys/${surveyId}/approval-requests`]: () => [
+        { ...baseApproval, status: 'published' },
+      ],
+    });
+
+    renderWithQuery(
+      <PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />,
+    );
+
+    expect(await screen.findByRole('button', { name: '提交审批' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发布问卷' })).not.toBeInTheDocument();
+  });
+
   test('announcesPublishStatusChangesToAssistiveTechnology', async () => {
     renderWithQuery(
       <PublishPage actorId="author-1" api={standardApi()} surveyId={surveyId} tenantId="tenant-a" />,

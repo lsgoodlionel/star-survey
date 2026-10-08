@@ -127,6 +127,9 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
     return <p role="alert">发布信息暂时不可用，请稍后重试。</p>;
   }
 
+  const currentApproval = latestApproval?.draftVersion === overview.data.draftVersion
+    ? latestApproval
+    : null;
   const busy = approvalMutation.isPending || publishMutation.isPending;
   const publicationBlocked = overview.data.lastPublish?.manualReviewAt != null
     || overview.data.lastPublish?.orphanEngineSid != null;
@@ -150,7 +153,7 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
         <div><h2 id="publish-actions-title">可执行操作</h2><p>最终授权由服务端判定。</p></div>
         <div className="publish-actions__buttons">
           <ApprovalButtons
-            approval={latestApproval}
+            approval={currentApproval}
             actorId={actorId}
             busy={busy}
             capabilities={capabilities.data}
@@ -163,14 +166,14 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
         </div>
       </section>
 
-      {showRejectForm && latestApproval?.status === 'pending' ? (
+      {showRejectForm && currentApproval?.status === 'pending' ? (
         <form
           className="reject-form"
           onSubmit={(event) => {
             event.preventDefault();
             const reason = rejectReason.trim();
             if (!reason) return;
-            approvalMutation.mutate({ kind: 'reject', approvalId: latestApproval.id, reason });
+            approvalMutation.mutate({ kind: 'reject', approvalId: currentApproval.id, reason });
             setShowRejectForm(false);
           }}
         >

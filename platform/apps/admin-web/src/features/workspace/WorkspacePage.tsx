@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FolderPlus, FilePlus2, Plus } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { FolderPlus, FilePlus2, Pencil, Plus } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import {
   createFolder,
@@ -233,6 +233,12 @@ export function WorkspacePage() {
           <>
             <p className="workspace-kind">{kindLabel(selectedResource.kind)}</p>
             <h2>{selectedResource.name}</h2>
+            {selectedResource.kind === 'survey' && selectedCapabilities.data?.canEdit ? (
+              <Link className="workspace-edit-link" to={`/surveys/${selectedResource.id}/edit`}>
+                <Pencil size={17} aria-hidden="true" />
+                编辑问卷
+              </Link>
+            ) : null}
           </>
         ) : (
           <div className="workspace-welcome">
