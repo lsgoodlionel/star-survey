@@ -14,6 +14,16 @@ interface NetworkRecord {
   url: string;
 }
 
+interface MePayload {
+  actorId: string;
+  tenantId: string;
+}
+
+interface JourneyResult {
+  surveyId: string;
+  version: number;
+}
+
 const importText = [
   '1. 您的性别？[单选]',
   'A. 男',
@@ -24,9 +34,16 @@ const importText = [
 
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === testInfo.expectedStatus) return;
+  testInfo.setTimeout(testInfo.timeout + 7_000);
+  if (page.isClosed()) return;
   try {
-    await redactSensitiveInputs(page);
-    await page.screenshot({ path: testInfo.outputPath('failure.png'), fullPage: true });
+    await withTimeout(redactSensitiveInputs(page), 1_500);
+    if (page.isClosed()) return;
+    await page.screenshot({
+      path: testInfo.outputPath('failure.png'),
+      fullPage: true,
+      timeout: 2_000,
+    });
   } catch {
     // A crashed or inaccessible page is safer without a screenshot than with an unredacted one.
   }
@@ -38,8 +55,7 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
   const network: NetworkRecord[] = [];
   page.on('response', (response) => network.push(networkRecord(response, token)));
 
-  await login(page, token);
-  if (metadata.actorId) await expect(page.getByText(metadata.actorId, { exact: true })).toBeVisible();
+  const me = await login(page, token, metadata);
 
   const suffix = Date.now().toString(36);
   await createResource(page, '新建项目', '创建项目', `E2E 项目 ${suffix}`);
@@ -85,17 +101,15 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
   await expect(page.getByText('当前在线')).toBeVisible();
   await expect(page.getByText('字段映射')).toBeVisible();
 
-  await writeResult({ network, surveyId, tenantId: metadata.tenantId, version }, token);
+  await writeResult({ network, surveyId, tenantId: me.tenantId, version }, token);
 });
 
 test('@mobile editor keeps tabs and primary actions usable without horizontal overflow', async ({ page }) => {
+  const metadata = await readMetadata();
   const token = await readToken();
-  await login(page, token);
-  const suffix = `mobile-${Date.now().toString(36)}`;
-  await createResource(page, '新建项目', '创建项目', `移动项目 ${suffix}`);
-  await createResource(page, '新建文件夹', '创建文件夹', `移动文件夹 ${suffix}`);
-  await createResource(page, '新建问卷', '创建问卷', `移动问卷 ${suffix}`);
-  surveyIdFrom(page.url());
+  await login(page, token, metadata);
+  const result = await readResult();
+  await page.goto(`/surveys/${result.surveyId}/edit`);
 
   const tabs = page.getByRole('tablist', { name: '编辑区域' });
   await expect(tabs).toBeVisible();
@@ -129,19 +143,27 @@ async function createResource(page: Page, trigger: string, submit: string, value
   await expect(dialog).toBeHidden();
 }
 
-async function login(page: Page, token: string) {
+async function login(page: Page, token: string, metadata: TestMetadata) {
   await page.goto('/dev/token');
   const tokenInput = page.getByLabel('测试令牌');
   try {
-    const meResponse = page.waitForResponse((response) =>
+    const meResponsePromise = page.waitForResponse((response) =>
       response.url().includes('/v1/me') && response.request().method() === 'GET',
     );
     await tokenInput.fill(token);
     await page.getByRole('button', { name: '登录' }).click();
-    expect((await meResponse).status()).toBe(200);
+    const meResponse = await meResponsePromise;
+    expect(meResponse.status()).toBe(200);
+    const payload: unknown = await meResponse.json();
+    const me = parseMe(payload);
+    if (metadata.actorId) expect(me.actorId).toBe(metadata.actorId);
+    if (metadata.tenantId) expect(me.tenantId).toBe(metadata.tenantId);
     await expect(page).toHaveURL(/\/workspace$/);
+    return me;
   } finally {
-    await redactSensitiveInputs(page).catch(() => undefined);
+    if (!page.isClosed()) {
+      await withTimeout(redactSensitiveInputs(page), 1_500).catch(() => undefined);
+    }
   }
 }
 
@@ -157,6 +179,21 @@ async function readToken() {
 async function readMetadata(): Promise<TestMetadata> {
   const path = process.env.ADMIN_WEB_METADATA_FILE;
   return path ? JSON.parse(await readFile(path, 'utf8')) as TestMetadata : {};
+}
+
+async function readResult(): Promise<JourneyResult> {
+  const payload: unknown = JSON.parse(
+    await readFile(requiredEnv('ADMIN_WEB_RESULT_FILE'), 'utf8'),
+  );
+  if (!isRecord(payload)
+    || typeof payload.surveyId !== 'string'
+    || !/^[0-9a-f-]{36}$/i.test(payload.surveyId)
+    || typeof payload.version !== 'number'
+    || !Number.isInteger(payload.version)
+    || payload.version < 1) {
+    throw new Error('ADMIN_WEB_RESULT_FILE does not contain a completed desktop journey');
+  }
+  return { surveyId: payload.surveyId, version: payload.version };
 }
 
 async function writeResult(result: Record<string, unknown>, token: string) {
@@ -176,9 +213,8 @@ function networkRecord(response: Response, token: string): NetworkRecord {
 }
 
 async function redactSensitiveInputs(page: Page) {
-  const sensitive = page.locator('[data-sensitive="token"], input[type="password"]');
-  await sensitive.fill('').catch(() => undefined);
-  await sensitive.evaluateAll((elements) => {
+  await page.evaluate(() => {
+    const elements = document.querySelectorAll('[data-sensitive="token"], input[type="password"]');
     for (const element of elements) {
       if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
         element.value = '';
@@ -186,6 +222,18 @@ async function redactSensitiveInputs(page: Page) {
       (element as HTMLElement).style.visibility = 'hidden';
     }
   });
+}
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error('Artifact sanitization timed out')), timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 async function assertUsable(locator: Locator) {
@@ -205,6 +253,19 @@ function surveyIdFrom(url: string) {
   const match = new URL(url).pathname.match(/^\/surveys\/([0-9a-f-]{36})\/edit$/i);
   if (!match) throw new Error('Survey id is missing from the editor URL');
   return match[1];
+}
+
+function parseMe(payload: unknown): MePayload {
+  if (!isRecord(payload)
+    || typeof payload.actorId !== 'string'
+    || typeof payload.tenantId !== 'string') {
+    throw new Error('/v1/me returned an invalid identity payload');
+  }
+  return { actorId: payload.actorId, tenantId: payload.tenantId };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 function requiredEnv(name: string) {

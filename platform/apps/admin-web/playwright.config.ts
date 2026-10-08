@@ -28,6 +28,7 @@ export default defineConfig({
     },
     {
       name: 'chromium-mobile',
+      dependencies: ['chromium-desktop'],
       use: { ...devices['Pixel 7'] },
       testMatch: /authoring\.spec\.ts/,
       grep: /@mobile/,

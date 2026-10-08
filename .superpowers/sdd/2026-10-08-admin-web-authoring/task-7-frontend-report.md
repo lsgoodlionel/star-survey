@@ -51,3 +51,11 @@
 - RED: the Playwright configuration test proved a runner-provided `ADMIN_WEB_TEST_RESULTS_DIR=/private/tmp/admin-web-run-42/test-results` was ignored in favor of the shared local directory.
 - Playwright now passes `ADMIN_WEB_TEST_RESULTS_DIR` through unchanged as `outputDir`; local runs without the variable retain `./test-results`.
 - The focused configuration tests cover both the isolated runner path and the local fallback.
+
+## Real-stack debugging fix round 2
+
+- Real-stack RED evidence: both browser projects exhausted the 240-second test timeout. Desktop received `/v1/me` 200 but looked for the actor in shell text; mobile independently blocked while creating a second workspace; failure screenshot cleanup inherited the exhausted test budget.
+- Login now parses the real `/v1/me` JSON response and compares its `actorId` and `tenantId` to runner metadata in both projects. It no longer relies on visible account text.
+- `chromium-mobile` now depends on `chromium-desktop`. Desktop alone creates and publishes the survey, writes `ADMIN_WEB_RESULT_FILE` only after all version assertions pass, and mobile reads that completed result without overwriting it.
+- Failed-test screenshot work gets at most seven additional seconds, returns immediately for a closed page, budgets sanitization at 1.5 seconds and screenshot capture at 2 seconds, and emits no screenshot when sanitization fails.
+- Node 22.23.2 verification: focused contracts 10/10, full Vitest 13 files and 121/121, lint, typecheck, standard/E2E builds and both bundle assertions passed. `playwright --list` reports exactly two projects and two scenarios.
