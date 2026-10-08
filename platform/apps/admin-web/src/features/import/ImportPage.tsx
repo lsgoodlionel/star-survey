@@ -1,0 +1,195 @@
+import { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FileSearch, Import } from 'lucide-react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { z } from 'zod';
+import { useAuth } from '../auth/AuthProvider';
+import { parseDefinition } from '../editor/model/definition';
+import { ApiError } from '../../shared/api/errors';
+import type { ApiClient } from '../../shared/api/http';
+import {
+  confirmSurveyImport,
+  previewSurveyImport,
+  type ImportPreview,
+} from '../../shared/api/imports';
+import { getResourceCapabilities } from '../../shared/api/resources';
+import { getSurveyDraft } from '../../shared/api/surveys';
+import { ImportPreviewTable } from './ImportPreviewTable';
+import './import.css';
+
+interface ImportPageProps {
+  api: ApiClient;
+  surveyId: string;
+}
+
+export function ImportPage({ api, surveyId }: ImportPageProps) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [text, setText] = useState('');
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const [groupUuid, setGroupUuid] = useState('');
+  const [actionError, setActionError] = useState<string | null>(null);
+  const draftQuery = useQuery({
+    queryKey: ['survey-draft', surveyId],
+    queryFn: ({ signal }) => getSurveyDraft(api, surveyId, signal),
+  });
+  const capabilitiesQuery = useQuery({
+    queryKey: ['resource-capabilities', surveyId],
+    queryFn: ({ signal }) => getResourceCapabilities(api, surveyId, signal),
+  });
+  const definition = useMemo(() => {
+    if (!draftQuery.data) return null;
+    try {
+      return parseDefinition(draftQuery.data.definition);
+    } catch {
+      return null;
+    }
+  }, [draftQuery.data]);
+  const canEdit = capabilitiesQuery.data?.canEdit === true;
+
+  const previewMutation = useMutation({
+    mutationFn: () => previewSurveyImport(api, surveyId, text),
+    onSuccess: (result) => {
+      setPreview(result);
+      setSelected(new Set(result.questions.filter((question) => question.importable).map((question) => question.index)));
+      setActionError(null);
+    },
+    onError: (error) => setActionError(messageFor(error, '预览失败，请稍后重试')),
+  });
+
+  const importMutation = useMutation({
+    mutationFn: async () => {
+      if (!draftQuery.data) throw new Error('草稿尚未加载完成');
+      return confirmSurveyImport(api, surveyId, {
+        expectedVersion: draftQuery.data.version,
+        text,
+        accept: [...selected].sort((left, right) => left - right),
+        groupUuid: groupUuid || null,
+      });
+    },
+    onSuccess: async (updatedDraft) => {
+      queryClient.setQueryData(['survey-draft', surveyId], updatedDraft);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['survey', surveyId], exact: true }),
+        queryClient.invalidateQueries({ queryKey: ['survey', surveyId, 'approvals'], exact: true }),
+        queryClient.invalidateQueries({ queryKey: ['survey', surveyId, 'versions'], exact: true }),
+      ]);
+      navigate(`/surveys/${surveyId}/edit`, { replace: true });
+    },
+    onError: async (error) => {
+      setActionError(messageFor(error, '导入失败，请稍后重试'));
+      if (!(error instanceof ApiError) || error.kind !== 'validation') return;
+      try {
+        const refreshed = await previewSurveyImport(api, surveyId, text);
+        setPreview(refreshed);
+      } catch {
+        // The validation message remains useful when a diagnostic refresh is unavailable.
+      }
+    },
+  });
+
+  if (draftQuery.isPending || capabilitiesQuery.isPending) return <p>正在加载导入工具</p>;
+  if (draftQuery.isError || capabilitiesQuery.isError || !draftQuery.data || !definition) {
+    return <p role="alert">问卷草稿暂时不可用，请稍后重试。</p>;
+  }
+
+  const selectedCount = selected.size;
+  return (
+    <main className="survey-import-page">
+      <header className="import-header">
+        <div>
+          <p>问卷编辑</p>
+          <h1>批量文本导入</h1>
+        </div>
+        <span>当前草稿版本 {draftQuery.data.version}</span>
+      </header>
+
+      {!canEdit ? <p role="alert">当前账号仅可查看此问卷，不能导入题目。</p> : null}
+      <section className="import-source" aria-labelledby="import-source-title">
+        <h2 id="import-source-title">原文</h2>
+        <label htmlFor="import-text">待导入文本</label>
+        <textarea
+          id="import-text"
+          rows={12}
+          value={text}
+          disabled={!canEdit || importMutation.isPending}
+          onChange={(event) => {
+            setText(event.target.value);
+            setPreview(null);
+            setSelected(new Set());
+            setActionError(null);
+          }}
+        />
+        <button
+          type="button"
+          disabled={!canEdit || !text.trim() || previewMutation.isPending || importMutation.isPending}
+          onClick={() => previewMutation.mutate()}
+        >
+          <FileSearch aria-hidden="true" />
+          {previewMutation.isPending ? '正在解析' : '预览导入'}
+        </button>
+      </section>
+
+      {actionError ? <p className="import-error" role="alert">{actionError}</p> : null}
+
+      {preview ? (
+        <section className="import-preview" aria-labelledby="import-preview-title">
+          <div className="import-preview-heading">
+            <div>
+              <h2 id="import-preview-title">解析结果</h2>
+              <p>共读取 {preview.lineCount} 行，合法题目已默认选中。</p>
+            </div>
+            <label>
+              导入到题组
+              <select
+                aria-label="导入到题组"
+                value={groupUuid}
+                disabled={importMutation.isPending}
+                onChange={(event) => setGroupUuid(event.target.value)}
+              >
+                <option value="">新建“导入的题目”题组</option>
+                {definition.groups.map((group) => (
+                  <option key={group.uuid} value={group.uuid}>{group.title}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <ImportPreviewTable
+            preview={preview}
+            selected={selected}
+            onSelectionChange={(index, checked) => {
+              setSelected((current) => {
+                const next = new Set(current);
+                if (checked) next.add(index);
+                else next.delete(index);
+                return next;
+              });
+            }}
+          />
+          <div className="import-actions">
+            <button
+              type="button"
+              disabled={!canEdit || selectedCount === 0 || importMutation.isPending}
+              onClick={() => importMutation.mutate()}
+            >
+              <Import aria-hidden="true" />
+              {importMutation.isPending ? '正在导入' : `确认导入 ${selectedCount} 道题`}
+            </button>
+          </div>
+        </section>
+      ) : null}
+    </main>
+  );
+}
+
+export function ImportRoutePage() {
+  const { api, session } = useAuth();
+  const surveyId = z.string().uuid().safeParse(useParams().surveyId);
+  if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
+  return <ImportPage api={api} surveyId={surveyId.data} />;
+}
+
+function messageFor(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
