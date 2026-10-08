@@ -619,6 +619,28 @@ describe('PublishPage', () => {
     expect(screen.queryByRole('button', { name: '发布问卷' })).not.toBeInTheDocument();
   });
 
+  test('doesNotOfferActionsForADirectlyPublishedCurrentDraft', async () => {
+    const api = standardApi({
+      [`GET /v1/surveys/${surveyId}`]: () => ({
+        ...baseSurvey,
+        publishedVersion: baseSurvey.draftVersion,
+      }),
+      [`GET /v1/resource-capabilities?resourceId=${surveyId}`]: () => ({
+        ...baseCapabilities,
+        canPublishDirectly: true,
+      }),
+      [`GET /v1/surveys/${surveyId}/approval-requests`]: () => [],
+    });
+
+    renderWithQuery(
+      <PublishPage actorId="publisher-1" api={api} surveyId={surveyId} tenantId="tenant-a" />,
+    );
+
+    await screen.findByRole('heading', { name: '可执行操作' });
+    expect(screen.queryByRole('button', { name: '提交审批' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发布问卷' })).not.toBeInTheDocument();
+  });
+
   test('announcesPublishStatusChangesToAssistiveTechnology', async () => {
     renderWithQuery(
       <PublishPage actorId="author-1" api={standardApi()} surveyId={surveyId} tenantId="tenant-a" />,

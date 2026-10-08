@@ -157,6 +157,7 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
             actorId={actorId}
             busy={busy}
             capabilities={capabilities.data}
+            draftAlreadyPublished={overview.data.publishedVersion === overview.data.draftVersion}
             draftVersion={overview.data.draftVersion}
             onAction={(action) => approvalMutation.mutate(action)}
             onReject={() => setShowRejectForm(true)}
@@ -231,18 +232,19 @@ export function PublishRoutePage() {
   );
 }
 
-function ApprovalButtons({ approval, actorId, busy, capabilities, draftVersion, onAction, onReject, onPublish, publicationBlocked }: {
+function ApprovalButtons({ approval, actorId, busy, capabilities, draftAlreadyPublished, draftVersion, onAction, onReject, onPublish, publicationBlocked }: {
   approval: ApprovalRequest | null;
   actorId: string;
   busy: boolean;
   capabilities: ResourceCapabilities;
+  draftAlreadyPublished: boolean;
   draftVersion: number;
   onAction: (action: ApprovalAction) => void;
   onReject: () => void;
   onPublish: () => void;
   publicationBlocked: boolean;
 }) {
-  const state: ApprovalState = approval?.status ?? 'none';
+  const state: ApprovalState = draftAlreadyPublished ? 'published' : approval?.status ?? 'none';
   const rule = approvalActionStateTable[state];
   const canSubmit = rule.canSubmit && capabilities.canSubmitApproval;
   const canDecide = rule.canDecide && capabilities.canApprovePublish;

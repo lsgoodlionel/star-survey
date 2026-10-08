@@ -233,10 +233,10 @@ export function WorkspacePage() {
           <>
             <p className="workspace-kind">{kindLabel(selectedResource.kind)}</p>
             <h2>{selectedResource.name}</h2>
-            {selectedResource.kind === 'survey' && selectedCapabilities.data?.canEdit ? (
+            {selectedResource.kind === 'survey' ? (
               <Link className="workspace-edit-link" to={`/surveys/${selectedResource.id}/edit`}>
                 <Pencil size={17} aria-hidden="true" />
-                编辑问卷
+                {selectedCapabilities.data?.canEdit ? '编辑问卷' : '查看问卷'}
               </Link>
             ) : null}
           </>

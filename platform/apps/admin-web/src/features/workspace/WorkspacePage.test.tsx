@@ -477,6 +477,26 @@ test('usesServerCapabilitiesInsteadOfTokenRolesForAvailableActions', async () =>
   expect(screen.queryByRole('button', { name: '新建问卷' })).not.toBeInTheDocument();
 });
 
+test('opensAVisibleSurveyInReadOnlyModeWithoutEditCapability', async () => {
+  server.use(
+    http.get('/v1/resources', () =>
+      HttpResponse.json({ items: [surveyA], nextCursor: null }),
+    ),
+  );
+  const user = userEvent.setup();
+  renderWorkspace('/workspace', {
+    capabilities: { ...allCapabilities, canEdit: false },
+  });
+
+  await user.click(await screen.findByRole('button', { name: surveyA.name }));
+
+  expect(screen.getByRole('link', { name: '查看问卷' })).toHaveAttribute(
+    'href',
+    `/surveys/${surveyA.id}/edit`,
+  );
+  expect(screen.queryByRole('link', { name: '编辑问卷' })).not.toBeInTheDocument();
+});
+
 test('shows404AsUnavailableWithoutRevealingAnotherTenant', async () => {
   server.use(
     http.get('/v1/resources', () => HttpResponse.json({ items: [], nextCursor: null })),
