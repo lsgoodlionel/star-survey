@@ -3,8 +3,10 @@ name: MJY 平台 - 质量闸门
 # 上游 LimeSurvey 自带的几条 workflow 只在 master / develop-* 上触发，而本仓库的
 # 工作分支是 main，所以本土化部分的检查单独一条。
 #
-# 两个 job 的分工：
+# 主要 job 的分工：
 #   parity-tables      秒级，只要 Python；三端一致性对照表与对账脚本自己的用例
+#   admin-web          Node 22；管理端静态检查、单测、生产构建与产物断言
+#   admin-web-e2e      重；真实浏览器串起管理端、平台、发布网关与引擎
 #   gateway-parity-e2e 重，要起引擎栈；WP-03.4 双执行比对，mysql 与 pgsql 各跑一遍
 on:
   pull_request:
@@ -51,6 +53,76 @@ jobs:
       - name: 需求追溯校验
         working-directory: platform/tools/traceability
         run: python3 -m reqtrace.cli check
+
+  admin-web:
+    name: 管理端前端质量闸门
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: platform/apps/admin-web/package-lock.json
+
+      - name: 安装锁定依赖
+        working-directory: platform/apps/admin-web
+        run: npm ci
+
+      - name: ESLint
+        working-directory: platform/apps/admin-web
+        run: npm run lint
+
+      - name: TypeScript 类型检查
+        working-directory: platform/apps/admin-web
+        run: npm run typecheck
+
+      - name: Vitest
+        working-directory: platform/apps/admin-web
+        run: npm test -- --run
+
+      - name: 生产构建
+        working-directory: platform/apps/admin-web
+        run: npm run build
+
+      - name: 生产产物不含开发令牌入口
+        working-directory: platform/apps/admin-web
+        run: npm run assert:production-bundle
+
+  admin-web-e2e:
+    name: 管理端真实浏览器纵向验收
+    runs-on: ubuntu-22.04
+    needs: [admin-web, parity-tables]
+    env:
+      TEST_DB: mysql
+      SURVEY_TEST_PREFIX: adminweb-ci
+      COMPOSE_PROJECT_NAME: adminweb-ci
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: platform/apps/admin-web/package-lock.json
+
+      - name: 安装管理端依赖
+        working-directory: platform/apps/admin-web
+        run: npm ci
+
+      - name: 安装 Chromium 与系统依赖
+        working-directory: platform/apps/admin-web
+        run: npx playwright install --with-deps chromium
+
+      # runner 把 JWT、元数据和 Playwright 输出放在本次私有临时目录；失败时先删媒体，
+      # 再扫描非媒体文件，最后总是删除整个目录。因此这里没有可安全留存的失败产物可上传。
+      - name: 管理端真实浏览器纵向验收
+        run: platform/deploy/test/run-admin-web-e2e.sh --fresh
 
   gateway-parity-e2e:
     name: 双执行比对 (${{ matrix.db }})
