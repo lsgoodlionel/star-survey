@@ -1,0 +1,73 @@
+# Real-stack overlay for run-admin-web-e2e.sh. All state belongs to the
+# caller's COMPOSE_PROJECT_NAME; host ports are loopback-only and random.
+services:
+  admin-web-platform-db:
+    image: postgres:16-alpine
+    container_name: ${SURVEY_TEST_PREFIX:-adminweb}-admin-web-platform-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${ADMIN_WEB_DB_BOOTSTRAP_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./platform/deploy/platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d platform"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  platform:
+    image: maven:3.9-eclipse-temurin-21
+    container_name: ${SURVEY_TEST_PREFIX:-adminweb}-admin-web-platform
+    command: ["java", "-jar", "/app/business.jar"]
+    ports:
+      - "127.0.0.1::8080"
+    volumes:
+      - ${ADMIN_WEB_PLATFORM_JAR:?set ADMIN_WEB_PLATFORM_JAR}:/app/business.jar:ro
+    environment:
+      PLATFORM_DB_URL: jdbc:postgresql://admin-web-platform-db:5432/platform
+      PLATFORM_DB_APP_USER: platform_app
+      PLATFORM_DB_APP_PASSWORD: platform_app
+      PLATFORM_DB_OWNER_USER: platform_owner
+      PLATFORM_DB_OWNER_PASSWORD: platform_owner
+      PLATFORM_JWT_HMAC_SECRET:
+      PLATFORM_ENGINE_EVENTS_SECRET:
+      PLATFORM_PUBGW_SECRET:
+      PLATFORM_PUBGW_URL: http://gateway:8080
+    depends_on:
+      admin-web-platform-db:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: ./platform/tools/publish-gateway
+    image: survey-publish-gateway:${SURVEY_TEST_PREFIX:-adminweb}
+    container_name: ${SURVEY_TEST_PREFIX:-adminweb}-admin-web-gateway
+    ports:
+      - "127.0.0.1::8080"
+    volumes:
+      - ${ADMIN_WEB_ENGINES_FILE:?set ADMIN_WEB_ENGINES_FILE}:/app/engines.json:ro
+    environment:
+      PUBGW_SHARED_SECRET:
+      PUBGW_ENGINES_CONFIG: /app/engines.json
+      PUBGW_ENGINE_ADMIN_WEB_PASSWORD:
+
+  admin-web:
+    build:
+      context: ./platform/apps/admin-web
+      args:
+        VITE_E2E: "true"
+    image: survey-admin-web-e2e:${SURVEY_TEST_PREFIX:-adminweb}
+    container_name: ${SURVEY_TEST_PREFIX:-adminweb}-admin-web
+    ports:
+      - "127.0.0.1::80"
+    depends_on:
+      - platform
+
+  test-web:
+    environment:
+      MJY_ENGINE_INSTANCE_ID:
+      MJY_PLATFORM_EVENTS_URL: http://platform:8080/internal/engine-events
+      MJY_PLATFORM_EVENTS_SECRET:
