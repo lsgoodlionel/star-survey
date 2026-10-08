@@ -24,7 +24,7 @@ CREATE POLICY tenant_isolation ON org_login_handoff
 -- 运行期账号可直接插入，但消费与清理只能通过下面两个受租户上下文约束的函数完成。
 REVOKE SELECT, UPDATE, DELETE ON org_login_handoff FROM platform_app;
 
-CREATE FUNCTION org_login_handoff_consume(p_tenant uuid, p_hash text, p_now timestamptz)
+CREATE FUNCTION org_login_handoff_consume(p_tenant uuid, p_hash text, p_browser_hash text, p_now timestamptz)
 RETURNS TABLE (browser_hash text, principal_id uuid, connection_id uuid, provider text, expires_at timestamptz)
 LANGUAGE sql SECURITY DEFINER
 SET search_path = public, pg_temp
@@ -33,13 +33,14 @@ AS $$
        SET consumed_at = p_now
      WHERE h.tenant_id = p_tenant
        AND h.handoff_hash = p_hash
+       AND h.browser_hash = p_browser_hash
        AND h.consumed_at IS NULL
        AND h.expires_at > p_now
        AND p_tenant = app_current_tenant()
     RETURNING h.browser_hash, h.principal_id, h.connection_id, h.provider, h.expires_at
 $$;
-REVOKE ALL ON FUNCTION org_login_handoff_consume(uuid, text, timestamptz) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION org_login_handoff_consume(uuid, text, timestamptz) TO platform_app;
+REVOKE ALL ON FUNCTION org_login_handoff_consume(uuid, text, text, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION org_login_handoff_consume(uuid, text, text, timestamptz) TO platform_app;
 
 CREATE FUNCTION org_login_handoff_purge_stale(p_tenant uuid, p_now timestamptz) RETURNS integer
 LANGUAGE plpgsql SECURITY DEFINER

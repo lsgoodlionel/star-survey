@@ -12,7 +12,8 @@ import org.springframework.security.web.access.intercept.AuthorizationFilter;
 /**
  * 免登端点 /v1/auth/org/** 的独立过滤链：匿名可访问（用户此时还没有令牌），不认 Authorization 头。
  * 防护不靠过滤链而靠流程本身：state 一次性、限时、绑定租户与浏览器 Cookie（见 {@link OrgLoginService}）。
- * 两个端点都是 GET 且不改变已登录用户的状态，因此不需要 CSRF 令牌；登录 CSRF 由浏览器绑定 Cookie 防住。
+ * start/callback 是 GET，handoff 是匿名 POST；它们不使用既有登录态，登录 CSRF 由一次性 state、
+ * SameSite Cookie 和原子浏览器绑定交接共同防住，因此这条无会话链不需要 CSRF 令牌。
  * 主链（shared/security/SecurityConfig）行为不变。
  */
 @Configuration
@@ -33,7 +34,7 @@ class OrgLoginSecurityConfig {
                 .requestCache(cache -> cache.disable())
                 .anonymous(anonymous -> { });
         if (limits.enabled()) {
-            // start / callback 都是匿名的：先限流，再走一次性 state 与 Cookie 绑定。
+            // start / callback / handoff 都是匿名的：先限流，再走一次性 state、handoff 与 Cookie 绑定。
             http.addFilterBefore(
                     AnonymousRateLimitFilter.forLogin(OrgLoginController.BASE_PATH, limits),
                     AuthorizationFilter.class);

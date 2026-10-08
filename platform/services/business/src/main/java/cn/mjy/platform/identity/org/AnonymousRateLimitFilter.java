@@ -78,7 +78,7 @@ final class AnonymousRateLimitFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         String source = source(request);
-        String connection = connectionOf(request);
+        String connection = dimensionOf(request);
         String pair = source + "|" + connection;
         // 来源额度照扣不退：换连接号乱撒的扫描同样要计入这个来源。
         if (!perSource.tryAcquire(source) || !perConnection.tryAcquire(pair)) {
@@ -108,8 +108,8 @@ final class AnonymousRateLimitFilter extends OncePerRequestFilter {
         return address == null ? "" : address;
     }
 
-    /** 路径里的连接号；形状不对或不是 UUID 时归入同一个桶，键的数量因此不受调用方摆布。 */
-    private String connectionOf(HttpServletRequest request) {
+    /** 路径里的连接号；handoff 没有连接号，按租户分桶；非法 UUID 仍归入固定桶。 */
+    private String dimensionOf(HttpServletRequest request) {
         String uri = request.getRequestURI();
         String context = request.getContextPath();
         if (context != null && !context.isEmpty() && uri.startsWith(context)) {
@@ -119,9 +119,14 @@ final class AnonymousRateLimitFilter extends OncePerRequestFilter {
             return UNKNOWN_CONNECTION;
         }
         String[] segments = uri.substring(basePath.length()).split("/");
-        // segments[0] 是基路径之后的空串，[1] 是租户，[2] 是连接。
-        return segments.length >= 3 && isUuid(segments[2])
-                ? segments[2].toLowerCase(Locale.ROOT) : UNKNOWN_CONNECTION;
+        // segments[0] 是基路径之后的空串，[1] 是租户，[2] 是连接或 handoff。
+        if (segments.length >= 3 && isUuid(segments[2])) {
+            return segments[2].toLowerCase(Locale.ROOT);
+        }
+        if (segments.length == 3 && "handoff".equals(segments[2]) && isUuid(segments[1])) {
+            return "tenant:" + segments[1].toLowerCase(Locale.ROOT);
+        }
+        return UNKNOWN_CONNECTION;
     }
 
     private static boolean isUuid(String value) {

@@ -118,7 +118,7 @@ public class OrgLoginController {
     private String handoffCookie(TenantId tenant, String value, long maxAgeSeconds) {
         return ResponseCookie.from(HANDOFF_COOKIE, value)
                 .httpOnly(true)
-                .secure(properties.secureCookie())
+                .secure(true)
                 .sameSite("Strict")
                 .path(BASE_PATH + "/" + tenant + "/handoff")
                 .maxAge(maxAgeSeconds)

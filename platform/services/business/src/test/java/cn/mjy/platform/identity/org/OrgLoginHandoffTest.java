@@ -78,14 +78,23 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
         AdminCallback callback = adminCallback(org, userId, startAdminWeb(tenant, org.connectionId()));
         assertThat(sessionCount(tenant)).isZero();
 
-        String body = exchange(tenant, callback.handoff(), callback.browser())
+        MvcResult exchangeResult = exchange(tenant, callback.handoff(), callback.browser())
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().stringValues("Set-Cookie",
+                        hasItem(containsString(HANDOFF_COOKIE + "=;"))))
+                .andExpect(header().stringValues("Set-Cookie", hasItem(containsString("Max-Age=0"))))
+                .andExpect(header().stringValues("Set-Cookie", hasItem(containsString("Secure"))))
                 .andExpect(jsonPath("$.tokenType").value("Bearer"))
                 .andExpect(jsonPath("$.principalId").value(principal))
                 .andExpect(jsonPath("$.tenantId").value(tenant.toString()))
-                .andReturn().getResponse().getContentAsString();
+                .andReturn();
+        Cookie clearedHandoff = exchangeResult.getResponse().getCookie(HANDOFF_COOKIE);
+        assertThat(clearedHandoff).isNotNull();
+        assertThat(clearedHandoff.getMaxAge()).isZero();
+        assertThat(clearedHandoff.getSecure()).isTrue();
 
+        String body = exchangeResult.getResponse().getContentAsString();
         String token = JsonPath.read(body, "$.accessToken");
         assertThat(token).isNotBlank();
         assertThat(sessionCount(tenant)).isEqualTo(1);
@@ -138,7 +147,7 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
     }
 
     @Test
-    void aHandoffFromAnotherBrowserIsRejected() throws Exception {
+    void aWrongBrowserDoesNotConsumeTheHandoff() throws Exception {
         TenantId tenant = newTenant();
         Org org = connect(tenant, "wecom", "jit_staff");
         AdminCallback callback = adminCallback(org, unique("u"), startAdminWeb(tenant, org.connectionId()));
@@ -147,6 +156,9 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value(OrgLoginException.INVALID_STATE));
         assertThat(sessionCount(tenant)).isZero();
+
+        exchange(tenant, callback.handoff(), callback.browser()).andExpect(status().isOk());
+        assertThat(sessionCount(tenant)).isEqualTo(1);
     }
 
     @Test
@@ -178,15 +190,65 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
 
     @Test
     void anInsecureRemoteAdminWebBaseUrlIsRejected() {
-        assertThatThrownBy(() -> copyProperties("http://admin.example.test"))
+        assertThatThrownBy(() -> copyProperties(Map.of(
+                "callbackBaseUrl", "http://admin.example.test",
+                "adminWebBaseUrl", "http://admin.example.test")))
                 .rootCause().isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("admin-web-base-url");
     }
 
     @Test
     void aLoopbackHttpAdminWebBaseUrlIsAllowedForTests() {
-        assertThatCode(() -> copyProperties("http://127.0.0.1:3000"))
+        assertThatCode(() -> copyProperties(Map.of(
+                "callbackBaseUrl", "http://127.0.0.1:3000/platform",
+                "adminWebBaseUrl", "http://127.0.0.1:3000/admin")))
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    void adminWebAndCallbackBaseUrlsMustHaveTheSameOrigin() {
+        assertThatThrownBy(() -> copyProperties(Map.of(
+                "callbackBaseUrl", "https://survey.example.test",
+                "adminWebBaseUrl", "https://admin.example.test/admin")))
+                .rootCause().isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("same origin");
+        assertThatThrownBy(() -> copyProperties(Map.of(
+                "callbackBaseUrl", "http://127.0.0.1/platform",
+                "adminWebBaseUrl", "https://127.0.0.1/admin")))
+                .rootCause().isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("same origin");
+        assertThatThrownBy(() -> copyProperties(Map.of(
+                "callbackBaseUrl", "https://survey.example.test:8443",
+                "adminWebBaseUrl", "https://survey.example.test/admin")))
+                .rootCause().isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("same origin");
+    }
+
+    @Test
+    void sameOriginComparisonNormalizesHostAndEffectivePortAndKeepsTheAdminPath() throws Exception {
+        OrgLoginProperties properties = copyProperties(Map.of(
+                "callbackBaseUrl", "https://survey.example.test/platform",
+                "adminWebBaseUrl", "https://SURVEY.EXAMPLE.TEST:443/admin/"));
+
+        assertThat(properties.adminWebCallbackUrl(TenantId.of("11111111-1111-1111-1111-111111111111"), "opaque"))
+                .isEqualTo("https://SURVEY.EXAMPLE.TEST:443/admin/auth/callback"
+                        + "?tenant=11111111-1111-1111-1111-111111111111&handoff=opaque");
+    }
+
+    @Test
+    void handoffCookieIsAlwaysSecureAndHasA60SecondLifetime() throws Exception {
+        TenantId tenant = newTenant();
+        Org org = connect(tenant, "wecom", "jit_staff");
+        MockMvc legacyInsecureCookie = MockMvcBuilders.standaloneSetup(controllerWithProperties(Map.of(
+                        "secureCookie", false)))
+                .setControllerAdvice(applicationContext.getBean(OrgLoginErrorHandler.class))
+                .build();
+
+        AdminCallback callback = adminCallback(legacyInsecureCookie, org, unique("u"),
+                startAdminWeb(tenant, org.connectionId()));
+
+        assertThat(callback.browser().getSecure()).isTrue();
+        assertThat(callback.browser().getMaxAge()).isEqualTo(60);
     }
 
     private Started startAdminWeb(TenantId tenant, UUID connectionId) throws Exception {
@@ -201,8 +263,12 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
     }
 
     private AdminCallback adminCallback(Org org, String userId, Started started) throws Exception {
+        return adminCallback(mvc, org, userId, started);
+    }
+
+    private AdminCallback adminCallback(MockMvc target, Org org, String userId, Started started) throws Exception {
         String code = FAKE.issueCode(org.provider(), org.corp(), org.appId(), userId);
-        MvcResult result = mvc.perform(get(callbackPath(org.tenant(), org.connectionId()))
+        MvcResult result = target.perform(get(callbackPath(org.tenant(), org.connectionId()))
                         .param("client", "admin_web")
                         .param("code", code)
                         .param("state", started.state())
@@ -210,6 +276,10 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
                 .andExpect(status().isFound())
                 .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(header().stringValues("Set-Cookie", hasItem(containsString("SameSite=Strict"))))
+                .andExpect(header().stringValues("Set-Cookie", hasItem(containsString("Secure"))))
+                .andExpect(header().stringValues("Set-Cookie", hasItem(containsString("Max-Age=60"))))
+                .andExpect(header().stringValues("Set-Cookie", hasItem(containsString("mjy_org_login=;"))))
+                .andExpect(header().stringValues("Set-Cookie", hasItem(containsString("Max-Age=0"))))
                 .andReturn();
         URI location = URI.create(result.getResponse().getHeader("Location"));
         return new AdminCallback(query(location).get("handoff"),
@@ -229,7 +299,11 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
     }
 
     private Object controllerWithAdminWebBaseUrl(String baseUrl) throws Exception {
-        OrgLoginProperties properties = copyProperties(baseUrl);
+        return controllerWithProperties(Map.of("adminWebBaseUrl", baseUrl));
+    }
+
+    private Object controllerWithProperties(Map<String, Object> overrides) throws Exception {
+        OrgLoginProperties properties = copyProperties(overrides);
         Constructor<?> constructor = OrgLoginController.class.getDeclaredConstructors()[0];
         Object[] arguments = java.util.Arrays.stream(constructor.getParameterTypes())
                 .map(type -> type == OrgLoginProperties.class ? properties : applicationContext.getBean(type))
@@ -238,14 +312,14 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
         return constructor.newInstance(arguments);
     }
 
-    private OrgLoginProperties copyProperties(String adminWebBaseUrl) throws Exception {
+    private OrgLoginProperties copyProperties(Map<String, Object> overrides) throws Exception {
         RecordComponent[] components = OrgLoginProperties.class.getRecordComponents();
         assertThat(components).extracting(RecordComponent::getName).contains("adminWebBaseUrl");
         Class<?>[] types = java.util.Arrays.stream(components).map(RecordComponent::getType).toArray(Class<?>[]::new);
         Object[] values = new Object[components.length];
         for (int i = 0; i < components.length; i++) {
-            values[i] = "adminWebBaseUrl".equals(components[i].getName())
-                    ? adminWebBaseUrl
+            values[i] = overrides.containsKey(components[i].getName())
+                    ? overrides.get(components[i].getName())
                     : components[i].getAccessor().invoke(loginProperties);
         }
         return OrgLoginProperties.class.getDeclaredConstructor(types).newInstance(values);
