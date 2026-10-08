@@ -12,7 +12,6 @@ import {
   listApprovalRequests,
   listPublishedVersions,
   publishSurvey,
-  publishCapabilitiesQueryKey,
   rejectRequest,
   submitApproval,
   surveyOverviewQueryKey,
@@ -22,6 +21,7 @@ import {
   type ApprovalStatus,
   type SurveyOverview,
 } from '../../shared/api/approvals';
+import { surveyCapabilitiesQueryKey } from '../../shared/api/surveys';
 import {
   getResourceCapabilities,
   type ResourceCapabilities,
@@ -35,6 +35,7 @@ interface PublishPageProps {
   actorId: string;
   api: ApiClient;
   surveyId: string;
+  tenantId: string;
 }
 
 type ApprovalState = ApprovalStatus | 'none';
@@ -62,7 +63,7 @@ type ApprovalAction =
   | { kind: 'approve' | 'withdraw'; approvalId: string }
   | { kind: 'reject'; approvalId: string; reason: string };
 
-export function PublishPage({ actorId, api, surveyId }: PublishPageProps) {
+export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPageProps) {
   const queryClient = useQueryClient();
   const visible = useDocumentVisibility();
   const [actionError, setActionError] = useState<ApiError | null>(null);
@@ -71,28 +72,31 @@ export function PublishPage({ actorId, api, surveyId }: PublishPageProps) {
   const [rejectReason, setRejectReason] = useState('');
 
   const overview = useQuery({
-    queryKey: surveyOverviewQueryKey(surveyId),
+    queryKey: surveyOverviewQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurveyOverview(api, surveyId, signal),
     refetchInterval: (query) => shouldPoll(query.state.data, awaitingPublishResult, visible) ? 2_000 : false,
   });
   const approvals = useQuery({
-    queryKey: approvalRequestsQueryKey(surveyId),
+    queryKey: approvalRequestsQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => listApprovalRequests(api, surveyId, signal),
   });
   const capabilities = useQuery({
-    queryKey: publishCapabilitiesQueryKey(surveyId),
+    queryKey: surveyCapabilitiesQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getResourceCapabilities(api, surveyId, signal),
   });
   const versions = useQuery({
-    queryKey: versionsQueryKey(surveyId),
+    queryKey: versionsQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => listPublishedVersions(api, surveyId, signal),
   });
 
   const latestApproval = useMemo(() => approvals.data?.at(-1) ?? null, [approvals.data]);
 
   useEffect(() => () => {
-    void queryClient.cancelQueries({ queryKey: surveyOverviewQueryKey(surveyId), exact: true });
-  }, [queryClient, surveyId]);
+    void queryClient.cancelQueries({
+      queryKey: surveyOverviewQueryKey(tenantId, surveyId),
+      exact: true,
+    });
+  }, [queryClient, surveyId, tenantId]);
 
   const approvalMutation = useMutation({
     mutationFn: (action: ApprovalAction) => runApprovalAction(api, surveyId, action),
@@ -100,7 +104,7 @@ export function PublishPage({ actorId, api, surveyId }: PublishPageProps) {
       setActionError(null);
       setAwaitingPublishResult(false);
     },
-    onSuccess: () => invalidatePublishQueries(queryClient, surveyId),
+    onSuccess: () => invalidatePublishQueries(queryClient, tenantId, surveyId),
     onError: (error) => setActionError(publicApiError(error)),
   });
 
@@ -115,7 +119,7 @@ export function PublishPage({ actorId, api, surveyId }: PublishPageProps) {
       if (apiError.kind === 'pending') setAwaitingPublishResult(true);
       else setActionError(apiError);
     },
-    onSettled: () => invalidatePublishQueries(queryClient, surveyId),
+    onSettled: () => invalidatePublishQueries(queryClient, tenantId, surveyId),
   });
 
   if (overview.isPending || approvals.isPending || capabilities.isPending || versions.isPending) return <p className="publish-loading">正在加载发布信息</p>;
@@ -190,7 +194,14 @@ export function PublishRoutePage() {
   const params = useParams();
   const surveyId = parseSurveyIdParam(params.surveyId);
   if (!session || !surveyId) return <p role="alert">问卷标识无效</p>;
-  return <PublishPage actorId={session.me.actorId} api={api} surveyId={surveyId} />;
+  return (
+    <PublishPage
+      actorId={session.me.actorId}
+      api={api}
+      surveyId={surveyId}
+      tenantId={session.me.tenantId}
+    />
+  );
 }
 
 function ApprovalButtons({ approval, actorId, busy, capabilities, draftVersion, onAction, onReject, onPublish, publicationBlocked }: {
@@ -233,11 +244,21 @@ function runApprovalAction(api: ApiClient, surveyId: string, action: ApprovalAct
   }
 }
 
-async function invalidatePublishQueries(queryClient: ReturnType<typeof useQueryClient>, surveyId: string) {
+async function invalidatePublishQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  tenantId: string,
+  surveyId: string,
+) {
   await Promise.all([
-    queryClient.invalidateQueries({ queryKey: surveyOverviewQueryKey(surveyId), exact: true }),
-    queryClient.invalidateQueries({ queryKey: approvalRequestsQueryKey(surveyId), exact: true }),
-    queryClient.invalidateQueries({ queryKey: versionsQueryKey(surveyId) }),
+    queryClient.invalidateQueries({
+      queryKey: surveyOverviewQueryKey(tenantId, surveyId),
+      exact: true,
+    }),
+    queryClient.invalidateQueries({
+      queryKey: approvalRequestsQueryKey(tenantId, surveyId),
+      exact: true,
+    }),
+    queryClient.invalidateQueries({ queryKey: versionsQueryKey(tenantId, surveyId) }),
   ]);
 }
 

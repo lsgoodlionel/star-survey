@@ -10,12 +10,13 @@ import './publish.css';
 interface VersionDetailPageProps {
   api: ApiClient;
   surveyId: string;
+  tenantId: string;
   version: number;
 }
 
-export function VersionDetailPage({ api, surveyId, version }: VersionDetailPageProps) {
+export function VersionDetailPage({ api, surveyId, tenantId, version }: VersionDetailPageProps) {
   const query = useQuery({
-    queryKey: versionQueryKey(surveyId, version),
+    queryKey: versionQueryKey(tenantId, surveyId, version),
     queryFn: ({ signal }) => getPublishedVersion(api, surveyId, version, signal),
   });
 
@@ -57,12 +58,19 @@ export function VersionDetailPage({ api, surveyId, version }: VersionDetailPageP
 }
 
 export function VersionDetailRoutePage() {
-  const { api } = useAuth();
+  const { api, session } = useAuth();
   const params = useParams();
   const surveyId = parseSurveyIdParam(params.surveyId);
   const versionNumber = parsePositiveIntegerParam(params.version);
-  if (!surveyId || versionNumber == null) return <p role="alert">版本标识无效</p>;
-  return <VersionDetailPage api={api} surveyId={surveyId} version={versionNumber} />;
+  if (!session || !surveyId || versionNumber == null) return <p role="alert">版本标识无效</p>;
+  return (
+    <VersionDetailPage
+      api={api}
+      surveyId={surveyId}
+      tenantId={session.me.tenantId}
+      version={versionNumber}
+    />
+  );
 }
 
 function formatDate(value: string) {

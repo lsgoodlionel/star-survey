@@ -11,6 +11,9 @@ import {
   getSurvey,
   getSurveyDraft,
   saveDraft,
+  surveyCapabilitiesQueryKey,
+  surveyDetailQueryKey,
+  surveyDraftQueryKey,
   type DraftView,
 } from '../../shared/api/surveys';
 import { Outline } from './Outline';
@@ -40,15 +43,15 @@ type MobilePanel = 'outline' | 'editor' | 'properties';
 
 export function EditorPage({ api, surveyId, tenantId }: EditorPageProps) {
   const surveyQuery = useQuery({
-    queryKey: ['survey', surveyId],
+    queryKey: surveyDetailQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurvey(api, surveyId, signal),
   });
   const draftQuery = useQuery({
-    queryKey: ['survey-draft', surveyId],
+    queryKey: surveyDraftQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurveyDraft(api, surveyId, signal),
   });
   const capabilitiesQuery = useQuery({
-    queryKey: ['resource-capabilities', surveyId],
+    queryKey: surveyCapabilitiesQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getResourceCapabilities(api, surveyId, signal),
   });
 

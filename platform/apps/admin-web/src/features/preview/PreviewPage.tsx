@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { useAuth } from '../auth/AuthProvider';
 import { parseDefinition } from '../editor/model/definition';
 import type { ApiClient } from '../../shared/api/http';
-import { getSurveyDraft } from '../../shared/api/surveys';
+import { getSurveyDraft, surveyDraftQueryKey } from '../../shared/api/surveys';
 import { DraftRenderer } from './DraftRenderer';
 import './preview.css';
 
@@ -25,7 +25,7 @@ export function PreviewPage(props: PreviewPageProps) {
 function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
   const [mode, setMode] = useState<PreviewMode>('desktop');
   const draftQuery = useQuery({
-    queryKey: ['survey-draft', tenantId, surveyId],
+    queryKey: surveyDraftQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurveyDraft(api, surveyId, signal),
   });
 

@@ -12,6 +12,13 @@ import {
 import { describe, expect, test } from 'vitest';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
+import {
+  approvalRequestsQueryKey,
+  surveyOverviewQueryKey,
+  versionQueryKey,
+  versionsQueryKey,
+} from '../../shared/api/approvals';
+import { surveyDraftQueryKey } from '../../shared/api/surveys';
 import { ImportPage } from './ImportPage';
 
 const surveyId = '11111111-1111-4111-8111-111111111111';
@@ -280,7 +287,22 @@ describe('ImportPage', () => {
       },
     });
     const rendered = renderImport(api);
-    rendered.queryClient.setQueryData(['survey', tenantA, surveyId], { id: surveyId, draftVersion: 7 });
+    rendered.queryClient.setQueryData(
+      surveyOverviewQueryKey(tenantA, surveyId),
+      { id: surveyId, draftVersion: 7 },
+    );
+    rendered.queryClient.setQueryData(
+      approvalRequestsQueryKey(tenantA, surveyId),
+      [{ id: 'approval-before-import' }],
+    );
+    rendered.queryClient.setQueryData(
+      versionsQueryKey(tenantA, surveyId),
+      [{ version: 1 }],
+    );
+    rendered.queryClient.setQueryData(
+      versionQueryKey(tenantA, surveyId, 1),
+      { version: 1, surveyId },
+    );
     const input = await screen.findByLabelText('待导入文本');
     fireEvent.change(input, { target: { value: sourceText } });
     fireEvent.click(screen.getByRole('button', { name: '预览导入' }));
@@ -295,9 +317,20 @@ describe('ImportPage', () => {
       method: 'POST',
       body: { expectedVersion: 7, text: sourceText, accept: [0], groupUuid: groupTwo },
     });
-    expect(rendered.queryClient.getQueryData(['survey-draft', tenantA, surveyId])).toEqual(importedDraft);
-    expect(rendered.queryClient.getQueryData(['survey-draft', surveyId])).toEqual(importedDraft);
-    expect(rendered.queryClient.getQueryState(['survey', tenantA, surveyId])?.isInvalidated).toBe(true);
+    expect(rendered.queryClient.getQueryData(surveyDraftQueryKey(tenantA, surveyId))).toEqual(importedDraft);
+    expect(rendered.queryClient.getQueryData(['survey-draft', surveyId])).toBeUndefined();
+    expect(rendered.queryClient.getQueryState(
+      surveyOverviewQueryKey(tenantA, surveyId),
+    )?.isInvalidated).toBe(true);
+    expect(rendered.queryClient.getQueryState(
+      approvalRequestsQueryKey(tenantA, surveyId),
+    )?.isInvalidated).toBe(true);
+    expect(rendered.queryClient.getQueryState(
+      versionsQueryKey(tenantA, surveyId),
+    )?.isInvalidated).toBe(true);
+    expect(rendered.queryClient.getQueryState(
+      versionQueryKey(tenantA, surveyId, 1),
+    )?.isInvalidated).toBe(true);
   });
 
   test('preservesTheLocalTextAndCheckedQuestionsWhenImportConflicts', async () => {
@@ -368,7 +401,7 @@ describe('ImportPage', () => {
 
     expect(await screen.findByText('当前草稿版本 12')).toBeInTheDocument();
     expect(screen.getByLabelText('待导入文本')).toHaveValue('');
-    expect(queryClient.getQueryData(['survey-draft', tenantA, surveyId])).toEqual(draft);
-    expect(queryClient.getQueryData(['survey-draft', tenantB, surveyId])).toEqual({ ...draft, version: 12 });
+    expect(queryClient.getQueryData(surveyDraftQueryKey(tenantA, surveyId))).toEqual(draft);
+    expect(queryClient.getQueryData(surveyDraftQueryKey(tenantB, surveyId))).toEqual({ ...draft, version: 12 });
   });
 });

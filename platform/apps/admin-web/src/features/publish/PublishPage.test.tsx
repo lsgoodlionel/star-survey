@@ -1,7 +1,11 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { render } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
+import { versionQueryKey } from '../../shared/api/approvals';
 import { renderWithQuery } from '../../test/render';
 import { createAppRoutes } from '../../app/router';
 import { PublishPage } from './PublishPage';
@@ -101,6 +105,45 @@ afterEach(() => {
 });
 
 describe('PublishPage', () => {
+  test('doesNotConsumeFreshPublishDataCachedForAnotherTenant', async () => {
+    const tenantApi = (title: string) => standardApi({
+      [`GET /v1/surveys/${surveyId}`]: () => ({ ...baseSurvey, title }),
+    });
+    const apiA = tenantApi('租户 A 发布页');
+    const apiB = tenantApi('租户 B 发布页');
+    function TenantPublishHarness() {
+      const [tenantId, setTenantId] = useState('tenant-a');
+      return (
+        <>
+          <button type="button" onClick={() => setTenantId('tenant-b')}>切换发布租户</button>
+          <PublishPage
+            actorId="author-1"
+            api={tenantId === 'tenant-a' ? apiA : apiB}
+            surveyId={surveyId}
+            tenantId={tenantId}
+          />
+        </>
+      );
+    }
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 30_000 },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TenantPublishHarness />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '租户 A 发布页' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '切换发布租户' }));
+
+    expect(await screen.findByRole('heading', { name: '租户 B 发布页' })).toBeInTheDocument();
+    expect(screen.queryByText('租户 A 发布页')).not.toBeInTheDocument();
+  });
+
   test('showsOnlyActionsAllowedByTheCurrentApprovalState', async () => {
     const statuses = ['approved', 'rejected', 'withdrawn', 'voided', 'published', 'pending'];
     const approvals = statuses.map((status, index) => ({
@@ -116,7 +159,7 @@ describe('PublishPage', () => {
       },
     });
 
-    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />);
 
     for (const label of ['待审批', '已批准', '已驳回', '已撤回', '已作废', '已发布']) {
       expect(await screen.findByText(label)).toBeInTheDocument();
@@ -159,9 +202,9 @@ describe('PublishPage', () => {
     });
 
     const rendered = renderWithQuery(
-      <PublishPage actorId="author-1" api={api} surveyId={surveyId} />,
+      <PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />,
     );
-    rendered.queryClient.setQueryData(['survey', surveyId, 'versions', 2], baseVersion);
+    rendered.queryClient.setQueryData(versionQueryKey('tenant-a', surveyId, 2), baseVersion);
     fireEvent.click(await screen.findByRole('button', { name: '批准申请' }));
 
     expect(await screen.findByText('已作废')).toBeInTheDocument();
@@ -169,7 +212,9 @@ describe('PublishPage', () => {
     expect(overviewReads).toBeGreaterThanOrEqual(2);
     expect(approvalReads).toBeGreaterThanOrEqual(2);
     expect(versionReads).toBeGreaterThanOrEqual(2);
-    expect(rendered.queryClient.getQueryState(['survey', surveyId, 'versions', 2])?.isInvalidated).toBe(true);
+    expect(rendered.queryClient.getQueryState(
+      versionQueryKey('tenant-a', surveyId, 2),
+    )?.isInvalidated).toBe(true);
   });
 
   test('doesNotClaimSuccessWhilePublishReturns202', async () => {
@@ -181,7 +226,7 @@ describe('PublishPage', () => {
       },
     });
 
-    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />);
     fireEvent.click(await screen.findByRole('button', { name: '发布问卷' }));
 
     expect(await screen.findByText('发布结果正在核对')).toBeInTheDocument();
@@ -223,7 +268,7 @@ describe('PublishPage', () => {
       },
     });
 
-    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />);
     fireEvent.click(await screen.findByRole('button', { name: '发布问卷' }));
     await act(async () => vi.advanceTimersByTimeAsync(4_000));
 
@@ -273,7 +318,7 @@ describe('PublishPage', () => {
     });
 
     const view = renderWithQuery(
-      <PublishPage actorId="author-1" api={api} surveyId={surveyId} />,
+      <PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />,
     );
     fireEvent.click(await screen.findByRole('button', { name: '发布问卷' }));
     await waitFor(() => expect(overviewReads).toBeGreaterThanOrEqual(2));
@@ -334,7 +379,7 @@ describe('PublishPage', () => {
       }),
     });
 
-    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />);
 
     expect(await screen.findByText(warning)).toBeInTheDocument();
     expect(screen.queryByText(absentWarning)).not.toBeInTheDocument();
@@ -380,7 +425,7 @@ describe('PublishPage', () => {
       },
     });
 
-    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />);
     fireEvent.click(await screen.findByRole('button', { name: '发布问卷' }));
 
     expect(await screen.findByText('定义校验')).toBeInTheDocument();
@@ -415,7 +460,7 @@ describe('PublishPage', () => {
       }),
     });
 
-    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />);
 
     expect(await screen.findByText('发布失败')).toBeInTheDocument();
     expect(screen.getByText('未知阶段')).toBeInTheDocument();
@@ -456,7 +501,7 @@ describe('PublishPage', () => {
       }),
     });
 
-    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />);
 
     expect(await screen.findByText('发布失败，详细信息已隐藏。')).toBeInTheDocument();
     expect(screen.queryByText(/RAW_GATEWAY_SECRET|gateway-secret|至少需要一个选项|无法校验/)).not.toBeInTheDocument();
@@ -525,7 +570,7 @@ describe('PublishPage', () => {
       [`GET /v1/surveys/${surveyId}/approval-requests`]: () => approval ? [approval] : [],
     });
 
-    renderWithQuery(<PublishPage actorId={actorId} api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId={actorId} api={api} surveyId={surveyId} tenantId="tenant-a" />);
 
     await screen.findByRole('heading', { name: '可执行操作' });
     for (const name of shown) expect(screen.getByRole('button', { name })).toBeInTheDocument();
@@ -534,7 +579,7 @@ describe('PublishPage', () => {
 
   test('announcesPublishStatusChangesToAssistiveTechnology', async () => {
     renderWithQuery(
-      <PublishPage actorId="author-1" api={standardApi()} surveyId={surveyId} />,
+      <PublishPage actorId="author-1" api={standardApi()} surveyId={surveyId} tenantId="tenant-a" />,
     );
 
     expect(await screen.findByRole('status')).toHaveAttribute('aria-live', 'polite');
@@ -549,7 +594,9 @@ test('showsPublishedVersionsAsImmutableReadOnlyData', async () => {
     throw new Error(`Unhandled request: ${request.path}`);
   });
 
-  renderWithQuery(<VersionDetailPage api={api} surveyId={surveyId} version={2} />);
+  renderWithQuery(
+    <VersionDetailPage api={api} surveyId={surveyId} tenantId="tenant-a" version={2} />,
+  );
 
   expect(await screen.findByRole('heading', { name: '已发布版本 2' })).toBeInTheDocument();
   expect(screen.getByText('当前在线')).toBeInTheDocument();

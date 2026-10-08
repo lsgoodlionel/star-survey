@@ -20,6 +20,18 @@ export const draftViewSchema = z.object({
 
 export type DraftView = z.infer<typeof draftViewSchema>;
 
+const surveyQueryRoot = (tenantId: string, surveyId: string) =>
+  ['survey', tenantId, surveyId] as const;
+
+export const surveyDetailQueryKey = (tenantId: string, surveyId: string) =>
+  [...surveyQueryRoot(tenantId, surveyId), 'detail'] as const;
+
+export const surveyDraftQueryKey = (tenantId: string, surveyId: string) =>
+  [...surveyQueryRoot(tenantId, surveyId), 'draft'] as const;
+
+export const surveyCapabilitiesQueryKey = (tenantId: string, surveyId: string) =>
+  [...surveyQueryRoot(tenantId, surveyId), 'capabilities'] as const;
+
 export function createBlankDefinition(title: string): Record<string, unknown> {
   return {
     definitionVersion: 2,
