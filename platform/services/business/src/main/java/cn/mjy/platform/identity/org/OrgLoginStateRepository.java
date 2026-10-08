@@ -41,13 +41,14 @@ class OrgLoginStateRepository {
      * 原子地烧掉 state：只有尚未消费的 state 会返回内容，并发的两次回调恰好一次拿到。
      * 无论之后核对是否通过，state 都已作废——被截获的 state 最多被试一次。
      */
-    Optional<ConsumedState> consume(String state) {
+    Optional<ConsumedState> consume(String state, Instant consumedAt) {
         return jdbc.sql("""
-                        UPDATE org_login_state SET consumed_at = now()
+                        UPDATE org_login_state SET consumed_at = :consumed
                         WHERE state = :state AND consumed_at IS NULL
                         RETURNING connection_id, browser_hash, expires_at
                         """)
                 .param("state", state)
+                .param("consumed", java.sql.Timestamp.from(consumedAt))
                 .query((rs, n) -> new ConsumedState(rs.getObject("connection_id", UUID.class),
                         rs.getString("browser_hash"), rs.getTimestamp("expires_at").toInstant()))
                 .optional();

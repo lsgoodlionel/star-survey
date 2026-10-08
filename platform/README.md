@@ -8,13 +8,13 @@
 
 ## 1. 当前状态
 
-`main` @ `d807200b` · 更新 2026-09-24
+分支 `feat/admin-web-authoring` · 更新 2026-10-09
 
 | 阶段 | 状态 |
 |---|---|
 | P0 基线与可行性 | ✅（供应商询证与法务意见待业务侧） |
 | P1 租户与平台骨架 | ✅ 闸门通过 |
-| P2 通用问卷与本土入口 | 🔄 第一–七波已合并，第八波进行中 |
+| P2 通用问卷与本土入口 | 🔄 第一阶段管理端创作链路已交付并通过真实浏览器验收 |
 | P3 商业与业务应用 | 🔄 考试与测评（WP-09/10）已起步 |
 | P4–P5 | ⬜ |
 
@@ -22,31 +22,41 @@
 
 | 套件 | 数量 | 说明 |
 |---|---|---|
-| 平台 Java | **1231 通过 / 153 类** | 0 失败 0 错误 |
-| 发布网关 Python | **1039 通过** | |
+| 平台 Java | **1403 通过 / 175 类** | 0 失败 0 错误 0 跳过 |
+| 发布网关 Python | **1180 通过** | 0 失败 |
+| 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
+| 管理端 Vitest | **13 个文件 / 134 通过** | lint、typecheck 同步通过 |
+| 管理端生产构建 | **2080 modules / 13 个产物文件检查** | production bundle 不含开发令牌入口 |
+| 管理端真实 E2E | **3 通过（7.6s）** | 桌面完整创作、移动端响应式编辑、真实 Chromium 敏感控件遮蔽 |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
 
-**代码规模**：平台 Java 522 个文件、网关 Python 63 个、自研插件 3 个、自研作答主题 15 套、数据库迁移 42 个。
+**代码规模**（2026-10-09，可复现口径）：`platform/services/business/src/main/**/*.java` **558** 个，
+`platform/services/business/src/main/resources/db/migration/V*.sql` Flyway 迁移 **45** 个，
+`platform/tools/publish-gateway/pubgw/**/*.py` 发布网关生产包 **70** 个（不含 `tests/`）；另有自研插件
+3 个、自研作答主题 15 套。前三项分别可用对应目录下的 `rg --files -g '*.java'`、
+`rg --files -g 'V*.sql'`、`rg --files -g '*.py'` 复核。
 
 ---
 
 ## 2. 系统构成
 
 ```
-浏览器 ──→ LimeSurvey 引擎（作答页 / 后台）
-              │ ①事件回传(HMAC)        ↑ ③RemoteControl + 插件通道
-              ↓                        │
-         平台（Spring Boot, Java 21） ─┴─ 发布网关（Python, 纯标准库）
-              │
-         PostgreSQL（RLS, ENABLE+FORCE）
+作者浏览器 ──→ 管理端 Web（React / TypeScript）──同源 `/v1`──┐
+作答浏览器 ──→ LimeSurvey 引擎（作答页）                    │
+                    │ 事件回传(HMAC)       ↑ RemoteControl + 插件通道
+                    ↓                      │                ↓
+               平台（Spring Boot, Java 21）┴─ 发布网关（Python, 纯标准库）
+                    │
+               PostgreSQL（RLS, ENABLE+FORCE）
 ```
 
-**三条边界，各自的信任模型不同**：
+**五条通道，各自的信任模型不同**：
 
 | 通道 | 方向 | 认证 | 决策 |
 |---|---|---|---|
+| 管理端 API | 作者浏览器 → 管理端 Web → 平台 | 页面内存 Bearer JWT；同源 `/v1` | 本次作者工作台设计 |
 | 引擎事件回传 | 引擎 → 平台 | 每实例派生密钥 HMAC | ADR 0003 |
 | 发布与答卷读取 | 平台 → 网关 → 引擎 | 平台↔网关 HMAC＋时间戳；引擎口令只在网关 | ADR 0009 / 0013 |
 | 插件副表读取 | 网关 → 插件 | 通道密钥（自实例密钥再派生一层，单向） | ADR 0018 |
@@ -62,6 +72,7 @@
 
 | 路径 | 内容 |
 |---|---|
+| `platform/apps/admin-web/` | 作者工作台 SPA：内存会话、资源树、基础编辑、批量导入、草稿预览、审批发布与版本查看 |
 | `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
 | `platform/tools/publish-gateway/` | 发布网关：定义 → LSS → 导入 → 激活 → 回读校验 → 回滚；答卷读取；插件通道客户端 |
 | `platform/tools/engine-theme/` | 把随镜像发布的作答主题装进引擎库 |
@@ -113,6 +124,20 @@ PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh
 # 发布网关测试（本机无 pytest，用 unittest）
 cd platform/tools/publish-gateway && python3 -m unittest discover -s tests -t . -q
 
+# 管理端轻量质量闸门（Node 22）
+cd platform/apps/admin-web
+npm ci
+npm run lint
+npm run typecheck
+npm test -- --run
+npm run build
+npm run assert:production-bundle
+cd ../../..
+
+# 管理端真实浏览器纵向验收（Docker + Playwright，MySQL 测试引擎）
+SURVEY_TEST_PREFIX=adminweb-final COMPOSE_PROJECT_NAME=adminweb-final TEST_DB=mysql \
+  platform/deploy/test/run-admin-web-e2e.sh --fresh
+
 # 测试总数对账脚本自己的用例
 cd platform/tools/test-report && python3 -m unittest discover -s tests -t . -q
 
@@ -123,6 +148,12 @@ TEST_DB=pgsql platform/deploy/test/run-access-policy.sh --fresh
 # 并行开发时各车道用自己的前缀，互不踩踏
 SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test/run-question-themes.sh
 ```
+
+CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中经 gate 白名单重写的
+`*-sanitized-failure.png` 与 `*-sanitized-trace-summary.json`。后者只含 project、固定 test id、状态、耗时、
+真实管理端路由白名单内的路径，以及最近最多 25 条仅含 method/status/无 query URL 的网络事件，是结构化排障
+摘要而非 Playwright raw trace。gate 会在 JSON 解码、percent decode、NFKC 规范化后检查所有字符串，并复扫
+最终输出 bytes；JWT、headers、body、临时元数据、raw trace 和原始截图不会上传。
 
 ### 跑测试的三条硬规矩（都是真实踩出来的）
 
@@ -150,6 +181,7 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 
 | 工作包 | 状态 | 内容 |
 |---|---|---|
+| 管理端创作链路（第一阶段） | 🟡 | 组织免登安全交接、资源树和项目/文件夹/问卷创建、说明文字与单选/多选/短文本/长文本编辑、无损保存与冲突保护、批量文本导入、草稿预览、审批发布和不可变版本查看；桌面完整创作与移动端响应式编辑已有真实 E2E |
 | WP-23 共同基础 | 🟡 | 租户隔离（RLS）、公开路由、身份绑定、每实例事件密钥、审计；事件日志与补偿扫描；催答完成对账。跨系统对账报表、隐私删除、监控 ⬜ |
 | WP-22 套餐与计量 | 🟡 | 套餐版本、试用／付费订阅、有效答卷计量、席位额度、租户开通；赠送有效期 ⬜ |
 | WP-19 团队与品牌 | 🟡 | 角色目录、资源树授权继承、字段与导出权限、席位联动；企业模板库；`zh-business` 主题与多语言。协作员到期、自定义域名 ⬜ |
@@ -171,6 +203,8 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 | Job | 内容 | 需要什么 |
 |---|---|---|
 | `parity-tables` | 发布网关单测（含**三端注册表**与**三端数值上限**两张对照表）＋ 对账脚本自己的用例 ＋ **需求追溯校验** | 只要 Python，秒级 |
+| `admin-web` | Node 22 下执行 `npm ci`、lint、typecheck、Vitest、生产构建与 production bundle assertion | Node 22 |
+| `admin-web-e2e` | 桌面完整创作与移动端响应式编辑；真实串起管理端、平台、网关和 MySQL 引擎 | Docker ＋ Chromium；依赖 `admin-web` 与 `parity-tables` |
 | `gateway-parity-e2e` | WP-03.4 双执行比对，`mysql` 与 `pgsql` 两个矩阵分支各跑一遍 | 起引擎栈（脚本自行构建 `survey-web` 镜像） |
 | `platform-java` | 平台 Java 全套（`run-platform-tests.sh`，含测试数对账） | `actions/setup-java` ＋ PostgreSQL service 容器 |
 | `access-policy-e2e` | WP-04 访问策略端到端（R04-01…05），`mysql` 与 `pgsql` 各一遍 | 起引擎栈 |
@@ -191,27 +225,9 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 本机网络、**不能**当作 runner 的预估，口径与完整数据见
 [`platform/services/business/CONVENTIONS.md`](services/business/CONVENTIONS.md)。
 
-端到端脚本按「覆盖接缝与权限闸门」优先接了两条（`run-access-policy.sh`、`run-p1-e2e.sh`），
+端到端脚本按「覆盖接缝与权限闸门」优先接入 `run-access-policy.sh`、`run-p1-e2e.sh` 和
+`run-admin-web-e2e.sh`，
 其余仍是本地约定；取舍与下一批建议写在 workflow 末尾的注释里。
-
----
-
-## 6. 已交付能力
-
-| 工作包 | 状态 | 内容 |
-|---|---|---|
-| WP-23 共同基础 | 🟡 | 租户隔离（RLS）、公开路由、身份绑定、每实例事件密钥、审计；事件日志与补偿扫描；催答完成对账。跨系统对账报表、隐私删除、监控 ⬜ |
-| WP-22 套餐与计量 | 🟡 | 套餐版本、试用／付费订阅、有效答卷计量、席位额度、租户开通；赠送有效期 ⬜ |
-| WP-19 团队与品牌 | 🟡 | 角色目录、资源树授权继承、字段与导出权限、席位联动；企业模板库；`zh-business` 主题与多语言。协作员到期、自定义域名 ⬜ |
-| WP-01 创建与编辑 | ✅ | 定义格式与 LSS 编译、首发与改版再发布（原子路由切换）、草稿乐观锁、漂移检测、**旧版恢复**、**批量文本导入预览** |
-| WP-02 题型 | 🟡 | 47 项对照表；原生与原生加主题；**15 套自研主题**；插件副表结构版本；服务端校验（手机号／邮编／身份证／统一社会信用代码）。剩 6 类待资产服务补齐能力 |
-| WP-03 逻辑与计算 | ✅ | 定义 v2 DSL、类型检查与环检测、AST→ExpressionScript、**计分**、**双执行比对**（双库 48 例零分歧） |
-| WP-04 访问与作答规则 | ✅ | 时间窗（含改客户端时钟）、密码、邀请码、按 token/设备/IP 限次、服务端时长、验证码、IP 规则；策略摘要双端校验 |
-| WP-05 投放触达 | ✅ | 链接、二维码、短链、内嵌、签名渠道参数；批量任务（崩溃续跑不重发）、回执验签去重、退订不可翻转；催答与通知。真实短信／邮件通道 ⏳ |
-| WP-06 数据与输出 | 🟡 | 分页查询、字段字典、脱敏；导出作业（快照、续跑、再授权）；CSV／XLSX／**SAV**／**DOCX**；**扩展表作答进导出**。附件打包、PDF ⬜ |
-| WP-18 通讯录 | ✅ | 三类身份分离、名单导入去重、部门树与数据范围、**联系人 → 邀请码自动登记** |
-| WP-20 集成 | 🟡 | 企微／钉钉／飞书授权与免登、事件回调、定时同步。真实联调待凭据 ⏳ |
-| WP-09/10 考试测评 | 🔄 | 本波进行中 |
 
 ---
 
@@ -239,6 +255,7 @@ SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test
 
 **功能缺口**
 
+- 管理端首期仍未交付拖拽排序、高级题型可视化配置、真实 LimeSurvey 运行时预览和专门的屏幕阅读器审计；当前只有按钮式排序、复杂题型只读无损往返、明确标注的“草稿预览”和可访问性基础检查。
 - PDF 导出卡在中文字体（已决定随仓库交付思源黑体，SIL OFL 1.1）。
 - 附件打包卡在 `get_uploaded_files`——它一次把**整份答卷**的全部文件 base64 塞进一个 JSON 应答。
 - 字典节点上限 8000（由定义快照 1 MiB 倒推）：到区县够用，到乡镇街道不够。

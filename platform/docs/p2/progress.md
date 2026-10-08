@@ -1,6 +1,6 @@
 # P2 进度：通用问卷与本土入口
 
-更新：2026-09-22
+更新：2026-10-08
 
 ## 第一波（已合并，main `c7d79200`）
 
@@ -640,3 +640,59 @@ Java 三次都是「标题少了 `[结构化作答]`」）。**一处例外**：
 只能为每一个候选答卷经网关取一次作答——一次列表请求会放大成一次全量导出，
 还要把游标语义从"上一页最后一行"改成"上一次扫到哪"，并把网关不可达的 503 面扩大到整个列表。
 该走的路是 06.2 导出作业（已有快照水位线与可恢复分批）。
+## 管理端创作链路第一阶段（分支 `feat/admin-web-authoring`）
+
+日期：2026-10-08。新增 `platform/apps/admin-web/` React 19 / TypeScript / Vite SPA，浏览器只访问
+同源 `/v1`，平台继续承担租户、权限、定义校验和发布状态机；发布网关与 LimeSurvey 管理接口不暴露给
+浏览器。认证采用 60 秒、单次使用、绑定 HttpOnly Cookie 的组织登录 `handoff`，交换成功后才创建平台
+会话并签发 JWT；前端会话只驻留页面内存，生产 bundle 不包含开发令牌入口。
+
+首期交付的真实创作链路：
+
+- 浏览项目、文件夹和问卷资源树，创建项目、文件夹和空白中文问卷；动作显示以服务端返回的资源能力为准。
+- 编辑说明文字、单选、多选、短文本和长文本；未知字段与复杂题型只读并无损往返，保存使用 `draftVersion`
+  乐观锁，409 时保留本地内容，401 重新认证时保留同租户同问卷的内存恢复稿。
+- 批量文本先预览，再按原始行号展示坏行、选择合法题目并确认导入；草稿预览明确标为“草稿预览”。
+- 提交、批准、驳回、撤回发布审批，区分 `202` 待核对、失败、人工复核与孤儿引擎问卷；发布成功后查看
+  不可变版本详情。
+- 桌面采用资源树和三栏编辑，窄屏切换为大纲／编辑／属性标签页；真实 Playwright 验证关键控件可达、
+  焦点轮廓和无横向溢出。
+
+架构与运行入口：
+
+```bash
+# Node 22，轻量质量门禁
+cd platform/apps/admin-web
+npm ci
+npm run lint
+npm run typecheck
+npm test -- --run
+npm run build
+npm run assert:production-bundle
+
+# 仓库根目录，真实管理端 → 平台 → 网关 → LimeSurvey 纵向验收
+SURVEY_TEST_PREFIX=adminweb-final COMPOSE_PROJECT_NAME=adminweb-final TEST_DB=mysql \
+  platform/deploy/test/run-admin-web-e2e.sh --fresh
+```
+
+验证证据：平台 **1403 cases / 175 test classes**；发布网关 **1180 tests**；需求追溯工具
+**72 tests**，登记 **305** 条需求、**80** 条证据、覆盖 **37** 条需求、源码引用 **95** 个编号，
+matrix check passed；管理端 **13 files / 134 tests**，生产构建 **2080 modules**，production bundle
+assertion 检查 **13 files**；真实 E2E **3 passed (7.6s)**，覆盖桌面完整创作、移动端响应式编辑与真实 Chromium 敏感控件遮蔽。
+CI 的失败证据先在私有目录生成，再由 gate 按固定 schema 和文件名白名单导出到 ignored 目录；仅上传已遮蔽
+截图与 `sanitized-trace-summary.json`。该 JSON 是只含 project、固定 test id、状态、耗时、真实管理端路由
+白名单路径，以及最近最多 25 条 method/status/无 query URL 网络事件的结构化排障摘要，不是 Playwright raw
+trace；gate 对事件字段、类型、URL 与长度做严格校验，并在 JSON 解码、percent decode、NFKC 规范化后扫描所有
+字符串及最终输出 bytes。JWT、headers、body、临时元数据、raw trace 和原始截图均不上传并随私有目录清理；
+独立 Playwright 用例以真实 Chromium DOM 验证失败响应在截图前已脱敏收集，敏感控件清空、隐藏后才执行内存
+截图，不持久化该截图。
+
+### 明确保留的未交付项
+
+- **拖拽排序**：首期提供按钮式稳定排序与 UUID 保持，不含拖拽交互。
+- **高级题型**：复杂题型只读并无损保存，不含全部题型的可视化配置器。
+- **真实运行时预览**：当前是本地“草稿预览”，不声称与 LimeSurvey 作答运行时一致。
+- **专门的屏幕阅读器审计**：已有语义、键盘、焦点和状态播报的基础自动化检查，但没有独立的读屏器
+  人工或专项自动化审计。
+
+这些证据只证明上述工程切片和对应子断言，不把 R01、R19 或 R23 的整条复合需求标为 Accepted。

@@ -118,6 +118,29 @@ class AnonymousRateLimitFilterTest {
         assertThat(rawPath(filter, "10.0.0.7", "/v1/org-events/z/third-one").getStatus()).isEqualTo(429);
     }
 
+    @Test
+    void handoffUsesATenantBucketWhileRetainingThePerSourceLimit() throws Exception {
+        String loginBase = "/v1/auth/org";
+        UUID tenantA = UUID.randomUUID();
+        UUID tenantB = UUID.randomUUID();
+        AnonymousRateLimitFilter tenantBuckets = AnonymousRateLimitFilter.forLogin(loginBase, limits(1, 10, 10));
+
+        assertThat(rawPath(tenantBuckets, "10.0.0.8", loginBase + "/" + tenantA + "/handoff")
+                .getStatus()).isEqualTo(401);
+        assertThat(rawPath(tenantBuckets, "10.0.0.8", loginBase + "/" + tenantA + "/handoff")
+                .getStatus()).isEqualTo(429);
+        assertThat(rawPath(tenantBuckets, "10.0.0.8", loginBase + "/" + tenantB + "/handoff")
+                .getStatus()).isEqualTo(401);
+
+        AnonymousRateLimitFilter sourceLimit = AnonymousRateLimitFilter.forLogin(loginBase, limits(10, 2, 10));
+        assertThat(rawPath(sourceLimit, "10.0.0.9", loginBase + "/" + tenantA + "/handoff")
+                .getStatus()).isEqualTo(401);
+        assertThat(rawPath(sourceLimit, "10.0.0.9", loginBase + "/" + tenantB + "/handoff")
+                .getStatus()).isEqualTo(401);
+        assertThat(rawPath(sourceLimit, "10.0.0.9", loginBase + "/" + UUID.randomUUID() + "/handoff")
+                .getStatus()).isEqualTo(429);
+    }
+
     private static MockHttpServletResponse rawPath(AnonymousRateLimitFilter filter, String ip, String path)
             throws ServletException, IOException {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", path);

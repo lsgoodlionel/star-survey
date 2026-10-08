@@ -42,6 +42,7 @@ abstract class OrgLoginTestSupport {
 
     static final String OWNER = "owner";
     static final String CALLBACK_BASE = "https://survey.example.test";
+    static final String ADMIN_WEB_BASE = CALLBACK_BASE + "/admin";
 
     static final FakeOrgPlatforms FAKE = FakeOrgPlatforms.get();
 
@@ -49,6 +50,7 @@ abstract class OrgLoginTestSupport {
     static void orgPlatforms(DynamicPropertyRegistry registry) {
         String base = FAKE.baseUrl();
         registry.add("platform.identity.org-login.callback-base-url", () -> CALLBACK_BASE);
+        registry.add("platform.identity.org-login.admin-web-base-url", () -> ADMIN_WEB_BASE);
         registry.add("platform.identity.org-login.wecom-api-base-url", () -> base + "/wecom");
         registry.add("platform.identity.org-login.dingtalk-api-base-url", () -> base + "/dingtalk");
         registry.add("platform.identity.org-login.dingtalk-oapi-base-url", () -> base + "/dingtalk-oapi");

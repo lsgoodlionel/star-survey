@@ -102,6 +102,31 @@ public class ResourceTreeService {
         });
     }
 
+    /**
+     * 返回工作区所需的权威动作能力。发布申请使用原始 publish 授权，直接发布则保留审核开关的最终判定。
+     */
+    public ResourceCapabilities capabilities(TenantContext ctx, UUID resourceId) {
+        TenantId tenant = ctx.tenantId();
+        return tenantScope.call(tenant, () -> {
+            boolean canCreateProject = access.canInTenant(ctx, Permission.MANAGE_SETTINGS).allowed();
+            if (resourceId == null) {
+                return new ResourceCapabilities(canCreateProject, false, false, false, false, false);
+            }
+
+            require(ctx, Permission.VIEW, resourceId);
+            ResourceView node = requireNode(tenant, resourceId);
+            boolean canEdit = access.can(ctx, Permission.EDIT, resourceId).allowed();
+            boolean canSubmitApproval = access.held(ctx, resourceId).contains(Permission.PUBLISH);
+            return new ResourceCapabilities(
+                    canCreateProject,
+                    canEdit && node.resourceKind().canContainChildren(),
+                    canEdit,
+                    canSubmitApproval,
+                    access.can(ctx, Permission.PUBLISH, resourceId).allowed(),
+                    access.can(ctx, Permission.APPROVE_PUBLISH, resourceId).allowed());
+        });
+    }
+
     /** 改名需要节点上的 edit。问卷的名称来自其定义标题，改名须经保存草稿，不在这里改。 */
     public ResourceView rename(TenantContext ctx, UUID id, String name) {
         String normalized = normalizeName(name);

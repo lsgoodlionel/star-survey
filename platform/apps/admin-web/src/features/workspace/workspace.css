@@ -1,0 +1,246 @@
+.workspace-page {
+  min-height: calc(100vh - 52px);
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  background: #fff;
+}
+
+.workspace-sidebar {
+  min-width: 0;
+  padding: 18px 12px;
+  background: #f7f8f8;
+  border-right: 1px solid #d5dcdf;
+}
+
+.workspace-sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 6px 14px;
+}
+
+.workspace-sidebar-heading h1 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.workspace-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.workspace-actions button,
+.tree-icon-button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: #25444f;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.workspace-actions button:hover,
+.tree-icon-button:hover {
+  background: #e7edef;
+  border-color: #bcc9ce;
+}
+
+.workspace-actions svg,
+.tree-icon-button svg,
+.resource-tree-item svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.resource-tree,
+.resource-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.resource-tree ul {
+  padding-left: 22px;
+}
+
+.resource-tree-row {
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+}
+
+.tree-icon-placeholder {
+  width: 32px;
+}
+
+.resource-tree-item {
+  min-width: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  overflow: hidden;
+  color: #26383e;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.resource-tree-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-tree-item[aria-current='true'] {
+  color: #0e4f62;
+  background: #dcecf1;
+  border-color: #9dbec8;
+}
+
+.resource-tree-status,
+.resource-tree-more {
+  padding: 8px 10px 8px 36px;
+  color: #56676d;
+  font-size: 14px;
+}
+
+.resource-tree-more button {
+  padding: 4px 8px;
+  color: #0e5e75;
+  background: transparent;
+  border: 0;
+}
+
+.workspace-main {
+  min-width: 0;
+  padding: 32px;
+}
+
+.workspace-main h2 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: 0;
+}
+
+.workspace-kind {
+  margin: 0 0 8px;
+  color: #5d6b70;
+  font-size: 14px;
+}
+
+.workspace-edit-link {
+  width: fit-content;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 7px 12px;
+  color: #fff;
+  text-decoration: none;
+  background: #166534;
+  border: 1px solid #14532d;
+  border-radius: 4px;
+}
+
+.workspace-edit-link:hover {
+  background: #14532d;
+}
+
+.workspace-edit-link:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+.workspace-welcome {
+  max-width: 620px;
+}
+
+.workspace-welcome p {
+  color: #5d6b70;
+}
+
+.workspace-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(19 31 36 / 45%);
+}
+
+.workspace-dialog {
+  width: min(420px, 100%);
+  padding: 20px;
+  background: #fff;
+  border: 1px solid #aab7bc;
+  border-radius: 6px;
+  box-shadow: 0 18px 48px rgb(24 32 38 / 22%);
+}
+
+.workspace-dialog h2 {
+  margin: 0 0 18px;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.workspace-dialog form,
+.workspace-dialog label {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-dialog input {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #7f8e94;
+  border-radius: 4px;
+}
+
+.workspace-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.workspace-dialog-actions button {
+  min-height: 38px;
+  padding: 7px 14px;
+  color: #fff;
+  background: #166534;
+  border: 1px solid #14532d;
+  border-radius: 4px;
+}
+
+.workspace-dialog-actions .secondary-action {
+  color: #25383f;
+  background: #fff;
+  border-color: #9aa9af;
+}
+
+@media (max-width: 720px) {
+  .workspace-page {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #d5dcdf;
+  }
+
+  .workspace-main {
+    padding: 24px 18px;
+  }
+}
