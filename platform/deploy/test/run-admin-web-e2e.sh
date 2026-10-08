@@ -6,11 +6,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TEST_DB="${TEST_DB:-mysql}"
 is_fresh=false
-case "${1:-}" in
-  --fresh) is_fresh=true ;;
-  "") ;;
-  *) echo "usage: $0 [--fresh]" >&2; exit 2 ;;
-esac
 
 export SURVEY_TEST_PREFIX="${SURVEY_TEST_PREFIX:-adminweb}"
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$SURVEY_TEST_PREFIX}"
@@ -36,9 +31,12 @@ step() { echo "== $*" >&2; }
 random_secret() { python3 -c 'import secrets; print(secrets.token_urlsafe(48))'; }
 
 WORK_DIR=""
-cleanup() {
-  local status=$?
+cleanup_run() {
+  local status="$1"
   set +e
+  if [[ -n "${ADMIN_WEB_JWT_FILE:-}" && -f "$ADMIN_WEB_JWT_FILE" ]]; then
+    sanitize_test_artifacts "$([[ "$status" == "0" ]] && printf false || printf true)" >/dev/null 2>&1 || true
+  fi
   if ((status != 0)); then
     echo "--- platform log (tail) ---" >&2
     docker logs --tail 80 "$PLATFORM_CONTAINER" >&2 2>&1 || true
@@ -47,16 +45,22 @@ cleanup() {
     echo "--- admin web log (tail) ---" >&2
     docker logs --tail 40 "$ADMIN_WEB_CONTAINER" >&2 2>&1 || true
   fi
-  if [[ "${ADMIN_WEB_E2E_KEEP:-}" == "1" ]]; then
-    echo "ADMIN_WEB_E2E_KEEP=1: leaving this compose project running" >&2
-    return
-  fi
-  "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
   if [[ -n "$WORK_DIR" ]]; then
     rm -rf "$WORK_DIR"
   fi
+  if [[ "${ADMIN_WEB_E2E_KEEP:-}" == "1" ]]; then
+    echo "ADMIN_WEB_E2E_KEEP=1: leaving only compose resources running; private files were removed" >&2
+    return 0
+  fi
+  "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  return 0
 }
-trap cleanup EXIT
+
+cleanup() {
+  local status=$?
+  cleanup_run "$status"
+  return "$status"
+}
 
 wait_healthy() {
   local label="$1" url="$2" attempts="$3" container="$4"
@@ -103,6 +107,54 @@ ensure_node22() {
   done
   fail "Node 22 is required for Playwright (set NODE22_BIN when it is not managed by NVM)"
 }
+
+issue_browser_token() {
+  python3 "$GATE" --base-url "$PLATFORM_URL" issue-browser-token \
+    --metadata-file "$ADMIN_WEB_METADATA_FILE" \
+    --jwt-file "$ADMIN_WEB_JWT_FILE"
+  [[ "$(private_mode "$ADMIN_WEB_JWT_FILE")" == "600" ]] || fail "JWT file is not mode 0600"
+}
+
+sanitize_test_artifacts() {
+  local remove_media="$1"
+  local arguments=(
+    --base-url "${PLATFORM_URL:-http://127.0.0.1}"
+    scan-artifacts
+    --jwt-file "$ADMIN_WEB_JWT_FILE"
+    --path "$ADMIN_WEB_RESULT_FILE"
+    --path "$ADMIN_WEB_DIR/test-results"
+  )
+  if [[ "$remove_media" == "true" ]]; then
+    arguments+=(--remove-media)
+  fi
+  python3 "$GATE" "${arguments[@]}"
+}
+
+run_playwright() {
+  (
+    cd "$ADMIN_WEB_DIR"
+    npm run e2e -- --project=chromium-desktop --project=chromium-mobile
+  )
+}
+
+run_browser_tests() {
+  rm -f "$ADMIN_WEB_JWT_FILE" "$ADMIN_WEB_RESULT_FILE"
+  issue_browser_token
+  if ! run_playwright; then
+    sanitize_test_artifacts true || true
+    return 1
+  fi
+  [[ -f "$ADMIN_WEB_RESULT_FILE" ]] || fail "Playwright did not write the redacted result"
+  sanitize_test_artifacts false
+}
+
+main() {
+case "${1:-}" in
+  --fresh) is_fresh=true ;;
+  "") ;;
+  *) echo "usage: $0 [--fresh]" >&2; return 2 ;;
+esac
+trap cleanup EXIT
 
 ensure_node22
 for tool in docker python3 curl npm node; do
@@ -154,14 +206,12 @@ PLATFORM_URL="$(service_url platform 8080)"
 wait_healthy platform "$PLATFORM_URL/actuator/health" "$PLATFORM_HEALTH_ATTEMPTS" "$PLATFORM_CONTAINER"
 ok "platform healthy on a random loopback port"
 
-step "seed: tenant, owner, engine instance and private browser credential"
+step "seed: tenant, owner, engine instance and non-sensitive metadata"
 python3 "$GATE" --base-url "$PLATFORM_URL" prepare \
   --instance "$INSTANCE_ID" \
   --engine-base-url "http://test-web" \
-  --jwt-file "$ADMIN_WEB_JWT_FILE" \
   --metadata-file "$ADMIN_WEB_METADATA_FILE" \
   --event-secret-file "$EVENT_SECRET_FILE"
-[[ "$(private_mode "$ADMIN_WEB_JWT_FILE")" == "600" ]] || fail "JWT file is not mode 0600"
 
 step "engine: fresh database, RemoteControl and platform bridge"
 export MJY_ENGINE_INSTANCE_ID="$INSTANCE_ID"
@@ -185,15 +235,8 @@ ADMIN_WEB_BASE_URL="$(service_url admin-web 80)"
 wait_healthy admin-web "$ADMIN_WEB_BASE_URL/actuator/health" "$SERVICE_HEALTH_ATTEMPTS" "$ADMIN_WEB_CONTAINER"
 ok "gateway and admin web healthy"
 
-step "browser: desktop authoring path and mobile editor checks"
-(
-  cd "$ADMIN_WEB_DIR"
-  npm run e2e -- --project=chromium-desktop --project=chromium-mobile
-)
-[[ -f "$ADMIN_WEB_RESULT_FILE" ]] || fail "Playwright did not write the redacted result"
-if grep -F -f "$ADMIN_WEB_JWT_FILE" "$ADMIN_WEB_RESULT_FILE" >/dev/null 2>&1; then
-  fail "Playwright result contains the JWT"
-fi
+step "browser: issue a fresh 10-minute token, then run desktop and mobile checks"
+run_browser_tests
 
 step "gate: platform API, platform DB, gateway and engine DB"
 python3 "$GATE" --base-url "$PLATFORM_URL" verify \
@@ -206,3 +249,8 @@ python3 "$GATE" --base-url "$PLATFORM_URL" verify \
   --gateway-container "$GATEWAY_CONTAINER"
 
 echo "Admin web real-stack e2e passed ($TEST_DB); private credentials and temporary results will now be removed" >&2
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

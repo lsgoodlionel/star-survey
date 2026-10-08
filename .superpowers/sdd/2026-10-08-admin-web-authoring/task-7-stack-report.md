@@ -22,8 +22,12 @@ No file under `platform/apps/admin-web/**` was modified by this slice.
 - The runner does not call or source `run-p1-e2e.sh` and does not use the shared
   `platform-db`. It reuses `lib.sh` only for the isolated LimeSurvey setup.
 - `prepare` seeds the tenant, plan, owner and engine instance through public
-  platform APIs. The short-lived owner JWT and engine event secret are written
-  with mode `0600`; neither value is printed or included in metadata.
+  platform APIs, writes non-sensitive metadata, and writes the engine event
+  secret with mode `0600`. It does not mint a browser JWT.
+- `issue-browser-token` runs only after the engine installation and the cold
+  gateway/admin-web builds are healthy, immediately before Playwright. The JWT
+  has exactly `exp - iat = 600`, is written with mode `0600`, and is never
+  printed or included in metadata.
 - The runner exports `ADMIN_WEB_BASE_URL`, `ADMIN_WEB_JWT_FILE`,
   `ADMIN_WEB_METADATA_FILE` and `ADMIN_WEB_RESULT_FILE`, then invokes the Node 22
   desktop and mobile Playwright projects from `platform/apps/admin-web`.
@@ -34,8 +38,13 @@ No file under `platform/apps/admin-web/**` was modified by this slice.
   the published survey, live version and public route through the platform API,
   the current binding in platform PostgreSQL, exactly one gateway publish call,
   and `lime_surveys.active = 'Y'` in the engine database.
-- The EXIT trap removes only this Compose project, its volumes and its temporary
-  JWT, metadata, event-secret and result files.
+- The EXIT trap always removes the complete private work directory, including
+  JWT, metadata, event-secret, engine config and result, even when
+  `ADMIN_WEB_E2E_KEEP=1`; KEEP preserves only Compose resources.
+- Result and `test-results` files are scanned byte-for-byte for the JWT. Matches
+  are deleted and fail the gate without printing the credential. On Playwright
+  failure, retained image/video/trace media are also removed because pixel
+  content cannot be safely validated without OCR.
 
 ## TDD evidence
 
@@ -49,7 +58,7 @@ Initial RED:
 - A focused failure exposed the absent gateway log counter.
 - A focused failure exposed the missing Node 22 auto-selection.
 
-Final GREEN:
+Initial implementation GREEN:
 
 ```text
 python3 -m unittest discover -s platform/tests/e2e -p 'test_admin_web_gate.py' -q
@@ -75,18 +84,57 @@ Focused tests cover private-file overwrite permissions, output/token separation,
 strict browser-result schema, platform/engine mismatch failures, gateway publish
 counting, isolated Compose wiring, runner exports, cleanup and shell syntax.
 
+## Review fix round 1
+
+Review findings were reproduced before changes:
+
+- `cleanup` returned before deleting `WORK_DIR` when KEEP was enabled.
+- `prepare` required `--jwt-file`, so the 10-minute browser token was minted
+  before engine installation and image builds.
+- The runner scanned only the JSON result after a successful Playwright run and
+  did not sanitize `test-results` on failure.
+- Sourcing the runner started the real Docker workflow, preventing executable
+  shell behavior tests.
+
+Fixes:
+
+- Made the runner source-safe with an explicit `main` entry point and testable
+  `cleanup_run` / browser lifecycle functions.
+- Split seed and browser-token issuance into separate CLI commands.
+- Moved browser-token issuance to immediately before Playwright.
+- Added failure-safe artifact scanning and media removal.
+- Added executable shell tests with fake stack commands for cold-start ordering,
+  KEEP cleanup and Playwright failure cleanup.
+
+Round 1 GREEN:
+
+```text
+python3 -m unittest discover -s platform/tests/e2e -p 'test_admin_web_gate.py' -q
+Ran 15 tests ... OK
+
+shellcheck -x platform/deploy/test/run-admin-web-e2e.sh
+PASS
+
+bash -n platform/deploy/test/run-admin-web-e2e.sh
+PASS
+
+docker compose ... config --quiet
+PASS
+
+python3 -m py_compile platform/tests/e2e/admin_web_gate.py platform/tests/e2e/test_admin_web_gate.py
+PASS (with PYTHONPYCACHEPREFIX under /private/tmp)
+```
+
 ## Integration status and concerns
 
-The full real-stack command was not run in this slice. At implementation time
-the frontend Task 7 files were still uncommitted and the instruction for this
-slice prohibited downloading dependencies; building the frontend image executes
+The full real-stack command was not run in this slice because the instruction
+prohibited downloading dependencies; building the frontend image executes
 `npm ci`, while the required Playwright Chromium revision was not installed.
 
-Before the integrated run, the frontend slice must also ensure a login failure
-cannot leave the JWT visible in a retained screenshot. The current E2E-only login
-control is a plain `textarea`; `screenshot: only-on-failure` can capture it if the
-login fails before the test clears the field. The stack slice cannot repair that
-without modifying the explicitly excluded `platform/apps/admin-web/**` scope.
+The frontend slice separately owns manual masking of the E2E login control and
+was hardened in commit `65f284be`. The stack independently removes all retained
+media on a Playwright failure, so a failed run cannot leave a possibly sensitive
+screenshot even if frontend masking regresses.
 
 Intended integrated command after those frontend prerequisites are complete:
 
