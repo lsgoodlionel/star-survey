@@ -157,7 +157,9 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
             actorId={actorId}
             busy={busy}
             capabilities={capabilities.data}
-            draftAlreadyPublished={overview.data.publishedVersion === overview.data.draftVersion}
+            draftAlreadyPublished={versions.data?.some(
+              (version) => version.live && version.draftVersion === overview.data.draftVersion,
+            ) === true}
             draftVersion={overview.data.draftVersion}
             onAction={(action) => approvalMutation.mutate(action)}
             onReject={() => setShowRejectForm(true)}

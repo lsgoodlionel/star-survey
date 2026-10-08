@@ -49,7 +49,7 @@ const baseVersion = {
   surveyId,
   version: 2,
   requestId,
-  draftVersion: 4,
+  draftVersion: 3,
   engineInstanceId: 'test-engine',
   engineSid: 876543,
   compilerVersion: '2.1.0',
@@ -623,13 +623,17 @@ describe('PublishPage', () => {
     const api = standardApi({
       [`GET /v1/surveys/${surveyId}`]: () => ({
         ...baseSurvey,
-        publishedVersion: baseSurvey.draftVersion,
+        status: 'published',
+        publishedVersion: 1,
       }),
       [`GET /v1/resource-capabilities?resourceId=${surveyId}`]: () => ({
         ...baseCapabilities,
         canPublishDirectly: true,
       }),
       [`GET /v1/surveys/${surveyId}/approval-requests`]: () => [],
+      [`GET /v1/surveys/${surveyId}/versions`]: () => [
+        { ...baseVersion, version: 1, draftVersion: baseSurvey.draftVersion },
+      ],
     });
 
     renderWithQuery(
