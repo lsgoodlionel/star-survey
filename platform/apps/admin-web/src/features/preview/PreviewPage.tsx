@@ -13,14 +13,19 @@ import './preview.css';
 interface PreviewPageProps {
   api: ApiClient;
   surveyId: string;
+  tenantId: string;
 }
 
 type PreviewMode = 'desktop' | 'mobile';
 
-export function PreviewPage({ api, surveyId }: PreviewPageProps) {
+export function PreviewPage(props: PreviewPageProps) {
+  return <PreviewPageInstance key={`${props.tenantId}:${props.surveyId}`} {...props} />;
+}
+
+function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
   const [mode, setMode] = useState<PreviewMode>('desktop');
   const draftQuery = useQuery({
-    queryKey: ['survey-draft', surveyId],
+    queryKey: ['survey-draft', tenantId, surveyId],
     queryFn: ({ signal }) => getSurveyDraft(api, surveyId, signal),
   });
 
@@ -41,11 +46,10 @@ export function PreviewPage({ api, surveyId }: PreviewPageProps) {
           <p>只读视图</p>
           <h1>草稿预览</h1>
         </div>
-        <div className="preview-segments" role="tablist" aria-label="预览设备">
+        <div className="preview-segments" role="group" aria-label="预览设备">
           <button
             type="button"
-            role="tab"
-            aria-selected={mode === 'desktop'}
+            aria-pressed={mode === 'desktop'}
             onClick={() => setMode('desktop')}
           >
             <Monitor aria-hidden="true" />
@@ -53,8 +57,7 @@ export function PreviewPage({ api, surveyId }: PreviewPageProps) {
           </button>
           <button
             type="button"
-            role="tab"
-            aria-selected={mode === 'mobile'}
+            aria-pressed={mode === 'mobile'}
             onClick={() => setMode('mobile')}
           >
             <Smartphone aria-hidden="true" />
@@ -81,5 +84,11 @@ export function PreviewRoutePage() {
   const { api, session } = useAuth();
   const surveyId = z.string().uuid().safeParse(useParams().surveyId);
   if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
-  return <PreviewPage api={api} surveyId={surveyId.data} />;
+  return (
+    <PreviewPage
+      api={api}
+      surveyId={surveyId.data}
+      tenantId={session.me.tenantId}
+    />
+  );
 }

@@ -5,6 +5,7 @@ import { renderWithQuery } from '../../test/render';
 import { PreviewPage } from './PreviewPage';
 
 const surveyId = '11111111-1111-4111-8111-111111111111';
+const tenantId = 'tenant-a';
 const draft = {
   surveyId,
   version: 7,
@@ -52,7 +53,7 @@ describe('PreviewPage', () => {
       },
     };
 
-    renderWithQuery(<PreviewPage api={api} surveyId={surveyId} />);
+    renderWithQuery(<PreviewPage api={api} surveyId={surveyId} tenantId={tenantId} />);
 
     expect(await screen.findByRole('heading', { name: '草稿预览' })).toBeInTheDocument();
     expect(screen.getByText('员工体验调查')).toBeInTheDocument();
@@ -63,7 +64,7 @@ describe('PreviewPage', () => {
 
   test('rendersBasicQuestionsReadOnlyAndUnsupportedQuestionsAsReadablePlaceholders', async () => {
     const api: ApiClient = { request: () => Promise.resolve(draft) as never };
-    renderWithQuery(<PreviewPage api={api} surveyId={surveyId} />);
+    renderWithQuery(<PreviewPage api={api} surveyId={surveyId} tenantId={tenantId} />);
 
     expect(await screen.findByText('请选择一项')).toBeInTheDocument();
     expect(screen.getByText('请选择多项')).toBeInTheDocument();
@@ -79,14 +80,19 @@ describe('PreviewPage', () => {
 
   test('switchesBetweenStableDesktopAndMobilePreviewWidths', async () => {
     const api: ApiClient = { request: () => Promise.resolve(draft) as never };
-    renderWithQuery(<PreviewPage api={api} surveyId={surveyId} />);
+    renderWithQuery(<PreviewPage api={api} surveyId={surveyId} tenantId={tenantId} />);
 
     const frame = await screen.findByTestId('draft-preview-frame');
     expect(frame).toHaveAttribute('data-preview-mode', 'desktop');
     expect(frame).toHaveStyle({ width: '960px' });
 
-    fireEvent.click(screen.getByRole('tab', { name: '移动端' }));
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '桌面端' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '移动端' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: '移动端' }));
     expect(frame).toHaveAttribute('data-preview-mode', 'mobile');
     expect(frame).toHaveStyle({ width: '390px' });
+    expect(screen.getByRole('button', { name: '桌面端' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '移动端' })).toHaveAttribute('aria-pressed', 'true');
   });
 });
