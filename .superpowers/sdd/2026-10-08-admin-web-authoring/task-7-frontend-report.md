@@ -69,3 +69,10 @@
 - Mobile reads the desktop result and uses same-origin History API navigation to enter that survey without reloading. All tab and editor checks continue through real UI controls.
 - Every Playwright click/fill now first requires its locator to be visible and enabled within 15 seconds. The existing 210-second publish completion budget remains unchanged.
 - Node 22.23.2 verification: focused tests 36/36, full Vitest 13 files and 126/126, lint, and typecheck passed. Standard and E2E builds plus both bundle assertions passed; the standard production bundle was restored last and excludes the token UI. With `ADMIN_WEB_BASE_URL=http://127.0.0.1:1`, `playwright --list` reports exactly the desktop and mobile scenarios. The real stack was not rerun in this slice.
+
+## Browser fix round 4
+
+- Real attempt 3 reached a successful import preview request and rendered the expected question, but Playwright strict mode found both the source textarea and preview text for `您的性别？`.
+- RED: the focused browser contract produced one expected failure requiring the question assertion to be scoped to the accessible `解析结果` region; the other nine contracts passed.
+- The desktop E2E now resolves the import preview region first and asserts the exact question text within it, leaving the product and stack unchanged.
+- Node 22.23.2 verification: focused browser contracts 10/10, lint, and typecheck passed. With `ADMIN_WEB_BASE_URL=http://127.0.0.1:1`, `playwright --list` reports the same two desktop/mobile scenarios. The real stack was not rerun.

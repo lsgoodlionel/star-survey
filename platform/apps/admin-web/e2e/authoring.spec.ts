@@ -79,7 +79,8 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
   await fillAction(page.getByLabel('待导入文本'), importText);
   await clickAction(page.getByRole('button', { name: '预览导入' }));
   await expect(page.getByText('第 4 行')).toBeVisible();
-  await expect(page.getByText('您的性别？')).toBeVisible();
+  const importPreview = page.getByRole('region', { name: '解析结果' });
+  await expect(importPreview.getByText('您的性别？', { exact: true })).toBeVisible();
   await clickAction(page.getByRole('button', { name: '确认导入 1 道题' }));
   await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
 
