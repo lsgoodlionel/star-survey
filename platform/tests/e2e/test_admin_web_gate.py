@@ -461,6 +461,91 @@ class AdminWebGateTest(unittest.TestCase):
 
             self.assertFalse(screenshot.exists())
 
+    def test_export_copies_only_allowlisted_sanitized_failure_evidence(self):
+        gate = load_gate()
+        token = "header.payload.never-export-this-signature"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            case = source / "authoring-failed"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, token)
+            case.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            (destination / "stale.txt").write_text("old run", encoding="utf-8")
+            (case / "sanitized-failure.png").write_bytes(b"\x89PNG\r\n\x1a\nsafe-pixels")
+            (case / "sanitized-trace-summary.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "kind": "sanitized-playwright-trace-summary",
+                "project": "chromium-desktop",
+                "testId": "desktop-authoring",
+                "status": "failed",
+                "durationMs": 123,
+                "lastPath": "/surveys/00000000-0000-4000-8000-000000000000/edit",
+            }), encoding="utf-8")
+            (case / "trace.zip").write_bytes(b"raw playwright trace")
+            (case / "raw-failure.png").write_bytes(b"\x89PNG\r\n\x1a\nraw")
+            (case / "network.txt").write_text("Bearer " + token, encoding="utf-8")
+
+            exported = gate.export_sanitized_failure_evidence(
+                secret, source, destination, allowed_root
+            )
+
+            self.assertEqual(2, exported)
+            self.assertEqual({
+                "chromium-desktop-desktop-authoring-sanitized-failure.png",
+                "chromium-desktop-desktop-authoring-sanitized-trace-summary.json",
+            }, {path.name for path in destination.iterdir()})
+            for artifact in destination.iterdir():
+                self.assertNotIn(token.encode("ascii"), artifact.read_bytes())
+
+    def test_export_rejects_unknown_trace_fields_and_leaves_no_stale_output(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, "header.payload.signature")
+            source.mkdir()
+            destination.mkdir(parents=True)
+            (destination / "stale.txt").write_text("old run", encoding="utf-8")
+            (source / "sanitized-trace-summary.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "kind": "sanitized-playwright-trace-summary",
+                "project": "chromium-desktop",
+                "testId": "desktop-authoring",
+                "status": "failed",
+                "durationMs": 123,
+                "lastPath": "/workspace",
+                "jwt": "must be rejected",
+            }), encoding="utf-8")
+
+            with self.assertRaises(gate.StepFailed):
+                gate.export_sanitized_failure_evidence(
+                    secret, source, destination, allowed_root
+                )
+
+            self.assertFalse(destination.exists())
+
+    def test_export_rejects_a_destination_outside_the_ignored_results_root(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            allowed_root = root / "app" / "test-results"
+            gate.write_private(secret, "header.payload.signature")
+            source.mkdir()
+
+            with self.assertRaises(gate.StepFailed):
+                gate.export_sanitized_failure_evidence(
+                    secret, source, root / "outside", allowed_root
+                )
+
     def test_runner_scans_only_its_private_results_directory(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
         with tempfile.TemporaryDirectory() as directory:
@@ -498,6 +583,54 @@ sanitize_test_artifacts false
             self.assertFalse(private_leak.exists())
             self.assertTrue(shared_leak.exists())
             self.assertNotIn(token, completed.stdout + completed.stderr)
+
+    def test_playwright_failure_exports_only_sanitized_ci_evidence(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = root / "app"
+            private_results = root / "private-results"
+            artifact_dir = app / "test-results" / "ci-artifacts"
+            jwt = root / "owner.jwt"
+            result = root / "result.json"
+            token = "header.payload.never-upload-this-signature"
+            app.mkdir()
+            script = r'''
+source "$RUNNER"
+ADMIN_WEB_DIR="$APP"
+ADMIN_WEB_JWT_FILE="$JWT"
+ADMIN_WEB_RESULT_FILE="$RESULT"
+ADMIN_WEB_TEST_RESULTS_DIR="$PRIVATE_RESULTS"
+ADMIN_WEB_CI_ARTIFACT_DIR="$ARTIFACT_DIR"
+issue_browser_token() { printf '%s' "$TOKEN" >"$JWT"; chmod 600 "$JWT"; }
+run_playwright() {
+  mkdir -p "$PRIVATE_RESULTS/case"
+  printf '\211PNG\r\n\032\nsafe-pixels' >"$PRIVATE_RESULTS/case/sanitized-failure.png"
+  printf '%s\n' '{"schemaVersion":1,"kind":"sanitized-playwright-trace-summary","project":"chromium-desktop","testId":"desktop-authoring","status":"failed","durationMs":25,"lastPath":"/workspace"}' >"$PRIVATE_RESULTS/case/sanitized-trace-summary.json"
+  printf 'raw trace' >"$PRIVATE_RESULTS/case/trace.zip"
+  printf '%s' "$TOKEN" >"$PRIVATE_RESULTS/case/leak.txt"
+  return 1
+}
+run_browser_tests
+'''
+            completed = run_bash(script, {
+                "RUNNER": str(runner),
+                "APP": str(app),
+                "JWT": str(jwt),
+                "RESULT": str(result),
+                "PRIVATE_RESULTS": str(private_results),
+                "ARTIFACT_DIR": str(artifact_dir),
+                "TOKEN": token,
+            })
+
+            self.assertNotEqual(0, completed.returncode)
+            self.assertNotIn(token, completed.stdout + completed.stderr)
+            self.assertEqual({
+                "chromium-desktop-desktop-authoring-sanitized-failure.png",
+                "chromium-desktop-desktop-authoring-sanitized-trace-summary.json",
+            }, {path.name for path in artifact_dir.iterdir()})
+            self.assertFalse((private_results / "case" / "trace.zip").exists())
+            self.assertFalse((private_results / "case" / "leak.txt").exists())
 
     def test_keep_mode_still_removes_private_work_directory(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"

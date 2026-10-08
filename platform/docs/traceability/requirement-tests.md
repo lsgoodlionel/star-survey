@@ -67,8 +67,11 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
 - `R23-03`：`OrgLoginHandoffTest` 的无 JWT 重定向、单次交换、过期／换浏览器／跨租户拒绝用例，以及
   `AuthProvider.test.tsx` 的内存会话用例，证明管理端可信身份交接子项；不替代整套服务权限验收。
 - `R23-08`：`test_admin_web_gate.py` 的 `test_issue_browser_token_never_prints_the_jwt`、
-  `test_failure_scrub_removes_media_even_when_token_is_only_visual` 和 `test_keep_mode_still_removes_private_work_directory`
-  证明真实浏览器门禁不打印 JWT、失败媒体不留存、临时凭据总是清理；不代表完整安全供应链与审计要求。
+  `test_export_copies_only_allowlisted_sanitized_failure_evidence`、
+  `test_export_rejects_unknown_trace_fields_and_leaves_no_stale_output`、
+  `test_playwright_failure_exports_only_sanitized_ci_evidence` 和
+  `test_keep_mode_still_removes_private_work_directory` 证明真实浏览器门禁不打印 JWT，只导出白名单脱敏失败证据，
+  拒绝未知字段且总是清理私有临时凭据；不代表完整安全供应链与审计要求。
 - `R23-12`：`platform/deploy/test/run-admin-web-e2e.sh` 串起浏览器、平台、平台库、发布网关和引擎库，并由
   `AdminWebGateTest.test_verify_evidence_rejects_a_platform_or_engine_mismatch` 反向证明任一段不一致会失败；这是
   管理端首期纵向验收证据，不把 305 条需求整体视为完成。

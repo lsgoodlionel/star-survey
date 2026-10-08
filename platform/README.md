@@ -25,14 +25,18 @@
 | 平台 Java | **1422 通过 / 177 类** | 0 失败 0 错误 0 跳过 |
 | 发布网关 Python | **1180 通过** | 0 失败 |
 | 需求追溯工具 | **72 通过** | 305 条需求、85 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
-| 管理端 Vitest | **13 个文件 / 129 通过** | lint、typecheck 同步通过 |
+| 管理端 Vitest | **13 个文件 / 130 通过** | lint、typecheck 同步通过 |
 | 管理端生产构建 | **2080 modules / 13 个产物文件检查** | production bundle 不含开发令牌入口 |
 | 管理端真实 E2E | **2 通过（6.7s）** | 桌面完整创作与移动端响应式编辑 |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
 
-**代码规模**：平台 Java 522 个文件、网关 Python 63 个、自研插件 3 个、自研作答主题 15 套、数据库迁移 42 个。
+**代码规模**（2026-10-08，可复现口径）：`platform/services/business/src/main/**/*.java` **563** 个，
+`platform/services/business/src/main/resources/db/migration/V*.sql` Flyway 迁移 **46** 个，
+`platform/tools/publish-gateway/pubgw/**/*.py` 发布网关生产包 **70** 个（不含 `tests/`）；另有自研插件
+3 个、自研作答主题 15 套。前三项分别可用对应目录下的 `rg --files -g '*.java'`、
+`rg --files -g 'V*.sql'`、`rg --files -g '*.py'` 复核。
 
 ---
 
@@ -144,6 +148,10 @@ TEST_DB=pgsql platform/deploy/test/run-access-policy.sh --fresh
 # 并行开发时各车道用自己的前缀，互不踩踏
 SURVEY_TEST_PREFIX=l1 COMPOSE_PROJECT_NAME=l1 TEST_DB=mysql platform/deploy/test/run-question-themes.sh
 ```
+
+CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中经 gate 白名单重写的
+`*-sanitized-failure.png` 与 `*-sanitized-trace-summary.json`。后者只含 project、固定 test id、状态、耗时和
+不带查询参数的路径，是排障摘要而非 Playwright raw trace；JWT、临时元数据、raw trace 和原始截图不会上传。
 
 ### 跑测试的三条硬规矩（都是真实踩出来的）
 

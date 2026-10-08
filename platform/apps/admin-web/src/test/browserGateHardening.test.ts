@@ -23,6 +23,18 @@ describe('browser gate security contract', () => {
     expect(spec).toContain('assertArtifactContainsNoSecret');
   });
 
+  test('writes only an explicitly sanitized screenshot and allowlisted trace summary', async () => {
+    const config = await source('playwright.config.ts');
+    const spec = await source('e2e/authoring.spec.ts');
+
+    expect(config).toContain("trace: 'off'");
+    expect(config).toContain("video: 'off'");
+    expect(spec).toContain("testInfo.outputPath('sanitized-failure.png')");
+    expect(spec).toContain("testInfo.outputPath('sanitized-trace-summary.json')");
+    expect(spec).toContain("kind: 'sanitized-playwright-trace-summary'");
+    expect(spec).not.toContain('testInfo.error');
+  });
+
   test('uses a password control for defense in depth', async () => {
     const page = await source('src/features/auth/DevTokenPage.tsx');
     expect(page).toContain('type="password"');
