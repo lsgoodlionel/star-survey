@@ -9,7 +9,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:e2e": "tsc -b && VITE_E2E=true vite build",
+    "assert:e2e-bundle": "node scripts/assert-e2e-bundle.mjs",
     "assert:production-bundle": "node scripts/assert-production-bundle.mjs",
+    "e2e": "playwright test",
     "lint": "eslint .",
     "test": "vitest",
     "typecheck": "tsc -b --pretty false"

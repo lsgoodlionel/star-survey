@@ -153,6 +153,7 @@ export function publishSurvey(api: ApiClient, surveyId: string) {
     path: `/v1/surveys/${encodeURIComponent(surveyId)}/publish`,
     method: 'POST',
     schema: z.unknown(),
+    timeoutMs: 180_000,
   });
 }
 

@@ -176,8 +176,42 @@
 }
 
 .approval-section,
+.published-versions,
 .version-fields,
 .version-definition { margin-top: 24px; }
+
+.published-versions ol {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid #d8dfe1;
+}
+
+.published-versions li {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid #d8dfe1;
+}
+
+.published-versions li div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.published-versions li span {
+  color: #52636b;
+  font-size: 13px;
+}
+
+.published-versions a {
+  color: #075985;
+  font-weight: 600;
+}
 
 .approval-timeline {
   margin: 12px 0 0;
@@ -247,6 +281,7 @@
   .version-detail__header,
   .publish-actions { align-items: flex-start; flex-direction: column; }
   .publish-actions__buttons { width: 100%; justify-content: flex-start; }
+  .published-versions li { align-items: flex-start; flex-direction: column; gap: 6px; }
   .reject-form { grid-template-columns: 1fr 1fr; }
   .reject-form label,
   .reject-form input { grid-column: 1 / -1; }
