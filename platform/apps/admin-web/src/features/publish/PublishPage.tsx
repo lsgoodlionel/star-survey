@@ -12,29 +12,57 @@ import {
   listApprovalRequests,
   listPublishedVersions,
   publishSurvey,
+  publishCapabilitiesQueryKey,
   rejectRequest,
   submitApproval,
   surveyOverviewQueryKey,
   versionsQueryKey,
   withdrawRequest,
   type ApprovalRequest,
+  type ApprovalStatus,
   type SurveyOverview,
 } from '../../shared/api/approvals';
+import {
+  getResourceCapabilities,
+  type ResourceCapabilities,
+} from '../../shared/api/resources';
 import { ApprovalTimeline } from './ApprovalTimeline';
 import { PublishStatus } from './PublishStatus';
+import { parseSurveyIdParam } from './routeParams';
 import './publish.css';
 
 interface PublishPageProps {
+  actorId: string;
   api: ApiClient;
   surveyId: string;
 }
+
+type ApprovalState = ApprovalStatus | 'none';
+
+interface ApprovalStateRule {
+  canDecide: boolean;
+  canDirectPublish: boolean;
+  canPublishApproved: boolean;
+  canSubmit: boolean;
+  canWithdraw: boolean;
+}
+
+const approvalActionStateTable: Record<ApprovalState, ApprovalStateRule> = {
+  none: { canDecide: false, canDirectPublish: true, canPublishApproved: false, canSubmit: true, canWithdraw: false },
+  pending: { canDecide: true, canDirectPublish: true, canPublishApproved: false, canSubmit: false, canWithdraw: true },
+  approved: { canDecide: false, canDirectPublish: true, canPublishApproved: true, canSubmit: false, canWithdraw: true },
+  rejected: { canDecide: false, canDirectPublish: true, canPublishApproved: false, canSubmit: true, canWithdraw: false },
+  withdrawn: { canDecide: false, canDirectPublish: true, canPublishApproved: false, canSubmit: true, canWithdraw: false },
+  voided: { canDecide: false, canDirectPublish: true, canPublishApproved: false, canSubmit: true, canWithdraw: false },
+  published: { canDecide: false, canDirectPublish: false, canPublishApproved: false, canSubmit: false, canWithdraw: false },
+};
 
 type ApprovalAction =
   | { kind: 'submit'; draftVersion: number }
   | { kind: 'approve' | 'withdraw'; approvalId: string }
   | { kind: 'reject'; approvalId: string; reason: string };
 
-export function PublishPage({ api, surveyId }: PublishPageProps) {
+export function PublishPage({ actorId, api, surveyId }: PublishPageProps) {
   const queryClient = useQueryClient();
   const visible = useDocumentVisibility();
   const [actionError, setActionError] = useState<ApiError | null>(null);
@@ -50,6 +78,10 @@ export function PublishPage({ api, surveyId }: PublishPageProps) {
   const approvals = useQuery({
     queryKey: approvalRequestsQueryKey(surveyId),
     queryFn: ({ signal }) => listApprovalRequests(api, surveyId, signal),
+  });
+  const capabilities = useQuery({
+    queryKey: publishCapabilitiesQueryKey(surveyId),
+    queryFn: ({ signal }) => getResourceCapabilities(api, surveyId, signal),
   });
   const versions = useQuery({
     queryKey: versionsQueryKey(surveyId),
@@ -86,12 +118,14 @@ export function PublishPage({ api, surveyId }: PublishPageProps) {
     onSettled: () => invalidatePublishQueries(queryClient, surveyId),
   });
 
-  if (overview.isPending || approvals.isPending || versions.isPending) return <p className="publish-loading">正在加载发布信息</p>;
-  if (overview.error || approvals.error || versions.error || !overview.data || !approvals.data) {
+  if (overview.isPending || approvals.isPending || capabilities.isPending || versions.isPending) return <p className="publish-loading">正在加载发布信息</p>;
+  if (overview.error || approvals.error || capabilities.error || versions.error || !overview.data || !approvals.data || !capabilities.data) {
     return <p role="alert">发布信息暂时不可用，请稍后重试。</p>;
   }
 
   const busy = approvalMutation.isPending || publishMutation.isPending;
+  const publicationBlocked = overview.data.lastPublish?.manualReviewAt != null
+    || overview.data.lastPublish?.orphanEngineSid != null;
 
   return (
     <main className="publish-page">
@@ -113,11 +147,14 @@ export function PublishPage({ api, surveyId }: PublishPageProps) {
         <div className="publish-actions__buttons">
           <ApprovalButtons
             approval={latestApproval}
+            actorId={actorId}
             busy={busy}
+            capabilities={capabilities.data}
             draftVersion={overview.data.draftVersion}
             onAction={(action) => approvalMutation.mutate(action)}
             onReject={() => setShowRejectForm(true)}
             onPublish={() => publishMutation.mutate()}
+            publicationBlocked={publicationBlocked}
           />
         </div>
       </section>
@@ -149,36 +186,41 @@ export function PublishPage({ api, surveyId }: PublishPageProps) {
 }
 
 export function PublishRoutePage() {
-  const { api } = useAuth();
-  const { surveyId } = useParams();
-  if (!surveyId) return <p role="alert">问卷标识无效</p>;
-  return <PublishPage api={api} surveyId={surveyId} />;
+  const { api, session } = useAuth();
+  const params = useParams();
+  const surveyId = parseSurveyIdParam(params.surveyId);
+  if (!session || !surveyId) return <p role="alert">问卷标识无效</p>;
+  return <PublishPage actorId={session.me.actorId} api={api} surveyId={surveyId} />;
 }
 
-function ApprovalButtons({ approval, busy, draftVersion, onAction, onReject, onPublish }: {
+function ApprovalButtons({ approval, actorId, busy, capabilities, draftVersion, onAction, onReject, onPublish, publicationBlocked }: {
   approval: ApprovalRequest | null;
+  actorId: string;
   busy: boolean;
+  capabilities: ResourceCapabilities;
   draftVersion: number;
   onAction: (action: ApprovalAction) => void;
   onReject: () => void;
   onPublish: () => void;
+  publicationBlocked: boolean;
 }) {
-  if (approval?.status === 'pending') {
-    return <>
-      <button type="button" disabled={busy} onClick={() => onAction({ kind: 'approve', approvalId: approval.id })}><ShieldCheck size={17} aria-hidden="true" />批准申请</button>
-      <button type="button" disabled={busy} onClick={onReject}><XCircle size={17} aria-hidden="true" />驳回申请</button>
-      <button type="button" disabled={busy} onClick={() => onAction({ kind: 'withdraw', approvalId: approval.id })}><Undo2 size={17} aria-hidden="true" />撤回申请</button>
-    </>;
-  }
-  if (approval?.status === 'approved') {
-    return <>
-      <button type="button" disabled={busy} onClick={onPublish}><Send size={17} aria-hidden="true" />发布问卷</button>
-      <button type="button" disabled={busy} onClick={() => onAction({ kind: 'withdraw', approvalId: approval.id })}><Undo2 size={17} aria-hidden="true" />撤回申请</button>
-    </>;
-  }
+  const state: ApprovalState = approval?.status ?? 'none';
+  const rule = approvalActionStateTable[state];
+  const canSubmit = rule.canSubmit && capabilities.canSubmitApproval;
+  const canDecide = rule.canDecide && capabilities.canApprovePublish;
+  const canWithdraw = Boolean(approval && rule.canWithdraw && approval.applicant === actorId);
+  const canPublish = !publicationBlocked && (
+    (rule.canDirectPublish && capabilities.canPublishDirectly)
+    || (rule.canPublishApproved && capabilities.canSubmitApproval)
+  );
+
   return <>
-    <button type="button" disabled={busy} onClick={() => onAction({ kind: 'submit', draftVersion })}><ShieldCheck size={17} aria-hidden="true" />提交审批</button>
-    <button type="button" disabled={busy} onClick={onPublish}><Send size={17} aria-hidden="true" />发布问卷</button>
+    {canSubmit ? <button type="button" disabled={busy} onClick={() => onAction({ kind: 'submit', draftVersion })}><ShieldCheck size={17} aria-hidden="true" />提交审批</button> : null}
+    {canDecide && approval ? <button type="button" disabled={busy} onClick={() => onAction({ kind: 'approve', approvalId: approval.id })}><ShieldCheck size={17} aria-hidden="true" />批准申请</button> : null}
+    {canDecide ? <button type="button" disabled={busy} onClick={onReject}><XCircle size={17} aria-hidden="true" />驳回申请</button> : null}
+    {canWithdraw && approval ? <button type="button" disabled={busy} onClick={() => onAction({ kind: 'withdraw', approvalId: approval.id })}><Undo2 size={17} aria-hidden="true" />撤回申请</button> : null}
+    {canPublish ? <button type="button" disabled={busy} onClick={onPublish}><Send size={17} aria-hidden="true" />发布问卷</button> : null}
+    {publicationBlocked ? <p className="publish-blocked">发布操作已阻止，请先完成上述人工处理。</p> : null}
   </>;
 }
 
@@ -195,7 +237,7 @@ async function invalidatePublishQueries(queryClient: ReturnType<typeof useQueryC
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: surveyOverviewQueryKey(surveyId), exact: true }),
     queryClient.invalidateQueries({ queryKey: approvalRequestsQueryKey(surveyId), exact: true }),
-    queryClient.invalidateQueries({ queryKey: versionsQueryKey(surveyId), exact: true }),
+    queryClient.invalidateQueries({ queryKey: versionsQueryKey(surveyId) }),
   ]);
 }
 

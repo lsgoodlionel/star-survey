@@ -10,6 +10,14 @@ import { VersionDetailPage } from './VersionDetailPage';
 const surveyId = '11111111-1111-4111-8111-111111111111';
 const approvalId = '22222222-2222-4222-8222-222222222222';
 const requestId = '33333333-3333-4333-8333-333333333333';
+const baseCapabilities = {
+  canCreateProject: false,
+  canCreateChildren: false,
+  canEdit: false,
+  canSubmitApproval: true,
+  canPublishDirectly: false,
+  canApprovePublish: true,
+};
 
 const baseSurvey = {
   id: surveyId,
@@ -80,6 +88,7 @@ function standardApi(overrides: Partial<Record<string, RequestHandler>> = {}) {
     const override = overrides[key];
     if (override) return override(request);
     if (key === `GET /v1/surveys/${surveyId}`) return baseSurvey;
+    if (key === `GET /v1/resource-capabilities?resourceId=${surveyId}`) return baseCapabilities;
     if (key === `GET /v1/surveys/${surveyId}/approval-requests`) return [baseApproval];
     if (key === `GET /v1/surveys/${surveyId}/versions`) return [baseVersion];
     throw new Error(`Unhandled request: ${key}`);
@@ -107,7 +116,7 @@ describe('PublishPage', () => {
       },
     });
 
-    renderWithQuery(<PublishPage api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
 
     for (const label of ['待审批', '已批准', '已驳回', '已撤回', '已作废', '已发布']) {
       expect(await screen.findByText(label)).toBeInTheDocument();
@@ -149,7 +158,10 @@ describe('PublishPage', () => {
       }),
     });
 
-    renderWithQuery(<PublishPage api={api} surveyId={surveyId} />);
+    const rendered = renderWithQuery(
+      <PublishPage actorId="author-1" api={api} surveyId={surveyId} />,
+    );
+    rendered.queryClient.setQueryData(['survey', surveyId, 'versions', 2], baseVersion);
     fireEvent.click(await screen.findByRole('button', { name: '批准申请' }));
 
     expect(await screen.findByText('已作废')).toBeInTheDocument();
@@ -157,6 +169,7 @@ describe('PublishPage', () => {
     expect(overviewReads).toBeGreaterThanOrEqual(2);
     expect(approvalReads).toBeGreaterThanOrEqual(2);
     expect(versionReads).toBeGreaterThanOrEqual(2);
+    expect(rendered.queryClient.getQueryState(['survey', surveyId, 'versions', 2])?.isInvalidated).toBe(true);
   });
 
   test('doesNotClaimSuccessWhilePublishReturns202', async () => {
@@ -168,7 +181,7 @@ describe('PublishPage', () => {
       },
     });
 
-    renderWithQuery(<PublishPage api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
     fireEvent.click(await screen.findByRole('button', { name: '发布问卷' }));
 
     expect(await screen.findByText('发布结果正在核对')).toBeInTheDocument();
@@ -210,7 +223,7 @@ describe('PublishPage', () => {
       },
     });
 
-    renderWithQuery(<PublishPage api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
     fireEvent.click(await screen.findByRole('button', { name: '发布问卷' }));
     await act(async () => vi.advanceTimersByTimeAsync(4_000));
 
@@ -259,7 +272,9 @@ describe('PublishPage', () => {
       },
     });
 
-    const view = renderWithQuery(<PublishPage api={api} surveyId={surveyId} />);
+    const view = renderWithQuery(
+      <PublishPage actorId="author-1" api={api} surveyId={surveyId} />,
+    );
     fireEvent.click(await screen.findByRole('button', { name: '发布问卷' }));
     await waitFor(() => expect(overviewReads).toBeGreaterThanOrEqual(2));
     visibility = 'hidden';
@@ -278,6 +293,13 @@ describe('PublishPage', () => {
 
   test('showsManualReviewAndOrphanSidAsBlockingWarnings', async () => {
     const api = standardApi({
+      [`GET /v1/resource-capabilities?resourceId=${surveyId}`]: () => ({
+        ...baseCapabilities,
+        canPublishDirectly: true,
+      }),
+      [`GET /v1/surveys/${surveyId}/approval-requests`]: () => [
+        { ...baseApproval, status: 'approved' },
+      ],
       [`GET /v1/surveys/${surveyId}`]: () => ({
         ...baseSurvey,
         status: 'pending_reconciliation',
@@ -297,10 +319,13 @@ describe('PublishPage', () => {
       }),
     });
 
-    renderWithQuery(<PublishPage api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
 
     expect(await screen.findByText('需要人工复核')).toBeInTheDocument();
     expect(screen.getByText(/孤儿问卷.*918273/)).toBeInTheDocument();
+    expect(screen.queryByText('回滚没有完成')).not.toBeInTheDocument();
+    expect(screen.getByText('发布操作已阻止，请先完成上述人工处理。')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发布问卷' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '强制重发' })).not.toBeInTheDocument();
   });
 
@@ -319,7 +344,7 @@ describe('PublishPage', () => {
                 outcome: 'failed',
                 gatewayStatus: 422,
                 failedStage: 'validate',
-                failures: ['题目 Q1 缺少选项'],
+                failures: ['E_MISSING_ANSWERS Q1'],
                 orphanEngineSid: null,
                 tries: 1,
                 nextReconcileAt: null,
@@ -336,11 +361,11 @@ describe('PublishPage', () => {
       },
     });
 
-    renderWithQuery(<PublishPage api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
     fireEvent.click(await screen.findByRole('button', { name: '发布问卷' }));
 
     expect(await screen.findByText('定义校验')).toBeInTheDocument();
-    expect(screen.getByText('题目 Q1 缺少选项')).toBeInTheDocument();
+    expect(screen.getByText('题目缺少选项（Q1）')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('定义或导入内容未通过校验');
   });
 
@@ -368,13 +393,83 @@ describe('PublishPage', () => {
       }),
     });
 
-    renderWithQuery(<PublishPage api={api} surveyId={surveyId} />);
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
 
     expect(await screen.findByText('发布失败')).toBeInTheDocument();
     expect(screen.getByText('未知阶段')).toBeInTheDocument();
-    expect(screen.getAllByText('详细错误已隐藏，请联系管理员。')).toHaveLength(2);
+    expect(screen.getByText('发布失败，详细信息已隐藏。')).toBeInTheDocument();
     expect(screen.queryByText(/raw-gateway-secret/)).not.toBeInTheDocument();
     expect(screen.queryByText(/IllegalStateException/)).not.toBeInTheDocument();
+  });
+
+  test.each([
+    {
+      name: 'none allows submit but not direct publish',
+      approval: null,
+      actorId: 'author-1',
+      capabilities: { ...baseCapabilities, canApprovePublish: false },
+      shown: ['提交审批'],
+      hidden: ['发布问卷', '批准申请', '驳回申请', '撤回申请'],
+    },
+    {
+      name: 'pending approver who is not applicant may decide but not withdraw',
+      approval: baseApproval,
+      actorId: 'approver-1',
+      capabilities: { ...baseCapabilities, canSubmitApproval: false },
+      shown: ['批准申请', '驳回申请'],
+      hidden: ['提交审批', '发布问卷', '撤回申请'],
+    },
+    {
+      name: 'pending applicant without approval grant may only withdraw',
+      approval: baseApproval,
+      actorId: 'author-1',
+      capabilities: { ...baseCapabilities, canSubmitApproval: true, canPublishDirectly: false, canApprovePublish: false },
+      shown: ['撤回申请'],
+      hidden: ['提交审批', '发布问卷', '批准申请', '驳回申请'],
+    },
+    {
+      name: 'approved ordinary publisher may publish through the approved path',
+      approval: { ...baseApproval, status: 'approved' },
+      actorId: 'publisher-1',
+      capabilities: { ...baseCapabilities, canSubmitApproval: true, canPublishDirectly: false, canApprovePublish: false },
+      shown: ['发布问卷'],
+      hidden: ['提交审批', '批准申请', '驳回申请', '撤回申请'],
+    },
+    ...(['rejected', 'withdrawn', 'voided'] as const).map((status) => ({
+      name: `${status} allows a new submission`,
+      approval: { ...baseApproval, status },
+      actorId: 'author-1',
+      capabilities: { ...baseCapabilities, canSubmitApproval: true, canPublishDirectly: false, canApprovePublish: false },
+      shown: ['提交审批'],
+      hidden: ['发布问卷', '批准申请', '驳回申请', '撤回申请'],
+    })),
+    {
+      name: 'direct publisher may publish without submitting approval',
+      approval: null,
+      actorId: 'direct-publisher',
+      capabilities: { ...baseCapabilities, canSubmitApproval: false, canPublishDirectly: true, canApprovePublish: false },
+      shown: ['发布问卷'],
+      hidden: ['提交审批', '批准申请', '驳回申请', '撤回申请'],
+    },
+  ])('$name', async ({ approval, actorId, capabilities, shown, hidden }) => {
+    const api = standardApi({
+      [`GET /v1/resource-capabilities?resourceId=${surveyId}`]: () => capabilities,
+      [`GET /v1/surveys/${surveyId}/approval-requests`]: () => approval ? [approval] : [],
+    });
+
+    renderWithQuery(<PublishPage actorId={actorId} api={api} surveyId={surveyId} />);
+
+    await screen.findByRole('heading', { name: '可执行操作' });
+    for (const name of shown) expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    for (const name of hidden) expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+  });
+
+  test('announcesPublishStatusChangesToAssistiveTechnology', async () => {
+    renderWithQuery(
+      <PublishPage actorId="author-1" api={standardApi()} surveyId={surveyId} />,
+    );
+
+    expect(await screen.findByRole('status')).toHaveAttribute('aria-live', 'polite');
   });
 });
 

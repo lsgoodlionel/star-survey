@@ -101,6 +101,8 @@ export const approvalRequestsQueryKey = (surveyId: string) =>
 export const versionsQueryKey = (surveyId: string) => ['survey', surveyId, 'versions'] as const;
 export const versionQueryKey = (surveyId: string, version: number) =>
   ['survey', surveyId, 'versions', version] as const;
+export const publishCapabilitiesQueryKey = (surveyId: string) =>
+  ['resource', surveyId, 'publish-capabilities'] as const;
 
 export function getSurveyOverview(api: ApiClient, surveyId: string, signal?: AbortSignal) {
   return api.request({ path: `/v1/surveys/${encodeURIComponent(surveyId)}`, schema: surveyOverviewSchema, signal });
