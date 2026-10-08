@@ -5,6 +5,15 @@ import { AuthCallbackPage } from '../features/auth/AuthCallbackPage';
 import { useAuth } from '../features/auth/AuthProvider';
 import { WorkspacePage } from '../features/workspace/WorkspacePage';
 
+const PublishRoutePage = lazy(() =>
+  import('../features/publish/PublishPage').then((module) => ({ default: module.PublishRoutePage })),
+);
+const VersionDetailRoutePage = lazy(() =>
+  import('../features/publish/VersionDetailPage').then((module) => ({
+    default: module.VersionDetailRoutePage,
+  })),
+);
+
 const DevelopmentTokenPage = import.meta.env.DEV
   ? lazy(() =>
       import('../features/auth/DevTokenPage').then((module) => ({ default: module.DevTokenPage })),
@@ -59,6 +68,22 @@ export function createAppRoutes(isDevelopment: boolean): RouteObject[] {
           children: [
             { index: true, element: <Navigate to="/workspace" replace /> },
             { path: 'workspace', element: <WorkspacePage /> },
+            {
+              path: 'surveys/:surveyId/publish',
+              element: (
+                <Suspense fallback={<p>正在加载发布信息</p>}>
+                  <PublishRoutePage />
+                </Suspense>
+              ),
+            },
+            {
+              path: 'surveys/:surveyId/versions/:version',
+              element: (
+                <Suspense fallback={<p>正在加载版本</p>}>
+                  <VersionDetailRoutePage />
+                </Suspense>
+              ),
+            },
           ],
         },
       ],

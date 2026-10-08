@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
 import { renderWithQuery } from '../../test/render';
+import { createAppRoutes } from '../../app/router';
 import { PublishPage } from './PublishPage';
 import { VersionDetailPage } from './VersionDetailPage';
 
@@ -395,4 +396,20 @@ test('showsPublishedVersionsAsImmutableReadOnlyData', async () => {
   expect(screen.getByText(/员工体验调查（发布快照）/)).toBeInTheDocument();
   expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /保存|编辑|恢复/ })).not.toBeInTheDocument();
+});
+
+test('registersPublishAndImmutableVersionRoutesUnderProtectedShell', () => {
+  const routes = createAppRoutes(false);
+  const protectedRoute = routes.find((route) => route.children?.some((child) => child.children));
+  const appShell = protectedRoute?.children?.find((route) => route.children);
+  const protectedPaths = appShell?.children?.map((route) => route.path).filter(Boolean);
+
+  expect(protectedPaths).toEqual(expect.arrayContaining([
+    'surveys/:surveyId/publish',
+    'surveys/:surveyId/versions/:version',
+  ]));
+  expect(routes.map((route) => route.path).filter(Boolean)).not.toEqual(expect.arrayContaining([
+    'surveys/:surveyId/publish',
+    'surveys/:surveyId/versions/:version',
+  ]));
 });
