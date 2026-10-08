@@ -41,8 +41,9 @@ describe('browser gate security contract', () => {
 
     expect(config).toContain("testMatch: [/authoring\\.spec\\.ts/, /redaction\\.spec\\.ts/]");
     expect(workflow).toContain('id: admin_web_e2e');
-    expect(workflow).toContain("if: steps.admin_web_e2e.outcome == 'failure'");
-    expect(workflow).not.toContain('if: failure()');
+    expect(workflow).toContain(
+      'if: "${{ failure() && steps.admin_web_e2e.outcome == \'failure\' }}"',
+    );
   });
 
   test('uses a password control for defense in depth', async () => {
