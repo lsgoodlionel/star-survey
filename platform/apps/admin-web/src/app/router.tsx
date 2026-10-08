@@ -4,6 +4,7 @@ import { AppShell } from './App';
 import { AuthCallbackPage } from '../features/auth/AuthCallbackPage';
 import { useAuth } from '../features/auth/AuthProvider';
 import { WorkspacePage } from '../features/workspace/WorkspacePage';
+import { EditorRoutePage } from '../features/editor/EditorPage';
 
 const PublishRoutePage = lazy(() =>
   import('../features/publish/PublishPage').then((module) => ({ default: module.PublishRoutePage })),
@@ -68,6 +69,7 @@ export function createAppRoutes(isDevelopment: boolean): RouteObject[] {
           children: [
             { index: true, element: <Navigate to="/workspace" replace /> },
             { path: 'workspace', element: <WorkspacePage /> },
+            { path: 'surveys/:surveyId/edit', element: <EditorRoutePage /> },
             {
               path: 'surveys/:surveyId/publish',
               element: (
