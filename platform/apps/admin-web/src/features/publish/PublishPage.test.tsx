@@ -291,7 +291,22 @@ describe('PublishPage', () => {
     expect(aborted).toBe(true);
   });
 
-  test('showsManualReviewAndOrphanSidAsBlockingWarnings', async () => {
+  test.each([
+    {
+      name: 'manual review alone',
+      manualReviewAt: '2026-10-08T02:00:00Z',
+      orphanEngineSid: null,
+      warning: '需要人工复核',
+      absentWarning: /孤儿问卷/,
+    },
+    {
+      name: 'orphan engine survey alone',
+      manualReviewAt: null,
+      orphanEngineSid: 918273,
+      warning: /孤儿问卷.*918273/,
+      absentWarning: '需要人工复核',
+    },
+  ])('blocks publishing for $name', async ({ manualReviewAt, orphanEngineSid, warning, absentWarning }) => {
     const api = standardApi({
       [`GET /v1/resource-capabilities?resourceId=${surveyId}`]: () => ({
         ...baseCapabilities,
@@ -311,18 +326,18 @@ describe('PublishPage', () => {
           gatewayStatus: 502,
           failedStage: 'rollback',
           failures: ['回滚没有完成'],
-          orphanEngineSid: 918273,
+          orphanEngineSid,
           tries: 7,
           nextReconcileAt: null,
-          manualReviewAt: '2026-10-08T02:00:00Z',
+          manualReviewAt,
         },
       }),
     });
 
     renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
 
-    expect(await screen.findByText('需要人工复核')).toBeInTheDocument();
-    expect(screen.getByText(/孤儿问卷.*918273/)).toBeInTheDocument();
+    expect(await screen.findByText(warning)).toBeInTheDocument();
+    expect(screen.queryByText(absentWarning)).not.toBeInTheDocument();
     expect(screen.queryByText('回滚没有完成')).not.toBeInTheDocument();
     expect(screen.getByText('发布操作已阻止，请先完成上述人工处理。')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发布问卷' })).not.toBeInTheDocument();
@@ -344,7 +359,11 @@ describe('PublishPage', () => {
                 outcome: 'failed',
                 gatewayStatus: 422,
                 failedStage: 'validate',
-                failures: ['E_MISSING_ANSWERS Q1'],
+                failures: [
+                  'E_MISSING_ANSWERS groups[0].questions[1].answers: 至少需要一个选项',
+                  'E_DUPLICATE_UUID groups[].uuid: uuid 重复',
+                  'E_QUESTION_CODE_DUPLICATE questions[44444444-4444-4444-8444-444444444444].code: 题目代码重复',
+                ],
                 orphanEngineSid: null,
                 tries: 1,
                 nextReconcileAt: null,
@@ -365,7 +384,10 @@ describe('PublishPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '发布问卷' }));
 
     expect(await screen.findByText('定义校验')).toBeInTheDocument();
-    expect(screen.getByText('题目缺少选项（Q1）')).toBeInTheDocument();
+    expect(screen.getByText('题目缺少选项（groups[0].questions[1].answers）')).toBeInTheDocument();
+    expect(screen.getByText('题目或题组标识重复（groups[].uuid）')).toBeInTheDocument();
+    expect(screen.getByText('题目代码重复（questions[44444444-4444-4444-8444-444444444444].code）')).toBeInTheDocument();
+    expect(screen.queryByText(/至少需要一个选项|uuid 重复/)).not.toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('定义或导入内容未通过校验');
   });
 
@@ -403,6 +425,41 @@ describe('PublishPage', () => {
   });
 
   test.each([
+    { name: 'known code with an arbitrary second token', failedStage: 'validate', failure: 'E_MISSING_ANSWERS RAW_GATEWAY_SECRET' },
+    { name: 'unknown validation code', failedStage: 'validate', failure: 'E_UNKNOWN groups[0].questions[1]: 无法校验' },
+    { name: 'malformed validation path', failedStage: 'validate', failure: 'E_MISSING_ANSWERS groups[0]..questions[1].answers: 至少需要一个选项' },
+    { name: 'overlong validation path', failedStage: 'validate', failure: `E_MISSING_ANSWERS groups[0].${'questions.'.repeat(30)}answers: 至少需要一个选项` },
+    { name: 'extra line structure', failedStage: 'validate', failure: 'E_MISSING_ANSWERS groups[0].questions[1].answers: 至少需要一个选项\nRAW_GATEWAY_SECRET' },
+    { name: 'secret-like validation content', failedStage: 'validate', failure: 'E_MISSING_ANSWERS groups[0].questions[1].answers: bearer gateway-secret' },
+    { name: 'allowlisted code at a non-validation stage', failedStage: 'compile', failure: 'E_MISSING_ANSWERS groups[0].questions[1].answers: 至少需要一个选项' },
+  ])('hides $name', async ({ failedStage, failure }) => {
+    const api = standardApi({
+      [`GET /v1/surveys/${surveyId}`]: () => ({
+        ...baseSurvey,
+        status: 'publish_failed',
+        lastPublish: {
+          requestId,
+          engineInstanceId: 'test-engine',
+          draftVersion: 4,
+          outcome: 'failed',
+          gatewayStatus: 422,
+          failedStage,
+          failures: [failure],
+          orphanEngineSid: null,
+          tries: 1,
+          nextReconcileAt: null,
+          manualReviewAt: null,
+        },
+      }),
+    });
+
+    renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} />);
+
+    expect(await screen.findByText('发布失败，详细信息已隐藏。')).toBeInTheDocument();
+    expect(screen.queryByText(/RAW_GATEWAY_SECRET|gateway-secret|至少需要一个选项|无法校验/)).not.toBeInTheDocument();
+  });
+
+  test.each([
     {
       name: 'none allows submit but not direct publish',
       approval: null,
@@ -434,6 +491,14 @@ describe('PublishPage', () => {
       capabilities: { ...baseCapabilities, canSubmitApproval: true, canPublishDirectly: false, canApprovePublish: false },
       shown: ['发布问卷'],
       hidden: ['提交审批', '批准申请', '驳回申请', '撤回申请'],
+    },
+    {
+      name: 'published exposes no further action',
+      approval: { ...baseApproval, status: 'published' },
+      actorId: 'publisher-1',
+      capabilities: { ...baseCapabilities, canSubmitApproval: true, canPublishDirectly: true, canApprovePublish: true },
+      shown: [],
+      hidden: ['提交审批', '发布问卷', '批准申请', '驳回申请', '撤回申请'],
     },
     ...(['rejected', 'withdrawn', 'voided'] as const).map((status) => ({
       name: `${status} allows a new submission`,

@@ -104,12 +104,19 @@ const validationMessages: Record<string, string> = {
   E_UNSUPPORTED_TYPE: '包含不支持的题型',
 };
 
+const validationFailurePattern = /^([A-Z][A-Z0-9_]{1,63})(?: ([^ :\r\n]{1,160}): ([^\r\n]{1,300}))?$/;
+const validationPathPattern = /^(?:[A-Za-z_][A-Za-z0-9_]{0,31})(?:\[(?:(?:0|[1-9][0-9]{0,5})|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?\])?(?:\.(?:[A-Za-z_][A-Za-z0-9_]{0,31})(?:\[(?:(?:0|[1-9][0-9]{0,5})|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?\])?)*$/;
+const sensitiveFailureContent = /authorization|bearer|password|secret|stack\s*trace|traceback|exception|api[_-]?key|private[_-]?key/i;
+
 function validationMessage(value: string) {
-  const match = /^([A-Z][A-Z0-9_]*)(?: ([A-Z][A-Z0-9_]{0,31}))?$/.exec(value);
+  if (value.length > 512 || sensitiveFailureContent.test(value)) return null;
+  const match = validationFailurePattern.exec(value);
   if (!match) return null;
   const message = validationMessages[match[1]];
   if (!message) return null;
-  return match[2] ? `${message}（${match[2]}）` : message;
+  const path = match[2];
+  if (path && !validationPathPattern.test(path)) return null;
+  return path ? `${message}（${path}）` : message;
 }
 
 function safeStageLabel(stage: string) {
