@@ -13,10 +13,11 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tarfile
 import tempfile
-from typing import Iterable
+from typing import Callable, Iterable
 
 from render_notes import render_notes
 
@@ -63,6 +64,9 @@ IMAGE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 
 class ReleaseBuildError(ValueError):
     pass
+
+
+ReadValidationHook = Callable[[Path, os.stat_result], None]
 
 
 def file_sha256(path: Path) -> str:
@@ -113,7 +117,67 @@ def require_directory(path: Path, label: str) -> None:
         raise ReleaseBuildError(f"required production runtime directory is not a real directory: {label}")
 
 
-def read_regular_unlinked_file(path: Path, label: str, root: Path) -> bytes:
+def normalized_absolute(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def require_unsymlinked_directory_chain(path: Path, label: str) -> None:
+    absolute = normalized_absolute(path)
+    current = Path(absolute.anchor)
+    for component in absolute.parts[1:]:
+        current /= component
+        require_directory(current, f"{label}:{current}")
+
+
+def discover_trusted_root() -> Path:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise ReleaseBuildError("trusted repository root cannot be discovered; pass --trusted-root")
+    return Path(result.stdout.strip())
+
+
+def validate_source_boundary(source: Path, trusted_root: Path) -> tuple[Path, Path]:
+    source_absolute = normalized_absolute(source)
+    trusted_absolute = normalized_absolute(trusted_root)
+    expected_source = trusted_absolute / "platform" / "deploy" / "production"
+    if source_absolute != expected_source:
+        raise ReleaseBuildError("production source must be the expected subtree of the trusted repository root")
+    require_unsymlinked_directory_chain(trusted_absolute, "trusted repository root")
+    require_unsymlinked_directory_chain(source_absolute, "trusted production source")
+    try:
+        resolved_root = trusted_absolute.resolve(strict=True)
+        resolved_source = source_absolute.resolve(strict=True)
+        resolved_source.relative_to(resolved_root)
+    except (OSError, ValueError) as exc:
+        raise ReleaseBuildError("production source escapes the trusted repository root") from exc
+    if resolved_source != resolved_root / "platform" / "deploy" / "production":
+        raise ReleaseBuildError("resolved production source is not the expected trusted subtree")
+    return resolved_source, resolved_root
+
+
+def metadata_fingerprint(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def read_regular_unlinked_file(
+    path: Path,
+    label: str,
+    root: Path,
+    after_open: ReadValidationHook | None = None,
+) -> bytes:
     try:
         metadata = path.lstat()
         resolved = path.resolve(strict=True)
@@ -126,21 +190,31 @@ def read_regular_unlinked_file(path: Path, label: str, root: Path) -> bytes:
     try:
         descriptor = os.open(path, flags)
         with os.fdopen(descriptor, "rb") as handle:
-            opened = os.fstat(handle.fileno())
+            before = os.fstat(handle.fileno())
             if (
-                not stat.S_ISREG(opened.st_mode)
-                or opened.st_nlink != 1
-                or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or metadata_fingerprint(before) != metadata_fingerprint(metadata)
             ):
                 raise ReleaseBuildError(f"required production runtime file changed during validation: {label}")
-            return handle.read()
+            if after_open:
+                after_open(path, before)
+            payload = handle.read()
+            after = os.fstat(handle.fileno())
+            if metadata_fingerprint(after) != metadata_fingerprint(before) or len(payload) != before.st_size:
+                raise ReleaseBuildError(f"required production runtime file changed while being read: {label}")
+            return payload
     except OSError as exc:
         raise ReleaseBuildError(f"required production runtime file cannot be read safely: {label}") from exc
 
 
-def collect_runtime(source: Path) -> dict[str, bytes]:
-    require_directory(source, ".")
-    canonical_root = source.resolve(strict=True)
+def collect_runtime(
+    source: Path,
+    trusted_root: Path,
+    after_open: ReadValidationHook | None = None,
+) -> dict[str, bytes]:
+    source, _ = validate_source_boundary(source, trusted_root)
+    canonical_root = source
     files: dict[str, bytes] = {}
     for name in RUNTIME_FILES:
         current = source
@@ -152,7 +226,7 @@ def collect_runtime(source: Path) -> dict[str, bytes]:
             except (OSError, ValueError) as exc:
                 raise ReleaseBuildError(f"required production runtime directory escapes its source root: {name}") from exc
         path = source / name
-        files[name] = read_regular_unlinked_file(path, name, canonical_root)
+        files[name] = read_regular_unlinked_file(path, name, canonical_root, after_open)
     return files
 
 
@@ -237,7 +311,8 @@ def validate_args(args: argparse.Namespace) -> tuple[str, dict[str, str], list[s
 
 def build_release(args: argparse.Namespace) -> None:
     version, images, compatible_schemas = validate_args(args)
-    runtime = collect_runtime(args.source)
+    trusted_root = args.trusted_root or discover_trusted_root()
+    runtime = collect_runtime(args.source, trusted_root)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{args.output.name}-", dir=args.output.parent))
     try:
@@ -282,6 +357,7 @@ def build_release(args: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--source", type=Path, required=True)
+    result.add_argument("--trusted-root", type=Path)
     result.add_argument("--output", type=Path, required=True)
     result.add_argument("--version-file", type=Path, required=True)
     result.add_argument("--commit", required=True)

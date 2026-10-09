@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import unittest
 
 
@@ -42,6 +43,18 @@ def load_surveyctl():
     return module
 
 
+def load_builder():
+    spec = importlib.util.spec_from_file_location("production_release_builder", BUILDER)
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(RELEASE_DIR))
+    try:
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
 class ReleaseBuilderTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -55,6 +68,7 @@ class ReleaseBuilderTest(unittest.TestCase):
         output: Path,
         *extra: str,
         source: Path = PRODUCTION_DIR,
+        trusted_root: Path | None = None,
         compatible_schemas: tuple[str, ...] = ("919", "920"),
         image_keys: tuple[str, ...] = IMAGE_KEYS,
     ) -> subprocess.CompletedProcess[str]:
@@ -82,6 +96,8 @@ class ReleaseBuilderTest(unittest.TestCase):
             "--source-date-epoch",
             "1700000000",
         ]
+        if trusted_root is not None:
+            command.extend(["--trusted-root", str(trusted_root)])
         for value in compatible_schemas:
             command.extend(["--compatible-source-schema", value])
         digests = {key: index for index, key in enumerate(IMAGE_KEYS, start=1)}
@@ -89,6 +105,13 @@ class ReleaseBuilderTest(unittest.TestCase):
             command.extend(["--image", f"{key}=ghcr.io/lsgoodlionel/{key.lower()}@sha256:{digests[key]:064x}"])
         command.extend(extra)
         return subprocess.run(command, text=True, capture_output=True, check=False)
+
+    def copy_trusted_source(self, label: str) -> tuple[Path, Path]:
+        trusted_root = self.root.resolve() / label
+        source = trusted_root / "platform" / "deploy" / "production"
+        source.parent.mkdir(parents=True)
+        shutil.copytree(PRODUCTION_DIR, source)
+        return trusted_root, source
 
     def test_repeated_builds_are_byte_reproducible_and_tar_metadata_is_normalized(self):
         first, second = self.root / "first", self.root / "second"
@@ -212,48 +235,94 @@ class ReleaseBuilderTest(unittest.TestCase):
                 surveyctl.load_manifest(candidate)
 
     def test_source_root_parent_components_and_files_must_be_unlinked_regular_inodes(self):
-        pristine = self.root / "pristine"
-        shutil.copytree(PRODUCTION_DIR, pristine)
         sentinel = "EXTERNAL_RELEASE_SENTINEL"
 
-        external_root = self.root / "external-root"
-        shutil.copytree(pristine, external_root)
+        root_link_root, root_link_source = self.copy_trusted_source("source-root")
+        external_root = self.root.resolve() / "external-root"
+        shutil.copytree(root_link_source, external_root)
         external_root.joinpath("Caddyfile").write_text(sentinel, encoding="utf-8")
-        linked_root = self.root / "linked-root"
-        linked_root.symlink_to(external_root, target_is_directory=True)
+        shutil.rmtree(root_link_source)
+        root_link_source.symlink_to(external_root, target_is_directory=True)
 
-        intermediate_source = self.root / "intermediate-source"
-        shutil.copytree(pristine, intermediate_source)
-        external_init = self.root / "external-init"
+        intermediate_root, intermediate_source = self.copy_trusted_source("intermediate")
+        external_init = self.root.resolve() / "external-init"
         shutil.copytree(intermediate_source / "init", external_init)
         external_init.joinpath("config.production.php").write_text(sentinel, encoding="utf-8")
         shutil.rmtree(intermediate_source / "init")
         intermediate_source.joinpath("init").symlink_to(external_init, target_is_directory=True)
 
-        file_source = self.root / "file-source"
-        shutil.copytree(pristine, file_source)
-        external_file = self.root / "external-Caddyfile"
+        file_root, file_source = self.copy_trusted_source("file")
+        external_file = self.root.resolve() / "external-Caddyfile"
         external_file.write_text(sentinel, encoding="utf-8")
         file_source.joinpath("Caddyfile").unlink()
         file_source.joinpath("Caddyfile").symlink_to(external_file)
 
-        hardlink_source = self.root / "hardlink-source"
-        shutil.copytree(pristine, hardlink_source)
+        hardlink_root, hardlink_source = self.copy_trusted_source("hardlink")
         hardlink_source.joinpath("Caddyfile").unlink()
         os.link(external_file, hardlink_source / "Caddyfile")
 
-        for label, source in (
-            ("source-root", linked_root),
-            ("intermediate", intermediate_source),
-            ("file", file_source),
-            ("hardlink", hardlink_source),
+        for label, trusted_root, source in (
+            ("source-root", root_link_root, root_link_source),
+            ("intermediate", intermediate_root, intermediate_source),
+            ("file", file_root, file_source),
+            ("hardlink", hardlink_root, hardlink_source),
         ):
             output = self.root / f"output-{label}"
-            result = self.build(output, source=source)
+            result = self.build(output, source=source, trusted_root=trusted_root)
             with self.subTest(label=label):
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn("runtime", result.stderr.lower())
                 self.assertFalse(output.exists())
+
+    def test_source_ancestor_symlink_beneath_trusted_root_is_rejected(self):
+        trusted_root = self.root.resolve() / "ancestor-trusted"
+        external_root = self.root.resolve() / "ancestor-external"
+        external_source = external_root / "platform" / "deploy" / "production"
+        external_source.parent.mkdir(parents=True)
+        shutil.copytree(PRODUCTION_DIR, external_source)
+        external_source.joinpath("Caddyfile").write_text("ANCESTOR_SYMLINK_EXTERNAL_SENTINEL", encoding="utf-8")
+        trusted_root.mkdir()
+        trusted_root.joinpath("platform").symlink_to(external_root / "platform", target_is_directory=True)
+        source = trusted_root / "platform" / "deploy" / "production"
+        output = self.root / "ancestor-output"
+
+        result = self.build(output, source=source, trusted_root=trusted_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("trusted", result.stderr.lower())
+        self.assertNotIn("unrecognized arguments", result.stderr.lower())
+        self.assertFalse(output.exists())
+
+    def test_same_inode_mutation_during_read_is_rejected(self):
+        builder = load_builder()
+        trusted_root, source = self.copy_trusted_source("mutation")
+        target = source / "Caddyfile"
+        original = target.read_bytes()
+        replacement = b"X" * len(original)
+        opened = threading.Event()
+        mutated = threading.Event()
+
+        def after_open(path: Path, _metadata) -> None:
+            if path == target:
+                opened.set()
+                self.assertTrue(mutated.wait(timeout=5))
+
+        def mutate() -> None:
+            self.assertTrue(opened.wait(timeout=5))
+            before = target.stat()
+            with target.open("r+b", buffering=0) as handle:
+                handle.seek(0)
+                handle.write(replacement)
+                os.fsync(handle.fileno())
+            os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            mutated.set()
+
+        worker = threading.Thread(target=mutate, daemon=True)
+        worker.start()
+        with self.assertRaises(builder.ReleaseBuildError):
+            builder.collect_runtime(source, trusted_root, after_open=after_open)
+        worker.join(timeout=5)
+        self.assertFalse(worker.is_alive())
 
     def test_mutable_or_incomplete_image_inputs_are_rejected_without_outputs(self):
         output = self.root / "invalid"
