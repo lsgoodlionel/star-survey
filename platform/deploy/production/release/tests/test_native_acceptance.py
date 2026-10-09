@@ -123,7 +123,10 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         jobs = self.workflow["jobs"]
         candidate = jobs["candidate-assets"]
         native = jobs["native-acceptance"]
-        self.assertEqual("needs.policy.outputs.release == 'true'", candidate["if"])
+        self.assertEqual(
+            "needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'",
+            candidate["if"],
+        )
         self.assertEqual({"policy", "quality", "publish-images", "secure-images"}, set(candidate["needs"]))
         self.assertIn("release-candidate", job_text(candidate))
         self.assertIn("identity.json", job_text(candidate))
@@ -154,8 +157,9 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn("github-token", native_text)
         self.assertNotIn("actions/checkout@", native_text)
         self.assertIn("orchestrator/release/native_acceptance.sh", native_text)
-        self.assertNotIn("gh release create", self.workflow_text)
-        self.assertNotIn("gh release upload", self.workflow_text)
+        publication = self.workflow["jobs"]["publication"]
+        self.assertIn("needs.policy.outputs.release == 'true'", publication["if"])
+        self.assertIn("needs.policy.outputs.channel", publication["if"])
 
     def test_native_job_runs_real_lifecycle_and_always_uploads_redacted_evidence(self):
         job = self.workflow["jobs"]["native-acceptance"]
@@ -174,7 +178,10 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
 
     def test_tag_publication_gate_depends_on_the_complete_native_matrix(self):
         gate = self.workflow["jobs"]["release-ready"]
-        self.assertEqual("needs.policy.outputs.release == 'true'", gate["if"])
+        self.assertEqual(
+            "needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'",
+            gate["if"],
+        )
         self.assertEqual({"policy", "candidate-assets", "native-acceptance"}, set(gate["needs"]))
         text = job_text(gate)
         self.assertIn("test '${{ needs.native-acceptance.result }}' = success", text)

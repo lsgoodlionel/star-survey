@@ -189,7 +189,10 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             jobs["publish-images"]["permissions"],
         )
         self.assertEqual("needs.policy.outputs.release != 'true'", jobs["build-local"]["if"])
-        self.assertEqual("needs.policy.outputs.release == 'true'", jobs["publish-images"]["if"])
+        self.assertEqual(
+            "needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'",
+            jobs["publish-images"]["if"],
+        )
         self.assertEqual({"policy", "quality"}, set(jobs["build-local"]["needs"]))
         self.assertEqual({"policy", "quality"}, set(jobs["publish-images"]["needs"]))
         self.assertNotIn("docker/login-action@", job_text(jobs["build-local"]))
@@ -224,7 +227,10 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
 
     def test_security_job_depends_on_tag_publish_and_scans_signs_and_attests(self):
         secure = self.workflow["jobs"]["secure-images"]
-        self.assertEqual("needs.policy.outputs.release == 'true'", secure["if"])
+        self.assertEqual(
+            "needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'",
+            secure["if"],
+        )
         self.assertEqual({"policy", "quality", "publish-images"}, set(secure["needs"]))
         self.assertEqual(IMAGE_NAMES, set(secure["strategy"]["matrix"]["image"]))
         text = job_text(secure)
@@ -242,8 +248,10 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             self.assertIn(required, text)
         self.assertGreaterEqual(text.count("actions/attest@"), 2)
         self.assertIn("@${DIGEST}", text)
-        self.assertNotIn("gh release create", self.workflow_text)
-        self.assertNotIn("gh release upload", self.workflow_text)
+        publication = job_text(self.workflow["jobs"]["publication"])
+        self.assertIn("gh release create", publication)
+        self.assertIn("gh release upload", publication)
+        self.assertNotIn("--clobber", publication)
 
     def test_every_external_action_is_allowlisted_and_pinned_to_a_full_sha(self):
         for workflow_name, workflow in (("release", self.workflow), ("quality", self.quality)):

@@ -81,3 +81,23 @@ PYTHONPYCACHEPREFIX=/tmp/survey-pyc \
 `test_install_upgrade.py` 是不可 fake-success 的原生 clean-host 验收入口。它仅在 `SURVEY_PRODUCTION_E2E=1` 且提供两版真实 Release、DNS/TLS 和管理员参数时运行；否则明确 `SKIP`，不会用 fake 冒充成功。启用后实际执行 install -> setup-probe -> doctor/完整产品旅程 -> backup -> upgrade -> doctor/完整产品旅程 -> restore -> doctor/恢复后完整产品旅程 -> uninstall。
 
 `native-acceptance.requirement.json` 是后续 multiarch Release workflow 必须消费的机器可读发布要求。真实发布前必须在 Ubuntu 22.04/24.04 的 AMD64/ARM64 runner 上完成四项矩阵，并验证正式 GHCR 镜像和 GitHub Release 制品。当前 Task 4 本地结果明确为“发布阻断、未验收”；开发机的可控 fake/fault-injection 测试只证明事务顺序和失败边界，不等同于该矩阵通过。
+
+## GitHub Release 发布
+
+`.github/workflows/release.yml` 只接受严格的 `vX.Y.Z-rc.N` 和 `vX.Y.Z` tag。候选版必须依次通过完整仓库质量门禁、三镜像 AMD64/ARM64 构建、Trivy、Cosign/GitHub attestation，以及 Ubuntu 22.04/24.04 × AMD64/ARM64 原生生命周期矩阵。任一 job 失败、跳过或证据身份不一致都不会进入 publication job。
+
+RC Release 标记为 prerelease，并包含两架构 bundle、两层 checksum、三镜像 SBOM/Cosign bundle 和 native readiness。发布前后均使用下列命令重新核对下载后的全部资产：
+
+```bash
+platform/deploy/production/release/verify_release.sh \
+  --assets /secure/star-survey-release \
+  --repository lsgoodlionel/star-survey \
+  --target-tag vX.Y.Z-rc.N \
+  --source-tag vX.Y.Z-rc.N
+```
+
+稳定版不是第二次构建。`vX.Y.Z` 只会选择同版本、已发布且通过升级矩阵的 `vX.Y.Z-rc.N`，重新下载所有资产并验证相同 checksum、镜像 digest、Cosign bundle、GitHub artifact attestation、SBOM 和 native readiness，然后逐字节复用 RC 资产。稳定 tag 若指向不同源码提交，或 RC 不是 `upgrade-verified`，必须阻断推广。
+
+publication 采用可恢复的幂等发布：先查询现有 Release，逐个下载已有资产并比较字节；只上传缺失资产，不使用 `--clobber`。若 `gh release create` 返回未知结果，会先重新查询再继续；任何同名不同内容或多余资产都会阻断，不会覆盖。
+
+当前仓库没有因为本地实现或测试而创建真实 tag、GHCR 镜像或 GitHub Release。首次 RC 仍需在 GitHub Actions 中实际完成四节点矩阵，随后人工核对公网 TLS、备份密钥异地保存和 Release 资产，再决定是否创建稳定 tag。

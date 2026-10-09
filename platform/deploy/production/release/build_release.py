@@ -50,6 +50,7 @@ RUNTIME_FILES = (
     "init/start-edge.sh",
     "release/native_acceptance.sh",
     "release/native_acceptance_evidence.py",
+    "release/verify_release.sh",
     "release.schema.json",
     "restore.py",
     "surveyctl",

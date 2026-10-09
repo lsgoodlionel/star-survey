@@ -180,7 +180,7 @@ Task 7 用户可见证据位于 `docs/audits/2026-10-09-product-alignment/07-adm
 由真实 Playwright DOM 测量；另有运行中 `adminweb-demo` 的 Chromium 巡检遍历固定三层并拒绝 E2E 时间戳资源。Task 7 在
 `820–1179px` 只提供现有布局的不溢出临时保障，Phase C 约定的双栏 + 检查器尚未实现。代码、自动化和用户可见证据仅支持
 Phase A+B；Phase C/D 仍是后续工作。
-仓库已具备单机生产部署代码路径，详见 [`platform/deploy/production/README.md`](deploy/production/README.md)：固定 digest Compose、`surveyctl` 生命周期、加密备份、隔离恢复和脱敏 doctor 均已有自动化契约与故障注入。当前仍不能宣称正式 production-ready：真实 GitHub Release、正式 Engine 多架构镜像以及 Ubuntu 22.04/24.04 × AMD64/ARM64 的公网 TLS clean-host 矩阵尚待发布阶段执行。PR #10 于 2026-10-09 重新核验仍为 OPEN、未合并，依赖仍待合并。
+仓库已具备单机生产部署和 Release publication 代码路径，详见 [`platform/deploy/production/README.md`](deploy/production/README.md)：固定 digest Compose、`surveyctl` 生命周期、加密备份、隔离恢复、脱敏 doctor、RC 制品签名/证明、四节点 native readiness 和 stable 原字节推广均有自动化契约与故障注入。当前仍不能宣称正式 production-ready：本任务没有创建真实 tag、GitHub Release 或正式 Engine 多架构镜像，Ubuntu 22.04/24.04 × AMD64/ARM64 的真实 GitHub runner 与公网 TLS clean-host 证据仍须在首个 RC 流水线中产生。PR #10 于 2026-10-09 重新核验仍为 OPEN、未合并，依赖仍待合并。
 
 ### 跑测试的三条硬规矩（都是真实踩出来的）
 

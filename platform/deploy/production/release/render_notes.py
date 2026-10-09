@@ -57,6 +57,23 @@ surveyctl doctor
 ```
 
 This release declares rollback policy `{rollback}`. When it is `restore-only`, recover with the verified pre-upgrade backup instead of starting older images against a migrated database.
+
+## Verification
+
+Verify every downloaded asset before installation:
+
+```bash
+release/verify_release.sh --assets . --repository lsgoodlionel/star-survey --target-tag v{version} --source-tag v{version}
+gh attestation verify survey-{version}-linux-amd64.tar.gz --repo lsgoodlionel/star-survey
+cosign verify <image@sha256:digest> --bundle cosign-admin.sigstore.json
+```
+
+## Known issues and limits
+
+- This is a single-host deployment, not high availability. Planned host maintenance interrupts authoring and responses.
+- Public ACME TLS and DNS ownership must be verified on the target server; CI uses a local trusted CA for the native matrix.
+- Keep backup encryption keys outside the server failure domain. A lost key makes encrypted backups unrecoverable.
+- The `{rollback}` policy applies. For `restore-only`, use the verified pre-upgrade backup; do not start older images against a migrated database.
 """
 
 

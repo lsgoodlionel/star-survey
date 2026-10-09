@@ -41,6 +41,7 @@ jobs:
     outputs:
       release: ${{ steps.event.outputs.release }}
       version: ${{ steps.event.outputs.version }}
+      channel: ${{ steps.event.outputs.channel }}
     steps:
       - name: Accept only canonical release versions
         id: event
@@ -57,6 +58,7 @@ jobs:
           ref_name = os.environ['GITHUB_REF_NAME']
           release = False
           version = f"build-{os.environ['GITHUB_SHA'][:12]}"
+          channel = 'build'
 
           if event == 'push':
               canonical = re.fullmatch(
@@ -68,10 +70,12 @@ jobs:
                   raise SystemExit('only canonical vX.Y.Z and vX.Y.Z-rc.N tags may publish')
               release = True
               version = ref_name[1:]
+              channel = 'candidate' if '-rc.' in version else 'stable'
 
           with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
               output.write(f"release={str(release).lower()}\n")
               output.write(f"version={version}\n")
+              output.write(f"channel={channel}\n")
           PY
 
   quality:
@@ -151,7 +155,7 @@ jobs:
 
   publish-images:
     name: Publish ${{ matrix.id }} multi-architecture image
-    if: needs.policy.outputs.release == 'true'
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
     runs-on: ubuntu-24.04
     needs: [policy, quality]
     permissions:
@@ -239,7 +243,7 @@ jobs:
 
   secure-images:
     name: Scan, sign and attest ${{ matrix.image }}
-    if: needs.policy.outputs.release == 'true'
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
     runs-on: ubuntu-24.04
     needs: [policy, quality, publish-images]
     permissions:
@@ -418,7 +422,7 @@ jobs:
 
   candidate-assets:
     name: Assemble one immutable release candidate
-    if: needs.policy.outputs.release == 'true'
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
     runs-on: ubuntu-24.04
     needs: [policy, quality, publish-images, secure-images]
     permissions:
@@ -637,7 +641,7 @@ jobs:
     name: Native acceptance Ubuntu ${{ matrix.ubuntu }} ${{ matrix.architecture }}
     if: >-
       always() && !cancelled() && needs.quality.result == 'success' &&
-      (needs.policy.outputs.release == 'true' || inputs.candidate_run_id != '') &&
+      (needs.policy.outputs.channel == 'candidate' || inputs.candidate_run_id != '') &&
       (needs.candidate-assets.result == 'success' || inputs.candidate_run_id != '')
     runs-on: ${{ matrix.runner }}
     needs: [policy, quality, candidate-assets]
@@ -746,7 +750,7 @@ jobs:
 
   release-ready:
     name: Release candidate passed every native host
-    if: needs.policy.outputs.release == 'true'
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
     runs-on: ubuntu-24.04
     needs: [policy, candidate-assets, native-acceptance]
     outputs:
@@ -802,3 +806,326 @@ jobs:
           path: release-readiness.json
           if-no-files-found: error
           retention-days: 30
+
+  attest-release-assets:
+    name: Sign and attest the verified RC assets
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
+    runs-on: ubuntu-24.04
+    needs: [policy, candidate-assets, secure-images, release-ready]
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out the checksum-bound verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download candidate runtime assets
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-candidate
+          path: candidate
+
+      - name: Download image SBOMs and Cosign bundles
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: image-*-supply-chain
+          path: supply-chain
+
+      - name: Download native readiness identity
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: native-release-readiness
+          path: readiness
+
+      - name: Assemble the exact publication asset inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir publication-assets
+          cp candidate/candidate/release.json publication-assets/
+          cp candidate/candidate/release-notes.md publication-assets/
+          cp candidate/candidate/SHA256SUMS publication-assets/
+          cp candidate/candidate/survey-*-linux-amd64.tar.gz publication-assets/
+          cp candidate/candidate/survey-*-linux-arm64.tar.gz publication-assets/
+          cp readiness/release-readiness.json publication-assets/
+          for name in admin platform publish-gateway; do
+            mapfile -t sboms < <(find supply-chain -type f -name "sbom-$name.spdx.json" -print)
+            mapfile -t bundles < <(find supply-chain -type f -name "cosign-$name.sigstore.json" -print)
+            [[ "${#sboms[@]}" -eq 1 && "${#bundles[@]}" -eq 1 ]]
+            cp "${sboms[0]}" publication-assets/
+            cp "${bundles[0]}" publication-assets/
+          done
+          (
+            cd publication-assets
+            sha256sum \
+              SHA256SUMS release-readiness.json release-notes.md release.json \
+              sbom-*.spdx.json cosign-admin.sigstore.json cosign-platform.sigstore.json \
+              cosign-publish-gateway.sigstore.json survey-*-linux-*.tar.gz \
+              | LC_ALL=C sort -k2 > RELEASE_SHA256SUMS
+          )
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.2
+
+      - name: Log in to GHCR for final attestation verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign the complete release checksum inventory
+        shell: bash
+        run: >-
+          cosign sign-blob --yes
+          --bundle publication-assets/cosign-release.sigstore.json
+          publication-assets/RELEASE_SHA256SUMS
+
+      - name: Generate GitHub artifact attestations
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            publication-assets/survey-*-linux-amd64.tar.gz
+            publication-assets/survey-*-linux-arm64.tar.gz
+            publication-assets/release.json
+            publication-assets/SHA256SUMS
+            publication-assets/RELEASE_SHA256SUMS
+            publication-assets/release-readiness.json
+            publication-assets/sbom-admin.spdx.json
+            publication-assets/sbom-platform.spdx.json
+            publication-assets/sbom-publish-gateway.spdx.json
+
+      - name: Independently verify the complete RC before publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          platform/deploy/production/release/verify_release.sh
+          --assets publication-assets
+          --repository "$GITHUB_REPOSITORY"
+          --target-tag "$GITHUB_REF_NAME"
+          --source-tag "$GITHUB_REF_NAME"
+          --target-commit "$GITHUB_SHA"
+
+      - name: Preserve the verified RC publication assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-release-assets
+          path: publication-assets
+          if-no-files-found: error
+          retention-days: 30
+
+  stable-promotion:
+    name: Reuse a byte-identical verified RC for stable
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'stable'
+    runs-on: ubuntu-24.04
+    needs: [policy, quality]
+    outputs:
+      source-tag: ${{ steps.source.outputs.tag }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out the promotion verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Resolve the latest published RC for this stable version
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STABLE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release list --limit 100 --json tagName,isDraft,isPrerelease > releases.json
+          source_tag="$(python3 - "$STABLE_TAG" releases.json <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          stable = sys.argv[1]
+          match = re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', stable)
+          if match is None:
+              raise SystemExit('stable promotion tag is not canonical semver')
+          prefix = stable + '-rc.'
+          candidates = []
+          for release in json.loads(Path(sys.argv[2]).read_text(encoding='utf-8')):
+              tag = release.get('tagName', '')
+              suffix = tag.removeprefix(prefix)
+              if tag.startswith(prefix) and re.fullmatch(r'0|[1-9][0-9]*', suffix) and release.get('isPrerelease') is True and release.get('isDraft') is False:
+                  candidates.append((int(suffix), tag))
+          if not candidates:
+              raise SystemExit('no published verified RC is available for stable promotion')
+          print(max(candidates)[1])
+          PY
+          )"
+          printf 'tag=%s\n' "$source_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Redownload every source RC Release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir stable-promotion-assets
+          gh release download "$SOURCE_TAG" --dir stable-promotion-assets
+
+      - name: Log in to GHCR for promotion verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify RC bytes signatures attestations SBOM and native identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ steps.source.outputs.tag }}
+        run: >-
+          platform/deploy/production/release/verify_release.sh
+          --assets stable-promotion-assets
+          --repository "$GITHUB_REPOSITORY"
+          --target-tag "$GITHUB_REF_NAME"
+          --source-tag "$SOURCE_TAG"
+          --target-commit "$GITHUB_SHA"
+
+      - name: Preserve only the byte-identical RC assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stable-promotion-assets
+          path: stable-promotion-assets
+          if-no-files-found: error
+          retention-days: 30
+
+  publication:
+    name: Publish the independently verified GitHub Release
+    if: >-
+      always() && !cancelled() && needs.policy.outputs.release == 'true' &&
+      needs.quality.result == 'success' &&
+      ((needs.policy.outputs.channel == 'candidate' && needs.publish-images.result == 'success' &&
+        needs.secure-images.result == 'success' && needs.candidate-assets.result == 'success' &&
+        needs.native-acceptance.result == 'success' && needs.release-ready.result == 'success' &&
+        needs.attest-release-assets.result == 'success' && needs.stable-promotion.result == 'skipped') ||
+       (needs.policy.outputs.channel == 'stable' && needs.publish-images.result == 'skipped' &&
+        needs.secure-images.result == 'skipped' && needs.candidate-assets.result == 'skipped' &&
+        needs.native-acceptance.result == 'skipped' && needs.release-ready.result == 'skipped' &&
+        needs.attest-release-assets.result == 'skipped' && needs.stable-promotion.result == 'success'))
+    runs-on: ubuntu-24.04
+    needs:
+      - policy
+      - quality
+      - publish-images
+      - secure-images
+      - candidate-assets
+      - native-acceptance
+      - release-ready
+      - attest-release-assets
+      - stable-promotion
+    permissions:
+      actions: read
+      contents: write
+      packages: read
+    steps:
+      - name: Check out the final verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Redownload verified RC assets
+        if: needs.policy.outputs.channel == 'candidate'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: verified-release-assets
+          path: publication-assets
+
+      - name: Redownload byte-identical stable promotion assets
+        if: needs.policy.outputs.channel == 'stable'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: stable-promotion-assets
+          path: publication-assets
+
+      - name: Log in to GHCR for publication verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Reverify every asset immediately before publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ needs.stable-promotion.outputs.source-tag || github.ref_name }}
+        run: >-
+          platform/deploy/production/release/verify_release.sh
+          --assets publication-assets
+          --repository "$GITHUB_REPOSITORY"
+          --target-tag "$GITHUB_REF_NAME"
+          --source-tag "$SOURCE_TAG"
+          --target-commit "$GITHUB_SHA"
+
+      - name: Create or reconcile the immutable Release without clobbering
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          CHANNEL: ${{ needs.policy.outputs.channel }}
+        run: |
+          set -euo pipefail
+          mapfile -t desired < <(find publication-assets -maxdepth 1 -type f -print | LC_ALL=C sort)
+          [[ "${#desired[@]}" -eq 14 ]]
+
+          reconcile_release() {
+            local metadata existing_dir name path
+            metadata="$(gh release view "$TAG" --json tagName,isDraft,isPrerelease,assets)"
+            [[ "$(jq -r '.tagName' <<<"$metadata")" == "$TAG" ]]
+            if [[ "$CHANNEL" == candidate ]]; then
+              [[ "$(jq -r '.isPrerelease' <<<"$metadata")" == true ]]
+            else
+              [[ "$(jq -r '.isPrerelease' <<<"$metadata")" == false ]]
+            fi
+            existing_dir="$(mktemp -d)"
+            mapfile -t existing_names < <(jq -r '.assets[].name' <<<"$metadata" | LC_ALL=C sort)
+            for name in "${existing_names[@]}"; do
+              path="publication-assets/$name"
+              [[ -f "$path" ]]
+              gh release download "$TAG" --pattern "$name" --dir "$existing_dir"
+              cmp --silent "$path" "$existing_dir/$name"
+            done
+            for path in "${desired[@]}"; do
+              name="${path##*/}"
+              if ! printf '%s\n' "${existing_names[@]}" | grep -Fxq "$name"; then
+                if ! gh release upload "$TAG" "$path"; then
+                  metadata="$(gh release view "$TAG" --json assets)"
+                  jq -e --arg name "$name" '.assets | any(.name == $name)' <<<"$metadata" >/dev/null
+                  gh release download "$TAG" --pattern "$name" --dir "$existing_dir"
+                  cmp --silent "$path" "$existing_dir/$name"
+                fi
+              fi
+            done
+            rm -rf "$existing_dir"
+            metadata="$(gh release view "$TAG" --json isDraft,assets)"
+            [[ "$(jq '.assets | length' <<<"$metadata")" -eq "${#desired[@]}" ]]
+            if [[ "$(jq -r '.isDraft' <<<"$metadata")" == true ]]; then
+              gh release edit "$TAG" --draft=false
+            fi
+          }
+
+          prerelease=()
+          [[ "$CHANNEL" == candidate ]] && prerelease=(--prerelease)
+          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+            reconcile_release
+          elif ! gh release create "$TAG" "${desired[@]}" \
+            --verify-tag --title "Star Survey $TAG" --notes-file publication-assets/release-notes.md \
+            --latest=false "${prerelease[@]}"; then
+            reconcile_release
+          fi
+          reconcile_release
