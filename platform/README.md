@@ -8,7 +8,7 @@
 
 ## 1. 当前状态
 
-分支 `feat/admin-web-authoring` · 更新 2026-10-09
+`main` @ `4206f24a`（[PR #8](https://github.com/lsgoodlionel/star-survey/pull/8) 已合并）· 更新 2026-10-09
 
 | 阶段 | 状态 |
 |---|---|
@@ -31,6 +31,10 @@
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
+
+[GitHub Actions run 37861261899](https://github.com/lsgoodlionel/star-survey/actions/runs/37861261899)
+九组质量闸门全部通过，其中管理端真实浏览器纵向验收用时 **6m32s**。Node.js 20 运行时迁移和
+`setup-java@v4` 弃用提示属于非阻断维护项。
 
 **代码规模**（2026-10-09，可复现口径）：`platform/services/business/src/main/**/*.java` **558** 个，
 `platform/services/business/src/main/resources/db/migration/V*.sql` Flyway 迁移 **45** 个，
