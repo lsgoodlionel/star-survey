@@ -206,6 +206,149 @@ class PreviewGatewayTest(unittest.TestCase):
         self.assertIsNotNone(takeover)
         self.assertEqual("owner-b", takeover.operation_owner)
 
+    def test_close_returns_retryable_busy_without_spinning_for_live_prepare_or_activate(self):
+        for phase in ("preparing", "activating"):
+            with self.subTest(phase=phase):
+                clock = MovableClock()
+                operations = SpinGuardPreviewOperationStore(
+                    self.state_dir + "/{}-busy.sqlite3".format(phase), now=clock
+                )
+                service = make_service(self.engine, self.state_dir, clock=clock,
+                                       preview_operations=operations)
+                payload = self.payload()
+                operations.fail_after_import_once = True
+                self.assertEqual(503, self.send_with(service, "preview", payload)[0])
+                if phase == "activating":
+                    clock.advance(PreviewOperationStore.LEASE_SECONDS)
+                    self.assertEqual(200, self.send_with(service, "preview", payload)[0])
+                    operations.fail_after_activate_once = True
+                    self.assertEqual(503, self.send_with(
+                        service, "activate_preview", self.identity(payload)
+                    )[0])
+
+                started = time.process_time()
+                body = encode(self.identity(payload))
+                response = service.close_preview(signed_headers(body), body)
+
+                self.assertEqual(409, response.status)
+                self.assertEqual("preview_in_progress", json.loads(response.body)["error"])
+                self.assertGreaterEqual(int(response.headers["Retry-After"]), 1)
+                self.assertLess(time.process_time() - started, 0.1)
+                self.assertEqual(0, operations.follow_calls)
+
+    def test_expired_preparing_close_deletes_inactive_marker_without_orphan(self):
+        clock = MovableClock()
+        operations = PreviewOperationStore(self.state_dir + "/expired-prepare.sqlite3", now=clock)
+        service = make_service(self.engine, self.state_dir, clock=clock, preview_operations=operations)
+        payload = self.payload()
+        operations.fail_after_import_once = True
+        self.assertEqual(503, self.send_with(service, "preview", payload)[0])
+        sid = next(iter(self.engine.surveys))
+        clock.advance(PreviewOperationStore.LEASE_SECONDS)
+
+        closed = self.send_with(service, "close_preview", self.identity(payload))
+
+        self.assertEqual((200, {"status": "closed"}), closed)
+        self.assertEqual([sid], self.engine.deleted)
+        self.assertEqual({}, self.engine.surveys)
+
+    def test_expired_preparing_close_without_marker_cancels_without_engine_write(self):
+        clock = MovableClock()
+        operations = PreviewOperationStore(self.state_dir + "/expired-empty.sqlite3", now=clock)
+        service = make_service(self.engine, self.state_dir, clock=clock, preview_operations=operations)
+        payload = self.payload()
+        operations.fail_after_import_once = True
+        self.assertEqual(503, self.send_with(service, "preview", payload)[0])
+        self.engine.surveys.clear()
+        calls_before = len(self.engine.calls)
+        clock.advance(PreviewOperationStore.LEASE_SECONDS)
+
+        closed = self.send_with(service, "close_preview", self.identity(payload))
+
+        self.assertEqual((200, {"status": "closed"}), closed)
+        mutations = {"delete_survey", "set_survey_properties", "activate_survey", "add_participants"}
+        self.assertFalse(mutations.intersection(self.engine.methods()[calls_before:]))
+
+    def test_expired_prepared_cleanup_failure_is_durable_and_retryable(self):
+        clock = MovableClock()
+        operations = PreviewOperationStore(self.state_dir + "/cleanup-retry.sqlite3", now=clock)
+        service = make_service(self.engine, self.state_dir, clock=clock, preview_operations=operations)
+        payload = self.payload()
+        operations.fail_after_import_once = True
+        self.assertEqual(503, self.send_with(service, "preview", payload)[0])
+        clock.advance(PreviewOperationStore.LEASE_SECONDS)
+        self.engine.fail_delete = True
+
+        failed = self.send_with(service, "close_preview", self.identity(payload))
+        self.engine.fail_delete = False
+        retried = self.send_with(service, "close_preview", self.identity(payload))
+
+        self.assertEqual(502, failed[0])
+        self.assertEqual("cleanup_failed", failed[1]["status"])
+        self.assertEqual((200, {"status": "closed"}), retried)
+        self.assertEqual({}, self.engine.surveys)
+
+    def test_expired_activating_close_reconciles_participant_and_closes_active_marker(self):
+        clock = MovableClock()
+        operations = PreviewOperationStore(self.state_dir + "/expired-activate.sqlite3", now=clock)
+        service = make_service(self.engine, self.state_dir, clock=clock, preview_operations=operations)
+        payload = self.payload()
+        self.assertEqual(200, self.send_with(service, "preview", payload)[0])
+        operations.fail_after_activate_once = True
+        self.assertEqual(503, self.send_with(service, "activate_preview", self.identity(payload))[0])
+        sid = next(iter(self.engine.surveys))
+        clock.advance(PreviewOperationStore.LEASE_SECONDS)
+
+        closed = self.send_with(service, "close_preview", self.identity(payload))
+
+        self.assertEqual((200, {"status": "closed"}), closed)
+        self.assertEqual("Y", self.engine.surveys[sid]["active"])
+        self.assertIn("expires", self.engine.applied_settings[sid])
+        self.assertIn("get_participant_properties", self.engine.methods())
+
+    def test_close_fences_a_stalled_create_and_removes_its_late_import(self):
+        clock = MovableClock()
+        engine = BlockingPreviewEngine()
+        operations = PreviewOperationStore(self.state_dir + "/fenced-create.sqlite3", now=clock)
+        service = make_service(engine, self.state_dir, clock=clock, preview_operations=operations)
+        payload = self.payload()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            creating = pool.submit(self.send_with, service, "preview", payload)
+            self.assertTrue(engine.import_entered.wait(5))
+            clock.advance(PreviewOperationStore.LEASE_SECONDS)
+            closed = self.send_with(service, "close_preview", self.identity(payload))
+            engine.import_release.set()
+            create_result = creating.result(5)
+
+        self.assertEqual((200, {"status": "closed"}), closed)
+        self.assertEqual("closed", create_result[1]["status"])
+        self.assertEqual({}, engine.surveys)
+        self.assertEqual(1, engine.methods().count("import_survey"))
+        self.assertEqual(1, engine.methods().count("delete_survey"))
+
+    def test_close_fences_activation_before_participant_side_effects(self):
+        clock = MovableClock()
+        engine = ActiveThenBlockingPreviewEngine()
+        operations = PreviewOperationStore(self.state_dir + "/fenced-activate.sqlite3", now=clock)
+        service = make_service(engine, self.state_dir, clock=clock, preview_operations=operations)
+        payload = self.payload()
+        engine.import_release.set()
+        engine.close_release.set()
+        self.assertEqual(200, self.send_with(service, "preview", payload)[0])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            activating = pool.submit(self.send_with, service, "activate_preview", self.identity(payload))
+            self.assertTrue(engine.activate_entered.wait(5))
+            clock.advance(PreviewOperationStore.LEASE_SECONDS)
+            closed = self.send_with(service, "close_preview", self.identity(payload))
+            engine.activate_release.set()
+            activate_result = activating.result(5)
+
+        sid = next(iter(engine.surveys))
+        self.assertEqual((200, {"status": "closed"}), closed)
+        self.assertEqual("closed", activate_result[1]["status"])
+        self.assertIn("expires", engine.applied_settings[sid])
+        self.assertNotIn("add_participants", engine.methods())
+
     @staticmethod
     def send_with(service, method, payload):
         body = encode(payload)
@@ -244,6 +387,27 @@ class BlockingPreviewEngine(FakeEngine):
             if not self.close_release.wait(5):
                 raise AssertionError("close barrier was not released")
         return super()._set_survey_properties(key, sid, properties)
+
+
+class ActiveThenBlockingPreviewEngine(BlockingPreviewEngine):
+    def _activate_survey(self, key, sid):
+        result = FakeEngine._activate_survey(self, key, sid)
+        self.activate_entered.set()
+        if not self.activate_release.wait(5):
+            raise AssertionError("activate barrier was not released")
+        return result
+
+
+class SpinGuardPreviewOperationStore(PreviewOperationStore):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.follow_calls = 0
+
+    def follow(self, key, running):
+        self.follow_calls += 1
+        if self.follow_calls > 2:
+            raise AssertionError("close_preview busy-spun instead of returning a bounded response")
+        return super().follow(key, running)
 
 
 class PreviewHttpRouteTest(unittest.TestCase):

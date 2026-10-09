@@ -80,3 +80,26 @@
 - Java targeted suite passed: `PreviewSessionApiTest`, `PreviewEngineEventIsolationTest`, `ResponseProjectionTest`, `EngineOutboxTest`, and `EngineEventTenancyTest`, 31 tests total.
 - Existing database validation passed at V932 after upgrading from V931. A fresh PostgreSQL database applied all 49 migrations from an empty schema through V932; `PreviewSessionApiTest` then passed 10 tests.
 - Release/production files remain outside this change set.
+
+## Review Fix Round 3/5
+
+### Result
+
+- Addressed the stalled `preparing` / `activating` close Critical from `task-3-fix-review-2.md`.
+- Live prepare, activate or close ownership no longer enters an unbounded database loop. A close follower waits at most 250 ms for a close owner, then returns 409 `preview_in_progress` with `Retry-After` when work remains in flight.
+- Expired `preparing`, `activating` and `closing` operations can be atomically claimed by a close owner. The claim increments a durable SQLite `fence_version`; every later owner-qualified write and every mutating engine RPC verifies both owner and fence.
+- Close reconciliation compares durable SID with the tenant/session/request marker, inventories the engine SID, reads active state and the deterministic participant, then closes active previews, deletes inactive prepared previews, or cancels operations with no engine side effect.
+- A late import that was already inside the transport when close fenced its owner is compensating-deleted. Cleanup failure is persisted as `cleanup_failed` with its SID and is claimable by a later close retry.
+
+### TDD And Verification
+
+- RED reproduced the reviewer finding: expired `preparing` close stayed inside `follow(identity, "closing")` until the test process was interrupted; the stack showed repeated SQLite reads with no state progress.
+- Added movable-clock and spin-guard tests for live/expired preparing and activating states, active marker, inactive marker, no marker, cleanup retry, concurrent close/create and concurrent close/activate fencing.
+- Assertions cover bounded CPU/runtime, `Retry-After`, one import/activation path, no participant after fencing, inactive rollback, active expiry, durable cleanup retry and no remaining engine survey orphan.
+- Gateway targeted suite passed: preview, publish, drift, RPC allowlist and server tests, 92 tests total (85 previous plus 7 new).
+- Gateway full discovery ran 1,199 tests: 1,198 passed; the sole failure is the pre-existing executable-bit check for release/production file `platform/deploy/demo/init-platform-db.sh`. It is outside Task 3 scope and was not modified.
+- Java targeted suite passed unchanged: Preview API, preview event isolation, response projection, engine outbox and tenancy, 31 tests total.
+- A fresh PostgreSQL database applied all 49 migrations from an empty schema through V932 before the Java suite; no new Business migration was required because `fence_version` belongs to the Gateway's self-upgrading SQLite operation store.
+- Existing V932 database validation and `PreviewSessionApiTest` 10/10 also passed.
+- `PYTHONPYCACHEPREFIX=/tmp/preview-task3-pycache python3 -m compileall -q pubgw tests` and `git diff --check` passed.
+- Release/production files remain outside this change set.

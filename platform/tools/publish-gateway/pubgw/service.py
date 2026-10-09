@@ -30,6 +30,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -113,6 +114,28 @@ class _PreviewOperation:
     response_json: Optional[str]
     operation_owner: Optional[str]
     lease_until: Optional[float]
+    fence_version: int
+
+
+class PreviewFenceLost(Exception):
+    """A stale preview worker attempted a new engine mutation after ownership changed."""
+
+
+class _FencedTransport:
+    _MUTATIONS = frozenset({
+        "import_survey", "set_survey_properties", "activate_survey", "activate_tokens",
+        "add_participants", "delete_survey",
+    })
+
+    def __init__(self, transport: Transport, owns: Callable[[], bool]):
+        self._transport = transport
+        self._owns = owns
+
+    def __call__(self, payload: bytes) -> bytes:
+        method = json.loads(payload.decode("utf-8")).get("method")
+        if method in self._MUTATIONS and not self._owns():
+            raise PreviewFenceLost("preview operation ownership changed")
+        return self._transport(payload)
 
 
 class PreviewOperationStore:
@@ -120,6 +143,7 @@ class PreviewOperationStore:
 
     # Engine RPC transport permits 180 seconds; takeover starts only after a 30 second margin.
     LEASE_SECONDS = 210
+    CLOSE_FOLLOW_SECONDS = 0.25
 
     def __init__(self, path: str, now: Callable[[], float] = time.time,
                  sleep: Callable[[float], None] = time.sleep):
@@ -145,6 +169,7 @@ class PreviewOperationStore:
                     response_json TEXT,
                     operation_owner TEXT,
                     lease_until REAL,
+                    fence_version INTEGER NOT NULL DEFAULT 0,
                     updated_at INTEGER NOT NULL,
                     PRIMARY KEY (tenant_id, session_id, request_id)
                 )
@@ -154,6 +179,8 @@ class PreviewOperationStore:
                 db.execute("ALTER TABLE preview_operation ADD COLUMN operation_owner TEXT")
             if "lease_until" not in columns:
                 db.execute("ALTER TABLE preview_operation ADD COLUMN lease_until REAL")
+            if "fence_version" not in columns:
+                db.execute("ALTER TABLE preview_operation ADD COLUMN fence_version INTEGER NOT NULL DEFAULT 0")
 
     def _connect(self):
         db = sqlite3.connect(self._path, timeout=30)
@@ -164,7 +191,8 @@ class PreviewOperationStore:
         with self._connect() as db:
             row = db.execute("""
                 SELECT tenant_id, session_id, request_id, fingerprint, request_json, state,
-                       survey_id, invitation, preview_url, response_json, operation_owner, lease_until
+                       survey_id, invitation, preview_url, response_json, operation_owner, lease_until,
+                       fence_version
                   FROM preview_operation
                  WHERE tenant_id=? AND session_id=? AND request_id=?
             """, key).fetchone()
@@ -188,7 +216,8 @@ class PreviewOperationStore:
         with self._lock, self._connect() as db:
             changed = db.execute("""
                 UPDATE preview_operation
-                   SET state=?, operation_owner=?, lease_until=?, updated_at=?
+                   SET state=?, operation_owner=?, lease_until=?, fence_version=fence_version + 1,
+                       updated_at=?
                  WHERE tenant_id=? AND session_id=? AND request_id=?
                    AND (state IN ({}) OR (state=? AND COALESCE(lease_until, 0) <= ?))
             """.format(placeholders),
@@ -196,13 +225,33 @@ class PreviewOperationStore:
             ).rowcount
         return self.get(key) if changed == 1 else None
 
+    def claim_close(self, key: Tuple[str, str, str], owner: str) -> Optional[_PreviewOperation]:
+        now = self._now()
+        with self._lock, self._connect() as db:
+            changed = db.execute("""
+                UPDATE preview_operation
+                   SET state='closing', operation_owner=?, lease_until=?,
+                       fence_version=fence_version + 1, updated_at=?
+                 WHERE tenant_id=? AND session_id=? AND request_id=?
+                   AND (state IN ('creating', 'ready', 'prepared', 'failed', 'cleanup_failed')
+                        OR (state IN ('preparing', 'activating', 'closing')
+                            AND COALESCE(lease_until, 0) <= ?))
+            """, (owner, now + self.LEASE_SECONDS, int(now)) + key + (now,)).rowcount
+        return self.get(key) if changed == 1 else None
+
+    def owns(self, operation: _PreviewOperation, owner: str) -> bool:
+        current = self.get((operation.tenant_id, operation.session_id, operation.request_id))
+        return current is not None and current.operation_owner == owner \
+            and current.fence_version == operation.fence_version
+
     def progress(self, operation: _PreviewOperation, owner: str, survey_id: int) -> _PreviewOperation:
         key = (operation.tenant_id, operation.session_id, operation.request_id)
         with self._lock, self._connect() as db:
             db.execute("""
                 UPDATE preview_operation SET survey_id=?, updated_at=?
                  WHERE tenant_id=? AND session_id=? AND request_id=? AND operation_owner=?
-            """, (survey_id, int(self._now())) + key + (owner,))
+                   AND fence_version=?
+            """, (survey_id, int(self._now())) + key + (owner, operation.fence_version))
         return self.get(key)
 
     def settle(self, operation: _PreviewOperation, owner: str, state: str, survey_id=None,
@@ -216,7 +265,9 @@ class PreviewOperationStore:
                        preview_url=COALESCE(?, preview_url), response_json=COALESCE(?, response_json),
                        operation_owner=NULL, lease_until=NULL, updated_at=?
                  WHERE tenant_id=? AND session_id=? AND request_id=? AND operation_owner=?
-            """, (state, survey_id, invitation, preview_url, response_json, int(self._now())) + key + (owner,))
+                   AND fence_version=?
+            """, (state, survey_id, invitation, preview_url, response_json, int(self._now()))
+                + key + (owner, operation.fence_version))
         return self.get(key)
 
     def abandon(self, operation: _PreviewOperation, owner: str) -> None:
@@ -225,7 +276,20 @@ class PreviewOperationStore:
             db.execute("""
                 UPDATE preview_operation SET lease_until=0, updated_at=?
                  WHERE tenant_id=? AND session_id=? AND request_id=? AND operation_owner=?
-            """, (int(self._now()),) + key + (owner,))
+                   AND fence_version=?
+            """, (int(self._now()),) + key + (owner, operation.fence_version))
+
+    def late_cleanup_failed(self, operation: _PreviewOperation, survey_id: int, detail: str) -> None:
+        key = (operation.tenant_id, operation.session_id, operation.request_id)
+        response = json.dumps({"status": "cleanup_failed", "error": "engine_error", "detail": detail},
+                              sort_keys=True, ensure_ascii=False)
+        with self._lock, self._connect() as db:
+            db.execute("""
+                UPDATE preview_operation
+                   SET state='cleanup_failed', survey_id=?, response_json=?, updated_at=?
+                 WHERE tenant_id=? AND session_id=? AND request_id=?
+                   AND state='closed' AND operation_owner IS NULL
+            """, (survey_id, response, int(self._now())) + key)
 
     def follow(self, key: Tuple[str, str, str], running: str) -> _PreviewOperation:
         deadline = time.monotonic() + self.LEASE_SECONDS + 5
@@ -235,6 +299,14 @@ class PreviewOperationStore:
                 return operation
             self._sleep(0.01)
         return self.get(key)
+
+    def follow_close(self, key: Tuple[str, str, str]) -> _PreviewOperation:
+        deadline = time.monotonic() + self.CLOSE_FOLLOW_SECONDS
+        operation = self.get(key)
+        while operation.state == "closing" and time.monotonic() < deadline:
+            self._sleep(0.01)
+            operation = self.get(key)
+        return operation
 
 
 class LazyLoginClient(RemoteControlClient):
@@ -343,35 +415,18 @@ class PublishService:
         operation = self._preview_operations.get(identity)
         if operation is None:
             return self._json(404, {"error": "not_found"})
-        while True:
-            if operation.state == "closed":
-                return self._operation_response(operation)
-            owner = str(uuid.uuid4())
-            claimed = self._preview_operations.claim(
-                identity, ("ready", "prepared", "failed"), "closing", owner
-            )
-            if claimed is not None:
-                operation = claimed
-                break
-            operation = self._preview_operations.follow(identity, "closing")
-        request = _request_from_operation(operation)
-        engine = self._engines.get(request.engine_instance_id)
-        if engine is None or operation.survey_id is None:
-            operation = self._preview_operations.settle(
-                operation, owner, "closed", response={"status": "closed"}
-            )
+        if operation.state == "closed":
             return self._operation_response(operation)
-        response = self._with_engine(
-            engine, request.request_id, "close preview sid={}".format(operation.survey_id),
-            lambda client: self._close(client, operation.survey_id),
-        )
-        if response.status == 200:
-            operation = self._preview_operations.settle(
-                operation, owner, "closed", response={"status": "closed"}
-            )
-            return self._operation_response(operation)
-        self._preview_operations.abandon(operation, owner)
-        return response
+        owner = str(uuid.uuid4())
+        claimed = self._preview_operations.claim_close(identity, owner)
+        if claimed is None:
+            current = self._preview_operations.get(identity)
+            if current is not None and current.state == "closing":
+                current = self._preview_operations.follow_close(identity)
+            if current is not None and current.state == "closed":
+                return self._operation_response(current)
+            return self._preview_busy(current or operation)
+        return self._close_claimed_preview(claimed, owner)
 
     def preview_access(self, query: Mapping[str, List[str]]) -> Response:
         required = {"tenant", "session", "request", "sid", "expires", "sig"}
@@ -533,6 +588,89 @@ class PublishService:
         log.info("closed sid=%s (expires=%s, alreadyClosed=%s)", survey_id, result.expires, result.already_closed)
         return self._json(200, {"status": "closed", "result": result.to_dict()})
 
+    def _preview_client(self, engine: EngineConfig, operation: _PreviewOperation,
+                        owner: str) -> LazyLoginClient:
+        transport = _FencedTransport(
+            self._transport_factory(engine),
+            lambda: self._preview_operations.owns(operation, owner),
+        )
+        return LazyLoginClient(transport, engine.user, engine.password)
+
+    def _preview_busy(self, operation: _PreviewOperation) -> Response:
+        remaining = max(1, math.ceil((operation.lease_until or self._now() + 1) - self._now()))
+        return Response(
+            409,
+            self._json(409, {
+                "status": "busy", "error": "preview_in_progress", "operationState": operation.state,
+            }).body,
+            {"Retry-After": str(min(remaining, PreviewOperationStore.LEASE_SECONDS))},
+        )
+
+    def _close_claimed_preview(self, operation: _PreviewOperation, owner: str) -> Response:
+        request = _request_from_operation(operation)
+        engine = self._engines.get(request.engine_instance_id)
+        if engine is None:
+            return self._preview_cleanup_failed(operation, owner, "unknown_engine_instance")
+        client = self._preview_client(engine, operation, owner)
+        try:
+            rows = client.list_surveys()
+            marker = _preview_marker(request)
+            marker_ids = [int(row["sid"]) for row in rows
+                          if str(row.get("surveyls_title") or row.get("title") or "") == marker]
+            if len(marker_ids) > 1:
+                raise RpcError("list_surveys", "multiple surveys share preview marker")
+            marker_sid = marker_ids[0] if marker_ids else None
+            if operation.survey_id is not None and marker_sid is not None \
+                    and operation.survey_id != marker_sid:
+                raise RpcError("list_surveys", "durable SID does not match preview marker")
+            survey_id = operation.survey_id or marker_sid
+            visible_ids = {int(row["sid"]) for row in rows}
+            if survey_id is None or survey_id not in visible_ids:
+                operation = self._preview_operations.settle(
+                    operation, owner, "closed", response={"status": "closed"}
+                )
+                return self._operation_response(operation)
+            operation = self._preview_operations.progress(operation, owner, survey_id)
+            if not self._preview_operations.owns(operation, owner):
+                return self._preview_busy(operation)
+            active = str(client.get_survey_properties(survey_id).get("active", "N")) == "Y"
+            if active:
+                participant_email = "preview-{}@invalid.local".format(request.session_id)
+                try:
+                    client.get_participant_properties(survey_id, {"email": participant_email}, ["token"])
+                except RpcError:
+                    pass
+                self._close(client, survey_id)
+            else:
+                client.delete_survey(survey_id)
+            operation = self._preview_operations.settle(
+                operation, owner, "closed", response={"status": "closed"}
+            )
+            return self._operation_response(operation)
+        except PreviewFenceLost:
+            current = self._preview_operations.get(
+                (operation.tenant_id, operation.session_id, operation.request_id)
+            )
+            return self._operation_response(current) if current.state == "closed" else self._preview_busy(current)
+        except (CloseError, RpcError) as error:
+            return self._preview_cleanup_failed(operation, owner, self._redact(str(error)))
+        except Exception as error:  # noqa: BLE001 - persist a retryable cleanup state before hiding details
+            log.exception("preview close reconciliation failed for %s", request.request_id)
+            return self._preview_cleanup_failed(operation, owner, self._redact(str(error)))
+        finally:
+            _logout(client, request.request_id)
+
+    def _preview_cleanup_failed(self, operation: _PreviewOperation, owner: str, detail: str) -> Response:
+        payload = {"status": "cleanup_failed", "error": "engine_error", "detail": detail}
+        operation = self._preview_operations.settle(
+            operation, owner, "cleanup_failed", response=payload
+        )
+        if operation.state == "cleanup_failed":
+            return self._json(502, payload)
+        if operation.state == "closed":
+            return self._operation_response(operation)
+        return self._preview_busy(operation)
+
     # ------------------------------------------------------------ 流程
 
     def _publish(self, request: PublishRequest) -> Response:
@@ -599,7 +737,7 @@ class PublishService:
 
     def _prepare_preview(self, operation: _PreviewOperation, owner: str, request: _PreviewRequest,
                          engine: EngineConfig, definition: SurveyDefinition) -> Response:
-        client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
+        client = self._preview_client(engine, operation, owner)
         try:
             publisher = Publisher(client, engine_instance=engine.instance_id,
                                   policy_probe=self._policy_probe_factory(engine))
@@ -617,6 +755,11 @@ class PublishService:
                 if self._preview_operations.fail_after_import_once:
                     self._preview_operations.fail_after_import_once = False
                     return self._json(503, {"status": "creating", "error": "result_unknown"})
+            if not self._preview_operations.owns(operation, owner):
+                self._delete_late_preview(engine, operation, result.survey_id)
+                return self._operation_response(self._preview_operations.get(
+                    (operation.tenant_id, operation.session_id, operation.request_id)
+                ))
             operation = self._preview_operations.progress(operation, owner, result.survey_id)
             if publisher._stage_apply(definition, compiled, result) is None:
                 payload = {"status": "failed", "result": result.to_dict()}
@@ -625,6 +768,10 @@ class PublishService:
             payload = {"status": "prepared", "result": _preview_result(operation, request)}
             operation = self._preview_operations.settle(operation, owner, "prepared", response=payload)
             return self._operation_response(operation)
+        except PreviewFenceLost:
+            return self._operation_response(self._preview_operations.get(
+                (operation.tenant_id, operation.session_id, operation.request_id)
+            ))
         except RpcError as error:
             log.warning("preview prepare result unknown for %s: %s", request.request_id, self._redact(str(error)))
             self._preview_operations.abandon(operation, owner)
@@ -635,6 +782,18 @@ class PublishService:
             return self._json(503, {"status": "creating", "error": "result_unknown"})
         finally:
             _logout(client, request.request_id)
+
+    def _delete_late_preview(self, engine: EngineConfig, operation: _PreviewOperation,
+                             survey_id: int) -> None:
+        client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
+        try:
+            client.delete_survey(survey_id)
+        except RpcError as error:
+            self._preview_operations.late_cleanup_failed(
+                operation, survey_id, self._redact(str(error))
+            )
+        finally:
+            _logout(client, operation.request_id)
 
     def _activate_preview(self, identity: Tuple[str, str, str]) -> Response:
         operation = self._preview_operations.get(identity)
@@ -658,7 +817,7 @@ class PublishService:
         engine = self._engines.get(request.engine_instance_id)
         if engine is None:
             return self._json(404, {"error": "unknown_engine_instance"})
-        client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
+        client = self._preview_client(engine, operation, owner)
         try:
             preview_definition = dict(request.definition)
             participant_email = "preview-{}@invalid.local".format(request.session_id)
@@ -709,6 +868,8 @@ class PublishService:
             operation = self._preview_operations.settle(operation, owner, "ready", invitation=invitation,
                                                         preview_url=url, response=payload)
             return self._operation_response(operation)
+        except PreviewFenceLost:
+            return self._operation_response(self._preview_operations.get(identity))
         except (RpcError, DefinitionError) as error:
             log.warning("preview activation result unknown for %s: %s", request.request_id,
                         self._redact(str(error)))

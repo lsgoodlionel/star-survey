@@ -189,6 +189,13 @@
 lease 未到期的 DELETE 或 sweeper 不得夺取 owner。即使平台因超时稍后重试，Gateway 的 210 秒 durable lease
 仍保证同一 close 只有一个引擎副作用调用，follower 重放最终 `closed` 回执。
 
+若 operation 仍在未过期的 `preparing`、`activating` 或 `closing`，close 最多有限等待当前 close owner；
+未完成时返回 409 `preview_in_progress`，并带 `Retry-After`，不得轮询数据库忙等。lease 到期后 close owner
+以原子 CAS 把 operation 转成 `closing` 并递增 fence version：旧 prepare/activate owner 此后不得再提交引擎写操作
+或持久化结果。close owner 先对账 durable SID、导入 marker、active 状态和确定性 participant；active SID
+写入过期时间，inactive SID 用 `delete_survey` 回滚，无 SID/marker 则取消 operation。对账或清理失败持久化为
+`cleanup_failed`，相同 identity 的后续 close 可重新 claim 并继续清理。
+
 ## `GET /healthz`
 
 无需认证，200 `{"status":"ok"}`。不暴露实例列表或任何配置。
