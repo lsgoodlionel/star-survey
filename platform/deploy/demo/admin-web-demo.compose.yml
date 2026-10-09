@@ -2,7 +2,7 @@ services:
   engine-db:
     image: mariadb:10.11
     environment:
-      MARIADB_ROOT_PASSWORD: root
+      MARIADB_ROOT_PASSWORD: ${ENGINE_DB_ROOT_PASSWORD:?set ENGINE_DB_ROOT_PASSWORD}
       MARIADB_DATABASE: limesurvey
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     volumes:
@@ -33,6 +33,10 @@ services:
       MJY_ENGINE_INSTANCE_ID: admin-web-demo-engine-01
       MJY_PLATFORM_EVENTS_URL: http://platform:8080/internal/engine-events
       MJY_PLATFORM_EVENTS_SECRET:
+      ENGINE_DB_ROOT_PASSWORD: ${ENGINE_DB_ROOT_PASSWORD:?set ENGINE_DB_ROOT_PASSWORD}
+      DEMO_ENGINE_ADMIN_USER: ${DEMO_ENGINE_ADMIN_USER:?set DEMO_ENGINE_ADMIN_USER}
+      DEMO_ENGINE_ADMIN_PASSWORD: ${DEMO_ENGINE_ADMIN_PASSWORD:?set DEMO_ENGINE_ADMIN_PASSWORD}
+      YII_CONSOLE_COMMANDS: /var/www/html/platform/deploy/demo/commands
     depends_on:
       engine-db:
         condition: service_healthy
@@ -41,11 +45,13 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${PLATFORM_DB_SUPERUSER_PASSWORD:?set PLATFORM_DB_SUPERUSER_PASSWORD}
       POSTGRES_DB: postgres
+      PLATFORM_DB_APP_PASSWORD: ${PLATFORM_DB_APP_PASSWORD:?set PLATFORM_DB_APP_PASSWORD}
+      PLATFORM_DB_OWNER_PASSWORD: ${PLATFORM_DB_OWNER_PASSWORD:?set PLATFORM_DB_OWNER_PASSWORD}
     volumes:
       - platform-data:/var/lib/postgresql/data
-      - ../platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro
+      - ./init-platform-db.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d platform"]
       interval: 2s
@@ -62,9 +68,9 @@ services:
     environment:
       PLATFORM_DB_URL: jdbc:postgresql://platform-db:5432/platform
       PLATFORM_DB_APP_USER: platform_app
-      PLATFORM_DB_APP_PASSWORD: platform_app
+      PLATFORM_DB_APP_PASSWORD: ${PLATFORM_DB_APP_PASSWORD:?set PLATFORM_DB_APP_PASSWORD}
       PLATFORM_DB_OWNER_USER: platform_owner
-      PLATFORM_DB_OWNER_PASSWORD: platform_owner
+      PLATFORM_DB_OWNER_PASSWORD: ${PLATFORM_DB_OWNER_PASSWORD:?set PLATFORM_DB_OWNER_PASSWORD}
       PLATFORM_JWT_HMAC_SECRET:
       PLATFORM_ENGINE_EVENTS_SECRET:
       PLATFORM_PUBGW_SECRET: ${PUBGW_SHARED_SECRET}

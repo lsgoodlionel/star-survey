@@ -41,32 +41,120 @@ run_quiet() {
   umask 077
   mkdir -p "$RUNTIME_DIR"
   local log="$RUNTIME_DIR/lifecycle.log"
+  local capture
   : >"$log"
   chmod 600 "$log"
-  if ! "$@" >"$log" 2>&1; then
-    fail "lifecycle command failed; details are in the private runtime log"
+  capture="$(mktemp "$RUNTIME_DIR/.lifecycle-output.XXXXXX")"
+  if ! "$@" >"$capture" 2>&1; then
+    printf '%s failed; command output was discarded\n' "${RUN_QUIET_LABEL:-lifecycle command}" >"$log"
+    rm -f "$capture"
+    fail "${RUN_QUIET_LABEL:-lifecycle command} failed; output was discarded to protect credentials"
   fi
+  rm -f "$capture"
+}
+
+parse_runtime_env() {
+  local line key value seen='|'
+  PLATFORM_JWT_HMAC_SECRET=''
+  PLATFORM_ENGINE_EVENTS_SECRET=''
+  PUBGW_SHARED_SECRET=''
+  DEMO_ENGINE_ADMIN_USER=''
+  DEMO_ENGINE_ADMIN_PASSWORD=''
+  ENGINE_DB_ROOT_PASSWORD=''
+  PLATFORM_DB_SUPERUSER_PASSWORD=''
+  PLATFORM_DB_APP_PASSWORD=''
+  PLATFORM_DB_OWNER_PASSWORD=''
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^([A-Z0-9_]+)=([A-Za-z0-9_-]+)$ ]] || fail "runtime.env contains an invalid key=value line"
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    case "$key" in
+      PLATFORM_JWT_HMAC_SECRET|PLATFORM_ENGINE_EVENTS_SECRET|PUBGW_SHARED_SECRET|DEMO_ENGINE_ADMIN_USER|DEMO_ENGINE_ADMIN_PASSWORD|ENGINE_DB_ROOT_PASSWORD|PLATFORM_DB_SUPERUSER_PASSWORD|PLATFORM_DB_APP_PASSWORD|PLATFORM_DB_OWNER_PASSWORD) ;;
+      *) fail "runtime.env contains an unknown key" ;;
+    esac
+    [[ "$seen" != *"|$key|"* ]] || fail "runtime.env contains a duplicate key"
+    seen+="$key|"
+    printf -v "$key" '%s' "$value"
+  done <"$RUNTIME_ENV"
+}
+
+validate_base_runtime_env() {
+  [[ ${#PLATFORM_JWT_HMAC_SECRET} -ge 32 ]] || fail "runtime.env is missing a valid JWT secret"
+  [[ ${#PLATFORM_ENGINE_EVENTS_SECRET} -ge 32 ]] || fail "runtime.env is missing a valid engine event secret"
+  [[ ${#PUBGW_SHARED_SECRET} -ge 32 ]] || fail "runtime.env is missing a valid gateway secret"
+  [[ ${#DEMO_ENGINE_ADMIN_PASSWORD} -ge 32 ]] || fail "runtime.env is missing a valid engine password"
+  [[ "$DEMO_ENGINE_ADMIN_USER" =~ ^[a-z][a-z0-9_-]{1,39}$ ]] || fail "runtime.env contains an invalid engine username"
+}
+
+validate_runtime_env() {
+  validate_base_runtime_env
+  [[ ${#ENGINE_DB_ROOT_PASSWORD} -ge 32 ]] || fail "runtime.env is missing a valid engine database password"
+  [[ ${#PLATFORM_DB_SUPERUSER_PASSWORD} -ge 32 ]] || fail "runtime.env is missing a valid database bootstrap password"
+  [[ ${#PLATFORM_DB_APP_PASSWORD} -ge 32 ]] || fail "runtime.env is missing a valid application database password"
+  [[ ${#PLATFORM_DB_OWNER_PASSWORD} -ge 32 ]] || fail "runtime.env is missing a valid owner database password"
+  export PLATFORM_JWT_HMAC_SECRET PLATFORM_ENGINE_EVENTS_SECRET PUBGW_SHARED_SECRET
+  export DEMO_ENGINE_ADMIN_USER DEMO_ENGINE_ADMIN_PASSWORD ENGINE_DB_ROOT_PASSWORD
+  export PLATFORM_DB_SUPERUSER_PASSWORD PLATFORM_DB_APP_PASSWORD PLATFORM_DB_OWNER_PASSWORD
+}
+
+load_runtime_env() {
+  parse_runtime_env
+  validate_runtime_env
+}
+
+upgrade_runtime_env() {
+  if [[ -n "$ENGINE_DB_ROOT_PASSWORD" && -n "$PLATFORM_DB_SUPERUSER_PASSWORD" \
+      && -n "$PLATFORM_DB_APP_PASSWORD" && -n "$PLATFORM_DB_OWNER_PASSWORD" ]]; then
+    return 0
+  fi
+  local temporary="$RUNTIME_DIR/.runtime.env.$$"
+  [[ -z "$ENGINE_DB_ROOT_PASSWORD" ]] && ENGINE_DB_ROOT_PASSWORD="$(random_secret)"
+  [[ -z "$PLATFORM_DB_SUPERUSER_PASSWORD" ]] && PLATFORM_DB_SUPERUSER_PASSWORD="$(random_secret)"
+  [[ -z "$PLATFORM_DB_APP_PASSWORD" ]] && PLATFORM_DB_APP_PASSWORD="$(random_secret)"
+  [[ -z "$PLATFORM_DB_OWNER_PASSWORD" ]] && PLATFORM_DB_OWNER_PASSWORD="$(random_secret)"
+  {
+    printf 'PLATFORM_JWT_HMAC_SECRET=%s\n' "$PLATFORM_JWT_HMAC_SECRET"
+    printf 'PLATFORM_ENGINE_EVENTS_SECRET=%s\n' "$PLATFORM_ENGINE_EVENTS_SECRET"
+    printf 'PUBGW_SHARED_SECRET=%s\n' "$PUBGW_SHARED_SECRET"
+    printf 'DEMO_ENGINE_ADMIN_USER=%s\n' "$DEMO_ENGINE_ADMIN_USER"
+    printf 'DEMO_ENGINE_ADMIN_PASSWORD=%s\n' "$DEMO_ENGINE_ADMIN_PASSWORD"
+    printf 'ENGINE_DB_ROOT_PASSWORD=%s\n' "$ENGINE_DB_ROOT_PASSWORD"
+    printf 'PLATFORM_DB_SUPERUSER_PASSWORD=%s\n' "$PLATFORM_DB_SUPERUSER_PASSWORD"
+    printf 'PLATFORM_DB_APP_PASSWORD=%s\n' "$PLATFORM_DB_APP_PASSWORD"
+    printf 'PLATFORM_DB_OWNER_PASSWORD=%s\n' "$PLATFORM_DB_OWNER_PASSWORD"
+  } >"$temporary"
+  chmod 600 "$temporary"
+  mv "$temporary" "$RUNTIME_ENV"
 }
 
 ensure_runtime() {
   umask 077
-  mkdir -p "$RUNTIME_DIR"
-  chmod 700 "$RUNTIME_DIR"
-  if [[ ! -f "$RUNTIME_ENV" ]]; then
+  if [[ -f "$RUNTIME_ENV" ]]; then
+    require_private "$RUNTIME_ENV"
+    parse_runtime_env
+    validate_base_runtime_env
+    upgrade_runtime_env
+    validate_runtime_env
+  else
+    mkdir -p "$RUNTIME_DIR"
+    chmod 700 "$RUNTIME_DIR"
+    local temporary="$RUNTIME_DIR/.runtime.env.$$"
     {
       printf 'PLATFORM_JWT_HMAC_SECRET=%s\n' "$(random_secret)"
       printf 'PLATFORM_ENGINE_EVENTS_SECRET=%s\n' "$(random_secret)"
       printf 'PUBGW_SHARED_SECRET=%s\n' "$(random_secret)"
       printf 'DEMO_ENGINE_ADMIN_USER=admin\n'
       printf 'DEMO_ENGINE_ADMIN_PASSWORD=%s\n' "$(random_secret)"
-    } >"$RUNTIME_ENV"
-    chmod 600 "$RUNTIME_ENV"
+      printf 'ENGINE_DB_ROOT_PASSWORD=%s\n' "$(random_secret)"
+      printf 'PLATFORM_DB_SUPERUSER_PASSWORD=%s\n' "$(random_secret)"
+      printf 'PLATFORM_DB_APP_PASSWORD=%s\n' "$(random_secret)"
+      printf 'PLATFORM_DB_OWNER_PASSWORD=%s\n' "$(random_secret)"
+    } >"$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$RUNTIME_ENV"
+    load_runtime_env
   fi
-  require_private "$RUNTIME_ENV"
-  # shellcheck disable=SC1090
-  source "$RUNTIME_ENV"
-  export PLATFORM_JWT_HMAC_SECRET PLATFORM_ENGINE_EVENTS_SECRET PUBGW_SHARED_SECRET
-  export DEMO_ENGINE_ADMIN_USER DEMO_ENGINE_ADMIN_PASSWORD
+  chmod 700 "$RUNTIME_DIR"
   export PUBGW_ENGINE_ADMIN_WEB_PASSWORD="$DEMO_ENGINE_ADMIN_PASSWORD"
   export ADMIN_WEB_DEMO_PLATFORM_JAR="$PLATFORM_JAR"
   export ADMIN_WEB_DEMO_ENGINES_FILE="$ENGINES_FILE"
@@ -129,6 +217,49 @@ wait_container_healthy() {
   fail "$service database did not become healthy"
 }
 
+sync_database_credentials() {
+  local engine_db_id platform_db_id
+  engine_db_id="$("${COMPOSE[@]}" ps -q engine-db)"
+  platform_db_id="$("${COMPOSE[@]}" ps -q platform-db)"
+  [[ -n "$engine_db_id" && -n "$platform_db_id" ]] || fail "demo databases are absent"
+  run_quiet docker exec -e ENGINE_DB_ROOT_PASSWORD "$engine_db_id" sh -c '
+    MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot <<SQL
+ALTER USER '\''root'\''@'\''localhost'\'' IDENTIFIED BY '\''$ENGINE_DB_ROOT_PASSWORD'\'';
+CREATE USER IF NOT EXISTS '\''root'\''@'\''%'\'' IDENTIFIED BY '\''$ENGINE_DB_ROOT_PASSWORD'\'';
+ALTER USER '\''root'\''@'\''%'\'' IDENTIFIED BY '\''$ENGINE_DB_ROOT_PASSWORD'\'';
+GRANT ALL PRIVILEGES ON *.* TO '\''root'\''@'\''%'\'' WITH GRANT OPTION;
+SQL
+  '
+  run_quiet docker exec -e PLATFORM_DB_SUPERUSER_PASSWORD -e PLATFORM_DB_APP_PASSWORD \
+    -e PLATFORM_DB_OWNER_PASSWORD "$platform_db_id" sh -c '
+    psql --set=ON_ERROR_STOP=1 --username postgres --dbname postgres <<'\''SQL'\''
+\getenv superuser_password PLATFORM_DB_SUPERUSER_PASSWORD
+\getenv app_password PLATFORM_DB_APP_PASSWORD
+\getenv owner_password PLATFORM_DB_OWNER_PASSWORD
+SELECT format('\''ALTER ROLE postgres PASSWORD %L'\'', :'\''superuser_password'\'')
+\gexec
+SELECT format('\''ALTER ROLE platform_app PASSWORD %L'\'', :'\''app_password'\'')
+\gexec
+SELECT format('\''ALTER ROLE platform_owner PASSWORD %L'\'', :'\''owner_password'\'')
+\gexec
+SQL
+  '
+}
+
+prepare_existing_database_credentials() {
+  local engine_db_id platform_db_id
+  engine_db_id="$("${COMPOSE[@]}" ps -aq engine-db)"
+  platform_db_id="$("${COMPOSE[@]}" ps -aq platform-db)"
+  if [[ -z "$engine_db_id" && -z "$platform_db_id" ]]; then
+    return 0
+  fi
+  [[ -n "$engine_db_id" && -n "$platform_db_id" ]] || fail "demo database state is incomplete"
+  run_quiet docker start "$engine_db_id" "$platform_db_id"
+  wait_container_healthy platform-db
+  wait_container_healthy engine-db
+  sync_database_credentials
+}
+
 build_platform() {
   if [[ -f "$PLATFORM_JAR" ]]; then
     return 0
@@ -153,14 +284,15 @@ install_engine() {
   db_id="$("${COMPOSE[@]}" ps -q engine-db)"
   docker exec "$engine_id" sh -c \
     'mkdir -p application/runtime tmp/runtime tmp/assets tmp/upload && chmod -R 777 application/runtime tmp'
-  installed="$(docker exec "$db_id" mariadb -uroot -proot -N -e \
+  export MYSQL_PWD="$ENGINE_DB_ROOT_PASSWORD"
+  installed="$(docker exec -e MYSQL_PWD "$db_id" mariadb -uroot -N -e \
     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='limesurvey' AND table_name='lime_users'")"
   if [[ "$installed" == "0" ]]; then
-    run_quiet docker exec "$engine_id" php application/commands/console.php install \
-      "$DEMO_ENGINE_ADMIN_USER" "$DEMO_ENGINE_ADMIN_PASSWORD" "Admin Web Demo" "demo-admin@example.invalid"
+    run_quiet docker exec "$engine_id" php application/commands/console.php installDemo
   fi
-  run_quiet docker exec "$db_id" mariadb -uroot -proot limesurvey -e \
+  run_quiet docker exec -e MYSQL_PWD "$db_id" mariadb -uroot limesurvey -e \
     "DELETE FROM lime_settings_global WHERE stg_name='RPCInterface'; INSERT INTO lime_settings_global (stg_name, stg_value) VALUES ('RPCInterface', 'json');"
+  unset MYSQL_PWD
   run_quiet docker exec "$engine_id" php platform/tools/engine-theme/install-survey-theme.php zh-business
   run_quiet docker exec "$engine_id" php platform/tests/e2e/install_question_themes.php mjy-collapsible
   docker exec "$engine_id" rm -rf tmp/runtime/cache
@@ -170,8 +302,10 @@ enable_bridge() {
   local engine_id db_id
   engine_id="$("${COMPOSE[@]}" ps -q engine)"
   db_id="$("${COMPOSE[@]}" ps -q engine-db)"
-  run_quiet docker exec "$db_id" mariadb -uroot -proot limesurvey -e \
+  export MYSQL_PWD="$ENGINE_DB_ROOT_PASSWORD"
+  run_quiet docker exec -e MYSQL_PWD "$db_id" mariadb -uroot limesurvey -e \
     "DELETE FROM lime_plugins WHERE name='MjyPlatformBridge'; INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error) VALUES ('MjyPlatformBridge', 'user', 1, 0, '0.1.0', 0);"
+  unset MYSQL_PWD
   docker exec "$engine_id" rm -rf tmp/runtime/cache
 }
 
@@ -180,9 +314,12 @@ start_demo() {
   ensure_runtime
   build_platform
   build_engine_if_missing
-  run_quiet "${COMPOSE[@]}" up -d platform-db platform engine-db engine
+  prepare_existing_database_credentials
+  run_quiet "${COMPOSE[@]}" up -d platform-db engine-db
   wait_container_healthy platform-db
   wait_container_healthy engine-db
+  sync_database_credentials
+  run_quiet "${COMPOSE[@]}" up -d platform engine
   platform_url="$(service_url platform 8080)"
   engine_url="$(service_url engine 80)"
   wait_url platform "$platform_url/actuator/health"
@@ -251,39 +388,38 @@ refresh_token() {
 
 stop_demo() {
   local purge="${1:-}"
-  ensure_runtime
   if [[ "$purge" == "--purge" ]]; then
     [[ -t 0 ]] || fail "--purge requires interactive confirmation"
     local confirmation
     read -r -p "Type PURGE adminweb-demo to delete demo volumes: " confirmation
     [[ "$confirmation" == "PURGE adminweb-demo" ]] || fail "purge cancelled"
+    ensure_runtime
     run_quiet "${COMPOSE[@]}" down -v --remove-orphans
     return 0
   fi
   [[ -z "$purge" ]] || fail "usage: $0 stop [--purge]"
+  ensure_runtime
   run_quiet "${COMPOSE[@]}" down --remove-orphans
 }
 
 main() {
   case "${1:-}" in
+    start|status|refresh-token) [[ $# == 1 ]] || fail "usage: $0 start|status|refresh-token" ;;
+    stop) [[ $# == 1 || ( $# == 2 && "$2" == "--purge" ) ]] || fail "usage: $0 stop [--purge]" ;;
+    *) fail "usage: $0 start|stop [--purge]|status|refresh-token" ;;
+  esac
+  case "${1:-}" in
     start)
-      [[ $# == 1 ]] || fail "usage: $0 start"
       start_demo
       ;;
     stop)
-      [[ $# -le 2 ]] || fail "usage: $0 stop [--purge]"
       stop_demo "${2:-}"
       ;;
     status)
-      [[ $# == 1 ]] || fail "usage: $0 status"
       status_demo
       ;;
     refresh-token)
-      [[ $# == 1 ]] || fail "usage: $0 refresh-token"
       refresh_token
-      ;;
-    *)
-      fail "usage: $0 start|stop [--purge]|status|refresh-token"
       ;;
   esac
 }

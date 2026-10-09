@@ -31,7 +31,7 @@ return array(
             'connectionString' => 'mysql:host=test-db;port=3306;dbname=limesurvey;',
             'emulatePrepare' => true,
             'username' => 'root',
-            'password' => 'root',
+            'password' => (string) getenv('ENGINE_DB_ROOT_PASSWORD'),
             'charset' => 'utf8mb4',
             'tablePrefix' => 'lime_',
         ),
