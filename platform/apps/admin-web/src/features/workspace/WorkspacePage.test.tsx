@@ -48,7 +48,10 @@ vi.mock('../auth/AuthProvider', async () => {
 
 const projectA = resource('10000000-0000-4000-8000-000000000001', 'project', null, '项目甲');
 const projectB = resource('10000000-0000-4000-8000-000000000002', 'project', null, '项目乙');
+const projectC = resource('10000000-0000-4000-8000-000000000003', 'project', null, '项目丙');
 const folderA = resource('20000000-0000-4000-8000-000000000001', 'folder', projectA.id, '调研资料');
+const folderB = resource('20000000-0000-4000-8000-000000000002', 'folder', projectC.id, '目标文件夹');
+const nestedFolder = resource('20000000-0000-4000-8000-000000000003', 'folder', folderB.id, '嵌套目标');
 const surveyA = resource('30000000-0000-4000-8000-000000000001', 'survey', projectA.id, '客户反馈');
 const surveyB = resource('30000000-0000-4000-8000-000000000002', 'survey', projectB.id, '员工体验');
 
@@ -349,7 +352,120 @@ test('usesCapabilitiesToHideCreateAndResourceActionsRegardlessOfTokenRoles', asy
   expect(screen.queryByRole('button', { name: '归档' })).not.toBeInTheDocument();
 });
 
-test('renamesAndMovesAResourceThenRefreshesAffectedTenantBranches', async () => {
+test('exposesProjectRenameAndArchiveAfterNormalProjectSelection', async () => {
+  installListHandler({ root: [projectA], [projectA.id]: [] });
+  const user = userEvent.setup();
+  const { router } = renderWorkspace('/workspace');
+
+  const navigation = await screen.findByRole('complementary', { name: '项目与文件夹' });
+  await user.click(within(navigation).getByRole('button', { name: projectA.name }));
+
+  expect(await screen.findByRole('button', { name: '重命名' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '归档' })).toBeInTheDocument();
+  expect(router.state.location.search).toContain(`resource=${projectA.id}`);
+});
+
+test('exposesProjectRestoreAfterSelectingAnArchivedProjectFromTheResourceList', async () => {
+  const archivedProject = { ...projectA, archivedAt: '2026-10-09T10:00:00Z' };
+  installListHandler({ root: [archivedProject] });
+  const user = userEvent.setup();
+  const { router } = renderWorkspace('/workspace?archived=archived');
+
+  const list = await screen.findByRole('list', { name: '当前位置资源' });
+  await user.click(within(list).getByRole('button', { name: archivedProject.name }));
+
+  expect(await screen.findByRole('button', { name: '恢复' })).toBeInTheDocument();
+  expect(router.state.location.search).toContain(`resource=${projectA.id}`);
+});
+
+test('movesASurveyIntoANestedFolderFromAPaginatedDestinationTree', async () => {
+  const destinationCursors: Array<string | null> = [];
+  let movedParentId: string | null = null;
+  server.use(
+    http.get('/v1/resources', ({ request }) => {
+      const url = new URL(request.url);
+      const parentId = url.searchParams.get('parentId');
+      const kind = url.searchParams.get('kind');
+      const cursor = url.searchParams.get('cursor');
+      if (!parentId && kind === 'project') {
+        destinationCursors.push(cursor);
+        return cursor === 'next-projects'
+          ? HttpResponse.json({ items: [projectC], nextCursor: null })
+          : HttpResponse.json({ items: [projectA], nextCursor: 'next-projects' });
+      }
+      if (parentId === projectA.id) {
+        return HttpResponse.json({ items: [surveyA], nextCursor: null });
+      }
+      if (parentId === projectC.id && kind === 'folder') {
+        return HttpResponse.json({ items: [folderB], nextCursor: null });
+      }
+      if (parentId === folderB.id && kind === 'folder') {
+        return HttpResponse.json({ items: [nestedFolder], nextCursor: null });
+      }
+      return HttpResponse.json({ items: [], nextCursor: null });
+    }),
+    http.post('/v1/resources/:id/move', async ({ request }) => {
+      const body = (await request.json()) as { parentId: string };
+      movedParentId = body.parentId;
+      return HttpResponse.json({ ...surveyA, parentId: body.parentId });
+    }),
+  );
+  const user = userEvent.setup();
+  renderWorkspace(`/workspace?project=${projectA.id}&parent=${projectA.id}`);
+
+  await user.click(await screen.findByRole('button', { name: surveyA.name }));
+  await user.click(await screen.findByRole('button', { name: '移动' }));
+  const dialog = screen.getByRole('dialog', { name: '移动资源' });
+  await user.click(within(dialog).getByRole('button', { name: '加载更多目标' }));
+  await user.click(await within(dialog).findByRole('button', { name: `展开 ${projectC.name}` }));
+  await user.click(await within(dialog).findByRole('button', { name: `展开 ${folderB.name}` }));
+  await user.click(await within(dialog).findByRole('radio', { name: nestedFolder.name }));
+  await user.click(within(dialog).getByRole('button', { name: '确认移动' }));
+
+  await waitFor(() => expect(movedParentId).toBe(nestedFolder.id));
+  expect(destinationCursors).toContain('next-projects');
+});
+
+test('resolvesTheRealPathWhenOpeningARecentResourceAcrossContainers', async () => {
+  const resources = [projectA, projectB, surveyA, surveyB];
+  server.use(
+    http.get('/v1/resources/:id', ({ params }) => {
+      const found = resources.find((item) => item.id === params.id);
+      return found ? HttpResponse.json(found) : new HttpResponse(null, { status: 404 });
+    }),
+    http.get('/v1/resources', ({ request }) => {
+      const url = new URL(request.url);
+      if (url.searchParams.get('kind') === 'project') {
+        return HttpResponse.json({ items: [projectA, projectB], nextCursor: null });
+      }
+      const parentId = url.searchParams.get('parentId');
+      return HttpResponse.json({
+        items: parentId === projectA.id ? [surveyA] : parentId === projectB.id ? [surveyB] : [],
+        nextCursor: null,
+      });
+    }),
+  );
+  const user = userEvent.setup();
+  const { router } = renderWorkspace(`/workspace?project=${projectA.id}&parent=${projectA.id}`);
+
+  await user.click(await screen.findByRole('button', { name: surveyA.name }));
+  const navigation = screen.getByRole('complementary', { name: '项目与文件夹' });
+  await user.click(within(navigation).getByRole('button', { name: projectB.name }));
+  expect(await screen.findByRole('button', { name: surveyB.name })).toBeInTheDocument();
+  await user.click(within(screen.getByRole('region', { name: '最近打开' })).getByRole('button', {
+    name: surveyA.name,
+  }));
+
+  await waitFor(() => {
+    expect(router.state.location.search).toContain(`project=${projectA.id}`);
+    expect(router.state.location.search).toContain(`parent=${projectA.id}`);
+    expect(router.state.location.search).toContain(`resource=${surveyA.id}`);
+    expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent(projectA.name);
+    expect(screen.getByRole('navigation', { name: '当前位置' })).not.toHaveTextContent(projectB.name);
+  });
+});
+
+test('renamesAndMovesTheCurrentFolderThenExitsAndRefreshesAffectedContexts', async () => {
   const requestedParents: Array<string | null> = [];
   const children: Record<string, ResourceView[]> = {
     root: [projectA, projectB],
@@ -384,7 +500,7 @@ test('renamesAndMovesAResourceThenRefreshesAffectedTenantBranches', async () => 
     }),
   );
   const user = userEvent.setup();
-  const { queryClient } = renderWorkspace(
+  const { queryClient, router } = renderWorkspace(
     `/workspace?project=${projectA.id}&parent=${projectA.id}`,
   );
   const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
@@ -399,15 +515,28 @@ test('renamesAndMovesAResourceThenRefreshesAffectedTenantBranches', async () => 
 
   await user.click(screen.getByRole('button', { name: '移动' }));
   dialog = screen.getByRole('dialog', { name: '移动资源' });
-  await user.selectOptions(within(dialog).getByLabelText('目标位置'), projectB.id);
+  await user.click(within(dialog).getByRole('radio', { name: projectB.name }));
   await user.click(within(dialog).getByRole('button', { name: '确认移动' }));
-  await waitFor(() => expect(screen.queryByText('新的资料夹')).not.toBeInTheDocument());
+  await waitFor(() => {
+    expect(router.state.location.search).toContain(`project=${projectA.id}`);
+    expect(router.state.location.search).toContain(`parent=${projectA.id}`);
+    expect(screen.getByText('当前位置暂无资源')).toBeInTheDocument();
+  });
+  expect(router.state.location.search).not.toContain('resource=');
+  expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent(projectA.name);
+  expect(screen.getByRole('navigation', { name: '当前位置' })).not.toHaveTextContent('新的资料夹');
   expect(requestedParents).toContain(projectA.id);
   expect(invalidate).toHaveBeenCalledWith({
     queryKey: ['resources', 'tenant-a', projectA.id],
   });
   expect(invalidate).toHaveBeenCalledWith({
     queryKey: ['resources', 'tenant-a', projectB.id],
+  });
+  expect(invalidate).toHaveBeenCalledWith({
+    queryKey: ['resources', 'tenant-a', folderA.id],
+  });
+  expect(invalidate).toHaveBeenCalledWith({
+    queryKey: ['resource-path', 'tenant-a'],
   });
 });
 
@@ -435,6 +564,58 @@ test('archivesASurveyWithPublicLinkWarningAndRemovesItFromActiveView', async () 
   await user.click(within(dialog).getByRole('button', { name: '确认归档' }));
   expect(await screen.findByText('当前位置暂无资源')).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: '最近打开' })).not.toBeInTheDocument();
+});
+
+test('archivesTheCurrentFolderThenReturnsToItsParentAndClearsCachedChildren', async () => {
+  const nestedSurvey = { ...surveyA, parentId: folderA.id };
+  let archived = false;
+  server.use(
+    http.get('/v1/resources', ({ request }) => {
+      const url = new URL(request.url);
+      const parentId = url.searchParams.get('parentId');
+      const kind = url.searchParams.get('kind');
+      if (!parentId && kind === 'project') {
+        return HttpResponse.json({ items: [projectA], nextCursor: null });
+      }
+      if (parentId === projectA.id) {
+        return HttpResponse.json({ items: archived ? [] : [folderA], nextCursor: null });
+      }
+      if (parentId === folderA.id) {
+        return HttpResponse.json({ items: [nestedSurvey], nextCursor: null });
+      }
+      return HttpResponse.json({ items: [], nextCursor: null });
+    }),
+    http.post('/v1/resources/:id/archive', () => {
+      archived = true;
+      return HttpResponse.json({ ...folderA, archivedAt: '2026-10-09T10:00:00Z' });
+    }),
+  );
+  const user = userEvent.setup();
+  const { queryClient, router } = renderWorkspace(
+    `/workspace?project=${projectA.id}&parent=${projectA.id}`,
+  );
+  const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+
+  await user.click(await screen.findByRole('button', { name: folderA.name }));
+  expect(await screen.findByRole('button', { name: nestedSurvey.name })).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '归档' }));
+  await user.click(within(screen.getByRole('dialog', { name: '归档资源' })).getByRole('button', {
+    name: '确认归档',
+  }));
+
+  expect(await screen.findByText('当前位置暂无资源')).toBeInTheDocument();
+  expect(router.state.location.search).toContain(`project=${projectA.id}`);
+  expect(router.state.location.search).toContain(`parent=${projectA.id}`);
+  expect(router.state.location.search).not.toContain('resource=');
+  expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent(projectA.name);
+  expect(screen.getByRole('navigation', { name: '当前位置' })).not.toHaveTextContent(folderA.name);
+  expect(screen.queryByText(nestedSurvey.name)).not.toBeInTheDocument();
+  expect(invalidate).toHaveBeenCalledWith({
+    queryKey: ['resources', 'tenant-a', folderA.id],
+  });
+  expect(invalidate).toHaveBeenCalledWith({
+    queryKey: ['resource-path', 'tenant-a'],
+  });
 });
 
 test('restoresAResourceAndRemovesItFromArchivedView', async () => {

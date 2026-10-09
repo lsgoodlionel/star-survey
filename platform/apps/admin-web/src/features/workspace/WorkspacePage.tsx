@@ -37,10 +37,22 @@ interface ActionDialogState {
   kind: 'action';
   action: ResourceAction;
   resource: ResourceView;
+  context: ActionContext;
   trigger: HTMLElement;
 }
 
 type WorkspaceDialogState = DialogState | ActionDialogState;
+
+interface ActionContext {
+  parentId: string | null;
+  path: ResourceView[];
+}
+
+interface LocalSelection {
+  tenantId: string;
+  resource: ResourceView;
+  resolvePath: boolean;
+}
 
 export function WorkspacePage() {
   const { api, session } = useAuth();
@@ -54,7 +66,7 @@ export function WorkspacePage() {
   const filters = readFilters(searchParams);
   const [projectNavOpen, setProjectNavOpen] = useState(false);
   const [recentResources, setRecentResources] = useState<ResourceView[]>([]);
-  const [localSelection, setLocalSelection] = useState<{ tenantId: string; resource: ResourceView } | null>(null);
+  const [localSelection, setLocalSelection] = useState<LocalSelection | null>(null);
   const [localPath, setLocalPath] = useState<ResourceView[]>([]);
   const [dialogState, setDialogState] = useState<WorkspaceDialogState | null>(null);
   const currentTenantId = useRef(tenantId);
@@ -110,7 +122,7 @@ export function WorkspacePage() {
   const resourcePathQuery = useQuery({
     queryKey: ['resource-path', tenantId, resourceId],
     queryFn: ({ signal }) => getResourcePath(api, resourceId!, signal),
-    enabled: Boolean(tenantId && resourceId && !selectedFromLocal),
+    enabled: Boolean(tenantId && resourceId && (!selectedFromLocal || localSelection?.resolvePath)),
     retry: false,
   });
   const containerPathQuery = useQuery({
@@ -220,18 +232,19 @@ export function WorkspacePage() {
   });
 
   const actionMutation = useMutation({
-    mutationFn: async ({ action, resource, value, mutationTenantId }: {
+    mutationFn: async ({ action, resource, value, mutationTenantId, context }: {
       action: ResourceAction;
       resource: ResourceView;
       value?: string;
       mutationTenantId: string;
+      context: ActionContext;
     }) => {
       let updated: ResourceView;
       if (action === 'rename') updated = await renameResource(api, resource.id, value!);
       else if (action === 'move') updated = await moveResource(api, resource.id, value!);
       else if (action === 'archive') updated = await archiveResource(api, resource.id);
       else updated = await restoreResource(api, resource.id);
-      return { action, resource, updated, value, mutationTenantId };
+      return { action, resource, updated, value, mutationTenantId, context };
     },
     onSuccess: async (result) => {
       const invalidations = [
@@ -251,17 +264,58 @@ export function WorkspacePage() {
           queryClient.invalidateQueries({ queryKey: ['resources', result.mutationTenantId, null] }),
         );
       }
+      if (
+        result.resource.kind === 'folder' &&
+        (result.action === 'move' || result.action === 'archive')
+      ) {
+        invalidations.push(
+          queryClient.invalidateQueries({
+            queryKey: ['resources', result.mutationTenantId, result.resource.id],
+          }),
+        );
+      }
+      invalidations.push(
+        queryClient.invalidateQueries({
+          queryKey: ['resource-path', result.mutationTenantId],
+        }),
+      );
       await Promise.all(invalidations);
       if (result.mutationTenantId !== currentTenantId.current) return;
       setDialogState(null);
       if (result.action === 'rename') {
-        setLocalSelection({ tenantId: result.mutationTenantId, resource: result.updated });
+        setLocalSelection({
+          tenantId: result.mutationTenantId,
+          resource: result.updated,
+          resolvePath: false,
+        });
         return;
       }
       setRecentResources((current) =>
         current.filter((resource) => resource.id !== result.resource.id),
       );
       setLocalSelection(null);
+      const exitsCurrentContainer =
+        result.resource.id === result.context.parentId &&
+        (result.action === 'move' || result.action === 'archive');
+      if (exitsCurrentContainer) {
+        const oldParentId = result.resource.parentId;
+        const oldParentIndex = result.context.path.findIndex((item) => item.id === oldParentId);
+        const parentPath = oldParentIndex >= 0
+          ? result.context.path.slice(0, oldParentIndex + 1)
+          : [];
+        const parentProjectId = parentPath.find((item) => item.kind === 'project')?.id ?? null;
+        setLocalPath(parentPath);
+        setSearchParams((current) => {
+          const next = new URLSearchParams(current);
+          if (parentProjectId) next.set('project', parentProjectId);
+          else next.delete('project');
+          if (oldParentId) next.set('parent', oldParentId);
+          else next.delete('parent');
+          next.delete('resource');
+          return next;
+        }, { replace: true });
+        return;
+      }
       setSearchParams((current) => {
         const next = new URLSearchParams(current);
         next.delete('resource');
@@ -288,11 +342,11 @@ export function WorkspacePage() {
   }
 
   function selectResource(resource: ResourceView) {
-    setLocalSelection({ tenantId, resource });
+    setLocalSelection({ tenantId, resource, resolvePath: false });
     setProjectNavOpen(false);
     if (resource.kind === 'project') {
       setLocalPath([resource]);
-      updateUrl({ project: resource.id, parent: resource.id, resource: null });
+      updateUrl({ project: resource.id, parent: resource.id, resource: resource.id });
       return;
     }
     if (resource.kind === 'folder') {
@@ -316,6 +370,12 @@ export function WorkspacePage() {
     updateUrl({ resource: resource.id });
   }
 
+  function selectRecentResource(resource: ResourceView) {
+    setLocalSelection({ tenantId, resource, resolvePath: true });
+    setLocalPath([]);
+    updateUrl({ resource: resource.id });
+  }
+
   function updateFilters(nextFilters: ResourceFilters) {
     updateUrl({
       query: nextFilters.query?.trim() || null,
@@ -333,15 +393,22 @@ export function WorkspacePage() {
   function openAction(action: ResourceAction, trigger: HTMLElement) {
     if (!selectedResource) return;
     actionMutation.reset();
-    setDialogState({ tenantId, kind: 'action', action, resource: selectedResource, trigger });
+    setDialogState({
+      tenantId,
+      kind: 'action',
+      action,
+      resource: selectedResource,
+      context: { parentId, path: navigationPath },
+      trigger,
+    });
   }
 
-  const destinations = projects.filter(
-    (project) => project.id !== selectedResource?.id && project.id !== selectedResource?.parentId,
-  );
   const selectedCaps = selectedCapabilities.data;
   const canRename = Boolean(selectedResource && selectedResource.kind !== 'survey' && selectedCaps?.canEdit);
-  const canMove = Boolean(selectedResource?.kind === 'folder' && selectedCaps?.canEdit);
+  const canMove = Boolean(
+    (selectedResource?.kind === 'folder' || selectedResource?.kind === 'survey') &&
+    selectedCaps?.canEdit,
+  );
   const canArchive = filters.archived !== 'archived' && selectedCaps?.canArchive === true;
   const canRestore = filters.archived === 'archived' && selectedCaps?.canRestore === true;
 
@@ -457,7 +524,7 @@ export function WorkspacePage() {
             <ul>
               {recentResources.map((resource) => (
                 <li key={resource.id}>
-                  <button type="button" title={resource.name} onClick={() => selectResource(resource)}>
+                  <button type="button" title={resource.name} onClick={() => selectRecentResource(resource)}>
                     {resource.name}
                   </button>
                 </li>
@@ -487,9 +554,10 @@ export function WorkspacePage() {
       ) : null}
       {activeDialog?.kind === 'action' ? (
         <ResourceActionDialogs
+          api={api}
+          tenantId={tenantId}
           action={activeDialog.action}
           resource={activeDialog.resource}
-          destinations={destinations}
           pending={actionPending}
           error={actionPending || !(actionMutation.error instanceof Error) ? undefined : actionMutation.error.message}
           returnFocus={activeDialog.trigger}
@@ -503,6 +571,7 @@ export function WorkspacePage() {
               resource: activeDialog.resource,
               value,
               mutationTenantId: tenantId,
+              context: activeDialog.context,
             })
           }
         />

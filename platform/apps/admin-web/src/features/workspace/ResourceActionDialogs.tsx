@@ -1,19 +1,27 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
-  type RefObject,
 } from 'react';
-import type { ResourceView } from '../../shared/api/resources';
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { ChevronDown, ChevronRight, Folder, FolderKanban } from 'lucide-react';
+import type { ApiClient } from '../../shared/api/http';
+import {
+  listResources,
+  resourceQueryKey,
+  type ResourceView,
+} from '../../shared/api/resources';
 
 export type ResourceAction = 'rename' | 'move' | 'archive' | 'restore';
 
 interface ResourceActionDialogsProps {
+  api: ApiClient;
+  tenantId: string;
   action: ResourceAction;
   resource: ResourceView;
-  destinations: ResourceView[];
   pending: boolean;
   error?: string;
   returnFocus: HTMLElement | null;
@@ -29,17 +37,18 @@ const actionText = {
 } satisfies Record<ResourceAction, { title: string; submit: string }>;
 
 export function ResourceActionDialogs({
+  api,
+  tenantId,
   action,
   resource,
-  destinations,
   pending,
   error,
   returnFocus,
   onClose,
   onSubmit,
 }: ResourceActionDialogsProps) {
-  const [value, setValue] = useState(action === 'rename' ? resource.name : destinations[0]?.id ?? '');
-  const firstField = useRef<HTMLInputElement | HTMLSelectElement>(null);
+  const [value, setValue] = useState(action === 'rename' ? resource.name : '');
+  const firstField = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const text = actionText[action];
 
@@ -78,7 +87,7 @@ export function ResourceActionDialogs({
             <label>
               <span>名称</span>
               <input
-                ref={firstField as RefObject<HTMLInputElement>}
+                ref={firstField}
                 value={value}
                 disabled={pending}
                 onChange={(event) => setValue(event.target.value)}
@@ -86,19 +95,14 @@ export function ResourceActionDialogs({
             </label>
           ) : null}
           {action === 'move' ? (
-            <label>
-              <span>目标位置</span>
-              <select
-                ref={firstField as RefObject<HTMLSelectElement>}
-                value={value}
-                disabled={pending}
-                onChange={(event) => setValue(event.target.value)}
-              >
-                {destinations.map((destination) => (
-                  <option key={destination.id} value={destination.id}>{destination.name}</option>
-                ))}
-              </select>
-            </label>
+            <MoveDestinationPicker
+              api={api}
+              tenantId={tenantId}
+              excludedId={resource.id}
+              value={value}
+              disabled={pending}
+              onChange={setValue}
+            />
           ) : null}
           {action === 'archive' ? (
             <>
@@ -114,13 +118,155 @@ export function ResourceActionDialogs({
             <button type="button" className="secondary-action" disabled={pending} onClick={onClose}>
               取消
             </button>
-            <button type="submit" disabled={pending || (action === 'move' && destinations.length === 0)}>
+            <button type="submit" disabled={pending || (action === 'move' && !value)}>
               {pending ? '正在处理' : text.submit}
             </button>
           </div>
         </form>
       </dialog>
     </div>
+  );
+}
+
+interface MoveDestinationPickerProps {
+  api: ApiClient;
+  tenantId: string;
+  excludedId: string;
+  value: string;
+  disabled: boolean;
+  onChange(value: string): void;
+}
+
+function MoveDestinationPicker(props: MoveDestinationPickerProps) {
+  const query = useInfiniteQuery({
+    queryKey: resourceQueryKey(props.tenantId, null, {
+      kind: 'project',
+      archived: 'active',
+      sort: 'name_asc',
+    }),
+    queryFn: ({ pageParam, signal }) =>
+      listResources(props.api, {
+        kind: 'project',
+        archived: 'active',
+        sort: 'name_asc',
+        cursor: pageParam,
+        signal,
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
+  });
+  const projects = query.data?.pages.flatMap((page) => page.items) ?? [];
+
+  return (
+    <fieldset className="move-destination-picker" disabled={props.disabled}>
+      <legend>目标位置</legend>
+      {query.isPending ? <p aria-live="polite">正在加载目标位置</p> : null}
+      {query.isError ? (
+        <div role="alert">
+          <span>目标位置加载失败</span>
+          <button type="button" onClick={() => void query.refetch()}>重试</button>
+        </div>
+      ) : null}
+      <ul>
+        {projects.map((project) => (
+          <MoveDestinationNode key={project.id} resource={project} {...props} />
+        ))}
+      </ul>
+      {query.hasNextPage ? (
+        <button
+          type="button"
+          disabled={props.disabled || query.isFetchingNextPage}
+          onClick={() => void query.fetchNextPage()}
+        >
+          {query.isFetchingNextPage ? '正在加载' : '加载更多目标'}
+        </button>
+      ) : null}
+    </fieldset>
+  );
+}
+
+interface MoveDestinationNodeProps extends MoveDestinationPickerProps {
+  resource: ResourceView;
+}
+
+function MoveDestinationNode({ resource, ...props }: MoveDestinationNodeProps) {
+  const [expanded, setExpanded] = useState(false);
+  const query = useInfiniteQuery({
+    queryKey: resourceQueryKey(props.tenantId, resource.id, {
+      kind: 'folder',
+      archived: 'active',
+      sort: 'name_asc',
+    }),
+    queryFn: ({ pageParam, signal }) =>
+      listResources(props.api, {
+        parentId: resource.id,
+        kind: 'folder',
+        archived: 'active',
+        sort: 'name_asc',
+        cursor: pageParam,
+        signal,
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
+    enabled: expanded,
+  });
+  const folders = useMemo(
+    () => (query.data?.pages.flatMap((page) => page.items) ?? [])
+      .filter((item) => item.kind === 'folder' && item.id !== props.excludedId),
+    [props.excludedId, query.data],
+  );
+
+  if (resource.id === props.excludedId) return null;
+
+  return (
+    <li>
+      <div className="move-destination-row">
+        <button
+          type="button"
+          aria-label={`${expanded ? '收起' : '展开'} ${resource.name}`}
+          aria-expanded={expanded}
+          disabled={props.disabled}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+        </button>
+        <label title={resource.name}>
+          <input
+            type="radio"
+            name="move-destination"
+            value={resource.id}
+            checked={props.value === resource.id}
+            onChange={() => props.onChange(resource.id)}
+          />
+          {resource.kind === 'project'
+            ? <FolderKanban aria-hidden="true" />
+            : <Folder aria-hidden="true" />}
+          <span>{resource.name}</span>
+        </label>
+      </div>
+      {expanded ? (
+        <div className="move-destination-children">
+          {query.isPending ? <p aria-live="polite">正在加载文件夹</p> : null}
+          {query.isError ? (
+            <button type="button" onClick={() => void query.refetch()}>重试加载文件夹</button>
+          ) : null}
+          <ul>
+            {folders.map((folder) => (
+              <MoveDestinationNode key={folder.id} resource={folder} {...props} />
+            ))}
+          </ul>
+          {query.hasNextPage ? (
+            <button
+              type="button"
+              disabled={props.disabled || query.isFetchingNextPage}
+              onClick={() => void query.fetchNextPage()}
+            >
+              {query.isFetchingNextPage ? '正在加载' : '加载更多目标'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
   );
 }
 
