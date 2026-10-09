@@ -1,0 +1,353 @@
+name: survey-production
+
+x-runtime-defaults: &runtime-defaults
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  edge:
+    <<: *runtime-defaults
+    image: ${CADDY_IMAGE:?set CADDY_IMAGE to a fixed version or digest}
+    entrypoint: ["/bin/sh", "/opt/survey/start-edge.sh"]
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?set PUBLIC_HOST}
+      ENGINE_ADMIN_USER: ${ENGINE_ADMIN_USER:?set ENGINE_ADMIN_USER}
+      ENGINE_ADMIN_PASSWORD_HASH_FILE: /run/secrets/engine_admin_password_hash
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./init/start-edge.sh:/opt/survey/start-edge.sh:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    secrets:
+      - engine_admin_password_hash
+    networks:
+      - edge
+    depends_on:
+      admin-web:
+        condition: service_healthy
+      platform:
+        condition: service_healthy
+      engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 256M
+
+  admin-web:
+    <<: *runtime-defaults
+    image: ${ADMIN_IMAGE:?set ADMIN_IMAGE to a fixed version or digest}
+    build:
+      context: ../../apps/admin-web
+      args:
+        VERSION: ${VERSION:?set VERSION}
+        REVISION: ${REVISION:?set REVISION}
+        CREATED: ${CREATED:?set CREATED}
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 128M
+
+  platform:
+    <<: *runtime-defaults
+    image: ${PLATFORM_IMAGE:?set PLATFORM_IMAGE to a fixed version or digest}
+    build:
+      context: ../../services/business
+      args:
+        VERSION: ${VERSION:?set VERSION}
+        REVISION: ${REVISION:?set REVISION}
+        CREATED: ${CREATED:?set CREATED}
+    entrypoint: ["/bin/sh", "/opt/survey/run-with-secrets.sh"]
+    command:
+      - PLATFORM_DB_APP_PASSWORD=/run/secrets/platform_db_app_password
+      - PLATFORM_DB_OWNER_PASSWORD=/run/secrets/platform_db_owner_password
+      - PLATFORM_JWT_HMAC_SECRET=/run/secrets/platform_jwt_hmac_secret
+      - PLATFORM_ENGINE_EVENTS_SECRET=/run/secrets/platform_engine_events_secret
+      - PLATFORM_PUBGW_SECRET=/run/secrets/platform_pubgw_secret
+      - --
+      - java
+      - -jar
+      - /app/business.jar
+    environment:
+      PLATFORM_DB_URL: jdbc:postgresql://platform-db:5432/platform
+      PLATFORM_DB_APP_USER: platform_app
+      PLATFORM_DB_OWNER_USER: platform_owner
+      PLATFORM_PUBLIC_BASE_URL: https://${PUBLIC_HOST:?set PUBLIC_HOST}
+      PLATFORM_PUBGW_URL: http://publish-gateway:8080
+      PLATFORM_RESPONSE_EXPORT_DIR: /var/lib/survey/exports
+      PLATFORM_ASSET_DIR: /var/lib/survey/assets
+    volumes:
+      - ./init/run-with-secrets.sh:/opt/survey/run-with-secrets.sh:ro
+      - platform-assets:/var/lib/survey/assets
+      - platform-exports:/var/lib/survey/exports
+    secrets:
+      - platform_db_app_password
+      - platform_db_owner_password
+      - platform_jwt_hmac_secret
+      - platform_engine_events_secret
+      - platform_pubgw_secret
+    networks:
+      - edge
+      - internal
+    depends_on:
+      platform-db:
+        condition: service_healthy
+      publish-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1536M
+
+  publish-gateway:
+    <<: *runtime-defaults
+    image: ${PUBLISH_GATEWAY_IMAGE:?set PUBLISH_GATEWAY_IMAGE to a fixed version or digest}
+    build:
+      context: ../../tools/publish-gateway
+      args:
+        VERSION: ${VERSION:?set VERSION}
+        REVISION: ${REVISION:?set REVISION}
+        CREATED: ${CREATED:?set CREATED}
+    entrypoint: ["/bin/sh", "/opt/survey/run-with-secrets.sh"]
+    command:
+      - PUBGW_SHARED_SECRET=/run/secrets/platform_pubgw_secret
+      - PUBGW_ENGINE_ADMIN_PASSWORD=/run/secrets/pubgw_engine_admin_password
+      - PUBGW_ENGINE_CHANNEL_SECRET=/run/secrets/platform_engine_events_secret
+      - --
+      - python
+      - -m
+      - pubgw.server
+    environment:
+      PUBGW_ENGINES_CONFIG: /etc/survey/engines.json
+      PUBGW_STATE_DIR: /var/lib/pubgw
+    volumes:
+      - ./init/run-with-secrets.sh:/opt/survey/run-with-secrets.sh:ro
+      - ${ENGINES_CONFIG_FILE:?set ENGINES_CONFIG_FILE}:/etc/survey/engines.json:ro
+      - publish-gateway-state:/var/lib/pubgw
+    secrets:
+      - platform_pubgw_secret
+      - platform_engine_events_secret
+      - pubgw_engine_admin_password
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    stop_grace_period: 150s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+
+  engine:
+    <<: *runtime-defaults
+    image: ${ENGINE_IMAGE:?set ENGINE_IMAGE to a fixed version or digest}
+    entrypoint: ["/bin/sh", "/opt/survey/run-with-secrets.sh"]
+    command:
+      - MJY_PLATFORM_EVENTS_SECRET=/run/secrets/platform_engine_events_secret
+      - --
+      - apache2-foreground
+    environment:
+      ENGINE_DB_HOST: engine-db
+      ENGINE_DB_NAME: limesurvey
+      ENGINE_DB_USER: limesurvey
+      ENGINE_DB_PASSWORD_FILE: /run/secrets/engine_db_password
+      MJY_ENGINE_INSTANCE_ID: ${ENGINE_INSTANCE_ID:?set ENGINE_INSTANCE_ID}
+      MJY_PLATFORM_EVENTS_URL: http://platform:8080/internal/engine-events
+      MJY_TRUSTED_PROXIES: 172.16.0.0/12
+    volumes:
+      - ./init/run-with-secrets.sh:/opt/survey/run-with-secrets.sh:ro
+      - ./init/config.production.php:/var/www/html/application/config/config.php:ro
+      - engine-upload:/var/www/html/upload
+      - engine-runtime:/var/www/html/application/runtime
+    secrets:
+      - engine_db_password
+      - platform_engine_events_secret
+    networks:
+      - edge
+      - internal
+    depends_on:
+      engine-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "php", "-r", "$$s=@fsockopen('127.0.0.1',80,$$e,$$m,2);exit($$s?0:1);"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1536M
+
+  engine-init:
+    image: ${ENGINE_IMAGE:?set ENGINE_IMAGE to a fixed version or digest}
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["/bin/sh", "/opt/survey/engine-init.sh"]
+    environment:
+      ENGINE_DB_HOST: engine-db
+      ENGINE_DB_NAME: limesurvey
+      ENGINE_DB_USER: limesurvey
+      ENGINE_DB_PASSWORD_FILE: /run/secrets/engine_db_password
+      ENGINE_ADMIN_USER: ${ENGINE_ADMIN_USER:?set ENGINE_ADMIN_USER}
+      ENGINE_ADMIN_EMAIL: ${ENGINE_ADMIN_EMAIL:?set ENGINE_ADMIN_EMAIL}
+      ENGINE_ADMIN_PASSWORD_FILE: /run/secrets/engine_admin_password
+      YII_CONSOLE_COMMANDS: /opt/survey/commands
+    volumes:
+      - ./init/engine-init.sh:/opt/survey/engine-init.sh:ro
+      - ./init/ProductionInitCommand.php:/opt/survey/commands/ProductionInitCommand.php:ro
+      - ./init/config.production.php:/var/www/html/application/config/config.php:ro
+      - engine-upload:/var/www/html/upload
+      - engine-runtime:/var/www/html/application/runtime
+    secrets:
+      - engine_db_password
+      - engine_admin_password
+    networks:
+      - internal
+    depends_on:
+      engine-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-v"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+
+  platform-db:
+    <<: *runtime-defaults
+    image: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE to a fixed version or digest}
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/platform_db_superuser_password
+      PLATFORM_DB_OWNER_PASSWORD_FILE: /run/secrets/platform_db_owner_password
+      PLATFORM_DB_APP_PASSWORD_FILE: /run/secrets/platform_db_app_password
+    volumes:
+      - platform-db-data:/var/lib/postgresql/data
+      - ./init/init-platform-db.sh:/docker-entrypoint-initdb.d/10-platform-roles.sh:ro
+    secrets:
+      - platform_db_superuser_password
+      - platform_db_owner_password
+      - platform_db_app_password
+    networks:
+      - internal
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U postgres -d postgres &&
+          psql -U postgres -d postgres -Atqc "SELECT 1 FROM pg_roles WHERE rolname='platform_owner'" | grep -qx 1 &&
+          psql -U postgres -d postgres -Atqc "SELECT 1 FROM pg_roles WHERE rolname='platform_app'" | grep -qx 1 &&
+          psql -U postgres -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='platform'" | grep -qx 1
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1536M
+
+  engine-db:
+    <<: *runtime-defaults
+    image: ${MARIADB_IMAGE:?set MARIADB_IMAGE to a fixed version or digest}
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    environment:
+      MARIADB_DATABASE: limesurvey
+      MARIADB_USER: limesurvey
+      MARIADB_PASSWORD_FILE: /run/secrets/engine_db_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/engine_db_root_password
+    volumes:
+      - engine-db-data:/var/lib/mysql
+    secrets:
+      - engine_db_password
+      - engine_db_root_password
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1536M
+
+networks:
+  edge:
+  internal:
+    internal: true
+
+volumes:
+  caddy-data:
+  caddy-config:
+  platform-db-data:
+  platform-assets:
+  platform-exports:
+  publish-gateway-state:
+  engine-db-data:
+  engine-upload:
+  engine-runtime:
+
+secrets:
+  engine_admin_password_hash:
+    file: ${ENGINE_ADMIN_PASSWORD_HASH_FILE:?set ENGINE_ADMIN_PASSWORD_HASH_FILE}
+  engine_admin_password:
+    file: ${ENGINE_ADMIN_PASSWORD_FILE:?set ENGINE_ADMIN_PASSWORD_FILE}
+  engine_db_password:
+    file: ${ENGINE_DB_PASSWORD_FILE:?set ENGINE_DB_PASSWORD_FILE}
+  engine_db_root_password:
+    file: ${ENGINE_DB_ROOT_PASSWORD_FILE:?set ENGINE_DB_ROOT_PASSWORD_FILE}
+  platform_db_superuser_password:
+    file: ${PLATFORM_DB_SUPERUSER_PASSWORD_FILE:?set PLATFORM_DB_SUPERUSER_PASSWORD_FILE}
+  platform_db_owner_password:
+    file: ${PLATFORM_DB_OWNER_PASSWORD_FILE:?set PLATFORM_DB_OWNER_PASSWORD_FILE}
+  platform_db_app_password:
+    file: ${PLATFORM_DB_APP_PASSWORD_FILE:?set PLATFORM_DB_APP_PASSWORD_FILE}
+  platform_jwt_hmac_secret:
+    file: ${PLATFORM_JWT_HMAC_SECRET_FILE:?set PLATFORM_JWT_HMAC_SECRET_FILE}
+  platform_engine_events_secret:
+    file: ${PLATFORM_ENGINE_EVENTS_SECRET_FILE:?set PLATFORM_ENGINE_EVENTS_SECRET_FILE}
+  platform_pubgw_secret:
+    file: ${PLATFORM_PUBGW_SECRET_FILE:?set PLATFORM_PUBGW_SECRET_FILE}
+  pubgw_engine_admin_password:
+    file: ${PUBGW_ENGINE_ADMIN_PASSWORD_FILE:?set PUBGW_ENGINE_ADMIN_PASSWORD_FILE}
