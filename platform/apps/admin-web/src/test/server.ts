@@ -12,6 +12,15 @@ export function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+export function binaryResponse(
+  body: BodyInit,
+  options: { status?: number; contentType?: string; headers?: HeadersInit } = {},
+) {
+  const headers = new Headers(options.headers);
+  if (options.contentType) headers.set('Content-Type', options.contentType);
+  return new Response(body, { status: options.status ?? 200, headers });
+}
+
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 afterEach(() => {
   cleanup();
