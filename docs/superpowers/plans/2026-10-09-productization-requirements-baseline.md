@@ -41,7 +41,7 @@
 
 - [ ] **Step 2: Run tests and verify failure**
 
-Run: `python3 -m unittest platform/tools/productization/test_render_capabilities.py`
+Run: `python3 -m unittest discover -s platform/tools/productization -p 'test_render_capabilities.py'`
 
 Expected: FAIL because schema, source data and renderer do not exist.
 
@@ -51,7 +51,7 @@ Expected: FAIL because schema, source data and renderer do not exist.
 
 - [ ] **Step 4: Verify**
 
-Run: `python3 -m unittest platform/tools/productization/test_render_capabilities.py && python3 platform/tools/productization/render_capabilities.py --check`
+Run: `python3 -m unittest discover -s platform/tools/productization -p 'test_render_capabilities.py' && python3 platform/tools/productization/render_capabilities.py --check`
 
 Expected: PASS; generated Markdown is clean.
 
@@ -87,7 +87,7 @@ git commit -m "docs: add verified productization capability baseline"
 
 - [ ] **Step 4: Verify and commit**
 
-Run: `python3 -m unittest platform/tools/productization/test_render_capabilities.py && python3 platform/tools/productization/render_capabilities.py --check`
+Run: `python3 -m unittest discover -s platform/tools/productization -p 'test_render_capabilities.py' && python3 platform/tools/productization/render_capabilities.py --check`
 
 ```bash
 git add platform/README.md platform/docs platform/tools/productization

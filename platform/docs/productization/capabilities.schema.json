@@ -22,17 +22,21 @@
   },
   "$defs": {
     "deliveryState": {
-      "enum": ["not-started", "partial", "complete"]
+      "enum": ["complete", "partial", "not_started", "external"]
     },
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["layer", "path", "description"],
+      "required": ["layer", "path", "locator", "description"],
       "properties": {
         "layer": {
           "enum": ["requirement", "backend", "frontend", "flow", "production", "traceability"]
         },
         "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locator": {
           "type": "string",
           "minLength": 1
         },
@@ -88,7 +92,7 @@
           "$ref": "#/$defs/deliveryState"
         },
         "status": {
-          "enum": ["planned", "in-progress", "engineering-complete", "accepted"]
+          "enum": ["accepted", "partial", "not_started", "external"]
         },
         "evidence": {
           "type": "array",
@@ -112,6 +116,7 @@
             "required": ["status"]
           },
           "then": {
+            "x-requireDistinctEvidenceIdentities": true,
             "properties": {
               "backend": {"const": "complete"},
               "frontend": {"const": "complete"},
