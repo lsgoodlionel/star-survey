@@ -1,4 +1,4 @@
-"""隔离运行时预览：复用发布编译链，但不进入正式发布语义。"""
+"""Durable, tenant-scoped preview operations and signed public access."""
 
 import json
 import shutil
@@ -6,11 +6,10 @@ import tempfile
 import time
 import unittest
 import uuid
-
-from pubgw.store import ResultStore
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from .fixtures import sample_payload
-from .gateway_support import INSTANCE, NOW, encode, make_service, new_engine, signed_headers
+from .gateway_support import INSTANCE, encode, make_service, new_engine, signed_headers
 from .test_server import RunningServer, now_headers
 
 
@@ -23,76 +22,101 @@ class PreviewGatewayTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.state_dir)
 
-    def payload(self, request_id=None, generation=None, expires_at=None):
+    def payload(self, request_id=None, tenant_id=None, session_id=None, expires_at=None):
         return {
+            "tenantId": tenant_id or str(uuid.uuid4()),
+            "sessionId": session_id or str(uuid.uuid4()),
             "requestId": request_id or str(uuid.uuid4()),
             "engineInstanceId": INSTANCE,
-            "generation": generation or "preview-4b3129a8",
+            "generation": "preview-4b3129a8",
             "expiresAt": expires_at or "2027-01-15T08:30:00Z",
             "definition": sample_payload(),
         }
 
-    def send(self, payload):
+    def send(self, method, payload):
         body = encode(payload)
-        response = self.service.preview(signed_headers(body), body)
+        response = getattr(self.service, method)(signed_headers(body), body)
         return response.status, json.loads(response.body.decode("utf-8"))
 
-    def test_preview_reuses_publish_stages_and_returns_isolated_binding(self):
-        status, body = self.send(self.payload())
+    @staticmethod
+    def identity(payload):
+        return {name: payload[name] for name in ("tenantId", "sessionId", "requestId")}
 
-        self.assertEqual(200, status)
-        self.assertEqual("ready", body["status"])
-        self.assertEqual("preview-4b3129a8", body["result"]["generation"])
-        self.assertEqual(INSTANCE, body["result"]["engineInstanceId"])
-        self.assertGreater(body["result"]["surveyId"], 0)
-        self.assertEqual("2027-01-15T08:30:00Z", body["result"]["expiresAt"])
-        self.assertRegex(body["result"]["previewUrl"], r"[?&]token=tok1(?:&|$)")
-        self.assertRegex(body["result"]["previewUrl"], r"^https?://.+[?&]preview=[0-9a-f]{64}$")
-        self.assertIn("activate_survey", self.engine.methods())
-        self.assertIn("get_fieldmap", self.engine.methods())
-
-    def test_same_request_id_is_idempotent_and_does_not_import_twice(self):
+    def test_prepare_registers_sid_before_activation_then_activate_is_idempotent(self):
         payload = self.payload()
-        first = self.send(payload)
-        second = self.send(payload)
 
-        self.assertEqual(first, second)
+        prepared = self.send("preview", payload)
+        self.assertEqual(200, prepared[0])
+        self.assertEqual("prepared", prepared[1]["status"])
+        self.assertNotIn("activate_survey", self.engine.methods())
+
+        activated = self.send("activate_preview", self.identity(payload))
+        repeated = self.send("activate_preview", self.identity(payload))
+
+        self.assertEqual(200, activated[0])
+        self.assertEqual("ready", activated[1]["status"])
+        self.assertEqual(activated, repeated)
+        self.assertEqual(1, self.engine.methods().count("import_survey"))
+        self.assertEqual(1, self.engine.methods().count("activate_survey"))
+        self.assertNotIn("token=", activated[1]["result"]["previewUrl"])
+
+    def test_prepared_operation_survives_gateway_restart(self):
+        payload = self.payload()
+        self.assertEqual("prepared", self.send("preview", payload)[1]["status"])
+
+        restarted = make_service(self.engine, self.state_dir)
+        body = encode(self.identity(payload))
+        response = restarted.activate_preview(signed_headers(body), body)
+
+        self.assertEqual(200, response.status)
+        self.assertEqual("ready", json.loads(response.body)["status"])
         self.assertEqual(1, self.engine.methods().count("import_survey"))
 
-    def test_same_request_id_with_changed_generation_is_rejected(self):
+    def test_same_request_id_is_namespaced_by_tenant_and_session(self):
         request_id = str(uuid.uuid4())
-        self.assertEqual(200, self.send(self.payload(request_id=request_id))[0])
+        first = self.payload(request_id=request_id)
+        second = self.payload(request_id=request_id)
 
-        status, body = self.send(self.payload(request_id=request_id, generation="preview-other"))
+        self.assertEqual(200, self.send("preview", first)[0])
+        self.assertEqual(200, self.send("preview", second)[0])
+        self.assertEqual(2, self.engine.methods().count("import_survey"))
 
-        self.assertEqual(400, status)
-        self.assertEqual("invalid_request", body["error"])
-        self.assertEqual(1, self.engine.methods().count("import_survey"))
-
-    def test_invalid_ttl_or_generation_never_reaches_the_engine(self):
+    def test_schema_requires_tenant_and_session_and_rejects_unknown_fields(self):
         for payload in (
-            self.payload(generation="formal"),
-            self.payload(expires_at="not-a-time"),
-            self.payload(expires_at="2027-01-15T07:59:59Z"),
-            self.payload(expires_at="2027-01-15T09:00:01Z"),
+            {k: v for k, v in self.payload().items() if k != "tenantId"},
+            {k: v for k, v in self.payload().items() if k != "sessionId"},
+            dict(self.payload(), extra=True),
         ):
-            status, body = self.send(payload)
+            status, body = self.send("preview", payload)
             self.assertEqual(400, status)
             self.assertEqual("invalid_request", body["error"])
         self.assertNotIn("import_survey", self.engine.methods())
 
-    def test_failed_preview_is_rolled_back(self):
-        engine = new_engine(fail_activate=True)
-        service = make_service(engine, self.state_dir, store=ResultStore(self.state_dir + "/other.sqlite3"))
+    def test_unknown_prepare_result_is_reconciled_by_marker_without_second_import(self):
         payload = self.payload()
-        body = encode(payload)
+        self.service._preview_operations.fail_after_import_once = True
 
-        response = service.preview(signed_headers(body), body)
-        result = json.loads(response.body.decode("utf-8"))
+        first = self.send("preview", payload)
+        second = self.send("preview", payload)
 
-        self.assertEqual(502, response.status)
-        self.assertEqual("failed", result["status"])
-        self.assertTrue(result["result"]["rolledBack"])
+        self.assertEqual(503, first[0])
+        self.assertEqual("creating", first[1]["status"])
+        self.assertEqual(200, second[0])
+        self.assertEqual("prepared", second[1]["status"])
+        self.assertEqual(1, self.engine.methods().count("import_survey"))
+
+    def test_unknown_activation_result_is_reconciled_without_second_activation_or_participant(self):
+        payload = self.payload()
+        self.assertEqual("prepared", self.send("preview", payload)[1]["status"])
+        self.service._preview_operations.fail_after_activate_once = True
+
+        first = self.send("activate_preview", self.identity(payload))
+        second = self.send("activate_preview", self.identity(payload))
+
+        self.assertEqual(503, first[0])
+        self.assertEqual("ready", second[1]["status"])
+        self.assertEqual(1, self.engine.methods().count("activate_survey"))
+        self.assertEqual(1, self.engine.methods().count("add_participants"))
 
 
 class PreviewHttpRouteTest(unittest.TestCase):
@@ -105,18 +129,55 @@ class PreviewHttpRouteTest(unittest.TestCase):
         self.server.stop()
         shutil.rmtree(self.state_dir)
 
-    def test_post_preview_is_routed_and_get_is_rejected(self):
-        expires = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 1800))
-        payload = PreviewGatewayTest.payload(self, expires_at=expires)
+    def payload(self, expires):
+        return PreviewGatewayTest.payload(self, expires_at=expires)
+
+    def post(self, path, payload):
         body = encode(payload)
+        return self.server.request("POST", path, body, now_headers(body))
 
-        status, _, raw = self.server.request("POST", "/v1/preview", body, now_headers(body))
-        get_status, headers, _ = self.server.request("GET", "/v1/preview")
-
+    def ready_url(self):
+        expires = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 1800))
+        payload = self.payload(expires)
+        status, _, raw = self.post("/v1/preview", payload)
         self.assertEqual(200, status, raw)
-        self.assertEqual("ready", json.loads(raw)["status"])
-        self.assertEqual(405, get_status)
-        self.assertEqual("POST", headers["Allow"])
+        status, _, raw = self.post("/v1/preview/activate", PreviewGatewayTest.identity(payload))
+        self.assertEqual(200, status, raw)
+        return payload, json.loads(raw)["result"]["previewUrl"]
+
+    def test_public_access_validates_signature_at_runtime_and_redirects(self):
+        _, url = self.ready_url()
+        path = urlsplit(url).path + "?" + urlsplit(url).query
+
+        status, headers, raw = self.server.request("GET", path)
+
+        self.assertEqual(302, status, raw)
+        self.assertRegex(headers["Location"], r"/index\.php/\d+\?")
+        self.assertIn("token=tok1", headers["Location"])
+
+    def test_tampered_and_expired_public_access_is_rejected(self):
+        _, url = self.ready_url()
+        split = urlsplit(url)
+        query = parse_qs(split.query)
+        query["sid"] = [str(int(query["sid"][0]) + 1)]
+        tampered = urlunsplit(("", "", split.path, urlencode(query, doseq=True), ""))
+        self.assertEqual(403, self.server.request("GET", tampered)[0])
+
+        self.server.httpd.service._now = lambda: time.time() + 7200
+        self.assertEqual(410, self.server.request("GET", split.path + "?" + split.query)[0])
+
+    def test_closed_preview_cannot_be_accessed_and_close_is_idempotent(self):
+        payload, url = self.ready_url()
+        close = PreviewGatewayTest.identity(payload)
+
+        first = self.post("/v1/preview/close", close)
+        second = self.post("/v1/preview/close", close)
+        split = urlsplit(url)
+        status, _, _ = self.server.request("GET", split.path + "?" + split.query)
+
+        self.assertEqual(200, first[0])
+        self.assertEqual(first, second)
+        self.assertEqual(410, status)
 
 
 if __name__ == "__main__":

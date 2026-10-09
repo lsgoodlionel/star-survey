@@ -34,6 +34,11 @@ class PreviewSessionRepository {
                 .optional();
     }
 
+    String definition(UUID id) {
+        return jdbc.sql("SELECT definition::text FROM survey_preview_session WHERE id = :id")
+                .param("id", id).query(String.class).single();
+    }
+
     boolean insert(TenantId tenant, UUID id, UUID requestId, UUID surveyId, DraftSnapshot draft,
             String actor, String instance, String generation, OffsetDateTime expiresAt) {
         return jdbc.sql("""
@@ -68,6 +73,13 @@ class PreviewSessionRepository {
                 """).param("id", id).param("sid", sid).param("url", url).update();
     }
 
+    boolean bindSid(UUID id, int sid) {
+        return jdbc.sql("""
+                UPDATE survey_preview_session SET engine_sid = :sid, failure = NULL, updated_at = now()
+                 WHERE id = :id AND status = 'creating' AND (engine_sid IS NULL OR engine_sid = :sid)
+                """).param("id", id).param("sid", sid).update() == 1;
+    }
+
     void failed(UUID id, String failure) {
         jdbc.sql("""
                 UPDATE survey_preview_session SET status = 'failed', failure = :failure, updated_at = now()
@@ -75,28 +87,57 @@ class PreviewSessionRepository {
                 """).param("id", id).param("failure", failure).update();
     }
 
-    boolean markClosing(UUID id) {
-        return jdbc.sql("""
+    Optional<UUID> claimClosing(UUID id) {
+        UUID owner = UUID.randomUUID();
+        int updated = jdbc.sql("""
                 UPDATE survey_preview_session
-                   SET status = 'closing', cleanup_attempts = cleanup_attempts + 1, updated_at = now()
-                 WHERE id = :id AND status IN ('ready', 'cleanup_failed')
-                """).param("id", id).update() == 1;
+                   SET status = 'closing', close_owner = :owner,
+                       cleanup_attempts = cleanup_attempts + 1, updated_at = now()
+                 WHERE id = :id AND (status IN ('ready', 'cleanup_failed')
+                       OR (status = 'closing' AND updated_at <= now() - interval '30 seconds'))
+                """).param("id", id).param("owner", owner).update();
+        return updated == 1 ? Optional.of(owner) : Optional.empty();
     }
 
-    void closed(UUID id) {
+    boolean claimCreatingForCleanup(UUID id, UUID owner) {
+        return jdbc.sql("""
+                UPDATE survey_preview_session
+                   SET status = 'closing', close_owner = :owner,
+                       cleanup_attempts = cleanup_attempts + 1, updated_at = now()
+                 WHERE id = :id AND status = 'creating' AND engine_sid IS NOT NULL
+                """).param("id", id).param("owner", owner).update() == 1;
+    }
+
+    void closed(UUID id, UUID owner) {
         jdbc.sql("""
                 UPDATE survey_preview_session
                    SET status = 'closed', failure = NULL, closed_at = now(), updated_at = now()
-                 WHERE id = :id AND status = 'closing'
-                """).param("id", id).update();
+                 WHERE id = :id AND status = 'closing' AND close_owner = :owner
+                """).param("id", id).param("owner", owner).update();
     }
 
-    void cleanupFailed(UUID id, String failure) {
+    void cleanupFailed(UUID id, UUID owner, String failure) {
         jdbc.sql("""
                 UPDATE survey_preview_session
                    SET status = 'cleanup_failed', failure = :failure, updated_at = now()
-                 WHERE id = :id AND status = 'closing'
-                """).param("id", id).param("failure", failure).update();
+                 WHERE id = :id AND status = 'closing' AND close_owner = :owner
+                """).param("id", id).param("owner", owner).param("failure", failure).update();
+    }
+
+    List<UUID> staleCreating(int limit) {
+        return jdbc.sql("""
+                SELECT id FROM survey_preview_session
+                 WHERE status = 'creating' AND updated_at <= now() - interval '30 seconds'
+                 ORDER BY updated_at LIMIT :limit
+                """).param("limit", limit).query(UUID.class).list();
+    }
+
+    List<UUID> staleClosing(int limit) {
+        return jdbc.sql("""
+                SELECT id FROM survey_preview_session
+                 WHERE status = 'closing' AND updated_at <= now() - interval '30 seconds'
+                 ORDER BY updated_at LIMIT :limit
+                """).param("limit", limit).query(UUID.class).list();
     }
 
     List<UUID> expired(int limit) {

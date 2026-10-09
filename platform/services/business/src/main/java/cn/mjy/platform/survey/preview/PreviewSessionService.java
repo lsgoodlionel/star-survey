@@ -70,8 +70,8 @@ public class PreviewSessionService {
     public record Created(PreviewSessionView session, boolean fresh) {
     }
 
-    private record Ticket(UUID id, UUID requestId, UUID surveyId, int draftVersion, String actor,
-            String instance, String generation, OffsetDateTime expiresAt, String definition) {
+    private record Ticket(TenantId tenant, UUID id, UUID requestId, UUID surveyId, int draftVersion, String actor,
+            String instance, String generation, OffsetDateTime expiresAt, String definition, boolean fresh) {
     }
 
     public Created create(TenantContext ctx, UUID surveyId, UUID requestId, int ttlSeconds) {
@@ -86,10 +86,7 @@ public class PreviewSessionService {
             return new Created(existing, false);
         }
         Ticket ticket = (Ticket) started;
-        PreviewGatewayClient.CreateOutcome outcome = gateway.create(new PreviewGatewayClient.CreateRequest(
-                ticket.requestId(), ticket.instance(), ticket.definition(), ticket.generation(), ticket.expiresAt()));
-        PreviewSessionView settled = tenantScope.call(ctx.tenantId(), () -> settle(ticket, outcome));
-        return new Created(settled, true);
+        return new Created(resume(ticket), ticket.fresh());
     }
 
     public PreviewSessionView get(TenantContext ctx, UUID id) {
@@ -101,18 +98,17 @@ public class PreviewSessionService {
     }
 
     public PreviewSessionView close(TenantContext ctx, UUID id) {
-        PreviewSessionView claimed = tenantScope.call(ctx.tenantId(), () -> {
+        record Claim(PreviewSessionView session, UUID owner) {}
+        Claim claim = tenantScope.call(ctx.tenantId(), () -> {
             PreviewSessionView current = require(id);
             require(ctx, Permission.EDIT, current.surveyId());
             if ("closed".equals(current.status()) || "failed".equals(current.status())) {
-                return current;
+                return new Claim(current, null);
             }
-            if (!sessions.markClosing(id)) {
-                return require(id);
-            }
-            return require(id);
+            UUID owner = sessions.claimClosing(id).orElse(null);
+            return new Claim(require(id), owner);
         });
-        return closeClaimed(ctx.tenantId(), claimed);
+        return claim.owner() == null ? claim.session() : closeClaimed(ctx.tenantId(), claim.session(), claim.owner());
     }
 
     @Scheduled(fixedDelayString = "${platform.survey.preview.cleanup-delay-ms:60000}")
@@ -123,15 +119,23 @@ public class PreviewSessionService {
     }
 
     public void cleanupExpired(TenantId tenant) {
+        List<UUID> stale = tenantScope.call(tenant, () -> sessions.staleCreating(100));
+        for (UUID id : stale) {
+            PreviewSessionView current = tenantScope.call(tenant, () -> require(id));
+            if (current.expiresAt().isBefore(OffsetDateTime.now(clock)) && current.engineSid() != null) {
+                UUID owner = UUID.randomUUID();
+                boolean claimed = tenantScope.call(tenant, () -> sessions.claimCreatingForCleanup(id, owner));
+                if (claimed) closeClaimed(tenant, tenantScope.call(tenant, () -> require(id)), owner);
+            } else {
+                Ticket pending = tenantScope.call(tenant, () -> ticket(tenant, current, false));
+                resume(pending);
+            }
+        }
         List<UUID> expired = tenantScope.call(tenant, () -> sessions.expired(100));
-        for (UUID id : expired) {
-            PreviewSessionView claimed = tenantScope.call(tenant, () -> {
-                if (!sessions.markClosing(id)) {
-                    return require(id);
-                }
-                return require(id);
-            });
-            closeClaimed(tenant, claimed);
+        List<UUID> closing = tenantScope.call(tenant, () -> sessions.staleClosing(100));
+        for (UUID id : java.util.stream.Stream.concat(expired.stream(), closing.stream()).distinct().toList()) {
+            UUID owner = tenantScope.call(tenant, () -> sessions.claimClosing(id).orElse(null));
+            if (owner != null) closeClaimed(tenant, tenantScope.call(tenant, () -> require(id)), owner);
         }
     }
 
@@ -143,7 +147,7 @@ public class PreviewSessionService {
                 throw new SurveyConflictException("preview_request_reused",
                         "requestId belongs to another preview session");
             }
-            return existing;
+            return "creating".equals(existing.status()) ? ticket(ctx.tenantId(), existing, false) : existing;
         }
         PreviewSessionRepository.DraftSnapshot draft = sessions.draft(surveyId)
                 .orElseThrow(() -> new SurveyNotFoundException("survey not found: " + surveyId));
@@ -156,41 +160,81 @@ public class PreviewSessionService {
         if (!inserted) {
             return sessions.findByRequest(requestId).orElseThrow();
         }
-        return new Ticket(id, requestId, surveyId, draft.version(), ctx.actorId(), instance, generation, expires,
-                draft.definition());
+        return new Ticket(ctx.tenantId(), id, requestId, surveyId, draft.version(), ctx.actorId(), instance,
+                generation, expires, draft.definition(), true);
     }
 
-    private PreviewSessionView settle(Ticket ticket, PreviewGatewayClient.CreateOutcome outcome) {
+    private PreviewSessionView resume(Ticket ticket) {
+        PreviewGatewayClient.CreateOutcome prepared = gateway.prepare(request(ticket));
+        if (prepared instanceof PreviewGatewayClient.CreateOutcome.Unknown) {
+            return tenantScope.call(ticket.tenant(), () -> require(ticket.id()));
+        }
+        if (prepared instanceof PreviewGatewayClient.CreateOutcome.Orphan orphan) {
+            UUID owner = UUID.randomUUID();
+            PreviewSessionView claimed = tenantScope.call(ticket.tenant(), () -> {
+                sessions.bindSid(ticket.id(), orphan.engineSid());
+                sessions.claimCreatingForCleanup(ticket.id(), owner);
+                return require(ticket.id());
+            });
+            return closeClaimed(ticket.tenant(), claimed, owner);
+        }
+        if (prepared instanceof PreviewGatewayClient.CreateOutcome.Failed failed) {
+            return tenantScope.call(ticket.tenant(), () -> { sessions.failed(ticket.id(), failed.reason()); return require(ticket.id()); });
+        }
+        PreviewGatewayClient.CreateOutcome.Prepared value = (PreviewGatewayClient.CreateOutcome.Prepared) prepared;
+        boolean bound = tenantScope.call(ticket.tenant(), () -> sessions.bindSid(ticket.id(), value.engineSid()));
+        if (!bound) return tenantScope.call(ticket.tenant(), () -> require(ticket.id()));
+        PreviewGatewayClient.CreateOutcome activated = gateway.activate(identity(ticket));
+        if (activated instanceof PreviewGatewayClient.CreateOutcome.Orphan) {
+            UUID owner = UUID.randomUUID();
+            PreviewSessionView claimed = tenantScope.call(ticket.tenant(), () -> {
+                sessions.claimCreatingForCleanup(ticket.id(), owner);
+                return require(ticket.id());
+            });
+            return closeClaimed(ticket.tenant(), claimed, owner);
+        }
+        return tenantScope.call(ticket.tenant(), () -> settleActivated(ticket, value.engineSid(), activated));
+    }
+
+    private PreviewSessionView settleActivated(Ticket ticket, int sid, PreviewGatewayClient.CreateOutcome outcome) {
         if (outcome instanceof PreviewGatewayClient.CreateOutcome.Ready ready) {
-            if (!ticket.instance().equals(ready.engineInstanceId())
-                    || !ticket.generation().equals(ready.generation())
-                    || !ticket.expiresAt().toInstant().equals(ready.expiresAt().toInstant())) {
-                sessions.failed(ticket.id(), "gateway preview binding mismatch");
-            } else {
-                sessions.ready(ticket.id(), ready.engineSid(), ready.previewUrl());
-            }
+            if (sid != ready.engineSid() || !ticket.instance().equals(ready.engineInstanceId())
+                    || !ticket.generation().equals(ready.generation())) sessions.failed(ticket.id(), "gateway preview binding mismatch");
+            else sessions.ready(ticket.id(), sid, ready.previewUrl());
         } else if (outcome instanceof PreviewGatewayClient.CreateOutcome.Failed failed) {
             sessions.failed(ticket.id(), failed.reason());
         }
         return require(ticket.id());
     }
 
-    private PreviewSessionView closeClaimed(TenantId tenant, PreviewSessionView claimed) {
-        if (!"closing".equals(claimed.status())) {
-            return claimed;
-        }
+    private PreviewSessionView closeClaimed(TenantId tenant, PreviewSessionView claimed, UUID owner) {
         PreviewGatewayClient.CloseOutcome outcome = gateway.close(new PreviewGatewayClient.CloseRequest(
-                UUID.randomUUID(), claimed.engineInstanceId(), claimed.engineSid()));
+                tenant, claimed.id(), claimed.requestId(), claimed.engineInstanceId(), claimed.engineSid()));
         return tenantScope.call(tenant, () -> {
             if (outcome instanceof PreviewGatewayClient.CloseOutcome.Closed) {
-                sessions.closed(claimed.id());
+                sessions.closed(claimed.id(), owner);
             } else if (outcome instanceof PreviewGatewayClient.CloseOutcome.Failed failed) {
-                sessions.cleanupFailed(claimed.id(), failed.reason());
+                sessions.cleanupFailed(claimed.id(), owner, failed.reason());
                 log.warn("preview cleanup failed: session={} attempts={} reason={}", claimed.id(),
                         claimed.cleanupAttempts(), failed.reason());
             }
             return require(claimed.id());
         });
+    }
+
+    private Ticket ticket(TenantId tenant, PreviewSessionView view, boolean fresh) {
+        return new Ticket(tenant, view.id(), view.requestId(), view.surveyId(), view.draftVersion(),
+                view.requestedBy(), view.engineInstanceId(), view.generation(), view.expiresAt(),
+                sessions.definition(view.id()), fresh);
+    }
+
+    private PreviewGatewayClient.CreateRequest request(Ticket ticket) {
+        return new PreviewGatewayClient.CreateRequest(ticket.tenant(), ticket.id(), ticket.requestId(),
+                ticket.instance(), ticket.definition(), ticket.generation(), ticket.expiresAt());
+    }
+
+    private PreviewGatewayClient.Identity identity(Ticket ticket) {
+        return new PreviewGatewayClient.Identity(ticket.tenant(), ticket.id(), ticket.requestId());
     }
 
     private void require(TenantContext ctx, Permission permission, UUID surveyId) {
@@ -216,17 +260,22 @@ public class PreviewSessionService {
 }
 
 interface PreviewGatewayClient {
-    record CreateRequest(UUID requestId, String engineInstanceId, String definitionJson,
+    record CreateRequest(TenantId tenantId, UUID sessionId, UUID requestId, String engineInstanceId, String definitionJson,
             String generation, OffsetDateTime expiresAt) {
     }
+    record Identity(TenantId tenantId, UUID sessionId, UUID requestId) {}
     sealed interface CreateOutcome {
+        record Prepared(int engineSid) implements CreateOutcome {}
         record Ready(int engineSid, String engineInstanceId, String generation, OffsetDateTime expiresAt,
                 String previewUrl) implements CreateOutcome {
         }
         record Failed(String reason) implements CreateOutcome {
         }
+        record Orphan(int engineSid, String reason) implements CreateOutcome {}
+        record Unknown(String reason) implements CreateOutcome {}
     }
-    record CloseRequest(UUID requestId, String engineInstanceId, Integer engineSid) {
+    record CloseRequest(TenantId tenantId, UUID sessionId, UUID requestId,
+            String engineInstanceId, Integer engineSid) {
     }
     sealed interface CloseOutcome {
         record Closed() implements CloseOutcome {
@@ -235,7 +284,8 @@ interface PreviewGatewayClient {
         }
     }
     boolean isConfigured();
-    CreateOutcome create(CreateRequest request);
+    CreateOutcome prepare(CreateRequest request);
+    CreateOutcome activate(Identity request);
     CloseOutcome close(CloseRequest request);
 }
 
@@ -259,36 +309,71 @@ class HttpPreviewGatewayClient implements PreviewGatewayClient {
 
     @Override public boolean isConfigured() { return baseUrl != null && secret.length >= 32; }
 
-    @Override public CreateOutcome create(CreateRequest request) {
+    @Override public CreateOutcome prepare(CreateRequest request) {
         ObjectNode body = json.createObjectNode();
+        body.put("tenantId", request.tenantId().value().toString());
+        body.put("sessionId", request.sessionId().toString());
         body.put("requestId", request.requestId().toString());
         body.put("engineInstanceId", request.engineInstanceId());
         body.set("definition", json.readTree(request.definitionJson()));
         body.put("generation", request.generation());
         body.put("expiresAt", request.expiresAt().withOffsetSameInstant(ZoneOffset.UTC).toString().replace("+00:00", "Z"));
         Exchange exchange = post("v1/preview", json.writeValueAsBytes(body));
-        if (exchange.failure != null) return new CreateOutcome.Failed(exchange.failure);
+        if (exchange.failure != null) return new CreateOutcome.Unknown(exchange.failure);
         try {
             JsonNode root = json.readTree(exchange.body);
-            if (exchange.status != 200 || root == null || !"ready".equals(root.path("status").asString())) {
+            if (exchange.status == 503) return new CreateOutcome.Unknown("gateway result unknown");
+            String status = root == null ? "" : root.path("status").asString();
+            if (exchange.status == 502 && root != null && !root.path("result").path("orphanSurveyId").isNull()
+                    && root.path("result").path("orphanSurveyId").canConvertToInt()) {
+                return new CreateOutcome.Orphan(root.path("result").path("orphanSurveyId").intValue(),
+                        "gateway left an orphan preview");
+            }
+            if (exchange.status != 200 || !("prepared".equals(status) || "ready".equals(status))) {
                 return new CreateOutcome.Failed("http " + exchange.status);
             }
+            JsonNode result = root.path("result");
+            return new CreateOutcome.Prepared(result.path("surveyId").intValue());
+        } catch (RuntimeException e) {
+            return new CreateOutcome.Unknown("unreadable gateway response");
+        }
+    }
+
+    @Override public CreateOutcome activate(Identity request) {
+        ObjectNode body = identity(request.tenantId(), request.sessionId(), request.requestId());
+        Exchange exchange = post("v1/preview/activate", json.writeValueAsBytes(body));
+        if (exchange.failure != null || exchange.status == 503) {
+            return new CreateOutcome.Unknown(exchange.failure == null ? "gateway result unknown" : exchange.failure);
+        }
+        try {
+            JsonNode root = json.readTree(exchange.body);
+            if (exchange.status == 502 && !root.path("result").path("orphanSurveyId").isNull()
+                    && root.path("result").path("orphanSurveyId").canConvertToInt()) {
+                return new CreateOutcome.Orphan(root.path("result").path("orphanSurveyId").intValue(),
+                        "gateway left an orphan preview");
+            }
+            if (exchange.status != 200 || !"ready".equals(root.path("status").asString()))
+                return new CreateOutcome.Failed("http " + exchange.status);
             JsonNode result = root.path("result");
             return new CreateOutcome.Ready(result.path("surveyId").intValue(),
                     result.path("engineInstanceId").asString(), result.path("generation").asString(),
                     OffsetDateTime.parse(result.path("expiresAt").asString()), result.path("previewUrl").asString());
         } catch (RuntimeException e) {
-            return new CreateOutcome.Failed("unreadable gateway response");
+            return new CreateOutcome.Unknown("unreadable gateway response");
         }
     }
 
     @Override public CloseOutcome close(CloseRequest request) {
-        ObjectNode body = json.createObjectNode().put("requestId", request.requestId().toString())
-                .put("engineInstanceId", request.engineInstanceId()).put("surveyId", request.engineSid());
-        Exchange exchange = post("v1/close", json.writeValueAsBytes(body));
+        ObjectNode body = identity(request.tenantId(), request.sessionId(), request.requestId());
+        Exchange exchange = post("v1/preview/close", json.writeValueAsBytes(body));
         return exchange.failure == null && exchange.status == 200
                 ? new CloseOutcome.Closed() : new CloseOutcome.Failed(
                         exchange.failure == null ? "http " + exchange.status : exchange.failure);
+    }
+
+    private ObjectNode identity(TenantId tenant, UUID session, UUID request) {
+        return json.createObjectNode().put("tenantId", tenant.value().toString())
+                .put("sessionId", session.toString()).put("requestId", request.toString());
     }
 
     private Exchange post(String path, byte[] body) {

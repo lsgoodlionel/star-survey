@@ -96,8 +96,12 @@ class FakeEngine:
             return self.import_result
         sid = self._next_sid
         self._next_sid += 1
-        self.surveys[sid] = {"active": "N", "lss": data}
+        self.surveys[sid] = {"active": "N", "lss": data, "title": name or ""}
         return sid
+
+    def _list_surveys(self, key):
+        return [{"sid": sid, "surveyls_title": survey.get("title", "")}
+                for sid, survey in sorted(self.surveys.items())]
 
     def _activate_survey(self, key, sid):
         if self.fail_activate:

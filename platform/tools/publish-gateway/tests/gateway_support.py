@@ -7,7 +7,7 @@ import uuid
 
 from pubgw.auth import sign
 from pubgw.engines import EngineConfig
-from pubgw.service import PublishService
+from pubgw.service import PreviewOperationStore, PublishService
 from pubgw.store import ResultStore
 
 from .fakes import FakeEngine
@@ -78,6 +78,8 @@ def make_service(engine, state_dir, clock=None, store=None):
         secret=SECRET,
         transport_factory=lambda config: engine.transport,
         now=clock or (lambda: NOW),
+        preview_operations=PreviewOperationStore(os.path.join(state_dir, "preview-operations.sqlite3")),
+        preview_public_url="http://gateway.invalid",
     )
 
 

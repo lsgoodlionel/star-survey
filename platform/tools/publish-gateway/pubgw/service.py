@@ -30,7 +30,10 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
+import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -45,7 +48,10 @@ from .model import DefinitionError, SurveyDefinition
 from .participants import RevokeError, revoke_participant
 from .policy.probe import HttpPolicyProbe, PolicyProbe
 from .ops_request import parse_close_request, parse_drift_request, parse_revoke_request
-from .publish import PublishResult, Publisher
+from .binding import BindingRecord
+from .fieldmap import FINGERPRINT_VERSION
+from .logic.scoring import expand_scoring
+from .publish import PublishResult, Publisher, StageStep
 from .request import InvalidRequest, PublishRequest, parse_request
 from .rpc import HttpTransport, RemoteControlClient, RpcError, Transport
 from .store import ExpiredResult, InFlight, Lookup, ResultStore
@@ -57,7 +63,10 @@ PolicyProbeFactory = Callable[[EngineConfig], Optional[PolicyProbe]]
 
 REDACTED = "***"
 _REJECTED_STAGES = frozenset({"validate", "compile"})
-_PREVIEW_FIELDS = frozenset({"requestId", "engineInstanceId", "definition", "generation", "expiresAt"})
+_PREVIEW_FIELDS = frozenset({
+    "tenantId", "sessionId", "requestId", "engineInstanceId", "definition", "generation", "expiresAt"
+})
+_PREVIEW_IDENTITY_FIELDS = frozenset({"tenantId", "sessionId", "requestId"})
 _PREVIEW_GENERATION = re.compile(r"\Apreview-[a-z0-9][a-z0-9-]{2,55}\Z")
 _UUID_TEXT = re.compile(r"\A[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\Z")
 
@@ -66,6 +75,7 @@ _UUID_TEXT = re.compile(r"\A[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}
 class Response:
     status: int
     body: bytes
+    headers: Optional[Mapping[str, str]] = None
 
 
 @dataclass(frozen=True)
@@ -78,12 +88,96 @@ class _Attempt:
 
 @dataclass(frozen=True)
 class _PreviewRequest:
+    tenant_id: str
+    session_id: str
     request_id: str
     engine_instance_id: str
     definition: Mapping[str, Any]
     generation: str
     expires_at: str
     fingerprint: str
+
+
+@dataclass(frozen=True)
+class _PreviewOperation:
+    tenant_id: str
+    session_id: str
+    request_id: str
+    fingerprint: str
+    request_json: str
+    state: str
+    survey_id: Optional[int]
+    invitation: Optional[str]
+    preview_url: Optional[str]
+    response_json: Optional[str]
+
+
+class PreviewOperationStore:
+    """Durable preview operation registry, independent from formal publish receipts."""
+
+    def __init__(self, path: str):
+        self._path = path
+        self._lock = threading.Lock()
+        self.fail_after_import_once = False  # deterministic crash boundary used by fault tests
+        self.fail_after_activate_once = False
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with self._connect() as db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS preview_operation (
+                    tenant_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    request_json TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    survey_id INTEGER,
+                    invitation TEXT,
+                    preview_url TEXT,
+                    response_json TEXT,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (tenant_id, session_id, request_id)
+                )
+            """)
+
+    def _connect(self):
+        db = sqlite3.connect(self._path, timeout=30)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def get(self, key: Tuple[str, str, str]) -> Optional[_PreviewOperation]:
+        with self._connect() as db:
+            row = db.execute("""
+                SELECT tenant_id, session_id, request_id, fingerprint, request_json, state,
+                       survey_id, invitation, preview_url, response_json
+                  FROM preview_operation
+                 WHERE tenant_id=? AND session_id=? AND request_id=?
+            """, key).fetchone()
+        return _PreviewOperation(*row) if row else None
+
+    def register(self, request: _PreviewRequest) -> _PreviewOperation:
+        key = (request.tenant_id, request.session_id, request.request_id)
+        request_json = json.dumps(request.__dict__, sort_keys=True, separators=(",", ":"))
+        with self._lock, self._connect() as db:
+            db.execute("""
+                INSERT OR IGNORE INTO preview_operation
+                    (tenant_id, session_id, request_id, fingerprint, request_json, state, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'creating', ?)
+            """, key + (request.fingerprint, request_json, int(time.time())))
+        return self.get(key)
+
+    def update(self, operation: _PreviewOperation, state: str, survey_id=None, invitation=None,
+               preview_url=None, response=None) -> _PreviewOperation:
+        key = (operation.tenant_id, operation.session_id, operation.request_id)
+        response_json = None if response is None else json.dumps(response, sort_keys=True, ensure_ascii=False)
+        with self._lock, self._connect() as db:
+            db.execute("""
+                UPDATE preview_operation
+                   SET state=?, survey_id=COALESCE(?, survey_id), invitation=COALESCE(?, invitation),
+                       preview_url=COALESCE(?, preview_url), response_json=COALESCE(?, response_json),
+                       updated_at=?
+                 WHERE tenant_id=? AND session_id=? AND request_id=?
+            """, (state, survey_id, invitation, preview_url, response_json, int(time.time())) + key)
+        return self.get(key)
 
 
 class LazyLoginClient(RemoteControlClient):
@@ -119,6 +213,8 @@ class PublishService:
         now: Callable[[], float] = time.time,
         locks: Optional[InFlight] = None,
         policy_probe_factory: PolicyProbeFactory = http_policy_probe,
+        preview_operations: Optional[PreviewOperationStore] = None,
+        preview_public_url: str = "http://127.0.0.1:8080",
     ):
         self._engines = engines
         self._store = store
@@ -127,6 +223,10 @@ class PublishService:
         self._now = now
         self._locks = locks or InFlight()
         self._policy_probe_factory = policy_probe_factory
+        preview_path = os.path.join(os.path.dirname(getattr(store, "_path", "") or "."),
+                                    "preview-operations.sqlite3")
+        self._preview_operations = preview_operations or PreviewOperationStore(preview_path)
+        self._preview_public_url = preview_public_url.rstrip("/")
         self._redactions = _redaction_forms(engine.password for engine in engines.values())
 
     # ------------------------------------------------------------ 入口
@@ -143,7 +243,7 @@ class PublishService:
         return self._publish(request)
 
     def preview(self, headers: Mapping[str, str], body: bytes) -> Response:
-        """``POST /v1/preview``：在独立 SID 上运行草稿，不登记正式发布绑定。"""
+        """Prepare an inactive SID and durably register it before activation."""
         rejected = self._authenticate("preview", headers, body)
         if rejected is not None:
             return rejected
@@ -153,6 +253,79 @@ class PublishService:
             log.info("rejected preview request: %s", error)
             return self._invalid()
         return self._preview(request)
+
+    def activate_preview(self, headers: Mapping[str, str], body: bytes) -> Response:
+        rejected = self._authenticate("preview/activate", headers, body)
+        if rejected is not None:
+            return rejected
+        try:
+            identity = _parse_preview_identity(body)
+        except InvalidRequest:
+            return self._invalid()
+        return self._activate_preview(identity)
+
+    def preview_status(self, headers: Mapping[str, str], body: bytes) -> Response:
+        rejected = self._authenticate("preview/status", headers, body)
+        if rejected is not None:
+            return rejected
+        try:
+            identity = _parse_preview_identity(body)
+        except InvalidRequest:
+            return self._invalid()
+        operation = self._preview_operations.get(identity)
+        return self._operation_response(operation) if operation else self._json(404, {"error": "not_found"})
+
+    def close_preview(self, headers: Mapping[str, str], body: bytes) -> Response:
+        rejected = self._authenticate("preview/close", headers, body)
+        if rejected is not None:
+            return rejected
+        try:
+            identity = _parse_preview_identity(body)
+        except InvalidRequest:
+            return self._invalid()
+        operation = self._preview_operations.get(identity)
+        if operation is None:
+            return self._json(404, {"error": "not_found"})
+        if operation.state == "closed":
+            return self._operation_response(operation)
+        request = _request_from_operation(operation)
+        engine = self._engines.get(request.engine_instance_id)
+        if engine is None or operation.survey_id is None:
+            operation = self._preview_operations.update(operation, "closed", response={"status": "closed"})
+            return self._operation_response(operation)
+        response = self._with_engine(
+            engine, request.request_id, "close preview sid={}".format(operation.survey_id),
+            lambda client: self._close(client, operation.survey_id),
+        )
+        if response.status == 200:
+            operation = self._preview_operations.update(operation, "closed", response={"status": "closed"})
+            return self._operation_response(operation)
+        return response
+
+    def preview_access(self, query: Mapping[str, List[str]]) -> Response:
+        required = {"tenant", "session", "request", "sid", "expires", "sig"}
+        if set(query) != required or any(len(query[name]) != 1 for name in required):
+            return self._json(400, {"error": "invalid_request"})
+        values = {name: query[name][0] for name in required}
+        signed = _preview_access_payload(values)
+        expected = hmac.new(self._secret, signed, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, values["sig"]):
+            return self._json(403, {"error": "invalid_signature"})
+        try:
+            expiry = datetime.fromisoformat(values["expires"].replace("Z", "+00:00")).timestamp()
+            sid = int(values["sid"])
+        except (ValueError, TypeError):
+            return self._json(400, {"error": "invalid_request"})
+        if expiry <= self._now():
+            return self._json(410, {"error": "preview_expired"})
+        operation = self._preview_operations.get((values["tenant"], values["session"], values["request"]))
+        if operation is None or operation.state != "ready" or operation.survey_id != sid:
+            return self._json(410, {"error": "preview_unavailable"})
+        request = _request_from_operation(operation)
+        engine = self._engines[request.engine_instance_id]
+        location = _engine_preview_url(engine, sid, request.definition.get("language", "zh-Hans"),
+                                       operation.invitation or "")
+        return Response(302, b"", {"Location": location})
 
     def close(self, headers: Mapping[str, str], body: bytes) -> Response:
         """``POST /v1/close``：让一份被取代的已发布问卷不再接收新答卷（设过期，不停用、不删除）。"""
@@ -327,9 +500,11 @@ class PublishService:
                 self._locks.release(key)
 
     def _preview(self, request: _PreviewRequest) -> Response:
-        stored = self._store.get(request.request_id)
-        if stored is not None:
-            return self._replay_preview(request, stored)
+        operation = self._preview_operations.register(request)
+        if operation.fingerprint != request.fingerprint:
+            return self._invalid()
+        if operation.state != "creating":
+            return self._operation_response(operation)
         engine = self._engines.get(request.engine_instance_id)
         if engine is None:
             return self._json(404, {"error": "unknown_engine_instance"})
@@ -341,61 +516,133 @@ class PublishService:
             log.info("request %s: malformed preview definition: %s", request.request_id, error)
             return self._invalid()
 
-        keys = [("request", request.request_id), ("preview", engine.instance_id, request.generation)]
+        keys = [("preview-request", request.tenant_id, request.session_id, request.request_id),
+                ("preview", engine.instance_id, request.generation)]
         acquired = self._acquire_all(keys)
         if acquired is None:
             return self._json(409, {"status": "conflict", "error": "preview_in_progress"})
         try:
-            stored = self._store.get(request.request_id)
-            if stored is not None:
-                return self._replay_preview(request, stored)
-            attempt = self._run_preview(request, engine, definition)
-            stored = self._store.put(request.request_id, request.fingerprint, attempt.response.status,
-                                     attempt.response.body, attempt.survey_id)
-            return Response(stored.status, stored.body)
+            operation = self._preview_operations.get((request.tenant_id, request.session_id, request.request_id))
+            if operation.state != "creating":
+                return self._operation_response(operation)
+            return self._prepare_preview(operation, request, engine, definition)
         finally:
             for key in acquired:
                 self._locks.release(key)
 
-    def _run_preview(self, request: _PreviewRequest, engine: EngineConfig,
-                     definition: SurveyDefinition) -> _Attempt:
+    def _prepare_preview(self, operation: _PreviewOperation, request: _PreviewRequest,
+                         engine: EngineConfig, definition: SurveyDefinition) -> Response:
         client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
         try:
-            result = Publisher(
-                client, engine_instance=engine.instance_id, policy_probe=self._policy_probe_factory(engine)
-            ).publish(definition)
+            publisher = Publisher(client, engine_instance=engine.instance_id,
+                                  policy_probe=self._policy_probe_factory(engine))
+            result = PublishResult(survey_id=operation.survey_id)
+            compiled = publisher._stage_validate_and_compile(definition, result)
+            if compiled is None:
+                payload = {"status": "failed", "result": result.to_dict()}
+                operation = self._preview_operations.update(operation, "failed", response=payload)
+                return self._operation_response(operation, 422)
+            definition = expand_scoring(definition)
+            if result.survey_id is None:
+                result.survey_id = _find_preview_marker(client, _preview_marker(request))
+            if result.survey_id is None:
+                result.survey_id = client.import_survey(compiled.lss, _preview_marker(request))
+                if self._preview_operations.fail_after_import_once:
+                    self._preview_operations.fail_after_import_once = False
+                    return self._json(503, {"status": "creating", "error": "result_unknown"})
+            operation = self._preview_operations.update(operation, "creating", survey_id=result.survey_id)
+            if publisher._stage_apply(definition, compiled, result) is None:
+                payload = {"status": "failed", "result": result.to_dict()}
+                operation = self._preview_operations.update(operation, "failed", response=payload)
+                return self._operation_response(operation, 502)
+            payload = {"status": "prepared", "result": _preview_result(operation, request)}
+            operation = self._preview_operations.update(operation, "prepared", response=payload)
+            return self._operation_response(operation)
+        except RpcError as error:
+            log.warning("preview prepare result unknown for %s: %s", request.request_id, self._redact(str(error)))
+            return self._json(503, {"status": "creating", "error": "result_unknown"})
         except Exception:  # noqa: BLE001
-            log.exception("request %s: unexpected preview failure on %s", request.request_id, engine.instance_id)
-            return _Attempt(self._json(500, {"error": "internal_error"}))
+            log.exception("preview prepare result unknown for %s", request.request_id)
+            return self._json(503, {"status": "creating", "error": "result_unknown"})
         finally:
             _logout(client, request.request_id)
 
-        status, label = classify(result)
-        if result.ok and result.survey_id is not None:
+    def _activate_preview(self, identity: Tuple[str, str, str]) -> Response:
+        operation = self._preview_operations.get(identity)
+        if operation is None:
+            return self._json(404, {"error": "not_found"})
+        if operation.state == "ready":
+            return self._operation_response(operation)
+        if operation.state != "prepared" or operation.survey_id is None:
+            return self._operation_response(operation, 409)
+        request = _request_from_operation(operation)
+        engine = self._engines.get(request.engine_instance_id)
+        if engine is None:
+            return self._json(404, {"error": "unknown_engine_instance"})
+        client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
+        try:
+            preview_definition = dict(request.definition)
+            participant_email = "preview-{}@invalid.local".format(request.session_id)
+            preview_definition["participants"] = [{
+                "ref": "preview-" + request.generation,
+                "email": participant_email,
+            }]
+            raw_definition = SurveyDefinition.from_dict(preview_definition)
+            publisher = Publisher(client, engine_instance=engine.instance_id,
+                                  policy_probe=self._policy_probe_factory(engine))
+            result = PublishResult(survey_id=operation.survey_id)
+            compiled = publisher._stage_validate_and_compile(raw_definition, result)
+            definition = expand_scoring(raw_definition)
+            if compiled is None:
+                payload = {"status": "failed", "result": result.to_dict()}
+                operation = self._preview_operations.update(operation, "failed", response=payload)
+                return self._operation_response(operation, 502)
+            active = str(client.get_survey_properties(operation.survey_id).get("active", "N")) == "Y"
+            if active:
+                participant = client.get_participant_properties(
+                    operation.survey_id, {"email": participant_email}, ["token"]
+                )
+                result.invitations = [{"ref": "preview-" + request.generation,
+                                       "token": str(participant["token"])}]
+                result.steps.append(StageStep("activate", True, "reconciled"))
+            elif not publisher._stage_activate(definition, result):
+                payload = {"status": "failed", "result": result.to_dict()}
+                operation = self._preview_operations.update(operation, "failed", response=payload)
+                return self._operation_response(operation, 502)
+            if self._preview_operations.fail_after_activate_once:
+                self._preview_operations.fail_after_activate_once = False
+                return self._json(503, {"status": "creating", "error": "result_unknown"})
+            verification = publisher._stage_verify(definition, compiled, result)
+            if verification is None:
+                payload = {"status": "failed", "result": result.to_dict()}
+                operation = self._preview_operations.update(operation, "failed", response=payload)
+                return self._operation_response(operation, 502)
+            result.binding = BindingRecord(engine.instance_id, operation.survey_id, definition.uuid,
+                                           compiled.compiler_version, FINGERPRINT_VERSION,
+                                           verification.fingerprint, definition.language,
+                                           datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                           verification.bindings)
             invitation = result.invitations[0]["token"] if result.invitations else ""
-            preview_url = _preview_url(engine, result.survey_id, request.generation, request.expires_at,
-                                       definition.language, invitation, self._secret)
-            body = {
-                "status": "ready",
-                "result": {
-                    "surveyId": result.survey_id,
-                    "engineInstanceId": engine.instance_id,
-                    "generation": request.generation,
-                    "expiresAt": request.expires_at,
-                    "previewUrl": preview_url,
-                    "binding": result.binding.to_dict() if result.binding is not None else None,
-                },
-            }
-            return _Attempt(self._json(200, body), result.survey_id)
-        return _Attempt(self._json(status, {"status": label, "result": result.to_dict()}),
-                        surviving_survey_id(result))
+            url = _preview_url(self._preview_public_url, request, operation.survey_id, self._secret)
+            payload = {"status": "ready", "result": dict(_preview_result(operation, request),
+                                                              previewUrl=url,
+                                                              binding=result.binding.to_dict())}
+            operation = self._preview_operations.update(operation, "ready", invitation=invitation,
+                                                        preview_url=url, response=payload)
+            return self._operation_response(operation)
+        except (RpcError, DefinitionError) as error:
+            log.warning("preview activation result unknown for %s: %s", request.request_id,
+                        self._redact(str(error)))
+            return self._json(503, {"status": "creating", "error": "result_unknown"})
+        finally:
+            _logout(client, request.request_id)
 
-    def _replay_preview(self, request: _PreviewRequest, stored: Lookup) -> Response:
-        if stored.fingerprint != request.fingerprint:
-            return self._invalid()
-        if isinstance(stored, ExpiredResult):
-            return self._json(410, {"status": "expired", "error": "result_expired"})
-        return Response(stored.status, stored.body)
+    def _operation_response(self, operation: Optional[_PreviewOperation], status: int = 200) -> Response:
+        if operation is None:
+            return self._json(404, {"error": "not_found"})
+        if operation.response_json:
+            return Response(status, operation.response_json.encode("utf-8"))
+        return self._json(status, {"status": operation.state})
 
     def _run(self, request: PublishRequest, engine: EngineConfig, definition: SurveyDefinition) -> _Attempt:
         started = time.monotonic()
@@ -548,12 +795,15 @@ def _parse_preview_request(body: bytes, now: float) -> _PreviewRequest:
     if not isinstance(payload, dict) or set(payload) != _PREVIEW_FIELDS:
         raise InvalidRequest("preview body has unexpected fields")
     request_id = payload["requestId"]
+    tenant_id = payload["tenantId"]
+    session_id = payload["sessionId"]
     instance_id = payload["engineInstanceId"]
     generation = payload["generation"]
     expires_at = payload["expiresAt"]
     definition = payload["definition"]
-    if not isinstance(request_id, str) or not _UUID_TEXT.match(request_id):
-        raise InvalidRequest("requestId must be a UUID")
+    for name, value in (("tenantId", tenant_id), ("sessionId", session_id), ("requestId", request_id)):
+        if not isinstance(value, str) or not _UUID_TEXT.match(value):
+            raise InvalidRequest("{} must be a UUID".format(name))
     if not isinstance(instance_id, str) or not 0 < len(instance_id) <= 128:
         raise InvalidRequest("engineInstanceId must be a non-empty string")
     if not isinstance(generation, str) or not _PREVIEW_GENERATION.match(generation):
@@ -572,24 +822,77 @@ def _parse_preview_request(body: bytes, now: float) -> _PreviewRequest:
     if not isinstance(definition, dict):
         raise InvalidRequest("definition must be a JSON object")
     canonical = json.dumps(
-        {"engineInstanceId": instance_id, "definition": definition, "generation": generation,
+        {"tenantId": tenant_id, "sessionId": session_id, "requestId": request_id,
+         "engineInstanceId": instance_id, "definition": definition, "generation": generation,
          "expiresAt": expires_at},
         sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     )
     return _PreviewRequest(
-        request_id.lower(), instance_id, definition, generation, expires_at,
+        tenant_id.lower(), session_id.lower(), request_id.lower(), instance_id, definition, generation, expires_at,
         hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
     )
 
 
-def _preview_url(engine: EngineConfig, survey_id: int, generation: str, expires_at: str,
-                 language: str, invitation: str, secret: bytes) -> str:
+def _parse_preview_identity(body: bytes) -> Tuple[str, str, str]:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise InvalidRequest(str(error)) from None
+    if not isinstance(payload, dict) or set(payload) != _PREVIEW_IDENTITY_FIELDS:
+        raise InvalidRequest("preview identity has unexpected fields")
+    values = tuple(payload[name] for name in ("tenantId", "sessionId", "requestId"))
+    if any(not isinstance(value, str) or not _UUID_TEXT.match(value) for value in values):
+        raise InvalidRequest("preview identity values must be UUIDs")
+    return tuple(value.lower() for value in values)
+
+
+def _request_from_operation(operation: _PreviewOperation) -> _PreviewRequest:
+    return _PreviewRequest(**json.loads(operation.request_json))
+
+
+def _preview_marker(request: _PreviewRequest) -> str:
+    return "preview:{}:{}:{}".format(request.tenant_id, request.session_id, request.request_id)
+
+
+def _find_preview_marker(client: RemoteControlClient, marker: str) -> Optional[int]:
+    matches = [row for row in client.list_surveys()
+               if str(row.get("surveyls_title") or row.get("title") or "") == marker]
+    if len(matches) > 1:
+        raise RpcError("list_surveys", "multiple surveys share preview marker")
+    if not matches:
+        return None
+    return int(matches[0].get("sid"))
+
+
+def _preview_result(operation: _PreviewOperation, request: _PreviewRequest) -> Dict[str, Any]:
+    return {
+        "surveyId": operation.survey_id,
+        "engineInstanceId": request.engine_instance_id,
+        "generation": request.generation,
+        "expiresAt": request.expires_at,
+    }
+
+
+def _preview_access_payload(values: Mapping[str, str]) -> bytes:
+    return "\n".join(values[name] for name in ("tenant", "session", "request", "sid", "expires")).encode("utf-8")
+
+
+def _preview_url(public_base: str, request: _PreviewRequest, survey_id: int, secret: bytes) -> str:
+    values = {
+        "tenant": request.tenant_id,
+        "session": request.session_id,
+        "request": request.request_id,
+        "sid": str(survey_id),
+        "expires": request.expires_at,
+    }
+    values["sig"] = hmac.new(secret, _preview_access_payload(values), hashlib.sha256).hexdigest()
+    return public_base + "/v1/preview/access?" + urlencode(values)
+
+
+def _engine_preview_url(engine: EngineConfig, survey_id: int, language: str, invitation: str) -> str:
     marker = "/index.php/admin/remotecontrol"
     base = engine.rpc_url.split(marker, 1)[0].rstrip("/")
-    signed = "{}.{}.{}".format(generation, survey_id, expires_at).encode("utf-8")
-    token = hmac.new(secret, signed, hashlib.sha256).hexdigest()
-    query = urlencode({"newtest": "Y", "lang": language, "token": invitation,
-                       "generation": generation, "expires": expires_at, "preview": token})
+    query = urlencode({"newtest": "Y", "lang": language, "token": invitation})
     return "{}/index.php/{}?{}".format(base, survey_id, query)
 
 

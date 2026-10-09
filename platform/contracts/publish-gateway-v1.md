@@ -135,14 +135,17 @@
 
 ## 隔离运行时预览（v1.5）
 
-`POST /v1/preview` 只供平台创建短期草稿预览。它复用正式发布的 validate、compile、import、apply、
-activate、verify、bind 阶段，但使用独立的 preview generation 和独立 SID；平台不得把返回的 binding
+预览使用 durable two-phase operation。`POST /v1/preview` 只执行 validate、compile、import、apply，
+返回未激活且已持久登记的 SID；平台先把 SID 写入 preview registry，再调用
+`POST /v1/preview/activate` 执行 activate、verify、bind。它使用独立的 preview generation 和独立 SID；平台不得把返回的 binding
 写入 `survey_published_version` 或 `survey_route`，也不得把该 SID 的引擎事件写入正式答卷投影。
 
 请求仍使用本契约的 HMAC 头，正文必须恰有以下字段：
 
 ```json
 {
+  "tenantId": "6ef17bf8-...",
+  "sessionId": "8461698e-...",
   "requestId": "0b0d3f2e-...",
   "engineInstanceId": "hd-engine-01",
   "generation": "preview-4b3129a8...",
@@ -151,11 +154,13 @@ activate、verify、bind 阶段，但使用独立的 preview generation 和独�
 }
 ```
 
-- `requestId` 与正文指纹共同提供持久幂等；相同请求原样重放，不再次导入，相同 ID 改正文返回 400。
+- 幂等键固定为 `(tenantId, sessionId, requestId)`；相同请求原样重放，不再次导入，相同键改正文返回 400。
 - `generation` 必须以 `preview-` 开头，且不得与正式答卷 generation 共用。
-- `expiresAt` 是 UTC RFC 3339 时间；平台负责在到期后调用既有 `POST /v1/close`，失败状态必须保留并重试。
-- 网关为预览创建一次性参与者 token，并返回同时携带该 token、generation、到期时间及 HMAC 摘要的短期 URL。
-- preview create 失败沿用正式发布的 422/502 和回滚语义；成功响应如下：
+- `expiresAt` 是 UTC RFC 3339 时间；平台负责在到期后调用 `POST /v1/preview/close`，失败状态必须保留并重试。
+- prepare 成功返回 `status=prepared` 和 SID。网络/进程中断导致结果未知时返回 `status=creating`；平台以同一完整请求重放，Gateway 通过持久 operation 和导入 marker 对账，绝不盲目二次导入。
+- activate、status、close 的正文必须恰有 `tenantId`、`sessionId`、`requestId`。它们只操作该复合键对应的 operation。
+- 网关为预览创建一次性参与者 token，但 token 不出现在公开 URL。公开 URL 指向 Gateway 的 `GET /v1/preview/access`；该入口以 constant-time HMAC 校验完整 identity、SID 和 expires，检查实时 operation 状态与过期时间后才 302 到带短期 token 的引擎 URL。篡改、过期、关闭均拒绝。
+- activate 成功响应如下：
 
 ```json
 {
@@ -165,14 +170,17 @@ activate、verify、bind 阶段，但使用独立的 preview generation 和独�
     "engineInstanceId": "hd-engine-01",
     "generation": "preview-4b3129a8...",
     "expiresAt": "2027-01-15T08:30:00Z",
-    "previewUrl": "https://engine.example/index.php/511001?...",
+    "previewUrl": "https://gateway.example/v1/preview/access?...",
     "binding": { "...": "仅用于预览审计，不是正式发布绑定" }
   }
 }
 ```
 
 平台侧 session 状态固定为 `creating | ready | closing | closed | failed | cleanup_failed`。手动关闭和
-到期回收都调用 `POST /v1/close`；close 天然幂等，`cleanup_failed` 必须保留失败原因和重试次数。
+到期回收都调用 `POST /v1/preview/close`；close 天然幂等，`cleanup_failed` 必须保留失败原因和重试次数。
+平台只能由成功 CAS `ready|cleanup_failed -> closing` 的 owner 发起 close RPC，并用 owner token 结算，
+避免并发失败覆盖已经成功的关闭。`creating` 的 stale sweeper 必须先对账；已知 SID 且过期时转入关闭，
+不得直接标记 failed 丢失 SID。
 
 ## `GET /healthz`
 
