@@ -96,6 +96,12 @@ function standardApi(overrides: Partial<Record<string, RequestHandler>> = {}) {
     if (key === `GET /v1/resource-capabilities?resourceId=${surveyId}`) return baseCapabilities;
     if (key === `GET /v1/surveys/${surveyId}/approval-requests`) return [baseApproval];
     if (key === `GET /v1/surveys/${surveyId}/versions`) return [baseVersion];
+    if (key === `GET /v1/delivery/surveys/${surveyId}/links`) return [];
+    if (key === `GET /v1/surveys/${surveyId}/responses/summary`) return {
+      surveyId,
+      versions: [],
+      total: { inProgress: 0, engineCompleted: 0, deleted: 0 },
+    };
     throw new Error(`Unhandled request: ${key}`);
   });
 }
@@ -124,6 +130,11 @@ describe('PublishPage', () => {
     expect(await screen.findByRole('link', { name: '查看版本 2' })).toHaveAttribute(
       'href',
       `/surveys/${surveyId}/versions/2`,
+    );
+    expect(screen.getByRole('heading', { name: '投放与答卷' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '答卷与导出' })).toHaveAttribute(
+      'href',
+      `/surveys/${surveyId}/responses`,
     );
   });
 
@@ -680,7 +691,7 @@ test('showsPublishedVersionsAsImmutableReadOnlyData', async () => {
   expect(screen.queryByRole('button', { name: /保存|编辑|恢复/ })).not.toBeInTheDocument();
 });
 
-test('registersPublishAndImmutableVersionRoutesUnderProtectedShell', () => {
+test('registersPublishResponsesAndImmutableVersionRoutesUnderProtectedShell', () => {
   const routes = createAppRoutes(false);
   const protectedRoute = routes.find((route) => route.children?.some((child) => child.children));
   const appShell = protectedRoute?.children?.find((route) => route.children);
@@ -689,6 +700,7 @@ test('registersPublishAndImmutableVersionRoutesUnderProtectedShell', () => {
 
   expect(protectedPaths).toEqual(expect.arrayContaining([
     'publish',
+    'responses',
     'versions/:version',
   ]));
   expect(routes.map((route) => route.path).filter(Boolean)).not.toEqual(expect.arrayContaining([

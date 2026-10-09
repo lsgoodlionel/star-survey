@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Eye, FileInput, Pencil, Rocket } from 'lucide-react';
+import { ArrowLeft, BarChart3, Eye, FileInput, Pencil, Rocket } from 'lucide-react';
 import { createContext, useContext, useState } from 'react';
 import { Link, Outlet, useLocation, useParams } from 'react-router-dom';
 import { z } from 'zod';
@@ -19,6 +19,7 @@ const workflowTabs = [
   { path: 'import', label: '批量导入', icon: FileInput },
   { path: 'preview', label: '快速预览', icon: Eye },
   { path: 'publish', label: '发布与版本', icon: Rocket },
+  { path: 'responses', label: '答卷与导出', icon: BarChart3 },
 ] as const;
 
 export function SurveyShell() {

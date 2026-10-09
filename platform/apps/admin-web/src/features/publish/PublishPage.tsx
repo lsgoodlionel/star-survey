@@ -28,6 +28,7 @@ import {
   type ResourceCapabilities,
 } from '../../shared/api/resources';
 import { ApprovalTimeline } from './ApprovalTimeline';
+import { PublishedAccessPanel } from './PublishedAccessPanel';
 import { PublishStatus } from './PublishStatus';
 import { parseSurveyIdParam } from './routeParams';
 import './publish.css';
@@ -37,6 +38,8 @@ interface PublishPageProps {
   api: ApiClient;
   surveyId: string;
   tenantId: string;
+  accessToken?: string;
+  onUnauthorized?: () => void | Promise<void>;
 }
 
 type ApprovalState = ApprovalStatus | 'none';
@@ -64,7 +67,7 @@ type ApprovalAction =
   | { kind: 'approve' | 'withdraw'; approvalId: string }
   | { kind: 'reject'; approvalId: string; reason: string };
 
-export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPageProps) {
+export function PublishPage({ actorId, api, surveyId, tenantId, accessToken, onUnauthorized }: PublishPageProps) {
   const queryClient = useQueryClient();
   const surveyShell = useSurveyShell();
   const visible = useDocumentVisibility();
@@ -212,6 +215,15 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
           </ol>
         ) : <p className="publish-empty">尚无已发布版本</p>}
       </section>
+
+      <PublishedAccessPanel
+        accessToken={accessToken}
+        api={api}
+        onUnauthorized={onUnauthorized}
+        published={(versions.data?.length ?? 0) > 0}
+        surveyId={surveyId}
+        tenantId={tenantId}
+      />
     </main>
   );
 }
@@ -230,14 +242,16 @@ function QuestionAwareVersionLink({ href, version }: { href: string; version: nu
 }
 
 export function PublishRoutePage() {
-  const { api, session } = useAuth();
+  const { api, logout, session } = useAuth();
   const params = useParams();
   const surveyId = parseSurveyIdParam(params.surveyId);
   if (!session || !surveyId) return <p role="alert">问卷标识无效</p>;
   return (
     <PublishPage
       actorId={session.me.actorId}
+      accessToken={session.token}
       api={api}
+      onUnauthorized={() => logout()}
       surveyId={surveyId}
       tenantId={session.me.tenantId}
     />
