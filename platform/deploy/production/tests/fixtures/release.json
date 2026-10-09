@@ -10,6 +10,7 @@
   "minimumSourceVersion": "0.1.0",
   "database": {
     "schema": "920",
+    "backupSchema": 2,
     "rollback": "compatible",
     "compatibleSourceSchemas": ["919", "920"]
   },

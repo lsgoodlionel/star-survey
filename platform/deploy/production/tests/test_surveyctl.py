@@ -426,6 +426,9 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         value = json.loads(json.dumps(base)); value["supportedHosts"] = "ubuntu"; cases.append(value)
         value = json.loads(json.dumps(base)); value["images"] = []; cases.append(value)
         value = json.loads(json.dumps(base)); value["database"]["compatibleSourceSchemas"] = []; cases.append(value)
+        value = json.loads(json.dumps(base)); del value["database"]["backupSchema"]; cases.append(value)
+        value = json.loads(json.dumps(base)); value["database"]["backupSchema"] = True; cases.append(value)
+        value = json.loads(json.dumps(base)); value["database"]["backupSchema"] = 1; cases.append(value)
         value = json.loads(json.dumps(base)); value["database"]["unexpected"] = True; cases.append(value)
         value = json.loads(json.dumps(base)); value["assets"]["bundles"]["amd64"]["unexpected"] = True; cases.append(value)
         for index, value in enumerate(cases):

@@ -12,6 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import stat
 import sys
 import tarfile
 import tempfile
@@ -55,6 +56,8 @@ SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?")
 STABLE_SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 COMMIT = re.compile(r"[0-9a-f]{40}")
 SCHEMA = re.compile(r"[A-Za-z0-9._-]{1,64}")
+NUMERIC_SCHEMA = re.compile(r"[0-9]+")
+SEMVER_SCHEMA = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)")
 IMAGE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 
 
@@ -101,14 +104,75 @@ def read_version(path: Path, channel: str) -> str:
     return version
 
 
+def require_directory(path: Path, label: str) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ReleaseBuildError(f"required production runtime directory is unavailable: {label}") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ReleaseBuildError(f"required production runtime directory is not a real directory: {label}")
+
+
+def read_regular_unlinked_file(path: Path, label: str, root: Path) -> bytes:
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise ReleaseBuildError(f"required production runtime file escapes its source root: {label}") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise ReleaseBuildError(f"required production runtime file is not an unlinked regular file: {label}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
+            ):
+                raise ReleaseBuildError(f"required production runtime file changed during validation: {label}")
+            return handle.read()
+    except OSError as exc:
+        raise ReleaseBuildError(f"required production runtime file cannot be read safely: {label}") from exc
+
+
 def collect_runtime(source: Path) -> dict[str, bytes]:
+    require_directory(source, ".")
+    canonical_root = source.resolve(strict=True)
     files: dict[str, bytes] = {}
     for name in RUNTIME_FILES:
+        current = source
+        for component in PurePosixPath(name).parts[:-1]:
+            current /= component
+            require_directory(current, current.relative_to(source).as_posix())
+            try:
+                current.resolve(strict=True).relative_to(canonical_root)
+            except (OSError, ValueError) as exc:
+                raise ReleaseBuildError(f"required production runtime directory escapes its source root: {name}") from exc
         path = source / name
-        if path.is_symlink() or not path.is_file():
-            raise ReleaseBuildError(f"required production runtime file is unavailable: {name}")
-        files[name] = path.read_bytes()
+        files[name] = read_regular_unlinked_file(path, name, canonical_root)
     return files
+
+
+def canonicalize_schemas(values: Iterable[str]) -> list[str]:
+    normalized: set[tuple[int, tuple[int, ...], str]] = set()
+    for value in values:
+        if NUMERIC_SCHEMA.fullmatch(value):
+            number = int(value)
+            normalized.add((0, (number,), str(number)))
+            continue
+        match = SEMVER_SCHEMA.fullmatch(value)
+        if match:
+            components = tuple(int(component) for component in match.groups())
+            canonical = ".".join(str(component) for component in components)
+            normalized.add((1, components, canonical))
+            continue
+        raise ReleaseBuildError("compatible source schemas must be numeric or semantic versions")
+    if not normalized:
+        raise ReleaseBuildError("compatible source schemas cannot be empty")
+    return [canonical for _, _, canonical in sorted(normalized)]
 
 
 def bundle_metadata(version: str, architecture: str, files: dict[str, bytes]) -> bytes:
@@ -151,7 +215,7 @@ def write_json(path: Path, value: object) -> None:
         handle.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def validate_args(args: argparse.Namespace) -> tuple[str, dict[str, str]]:
+def validate_args(args: argparse.Namespace) -> tuple[str, dict[str, str], list[str]]:
     if not args.source.is_dir():
         raise ReleaseBuildError("production source directory does not exist")
     if args.output.exists():
@@ -164,17 +228,15 @@ def validate_args(args: argparse.Namespace) -> tuple[str, dict[str, str]]:
         raise ReleaseBuildError("database schema is invalid")
     if args.backup_schema != 2:
         raise ReleaseBuildError("backup schema must match the supported production backup schema (2)")
-    compatible = args.compatible_source_schema
-    if not compatible or any(SCHEMA.fullmatch(value) is None for value in compatible) or len(set(compatible)) != len(compatible):
-        raise ReleaseBuildError("compatible source schemas must be non-empty, valid, and unique")
+    compatible = canonicalize_schemas(args.compatible_source_schema)
     if args.source_date_epoch < 0:
         raise ReleaseBuildError("source date epoch cannot be negative")
     version = read_version(args.version_file, args.channel)
-    return version, parse_images(args.image)
+    return version, parse_images(args.image), compatible
 
 
 def build_release(args: argparse.Namespace) -> None:
-    version, images = validate_args(args)
+    version, images, compatible_schemas = validate_args(args)
     runtime = collect_runtime(args.source)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{args.output.name}-", dir=args.output.parent))
@@ -199,7 +261,7 @@ def build_release(args: argparse.Namespace) -> None:
                 "schema": args.database_schema,
                 "backupSchema": args.backup_schema,
                 "rollback": args.rollback,
-                "compatibleSourceSchemas": args.compatible_source_schema,
+                "compatibleSourceSchemas": compatible_schemas,
             },
             "images": images,
             "assets": {"bundles": bundles},

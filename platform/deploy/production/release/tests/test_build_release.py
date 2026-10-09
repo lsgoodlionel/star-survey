@@ -4,7 +4,9 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -48,12 +50,19 @@ class ReleaseBuilderTest(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def build(self, output: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    def build(
+        self,
+        output: Path,
+        *extra: str,
+        source: Path = PRODUCTION_DIR,
+        compatible_schemas: tuple[str, ...] = ("919", "920"),
+        image_keys: tuple[str, ...] = IMAGE_KEYS,
+    ) -> subprocess.CompletedProcess[str]:
         command = [
             sys.executable,
             str(BUILDER),
             "--source",
-            str(PRODUCTION_DIR),
+            str(source),
             "--output",
             str(output),
             "--version-file",
@@ -70,15 +79,14 @@ class ReleaseBuilderTest(unittest.TestCase):
             "2",
             "--rollback",
             "restore-only",
-            "--compatible-source-schema",
-            "919",
-            "--compatible-source-schema",
-            "920",
             "--source-date-epoch",
             "1700000000",
         ]
-        for index, key in enumerate(IMAGE_KEYS, start=1):
-            command.extend(["--image", f"{key}=ghcr.io/lsgoodlionel/{key.lower()}@sha256:{index:064x}"])
+        for value in compatible_schemas:
+            command.extend(["--compatible-source-schema", value])
+        digests = {key: index for index, key in enumerate(IMAGE_KEYS, start=1)}
+        for key in image_keys:
+            command.extend(["--image", f"{key}=ghcr.io/lsgoodlionel/{key.lower()}@sha256:{digests[key]:064x}"])
         command.extend(extra)
         return subprocess.run(command, text=True, capture_output=True, check=False)
 
@@ -111,6 +119,20 @@ class ReleaseBuilderTest(unittest.TestCase):
                         self.assertEqual(1700000000, member.mtime, member.name)
                         self.assertEqual((0, 0, "root", "root"), (member.uid, member.gid, member.uname, member.gname))
                         self.assertEqual(0o755 if member.isdir() or member.name in {"surveyctl", "surveyctl.py"} or member.name.endswith(".sh") else 0o644, member.mode, member.name)
+
+    def test_equivalent_parameter_order_and_duplicate_schemas_produce_identical_assets(self):
+        first, second = self.root / "ordered", self.root / "permuted"
+        first_result = self.build(first, compatible_schemas=("919", "1.10.0", "920"))
+        second_result = self.build(
+            second,
+            compatible_schemas=("0920", "1.10.0", "919", "919"),
+            image_keys=tuple(reversed(IMAGE_KEYS)),
+        )
+        self.assertEqual(0, first_result.returncode, first_result.stderr)
+        self.assertEqual(0, second_result.returncode, second_result.stderr)
+        self.assertEqual(["919", "920", "1.10.0"], json.loads(first.joinpath("release.json").read_text())["database"]["compatibleSourceSchemas"])
+        for name in sorted(path.name for path in first.iterdir()):
+            self.assertEqual(sha256(first / name), sha256(second / name), name)
 
     def test_manifest_is_consumable_and_records_release_compatibility_and_asset_digests(self):
         output = self.root / "release"
@@ -171,18 +193,67 @@ class ReleaseBuilderTest(unittest.TestCase):
         forbidden_fragments = ("tests/", "fixtures/", "secrets/", "backups/", ".runtime/", ".env")
         self.assertFalse([name for name in names if any(fragment in name for fragment in forbidden_fragments)])
 
-    def test_manifest_rejects_an_unsupported_backup_schema(self):
+    def test_manifest_requires_the_supported_backup_schema(self):
         output = self.root / "release"
         result = self.build(output)
         self.assertEqual(0, result.returncode, result.stderr)
         manifest_path = output / "release.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["database"]["backupSchema"] = 1
-        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-
         surveyctl = load_surveyctl()
-        with self.assertRaises(surveyctl.IntegrityError):
-            surveyctl.load_manifest(manifest_path)
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for index, mutation in enumerate(("missing", True, 1)):
+            manifest = json.loads(json.dumps(original))
+            if mutation == "missing":
+                del manifest["database"]["backupSchema"]
+            else:
+                manifest["database"]["backupSchema"] = mutation
+            candidate = self.root / f"invalid-backup-schema-{index}.json"
+            candidate.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.subTest(mutation=mutation), self.assertRaises(surveyctl.IntegrityError):
+                surveyctl.load_manifest(candidate)
+
+    def test_source_root_parent_components_and_files_must_be_unlinked_regular_inodes(self):
+        pristine = self.root / "pristine"
+        shutil.copytree(PRODUCTION_DIR, pristine)
+        sentinel = "EXTERNAL_RELEASE_SENTINEL"
+
+        external_root = self.root / "external-root"
+        shutil.copytree(pristine, external_root)
+        external_root.joinpath("Caddyfile").write_text(sentinel, encoding="utf-8")
+        linked_root = self.root / "linked-root"
+        linked_root.symlink_to(external_root, target_is_directory=True)
+
+        intermediate_source = self.root / "intermediate-source"
+        shutil.copytree(pristine, intermediate_source)
+        external_init = self.root / "external-init"
+        shutil.copytree(intermediate_source / "init", external_init)
+        external_init.joinpath("config.production.php").write_text(sentinel, encoding="utf-8")
+        shutil.rmtree(intermediate_source / "init")
+        intermediate_source.joinpath("init").symlink_to(external_init, target_is_directory=True)
+
+        file_source = self.root / "file-source"
+        shutil.copytree(pristine, file_source)
+        external_file = self.root / "external-Caddyfile"
+        external_file.write_text(sentinel, encoding="utf-8")
+        file_source.joinpath("Caddyfile").unlink()
+        file_source.joinpath("Caddyfile").symlink_to(external_file)
+
+        hardlink_source = self.root / "hardlink-source"
+        shutil.copytree(pristine, hardlink_source)
+        hardlink_source.joinpath("Caddyfile").unlink()
+        os.link(external_file, hardlink_source / "Caddyfile")
+
+        for label, source in (
+            ("source-root", linked_root),
+            ("intermediate", intermediate_source),
+            ("file", file_source),
+            ("hardlink", hardlink_source),
+        ):
+            output = self.root / f"output-{label}"
+            result = self.build(output, source=source)
+            with self.subTest(label=label):
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("runtime", result.stderr.lower())
+                self.assertFalse(output.exists())
 
     def test_mutable_or_incomplete_image_inputs_are_rejected_without_outputs(self):
         output = self.root / "invalid"

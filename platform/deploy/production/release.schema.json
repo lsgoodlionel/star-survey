@@ -23,7 +23,7 @@
     "database": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "rollback", "compatibleSourceSchemas"],
+      "required": ["schema", "backupSchema", "rollback", "compatibleSourceSchemas"],
       "properties": {
         "schema": {"type": "string", "minLength": 1},
         "backupSchema": {"type": "integer", "const": 2},
