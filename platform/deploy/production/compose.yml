@@ -35,7 +35,7 @@ services:
       engine:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "caddy", "version"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/.well-known/survey-health"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -48,12 +48,6 @@ services:
   admin-web:
     <<: *runtime-defaults
     image: ${ADMIN_IMAGE:?set ADMIN_IMAGE to a fixed version or digest}
-    build:
-      context: ../../apps/admin-web
-      args:
-        VERSION: ${VERSION:?set VERSION}
-        REVISION: ${REVISION:?set REVISION}
-        CREATED: ${CREATED:?set CREATED}
     networks:
       - edge
     healthcheck:
@@ -70,12 +64,6 @@ services:
   platform:
     <<: *runtime-defaults
     image: ${PLATFORM_IMAGE:?set PLATFORM_IMAGE to a fixed version or digest}
-    build:
-      context: ../../services/business
-      args:
-        VERSION: ${VERSION:?set VERSION}
-        REVISION: ${REVISION:?set REVISION}
-        CREATED: ${CREATED:?set CREATED}
     entrypoint: ["/bin/sh", "/opt/survey/run-with-secrets.sh"]
     command:
       - PLATFORM_DB_APP_PASSWORD=/run/secrets/platform_db_app_password
@@ -128,12 +116,6 @@ services:
   publish-gateway:
     <<: *runtime-defaults
     image: ${PUBLISH_GATEWAY_IMAGE:?set PUBLISH_GATEWAY_IMAGE to a fixed version or digest}
-    build:
-      context: ../../tools/publish-gateway
-      args:
-        VERSION: ${VERSION:?set VERSION}
-        REVISION: ${REVISION:?set REVISION}
-        CREATED: ${CREATED:?set CREATED}
     entrypoint: ["/bin/sh", "/opt/survey/run-with-secrets.sh"]
     command:
       - PUBGW_SHARED_SECRET=/run/secrets/platform_pubgw_secret
@@ -184,9 +166,13 @@ services:
       MJY_ENGINE_INSTANCE_ID: ${ENGINE_INSTANCE_ID:?set ENGINE_INSTANCE_ID}
       MJY_PLATFORM_EVENTS_URL: http://platform:8080/internal/engine-events
       MJY_TRUSTED_PROXIES: 172.16.0.0/12
+      ENGINE_ADMIN_USER: ${ENGINE_ADMIN_USER:?set ENGINE_ADMIN_USER}
+      YII_CONSOLE_COMMANDS: /opt/survey/commands
     volumes:
       - ./init/run-with-secrets.sh:/opt/survey/run-with-secrets.sh:ro
+      - ./init/ProductionInitCommand.php:/opt/survey/commands/ProductionInitCommand.php:ro
       - ./init/config.production.php:/var/www/html/application/config/config.php:ro
+      - ./init/production-health.php:/var/www/html/production-health.php:ro
       - engine-upload:/var/www/html/upload
       - engine-runtime:/var/www/html/application/runtime
     secrets:
@@ -199,7 +185,11 @@ services:
       engine-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "php", "-r", "$$s=@fsockopen('127.0.0.1',80,$$e,$$m,2);exit($$s?0:1);"]
+      test:
+        - CMD-SHELL
+        - >-
+          php -r '$$context=stream_context_create(["http"=>["timeout"=>2,"follow_location"=>0]]);$$body=@file_get_contents("http://127.0.0.1/production-health.php",false,$$context);$$status=$$http_response_header[0]??"";exit($$body===false||!preg_match("#^HTTP/\\S+ 204#",$$status)||preg_match("/CException|CDbException|Fatal error|Parse error/i",$$body)?1:0);' &&
+          php application/commands/console.php productionInit status
       interval: 10s
       timeout: 3s
       start_period: 20s

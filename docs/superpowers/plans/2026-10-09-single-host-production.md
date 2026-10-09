@@ -90,7 +90,7 @@ git commit -m "build: add production runtime images"
 
 - [ ] **Step 4: Verify config and runtime**
 
-Run: `python3 -m unittest platform/deploy/production/tests/test_compose.py && docker compose --env-file platform/deploy/production/tests/fixtures/test.env -f platform/deploy/production/compose.yml config`
+Run: `python3 -m unittest discover -s platform/deploy/production/tests -p 'test_compose.py' && docker compose --env-file platform/deploy/production/tests/fixtures/test.env -f platform/deploy/production/compose.yml config`
 
 - [ ] **Step 5: Commit**
 

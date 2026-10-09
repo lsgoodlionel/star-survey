@@ -32,7 +32,10 @@
 		basic_auth {
 			{$ENGINE_ADMIN_USER} {$ENGINE_ADMIN_PASSWORD_HASH}
 		}
-		rewrite * /index.php/admin{uri}
+		@health_path path /production-health.php
+		respond @health_path 404
+		@admin_root path /
+		rewrite @admin_root /index.php/admin
 		reverse_proxy engine:80 {
 			import proxy_headers
 			header_up X-Forwarded-Prefix /engine-admin
@@ -41,7 +44,7 @@
 
 	redir /survey /survey/ 308
 	handle_path /survey/* {
-		@admin_path path /admin* /index.php/admin*
+		@admin_path path /admin* /index.php/admin* /production-health.php
 		respond @admin_path 404
 		reverse_proxy engine:80 {
 			import proxy_headers
@@ -49,7 +52,8 @@
 		}
 	}
 
-	handle /v1* {
+	@platform_api path /v1 /v1/*
+	handle @platform_api {
 		reverse_proxy platform:8080 {
 			import proxy_headers
 		}
@@ -69,4 +73,13 @@
 			import proxy_headers
 		}
 	}
+}
+
+http://127.0.0.1 {
+	@local remote_ip 127.0.0.1 ::1
+	handle @local {
+		rewrite * /production-health.php
+		reverse_proxy engine:80
+	}
+	respond 404
 }
