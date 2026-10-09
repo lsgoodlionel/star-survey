@@ -72,6 +72,7 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
     queryFn: ({ signal }) => exportClient.get(currentJob!.jobId, signal),
     enabled: currentJob?.status === 'queued' || currentJob?.status === 'running',
     initialData: currentJob?.status === 'queued' || currentJob?.status === 'running' ? currentJob : undefined,
+    retry: false,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === 'queued' || status === 'running' ? 1_500 : false;
@@ -82,7 +83,7 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
   const createJob = useMutation({
     mutationFn: () => exportClient.create(surveyId, {
       format,
-      filter: { states: state ? [state] : null },
+      filter: { states: state ? [state] : null, versions: version ? [version] : null },
       templateVersion: null,
     }, { idempotencyKey: crypto.randomUUID() }),
     onMutate: () => setDownloadError(null),
@@ -209,13 +210,39 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
           </div>
           {createJob.isError ? <p role="alert">{publicMessage(createJob.error)}</p> : null}
           {visibleJob ? (
-            <ExportJob
-              job={visibleJob}
-              cancelling={cancelJob.isPending}
-              downloading={downloadJob.isPending}
-              onCancel={() => cancelJob.mutate(visibleJob.jobId)}
-              onDownload={() => downloadJob.mutate(visibleJob.jobId)}
-            />
+            <>
+              <ExportJob
+                job={visibleJob}
+                cancelling={cancelJob.isPending}
+                downloading={downloadJob.isPending}
+                onCancel={() => {
+                  cancelJob.reset();
+                  cancelJob.mutate(visibleJob.jobId);
+                }}
+                onDownload={() => downloadJob.mutate(visibleJob.jobId)}
+              />
+              {job.isError ? (
+                <div className="export-job-error" role="alert" aria-label="导出任务状态刷新失败">
+                  <p>任务状态刷新失败，任务仍已保留。请重新加载最新状态。</p>
+                  <button type="button" onClick={() => void job.refetch()}>
+                    <RefreshCw aria-hidden="true" />重新加载任务状态
+                  </button>
+                </div>
+              ) : null}
+              {cancelJob.isError ? (
+                <div className="export-job-error" role="alert" aria-label="取消导出任务失败">
+                  <p>取消失败，任务仍已保留。你可以重试取消或刷新任务状态。</p>
+                  <div>
+                    <button type="button" onClick={() => cancelJob.mutate(visibleJob.jobId)}>
+                      <Ban aria-hidden="true" />重试取消
+                    </button>
+                    <button type="button" onClick={() => void job.refetch()}>
+                      <RefreshCw aria-hidden="true" />刷新任务状态
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </>
           ) : <p className="responses-empty">尚未创建导出任务。</p>}
           {downloadError ? <p role="alert">{downloadError}</p> : null}
         </section>

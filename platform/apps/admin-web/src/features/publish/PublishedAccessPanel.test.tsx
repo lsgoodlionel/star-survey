@@ -93,7 +93,7 @@ describe('PublishedAccessPanel', () => {
     }));
 
     fireEvent.click(screen.getByRole('button', { name: '撤销客户邀请链接' }));
-    expect(await screen.findByText('已撤销')).toBeInTheDocument();
+    expect(await screen.findByText('链接已撤销')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '复制客户邀请链接' })).not.toBeInTheDocument();
   });
 
@@ -124,5 +124,53 @@ describe('PublishedAccessPanel', () => {
     );
     expect(await screen.findByRole('alert')).toHaveTextContent('投放与答卷信息加载失败');
     expect(screen.getByRole('button', { name: '重新加载' })).toBeInTheDocument();
+  });
+
+  test('blocks opening copying and QR rendering for expired revoked and unusable links', async () => {
+    const fetchQr = vi.fn().mockResolvedValue(new Blob(['qr'], { type: 'image/png' }));
+    const inactiveLinks: LinkView[] = [
+      { ...activeLink, id: '33333333-3333-4333-8333-333333333333', label: '过期链接', expiresAt: '2000-01-01T00:00:00Z' },
+      { ...activeLink, id: '44444444-4444-4444-8444-444444444444', label: '撤销链接', revokedAt: '2026-10-09T09:00:00Z' },
+      { ...activeLink, id: '55555555-5555-4555-8555-555555555555', label: '不可用链接', url: 'ftp://survey.example.test/file', shortUrl: null },
+    ];
+    const api = apiFrom((request) => {
+      if (request.path.includes('/delivery/')) return inactiveLinks;
+      if (request.path.includes('/responses/summary')) return summary;
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+
+    renderWithQuery(
+      <MemoryRouter>
+        <PublishedAccessPanel api={api} fetchQr={fetchQr} published surveyId={surveyId} tenantId="tenant-a" />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('链接已过期')).toBeInTheDocument();
+    expect(screen.getByText('链接已撤销')).toBeInTheDocument();
+    expect(screen.getByText('链接地址不可用')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /survey\.example\.test/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /复制.*链接/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /二维码/ })).not.toBeInTheDocument();
+    expect(fetchQr).not.toHaveBeenCalled();
+  });
+
+  test('preserves the selected question in the response workspace entry', async () => {
+    const api = apiFrom((request) => {
+      if (request.path.includes('/delivery/')) return [];
+      if (request.path.includes('/responses/summary')) return summary;
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    const questionId = '99999999-9999-4999-8999-999999999999';
+
+    renderWithQuery(
+      <MemoryRouter initialEntries={[`/surveys/${surveyId}/publish?question=${questionId}`]}>
+        <PublishedAccessPanel api={api} published surveyId={surveyId} tenantId="tenant-a" />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('link', { name: '答卷与导出' })).toHaveAttribute(
+      'href',
+      `/surveys/${surveyId}/responses?question=${questionId}`,
+    );
   });
 });

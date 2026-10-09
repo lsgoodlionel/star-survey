@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Clipboard, ExternalLink, Link2, Link2Off, Plus, RefreshCw } from 'lucide-react';
-import { Link, useInRouterContext } from 'react-router-dom';
+import { Link, useInRouterContext, useLocation } from 'react-router-dom';
+import { surveyWorkflowHref } from '../../app/SurveyShell';
 import {
   createDeliveryLink,
   deliveryLinksQueryKey,
@@ -152,41 +153,15 @@ export function PublishedAccessPanel({
           {links.data.length ? (
             <ul className="delivery-list" aria-label="投放链接">
               {links.data.map((link) => (
-                <li key={link.id}>
-                  <div className="delivery-list__details">
-                    <div className="delivery-list__title">
-                      <Link2 aria-hidden="true" />
-                      <strong>{link.label}</strong>
-                      {link.revokedAt ? <span>已撤销</span> : null}
-                    </div>
-                    <a href={link.shortUrl ?? link.url} target="_blank" rel="noreferrer">
-                      {link.shortUrl ?? link.url}
-                    </a>
-                    {link.expiresAt ? <small>有效期至 {formatDateTime(link.expiresAt)}</small> : <small>长期有效</small>}
-                  </div>
-                  {!link.revokedAt ? <DeliveryQr link={link} load={qrLoader} /> : null}
-                  <div className="delivery-list__actions">
-                    {!link.revokedAt ? (
-                      <>
-                        <button
-                          type="button"
-                          aria-label={`复制${link.label}链接`}
-                          onClick={() => void copyLink(link, setCopiedId, setActionError)}
-                        >
-                          <Clipboard aria-hidden="true" />{copiedId === link.id ? '已复制' : '复制'}
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`撤销${link.label}链接`}
-                          disabled={revokeLink.isPending}
-                          onClick={() => revokeLink.mutate(link.id)}
-                        >
-                          <Link2Off aria-hidden="true" />撤销
-                        </button>
-                      </>
-                    ) : null}
-                  </div>
-                </li>
+                <DeliveryLinkRow
+                  key={link.id}
+                  copied={copiedId === link.id}
+                  link={link}
+                  qrLoader={qrLoader}
+                  revokePending={revokeLink.isPending}
+                  onCopy={(url) => void copyLink(link.id, url, setCopiedId, setActionError)}
+                  onRevoke={() => revokeLink.mutate(link.id)}
+                />
               ))}
             </ul>
           ) : <p className="aftercare-empty">尚未创建投放链接。</p>}
@@ -209,10 +184,69 @@ function ResponseSummaryStrip({ summary }: { summary: ResponseSummary }) {
 function ResponsesLink({ surveyId }: { surveyId: string }) {
   const inRouter = useInRouterContext();
   const content = <>答卷与导出<ExternalLink aria-hidden="true" /></>;
-  const href = `/surveys/${surveyId}/responses`;
   return inRouter
-    ? <Link className="aftercare-primary-link" to={href}>{content}</Link>
-    : <a className="aftercare-primary-link" href={href}>{content}</a>;
+    ? <QuestionAwareResponsesLink surveyId={surveyId}>{content}</QuestionAwareResponsesLink>
+    : <a className="aftercare-primary-link" href={`/surveys/${surveyId}/responses`}>{content}</a>;
+}
+
+function QuestionAwareResponsesLink({ surveyId, children }: {
+  surveyId: string;
+  children: React.ReactNode;
+}) {
+  const question = new URLSearchParams(useLocation().search).get('question');
+  return (
+    <Link className="aftercare-primary-link" to={surveyWorkflowHref(surveyId, 'responses', question)}>
+      {children}
+    </Link>
+  );
+}
+
+function DeliveryLinkRow({ copied, link, qrLoader, revokePending, onCopy, onRevoke }: {
+  copied: boolean;
+  link: LinkView;
+  qrLoader: (linkId: string, signal: AbortSignal) => Promise<Blob>;
+  revokePending: boolean;
+  onCopy: (url: string) => void;
+  onRevoke: () => void;
+}) {
+  const availability = deliveryLinkAvailability(link);
+  return (
+    <li>
+      <div className="delivery-list__details">
+        <div className="delivery-list__title">
+          <Link2 aria-hidden="true" />
+          <strong>{link.label}</strong>
+          {availability.reason ? <span>{availability.reason}</span> : null}
+        </div>
+        {availability.url ? (
+          <a href={availability.url} target="_blank" rel="noreferrer">{availability.url}</a>
+        ) : <p className="delivery-list__inactive-reason">该链接不能再用于访问、复制或生成二维码。</p>}
+        {availability.active
+          ? link.expiresAt
+            ? <small>有效期至 {formatDateTime(link.expiresAt)}</small>
+            : <small>长期有效</small>
+          : null}
+      </div>
+      {availability.active ? <DeliveryQr link={link} load={qrLoader} /> : null}
+      <div className="delivery-list__actions">
+        {availability.active && availability.url ? (
+          <>
+            <button type="button" aria-label={`复制${link.label}链接`} onClick={() => onCopy(availability.url!)}>
+              <Clipboard aria-hidden="true" />{copied ? '已复制' : '复制'}
+            </button>
+            <button
+              type="button"
+              aria-label={`撤销${link.label}链接`}
+              disabled={revokePending}
+              onClick={onRevoke}
+            >
+              <Link2Off aria-hidden="true" />撤销
+            </button>
+          </>
+        ) : null}
+      </div>
+    </li>
+  );
 }
 
 function DeliveryQr({ link, load }: {
@@ -244,16 +278,41 @@ function DeliveryQr({ link, load }: {
 }
 
 async function copyLink(
-  link: LinkView,
+  linkId: string,
+  url: string,
   setCopiedId: (id: string | null) => void,
   setError: (message: string | null) => void,
 ) {
   try {
-    await navigator.clipboard.writeText(link.shortUrl ?? link.url);
-    setCopiedId(link.id);
+    await navigator.clipboard.writeText(url);
+    setCopiedId(linkId);
     setError(null);
   } catch {
     setError('复制失败，请打开链接后从浏览器地址栏复制。');
+  }
+}
+
+function deliveryLinkAvailability(link: LinkView): {
+  active: boolean;
+  reason: string | null;
+  url: string | null;
+} {
+  if (link.revokedAt) return { active: false, reason: '链接已撤销', url: null };
+  if (link.expiresAt && new Date(link.expiresAt).getTime() <= Date.now()) {
+    return { active: false, reason: '链接已过期', url: null };
+  }
+  const url = usableHttpUrl(link.shortUrl) ?? usableHttpUrl(link.url);
+  if (!url) return { active: false, reason: '链接地址不可用', url: null };
+  return { active: true, reason: null, url };
+}
+
+function usableHttpUrl(value: string | null) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? value : null;
+  } catch {
+    return null;
   }
 }
 

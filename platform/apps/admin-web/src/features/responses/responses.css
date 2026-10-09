@@ -214,6 +214,12 @@
   color: #63747b;
 }
 
+.delivery-list__inactive-reason {
+  margin: 5px 0 0;
+  color: #7f1d1d;
+  font-size: 13px;
+}
+
 .delivery-qr {
   width: 64px;
   height: 64px;
@@ -365,6 +371,37 @@
   padding: 14px;
   border: 1px solid #b7c4c8;
   border-radius: 6px;
+}
+
+.export-job-error {
+  margin-top: 10px;
+  padding: 11px 12px;
+  color: #7f1d1d;
+  background: #fff1f0;
+  border-left: 3px solid #b42318;
+}
+
+.export-job-error p {
+  margin: 0;
+}
+
+.export-job-error > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.export-job-error button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  color: #7f1d1d;
+  background: #fff;
+  border: 1px solid #c77670;
+  border-radius: 4px;
 }
 
 .export-job__heading > div {

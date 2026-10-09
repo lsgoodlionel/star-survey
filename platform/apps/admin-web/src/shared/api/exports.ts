@@ -13,6 +13,7 @@ export const exportStatusSchema = z.enum([
 ]);
 export const exportFilterSchema = z.object({
   states: z.array(z.enum(['in_progress', 'engine_completed', 'deleted'])).nullable(),
+  versions: z.array(z.number().int().positive()).nullable().optional(),
 });
 
 export const exportJobSchema = z.object({

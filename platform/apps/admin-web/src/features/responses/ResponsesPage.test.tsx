@@ -171,6 +171,84 @@ describe('ResponsesPage', () => {
     expect(screen.queryByRole('button', { name: '下载导出文件' })).not.toBeInTheDocument();
   });
 
+  test('uses the selected status and version in the exact export snapshot request', async () => {
+    const create = vi.fn().mockResolvedValue(baseJob('queued'));
+    renderWithQuery(
+      <ResponsesPage
+        api={responseApi()}
+        exportClient={exportClient({ create })}
+        surveyId={surveyId}
+        tenantId="tenant-a"
+      />,
+    );
+
+    await screen.findByLabelText('发布版本 2');
+    fireEvent.change(screen.getByLabelText('答卷状态'), { target: { value: 'engine_completed' } });
+    fireEvent.change(screen.getByLabelText('发布版本'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('导出格式'), { target: { value: 'xlsx' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建导出任务' }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(
+      surveyId,
+      {
+        format: 'xlsx',
+        filter: { states: ['engine_completed'], versions: [2] },
+        templateVersion: null,
+      },
+      { idempotencyKey: expect.any(String) },
+    ));
+  });
+
+  test('keeps the export job and offers reload after polling fails', async () => {
+    const get = vi.fn()
+      .mockRejectedValueOnce(new ApiError('unavailable', '服务暂时不可用'))
+      .mockResolvedValue(baseJob('running'));
+    renderWithQuery(
+      <ResponsesPage
+        api={responseApi()}
+        exportClient={exportClient({ get })}
+        surveyId={surveyId}
+        tenantId="tenant-a"
+      />,
+    );
+
+    await screen.findByRole('heading', { name: '创建导出' });
+    fireEvent.click(screen.getByRole('button', { name: '创建导出任务' }));
+    expect(await screen.findByRole('alert', { name: '导出任务状态刷新失败' })).toHaveTextContent(
+      '任务仍已保留',
+    );
+    expect(screen.getByText('等待处理')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重新加载任务状态' }));
+    expect(await screen.findByText('正在导出')).toBeInTheDocument();
+  });
+
+  test('keeps the export job and offers retry and reload after cancellation fails', async () => {
+    const get = vi.fn().mockResolvedValue(baseJob('queued'));
+    const cancel = vi.fn()
+      .mockRejectedValueOnce(new ApiError('unavailable', '服务暂时不可用'))
+      .mockResolvedValue(baseJob('cancelled'));
+    renderWithQuery(
+      <ResponsesPage
+        api={responseApi()}
+        exportClient={exportClient({ get, cancel })}
+        surveyId={surveyId}
+        tenantId="tenant-a"
+      />,
+    );
+
+    await screen.findByRole('heading', { name: '创建导出' });
+    fireEvent.click(screen.getByRole('button', { name: '创建导出任务' }));
+    expect(await screen.findByText('等待处理')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '取消任务' }));
+    expect(await screen.findByRole('alert', { name: '取消导出任务失败' })).toHaveTextContent(
+      '任务仍已保留',
+    );
+    expect(screen.getByText('等待处理')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '刷新任务状态' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重试取消' }));
+    expect(await screen.findByText('已取消')).toBeInTheDocument();
+  });
+
   test('keeps summary available when detail permission is missing and separates empty and failed states', async () => {
     const noDetailApi = apiFrom((request) => {
       if (request.path.endsWith('/responses/summary')) return summary;

@@ -13,7 +13,7 @@ const job = {
   surveyId,
   format: 'xlsx',
   templateVersion: 'default',
-  filter: { states: ['engine_completed'] },
+  filter: { states: ['engine_completed'], versions: [2] },
   status: 'completed',
   sensitiveRevealed: false,
   totalRows: 12,
@@ -42,7 +42,11 @@ test('creates an export from a 202 response with the exact body and idempotency 
   await expect(
     client.create(
       'survey/id',
-      { format: 'xlsx', filter: { states: ['engine_completed'] }, templateVersion: 'default' },
+      {
+        format: 'xlsx',
+        filter: { states: ['engine_completed'], versions: [2] },
+        templateVersion: 'default',
+      },
       { idempotencyKey: 'export-request-1' },
     ),
   ).resolves.toEqual(job);
@@ -53,7 +57,7 @@ test('creates an export from a 202 response with the exact body and idempotency 
   expect(init?.body).toBe(
     JSON.stringify({
       format: 'xlsx',
-      filter: { states: ['engine_completed'] },
+      filter: { states: ['engine_completed'], versions: [2] },
       templateVersion: 'default',
     }),
   );
