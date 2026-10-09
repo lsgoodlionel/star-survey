@@ -1059,6 +1059,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Validate publication tag commit identity
+        shell: bash
+        run: test "$(git rev-parse "$GITHUB_REF_NAME^{commit}")" = "$GITHUB_SHA"
+
+      - name: Render reviewed channel-specific Release metadata
+        shell: bash
+        env:
+          SOURCE_TAG: ${{ needs.stable-promotion.outputs.source-tag || github.ref_name }}
+        run: >-
+          python3 platform/deploy/production/release/render_publication.py
+          --assets publication-assets
+          --repository "$GITHUB_REPOSITORY"
+          --target-tag "$GITHUB_REF_NAME"
+          --source-tag "$SOURCE_TAG"
+          --target-commit "$GITHUB_SHA"
+          --output-body publication-metadata/body.md
+          --output-metadata publication-metadata/expected.json
+
       - name: Reverify every asset immediately before publication
         shell: bash
         env:
@@ -1076,56 +1094,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          CHANNEL: ${{ needs.policy.outputs.channel }}
-        run: |
-          set -euo pipefail
-          mapfile -t desired < <(find publication-assets -maxdepth 1 -type f -print | LC_ALL=C sort)
-          [[ "${#desired[@]}" -eq 14 ]]
-
-          reconcile_release() {
-            local metadata existing_dir name path
-            metadata="$(gh release view "$TAG" --json tagName,isDraft,isPrerelease,assets)"
-            [[ "$(jq -r '.tagName' <<<"$metadata")" == "$TAG" ]]
-            if [[ "$CHANNEL" == candidate ]]; then
-              [[ "$(jq -r '.isPrerelease' <<<"$metadata")" == true ]]
-            else
-              [[ "$(jq -r '.isPrerelease' <<<"$metadata")" == false ]]
-            fi
-            existing_dir="$(mktemp -d)"
-            mapfile -t existing_names < <(jq -r '.assets[].name' <<<"$metadata" | LC_ALL=C sort)
-            for name in "${existing_names[@]}"; do
-              path="publication-assets/$name"
-              [[ -f "$path" ]]
-              gh release download "$TAG" --pattern "$name" --dir "$existing_dir"
-              cmp --silent "$path" "$existing_dir/$name"
-            done
-            for path in "${desired[@]}"; do
-              name="${path##*/}"
-              if ! printf '%s\n' "${existing_names[@]}" | grep -Fxq "$name"; then
-                if ! gh release upload "$TAG" "$path"; then
-                  metadata="$(gh release view "$TAG" --json assets)"
-                  jq -e --arg name "$name" '.assets | any(.name == $name)' <<<"$metadata" >/dev/null
-                  gh release download "$TAG" --pattern "$name" --dir "$existing_dir"
-                  cmp --silent "$path" "$existing_dir/$name"
-                fi
-              fi
-            done
-            rm -rf "$existing_dir"
-            metadata="$(gh release view "$TAG" --json isDraft,assets)"
-            [[ "$(jq '.assets | length' <<<"$metadata")" -eq "${#desired[@]}" ]]
-            if [[ "$(jq -r '.isDraft' <<<"$metadata")" == true ]]; then
-              gh release edit "$TAG" --draft=false
-            fi
-          }
-
-          prerelease=()
-          [[ "$CHANNEL" == candidate ]] && prerelease=(--prerelease)
-          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
-            reconcile_release
-          elif ! gh release create "$TAG" "${desired[@]}" \
-            --verify-tag --title "Star Survey $TAG" --notes-file publication-assets/release-notes.md \
-            --latest=false "${prerelease[@]}"; then
-            reconcile_release
-          fi
-          reconcile_release
+        run: >-
+          platform/deploy/production/release/publish_release.sh
+          --assets publication-assets
+          --metadata publication-metadata/expected.json
+          --body publication-metadata/body.md
+          --repository "$GITHUB_REPOSITORY"

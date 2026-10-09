@@ -93,11 +93,14 @@ platform/deploy/production/release/verify_release.sh \
   --assets /secure/star-survey-release \
   --repository lsgoodlionel/star-survey \
   --target-tag vX.Y.Z-rc.N \
-  --source-tag vX.Y.Z-rc.N
+  --source-tag vX.Y.Z-rc.N \
+  --target-commit <40-character-tag-commit>
 ```
 
-稳定版不是第二次构建。`vX.Y.Z` 只会选择同版本、已发布且通过升级矩阵的 `vX.Y.Z-rc.N`，重新下载所有资产并验证相同 checksum、镜像 digest、Cosign bundle、GitHub artifact attestation、SBOM 和 native readiness，然后逐字节复用 RC 资产。稳定 tag 若指向不同源码提交，或 RC 不是 `upgrade-verified`，必须阻断推广。
+稳定版不是第二次构建。`vX.Y.Z` 只会选择同版本、已发布且通过升级矩阵的 `vX.Y.Z-rc.N`，重新下载所有资产并验证相同 checksum、镜像 digest、Cosign bundle、GitHub artifact attestation、SBOM 和 native readiness，然后逐字节复用 RC 资产。稳定 Release 页面会单独生成 `vX.Y.Z` 标题和验证命令，明确来源 RC、same bytes/digests、`upgradeVerified: true` 与稳定 tag commit；不会复用 RC 页面文本。稳定 tag 若指向不同源码提交，或 RC 不是 `upgrade-verified`，必须阻断推广。
 
-publication 采用可恢复的幂等发布：先查询现有 Release，逐个下载已有资产并比较字节；只上传缺失资产，不使用 `--clobber`。若 `gh release create` 返回未知结果，会先重新查询再继续；任何同名不同内容或多余资产都会阻断，不会覆盖。
+publication 采用可恢复的幂等发布：先查询现有 Release，规范化核对 tag、title、body、prerelease、draft 和 target commit，再逐个下载已有资产并比较字节；只上传缺失资产，不使用 `--clobber`。draft 的 title/body/prerelease 漂移可按受审内容修复，target commit 漂移始终阻断；已发布 Release 的任意 metadata 漂移直接失败且不会覆盖。若 `gh release create` 返回未知结果，会先重新查询再继续；任何同名不同内容或多余资产都会阻断。
+
+本地 verifier 递归枚举下载目录的所有 entry。除了清单精确列出的单链接普通文件，不允许额外目录、嵌套文件、symlink、hardlink、FIFO/socket/device，也拒绝大小写或 Unicode NFC 冲突路径。
 
 当前仓库没有因为本地实现或测试而创建真实 tag、GHCR 镜像或 GitHub Release。首次 RC 仍需在 GitHub Actions 中实际完成四节点矩阵，随后人工核对公网 TLS、备份密钥异地保存和 Release 资产，再决定是否创建稳定 tag。

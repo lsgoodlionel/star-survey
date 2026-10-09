@@ -36,6 +36,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+import unicodedata
 
 root, target_tag, source_tag, target_commit = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 sha = re.compile(r"[0-9a-f]{64}")
@@ -197,8 +198,32 @@ for name, expected in top.items():
     if hashlib.sha256(regular(name).read_bytes()).hexdigest() != expected:
         fail(f"RELEASE_SHA256SUMS mismatch: {name}")
 expected_files = expected_top | {"RELEASE_SHA256SUMS", "cosign-release.sigstore.json"}
-actual_files = {path.name for path in root.iterdir() if path.is_file() or path.is_symlink()}
-if actual_files != expected_files:
+actual_files: set[str] = set()
+actual_dirs: set[str] = set()
+collision_keys: dict[str, str] = {}
+pending = [root]
+while pending:
+    directory = pending.pop()
+    for path in directory.iterdir():
+        relative = path.relative_to(root).as_posix()
+        key = unicodedata.normalize("NFC", relative).casefold()
+        previous = collision_keys.get(key)
+        if previous is not None and previous != relative:
+            fail(f"release directory contains a case or Unicode path collision: {previous}, {relative}")
+        collision_keys[key] = relative
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            fail(f"release directory contains a symlink: {relative}")
+        if stat.S_ISDIR(metadata.st_mode):
+            actual_dirs.add(relative)
+            pending.append(path)
+        elif stat.S_ISREG(metadata.st_mode):
+            if metadata.st_nlink != 1:
+                fail(f"release directory contains a hard-linked file: {relative}")
+            actual_files.add(relative)
+        else:
+            fail(f"release directory contains a special entry: {relative}")
+if actual_dirs or actual_files != expected_files:
     fail("release directory contains missing or untracked assets")
 PY
 

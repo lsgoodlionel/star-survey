@@ -249,9 +249,13 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertGreaterEqual(text.count("actions/attest@"), 2)
         self.assertIn("@${DIGEST}", text)
         publication = job_text(self.workflow["jobs"]["publication"])
-        self.assertIn("gh release create", publication)
-        self.assertIn("gh release upload", publication)
+        self.assertIn("publish_release.sh", publication)
+        publisher = (ROOT / "platform/deploy/production/release/publish_release.sh").read_text(encoding="utf-8")
+        self.assertIn("gh release create", publisher)
+        self.assertIn("gh release upload", publisher)
+        self.assertIn("render_publication.py", publisher)
         self.assertNotIn("--clobber", publication)
+        self.assertNotIn("--clobber", publisher)
 
     def test_every_external_action_is_allowlisted_and_pinned_to_a_full_sha(self):
         for workflow_name, workflow in (("release", self.workflow), ("quality", self.quality)):
