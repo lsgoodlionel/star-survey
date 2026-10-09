@@ -23,6 +23,8 @@ class AccessAudit {
     static final String RESOURCE_CREATE = "access.resource.create";
     static final String RESOURCE_RENAME = "access.resource.rename";
     static final String RESOURCE_MOVE = "access.resource.move";
+    static final String RESOURCE_ARCHIVE = "access.resource.archive";
+    static final String RESOURCE_RESTORE = "access.resource.restore";
 
     private final AuditLogRepository auditLog;
 

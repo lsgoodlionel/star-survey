@@ -176,6 +176,42 @@ class ResourceTreeRepository {
                 .update();
     }
 
+    /** 只改变选中节点；后代的生效归档状态由查询时沿祖先链计算。 */
+    boolean archive(TenantId tenant, UUID id) {
+        return jdbc.sql("UPDATE access_resource SET archived_at = now(), updated_at = now() "
+                        + "WHERE tenant_id = :tenant AND id = :id AND archived_at IS NULL")
+                .param("tenant", tenant.value())
+                .param("id", id)
+                .update() == 1;
+    }
+
+    /** 只恢复选中节点，绝不清除独立归档的后代。 */
+    boolean restore(TenantId tenant, UUID id) {
+        return jdbc.sql("UPDATE access_resource SET archived_at = NULL, updated_at = now() "
+                        + "WHERE tenant_id = :tenant AND id = :id AND archived_at IS NOT NULL")
+                .param("tenant", tenant.value())
+                .param("id", id)
+                .update() == 1;
+    }
+
+    boolean isEffectivelyActive(TenantId tenant, UUID id) {
+        return jdbc.sql("""
+                WITH RECURSIVE chain (id, parent_id, archived_at) AS (
+                    SELECT id, parent_id, archived_at
+                    FROM access_resource WHERE tenant_id = :tenant AND id = :id
+                    UNION ALL
+                    SELECT r.id, r.parent_id, r.archived_at
+                    FROM access_resource r
+                    JOIN chain c ON r.tenant_id = :tenant AND r.id = c.parent_id
+                )
+                SELECT COUNT(*) = 0 FROM chain WHERE archived_at IS NOT NULL
+                """)
+                .param("tenant", tenant.value())
+                .param("id", id)
+                .query(Boolean.class)
+                .single();
+    }
+
     private static ResourceView toView(ResultSet rs, int row) throws SQLException {
         return new ResourceView(rs.getObject("id", UUID.class), rs.getString("kind"),
                 rs.getObject("parent_id", UUID.class), rs.getString("name"),

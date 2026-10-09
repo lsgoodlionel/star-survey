@@ -197,6 +197,45 @@ class ResourceTreeTest {
     }
 
     @Test
+    void updatedDescKeepsItsDirectionAcrossPageBoundaries() {
+        UUID project = tree.createProject(admin, "项目").id();
+        UUID oldest = tree.createFolder(admin, project, "最早").id();
+        UUID middle = tree.createFolder(admin, project, "中间").id();
+        UUID newest = tree.createFolder(admin, project, "最新").id();
+        setOrdering(oldest, "最早", Instant.parse("2026-10-09T08:00:00Z"));
+        setOrdering(middle, "中间", Instant.parse("2026-10-09T09:00:00Z"));
+        setOrdering(newest, "最新", Instant.parse("2026-10-09T10:00:00Z"));
+
+        ResourcePage first = tree.list(admin, project, null, 2, null, "folder", null, "updated_desc");
+        ResourcePage second = tree.list(admin, project, first.nextCursor(), 2,
+                null, "folder", null, "updated_desc");
+
+        assertThat(java.util.stream.Stream.of(first, second).flatMap(page -> page.items().stream())
+                .map(ResourceView::id)).containsExactly(newest, middle, oldest);
+        assertThat(second.nextCursor()).isNull();
+    }
+
+    @Test
+    void updatedDescUsesIdAsTheFinalTieBreakerForSameTimeAndName() {
+        UUID project = tree.createProject(admin, "项目").id();
+        UUID first = tree.createFolder(admin, project, "同名").id();
+        UUID second = tree.createFolder(admin, project, "同名").id();
+        Instant sameTime = Instant.parse("2026-10-09T08:00:00Z");
+        setOrdering(first, "同名", sameTime);
+        setOrdering(second, "同名", sameTime);
+        List<UUID> expected = java.util.stream.Stream.of(first, second)
+                .sorted(Comparator.comparing(UUID::toString)).toList();
+
+        ResourcePage pageOne = tree.list(admin, project, null, 1, null, "folder", null, "updated_desc");
+        ResourcePage pageTwo = tree.list(admin, project, pageOne.nextCursor(), 1,
+                null, "folder", null, "updated_desc");
+
+        assertThat(List.of(pageOne.items().getFirst().id(), pageTwo.items().getFirst().id()))
+                .containsExactlyElementsOf(expected);
+        assertThat(pageTwo.nextCursor()).isNull();
+    }
+
+    @Test
     void nameSortIsStableForNormalizedUnicodeNames() {
         UUID project = tree.createProject(admin, "项目").id();
         UUID first = tree.createFolder(admin, project, "e\u0301").id();
@@ -282,13 +321,94 @@ class ResourceTreeTest {
         settings.setPublishApprovalRequired(owner, true);
 
         assertThat(tree.capabilities(editor, survey))
-                .isEqualTo(new ResourceCapabilities(false, false, true, true, false, false));
+                .isEqualTo(new ResourceCapabilities(false, false, true, true, false, false, true, false));
         assertThat(tree.capabilities(viewer, survey))
-                .isEqualTo(new ResourceCapabilities(false, false, false, false, false, false));
+                .isEqualTo(new ResourceCapabilities(false, false, false, false, false, false, false, false));
         assertThat(tree.capabilities(reviewer, survey))
-                .isEqualTo(new ResourceCapabilities(false, false, false, false, false, true));
+                .isEqualTo(new ResourceCapabilities(false, false, false, false, false, true, false, false));
         assertThat(tree.capabilities(editor, folder).canCreateChildren()).isTrue();
         assertThat(tree.capabilities(admin, null).canCreateProject()).isTrue();
+    }
+
+    // ------------------------------------------------------------ 归档与恢复
+
+    @Test
+    void archiveHidesTheWholeSubtreeFromActiveLists() {
+        UUID project = tree.createProject(admin, "项目").id();
+        UUID folder = tree.createFolder(admin, project, "文件夹").id();
+        UUID survey = fixture.survey(owner.tenantId(), folder);
+
+        ResourceView archived = tree.archive(admin, project);
+
+        assertThat(archived.archivedAt()).isNotNull();
+        assertThat(tree.get(admin, folder).archivedAt()).isNull();
+        assertThat(tree.get(admin, survey).archivedAt()).isNull();
+        assertThat(tree.list(admin, null, null, 20).items()).extracting(ResourceView::id)
+                .doesNotContain(project, folder, survey);
+        assertThat(tree.list(admin, project, null, 20).items()).extracting(ResourceView::id)
+                .doesNotContain(folder, survey);
+        assertThat(tree.list(admin, null, null, 20, null, null, "archived", null).items())
+                .extracting(ResourceView::id).containsExactly(project);
+        assertThat(tree.capabilities(admin, project).canArchive()).isFalse();
+        assertThat(tree.capabilities(admin, project).canRestore()).isTrue();
+        assertThat(tree.capabilities(admin, folder).canArchive()).isFalse();
+        assertThat(tree.capabilities(admin, folder).canRestore()).isFalse();
+    }
+
+    @Test
+    void restorePreservesAnIndependentlyArchivedDescendant() {
+        UUID project = tree.createProject(admin, "项目").id();
+        UUID folder = tree.createFolder(admin, project, "独立归档").id();
+        UUID survey = fixture.survey(owner.tenantId(), folder);
+        tree.archive(admin, folder);
+        tree.archive(admin, project);
+
+        ResourceView restored = tree.restore(admin, project);
+
+        assertThat(restored.archivedAt()).isNull();
+        assertThat(tree.get(admin, folder).archivedAt()).isNotNull();
+        assertThat(tree.get(admin, survey).archivedAt()).isNull();
+        assertThat(tree.list(admin, null, null, 20).items()).extracting(ResourceView::id).contains(project);
+        assertThat(tree.list(admin, project, null, 20).items()).extracting(ResourceView::id).doesNotContain(folder);
+        assertThat(tree.list(admin, project, null, 20, null, null, "archived", null).items())
+                .extracting(ResourceView::id).containsExactly(folder);
+    }
+
+    @Test
+    void archiveRequiresEditAndKeepsCrossTenantIdsPrivate() {
+        UUID project = tree.createProject(admin, "项目").id();
+        TenantContext viewer = fixture.member(owner, "viewer", "statistics_viewer", project);
+        TenantContext otherOwner = fixture.newTenant();
+        UUID otherProject = tree.createProject(otherOwner, "别的租户").id();
+
+        assertThatThrownBy(() -> tree.archive(viewer, project))
+                .isInstanceOf(ResourceAccessDeniedException.class);
+        assertThatThrownBy(() -> tree.restore(viewer, project))
+                .isInstanceOf(ResourceAccessDeniedException.class);
+        assertThatThrownBy(() -> tree.archive(admin, otherProject))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> tree.restore(admin, otherProject))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> tree.archive(admin, UUID.randomUUID()))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> tree.restore(admin, UUID.randomUUID()))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void archiveAndRestoreAreAudited() {
+        UUID project = tree.createProject(admin, "项目").id();
+
+        ResourceView archived = tree.archive(admin, project);
+        ResourceView archivedAgain = tree.archive(admin, project);
+        ResourceView restored = tree.restore(admin, project);
+        ResourceView restoredAgain = tree.restore(admin, project);
+
+        assertThat(archivedAgain.archivedAt()).isEqualTo(archived.archivedAt());
+        assertThat(restored.archivedAt()).isNull();
+        assertThat(restoredAgain.archivedAt()).isNull();
+        assertThat(auditCount(owner, "access.resource.archive", project)).isEqualTo(1);
+        assertThat(auditCount(owner, "access.resource.restore", project)).isEqualTo(1);
     }
 
     @Test

@@ -140,17 +140,62 @@ class ResourceTreeApiTest {
                 .andExpect(jsonPath("$.canEdit").value(true))
                 .andExpect(jsonPath("$.canSubmitApproval").value(true))
                 .andExpect(jsonPath("$.canPublishDirectly").value(false))
-                .andExpect(jsonPath("$.canApprovePublish").value(false));
+                .andExpect(jsonPath("$.canApprovePublish").value(false))
+                .andExpect(jsonPath("$.canArchive").value(true))
+                .andExpect(jsonPath("$.canRestore").value(false));
         mvc.perform(get("/v1/resource-capabilities").param("resourceId", folderA)
                         .header("Authorization", bearer(viewer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.canCreateChildren").value(false))
-                .andExpect(jsonPath("$.canEdit").value(false));
+                .andExpect(jsonPath("$.canEdit").value(false))
+                .andExpect(jsonPath("$.canArchive").value(false))
+                .andExpect(jsonPath("$.canRestore").value(false));
         mvc.perform(get("/v1/resource-capabilities").param("resourceId", projectB)
                         .header("Authorization", bearer(ownerA)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("not_found"));
         mvc.perform(get("/v1/resource-capabilities").param("resourceId", UUID.randomUUID().toString())
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+    }
+
+    @Test
+    void archiveAndRestoreEndpointsReturnTheUpdatedResourceAndPreservePrivacy() throws Exception {
+        String projectA = idOf(createProject(ownerA, "A 的项目"));
+        String folderA = idOf(createFolder(ownerA, projectA, "A 的文件夹"));
+        String projectB = idOf(createProject(ownerB, "B 的项目"));
+        String unknown = UUID.randomUUID().toString();
+
+        mvc.perform(post("/v1/resources/" + folderA + "/archive")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(folderA))
+                .andExpect(jsonPath("$.archivedAt").isNotEmpty());
+        mvc.perform(get("/v1/resource-capabilities").param("resourceId", folderA)
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canArchive").value(false))
+                .andExpect(jsonPath("$.canRestore").value(true));
+        mvc.perform(post("/v1/resources/" + folderA + "/restore")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(folderA))
+                .andExpect(jsonPath("$.archivedAt").doesNotExist());
+
+        mvc.perform(post("/v1/resources/" + projectB + "/archive")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+        mvc.perform(post("/v1/resources/" + projectB + "/restore")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+        mvc.perform(post("/v1/resources/" + unknown + "/archive")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+        mvc.perform(post("/v1/resources/" + unknown + "/restore")
                         .header("Authorization", bearer(ownerA)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("not_found"));

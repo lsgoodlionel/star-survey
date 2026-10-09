@@ -119,20 +119,48 @@ public class ResourceTreeService {
         return tenantScope.call(tenant, () -> {
             boolean canCreateProject = access.canInTenant(ctx, Permission.MANAGE_SETTINGS).allowed();
             if (resourceId == null) {
-                return new ResourceCapabilities(canCreateProject, false, false, false, false, false);
+                return new ResourceCapabilities(canCreateProject, false, false, false, false, false, false, false);
             }
 
             require(ctx, Permission.VIEW, resourceId);
             ResourceView node = requireNode(tenant, resourceId);
             boolean canEdit = access.can(ctx, Permission.EDIT, resourceId).allowed();
             boolean canSubmitApproval = access.held(ctx, resourceId).contains(Permission.PUBLISH);
+            boolean directlyArchived = node.archivedAt() != null;
             return new ResourceCapabilities(
                     canCreateProject,
                     canEdit && node.resourceKind().canContainChildren(),
                     canEdit,
                     canSubmitApproval,
                     access.can(ctx, Permission.PUBLISH, resourceId).allowed(),
-                    access.can(ctx, Permission.APPROVE_PUBLISH, resourceId).allowed());
+                    access.can(ctx, Permission.APPROVE_PUBLISH, resourceId).allowed(),
+                    canEdit && tree.isEffectivelyActive(tenant, resourceId),
+                    canEdit && directlyArchived);
+        });
+    }
+
+    /** 归档只标记选中节点；列表通过祖先链把整棵子树视为不可见。 */
+    public ResourceView archive(TenantContext ctx, UUID id) {
+        return changeArchiveState(ctx, id, true);
+    }
+
+    /** 恢复只清除选中节点的标记，独立归档的后代保持不变。 */
+    public ResourceView restore(TenantContext ctx, UUID id) {
+        return changeArchiveState(ctx, id, false);
+    }
+
+    private ResourceView changeArchiveState(TenantContext ctx, UUID id, boolean archived) {
+        requireId(id, "id");
+        TenantId tenant = ctx.tenantId();
+        return tenantScope.call(tenant, () -> {
+            require(ctx, Permission.EDIT, id);
+            ResourceView node = requireNode(tenant, id);
+            boolean changed = archived ? tree.archive(tenant, id) : tree.restore(tenant, id);
+            if (changed) {
+                audit.record(ctx, archived ? AccessAudit.RESOURCE_ARCHIVE : AccessAudit.RESOURCE_RESTORE,
+                        describe(id, node.resourceKind(), node.parentId(), node.name()));
+            }
+            return changed ? requireNode(tenant, id) : node;
         });
     }
 
