@@ -26,6 +26,11 @@ interface JourneyResult {
   version: number;
 }
 
+interface OutlineGroupOrder {
+  title: string;
+  questions: string[];
+}
+
 const ACTION_TIMEOUT_MS = 15_000;
 
 const importText = [
@@ -97,11 +102,7 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
   const me = await login(page, token, metadata);
 
   const suffix = Date.now().toString(36);
-  await createResource(page, '新建项目', '创建项目', `E2E 项目 ${suffix}`);
-  await createResource(page, '新建文件夹', '创建文件夹', `E2E 文件夹 ${suffix}`);
-  await createResource(page, '新建问卷', '创建问卷', `E2E 问卷 ${suffix}`);
-  await expect(page).toHaveURL(/\/surveys\/[0-9a-f-]{36}\/edit/);
-  const surveyId = surveyIdFrom(page.url());
+  const surveyId = await createSurveyResourceTree(page, 'E2E', suffix);
 
   await fillAction(page.getByLabel('题目文本'), '这是一份真实浏览器验收问卷');
   await fillAction(page.getByLabel('标题'), `作者工作台验收 ${suffix}`);
@@ -146,6 +147,57 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
   await writeResult({ network, surveyId, tenantId: me.tenantId, version }, token);
 });
 
+test('desktop pointer dragging persists question and group order after refresh', async ({ page }) => {
+  const surveyId = await createSortableSurvey(page, 'pointer');
+
+  await dragWithPointer(
+    page,
+    page.getByRole('button', { name: '拖动题组 导入的题目' }),
+    page.getByRole('button', { name: '拖动题目 QNOTE' }),
+  );
+  await expect(sortStatus(page)).toContainText('题组 导入的题目 已移动到第 1 位');
+
+  await dragWithPointer(
+    page,
+    page.getByRole('button', { name: '拖动题目 QNOTE' }),
+    page.getByRole('button', { name: '拖动题目 Q1' }),
+  );
+  await expect(sortStatus(page)).toContainText('题目 QNOTE 已移动到题组 导入的题目 第 1 位');
+
+  await saveAndReloadDraft(page, surveyId);
+  await expectOutlineOrder(page, sortedOutlineOrder);
+});
+
+test('desktop explicit sorting controls persist the same order after refresh', async ({ page }) => {
+  const surveyId = await createSortableSurvey(page, 'controls');
+
+  await clickAction(page.getByRole('button', { name: '下移 QNOTE' }));
+  await expect(sortStatus(page)).toContainText('题目 QNOTE 已移动到题组 导入的题目 第 1 位');
+  await clickAction(page.getByRole('button', { name: '上移 导入的题目' }));
+  await expect(sortStatus(page)).toContainText('题组 导入的题目 已移动到第 1 位');
+
+  await saveAndReloadDraft(page, surveyId);
+  await expectOutlineOrder(page, sortedOutlineOrder);
+});
+
+test('desktop keyboard dragging persists question order after refresh', async ({ page }) => {
+  const surveyId = await createSortableSurvey(page, 'keyboard');
+  const handle = page.getByRole('button', { name: '拖动题目 QNOTE' });
+
+  await handle.focus();
+  await page.keyboard.press('Space');
+  await expect(handle.locator('xpath=..')).toHaveAttribute('data-dragging', 'true');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Space');
+  await expect(sortStatus(page)).toContainText('题目 QNOTE 已移动到题组 导入的题目 第 1 位');
+
+  await saveAndReloadDraft(page, surveyId);
+  await expectOutlineOrder(page, [
+    { title: '第一题组', questions: [] },
+    { title: '导入的题目', questions: ['QNOTE', 'Q1'] },
+  ]);
+});
+
 test('@mobile editor keeps tabs and primary actions usable without horizontal overflow', async ({ page }) => {
   const metadata = await readMetadata();
   const token = await readToken();
@@ -177,6 +229,150 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
   }
   await assertUsable(page.getByRole('button', { name: '保存草稿' }));
 });
+
+test('@mobile touch-accessible sorting persists without horizontal overflow', async ({ page }) => {
+  const metadata = await readMetadata();
+  const token = await readToken();
+  await login(page, token, metadata);
+  const result = await readResult();
+  const surveyId = result.surveyId;
+  await navigateWithinApp(page, `/surveys/${surveyId}/edit`);
+  await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
+  const currentOrder = await readOutlineOrder(page);
+  if (currentOrder[0]?.title === '导入的题目') {
+    await page.getByRole('button', { name: '上移 第一题组' }).tap();
+    await saveAndReloadDraft(page, surveyId);
+  }
+  await expectOutlineOrder(page, [
+    { title: '第一题组', questions: ['QNOTE'] },
+    { title: '导入的题目', questions: ['Q1'] },
+  ]);
+  const reorderButtons = [
+    page.getByRole('button', { name: '下移 QNOTE' }),
+    page.getByRole('button', { name: '上移 Q1' }),
+    page.getByRole('button', { name: '下移 第一题组' }),
+    page.getByRole('button', { name: '上移 导入的题目' }),
+  ];
+
+  for (const button of reorderButtons) await assertTouchTarget(button);
+  await expectNoHorizontalOverflow(page);
+
+  await reorderButtons[2].tap();
+  await expect(sortStatus(page)).toContainText('题组 第一题组 已移动到第 2 位');
+  await saveAndReloadDraft(page, surveyId);
+  await expectOutlineOrder(page, [
+    { title: '导入的题目', questions: ['Q1'] },
+    { title: '第一题组', questions: ['QNOTE'] },
+  ]);
+  await expectNoHorizontalOverflow(page);
+});
+
+const sortedOutlineOrder: OutlineGroupOrder[] = [
+  { title: '导入的题目', questions: ['QNOTE', 'Q1'] },
+  { title: '第一题组', questions: [] },
+];
+
+async function createSortableSurvey(page: Page, label: string) {
+  const metadata = await readMetadata();
+  const token = await readToken();
+  await login(page, token, metadata);
+
+  const suffix = `${label}-${Date.now().toString(36)}`;
+  const surveyId = await createSurveyResourceTree(page, '排序验收', suffix);
+
+  await clickAction(page.getByRole('link', { name: '批量导入' }));
+  await fillAction(page.getByLabel('待导入文本'), importText);
+  await clickAction(page.getByRole('button', { name: '预览导入' }));
+  await clickAction(page.getByRole('button', { name: '确认导入 1 道题' }));
+  await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
+  await expectOutlineOrder(page, [
+    { title: '第一题组', questions: ['QNOTE'] },
+    { title: '导入的题目', questions: ['Q1'] },
+  ]);
+  return surveyId;
+}
+
+async function createSurveyResourceTree(page: Page, prefix: string, suffix: string) {
+  await createResource(page, '新建项目', '创建项目', `${prefix}项目 ${suffix}`);
+  await createResource(page, '新建文件夹', '创建文件夹', `${prefix}文件夹 ${suffix}`);
+  await createResource(page, '新建问卷', '创建问卷', `${prefix}问卷 ${suffix}`);
+  await expect(page).toHaveURL(/\/surveys\/[0-9a-f-]{36}\/edit/);
+  return surveyIdFrom(page.url());
+}
+
+async function dragWithPointer(page: Page, source: Locator, target: Locator) {
+  await expectActionable(source);
+  await expect(target).toBeVisible({ timeout: ACTION_TIMEOUT_MS });
+  await source.scrollIntoViewIfNeeded();
+  await target.scrollIntoViewIfNeeded();
+  const sourceBox = await source.boundingBox();
+  const targetBox = await target.boundingBox();
+  expect(sourceBox).not.toBeNull();
+  expect(targetBox).not.toBeNull();
+
+  const start = {
+    x: sourceBox!.x + sourceBox!.width / 2,
+    y: sourceBox!.y + sourceBox!.height / 2,
+  };
+  const end = {
+    x: targetBox!.x + targetBox!.width / 2,
+    y: targetBox!.y + targetBox!.height / 2,
+  };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 8, start.y, { steps: 2 });
+  await page.mouse.move(end.x, end.y, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(75);
+}
+
+async function saveAndReloadDraft(page: Page, surveyId: string) {
+  const saveResponse = page.waitForResponse((response) =>
+    response.url().includes(`/v1/surveys/${surveyId}/draft`)
+      && response.request().method() === 'PUT',
+  );
+  await clickAction(page.getByRole('button', { name: '保存草稿' }));
+  expect((await saveResponse).status()).toBe(200);
+  await expect(page.getByText(/已保存版本 \d+/)).toBeVisible();
+  await page.reload();
+  await login(page, await readToken(), await readMetadata());
+  await navigateWithinApp(page, `/surveys/${surveyId}/edit`);
+  await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
+  await expect(page.getByRole('heading', { name: '问卷大纲' })).toBeVisible();
+}
+
+async function expectOutlineOrder(page: Page, expected: OutlineGroupOrder[]) {
+  await expect.poll(() => readOutlineOrder(page)).toEqual(expected);
+}
+
+async function readOutlineOrder(page: Page): Promise<OutlineGroupOrder[]> {
+  return page.locator('.editor-outline-group').evaluateAll((groups) =>
+    groups.map((group) => ({
+      title: group.querySelector('h3')?.textContent?.trim() ?? '',
+      questions: [...group.querySelectorAll<HTMLButtonElement>('.editor-outline-question > span')]
+        .map((question) => question.textContent?.trim() ?? ''),
+    })),
+  );
+}
+
+async function assertTouchTarget(locator: Locator) {
+  await expect(locator).toBeVisible();
+  await expect(locator).toBeInViewport();
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.width).toBeGreaterThanOrEqual(44);
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+}
+
+async function expectNoHorizontalOverflow(page: Page) {
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  )).toBe(true);
+}
+
+function sortStatus(page: Page) {
+  return page.locator('.editor-outline > [role="status"][aria-live="polite"]');
+}
 
 async function createResource(page: Page, trigger: string, submit: string, value: string) {
   await clickAction(page.getByRole('button', { name: trigger }));

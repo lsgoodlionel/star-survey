@@ -14,7 +14,7 @@
 |---|---|
 | P0 基线与可行性 | ✅（供应商询证与法务意见待业务侧） |
 | P1 租户与平台骨架 | ✅ 闸门通过 |
-| P2 通用问卷与本土入口 | 🔄 第一阶段管理端创作链路已交付并通过真实浏览器验收 |
+| P2 通用问卷与本土入口 | 🔄 管理端创作链路与大纲拖拽排序已交付并通过真实浏览器验收 |
 | P3 商业与业务应用 | 🔄 考试与测评（WP-09/10）已起步 |
 | P4–P5 | ⬜ |
 
@@ -25,9 +25,9 @@
 | 平台 Java | **1403 通过 / 175 类** | 0 失败 0 错误 0 跳过 |
 | 发布网关 Python | **1180 通过** | 0 失败 |
 | 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
-| 管理端 Vitest | **13 个文件 / 134 通过** | lint、typecheck 同步通过 |
-| 管理端生产构建 | **2080 modules / 13 个产物文件检查** | production bundle 不含开发令牌入口 |
-| 管理端真实 E2E | **3 通过（7.6s）** | 桌面完整创作、移动端响应式编辑、真实 Chromium 敏感控件遮蔽 |
+| 管理端 Vitest | **14 个文件 / 142 通过** | lint、typecheck 同步通过 |
+| 管理端生产构建 | **2084 modules / 13 个产物文件检查** | production bundle 不含开发令牌入口 |
+| 管理端真实 E2E | **7 通过（19.7s，本地）** | 完整创作、pointer/键盘/按钮排序、移动端响应式与敏感控件遮蔽 |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
@@ -76,7 +76,7 @@
 
 | 路径 | 内容 |
 |---|---|
-| `platform/apps/admin-web/` | 作者工作台 SPA：内存会话、资源树、基础编辑、批量导入、草稿预览、审批发布与版本查看 |
+| `platform/apps/admin-web/` | 作者工作台 SPA：内存会话、资源树、基础编辑、大纲拖拽排序、批量导入、草稿预览、审批发布与版本查看 |
 | `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
 | `platform/tools/publish-gateway/` | 发布网关：定义 → LSS → 导入 → 激活 → 回读校验 → 回滚；答卷读取；插件通道客户端 |
 | `platform/tools/engine-theme/` | 把随镜像发布的作答主题装进引擎库 |
@@ -185,7 +185,7 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 
 | 工作包 | 状态 | 内容 |
 |---|---|---|
-| 管理端创作链路（第一阶段） | 🟡 | 组织免登安全交接、资源树和项目/文件夹/问卷创建、说明文字与单选/多选/短文本/长文本编辑、无损保存与冲突保护、批量文本导入、草稿预览、审批发布和不可变版本查看；桌面完整创作与移动端响应式编辑已有真实 E2E |
+| 管理端创作链路 | 🟡 | 组织免登安全交接、资源树和项目/文件夹/问卷创建、说明文字与单选/多选/短文本/长文本编辑、题组及题目拖拽/按钮/键盘排序、无损保存与冲突保护、批量文本导入、草稿预览、审批发布和不可变版本查看；桌面与移动端已有真实 E2E |
 | WP-23 共同基础 | 🟡 | 租户隔离（RLS）、公开路由、身份绑定、每实例事件密钥、审计；事件日志与补偿扫描；催答完成对账。跨系统对账报表、隐私删除、监控 ⬜ |
 | WP-22 套餐与计量 | 🟡 | 套餐版本、试用／付费订阅、有效答卷计量、席位额度、租户开通；赠送有效期 ⬜ |
 | WP-19 团队与品牌 | 🟡 | 角色目录、资源树授权继承、字段与导出权限、席位联动；企业模板库；`zh-business` 主题与多语言。协作员到期、自定义域名 ⬜ |
@@ -208,7 +208,7 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 |---|---|---|
 | `parity-tables` | 发布网关单测（含**三端注册表**与**三端数值上限**两张对照表）＋ 对账脚本自己的用例 ＋ **需求追溯校验** | 只要 Python，秒级 |
 | `admin-web` | Node 22 下执行 `npm ci`、lint、typecheck、Vitest、生产构建与 production bundle assertion | Node 22 |
-| `admin-web-e2e` | 桌面完整创作与移动端响应式编辑；真实串起管理端、平台、网关和 MySQL 引擎 | Docker ＋ Chromium；依赖 `admin-web` 与 `parity-tables` |
+| `admin-web-e2e` | 桌面完整创作、pointer/键盘/按钮排序与移动端响应式编辑；真实串起管理端、平台、网关和 MySQL 引擎 | Docker ＋ Chromium；依赖 `admin-web` 与 `parity-tables` |
 | `gateway-parity-e2e` | WP-03.4 双执行比对，`mysql` 与 `pgsql` 两个矩阵分支各跑一遍 | 起引擎栈（脚本自行构建 `survey-web` 镜像） |
 | `platform-java` | 平台 Java 全套（`run-platform-tests.sh`，含测试数对账） | `actions/setup-java` ＋ PostgreSQL service 容器 |
 | `access-policy-e2e` | WP-04 访问策略端到端（R04-01…05），`mysql` 与 `pgsql` 各一遍 | 起引擎栈 |
@@ -259,7 +259,7 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 
 **功能缺口**
 
-- 管理端首期仍未交付拖拽排序、高级题型可视化配置、真实 LimeSurvey 运行时预览和专门的屏幕阅读器审计；当前只有按钮式排序、复杂题型只读无损往返、明确标注的“草稿预览”和可访问性基础检查。
+- 管理端已交付题组与题目的 pointer 拖拽、键盘排序和移动端按钮替代操作；仍未交付高级题型可视化配置、真实 LimeSurvey 运行时预览和专门的屏幕阅读器审计。当前复杂题型仍是只读无损往返，预览仍是明确标注的“草稿预览”。
 - PDF 导出卡在中文字体（已决定随仓库交付思源黑体，SIL OFL 1.1）。
 - 附件打包卡在 `get_uploaded_files`——它一次把**整份答卷**的全部文件 base64 塞进一个 JSON 应答。
 - 字典节点上限 8000（由定义快照 1 MiB 倒推）：到区县够用，到乡镇街道不够。
