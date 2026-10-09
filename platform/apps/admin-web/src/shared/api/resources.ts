@@ -41,37 +41,46 @@ export interface ResourceFilters {
   sort?: 'updated_desc' | 'name_asc';
 }
 
+export interface NormalizedResourceFilters {
+  query: string | null;
+  kind: ResourceKind | null;
+  archived: 'active' | 'archived';
+  sort: 'updated_desc' | 'name_asc';
+}
+
 export interface ListResourcesOptions extends ResourceFilters {
   parentId?: string | null;
   cursor?: string | null;
   signal?: AbortSignal;
 }
 
+export function normalizeResourceFilters(
+  filters: ResourceFilters = {},
+): NormalizedResourceFilters {
+  const strippedQuery = filters.query?.trim();
+  return {
+    query: strippedQuery ? strippedQuery.normalize('NFC') : null,
+    kind: filters.kind ?? null,
+    archived: filters.archived ?? 'active',
+    sort: filters.sort ?? 'updated_desc',
+  };
+}
+
 export const resourceQueryKey = (
   tenantId: string,
   parentId: string | null,
   filters: ResourceFilters = {},
-) =>
-  [
-    'resources',
-    tenantId,
-    parentId,
-    {
-      query: filters.query ?? null,
-      kind: filters.kind ?? null,
-      archived: filters.archived ?? null,
-      sort: filters.sort ?? null,
-    },
-  ] as const;
+) => ['resources', tenantId, parentId, normalizeResourceFilters(filters)] as const;
 
 export function listResources(api: ApiClient, options: ListResourcesOptions = {}) {
+  const filters = normalizeResourceFilters(options);
   const search = new URLSearchParams();
   if (options.parentId) search.set('parentId', options.parentId);
-  if (options.query !== undefined) search.set('query', options.query);
-  if (options.kind !== undefined) search.set('kind', options.kind);
-  if (options.archived !== undefined) search.set('archived', options.archived);
-  if (options.sort !== undefined) search.set('sort', options.sort);
-  if (options.cursor !== undefined && options.cursor !== null) search.set('cursor', options.cursor);
+  if (filters.query) search.set('query', filters.query);
+  if (filters.kind) search.set('kind', filters.kind);
+  search.set('archived', filters.archived);
+  search.set('sort', filters.sort);
+  if (options.cursor?.trim()) search.set('cursor', options.cursor);
   const query = search.toString();
   return api.request({
     path: `/v1/resources${query ? `?${query}` : ''}`,

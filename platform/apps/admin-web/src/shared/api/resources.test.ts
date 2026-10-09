@@ -1,9 +1,10 @@
 import { expect, test, vi } from 'vitest';
-import { createApiClient } from './http';
+import { createApiClient, type ApiClient } from './http';
 import {
   archiveResource,
   listResources,
   moveResource,
+  normalizeResourceFilters,
   renameResource,
   resourceCapabilitiesSchema,
   resourceQueryKey,
@@ -85,6 +86,58 @@ test('encodesEveryResourceFilterAndPreservesTheOpaqueCursor', async () => {
   );
 });
 
+test('normalizesServerDefaultAndBlankFiltersToTheSameQueryKey', () => {
+  const omitted = resourceQueryKey('tenant-a', parentId);
+  const explicitDefaults = resourceQueryKey('tenant-a', parentId, {
+    archived: 'active',
+    sort: 'updated_desc',
+  });
+  const blankQuery = resourceQueryKey('tenant-a', parentId, {
+    query: ' \t\n ',
+    archived: 'active',
+    sort: 'updated_desc',
+  });
+
+  expect(omitted).toEqual(explicitDefaults);
+  expect(blankQuery).toEqual(omitted);
+});
+
+test('normalizesTrimmedQueriesToNfcForKeysAndUrls', async () => {
+  const decomposed = ' Cafe\u0301 ';
+  const composed = 'Caf\u00e9';
+  expect(normalizeResourceFilters({ query: decomposed })).toEqual({
+    query: composed,
+    kind: null,
+    archived: 'active',
+    sort: 'updated_desc',
+  });
+  expect(resourceQueryKey('tenant-a', parentId, { query: decomposed })).toEqual(
+    resourceQueryKey('tenant-a', parentId, { query: composed }),
+  );
+
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+    jsonResponse({ items: [resource], nextCursor: null }),
+  );
+  await listResources(createApiClient({ fetchImpl }), { query: decomposed });
+  expect(fetchImpl).toHaveBeenCalledWith(
+    '/v1/resources?query=Caf%C3%A9&archived=active&sort=updated_desc',
+    expect.any(Object),
+  );
+});
+
+test('omitsBlankQueryAndCursorFromTheNormalizedListUrl', async () => {
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+    jsonResponse({ items: [resource], nextCursor: null }),
+  );
+
+  await listResources(createApiClient({ fetchImpl }), { query: ' \t ', cursor: ' \n ' });
+
+  expect(fetchImpl).toHaveBeenCalledWith(
+    '/v1/resources?archived=active&sort=updated_desc',
+    expect.any(Object),
+  );
+});
+
 test('isolatesResourceQueryKeysByTenantParentAndEveryFilter', () => {
   const base: ResourceFilters = {
     query: '客户',
@@ -119,5 +172,23 @@ test('sendsTypedRenameMoveArchiveAndRestoreRequests', async () => {
     ['/v1/resources/folder%2Fid/move', 'POST', JSON.stringify({ parentId })],
     ['/v1/resources/folder%2Fid/archive', 'POST', undefined],
     ['/v1/resources/folder%2Fid/restore', 'POST', undefined],
+  ]);
+});
+
+test('forwardsAbortSignalsThroughEveryResourceMutation', async () => {
+  const request = vi.fn().mockResolvedValue(resource);
+  const api = { request } as unknown as ApiClient;
+  const signal = new AbortController().signal;
+
+  await renameResource(api, resourceId, '新名称', signal);
+  await moveResource(api, resourceId, parentId, signal);
+  await archiveResource(api, resourceId, signal);
+  await restoreResource(api, resourceId, signal);
+
+  expect(request.mock.calls.map(([options]) => options.signal)).toEqual([
+    signal,
+    signal,
+    signal,
+    signal,
   ]);
 });
