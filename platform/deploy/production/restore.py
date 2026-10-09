@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unicodedata
 
 from backup import (
     AuthenticatedOpenSSLCipher, BackupError, BackupManager, IMAGE_KEYS, VOLUME_SOURCES,
@@ -232,9 +233,8 @@ class RestoreManager:
         limits = self.archive_limits
         count = 0
         total = 0
-        names = set()
-        folded = set()
-        types = {}
+        explicit = {}
+        spellings = {}
         try:
             with tarfile.open(archive_path, mode="r:*") as archive:
                 for member in archive:
@@ -246,17 +246,19 @@ class RestoreManager:
                     if not raw or "\\" in raw or path.is_absolute() or ".." in path.parts \
                             or (raw != "." and path.as_posix() != raw.rstrip("/")):
                         raise RestoreIntegrityError("volume archive contains an unsafe path")
-                    canonical = path.as_posix()
-                    if canonical in names or canonical.casefold() in folded:
-                        raise RestoreIntegrityError("volume archive contains duplicate paths")
                     if not (member.isfile() or member.isdir()):
                         raise RestoreIntegrityError("volume archive contains an unsupported entry type")
-                    for parent in path.parents:
-                        if parent.as_posix() in types and types[parent.as_posix()] == "file":
-                            raise RestoreIntegrityError("volume archive path descends through a regular file")
-                    names.add(canonical)
-                    folded.add(canonical.casefold())
-                    types[canonical] = "file" if member.isfile() else "dir"
+                    normalized_parts = tuple(unicodedata.normalize("NFC", part) for part in path.parts)
+                    identity = tuple(part.casefold() for part in normalized_parts)
+                    if identity in explicit:
+                        raise RestoreIntegrityError("volume archive contains duplicate or colliding paths")
+                    for depth in range(1, len(identity) + 1):
+                        node = identity[:depth]
+                        spelling = normalized_parts[:depth]
+                        if node in spellings and spellings[node] != spelling:
+                            raise RestoreIntegrityError("volume archive contains duplicate or colliding paths")
+                        spellings[node] = spelling
+                    explicit[identity] = "file" if member.isfile() else "dir"
                     if member.isfile():
                         if member.size < 0 or member.size > limits["max_file_bytes"]:
                             raise RestoreIntegrityError("volume archive member exceeds the safety limit")
@@ -264,6 +266,9 @@ class RestoreManager:
                         if total > limits["max_total_bytes"]:
                             raise RestoreIntegrityError("volume archive content exceeds the safety limit")
             archive_size = max(1, archive_path.stat().st_size)
+            files = {identity for identity, kind in explicit.items() if kind == "file"}
+            if any(any(identity[:depth] in files for depth in range(1, len(identity))) for identity in explicit):
+                raise RestoreIntegrityError("volume archive path descends through a regular file")
             if total > archive_size * limits["max_expansion_ratio"] + limits["expansion_slack_bytes"]:
                 raise RestoreIntegrityError("volume archive expansion ratio exceeds the safety limit")
         except RestoreIntegrityError:

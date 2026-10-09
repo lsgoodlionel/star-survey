@@ -23,20 +23,21 @@ def load_doctor():
 
 class DoctorRunner:
     def __init__(self, unhealthy=False, migration="920", secret="", line_delimited_health=False,
-                 runtime_db_port=False, missing_https_listener=False):
+                 runtime_db_port=False, missing_https_listener=False, rogue_listener=False):
         self.unhealthy = unhealthy
         self.migration = migration
         self.secret = secret
         self.line_delimited_health = line_delimited_health
         self.runtime_db_port = runtime_db_port
         self.missing_https_listener = missing_https_listener
+        self.rogue_listener = rogue_listener
         self.calls = []
 
     def run(self, command, **kwargs):
         command = tuple(str(value) for value in command)
         self.calls.append(command)
         joined = " ".join(command)
-        if " ps " in f" {joined} ":
+        if command[:2] == ("docker", "compose") and "ps" in command:
             services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"]
             payload = [{"Service": name, "ID": "id-" + name, "State": "running", "Health": "unhealthy" if self.unhealthy and name == "engine" else "healthy"} for name in services]
             payload.append({"Service": "engine-init", "ID": "id-engine-init", "State": "exited", "ExitCode": 0, "Health": ""})
@@ -73,17 +74,27 @@ class DoctorRunner:
                 rows.append({"Id": "id-" + service, "Name": "/survey-production-" + service,
                              "Config": {"Labels": {"com.docker.compose.service": service}},
                              "HostConfig": {"PortBindings": bindings},
+                             "State": {"Pid": 500 if service == "edge" else 0},
                              "NetworkSettings": {"Networks": {
-                                 "survey-production_" + name: {} for name in networks[service]
+                                 "survey-production_" + name: {"IPAddress": "172.20.0.2" if service == "edge" else "172.20.0.3"}
+                                 for name in networks[service]
                              }}})
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(rows), stderr="")
         if command and command[0] == "ss":
-            lines = ["LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* users:((\"docker-proxy\",pid=1,fd=4))"]
+            owner = "nginx" if self.rogue_listener else "docker-proxy"
+            lines = [f"LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* users:((\"{owner}\",pid=101,fd=4))"]
             if not self.missing_https_listener:
-                lines.append("LISTEN 0 4096 0.0.0.0:443 0.0.0.0:* users:((\"docker-proxy\",pid=2,fd=4))")
+                https_owner = "caddy-rogue" if self.rogue_listener else "docker-proxy"
+                lines.append(f"LISTEN 0 4096 0.0.0.0:443 0.0.0.0:* users:((\"{https_owner}\",pid=102,fd=4))")
             if self.runtime_db_port:
                 lines.append("LISTEN 0 4096 0.0.0.0:5432 0.0.0.0:* users:((\"docker-proxy\",pid=3,fd=4))")
             return subprocess.CompletedProcess(command, 0, stdout="\n".join(lines), stderr="")
+        if command[:3] == ("ps", "-p", "101"):
+            value = "nginx: master process" if self.rogue_listener else "/usr/bin/docker-proxy -host-port 80 -container-ip 172.20.0.2 -container-port 80"
+            return subprocess.CompletedProcess(command, 0, stdout=value + "\n", stderr="")
+        if command[:3] == ("ps", "-p", "102"):
+            value = "caddy run" if self.rogue_listener else "/usr/bin/docker-proxy -host-port 443 -container-ip 172.20.0.2 -container-port 443"
+            return subprocess.CompletedProcess(command, 0, stdout=value + "\n", stderr="")
         if "flyway_schema_history" in joined:
             return subprocess.CompletedProcess(command, 0, stdout=self.migration + "\n", stderr="")
         if "productionInit status" in joined:
@@ -152,7 +163,8 @@ class DoctorAndCleanHostTest(unittest.TestCase):
         self.assertTrue(any(command and command[0] == "ss" for command in runner.calls))
 
     def test_doctor_blocks_runtime_port_drift_and_missing_host_listener(self):
-        for runner in (DoctorRunner(runtime_db_port=True), DoctorRunner(missing_https_listener=True)):
+        for runner in (DoctorRunner(runtime_db_port=True), DoctorRunner(missing_https_listener=True),
+                       DoctorRunner(rogue_listener=True)):
             with self.subTest(runner=runner):
                 report = self.doctor.Doctor(
                     self.target, runner=runner, tls_probe=lambda host: True, product_probe=lambda *args: None

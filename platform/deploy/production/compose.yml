@@ -120,7 +120,7 @@ services:
     command:
       - PUBGW_SHARED_SECRET=/run/secrets/platform_pubgw_secret
       - PUBGW_ENGINE_ADMIN_PASSWORD=/run/secrets/pubgw_engine_admin_password
-      - PUBGW_ENGINE_CHANNEL_SECRET=/run/secrets/platform_engine_events_secret
+      - PUBGW_ENGINE_CHANNEL_SECRET=/run/secrets/engine_instance_events_secret
       - --
       - python
       - -m
@@ -134,7 +134,7 @@ services:
       - publish-gateway-state:/var/lib/pubgw
     secrets:
       - platform_pubgw_secret
-      - platform_engine_events_secret
+      - engine_instance_events_secret
       - pubgw_engine_admin_password
     networks:
       - internal
@@ -155,7 +155,7 @@ services:
     image: ${ENGINE_IMAGE:?set ENGINE_IMAGE to a fixed version or digest}
     entrypoint: ["/bin/sh", "/opt/survey/run-with-secrets.sh"]
     command:
-      - MJY_PLATFORM_EVENTS_SECRET=/run/secrets/platform_engine_events_secret
+      - MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret
       - --
       - apache2-foreground
     environment:
@@ -177,7 +177,7 @@ services:
       - engine-runtime:/var/www/html/application/runtime
     secrets:
       - engine_db_password
-      - platform_engine_events_secret
+      - engine_instance_events_secret
     networks:
       - edge
       - internal
@@ -337,6 +337,8 @@ secrets:
     file: ${PLATFORM_JWT_HMAC_SECRET_FILE:?set PLATFORM_JWT_HMAC_SECRET_FILE}
   platform_engine_events_secret:
     file: ${PLATFORM_ENGINE_EVENTS_SECRET_FILE:?set PLATFORM_ENGINE_EVENTS_SECRET_FILE}
+  engine_instance_events_secret:
+    file: ${ENGINE_INSTANCE_EVENTS_SECRET_FILE:?set ENGINE_INSTANCE_EVENTS_SECRET_FILE}
   platform_pubgw_secret:
     file: ${PLATFORM_PUBGW_SECRET_FILE:?set PLATFORM_PUBGW_SECRET_FILE}
   pubgw_engine_admin_password:

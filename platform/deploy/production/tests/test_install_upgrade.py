@@ -55,6 +55,10 @@ class NativeCleanHostAcceptanceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="survey-clean-host-") as root:
             target = Path(root) / "survey"
             self.run_ctl(target, "install", "--manifest", initial_manifest, "--public-host", public_host, "--admin-user", admin_user, "--admin-email", admin_email)
+            self.run_ctl(target, "setup-probe")
+            probe = target / "shared" / "product-probe.json"
+            self.assertTrue(probe.is_file())
+            self.assertEqual(0o600, probe.stat().st_mode & 0o777)
             self.run_ctl(target, "doctor")
             request = urllib.request.Request(f"https://{public_host}/.well-known/survey-health", headers={"User-Agent": "survey-clean-host/1"})
             with urllib.request.urlopen(request, timeout=15) as response:

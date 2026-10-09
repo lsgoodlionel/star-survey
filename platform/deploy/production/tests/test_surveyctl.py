@@ -1,5 +1,6 @@
 import contextlib
 import hashlib
+import hmac
 import importlib.util
 import io
 import json
@@ -682,7 +683,7 @@ class SurveyctlTest(unittest.TestCase):
     def test_cli_exposes_all_lifecycle_commands_and_fixed_exit_codes(self):
         parser = self.module.build_parser()
         self.assertEqual(
-            {"install", "upgrade", "rollback", "backup", "restore", "status", "doctor", "logs", "uninstall"},
+            {"install", "setup-probe", "upgrade", "rollback", "backup", "restore", "status", "doctor", "logs", "uninstall"},
             set(parser._subparsers._group_actions[0].choices),
         )
         self.assertEqual(0, self.module.EXIT_SUCCESS)
@@ -746,6 +747,77 @@ class SurveyctlTest(unittest.TestCase):
         admin_password = (secret_dir / "engine_admin_password").read_text().strip()
         self.assertTrue(all(admin_password not in value for value in joined))
         self.assertTrue(all(str(self.target) in value for value in state["managedPaths"]))
+        master = (secret_dir / "platform_engine_events_secret").read_text().strip().encode()
+        expected = hmac.new(master, b"mjy-engine-events/v1/production-engine-01", hashlib.sha256).hexdigest()
+        self.assertEqual(expected, (secret_dir / "engine_instance_events_secret").read_text().strip())
+        self.assertIn(
+            f"ENGINE_INSTANCE_EVENTS_SECRET_FILE={secret_dir / 'engine_instance_events_secret'}",
+            (self.target / "releases" / "0.2.0" / ".env").read_text(),
+        )
+
+    def test_setup_probe_creates_least_privilege_identity_without_logging_secrets(self):
+        self.install()
+        calls = []
+
+        def api_call(token, method, path, body=None):
+            calls.append((method, path, body, token))
+            if path == "/v1/platform/tenants":
+                return 201, {"id": "11111111-1111-4111-8111-111111111111", "status": "provisioning"}
+            if path == "/v1/platform/plans":
+                return 201, {"id": "22222222-2222-4222-8222-222222222222", "version": 1}
+            if path.endswith("/onboarding"):
+                return 200, {"ownerActorId": "production-probe-owner"}
+            if path.endswith("/status"):
+                return 200, {"status": "active"}
+            if path.endswith("/engine-instances"):
+                return 201, {"id": "production-engine-01"}
+            if path.endswith("/event-secret"):
+                return 200, {
+                    "engineInstanceId": "production-engine-01",
+                    "secret": (self.target / "shared" / "secrets" / "engine_instance_events_secret").read_text().strip(),
+                }
+            raise AssertionError(path)
+
+        self.manager().setup_probe(api_call=api_call)
+        probe = self.target / "shared" / "product-probe.json"
+        self.assertEqual(0o600, stat.S_IMODE(probe.stat().st_mode))
+        self.assertEqual(
+            {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner"},
+            json.loads(probe.read_text()),
+        )
+        plan = next(body for method, path, body, _ in calls if path == "/v1/platform/plans")
+        self.assertEqual(
+            {"survey.read", "survey.write", "response.collect", "response.export"},
+            set(plan["capabilities"]),
+        )
+        secrets_on_disk = [path.read_text().strip() for path in (self.target / "shared" / "secrets").iterdir()]
+        self.assertTrue(all(secret not in "\n".join(" ".join(map(str, call[:3])) for call in calls) for secret in secrets_on_disk))
+
+    def test_helper_exit_codes_are_preserved_by_real_cli_without_traceback(self):
+        self.install()
+        backup = self.target / "backups" / "sample"
+        write_fake_backup(backup)
+        helper = self.target / "releases" / "0.2.0" / "restore.py"
+        for operation, helper_source, expected in (
+            ("verify", "import sys\nsys.exit(5)\n", 5),
+            ("restore", "import sys\nsys.exit(0 if 'verify' in sys.argv else 4)\n", 4),
+        ):
+            with self.subTest(operation=operation):
+                helper.write_text(helper_source)
+                result = subprocess.run(
+                    [sys.executable, str(MODULE_PATH), "--target", str(self.target), "restore", "sample"],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(expected, result.returncode, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+        backup_helper = self.target / "releases" / "0.2.0" / "backup.py"
+        backup_helper.write_text("import sys\nsys.exit(5)\n")
+        result = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "--target", str(self.target), "backup", "--output", "helper-integrity"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(5, result.returncode, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_install_refuses_to_overwrite_an_existing_managed_installation(self):
         self.install()

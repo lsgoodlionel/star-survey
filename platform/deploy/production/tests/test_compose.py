@@ -232,6 +232,7 @@ class ProductionComposeTest(unittest.TestCase):
             "PLATFORM_DB_APP_PASSWORD_FILE",
             "PLATFORM_JWT_HMAC_SECRET_FILE",
             "PLATFORM_ENGINE_EVENTS_SECRET_FILE",
+            "ENGINE_INSTANCE_EVENTS_SECRET_FILE",
             "PLATFORM_PUBGW_SECRET_FILE",
             "PUBGW_ENGINE_ADMIN_PASSWORD_FILE",
         }
@@ -266,6 +267,14 @@ class ProductionComposeTest(unittest.TestCase):
                     )
                     self.assertNotEqual(0, result.returncode)
                     self.assertIn(missing, result.stderr)
+
+    def test_engine_event_channel_uses_per_instance_secret(self):
+        services = self.render_compose()["services"]
+        sources = lambda service: {item["source"] for item in services[service]["secrets"]}
+        self.assertIn("platform_engine_events_secret", sources("platform"))
+        for service in ("engine", "publish-gateway"):
+            self.assertIn("engine_instance_events_secret", sources(service))
+            self.assertNotIn("platform_engine_events_secret", sources(service))
 
         config = self.render_compose()
         rendered = json.dumps(config, sort_keys=True)

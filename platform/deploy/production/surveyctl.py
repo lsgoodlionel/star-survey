@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from dataclasses import dataclass
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -21,6 +23,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from typing import Any, Callable
 import urllib.error
 import urllib.request
@@ -47,6 +50,7 @@ SECRET_NAMES = (
     "engine_db_root_password", "platform_db_superuser_password", "platform_db_owner_password",
     "platform_db_app_password", "platform_jwt_hmac_secret", "platform_engine_events_secret",
     "platform_pubgw_secret", "pubgw_engine_admin_password", "backup_encryption_key",
+    "engine_instance_events_secret",
 )
 REQUIRED_BUNDLE_FILES = {
     "compose.yml", "Caddyfile", "surveyctl", "surveyctl.py", "release.schema.json",
@@ -660,6 +664,16 @@ class SurveyManager:
         except (OSError, subprocess.CalledProcessError) as exc:
             raise RuntimeHealthError(runtime_message) from exc
 
+    def _run_helper(self, command: list[str], runtime_message: str, **kwargs):
+        try:
+            return self.runner.run(command, cwd=self.target, **kwargs)
+        except subprocess.CalledProcessError as exc:
+            if exc.returncode == EXIT_INTEGRITY:
+                raise IntegrityError(runtime_message) from exc
+            raise RuntimeHealthError(runtime_message) from exc
+        except OSError as exc:
+            raise RuntimeHealthError(runtime_message) from exc
+
     def _assert_healthy(self, compose: list[str], message: str) -> None:
         result = self._run(compose + ["ps", "--all", "--format", "json"], message, capture_output=True)
         try:
@@ -853,8 +867,17 @@ class SurveyManager:
         secret_dir = self._mkdir("shared/secrets")
         for name in SECRET_NAMES:
             path = secret_dir / name
-            if not path.exists() and name != "engine_admin_password_hash":
+            if not path.exists() and name not in {"engine_admin_password_hash", "engine_instance_events_secret"}:
                 self._atomic_write(path, secrets.token_urlsafe(48) + "\n")
+        master = (secret_dir / "platform_engine_events_secret").read_bytes().strip()
+        instance_secret = hmac.new(
+            master, b"mjy-engine-events/v1/production-engine-01", hashlib.sha256
+        ).hexdigest()
+        instance_path = secret_dir / "engine_instance_events_secret"
+        if not instance_path.exists():
+            self._atomic_write(instance_path, instance_secret + "\n")
+        elif not secrets.compare_digest(instance_path.read_text(encoding="ascii").strip(), instance_secret):
+            raise IntegrityError("engine instance event secret does not match the platform trust root")
         lines = [f"PUBLIC_HOST={host}"] + [f"{key}={value}" for key, value in sorted(manifest.raw["images"].items())]
         lines += [
             "ENGINE_INSTANCE_ID=production-engine-01", f"ENGINE_ADMIN_USER={admin_user}",
@@ -866,6 +889,7 @@ class SurveyManager:
             "PLATFORM_DB_SUPERUSER_PASSWORD_FILE": "platform_db_superuser_password", "PLATFORM_DB_OWNER_PASSWORD_FILE": "platform_db_owner_password",
             "PLATFORM_DB_APP_PASSWORD_FILE": "platform_db_app_password", "PLATFORM_JWT_HMAC_SECRET_FILE": "platform_jwt_hmac_secret",
             "PLATFORM_ENGINE_EVENTS_SECRET_FILE": "platform_engine_events_secret", "PLATFORM_PUBGW_SECRET_FILE": "platform_pubgw_secret",
+            "ENGINE_INSTANCE_EVENTS_SECRET_FILE": "engine_instance_events_secret",
             "PUBGW_ENGINE_ADMIN_PASSWORD_FILE": "pubgw_engine_admin_password",
         }
         lines += [f"{key}={secret_dir / value}" for key, value in env_keys.items()]
@@ -1042,7 +1066,7 @@ class SurveyManager:
             self._reject_symlink_components(path)
         state = self._read_state(require_current=True)
         helper = self._release_dir(state["version"]) / "restore.py"
-        self._run(
+        self._run_helper(
             [sys.executable, str(helper), "verify", "--target", str(self.target), "--backup", str(backup)],
             "backup restore-grade verification failed",
         )
@@ -1055,7 +1079,7 @@ class SurveyManager:
             raise InputError("backup destination already exists")
         self._mkdir("backups")
         helper = self._release_dir(state["version"]) / "backup.py"
-        self._run([sys.executable, str(helper), "backup", "--target", str(self.target), "--output", str(output), "--version", state["version"]], "backup failed")
+        self._run_helper([sys.executable, str(helper), "backup", "--target", str(self.target), "--output", str(output), "--version", state["version"]], "backup failed")
         self._verify_backup(output, state["version"], state["databaseSchema"])
         return output
 
@@ -1068,7 +1092,79 @@ class SurveyManager:
         if metadata["databaseSchema"] not in compatible_schemas:
             raise IntegrityError("backup database schema is incompatible with the installed release")
         helper = self._release_dir(state["version"]) / "restore.py"
-        self._run([sys.executable, str(helper), "restore", "--target", str(self.target), "--backup", str(backup)], "restore failed")
+        self._run_helper([sys.executable, str(helper), "restore", "--target", str(self.target), "--backup", str(backup)], "restore failed")
+
+    @staticmethod
+    def _jwt(secret: bytes, actor: str, tenant: str, roles: list[str]) -> str:
+        encode = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+        now = int(time.time())
+        header = encode(b'{"alg":"HS256","typ":"JWT"}')
+        claims = encode(json.dumps({
+            "sub": actor, "tenant_id": tenant, "roles": roles, "iat": now, "exp": now + 300,
+        }, separators=(",", ":")).encode("utf-8"))
+        signed = f"{header}.{claims}".encode("ascii")
+        return signed.decode("ascii") + "." + encode(hmac.new(secret, signed, hashlib.sha256).digest())
+
+    def setup_probe(self, api_call=None) -> None:
+        state = self._read_state(require_current=True)
+        host = state["publicHost"]
+        jwt_path = self._managed("shared/secrets/platform_jwt_hmac_secret", must_exist=True)
+        event_path = self._managed("shared/secrets/engine_instance_events_secret", must_exist=True)
+        jwt_secret = jwt_path.read_bytes().strip()
+        if jwt_path.is_symlink() or event_path.is_symlink() or len(jwt_secret) < 32:
+            raise IntegrityError("probe setup secrets are unavailable or unsafe")
+        token = self._jwt(jwt_secret, "production-probe-operator", str(uuid.uuid4()), ["platform_operator"])
+
+        def request(call_token, method, path, body=None):
+            payload = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
+            headers = {"Authorization": "Bearer " + call_token, "Accept": "application/json"}
+            if payload is not None:
+                headers["Content-Type"] = "application/json"
+            req = urllib.request.Request(f"https://{host}{path}", data=payload, headers=headers, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=60, context=ssl.create_default_context()) as response:
+                    data = response.read(1024 * 1024)
+                    return response.status, json.loads(data) if data else None
+            except (OSError, urllib.error.URLError, ValueError) as exc:
+                raise RuntimeHealthError("probe setup API request failed") from exc
+
+        call = api_call or request
+        suffix = uuid.uuid4().hex[:12]
+
+        def expect(method, path, body, status):
+            actual, value = call(token, method, path, body)
+            if actual != status or not isinstance(value, dict):
+                raise RuntimeHealthError("probe setup API rejected a provisioning step")
+            return value
+
+        tenant = expect("POST", "/v1/platform/tenants", {"code": "production-probe-" + suffix,
+                        "name": "Production probe"}, 201)
+        tenant_id = tenant.get("id")
+        try:
+            uuid.UUID(tenant_id)
+        except (ValueError, TypeError) as exc:
+            raise RuntimeHealthError("probe setup returned an invalid tenant identity") from exc
+        plan = expect("POST", "/v1/platform/plans", {
+            "planCode": "production-probe-" + suffix,
+            "capabilities": ["survey.read", "survey.write", "response.collect", "response.export"],
+            "quotas": {"member.seats": 1, "response.valid_completed": 100}, "exportWindowDays": 1,
+        }, 201)
+        owner = "production-probe-owner"
+        expect("POST", f"/v1/platform/tenants/{tenant_id}/onboarding", {
+            "planVersionId": plan.get("id"), "kind": "TRIAL", "days": 3650, "ownerActorId": owner,
+        }, 200)
+        expect("POST", f"/v1/platform/tenants/{tenant_id}/status", {"status": "active"}, 200)
+        expect("POST", f"/v1/platform/tenants/{tenant_id}/engine-instances", {
+            "id": "production-engine-01", "baseUrl": "http://engine",
+        }, 201)
+        issued = expect("POST", "/v1/platform/engine-instances/production-engine-01/event-secret", None, 200)
+        expected_secret = event_path.read_text(encoding="ascii").strip()
+        if not isinstance(issued.get("secret"), str) or not secrets.compare_digest(issued["secret"], expected_secret):
+            raise IntegrityError("issued engine event secret does not match the configured engine")
+        self._atomic_write(
+            self._managed("shared/product-probe.json"),
+            json.dumps({"tenantId": tenant_id, "actorId": owner}, sort_keys=True) + "\n",
+        )
 
     def upgrade(self, manifest_path, expected_sha256=None, bundle_path=None, asset_loader=None) -> None:
         state = self._read_state(require_current=True)
@@ -1254,6 +1350,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="public IP expected for --public-host (repeatable; required behind NAT)",
     )
+    sub.add_parser("setup-probe")
     upgrade = sub.add_parser("upgrade")
     upgrade_source = upgrade.add_mutually_exclusive_group(required=True)
     upgrade_source.add_argument("--manifest")
@@ -1289,6 +1386,8 @@ def main(argv=None) -> int:
                 manager.install_offline(args.offline, args.public_host, args.admin_user, args.admin_email, args.manifest_sha256)
             else:
                 manager.install(args.manifest, args.public_host, args.admin_user, args.admin_email, args.manifest_sha256)
+        elif args.command == "setup-probe":
+            manager.setup_probe()
         elif args.command == "upgrade":
             manager.upgrade_version(args.version, args.manifest_sha256) if args.version else manager.upgrade(args.manifest, args.manifest_sha256)
         elif args.command == "rollback":

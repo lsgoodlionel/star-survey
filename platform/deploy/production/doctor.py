@@ -292,8 +292,56 @@ class ProductProbe:
             raise DoctorRuntimeError("product probe failed") from failure
 
 
+class HostListenerProbe:
+    """Bind host listeners to the inspected edge container, not just port numbers."""
+
+    def __init__(self, runner):
+        self.runner = runner
+
+    def audit(self, output, edge):
+        networks = edge.get("NetworkSettings", {}).get("Networks", {}) or {}
+        edge_addresses = {
+            details.get("IPAddress") for details in networks.values()
+            if isinstance(details, dict) and details.get("IPAddress")
+        }
+        by_port = {}
+        for line in (output or "").splitlines():
+            match = re.search(r":(\d+)\s", line)
+            if match:
+                by_port.setdefault(int(match.group(1)), []).append(line)
+        bad = []
+        for port in (80, 443):
+            lines = by_port.get(port, [])
+            if not lines:
+                bad.append("edge-listeners")
+                continue
+            for line in lines:
+                owner = re.search(r'users:\(\(\"([^\"]+)\",pid=(\d+)', line)
+                if owner is None or owner.group(1) != "docker-proxy":
+                    bad.append(f"edge-listener-owner-{port}")
+                    continue
+                try:
+                    process = self.runner.run(
+                        ["ps", "-p", owner.group(2), "-o", "args="],
+                        check=True, capture_output=True, text=True,
+                    )
+                except (OSError, subprocess.CalledProcessError):
+                    bad.append(f"edge-listener-owner-{port}")
+                    continue
+                args = process.stdout or ""
+                host_ok = re.search(rf"(?:^|\s)-host-port\s+{port}(?:\s|$)", args)
+                container_ok = re.search(rf"(?:^|\s)-container-port\s+{port}(?:\s|$)", args)
+                address = re.search(r"(?:^|\s)-container-ip\s+(\S+)", args)
+                if not host_ok or not container_ok or not address or address.group(1) not in edge_addresses:
+                    bad.append(f"edge-listener-target-{port}")
+        if {3306, 5432} & set(by_port):
+            bad.append("database-listeners")
+        return bad
+
+
 class Doctor:
-    def __init__(self, target, runner=None, tls_probe=None, product_probe=None, backup_verifier=None):
+    def __init__(self, target, runner=None, tls_probe=None, product_probe=None, backup_verifier=None,
+                 listener_probe=None):
         self.target = Path(os.path.abspath(os.fspath(Path(target).expanduser())))
         current = Path(self.target.anchor)
         for component in self.target.parts[1:]:
@@ -303,6 +351,7 @@ class Doctor:
             if not current.exists():
                 break
         self.runner = runner or CommandRunner()
+        self.listener_probe = listener_probe or HostListenerProbe(self.runner)
         self.tls_probe = tls_probe or self._tls_probe
         self.product_probe = product_probe or self._run_product_probe
         self.backup_verifier = backup_verifier or RestoreManager(
@@ -478,11 +527,9 @@ class Doctor:
                 bad.append(f"{service}-networks")
         if inspected_services != set(allowed_networks):
             bad.append("container-inspection-set")
-        listener_ports = {int(value) for value in re.findall(r":(\d+)\s", listeners.stdout or "")}
-        if not {80, 443} <= listener_ports:
-            bad.append("edge-listeners")
-        if {3306, 5432} & listener_ports:
-            bad.append("database-listeners")
+        edge = next((item for item in containers if isinstance(item, dict)
+                     and item.get("Config", {}).get("Labels", {}).get("com.docker.compose.service") == "edge"), {})
+        bad.extend(self.listener_probe.audit(listeners.stdout, edge))
         return self._check(
             "runtime-exposure", "ok" if not bad else "blocked",
             "live bindings, networks and host listeners match the production contract"

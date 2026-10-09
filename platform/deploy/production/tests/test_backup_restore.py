@@ -8,6 +8,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import unicodedata
 from collections import namedtuple
 
 
@@ -192,6 +193,26 @@ class BackupRestoreTest(unittest.TestCase):
                 info = tarfile.TarInfo("compressed.bin")
                 info.size = len(payload)
                 archive.addfile(info, io.BytesIO(payload))
+            elif attack in {"file-before-child", "child-before-file"}:
+                entries = (("parent", b"file"), ("parent/child", b"child"))
+                if attack == "child-before-file":
+                    entries = reversed(entries)
+                for name, payload in entries:
+                    info = tarfile.TarInfo(name)
+                    info.size = len(payload)
+                    archive.addfile(info, io.BytesIO(payload))
+            elif attack == "casefold-parent-child":
+                info = tarfile.TarInfo("Parent/child")
+                info.size = 1
+                archive.addfile(info, io.BytesIO(b"x"))
+                info = tarfile.TarInfo("parent")
+                info.type = tarfile.DIRTYPE
+                archive.addfile(info)
+            elif attack == "unicode-normalization":
+                for name in ("caf\u00e9.txt", unicodedata.normalize("NFD", "caf\u00e9.txt")):
+                    info = tarfile.TarInfo(name)
+                    info.size = 1
+                    archive.addfile(info, io.BytesIO(b"x"))
             else:
                 info = tarfile.TarInfo({"absolute": "/escape", "traversal": "../escape"}.get(attack, "unsafe"))
                 info.type = {
@@ -209,6 +230,7 @@ class BackupRestoreTest(unittest.TestCase):
     def test_all_seven_volume_archives_reject_unsafe_members_before_docker(self):
         attacks = ("absolute", "traversal", "symlink", "hardlink", "fifo", "device", "socket",
                    "duplicate", "case-collision", "count-limit", "size-limit", "decompression-bomb")
+        attacks += ("file-before-child", "child-before-file", "casefold-parent-child", "unicode-normalization")
         for index, volume in enumerate(self.backup.VOLUME_SOURCES):
             for attack in attacks:
                 with self.subTest(volume=volume, attack=attack):
