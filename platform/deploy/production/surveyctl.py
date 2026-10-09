@@ -46,11 +46,11 @@ SECRET_NAMES = (
     "engine_admin_password_hash", "engine_admin_password", "engine_db_password",
     "engine_db_root_password", "platform_db_superuser_password", "platform_db_owner_password",
     "platform_db_app_password", "platform_jwt_hmac_secret", "platform_engine_events_secret",
-    "platform_pubgw_secret", "pubgw_engine_admin_password",
+    "platform_pubgw_secret", "pubgw_engine_admin_password", "backup_encryption_key",
 )
 REQUIRED_BUNDLE_FILES = {
     "compose.yml", "Caddyfile", "surveyctl", "surveyctl.py", "release.schema.json",
-    "env.example", "engines.example.json",
+    "env.example", "engines.example.json", "backup.py", "restore.py", "doctor.py",
 }
 
 
@@ -1053,7 +1053,9 @@ class SurveyManager:
         state = self._read_state(require_current=True)
         backup = self._backup_path(name)
         metadata = self._verify_backup(backup)
-        if metadata["databaseSchema"] != state["databaseSchema"]:
+        release = self._release_manifest(state["version"])
+        compatible_schemas = set(release.compatible_source_schemas) | {release.database_schema}
+        if metadata["databaseSchema"] not in compatible_schemas:
             raise IntegrityError("backup database schema is incompatible with the installed release")
         helper = self._release_dir(state["version"]) / "restore.py"
         self._run([sys.executable, str(helper), "restore", "--target", str(self.target), "--backup", str(backup)], "restore failed")

@@ -26,6 +26,9 @@ def write_test_release(root, version="0.2.0", rollback="compatible", **updates):
         "Caddyfile": b":443 { respond 204 }\n",
         "surveyctl": b"#!/bin/sh\n",
         "surveyctl.py": b"# verified controller\n",
+        "backup.py": b"# verified backup helper\n",
+        "restore.py": b"# verified restore helper\n",
+        "doctor.py": b"# verified doctor helper\n",
         "release.schema.json": b"{}\n",
         "env.example": b"PUBLIC_HOST=example.invalid\n",
         "engines.example.json": b"{}\n",
@@ -199,6 +202,27 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.manager().install(manifest, "survey.example.com", "operations", "operations@example.com")
         deployed = self.target / "releases" / "0.2.0" / "compose.yml"
         self.assertEqual("name: verified-bundle\nservices: {}\n", deployed.read_text())
+        self.assertTrue((self.target / "releases" / "0.2.0" / "backup.py").is_file())
+        key = self.target / "shared" / "secrets" / "backup_encryption_key"
+        self.assertTrue(key.is_file())
+        self.assertEqual(0, key.stat().st_mode & 0o077)
+
+    def test_bundle_without_recovery_helpers_is_rejected(self):
+        manifest, bundle = self.write_bundle_manifest()
+        with tarfile.open(bundle, "r:gz") as source:
+            retained = [(member, source.extractfile(member).read()) for member in source.getmembers() if member.isfile() and member.name not in {"backup.py", "restore.py", "doctor.py", "bundle-metadata.json"}]
+        files = {member.name: value for member, value in retained}
+        metadata = {"schemaVersion": 1, "version": "0.2.0", "architecture": "arm64", "files": {name: hashlib.sha256(value).hexdigest() for name, value in files.items()}}
+        files["bundle-metadata.json"] = json.dumps(metadata, sort_keys=True).encode()
+        with tarfile.open(bundle, "w:gz") as archive:
+            for name, value in files.items():
+                info = tarfile.TarInfo(name); info.size = len(value)
+                archive.addfile(info, io.BytesIO(value))
+        data = json.loads(manifest.read_text())
+        data["assets"]["bundles"]["arm64"]["sha256"] = hashlib.sha256(bundle.read_bytes()).hexdigest()
+        manifest.write_text(json.dumps(data))
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().install(manifest, "survey.example.com", "operations", "operations@example.com")
 
     def test_staged_payload_and_generated_config_are_reverified_before_compose(self):
         for name in ("compose.yml", "Caddyfile", ".env"):
@@ -795,6 +819,28 @@ class SurveyctlTest(unittest.TestCase):
         self.assertIn("logs --no-color platform", output)
         for secret in (self.target / "shared" / "secrets").iterdir():
             self.assertNotIn(secret.read_text().strip(), output)
+
+    def test_restore_accepts_only_release_declared_source_schemas(self):
+        self.install()
+        backup = self.target / "backups" / "older-compatible"
+        backup.mkdir(parents=True)
+        payload = backup / "payload.bin"
+        payload.write_bytes(b"compatible backup")
+        (backup / "manifest.json").write_text(json.dumps({
+            "schemaVersion": 1,
+            "version": "0.1.9",
+            "databaseSchema": "919",
+            "files": {"payload.bin": hashlib.sha256(payload.read_bytes()).hexdigest()},
+        }))
+        self.runner.commands.clear()
+        self.manager().restore("older-compatible")
+        self.assertTrue(any("restore.py" in " ".join(command) for command in self.runner.commands))
+
+        manifest = json.loads((backup / "manifest.json").read_text())
+        manifest["databaseSchema"] = "918"
+        (backup / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().restore("older-compatible")
 
     def test_uninstall_preserves_data_and_purge_requires_exact_second_confirmation(self):
         self.install()

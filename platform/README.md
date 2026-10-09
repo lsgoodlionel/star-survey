@@ -103,6 +103,7 @@
 | `platform/docs/adr/` | 架构决策记录（19 份） |
 | `platform/docs/p0|p1|p2/` | 逐阶段进度与证据 |
 | `platform/deploy/test/` | 与 CI 一致的测试配置与 14 个端到端脚本 |
+| `platform/deploy/production/` | 单机生产 Compose、`surveyctl`、加密备份/隔离恢复、脱敏 doctor 与 clean-host 验收入口 |
 | `platform/deploy/platform-dev/` | 容器化 Maven（本机无需装 JDK）与平台数据库 |
 | `platform/tests/e2e/` | 端到端驱动脚本 |
 | `plugins/MjyPlatformBridge/` | 答卷生命周期事件日志与补偿扫描 |
@@ -179,7 +180,7 @@ Task 7 用户可见证据位于 `docs/audits/2026-10-09-product-alignment/07-adm
 由真实 Playwright DOM 测量；另有运行中 `adminweb-demo` 的 Chromium 巡检遍历固定三层并拒绝 E2E 时间戳资源。Task 7 在
 `820–1179px` 只提供现有布局的不溢出临时保障，Phase C 约定的双栏 + 检查器尚未实现。代码、自动化和用户可见证据仅支持
 Phase A+B；Phase C/D 仍是后续工作。
-仓库尚无生产部署路径，SSL 检查只是部署前 gate，不表示 production-ready。PR #10 于 2026-10-09 重新核验仍为 OPEN、未合并，依赖仍待合并。
+仓库已具备单机生产部署代码路径，详见 [`platform/deploy/production/README.md`](deploy/production/README.md)：固定 digest Compose、`surveyctl` 生命周期、加密备份、隔离恢复和脱敏 doctor 均已有自动化契约与故障注入。当前仍不能宣称正式 production-ready：真实 GitHub Release、正式 Engine 多架构镜像以及 Ubuntu 22.04/24.04 × AMD64/ARM64 的公网 TLS clean-host 矩阵尚待发布阶段执行。PR #10 于 2026-10-09 重新核验仍为 OPEN、未合并，依赖仍待合并。
 
 ### 跑测试的三条硬规矩（都是真实踩出来的）
 
@@ -258,6 +259,8 @@ Phase A+B；Phase C/D 仍是后续工作。
 ---
 
 ## 7. 已知遗留
+
+单机生产运行手册、命令与当前验收边界见 [`deploy/production/README.md`](deploy/production/README.md)。本地故障注入通过不替代 Release CI 的真实主机矩阵；备份加密密钥的异地保管和备份保留策略仍由部署运维负责。
 
 **部署前必须处理**
 
