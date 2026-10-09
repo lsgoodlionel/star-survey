@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, Outlet, type RouteObject } from 'react-router-dom';
 import { AppShell } from './App';
+import { SurveyShell } from './SurveyShell';
 import { AuthCallbackPage } from '../features/auth/AuthCallbackPage';
 import { useAuth } from '../features/auth/AuthProvider';
 import { WorkspacePage } from '../features/workspace/WorkspacePage';
@@ -76,38 +77,44 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
           children: [
             { index: true, element: <Navigate to="/workspace" replace /> },
             { path: 'workspace', element: <WorkspacePage /> },
-            { path: 'surveys/:surveyId/edit', element: <EditorRoutePage /> },
             {
-              path: 'surveys/:surveyId/import',
-              element: (
-                <Suspense fallback={<p>正在加载导入工具</p>}>
-                  <ImportRoutePage />
-                </Suspense>
-              ),
-            },
-            {
-              path: 'surveys/:surveyId/preview',
-              element: (
-                <Suspense fallback={<p>正在加载草稿预览</p>}>
-                  <PreviewRoutePage />
-                </Suspense>
-              ),
-            },
-            {
-              path: 'surveys/:surveyId/publish',
-              element: (
-                <Suspense fallback={<p>正在加载发布信息</p>}>
-                  <PublishRoutePage />
-                </Suspense>
-              ),
-            },
-            {
-              path: 'surveys/:surveyId/versions/:version',
-              element: (
-                <Suspense fallback={<p>正在加载版本</p>}>
-                  <VersionDetailRoutePage />
-                </Suspense>
-              ),
+              path: 'surveys/:surveyId',
+              element: <SurveyShell />,
+              children: [
+                { path: 'edit', element: <EditorRoutePage /> },
+                {
+                  path: 'import',
+                  element: (
+                    <Suspense fallback={<p>正在加载导入工具</p>}>
+                      <ImportRoutePage />
+                    </Suspense>
+                  ),
+                },
+                {
+                  path: 'preview',
+                  element: (
+                    <Suspense fallback={<p>正在加载草稿预览</p>}>
+                      <PreviewRoutePage />
+                    </Suspense>
+                  ),
+                },
+                {
+                  path: 'publish',
+                  element: (
+                    <Suspense fallback={<p>正在加载发布信息</p>}>
+                      <PublishRoutePage />
+                    </Suspense>
+                  ),
+                },
+                {
+                  path: 'versions/:version',
+                  element: (
+                    <Suspense fallback={<p>正在加载版本</p>}>
+                      <VersionDetailRoutePage />
+                    </Suspense>
+                  ),
+                },
+              ],
             },
           ],
         },

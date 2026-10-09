@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Send, ShieldCheck, Undo2, XCircle } from 'lucide-react';
-import { Link, useInRouterContext, useParams } from 'react-router-dom';
+import { Link, useInRouterContext, useLocation, useParams } from 'react-router-dom';
+import { useSurveyShell } from '../../app/SurveyShell';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
@@ -65,6 +66,7 @@ type ApprovalAction =
 
 export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPageProps) {
   const queryClient = useQueryClient();
+  const surveyShell = useSurveyShell();
   const visible = useDocumentVisibility();
   const [actionError, setActionError] = useState<ApiError | null>(null);
   const [awaitingPublishResult, setAwaitingPublishResult] = useState(false);
@@ -136,10 +138,12 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
 
   return (
     <main className="publish-page">
-      <header className="publish-page__header">
-        <div><p className="publish-eyebrow">问卷发布</p><h1>{overview.data.title}</h1></div>
-        <span className="publish-version-count">已发布 {versions.data?.length ?? 0} 个版本</span>
-      </header>
+      {!surveyShell ? (
+        <header className="publish-page__header">
+          <div><p className="publish-eyebrow">问卷发布</p><h1>{overview.data.title}</h1></div>
+          <span className="publish-version-count">已发布 {versions.data?.length ?? 0} 个版本</span>
+        </header>
+      ) : <div className="embedded-page-toolbar">已发布 {versions.data?.length ?? 0} 个版本</div>}
 
       <PublishStatus survey={overview.data} awaitingPublishResult={awaitingPublishResult} />
 
@@ -215,8 +219,14 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
 function VersionLink({ surveyId, version }: { surveyId: string; version: number }) {
   const inRouter = useInRouterContext();
   const href = `/surveys/${surveyId}/versions/${version}`;
-  if (inRouter) return <Link to={href}>查看版本 {version}</Link>;
+  if (inRouter) return <QuestionAwareVersionLink href={href} version={version} />;
   return <a href={href}>查看版本 {version}</a>;
+}
+
+function QuestionAwareVersionLink({ href, version }: { href: string; version: number }) {
+  const question = new URLSearchParams(useLocation().search).get('question');
+  const target = question ? `${href}?question=${encodeURIComponent(question)}` : href;
+  return <Link to={target}>查看版本 {version}</Link>;
 }
 
 export function PublishRoutePage() {

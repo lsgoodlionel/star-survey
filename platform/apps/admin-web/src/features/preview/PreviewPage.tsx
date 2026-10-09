@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Monitor, Smartphone } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
+import { surveyWorkflowHref, useSurveyShell } from '../../app/SurveyShell';
 import { useAuth } from '../auth/AuthProvider';
 import { parseDefinition } from '../editor/model/definition';
 import type { ApiClient } from '../../shared/api/http';
@@ -24,6 +25,9 @@ export function PreviewPage(props: PreviewPageProps) {
 
 function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
   const [mode, setMode] = useState<PreviewMode>('desktop');
+  const surveyShell = useSurveyShell();
+  const [searchParams] = useSearchParams();
+  const selectedQuestion = searchParams.get('question');
   const draftQuery = useQuery({
     queryKey: surveyDraftQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurveyDraft(api, surveyId, signal),
@@ -42,15 +46,19 @@ function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
   return (
     <main className="preview-page">
       <header className="preview-toolbar">
-        <div>
-          <p>只读视图</p>
-          <h1>草稿预览</h1>
-        </div>
+        {!surveyShell ? (
+          <div>
+            <p>只读视图</p>
+            <h1>草稿预览</h1>
+          </div>
+        ) : <h2 className="sr-only">草稿预览</h2>}
         <div className="preview-toolbar-actions">
-          <Link to={`/surveys/${surveyId}/edit`}>
-            <ArrowLeft aria-hidden="true" />
-            返回编辑
-          </Link>
+          {!surveyShell ? (
+            <Link to={surveyWorkflowHref(surveyId, 'edit', selectedQuestion)}>
+              <ArrowLeft aria-hidden="true" />
+              返回编辑
+            </Link>
+          ) : null}
           <div className="preview-segments" role="group" aria-label="预览设备">
             <button
               type="button"

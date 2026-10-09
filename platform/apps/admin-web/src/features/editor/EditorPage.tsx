@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Eye, FileInput, RefreshCw, Rocket, Save } from 'lucide-react';
 import { Link, useBlocker, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
+import { surveyWorkflowHref, useSurveyShell } from '../../app/SurveyShell';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
@@ -83,6 +84,8 @@ interface LoadedEditorProps extends EditorPageProps {
 
 function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenantId }: LoadedEditorProps) {
   const queryClient = useQueryClient();
+  const surveyShell = useSurveyShell();
+  const setShellUnsavedChanges = surveyShell?.setUnsavedChanges;
   const [searchParams, setSearchParams] = useSearchParams();
   const [initialState] = useState(() => {
     const recovered = takeEditorRecovery(tenantId, surveyId);
@@ -142,6 +145,11 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
+
+  useEffect(() => {
+    setShellUnsavedChanges?.(dirty);
+    return () => setShellUnsavedChanges?.(false);
+  }, [dirty, setShellUnsavedChanges]);
 
   const selectedQuestion = useMemo(
     () =>
@@ -254,25 +262,29 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   return (
     <main className="survey-editor">
       <header className="survey-editor-header">
-        <div>
-          <p>问卷编辑</p>
-          <h1>{surveyTitle || definition.title}</h1>
-        </div>
+        {!surveyShell ? (
+          <div>
+            <p>问卷编辑</p>
+            <h1>{surveyTitle || definition.title}</h1>
+          </div>
+        ) : <h2 className="sr-only">问卷编辑</h2>}
         <div className="survey-editor-actions">
-          <nav className="survey-editor-nav" aria-label="问卷工作流">
-            <Link to={`/surveys/${surveyId}/import`}>
-              <FileInput aria-hidden="true" />
-              批量导入
-            </Link>
-            <Link to={`/surveys/${surveyId}/preview`}>
-              <Eye aria-hidden="true" />
-              草稿预览
-            </Link>
-            <Link to={`/surveys/${surveyId}/publish`}>
-              <Rocket aria-hidden="true" />
-              发布管理
-            </Link>
-          </nav>
+          {!surveyShell ? (
+            <nav className="survey-editor-nav" aria-label="问卷工作流">
+              <Link to={surveyWorkflowHref(surveyId, 'import', requestedQuestionUuid)}>
+                <FileInput aria-hidden="true" />
+                批量导入
+              </Link>
+              <Link to={surveyWorkflowHref(surveyId, 'preview', requestedQuestionUuid)}>
+                <Eye aria-hidden="true" />
+                草稿预览
+              </Link>
+              <Link to={surveyWorkflowHref(surveyId, 'publish', requestedQuestionUuid)}>
+                <Rocket aria-hidden="true" />
+                发布管理
+              </Link>
+            </nav>
+          ) : null}
           <div className="survey-editor-save">
             {!canEdit ? <span>当前账号仅可查看此问卷</span> : null}
             {savedVersion ? <span>已保存版本 {savedVersion}</span> : null}
