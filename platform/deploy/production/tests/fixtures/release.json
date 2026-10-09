@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "version": "0.2.0",
+  "channel": "stable",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "supportedHosts": {
+    "ubuntu": ["22.04", "24.04"],
+    "architectures": ["amd64", "arm64"]
+  },
+  "minimumSourceVersion": "0.1.0",
+  "database": {
+    "schema": "920",
+    "rollback": "compatible",
+    "compatibleSourceSchemas": ["919", "920"]
+  },
+  "images": {
+    "CADDY_IMAGE": "caddy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "ADMIN_IMAGE": "ghcr.io/example/admin@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "PLATFORM_IMAGE": "ghcr.io/example/platform@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "PUBLISH_GATEWAY_IMAGE": "ghcr.io/example/gateway@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "ENGINE_IMAGE": "ghcr.io/example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "POSTGRES_IMAGE": "postgres@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "MARIADB_IMAGE": "mariadb@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "assets": {
+    "bundle": {
+      "name": "survey-0.2.0-linux-amd64.tar.gz",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  }
+}
