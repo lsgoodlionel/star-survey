@@ -40,7 +40,7 @@
 
 - [ ] **Step 2: Verify failure**
 
-Run: `python3 -m unittest platform/deploy/production/tests/test_images.py`
+Run: `python3 -m unittest discover -s platform/deploy/production/tests -p 'test_images.py'`
 
 - [ ] **Step 3: Implement multi-stage production images**
 

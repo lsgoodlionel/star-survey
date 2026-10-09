@@ -44,13 +44,19 @@ class ProductionImagePolicyTest(unittest.TestCase):
                 self.assertIn('org.opencontainers.image.revision="$REVISION"', runtime)
                 self.assertIn('org.opencontainers.image.created="$CREATED"', runtime)
 
-    def test_admin_web_runtime_contains_only_verified_production_bundle(self):
+    def test_admin_web_defaults_to_production_and_retains_explicit_e2e_build(self):
         contents = dockerfile("admin-web")
         runtime = runtime_stage(contents)
         self.assertGreaterEqual(len(re.findall(r"(?m)^FROM\s+", contents)), 2)
-        self.assertIn("npm run assert:production-bundle", contents)
-        self.assertNotIn("assert:e2e-bundle", contents)
+        self.assertRegex(contents, r"(?m)^ARG\s+VITE_E2E=false\s*$")
+        self.assertRegex(contents, r"(?m)^ENV\s+VITE_E2E=\$\{VITE_E2E\}\s*$")
+        self.assertRegex(
+            contents,
+            r'if \[ "\$VITE_E2E" = "true" \]; then npm run assert:e2e-bundle; '
+            r"else npm run assert:production-bundle; fi",
+        )
         self.assertRegex(runtime, r"(?m)^COPY\s+--from=build\s+/app/dist\s+/usr/share/nginx/html\s*$")
+        self.assertRegex(runtime, r"chown\s+-R\s+10001:10001\s+[^\n]*\s/run(?:\s|$)")
         self.assertNotRegex(runtime, r"(?m)^COPY\s+(?!--from=)")
         self.assertNotRegex(runtime, r"(?m)^VOLUME\s+")
 
