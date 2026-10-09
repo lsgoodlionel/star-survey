@@ -469,6 +469,8 @@ jobs:
           if rule['mode'] == 'bootstrap':
               if set(rule) != {'mode'}:
                   raise SystemExit('bootstrap policy cannot name a synthetic predecessor')
+              if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+-rc\.1', version) is None:
+                  raise SystemExit('bootstrap is only valid for the first prerelease RC')
               print('BASELINE_MODE=bootstrap')
               print('MINIMUM_SOURCE_VERSION=0.0.0')
           else:
@@ -746,9 +748,50 @@ jobs:
     if: needs.policy.outputs.release == 'true'
     runs-on: ubuntu-24.04
     needs: [policy, candidate-assets, native-acceptance]
+    outputs:
+      promotable: ${{ steps.readiness.outputs.promotable }}
+      readiness-artifact: native-release-readiness
     permissions:
+      actions: read
       contents: read
     steps:
       - name: Confirm the blocking native matrix completed
         shell: bash
         run: test '${{ needs.native-acceptance.result }}' = success
+
+      - name: Download the checksum-bound candidate
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-candidate
+          path: release-candidate
+
+      - name: Download all native evidence summaries
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: native-acceptance-*
+          path: native-evidence
+
+      - name: Generate fail-closed release readiness evidence
+        id: readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity=release-candidate/identity.json
+          bundle="$(jq -er '.bundles.amd64.name' "$identity")"
+          bundle_sha="$(jq -er '.bundles.amd64.sha256' "$identity")"
+          [[ "$(sha256sum "release-candidate/candidate/$bundle" | awk '{print $1}')" == "$bundle_sha" ]]
+          mkdir -p readiness-runtime
+          tar -xzf "release-candidate/candidate/$bundle" -C readiness-runtime release/native_acceptance_evidence.py
+          python3 readiness-runtime/release/native_acceptance_evidence.py readiness \
+            --identity "$identity" \
+            --evidence-directory native-evidence \
+            --output release-readiness.json
+          printf 'promotable=%s\n' "$(jq -er '.promotable' release-readiness.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve the Task 4 promotion gate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-release-readiness
+          path: release-readiness.json
+          if-no-files-found: error
+          retention-days: 30

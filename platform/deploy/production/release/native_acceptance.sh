@@ -12,12 +12,14 @@ required_variables=(
   BASELINE_MODE SURVEY_ACCEPTANCE_PUBLIC_HOST SURVEY_ACCEPTANCE_ADMIN_EMAIL EVIDENCE_DIR
 )
 for variable in "${required_variables[@]}"; do
-  [[ -n "${!variable:-}" ]] || {
+  if [[ -z "${!variable:-}" ]]; then
     printf 'required native acceptance variable is missing: %s\n' "$variable" >&2
     exit 2
-  }
+  fi
 done
-[[ "$BASELINE_MODE" == predecessor || "$BASELINE_MODE" == bootstrap ]]
+if [[ "$BASELINE_MODE" != predecessor && "$BASELINE_MODE" != bootstrap ]]; then
+  exit 2
+fi
 [[ "$SURVEY_ACCEPTANCE_PUBLIC_HOST" == *.test ]]
 [[ "${SURVEY_ACCEPTANCE_EXPECTED_PUBLIC_ADDRESS:-}" == "127.0.0.1" ]]
 
@@ -71,36 +73,12 @@ PY
 }
 
 write_summary() {
-  python3 - "$evidence_root/summary.json" "$acceptance_status" "$1" "$last_step" "$upgrade_verified" <<'PY'
-import json
-import os
-from pathlib import Path
-import sys
-from datetime import datetime, timezone
-
-summary = {
-    "schemaVersion": 1,
-    "status": sys.argv[2],
-    "exitCode": int(sys.argv[3]),
-    "lastStep": sys.argv[4],
-    "runner": {"ubuntu": os.environ["EXPECTED_UBUNTU"], "architecture": os.environ["EXPECTED_ARCHITECTURE"]},
-    "candidate": {
-        "manifestSha256": os.environ["CANDIDATE_MANIFEST_SHA256"],
-        "bundleSha256": os.environ["CANDIDATE_BUNDLE_SHA256"],
-        "images": {
-            "admin": os.environ["ADMIN_IMAGE_DIGEST"],
-            "platform": os.environ["PLATFORM_IMAGE_DIGEST"],
-            "publish-gateway": os.environ["PUBLISH_GATEWAY_IMAGE_DIGEST"],
-        },
-    },
-    "baselineMode": os.environ["BASELINE_MODE"],
-    "upgradeVerified": sys.argv[5] == "true",
-    "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": True, "publicAcmeVerified": False},
-    "preflightDisk": "separately-tested",
-    "completedAt": datetime.now(timezone.utc).isoformat(),
-}
-Path(sys.argv[1]).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-PY
+  python3 "$evidence_helper" summary \
+    --output "$evidence_root/summary.json" \
+    --status "$acceptance_status" \
+    --exit-code "$1" \
+    --last-step "$last_step" \
+    --upgrade-verified "$upgrade_verified"
 }
 
 collect_evidence() {
@@ -113,8 +91,15 @@ collect_evidence() {
   local args=()
   while IFS= read -r item; do args+=("$item"); done < <(evidence_secret_args)
   python3 "$evidence_helper" "${args[@]}" services --input "$work_root/services.jsonl" --output "$evidence_root/services.json"
+  local services_result=$?
+  if [[ "$services_result" -ne 0 ]]; then
+    result=5
+    acceptance_status="failed"
+  fi
   rm -f "$work_root/services.jsonl"
   write_summary "$result"
+  local summary_result=$?
+  if [[ "$summary_result" -ne 0 ]]; then result=5; fi
   python3 "$evidence_helper" "${args[@]}" scan --directory "$evidence_root"
   local scan_result=$?
   if [[ "$scan_result" -ne 0 ]]; then result=5; fi
@@ -239,20 +224,10 @@ last_step="preflight-disk"
 actual_free_bytes="$(( $(df -Pk "$work_root" | awk 'NR==2 {print $4}') * 1024 ))"
 profile_minimum_bytes="$(jq -er '.nativeAcceptance.minimumFreeBytes' "$candidate_release_dir/release.json")"
 [[ "$actual_free_bytes" -ge "$profile_minimum_bytes" ]]
-python3 - "$evidence_root/preflight.json" "$actual_free_bytes" "$profile_minimum_bytes" <<'PY'
-import json
-from pathlib import Path
-import sys
-Path(sys.argv[1]).write_text(json.dumps({
-    "schemaVersion": 1,
-    "status": "ok",
-    "profile": "github-actions-native-v1",
-    "actualFreeBytes": int(sys.argv[2]),
-    "requiredFreeBytes": int(sys.argv[3]),
-    "productionRequiredFreeBytes": 20 * 1024**3,
-    "assertion": "preflight disk separately tested",
-}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-PY
+python3 "$evidence_helper" preflight \
+  --output "$evidence_root/preflight.json" \
+  --actual-free-bytes "$actual_free_bytes" \
+  --required-free-bytes "$profile_minimum_bytes"
 
 last_step="local-tls"
 printf '127.0.0.1 %s # %s\n' "$SURVEY_ACCEPTANCE_PUBLIC_HOST" "$hosts_marker" >> /etc/hosts

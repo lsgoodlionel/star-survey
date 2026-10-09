@@ -32,6 +32,33 @@ def job_text(job: dict) -> str:
     return json.dumps(job, sort_keys=True)
 
 
+def shell_without_heredocs(source: str) -> str:
+    kept = []
+    delimiter = None
+    for line in source.splitlines():
+        if delimiter is not None:
+            if line.strip() == delimiter:
+                delimiter = None
+            continue
+        match = re.search(r"<<-?['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
+        kept.append(line)
+        if match:
+            delimiter = match.group(1)
+    return "\n".join(kept)
+
+
+def assert_no_shell_success_bypass(testcase: unittest.TestCase, source: str) -> None:
+    shell = shell_without_heredocs(source)
+    identifiers = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", shell)
+    testcase.assertFalse(
+        [word for word in identifiers if re.search(r"(?i)(skip|bypass|disable|opt_?out)", word)],
+        "native acceptance contains a success-bypass identifier",
+    )
+    testcase.assertNotIn("||", shell)
+    testcase.assertNotRegex(shell, r"(?m)(?:^|[;&]\s*)continue(?:\s|;|$)")
+    testcase.assertNotRegex(shell, r"(?m)\b(?:exit|return)\s+0\b")
+
+
 class NativeAcceptanceWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -110,8 +137,15 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         gate = self.workflow["jobs"]["release-ready"]
         self.assertEqual("needs.policy.outputs.release == 'true'", gate["if"])
         self.assertEqual({"policy", "candidate-assets", "native-acceptance"}, set(gate["needs"]))
-        self.assertEqual(1, len(gate["steps"]))
-        self.assertEqual("test '${{ needs.native-acceptance.result }}' = success", gate["steps"][0]["run"])
+        text = job_text(gate)
+        self.assertIn("test '${{ needs.native-acceptance.result }}' = success", text)
+        self.assertIn("native-acceptance-*", text)
+        self.assertIn("release-readiness.json", text)
+        self.assertIn("native-release-readiness", text)
+        self.assertIn("readiness", text)
+        self.assertIn("if-no-files-found", text)
+        self.assertEqual("${{ steps.readiness.outputs.promotable }}", gate["outputs"]["promotable"])
+        self.assertEqual("native-release-readiness", gate["outputs"]["readiness-artifact"])
 
     def test_baseline_policy_is_explicit_and_bootstrap_never_claims_upgrade(self):
         policy = json.loads(BASELINE_POLICY_PATH.read_text(encoding="utf-8"))
@@ -124,10 +158,15 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                     self.assertRegex(rule["version"], r"^[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?$")
                     self.assertRegex(rule["manifestSha256"], r"^[0-9a-f]{64}$")
                 else:
+                    self.assertRegex(version, r"^[0-9]+\.[0-9]+\.[0-9]+-rc\.1$")
                     self.assertNotIn("version", rule)
+        candidate_text = job_text(self.workflow["jobs"]["candidate-assets"])
+        self.assertIn("bootstrap is only valid for the first prerelease RC", candidate_text)
+        self.assertIn("gh release list --limit 1", candidate_text)
         script = SCRIPT_PATH.read_text(encoding="utf-8")
         self.assertIn("upgrade_verified=false", script)
-        self.assertIn('"upgradeVerified": sys.argv[5] == "true"', script)
+        helper = EVIDENCE_HELPER_PATH.read_text(encoding="utf-8")
+        self.assertIn('"upgradeVerified": upgrade_verified', helper)
 
 
 class NativeAcceptanceScriptTest(unittest.TestCase):
@@ -140,10 +179,23 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("set -Eeuo pipefail", self.text)
         self.assertIn('[[ "${NATIVE_ACCEPTANCE_REAL:-}" == "1" ]]', self.text)
-        self.assertNotRegex(self.text.lower(), r"\bskip(?:ped)?\b")
         self.assertNotIn("continue-on-error", self.text)
-        self.assertNotIn("|| true", self.text)
         self.assertNotIn("compose-logs", self.text)
+        assert_no_shell_success_bypass(self, self.text)
+
+    def test_success_bypass_mutations_are_rejected(self):
+        mutations = (
+            'ALLOW_SKIP=1',
+            'SKIP=1',
+            'continue',
+            'false || true',
+            'false || exit 0',
+            '[[ "${ALLOW_SKIP:-}" != "1" ]] || exit 0',
+            'if [[ -n "${BYPASS:-}" ]]; then exit 0; fi',
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                assert_no_shell_success_bypass(self, self.text + "\n" + mutation + "\n")
 
     def test_script_verifies_shared_candidate_identity_before_installing(self):
         for required in (
@@ -178,8 +230,9 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
     def test_script_uses_local_trusted_ca_and_records_public_acme_as_separate(self):
         self.assertIn("/etc/hosts", self.text)
         self.assertIn("SSL_CERT_FILE", self.text)
-        self.assertIn('"publicAcmeVerified": False', self.text)
-        self.assertIn('"preflightDisk": "separately-tested"', self.text)
+        helper = EVIDENCE_HELPER_PATH.read_text(encoding="utf-8")
+        self.assertIn('"publicAcmeVerified": False', helper)
+        self.assertIn('"preflightDisk": "separately-tested"', helper)
 
 
 class NativeAcceptanceEvidenceTest(unittest.TestCase):
@@ -211,7 +264,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
     def test_evidence_writer_keeps_only_allowlisted_doctor_fields_and_scanner_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            output = root / "doctor-test.json"
+            output = root / "doctor-installed.json"
             self.module.write_doctor_evidence({
                 "status": "ok",
                 "checks": [{"id": "tls", "status": "ok", "summary": "secret=hidden", "raw": "forbidden"}],
@@ -224,6 +277,127 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             (root / "services.json").write_text('{"safe":"Bearer mutation-secret"}', encoding="utf-8")
             with self.assertRaises(self.module.EvidenceError):
                 self.module.scan_directory(root, secret_values={"hidden"})
+
+    def test_unknown_headers_cookies_and_pem_blocks_are_never_preserved(self):
+        attack = (
+            "X-Api-Key: unknown-header-secret\n"
+            "Cookie: session=unknown-cookie-secret\n"
+            "-----BEGIN PRIVATE KEY-----\nunknown-pem-secret\n-----END PRIVATE KEY-----"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "doctor-installed.json"
+            self.module.write_doctor_evidence({
+                "status": "ok",
+                "checks": [{"id": "tls", "status": "ok", "summary": attack}],
+            }, output)
+            rendered = output.read_text(encoding="utf-8")
+            for secret in ("unknown-header-secret", "unknown-cookie-secret", "unknown-pem-secret"):
+                self.assertNotIn(secret, rendered)
+            self.module.scan_directory(output.parent)
+            output.write_text(json.dumps({
+                "schemaVersion": 1,
+                "status": "ok",
+                "checks": [{"id": "tls", "status": "ok", "summary": attack}],
+            }), encoding="utf-8")
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.scan_directory(output.parent)
+
+    def test_strict_schema_rejects_unknown_fields_wrong_types_and_long_strings(self):
+        valid = {
+            "schemaVersion": 1,
+            "status": "ok",
+            "checks": [{"id": "tls", "status": "ok", "summary": "trusted HTTPS marker verified"}],
+        }
+        self.module.validate_evidence("doctor", valid)
+        mutations = (
+            {**valid, "unexpected": "value"},
+            {**valid, "status": 1},
+            {**valid, "checks": [{"id": "tls", "status": "ok", "summary": "x" * 4097}]},
+            {**valid, "checks": [{**valid["checks"][0], "raw": "forbidden"}]},
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(self.module.EvidenceError):
+                self.module.validate_evidence("doctor", mutation)
+
+    def test_release_readiness_blocks_stable_bootstrap_or_unverified_upgrade(self):
+        runners = (
+            ("22.04", "amd64"),
+            ("24.04", "amd64"),
+            ("22.04", "arm64"),
+            ("24.04", "arm64"),
+        )
+
+        def summaries(mode: str, verified: bool) -> list[dict]:
+            return [
+                {
+                    "schemaVersion": 1,
+                    "status": "passed",
+                    "exitCode": 0,
+                    "lastStep": "uninstall",
+                    "runner": {"ubuntu": ubuntu, "architecture": architecture},
+                    "candidate": {
+                        "manifestSha256": "a" * 64,
+                        "bundleSha256": ("b" if architecture == "amd64" else "f") * 64,
+                        "images": {
+                            "admin": "sha256:" + "c" * 64,
+                            "platform": "sha256:" + "d" * 64,
+                            "publish-gateway": "sha256:" + "e" * 64,
+                        },
+                    },
+                    "baselineMode": mode,
+                    "upgradeVerified": verified,
+                    "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": True, "publicAcmeVerified": False},
+                    "preflightDisk": "separately-tested",
+                    "completedAt": "2026-10-09T00:00:00+00:00",
+                }
+                for ubuntu, architecture in runners
+            ]
+
+        def identity(version: str, mode: str) -> dict:
+            return {
+                "version": version,
+                "manifestSha256": "a" * 64,
+                "bundles": {
+                    "amd64": {"sha256": "b" * 64},
+                    "arm64": {"sha256": "f" * 64},
+                },
+                "images": {
+                    "admin": {"digest": "sha256:" + "c" * 64},
+                    "platform": {"digest": "sha256:" + "d" * 64},
+                    "publish-gateway": {"digest": "sha256:" + "e" * 64},
+                },
+                "baseline": {"mode": mode},
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "release-readiness.json"
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.write_release_readiness(
+                    identity("1.0.0", "bootstrap"),
+                    summaries("bootstrap", False), output,
+                )
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.write_release_readiness(
+                    identity("1.0.0", "predecessor"),
+                    summaries("predecessor", False), output,
+                )
+            mismatched = summaries("predecessor", True)
+            mismatched[0]["candidate"]["manifestSha256"] = "9" * 64
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.write_release_readiness(identity("1.0.0", "predecessor"), mismatched, output)
+            self.module.write_release_readiness(
+                identity("1.0.0", "predecessor"), summaries("predecessor", True), output,
+            )
+            stable = json.loads(output.read_text(encoding="utf-8"))
+            self.assertTrue(stable["promotable"])
+            self.assertEqual("upgrade-verified", stable["reason"])
+            self.module.write_release_readiness(
+                identity("0.3.0-rc.1", "bootstrap"),
+                summaries("bootstrap", False), output,
+            )
+            bootstrap = json.loads(output.read_text(encoding="utf-8"))
+            self.assertFalse(bootstrap["promotable"])
+            self.assertEqual("bootstrap-not-promotable", bootstrap["reason"])
 
 
 if __name__ == "__main__":
