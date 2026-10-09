@@ -1,10 +1,10 @@
-FROM maven:3.9.16-eclipse-temurin-21-alpine AS build
+# syntax=docker/dockerfile:1.7
+FROM --platform=$BUILDPLATFORM maven:3.9.16-eclipse-temurin-21-alpine AS build
 
 WORKDIR /workspace
 COPY pom.xml ./
-RUN mvn -B -DskipTests dependency:go-offline
 COPY src ./src
-RUN mvn -B -DskipTests package \
+RUN --mount=type=cache,target=/root/.m2 mvn -B -Dmaven.artifact.threads=1 -DskipTests package \
     && cp "$(find target -maxdepth 1 -type f -name '*.jar' ! -name '*.original' -print -quit)" /tmp/business.jar
 
 FROM eclipse-temurin:21.0.12.1_1-jre-alpine-3.23 AS runtime

@@ -63,12 +63,20 @@ class ProductionImagePolicyTest(unittest.TestCase):
     def test_business_uses_java_21_builder_and_minimal_jre_runtime(self):
         contents = dockerfile("business")
         runtime = runtime_stage(contents)
+        self.assertRegex(contents, r"(?m)^# syntax=docker/dockerfile:1(?:\.\d+)?\s*$")
         self.assertRegex(
             contents,
-            r"(?m)^FROM\s+maven:\S*eclipse-temurin-21\S*\s+AS\s+build\s*$",
+            r"(?m)^FROM\s+--platform=\$BUILDPLATFORM\s+"
+            r"maven:\S*eclipse-temurin-21\S*\s+AS\s+build\s*$",
         )
         self.assertRegex(runtime, r"(?m)^FROM\s+eclipse-temurin:\S*21\S*jre\S*")
-        self.assertRegex(contents, r"mvn\s+-B\s+-DskipTests\s+package")
+        self.assertRegex(
+            contents,
+            r"RUN\s+--mount=type=cache,target=/root/\.m2\s+"
+            r"mvn\s+-B\s+-Dmaven\.artifact\.threads=1\s+-DskipTests\s+package",
+        )
+        self.assertNotIn("dependency:go-offline", contents)
+        self.assertEqual(len(re.findall(r"\bmvn\b", contents)), 1)
         self.assertRegex(runtime, r"(?m)^COPY\s+--from=build\s+\S+\.jar\s+/app/business\.jar\s*$")
         self.assertNotRegex(runtime, r"(?m)^COPY\s+(?!--from=)")
         self.assertIn("/var/lib/survey", runtime)
