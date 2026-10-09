@@ -1,9 +1,11 @@
 import { expect, test, type Locator, type Page, type Response, type TestInfo } from '@playwright/test';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import { assertArtifactContainsNoSecret, redactSecret } from './artifacts';
+import { createResourceEndpoint } from './createResourceEvidence';
 import { recentSanitizedNetworkEvents, trackSanitizedNetworkEvents } from './networkEvidence';
 import { redactSensitiveInputs } from './redaction';
+import { recordRunRootId } from './runRootEvidence';
 
 interface TestMetadata {
   actorId?: string;
@@ -213,7 +215,7 @@ test('desktop breakpoints keep workspace, breadcrumbs, dialogs and editor contro
   const token = await readToken();
   const result = await readResult();
 
-  for (const width of [768, 1024, 1440]) {
+  for (const width of [768, 819, 820, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await login(page, token, metadata);
     await navigateWithinApp(
@@ -228,7 +230,7 @@ test('desktop breakpoints keep workspace, breadcrumbs, dialogs and editor contro
     await assertTouchTarget(page.getByLabel('排序方式'));
 
     const projectToggle = page.getByRole('button', { name: '打开项目导航' });
-    if (width === 768) {
+    if (width < 820) {
       await assertTouchTarget(projectToggle);
       await clickAction(projectToggle);
       const drawer = page.getByRole('complementary', { name: '项目与文件夹' });
@@ -254,6 +256,11 @@ test('desktop breakpoints keep workspace, breadcrumbs, dialogs and editor contro
     await navigateWithinApp(page, `/surveys/${result.surveyId}/edit`);
     await expect(page.getByRole('navigation', { name: '面包屑' })).toBeVisible();
     await assertTouchTarget(page.getByRole('button', { name: '保存草稿' }));
+    if (width < 820) {
+      await expect(page.getByRole('tablist', { name: '编辑区域' })).toBeVisible();
+    } else {
+      await expect(page.getByRole('tablist', { name: '编辑区域' })).toBeHidden();
+    }
     await expectNoHorizontalOverflow(page);
   }
 });
@@ -444,13 +451,15 @@ async function createSortableSurvey(page: Page, label: string) {
 }
 
 async function createSurveyResourceTree(page: Page) {
-  await createResource(page, '新建项目', '创建项目', RUN_PROJECT_NAME);
+  const resultsDir = requiredEnv('ADMIN_WEB_TEST_RESULTS_DIR');
+  let rootProjectId = '';
+  await createResource(page, '新建项目', '创建项目', RUN_PROJECT_NAME, async (payload) => {
+    rootProjectId = await recordRunRootId(resultsDir, payload);
+  });
   await testWorkspaceRequestControls(page);
   await clickAction(currentResource(page, RUN_PROJECT_NAME));
   await expect(page.getByLabel('所选资源操作')).toBeVisible();
-  const rootProjectId = new URL(page.url()).searchParams.get('project');
-  expect(rootProjectId).toMatch(/^[0-9a-f-]{36}$/i);
-  await writeRunRootId(rootProjectId!);
+  expect(new URL(page.url()).searchParams.get('project')).toBe(rootProjectId);
   await testArchiveRestore(page);
 
   await createResource(page, '新建文件夹', '创建文件夹', RUN_FOLDER_NAME);
@@ -459,7 +468,7 @@ async function createSurveyResourceTree(page: Page) {
   expect(folderId).toMatch(/^[0-9a-f-]{36}$/i);
   await createResource(page, '新建问卷', '创建问卷', RUN_SURVEY_NAME);
   await expect(page).toHaveURL(/\/surveys\/[0-9a-f-]{36}\/edit/);
-  return { rootProjectId: rootProjectId!, folderId: folderId!, surveyId: surveyIdFrom(page.url()) };
+  return { rootProjectId, folderId: folderId!, surveyId: surveyIdFrom(page.url()) };
 }
 
 async function testWorkspaceRequestControls(page: Page) {
@@ -601,11 +610,26 @@ function sortStatus(page: Page) {
   return page.locator('.editor-outline > [role="status"][aria-live="polite"]');
 }
 
-async function createResource(page: Page, trigger: string, submit: string, value: string) {
+async function createResource(
+  page: Page,
+  trigger: string,
+  submit: string,
+  value: string,
+  onCreated?: (payload: unknown) => Promise<void>,
+) {
   await openCreateDialog(page, trigger);
   const dialog = page.getByRole('dialog', { name: trigger });
   await fillAction(dialog.getByRole('textbox'), value);
+  const endpoint = createResourceEndpoint(trigger);
+  const createResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === endpoint
+      && response.request().method() === 'POST',
+  );
   await clickAction(dialog.getByRole('button', { name: submit }));
+  const response = await createResponse;
+  expect(response.ok()).toBe(true);
+  const payload: unknown = await response.json();
+  await onCreated?.(payload);
   await expect(dialog).toBeHidden();
 }
 
@@ -696,16 +720,6 @@ async function readResult(): Promise<JourneyResult> {
     surveyId: payload.surveyId,
     version: payload.version,
   };
-}
-
-async function writeRunRootId(rootProjectId: string) {
-  const resultsDir = requiredEnv('ADMIN_WEB_TEST_RESULTS_DIR');
-  await mkdir(resultsDir, { recursive: true });
-  await writeFile(
-    resolve(resultsDir, 'run-root-resource-id.txt'),
-    `${rootProjectId}\n`,
-    { mode: 0o600 },
-  );
 }
 
 async function writeResult(result: Record<string, unknown>, token: string) {

@@ -554,6 +554,35 @@ class AdminWebGateTest(unittest.TestCase):
 
             self.assertFalse(destination.exists())
 
+    def test_immediate_post_create_failure_exports_only_the_canonical_root_id(self):
+        gate = load_gate()
+        root_id = "22222222-2222-4222-8222-222222222222"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, "header.payload.signature")
+            source.mkdir()
+            (source / "run-root-resource-id.txt").write_text(
+                root_id + "\n", encoding="ascii"
+            )
+
+            exported = gate.export_sanitized_failure_evidence(
+                secret, source, destination, allowed_root
+            )
+
+            self.assertEqual(1, exported)
+            self.assertEqual(
+                ["run-root-resource-id.txt"],
+                [path.name for path in destination.iterdir()],
+            )
+            self.assertEqual(
+                root_id + "\n",
+                (destination / "run-root-resource-id.txt").read_text(encoding="ascii"),
+            )
+
     def test_archive_run_root_posts_archive_and_confirms_the_same_resource(self):
         gate = load_gate()
         root_id = "33333333-3333-4333-8333-333333333333"
@@ -993,6 +1022,9 @@ issue_browser_token() {
 run_playwright() {
   echo playwright >>"$TRACE"
   printf '{}' >"$ADMIN_WEB_RESULT_FILE"
+  mkdir -p "$ADMIN_WEB_TEST_RESULTS_DIR"
+  printf passed >"$ADMIN_WEB_TEST_RESULTS_DIR/playwright-suite-success.txt"
+  printf '11111111-1111-4111-8111-111111111111\n' >"$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
 }
 sanitize_test_artifacts() { return 0; }
 main --fresh
@@ -1012,6 +1044,78 @@ main --fresh
             self.assertLess(engine_index, issue_index)
             self.assertLess(build_index, issue_index)
             self.assertEqual(issue_index + 1, playwright_index)
+
+    def test_post_playwright_verify_failure_does_not_archive(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory, "trace")
+            script = r'''
+source "$RUNNER"
+GATE=gate.py
+PLATFORM_URL=http://127.0.0.1:1
+ADMIN_WEB_METADATA_FILE=metadata.json
+ADMIN_WEB_RESULT_FILE=result.json
+PLATFORM_DB_CONTAINER=platform-db
+TEST_PREFIX=test
+DB_SERVICE=db
+TEST_DB=mysql
+GATEWAY_CONTAINER=gateway
+ADMIN_WEB_JWT_FILE=owner.jwt
+ADMIN_WEB_TEST_RESULTS_DIR="$TEST_RESULTS"
+mkdir -p "$ADMIN_WEB_TEST_RESULTS_DIR"
+printf passed >"$ADMIN_WEB_TEST_RESULTS_DIR/playwright-suite-success.txt"
+printf '11111111-1111-4111-8111-111111111111\n' >"$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
+python3() {
+  case " $* " in
+    *" verify "*) echo verify >>"$TRACE"; return 1 ;;
+    *" archive-run-root "*) echo archive >>"$TRACE" ;;
+  esac
+}
+verify_and_archive_run_root
+'''
+            completed = run_bash(script, {
+                "RUNNER": str(runner),
+                "TRACE": str(trace),
+                "TEST_RESULTS": str(Path(directory, "results")),
+            })
+            self.assertNotEqual(0, completed.returncode)
+            self.assertEqual(["verify"], trace.read_text(encoding="utf-8").splitlines())
+
+    def test_complete_post_playwright_verification_archives_exactly_once(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory, "trace")
+            script = r'''
+source "$RUNNER"
+GATE=gate.py
+PLATFORM_URL=http://127.0.0.1:1
+ADMIN_WEB_METADATA_FILE=metadata.json
+ADMIN_WEB_RESULT_FILE=result.json
+PLATFORM_DB_CONTAINER=platform-db
+TEST_PREFIX=test
+DB_SERVICE=db
+TEST_DB=mysql
+GATEWAY_CONTAINER=gateway
+ADMIN_WEB_JWT_FILE=owner.jwt
+ADMIN_WEB_TEST_RESULTS_DIR="$TEST_RESULTS"
+mkdir -p "$ADMIN_WEB_TEST_RESULTS_DIR"
+printf passed >"$ADMIN_WEB_TEST_RESULTS_DIR/playwright-suite-success.txt"
+printf '11111111-1111-4111-8111-111111111111\n' >"$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
+python3() {
+  case " $* " in
+    *" verify "*) echo verify >>"$TRACE" ;;
+    *" archive-run-root "*) echo archive >>"$TRACE" ;;
+  esac
+}
+verify_and_archive_run_root
+'''
+            completed = run_bash(script, {
+                "RUNNER": str(runner),
+                "TRACE": str(trace),
+                "TEST_RESULTS": str(Path(directory, "results")),
+            })
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertEqual(["verify", "archive"], trace.read_text(encoding="utf-8").splitlines())
 
     def test_playwright_failure_scrubs_sensitive_artifacts_without_printing_token(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"

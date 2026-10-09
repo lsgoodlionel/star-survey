@@ -13,6 +13,7 @@
     "assert:e2e-bundle": "node scripts/assert-e2e-bundle.mjs",
     "assert:production-bundle": "node scripts/assert-production-bundle.mjs",
     "e2e": "playwright test",
+    "e2e:demo": "node --experimental-strip-types e2e/demoDataGate.ts",
     "lint": "eslint .",
     "test": "vitest",
     "typecheck": "tsc -b --pretty false"

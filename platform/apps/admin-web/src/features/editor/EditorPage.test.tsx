@@ -588,9 +588,12 @@ describe('EditorPage', () => {
     expect(screen.queryByRole('dialog', { name: '未保存的修改' })).not.toBeInTheDocument();
   });
 
-  test('switchesOutlineEditorAndPropertiesAsTabsOnNarrowScreens', async () => {
+  test.each([
+    [819, true],
+    [820, false],
+  ])('uses the approved tab boundary at %ipx', async (width, expectsTabs) => {
     vi.stubGlobal('matchMedia', (query: string) => ({
-      matches: query === '(max-width: 900px)',
+      matches: query === '(max-width: 819px)' && width <= 819,
       media: query,
       onchange: null,
       addEventListener: vi.fn(),
@@ -601,7 +604,12 @@ describe('EditorPage', () => {
     }));
     renderEditor(editorApi(), `/surveys/${surveyId}/edit?question=${singleUuid}`);
 
-    expect(await screen.findByRole('tablist', { name: '编辑区域' })).toBeInTheDocument();
+    await screen.findByRole('heading', { name: '问卷大纲' });
+    if (!expectsTabs) {
+      expect(screen.queryByRole('tablist', { name: '编辑区域' })).not.toBeInTheDocument();
+      return;
+    }
+    expect(screen.getByRole('tablist', { name: '编辑区域' })).toBeInTheDocument();
     expect(screen.getByRole('tabpanel', { name: '大纲' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: '编辑' }));
     expect(screen.getByRole('tabpanel', { name: '编辑' })).toBeInTheDocument();

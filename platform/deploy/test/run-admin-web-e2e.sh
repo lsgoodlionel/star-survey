@@ -159,6 +159,28 @@ run_browser_tests() {
   sanitize_test_artifacts false
 }
 
+verify_and_archive_run_root() {
+  local success_marker="$ADMIN_WEB_TEST_RESULTS_DIR/playwright-suite-success.txt"
+  local root_id_file="$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
+  [[ -f "$success_marker" && "$(<"$success_marker")" == "passed" ]] \
+    || fail "Playwright did not write a valid suite success marker"
+  [[ -f "$root_id_file" ]] || fail "Playwright did not write run root evidence"
+
+  python3 "$GATE" --base-url "$PLATFORM_URL" verify \
+    --metadata-file "$ADMIN_WEB_METADATA_FILE" \
+    --result-file "$ADMIN_WEB_RESULT_FILE" \
+    --platform-db-container "$PLATFORM_DB_CONTAINER" \
+    --platform-db-name platform \
+    --engine-db-container "$TEST_PREFIX-$DB_SERVICE" \
+    --engine-db-kind "$TEST_DB" \
+    --gateway-container "$GATEWAY_CONTAINER"
+
+  python3 "$GATE" --base-url "$PLATFORM_URL" archive-run-root \
+    --jwt-file "$ADMIN_WEB_JWT_FILE" \
+    --root-id-file "$root_id_file"
+  ok "successful real-stack gate archived its run root"
+}
+
 main() {
 case "${1:-}" in
   --fresh) is_fresh=true ;;
@@ -255,14 +277,7 @@ step "browser: issue a fresh 10-minute token, then run desktop and mobile checks
 run_browser_tests
 
 step "gate: platform API, platform DB, gateway and engine DB"
-python3 "$GATE" --base-url "$PLATFORM_URL" verify \
-  --metadata-file "$ADMIN_WEB_METADATA_FILE" \
-  --result-file "$ADMIN_WEB_RESULT_FILE" \
-  --platform-db-container "$PLATFORM_DB_CONTAINER" \
-  --platform-db-name platform \
-  --engine-db-container "$TEST_PREFIX-$DB_SERVICE" \
-  --engine-db-kind "$TEST_DB" \
-  --gateway-container "$GATEWAY_CONTAINER"
+verify_and_archive_run_root
 
 echo "Admin web real-stack e2e passed ($TEST_DB); private credentials and temporary results will now be removed" >&2
 }

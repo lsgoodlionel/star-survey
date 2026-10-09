@@ -702,7 +702,7 @@ trace；gate 对事件字段、类型、URL 与长度做严格校验，并在 JS
 
 ## 管理端产品对齐 Phase A+B（2026-10-09）
 
-- **代码存在**：稳定 demo/E2E 资源、工作台搜索/过滤/排序、归档恢复、AppShell/SurveyShell、900px 响应式切换、44px 主操作和成功后根项目归档已落库。
-- **自动化通过**：管理端 17 files / 165 tests；平台 1421 tests；Python gate 37 tests；demo/SSL predeploy 27 tests；fresh real-stack Playwright 10/10 及全链路核对通过。
-- **用户可见**：768、1024、1440 和 Pixel 7 截图无异常遮挡、无横向溢出、无 E2E 命名污染；业务导航不链接 `/admin`；键盘流程覆盖可见焦点、对话框和问卷 tabs。
-- **边界**：Phase C/D 保留为后续计划；生产 SSL 仅有部署前真实探测 gate，不是 production-ready。PR #10 仍为 OPEN、未合并，依赖仍待合并。
+- **代码存在**：稳定 demo/E2E 资源、工作台搜索/过滤/排序、归档恢复、AppShell/SurveyShell、`<820px` tabs、44px 主操作，以及仅在浏览器和平台/网关/引擎最终核对全绿后归档根项目，均已落库。
+- **自动化通过**：Fix Round 1 管理端 20 files / 174 tests、typecheck、lint、build 和 Python gate 40 tests 通过；原 Task 7 backend 1421 tests 保持记录；fresh real-stack Playwright 10/10 及最终全链路核对通过。真实 Chromium 对 768/819/820/1024/1440、焦点、对话框、44px 与 DOM overflow 做行为测量；运行中 `adminweb-demo` 巡检遍历 `客户体验研究 / 2026 Q4 / 品牌跟踪调查` 并拒绝 E2E 时间戳资源。
+- **用户可见**：768、1024、1440 和 Pixel 7 截图人工检查确认固定 demo 名称可见、无明显遮挡或截断，业务导航不链接 `/admin`。截图本身不作为 DOM overflow、44px 或焦点几何的证明。
+- **边界**：`820–1179px` 当前只保留现有布局并由 Task 7 保证不溢出；Phase C 约定的双栏 + 检查器仍未实现，Phase C/D 均保留为后续计划。生产 SSL 仅有部署前真实探测 gate，不是 production-ready。PR #10 于 2026-10-09 再次核验仍为 OPEN、未合并，依赖仍待合并。

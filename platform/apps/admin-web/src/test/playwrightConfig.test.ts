@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import RunRootReporter from '../../e2e/runRootReporter';
 
 const originalBaseUrl = process.env.ADMIN_WEB_BASE_URL;
 const originalResultsDir = process.env.ADMIN_WEB_TEST_RESULTS_DIR;
@@ -46,6 +50,19 @@ describe('Playwright result artifact location', () => {
       ['line'],
       ['./e2e/runRootReporter.ts'],
     ]);
+  });
+
+  test('reporter writes a success marker without archiving the validated root', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'admin-web-reporter-'));
+    const rootId = '11111111-1111-4111-8111-111111111111';
+    process.env.ADMIN_WEB_TEST_RESULTS_DIR = directory;
+    await writeFile(join(directory, 'run-root-resource-id.txt'), `${rootId}\n`);
+
+    const result = await new RunRootReporter().onEnd({ status: 'passed' } as never);
+
+    expect(result).toBeUndefined();
+    expect(await readFile(join(directory, 'playwright-suite-success.txt'), 'utf8')).toBe('passed\n');
+    expect(await readFile(join(directory, 'run-root-resource-id.txt'), 'utf8')).toBe(`${rootId}\n`);
   });
 });
 

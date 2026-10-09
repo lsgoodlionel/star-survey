@@ -44,9 +44,12 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
 
 ### 管理端首期的局部断言索引
 
-Task 7 将证据分为三层：**代码存在**由下列定位符与组件测试证明；**自动化通过**由 17 files / 165 Vitest、
-1421 backend、37 gate、27 demo 和 fresh Playwright 10/10 证明；**用户可见**由 `docs/audits/2026-10-09-product-alignment/07-admin-workspace-*.png`
-四档人工检查证明。这些证据只收口 Phase A+B，不将 Phase C/D 或 production SSL 部署标为完成。
+Task 7 将证据分为三层：**代码存在**由下列定位符与组件测试证明；**自动化通过**由 Fix Round 1 frontend
+20 files / 174 tests、typecheck、lint、build、Python gate 40 tests、运行中 demo Chromium gate 和 fresh Playwright 10/10，
+以及原 Task 7 backend 1421 tests 证明；**用户可见**由
+`docs/audits/2026-10-09-product-alignment/07-admin-workspace-*.png` 四档人工检查证明固定名称可见且无明显遮挡、截断或入口混淆。
+截图不证明 `scrollWidth`、44px 或焦点几何；这些由 Playwright DOM 行为测量。运行中 demo 另由 Chromium 自动遍历固定三层并拒绝
+E2E 时间戳资源。这些证据只收口 Phase A+B，不将 `820–1179px` 的 Phase C 双栏 + 检查器、其他 Phase C/D 或 production SSL 部署标为完成。
 
 当前定位符校验器只解析 `.py`、`.java`、`.php` 和 `.sh`，尚不能把 Vitest 的 `.ts/.tsx` 符号加入
 上面的 80 条机器登记。下列补充索引给出可直接核对的测试名，并明确只证明复合需求中的局部断言：
@@ -84,7 +87,9 @@ Task 7 将证据分为三层：**代码存在**由下列定位符与组件测试
 - `R23-12`：`platform/deploy/test/run-admin-web-e2e.sh` 串起浏览器、平台、平台库、发布网关和引擎库，并由
   `AdminWebGateTest.test_verify_evidence_rejects_a_platform_or_engine_mismatch` 反向证明任一段不一致会失败；这是
   管理端首期纵向验收证据。Task 7 还覆盖稳定资源名、请求参数、同一问卷往返、归档恢复、
-  768/1024/1440/Pixel 7 无溢出、44px 和键盘流程，仅在 suite 全部成功后归档根项目；不把 305 条需求整体视为完成。
+  768/819/820/1024/1440/Pixel 7 DOM 无溢出、44px 和键盘流程，并在 Playwright 成功 marker、平台 API/DB、网关与引擎 DB
+  全部核对成功后才归档根项目；运行中 demo 的浏览器检查遍历固定三层并拒绝 E2E 时间戳资源。不把 305 条需求整体视为完成，
+  也不据此声称 `820–1179px` 的 Phase C 双栏 + 检查器已交付。
 
 ## WP-01 创建与编辑
 

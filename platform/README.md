@@ -25,9 +25,9 @@
 | 平台 Java | **1421 通过 / 175 类** | Task 7 新建隔离库；0 失败 0 错误 0 跳过 |
 | 发布网关 Python | **1180 通过** | 0 失败 |
 | 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
-| 管理端 Vitest | **17 个文件 / 165 通过** | lint、typecheck 与 build 同步通过 |
+| 管理端 Vitest | **20 个文件 / 174 通过** | lint、typecheck 与 build 同步通过 |
 | 管理端生产构建 | **2089 modules** | 构建通过；大 chunk 提示为非阻断维护项 |
-| 管理端真实 E2E | **10 通过（28.2s，fresh stack）** | 768/1024/1440/Pixel 7、44px、无溢出、键盘/对话框、成功后归档 |
+| 管理端真实 E2E | **10 通过（30.2s，fresh stack）** | 768/819/820/1024/1440/Pixel 7、44px、无溢出、键盘/对话框、最终全链路核对成功后归档 |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
@@ -159,8 +159,11 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 摘要而非 Playwright raw trace。gate 会在 JSON 解码、percent decode、NFKC 规范化后检查所有字符串，并复扫
 最终输出 bytes；JWT、headers、body、临时元数据、raw trace 和原始截图不会上传。
 
-Task 7 用户可见证据位于 `docs/audits/2026-10-09-product-alignment/07-admin-workspace-*.png`：四档宽度无横向溢出，控件至少 44px，
-无 E2E 时间戳命名污染，业务导航不包含引擎 `/admin`。代码、自动化和用户可见证据仅支持 Phase A+B；Phase C/D 仍是后续工作。
+Task 7 用户可见证据位于 `docs/audits/2026-10-09-product-alignment/07-admin-workspace-*.png`：截图人工检查只证明四档画面中
+固定 demo 名称可见、无明显遮挡或截断，且业务导航未混入引擎 `/admin`。横向溢出、44px 控件、819/820 边界、焦点与对话框
+由真实 Playwright DOM 测量；另有运行中 `adminweb-demo` 的 Chromium 巡检遍历固定三层并拒绝 E2E 时间戳资源。Task 7 在
+`820–1179px` 只提供现有布局的不溢出临时保障，Phase C 约定的双栏 + 检查器尚未实现。代码、自动化和用户可见证据仅支持
+Phase A+B；Phase C/D 仍是后续工作。
 仓库尚无生产部署路径，SSL 检查只是部署前 gate，不表示 production-ready。PR #10 于 2026-10-09 重新核验仍为 OPEN、未合并，依赖仍待合并。
 
 ### 跑测试的三条硬规矩（都是真实踩出来的）

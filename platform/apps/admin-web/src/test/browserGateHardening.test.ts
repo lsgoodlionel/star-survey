@@ -81,7 +81,6 @@ describe('browser gate security contract', () => {
     const spec = await source('e2e/authoring.spec.ts');
     expect(spec).toContain('const result = await readResult()');
     expect(spec).toContain('`/workspace?project=${result.rootProjectId}&parent=${result.folderId}`');
-    expect(spec).toContain("resolve(resultsDir, 'run-root-resource-id.txt')");
     expect(config).toContain("['./e2e/runRootReporter.ts']");
     expect(spec).toContain('if (page.isClosed()) return');
     expect(spec).toContain('testInfo.setTimeout(testInfo.timeout + 7_000)');
@@ -119,7 +118,7 @@ describe('browser gate security contract', () => {
     expect(workspaceStyles).toContain('.workspace-dialog button:focus');
     expect(workspaceStyles).toContain('outline: 3px solid #0b6bcb');
     expect(editorStyles).toMatch(/\.survey-editor-save button[\s\S]*?min-height: 44px/);
-    expect(editorStyles).toContain('@media (max-width: 900px)');
+    expect(editorStyles).toContain('@media (max-width: 819px)');
     expect(editorStyles).toContain('.editor-reorder-actions button:focus');
   });
 
