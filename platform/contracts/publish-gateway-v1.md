@@ -133,6 +133,47 @@
 
 `<PublishResult>` 即网关现有 `PublishResult.to_dict()` 的结构（`ok`、`surveyId`、`failedStage`、`failures`、`rolledBack`、`orphanSurveyId`、`steps`、`binding`、`verification`）。`binding` 即 `BindingRecord.to_dict()`：`engineInstance`、`surveyId`、`definitionUuid`、`compilerVersion`、`fingerprintVersion`、`fingerprint`、`language`、`publishedAt`、`questions[]`。
 
+## 隔离运行时预览（v1.5）
+
+`POST /v1/preview` 只供平台创建短期草稿预览。它复用正式发布的 validate、compile、import、apply、
+activate、verify、bind 阶段，但使用独立的 preview generation 和独立 SID；平台不得把返回的 binding
+写入 `survey_published_version` 或 `survey_route`，也不得把该 SID 的引擎事件写入正式答卷投影。
+
+请求仍使用本契约的 HMAC 头，正文必须恰有以下字段：
+
+```json
+{
+  "requestId": "0b0d3f2e-...",
+  "engineInstanceId": "hd-engine-01",
+  "generation": "preview-4b3129a8...",
+  "expiresAt": "2027-01-15T08:30:00Z",
+  "definition": { "...": "固定草稿版本的定义快照" }
+}
+```
+
+- `requestId` 与正文指纹共同提供持久幂等；相同请求原样重放，不再次导入，相同 ID 改正文返回 400。
+- `generation` 必须以 `preview-` 开头，且不得与正式答卷 generation 共用。
+- `expiresAt` 是 UTC RFC 3339 时间；平台负责在到期后调用既有 `POST /v1/close`，失败状态必须保留并重试。
+- 网关为预览创建一次性参与者 token，并返回同时携带该 token、generation、到期时间及 HMAC 摘要的短期 URL。
+- preview create 失败沿用正式发布的 422/502 和回滚语义；成功响应如下：
+
+```json
+{
+  "status": "ready",
+  "result": {
+    "surveyId": 511001,
+    "engineInstanceId": "hd-engine-01",
+    "generation": "preview-4b3129a8...",
+    "expiresAt": "2027-01-15T08:30:00Z",
+    "previewUrl": "https://engine.example/index.php/511001?...",
+    "binding": { "...": "仅用于预览审计，不是正式发布绑定" }
+  }
+}
+```
+
+平台侧 session 状态固定为 `creating | ready | closing | closed | failed | cleanup_failed`。手动关闭和
+到期回收都调用 `POST /v1/close`；close 天然幂等，`cleanup_failed` 必须保留失败原因和重试次数。
+
 ## `GET /healthz`
 
 无需认证，200 `{"status":"ok"}`。不暴露实例列表或任何配置。

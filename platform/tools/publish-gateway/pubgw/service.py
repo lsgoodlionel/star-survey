@@ -27,12 +27,15 @@
 """
 
 import hashlib
+import hmac
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from urllib.parse import urlencode
 
 from .auth import SIGNATURE_HEADER, TIMESTAMP_HEADER, AuthError, verify
 from .close import CloseError, close_survey
@@ -54,6 +57,9 @@ PolicyProbeFactory = Callable[[EngineConfig], Optional[PolicyProbe]]
 
 REDACTED = "***"
 _REJECTED_STAGES = frozenset({"validate", "compile"})
+_PREVIEW_FIELDS = frozenset({"requestId", "engineInstanceId", "definition", "generation", "expiresAt"})
+_PREVIEW_GENERATION = re.compile(r"\Apreview-[a-z0-9][a-z0-9-]{2,55}\Z")
+_UUID_TEXT = re.compile(r"\A[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\Z")
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,16 @@ class _Attempt:
 
     response: Response
     survey_id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class _PreviewRequest:
+    request_id: str
+    engine_instance_id: str
+    definition: Mapping[str, Any]
+    generation: str
+    expires_at: str
+    fingerprint: str
 
 
 class LazyLoginClient(RemoteControlClient):
@@ -125,6 +141,18 @@ class PublishService:
             log.info("rejected publish request: %s", error)
             return self._invalid()
         return self._publish(request)
+
+    def preview(self, headers: Mapping[str, str], body: bytes) -> Response:
+        """``POST /v1/preview``：在独立 SID 上运行草稿，不登记正式发布绑定。"""
+        rejected = self._authenticate("preview", headers, body)
+        if rejected is not None:
+            return rejected
+        try:
+            request = _parse_preview_request(body, self._now())
+        except InvalidRequest as error:
+            log.info("rejected preview request: %s", error)
+            return self._invalid()
+        return self._preview(request)
 
     def close(self, headers: Mapping[str, str], body: bytes) -> Response:
         """``POST /v1/close``：让一份被取代的已发布问卷不再接收新答卷（设过期，不停用、不删除）。"""
@@ -298,6 +326,77 @@ class PublishService:
             for key in acquired:
                 self._locks.release(key)
 
+    def _preview(self, request: _PreviewRequest) -> Response:
+        stored = self._store.get(request.request_id)
+        if stored is not None:
+            return self._replay_preview(request, stored)
+        engine = self._engines.get(request.engine_instance_id)
+        if engine is None:
+            return self._json(404, {"error": "unknown_engine_instance"})
+        try:
+            preview_definition = dict(request.definition)
+            preview_definition["participants"] = [{"ref": "preview-" + request.generation}]
+            definition = SurveyDefinition.from_dict(preview_definition)
+        except DefinitionError as error:
+            log.info("request %s: malformed preview definition: %s", request.request_id, error)
+            return self._invalid()
+
+        keys = [("request", request.request_id), ("preview", engine.instance_id, request.generation)]
+        acquired = self._acquire_all(keys)
+        if acquired is None:
+            return self._json(409, {"status": "conflict", "error": "preview_in_progress"})
+        try:
+            stored = self._store.get(request.request_id)
+            if stored is not None:
+                return self._replay_preview(request, stored)
+            attempt = self._run_preview(request, engine, definition)
+            stored = self._store.put(request.request_id, request.fingerprint, attempt.response.status,
+                                     attempt.response.body, attempt.survey_id)
+            return Response(stored.status, stored.body)
+        finally:
+            for key in acquired:
+                self._locks.release(key)
+
+    def _run_preview(self, request: _PreviewRequest, engine: EngineConfig,
+                     definition: SurveyDefinition) -> _Attempt:
+        client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
+        try:
+            result = Publisher(
+                client, engine_instance=engine.instance_id, policy_probe=self._policy_probe_factory(engine)
+            ).publish(definition)
+        except Exception:  # noqa: BLE001
+            log.exception("request %s: unexpected preview failure on %s", request.request_id, engine.instance_id)
+            return _Attempt(self._json(500, {"error": "internal_error"}))
+        finally:
+            _logout(client, request.request_id)
+
+        status, label = classify(result)
+        if result.ok and result.survey_id is not None:
+            invitation = result.invitations[0]["token"] if result.invitations else ""
+            preview_url = _preview_url(engine, result.survey_id, request.generation, request.expires_at,
+                                       definition.language, invitation, self._secret)
+            body = {
+                "status": "ready",
+                "result": {
+                    "surveyId": result.survey_id,
+                    "engineInstanceId": engine.instance_id,
+                    "generation": request.generation,
+                    "expiresAt": request.expires_at,
+                    "previewUrl": preview_url,
+                    "binding": result.binding.to_dict() if result.binding is not None else None,
+                },
+            }
+            return _Attempt(self._json(200, body), result.survey_id)
+        return _Attempt(self._json(status, {"status": label, "result": result.to_dict()}),
+                        surviving_survey_id(result))
+
+    def _replay_preview(self, request: _PreviewRequest, stored: Lookup) -> Response:
+        if stored.fingerprint != request.fingerprint:
+            return self._invalid()
+        if isinstance(stored, ExpiredResult):
+            return self._json(410, {"status": "expired", "error": "result_expired"})
+        return Response(stored.status, stored.body)
+
     def _run(self, request: PublishRequest, engine: EngineConfig, definition: SurveyDefinition) -> _Attempt:
         started = time.monotonic()
         client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
@@ -441,9 +540,61 @@ def _is_json_media_type(value: str) -> bool:
     return value.split(";", 1)[0].strip().lower() == "application/json"
 
 
+def _parse_preview_request(body: bytes, now: float) -> _PreviewRequest:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise InvalidRequest("body is not UTF-8 JSON: {}".format(error)) from None
+    if not isinstance(payload, dict) or set(payload) != _PREVIEW_FIELDS:
+        raise InvalidRequest("preview body has unexpected fields")
+    request_id = payload["requestId"]
+    instance_id = payload["engineInstanceId"]
+    generation = payload["generation"]
+    expires_at = payload["expiresAt"]
+    definition = payload["definition"]
+    if not isinstance(request_id, str) or not _UUID_TEXT.match(request_id):
+        raise InvalidRequest("requestId must be a UUID")
+    if not isinstance(instance_id, str) or not 0 < len(instance_id) <= 128:
+        raise InvalidRequest("engineInstanceId must be a non-empty string")
+    if not isinstance(generation, str) or not _PREVIEW_GENERATION.match(generation):
+        raise InvalidRequest("generation must be a preview generation")
+    if not isinstance(expires_at, str):
+        raise InvalidRequest("expiresAt must be an RFC3339 timestamp")
+    try:
+        expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        raise InvalidRequest("expiresAt must be an RFC3339 timestamp") from None
+    if expiry.tzinfo is None:
+        raise InvalidRequest("expiresAt must include a timezone")
+    remaining = expiry.timestamp() - now
+    if remaining <= 0 or remaining > 3600:
+        raise InvalidRequest("expiresAt must be in the next 3600 seconds")
+    if not isinstance(definition, dict):
+        raise InvalidRequest("definition must be a JSON object")
+    canonical = json.dumps(
+        {"engineInstanceId": instance_id, "definition": definition, "generation": generation,
+         "expiresAt": expires_at},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    )
+    return _PreviewRequest(
+        request_id.lower(), instance_id, definition, generation, expires_at,
+        hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+
+
+def _preview_url(engine: EngineConfig, survey_id: int, generation: str, expires_at: str,
+                 language: str, invitation: str, secret: bytes) -> str:
+    marker = "/index.php/admin/remotecontrol"
+    base = engine.rpc_url.split(marker, 1)[0].rstrip("/")
+    signed = "{}.{}.{}".format(generation, survey_id, expires_at).encode("utf-8")
+    token = hmac.new(secret, signed, hashlib.sha256).hexdigest()
+    query = urlencode({"newtest": "Y", "lang": language, "token": invitation,
+                       "generation": generation, "expires": expires_at, "preview": token})
+    return "{}/index.php/{}?{}".format(base, survey_id, query)
+
+
 def _logout(client: RemoteControlClient, request_id: str) -> None:
     try:
         client.logout()
     except Exception:  # noqa: BLE001 — 释放会话失败不影响发布结论
         log.warning("request %s: releasing the engine session failed", request_id, exc_info=True)
-
