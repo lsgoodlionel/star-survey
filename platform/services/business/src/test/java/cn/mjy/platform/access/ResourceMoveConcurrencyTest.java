@@ -31,16 +31,12 @@ class ResourceMoveConcurrencyTest {
     private static final long LOCK_WAIT_TIMEOUT_SECONDS = 10;
     private static final long LOCK_WAIT_POLL_MILLIS = 10;
     private static final String BLOCKED_ON_MY_RESOURCE_TRANSACTION = """
-            SELECT COUNT(*)
+            SELECT COUNT(DISTINCT waiting.pid)
               FROM pg_locks waiting
-              JOIN pg_locks held ON held.locktype = 'transactionid' AND held.granted
-                                AND held.transactionid = waiting.transactionid
-                                AND held.pid = pg_backend_pid()
-              JOIN pg_locks on_resource ON on_resource.pid = waiting.pid AND on_resource.granted
-                                AND on_resource.locktype = 'relation'
-                                AND on_resource.relation = 'access_resource'::regclass
-             WHERE NOT waiting.granted AND waiting.locktype = 'transactionid'
-               AND waiting.pid <> pg_backend_pid()
+              JOIN pg_stat_activity activity ON activity.pid = waiting.pid
+             WHERE NOT waiting.granted
+               AND waiting.pid IN (:workerPids)
+               AND activity.query LIKE 'UPDATE access_resource SET archived_at%'
             """;
 
     @Autowired
@@ -120,30 +116,48 @@ class ResourceMoveConcurrencyTest {
             TenantContext ctx, UUID resource, Supplier<ResourceView> operation) throws Exception {
         CompletableFuture<ResourceView> first = new CompletableFuture<>();
         CompletableFuture<ResourceView> second = new CompletableFuture<>();
+        CompletableFuture<Integer> firstPid = new CompletableFuture<>();
+        CompletableFuture<Integer> secondPid = new CompletableFuture<>();
         tenantScope.run(ctx.tenantId(), () -> {
             jdbc.sql("SELECT id FROM access_resource WHERE id = :id FOR UPDATE")
                     .param("id", resource).query(UUID.class).single();
-            completeAsync(first, operation);
-            completeAsync(second, operation);
-            awaitBothBlockedOnThisTransaction(first, second);
+            completeAsync(ctx, first, firstPid, operation);
+            completeAsync(ctx, second, secondPid, operation);
+            List<Integer> workerPids = List.of(awaitPid(firstPid), awaitPid(secondPid));
+            assertThat(workerPids).doesNotHaveDuplicates();
+            awaitBothBlockedOnThisTransaction(first, second, workerPids);
         });
         return List.of(first.get(20, TimeUnit.SECONDS), second.get(20, TimeUnit.SECONDS));
     }
 
-    private static void completeAsync(CompletableFuture<ResourceView> result, Supplier<ResourceView> operation) {
+    private void completeAsync(TenantContext ctx, CompletableFuture<ResourceView> result,
+            CompletableFuture<Integer> backendPid, Supplier<ResourceView> operation) {
         Thread.ofVirtual().start(() -> {
             try {
-                result.complete(operation.get());
+                result.complete(tenantScope.call(ctx.tenantId(), () -> {
+                    backendPid.complete(jdbc.sql("SELECT pg_backend_pid()").query(Integer.class).single());
+                    return operation.get();
+                }));
             } catch (RuntimeException | Error e) {
+                backendPid.completeExceptionally(e);
                 result.completeExceptionally(e);
             }
         });
     }
 
-    private void awaitBothBlockedOnThisTransaction(CompletableFuture<?> first, CompletableFuture<?> second) {
+    private static int awaitPid(CompletableFuture<Integer> backendPid) {
+        try {
+            return backendPid.get(5, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException("worker did not publish its database backend pid", e);
+        }
+    }
+
+    private void awaitBothBlockedOnThisTransaction(
+            CompletableFuture<?> first, CompletableFuture<?> second, List<Integer> workerPids) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(LOCK_WAIT_TIMEOUT_SECONDS);
         try {
-            while (jdbc.sql(BLOCKED_ON_MY_RESOURCE_TRANSACTION).query(Long.class).single() < 2) {
+            while (blockedWorkerCount(workerPids) < 2) {
                 assertThat(first).as("first operation must wait for the held resource row lock").isNotDone();
                 assertThat(second).as("second operation must wait for the held resource row lock").isNotDone();
                 assertThat(System.nanoTime()).as("both operations should reach the resource row lock")
@@ -154,6 +168,15 @@ class ResourceMoveConcurrencyTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
         }
+    }
+
+    private long blockedWorkerCount(List<Integer> workerPids) {
+        jdbc.sql("SELECT pg_stat_clear_snapshot()")
+                .query((rs, row) -> rs.getObject(1)).list();
+        return jdbc.sql(BLOCKED_ON_MY_RESOURCE_TRANSACTION)
+                .param("workerPids", workerPids)
+                .query(Long.class)
+                .single();
     }
 
     private long auditCount(TenantContext ctx, String action, UUID resource) {
