@@ -295,6 +295,29 @@
   font-size: 13px;
 }
 
+.responses-page__refresh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.responses-page__refresh span {
+  color: #52636b;
+  font-size: 13px;
+}
+
+.responses-page__refresh button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  color: #204c59;
+  background: #fff;
+  border: 1px solid #8ca5ac;
+  border-radius: 4px;
+}
+
 .responses-workspace,
 .export-workspace {
   margin-top: 24px;
@@ -440,8 +463,15 @@
 
   .aftercare-primary-link,
   .aftercare-error button,
-  .responses-error button {
+  .responses-error button,
+  .responses-page__refresh,
+  .responses-page__refresh button {
     width: 100%;
+  }
+
+  .responses-page__refresh {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .response-summary-strip,

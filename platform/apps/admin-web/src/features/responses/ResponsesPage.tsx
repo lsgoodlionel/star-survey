@@ -55,17 +55,22 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
   const [format, setFormat] = useState<ExportFormat>('csv');
   const [currentJob, setCurrentJob] = useState<ExportJobView | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [refreshState, setRefreshState] = useState<'idle' | 'refreshing' | 'done'>('idle');
   const filters: ResponseFilters = { state, version, cursor, limit: 50 };
 
   const summary = useQuery({
     queryKey: responseSummaryQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getResponseSummary(api, surveyId, signal),
     retry: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
   const responses = useQuery({
     queryKey: responsePageQueryKey(tenantId, surveyId, filters),
     queryFn: ({ signal }) => listResponses(api, surveyId, filters, signal),
     retry: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
   const job = useQuery({
     queryKey: exportJobQueryKey(tenantId, surveyId, currentJob?.jobId ?? 'none'),
@@ -109,6 +114,15 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
   const summaryForbidden = isForbidden(summary.error);
   const detailForbidden = isForbidden(responses.error);
   const loadFailed = (summary.isError && !summaryForbidden) || (responses.isError && !detailForbidden);
+  const refreshResponses = async () => {
+    setRefreshState('refreshing');
+    try {
+      await Promise.all([summary.refetch(), responses.refetch()]);
+      setRefreshState('done');
+    } catch {
+      setRefreshState('idle');
+    }
+  };
 
   return (
     <main className="responses-page">
@@ -117,7 +131,15 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
           <p>数据回收</p>
           <h2>答卷与导出</h2>
         </div>
-        <span>跨发布版本统一查看</span>
+        <div className="responses-page__refresh">
+          <span aria-live="polite">
+            {refreshState === 'refreshing' ? '正在刷新答卷数据' : null}
+            {refreshState === 'done' ? '答卷数据已更新' : null}
+          </span>
+          <button type="button" disabled={refreshState === 'refreshing'} onClick={() => void refreshResponses()}>
+            <RefreshCw aria-hidden="true" />刷新答卷数据
+          </button>
+        </div>
       </header>
 
       {loadFailed ? (

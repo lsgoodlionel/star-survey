@@ -50,3 +50,29 @@ Task 4 已按 brief / plan / spec 完成。管理端保留本地快速预览，�
 
 - 未修改或暂存 `.github/workflows/release.yml`、`platform/deploy/production/**` 或任何 release workflow 文件。
 - 工作区中并行 Release agent 的未提交文件保持原样，并将从本任务提交中排除。
+
+## Review Fix Round 1/5
+
+### 收口结果
+
+- Preview pending 查询在短暂错误后继续轮询，页面显示中文错误和手动恢复入口；ready 按 `expiresAt` 当地收口为已过期。
+- closed / expired 可用新 request ID 再次创建；failed 同时保留同 request ID 重试和新建选项；旧 session 进入页面审计历史。
+- 答卷 summary/list 不再受全局 30 秒 fresh 窗口限制，页面新增常显“刷新答卷数据”；E2E 删除 `30_500ms` 固定等待，改为 60 秒上限的 UI eventual。
+- 隔离预览作答事件确认已由 bridge 投递后，E2E 直接比较 `survey_published_version`、
+  `survey_question_binding`、official `survey_route`、`engine_outbox` 和 `response_projection`；五项前后均为 0。
+- 二维码等待 `naturalWidth/naturalHeight > 0`，再用 `jsQR` 解码实际渲染像素，结果与刚创建的正式作答 URL 逐字相等。
+- 浏览器下载后解包实际 ZIP，读取 `responses.csv` 与 `fields.csv`，校验 UTF-8 BOM、CRLF、
+  字段字典映射、一条正式答卷和真实存储值 `A1`。
+
+### TDD 与验证
+
+- RED：新增的轮询恢复、终态新建/历史、过期收口和答卷手动刷新用例按预期失败。
+- GREEN：定向组件测试 17/17，Admin Web 全量 26 files / 223 tests 通过。
+- `npm run typecheck`、`npm run lint`、`npm run build` 通过；build 仅有既有 chunk size 提示。
+- `platform/deploy/test/run-admin-web-e2e.sh --fresh` 通过，11/11；包含五项隔离快照、二维码解码和 CSV 内容验证。
+- `platform/deploy/test/run-p1-e2e.sh --fresh` 通过；覆盖 v1/v2/v3、旧版收口、两版答卷投影和幂等回归。
+- capability render check 通过；traceability 仍为 305 条需求、84 条证据、覆盖 40 条需求。
+- 屏幕证据已重新生成：`platform/docs/productization/evidence/task4/real-preview-desktop.png` 与
+  `platform/docs/productization/evidence/task4/real-preview-mobile.png`。
+- Production 仍为 `not_started`；导出 flow 仍为 `partial`，未用 CSV 单旅程替代其他格式的专项证据。
+- 本轮已解决上文“发现与边界”第 2 项的 30 秒缓存可观测性问题；其余边界仍保留。

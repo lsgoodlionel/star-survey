@@ -55,7 +55,7 @@ const readySession: PreviewSessionView = {
   engineSid: 123456,
   generation: 'preview-generation-a',
   previewUrl: 'https://survey.example/v1/preview/access?token=opaque',
-  expiresAt: '2026-10-09T09:30:00Z',
+  expiresAt: '2099-10-09T09:30:00Z',
   status: 'ready',
   failure: null,
   cleanupAttempts: 0,
@@ -160,7 +160,7 @@ describe('PreviewPage', () => {
 
     resolveCreate(readySession);
     expect(await screen.findByText('真实预览已就绪')).toBeInTheDocument();
-    expect(screen.getByText(/2026/)).toBeInTheDocument();
+    expect(screen.getByText(/2099/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '在新窗口打开真实预览' }));
     expect(open).toHaveBeenCalledWith(readySession.previewUrl, '_blank', 'noopener,noreferrer');
     expect(document.querySelector('iframe')).toBeNull();
@@ -181,6 +181,62 @@ describe('PreviewPage', () => {
 
     await waitFor(() => expect(close).toHaveBeenCalledWith(readySession.id));
     expect(await screen.findByText('真实预览已结束')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '再次创建真实预览' })).toBeInTheDocument();
+  });
+
+  test('showsAPollingFailureAndLetsTheUserRecoverThePendingSession', async () => {
+    const creating = { ...readySession, status: 'creating' as const, previewUrl: null, engineSid: null };
+    const get = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary polling failure'))
+      .mockResolvedValueOnce(readySession);
+    renderPreview(
+      { request: () => Promise.resolve(draft) as never },
+      previewClient({ create: vi.fn().mockResolvedValue(creating), get }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '创建真实预览' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('真实预览状态读取失败');
+    fireEvent.click(screen.getByRole('button', { name: '重试查询预览状态' }));
+
+    expect(await screen.findByText('真实预览已就绪')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  test('startsANewOperationAfterCloseAndKeepsTheClosedSessionInAuditHistory', async () => {
+    const nextSession = {
+      ...readySession,
+      id: '55555555-5555-4555-8555-555555555555',
+      requestId: '66666666-6666-4666-8666-666666666666',
+    };
+    const create = vi.fn()
+      .mockResolvedValueOnce(readySession)
+      .mockResolvedValueOnce(nextSession);
+    renderPreview({ request: () => Promise.resolve(draft) as never }, previewClient({ create }));
+
+    fireEvent.click(await screen.findByRole('button', { name: '创建真实预览' }));
+    await screen.findByText('真实预览已就绪');
+    fireEvent.click(screen.getByRole('button', { name: '结束真实预览' }));
+    await screen.findByText('真实预览已结束');
+    fireEvent.click(screen.getByRole('button', { name: '再次创建真实预览' }));
+
+    expect(await screen.findByText('真实预览已就绪')).toBeInTheDocument();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[1].requestId).not.toBe(create.mock.calls[1]?.[1].requestId);
+    expect(screen.getByRole('region', { name: '真实预览历史' })).toHaveTextContent('已结束');
+  });
+
+  test('treatsAnExpiredReadySessionAsTerminalAndOffersANewPreview', async () => {
+    const expired = { ...readySession, expiresAt: '2000-01-01T00:00:00Z' };
+    renderPreview(
+      { request: () => Promise.resolve(draft) as never },
+      previewClient({ create: vi.fn().mockResolvedValue(expired) }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '创建真实预览' }));
+
+    expect(await screen.findByText('真实预览已过期')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '在新窗口打开真实预览' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '再次创建真实预览' })).toBeInTheDocument();
   });
 
   test('keepsTheRequestIdAfterFailureAndRetriesTheSameOperation', async () => {

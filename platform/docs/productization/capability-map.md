@@ -55,7 +55,7 @@
 ### 投放链接与二维码 (`delivery-links`)
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryLinkController.java`](../../services/business/src/main/java/cn/mjy/platform/delivery/DeliveryLinkController.java) 定位 `public class DeliveryLinkController`：投放链接、短链和二维码后端接口已存在。
-- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：真实浏览器从发布结果创建链接和二维码，并通过该链接完成正式作答。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `decodeQrImage`：真实浏览器确认二维码图像完成加载，用 jsQR 解码渲染像素并逐字比对新建链接 URL，再完成正式作答。
 - **前端** （实现）[`platform/apps/admin-web/src/features/publish/PublishedAccessPanel.tsx`](../../apps/admin-web/src/features/publish/PublishedAccessPanel.tsx) 定位 `export function PublishedAccessPanel`：发布后可创建投放链接、展示后端二维码并进入答卷工作区。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R05-01 |`：链接、二维码和短链需求已编号。
 - **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R05-01 | 端到端 |`：链接、二维码和正式作答证据已登记。
@@ -70,7 +70,7 @@
 ### 导出 (`exports`)
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/response/ResponseExportController.java`](../../services/business/src/main/java/cn/mjy/platform/response/ResponseExportController.java) 定位 `public class ResponseExportController`：导出作业创建、进度、下载和再次授权接口已存在。
-- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `下载导出文件`：真实浏览器基于正式答卷创建 CSV 导出并完成下载；其他格式继续由专项测试覆盖。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `assertDownloadedCsvContainsFormalResponse`：真实浏览器解包下载 ZIP，校验 CSV UTF-8 BOM/CRLF，并通过 fields.csv 字段字典确认唯一正式答卷的真实字段值为 A1；其他格式继续由专项测试覆盖。
 - **前端** （实现）[`platform/apps/admin-web/src/features/responses/ResponsesPage.tsx`](../../apps/admin-web/src/features/responses/ResponsesPage.tsx) 定位 `创建导出任务`：前端提供真实支持格式选择、任务状态、取消、重试和下载。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R06-02 |`：Excel 和 CSV 导出需求已编号。
 - **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R06-02 | 端到端 |`：CSV 创建、完成和下载的完整旅程证据已登记。
@@ -85,8 +85,8 @@
 ### 预览 (`preview`)
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/survey/preview/PreviewSessionController.java`](../../services/business/src/main/java/cn/mjy/platform/survey/preview/PreviewSessionController.java) 定位 `public class PreviewSessionController`：隔离预览 session 的创建、查询和显式结束接口已交付。
-- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：真实浏览器验证隔离预览作答不进入正式计数，并继续完成发布后闭环。
-- **前端** （实现）[`platform/apps/admin-web/src/features/preview/PreviewPage.tsx`](../../apps/admin-web/src/features/preview/PreviewPage.tsx) 定位 `export function PreviewRoutePage`：页面同时提供本地快速预览和可重试、可显式结束的 LimeSurvey 真实预览。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `readPreviewIsolationSnapshot`：真实预览事件投递后直接比较正式 version、binding、route、outbox 和 response 计数，五项前后均为零。
+- **前端** （实现）[`platform/apps/admin-web/src/features/preview/PreviewPage.tsx`](../../apps/admin-web/src/features/preview/PreviewPage.tsx) 定位 `export function PreviewRoutePage`：页面同时提供快速预览和隔离真实预览；轮询失败可恢复，终态可新建且保留旧 session 审计。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R01-07 |`：预览、发布与关闭为复合需求。
 - **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R01-07 | 端到端 |`：真实预览、关闭和正式计数隔离证据已登记。
 
@@ -101,8 +101,8 @@
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/response/ResponseQueryController.java`](../../services/business/src/main/java/cn/mjy/platform/response/ResponseQueryController.java) 定位 `public class ResponseQueryController`：跨版本答卷查询、摘要和字段接口已存在。
 - **后端** （自动化测试）[`platform/services/business/src/test/java/cn/mjy/platform/response/ResponseTenantIsolationTest.java`](../../services/business/src/test/java/cn/mjy/platform/response/ResponseTenantIsolationTest.java) 定位 `class ResponseTenantIsolationTest`：答卷租户隔离已有后端测试。
-- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：真实浏览器验证预览后正式计数仍为零，并在正式作答后看到一份完成答卷。
-- **前端** （实现）[`platform/apps/admin-web/src/features/responses/ResponsesPage.tsx`](../../apps/admin-web/src/features/responses/ResponsesPage.tsx) 定位 `export function ResponsesPage`：答卷摘要、明细、状态与版本筛选已接入统一问卷上下文。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `刷新答卷数据`：正式作答后不使用固定 sleep，通过有界 UI 刷新 eventual 验证一份完成答卷可见。
+- **前端** （实现）[`platform/apps/admin-web/src/features/responses/ResponsesPage.tsx`](../../apps/admin-web/src/features/responses/ResponsesPage.tsx) 定位 `刷新答卷数据`：答卷摘要与明细设为即时过期查询，并提供常显手动刷新及中文进度反馈。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R06-01 |`：答卷查询需求已编号。
 - **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R06-01 | 端到端 |`：正式答卷投影、摘要和明细可见证据已登记。
 

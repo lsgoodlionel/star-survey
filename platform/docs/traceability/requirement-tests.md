@@ -75,13 +75,16 @@ E2E 时间戳资源。这些证据只收口 Phase A+B，不将 `820–1179px` �
   和桌面 E2E，证明“先预览、坏行定位、选择后导入”子链路。
 - `R01-04`：`definition.test.ts` 的 `editsOnlyTheSelectedBasicQuestion`、
   `keepsQuestionAndGroupUuidsStableWhileReordering`，证明基础字段编辑与稳定排序；不证明拖拽排序或高级题型编辑。
-- `R01-07`：`PreviewPage.test.tsx` 覆盖快速预览、真实预览防重复创建、中文状态、失败时保留 request ID、
-  新窗口打开和显式结束；`e2e/authoring.spec.ts` 在真实 LimeSurvey 中完成隔离预览作答并证明正式答卷计数仍为 0，
-  再完成审批发布与不可变版本查看。桌面与 Pixel 7 截图位于 `platform/docs/productization/evidence/task4/`。
-- `R05-01`／`R05-07`／`R05-08`：发布后管理端真实创建投放链接并展示后端二维码，浏览器经短链进入
-  LimeSurvey 正式作答；签名防篡改和失效短链仍由下方后端专项测试覆盖。
-- `R06-01`／`R06-02`：同一真实浏览器旅程等待引擎 bridge cron 投递，确认答卷摘要为 1、明细可见，
-  随后创建 CSV 导出任务、等待完成并下载制品；其他导出格式不因该旅程提升为完整验收。
+- `R01-07`：`PreviewPage.test.tsx` 覆盖防重复创建、轮询失败恢复、到期收口、同 request ID
+  重试、终态新建和旧 session 审计。`e2e/authoring.spec.ts` 等待真实预览事件投递后，直接比较
+  `survey_published_version`、`survey_question_binding`、official route、`engine_outbox` 和
+  `response_projection` 五项前后均为 0，再完成审批发布。桌面与 Pixel 7 截图位于
+  `platform/docs/productization/evidence/task4/`。
+- `R05-01`／`R05-07`／`R05-08`：发布后管理端真实创建投放链接；浏览器等待二维码像素完成加载，
+  用 jsQR 解码并与 create response 的作答 URL 逐字比对，再经短链进入 LimeSurvey 正式作答。
+- `R06-01`／`R06-02`：正式作答后通过有界 UI 手动刷新 eventual 观测摘要为 1 和明细值可见，
+  不再等待固定缓存时间；随后解包真实 CSV 制品，校验 UTF-8 BOM、CRLF、字段字典映射、
+  一条正式答卷及其 `A1` 值。其他导出格式不因该旅程提升为完整验收。
 - `R01-08`：`EditorPage.test.tsx` 的 `savesWithTheCurrentDraftVersionAndAdoptsTheReturnedVersion`、
   `keepsLocalChangesWhenTheServerReturns409`、`recoversTheInMemoryDraftAfterReauthentication`，证明版本保存、
   冲突不覆盖与同页内存恢复；不证明多人实时协同或字段级合并。
@@ -117,7 +120,7 @@ E2E 时间戳资源。这些证据只收口 Phase A+B，不将 `820–1179px` �
 | R01-02 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/survey/SurveyTextImportTest.java::previewSplitsTheTextIntoQuestionsWithTheirRecognisedTypeOptionsAndLineNumbers` | 多题多选项可预览，题号与顺序一致 |
 | R01-02 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/survey/SurveyTextImportTest.java::aBadLineIsReportedWithItsLineNumberAndDoesNotStopTheRestOfTheBatch` | 异常格式可定位到行，不中断整批 |
 | R01-02 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/survey/SurveyTextImportTest.java::questionsWithBlockingProblemsArePreviewedButMarkedNotImportable` | 先预览后落库 |
-| R01-07 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 真实隔离预览作答、正式计数不变、显式结束并继续完成发布 |
+| R01-07 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 预览事件投递后正式 version/binding/route/outbox/response 五项前后不变，再显式结束与发布 |
 | R01-09 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/survey/PublishApprovalFlowTest.java::anApprovedRequestLetsTheApplicantPublishExactlyTheApprovedVersion` | 批准绑定提交时的草稿版本 |
 | R01-09 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/survey/PublishApprovalFlowTest.java::editingTheDraftAfterApprovalVoidsTheApprovalAndPublishIsRefused` | 批准后改稿即失效 |
 | R01-09 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/survey/PublishApprovalApiTest.java::aSubAccountMustGoThroughApprovalToPublishOverTheApi` | 子账户经 API 也绕不过审批 |
@@ -184,7 +187,7 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | 需求ID | 层级 | 证据定位符 | 说明 |
 |---|---|---|---|
 | R05-01 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryLinkTest.java::theLinkPointsAtTheEnginesurveyAndCarriesTheSignedParameters` | 投放链接带签名参数 |
-| R05-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 管理端创建真实链接与二维码，并经链接完成正式作答 |
+| R05-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 二维码像素可解码且 payload 等于刚创建的作答 URL，再经链接完成正式作答 |
 | R05-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliverySendTest.java::aCrashMidTaskResumesWithoutSendingAnythingTwice` | 批量投放：恢复不重发 |
 | R05-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReceiptTest.java::aDeliveredReceiptIsCountedOnceNoMatterHowOftenItIsRedelivered` | 回执重复投递只计一次 |
 | R05-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReceiptTest.java::aReceiptWithoutAValidSignatureIsRejectedAndLeavesNoTrace` | 渠道商回执验签 |
@@ -203,8 +206,8 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 
 | 需求ID | 层级 | 证据定位符 | 说明 |
 |---|---|---|---|
-| R06-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 正式作答经引擎事件投影后在摘要和明细页可见 |
-| R06-02 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 基于真实答卷创建 CSV 导出、等待完成并下载 |
+| R06-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 正式作答经引擎事件投影后，通过有界 UI 刷新在摘要和明细页可见 |
+| R06-02 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 下载的 ZIP 含 UTF-8 BOM/CRLF CSV，字段字典映射到一条真实答卷值 `A1` |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::valueLabelsAreAttachedToBothNumericAndShortStringVariables` | SPSS 值标签 |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::cellsRoundTripWithSystemMissingForBlanksAndUtf8SafeTruncation` | 缺失值与 UTF-8 截断 |
 | R06-03 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportSavTest.java::theBundleHasTheDatasetItsVariableDictionaryAndTheUsualSideSheets` | 整条作业链路产出 SPSS 包与变量字典 |

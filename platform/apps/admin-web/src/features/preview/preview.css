@@ -133,6 +133,24 @@
   color: #9b2c1f;
 }
 
+.real-preview-query-error {
+  display: grid;
+  gap: 6px;
+}
+
+.real-preview-query-error button {
+  width: fit-content;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  color: #7f1d1d;
+  background: #fff;
+  border: 1px solid #d7a29a;
+  border-radius: 4px;
+}
+
 .real-preview-actions {
   display: flex;
   flex-wrap: wrap;
@@ -161,6 +179,37 @@
 .real-preview-actions svg {
   width: 17px;
   height: 17px;
+}
+
+.real-preview-history {
+  grid-column: 1 / -1;
+  padding-top: 12px;
+  border-top: 1px solid #c9ddd6;
+}
+
+.real-preview-history h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.real-preview-history ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.real-preview-history li {
+  display: grid;
+  grid-template-columns: 90px minmax(140px, 1fr) auto;
+  gap: 10px;
+  color: #52676b;
+  font-size: 13px;
+}
+
+.real-preview-history strong {
+  color: #19383c;
 }
 
 .draft-preview-frame {
@@ -311,6 +360,14 @@
 
   .real-preview-actions button {
     width: 100%;
+  }
+
+  .real-preview-history li {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .real-preview-history time {
+    grid-column: 1 / -1;
   }
 
   .draft-renderer > header h2 {

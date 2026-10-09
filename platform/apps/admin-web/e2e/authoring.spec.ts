@@ -1,6 +1,8 @@
-import { expect, test, type Locator, type Page, type Response, type TestInfo } from '@playwright/test';
+import { expect, test, type Download, type Locator, type Page, type Response, type TestInfo } from '@playwright/test';
+import { execFile } from 'node:child_process';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import jsQR from 'jsqr';
 import { assertArtifactContainsNoSecret, redactSecret } from './artifacts';
 import { createResourceEndpoint } from './createResourceEvidence';
 import { recentSanitizedNetworkEvents, trackSanitizedNetworkEvents } from './networkEvidence';
@@ -33,6 +35,20 @@ interface JourneyResult {
 interface OutlineGroupOrder {
   title: string;
   questions: string[];
+}
+
+interface PreviewIsolationSnapshot {
+  publishedVersions: number;
+  publishedBindings: number;
+  officialRoutes: number;
+  engineOutbox: number;
+  responses: number;
+}
+
+interface CreatedDeliveryLink {
+  id: string;
+  url: string;
+  shortUrl: string | null;
 }
 
 const ACTION_TIMEOUT_MS = 15_000;
@@ -140,6 +156,9 @@ test('author filters stable resources, restores archive, and publishes the same 
   await clickAction(page.getByRole('link', { name: '快速预览' }));
   await expect(page.getByRole('heading', { name: '快速预览' })).toBeVisible();
 
+  const isolationBefore = await readPreviewIsolationSnapshot(surveyId, me.tenantId);
+  const deliveredBefore = await readDeliveredEngineEvents();
+
   const previewPagePromise = page.context().waitForEvent('page');
   await clickAction(page.getByRole('button', { name: '创建真实预览' }));
   await expect(page.getByText('真实预览已就绪')).toBeVisible({ timeout: 210_000 });
@@ -148,8 +167,22 @@ test('author filters stable resources, restores archive, and publishes the same 
   const previewPage = await previewPagePromise;
   await completeLimeSurvey(previewPage);
   await previewPage.close();
+  await expect.poll(readDeliveredEngineEvents, {
+    timeout: 60_000,
+    intervals: [500, 1_000, 2_000],
+  }).toBeGreaterThan(deliveredBefore);
   await clickAction(page.getByRole('button', { name: '结束真实预览' }));
   await expect(page.getByText('真实预览已结束')).toBeVisible({ timeout: 210_000 });
+
+  const isolationAfter = await readPreviewIsolationSnapshot(surveyId, me.tenantId);
+  expect(isolationAfter).toEqual(isolationBefore);
+  expect(isolationAfter).toEqual({
+    publishedVersions: 0,
+    publishedBindings: 0,
+    officialRoutes: 0,
+    engineOutbox: 0,
+    responses: 0,
+  });
 
   await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', {
     name: '答卷与导出',
@@ -166,12 +199,22 @@ test('author filters stable resources, restores archive, and publishes the same 
   await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
 
   await fillAction(page.getByLabel('链接名称'), '正式验收链接');
+  const createLinkResponse = page.waitForResponse((response) =>
+    response.url().includes(`/v1/delivery/surveys/${surveyId}/links`)
+      && response.request().method() === 'POST',
+  );
   await clickAction(page.getByRole('button', { name: '创建链接' }));
+  const createdLink = await readCreatedDeliveryLink(await createLinkResponse);
   const deliveryList = page.getByRole('list', { name: '投放链接' });
   const deliveryLink = deliveryList.getByRole('link').first();
   await expect(deliveryLink).toBeVisible();
-  await expect(deliveryList.getByRole('img', { name: '正式验收链接二维码' })).toBeVisible();
+  const deliveryQr = deliveryList.getByRole('img', { name: '正式验收链接二维码' });
+  await expect(deliveryQr).toBeVisible();
+  await expect.poll(() => deliveryQr.evaluate((image: HTMLImageElement) =>
+    image.complete && image.naturalWidth > 0 && image.naturalHeight > 0)).toBe(true);
+  expect(await decodeQrImage(deliveryQr)).toBe(createdLink.url);
   const deliveryUrl = await deliveryLink.getAttribute('href');
+  expect(deliveryUrl).toBe(createdLink.shortUrl ?? createdLink.url);
   expect(deliveryUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
 
   const respondentPage = await page.context().newPage();
@@ -179,28 +222,20 @@ test('author filters stable resources, restores archive, and publishes the same 
   await completeLimeSurvey(respondentPage);
   await respondentPage.close();
 
-  await expect.poll(async () => {
-    const response = await page.request.get(
-      `${requiredEnv('ADMIN_WEB_BASE_URL')}/v1/surveys/${surveyId}/responses/summary`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (!response.ok()) return -1;
-    const payload = await response.json() as { total?: { engineCompleted?: number } };
-    return payload.total?.engineCompleted ?? -1;
-  }, {
-    timeout: 60_000,
-    intervals: [1_000, 2_000, 5_000],
-  }).toBe(1);
-  // The app intentionally keeps server queries fresh for 30 seconds. Re-enter
-  // the page after that window so the user journey exercises a real refetch.
-  await page.waitForTimeout(30_500);
   await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', {
     name: '答卷与导出',
   }));
   await expect(page.getByRole('heading', { name: '答卷与导出' })).toBeVisible();
-  await expect(page.getByLabel('已完成 1')).toBeVisible();
-  await expect(page.getByRole('table')).toContainText('Q9');
-  await expect(page.getByRole('table')).toContainText('A1');
+  await expect(async () => {
+    await clickAction(page.getByRole('button', { name: '刷新答卷数据' }));
+    await expect(page.getByLabel('已完成 1')).toBeVisible();
+  }).toPass({ timeout: 60_000, intervals: [500, 1_000, 2_000, 5_000] });
+  const formalAnswer = page.locator('.response-answers > div').filter({
+    has: page.locator('dd', { hasText: /^A1$/ }),
+  }).first();
+  await expect(formalAnswer).toBeVisible();
+  const formalQuestionCode = (await formalAnswer.locator('dt').textContent())?.trim() ?? '';
+  expect(formalQuestionCode).not.toBe('');
   await clickAction(page.getByRole('button', { name: '创建导出任务' }));
   const exportJob = page.locator('.export-job');
   await expect(exportJob).toContainText('导出完成', { timeout: 60_000 });
@@ -208,6 +243,7 @@ test('author filters stable resources, restores archive, and publishes the same 
   await clickAction(page.getByRole('button', { name: '下载导出文件' }));
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/\.(?:csv|zip)$/i);
+  await assertDownloadedCsvContainsFormalResponse(download, formalQuestionCode);
 
   const versionLink = page.getByRole('link', { name: /查看版本 \d+/ }).first();
   await clickAction(page.getByRole('link', { name: '发布与版本' }));
@@ -254,6 +290,171 @@ async function completeLimeSurvey(enginePage: Page) {
     if (await visibleChoices.count() === 0) break;
   }
   await expect(visibleChoices).toHaveCount(0, { timeout: 30_000 });
+}
+
+async function readCreatedDeliveryLink(response: Response): Promise<CreatedDeliveryLink> {
+  expect(response.status()).toBe(201);
+  const payload: unknown = await response.json();
+  expect(payload).toEqual(expect.objectContaining({
+    id: expect.stringMatching(/^[0-9a-f-]{36}$/i),
+    url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/),
+  }));
+  const link = payload as CreatedDeliveryLink;
+  expect(link.shortUrl === null || /^http:\/\/127\.0\.0\.1:/.test(link.shortUrl)).toBe(true);
+  return link;
+}
+
+async function decodeQrImage(image: Locator) {
+  const pixels = await image.evaluate((element: HTMLImageElement) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = element.naturalWidth;
+    canvas.height = element.naturalHeight;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('QR canvas is unavailable');
+    context.drawImage(element, 0, 0);
+    return {
+      data: Array.from(context.getImageData(0, 0, canvas.width, canvas.height).data),
+      height: canvas.height,
+      width: canvas.width,
+    };
+  });
+  return jsQR(Uint8ClampedArray.from(pixels.data), pixels.width, pixels.height)?.data ?? null;
+}
+
+async function readPreviewIsolationSnapshot(
+  surveyId: string,
+  tenantId: string,
+): Promise<PreviewIsolationSnapshot> {
+  assertCanonicalUuid(surveyId);
+  assertCanonicalUuid(tenantId);
+  const sql = `SELECT json_build_object(
+    'publishedVersions', (SELECT count(*)::int FROM survey_published_version WHERE tenant_id = '${tenantId}' AND survey_id = '${surveyId}'),
+    'publishedBindings', (SELECT count(*)::int FROM survey_question_binding WHERE tenant_id = '${tenantId}' AND survey_id = '${surveyId}'),
+    'officialRoutes', (SELECT count(*)::int FROM survey_route WHERE tenant_id = '${tenantId}' AND public_id = '${surveyId}' AND superseded_at IS NULL),
+    'engineOutbox', (SELECT count(*)::int FROM engine_outbox WHERE tenant_id = '${tenantId}'),
+    'responses', (SELECT count(*)::int FROM response_projection WHERE tenant_id = '${tenantId}')
+  )::text;`;
+  const output = await runText('docker', [
+    'exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'),
+    'psql', '-U', 'platform_owner', '-d', 'platform', '-tAq', '-c', sql,
+  ]);
+  const payload: unknown = JSON.parse(output.trim());
+  expect(payload).toEqual({
+    publishedVersions: expect.any(Number),
+    publishedBindings: expect.any(Number),
+    officialRoutes: expect.any(Number),
+    engineOutbox: expect.any(Number),
+    responses: expect.any(Number),
+  });
+  return payload as PreviewIsolationSnapshot;
+}
+
+async function readDeliveredEngineEvents() {
+  const query = 'SELECT COUNT(*) FROM lime_mjyplatformbridge_event_log WHERE delivered_at IS NOT NULL;';
+  const kind = requiredEnv('ADMIN_WEB_ENGINE_DB_KIND');
+  const container = requiredEnv('ADMIN_WEB_ENGINE_DB_CONTAINER');
+  const output = kind === 'pgsql'
+    ? await runText('docker', [
+      'exec', container, 'psql', '-U', 'postgres', '-d', 'limesurvey', '-tAq', '-c', query,
+    ])
+    : await runText('docker', [
+      'exec', container, 'mariadb', '-uroot', '-proot', 'limesurvey', '-N', '-B', '-e', query,
+    ]);
+  const count = Number(output.trim());
+  if (!Number.isInteger(count) || count < 0) throw new Error('Engine event count is invalid');
+  return count;
+}
+
+async function assertDownloadedCsvContainsFormalResponse(download: Download, expectedQuestionCode: string) {
+  const path = await download.path();
+  expect(path).not.toBeNull();
+  const entries = (await runBytes('unzip', ['-Z1', path!])).toString('utf8').trim().split('\n');
+  expect(entries).toEqual(expect.arrayContaining([
+    'responses.csv', 'fields.csv', 'attachments.csv', 'extensions.csv',
+  ]));
+  const responses = await readZipCsv(path!, 'responses.csv');
+  const fields = await readZipCsv(path!, 'fields.csv');
+  const fieldHeader = fields[0] ?? [];
+  const questionCodeIndex = fieldHeader.indexOf('questioncode');
+  const fieldnameIndex = fieldHeader.indexOf('fieldname');
+  const columnIndex = fieldHeader.indexOf('column');
+  expect(questionCodeIndex).toBeGreaterThanOrEqual(0);
+  expect(fieldnameIndex).toBeGreaterThanOrEqual(0);
+  expect(columnIndex).toBeGreaterThanOrEqual(0);
+  const questionField = fields.slice(1).find((row) =>
+    row[questionCodeIndex] === expectedQuestionCode
+      || row[fieldnameIndex] === expectedQuestionCode
+      || row[columnIndex] === expectedQuestionCode);
+  expect(questionField).toBeDefined();
+  const responseColumn = responses[0]?.indexOf(questionField![columnIndex]!) ?? -1;
+  expect(responseColumn).toBeGreaterThanOrEqual(0);
+  expect(responses).toHaveLength(3);
+  expect(responses[2]?.[responseColumn]).toBe('A1');
+}
+
+async function readZipCsv(path: string, entry: string) {
+  const bytes = await runBytes('unzip', ['-p', path, entry]);
+  expect(bytes.length).toBeGreaterThan(3);
+  expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+  const csv = bytes.subarray(3).toString('utf8');
+  expect(csv).toContain('\r\n');
+  expect(csv.replaceAll('\r\n', '')).not.toContain('\n');
+  return parseCsv(csv);
+}
+
+function parseCsv(value: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value[index];
+    if (current === '"') {
+      if (quoted && value[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (current === ',' && !quoted) {
+      row.push(cell);
+      cell = '';
+    } else if (current === '\r' && value[index + 1] === '\n' && !quoted) {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+      index += 1;
+    } else {
+      cell += current;
+    }
+  }
+  if (cell || row.length) rows.push([...row, cell]);
+  return rows;
+}
+
+function assertCanonicalUuid(value: string) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error('Expected a canonical UUID');
+  }
+}
+
+function runText(file: string, args: string[]) {
+  return new Promise<string>((resolve, reject) => {
+    execFile(file, args, { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+}
+
+function runBytes(file: string, args: string[]) {
+  return new Promise<Buffer>((resolve, reject) => {
+    execFile(file, args, { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
 }
 
 function limeSurveyAdvanceButton(enginePage: Page) {

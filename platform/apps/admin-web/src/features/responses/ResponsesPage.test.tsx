@@ -90,6 +90,32 @@ afterEach(() => {
 });
 
 describe('ResponsesPage', () => {
+  test('alwaysOffersAManualRefreshAndReplacesFreshCachedSummaryAndRows', async () => {
+    let completed = 0;
+    const api = apiFrom((request) => {
+      if (request.path.endsWith('/responses/summary')) {
+        return { ...summary, total: { ...summary.total, engineCompleted: completed } };
+      }
+      if (request.path.includes('/responses?')) {
+        return completed ? page : { ...page, items: [], nextCursor: null };
+      }
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    renderWithQuery(
+      <MemoryRouter>
+        <ResponsesPage api={api} exportClient={exportClient()} surveyId={surveyId} tenantId="tenant-a" />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText('已完成 0')).toBeInTheDocument();
+    completed = 1;
+    fireEvent.click(screen.getByRole('button', { name: '刷新答卷数据' }));
+
+    expect(await screen.findByLabelText('已完成 1')).toBeInTheDocument();
+    expect(screen.getByRole('table')).toHaveTextContent('#88');
+    expect(screen.getByText('答卷数据已更新')).toBeInTheDocument();
+  });
+
   test('shows summary, masked detail rows and cursor pagination with status and version filters', async () => {
     const requests: string[] = [];
     const api = apiFrom((request) => {

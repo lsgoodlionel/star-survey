@@ -212,7 +212,7 @@ esac
 trap cleanup EXIT
 
 ensure_node22
-for tool in docker python3 curl npm node; do
+for tool in docker python3 curl npm node unzip; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 docker info >/dev/null 2>&1 || fail "docker daemon is not running"
@@ -226,6 +226,9 @@ export ADMIN_WEB_JWT_FILE="$WORK_DIR/owner.jwt"
 export ADMIN_WEB_METADATA_FILE="$WORK_DIR/metadata.json"
 export ADMIN_WEB_RESULT_FILE="$WORK_DIR/result.json"
 export ADMIN_WEB_TEST_RESULTS_DIR="$WORK_DIR/test-results"
+export ADMIN_WEB_PLATFORM_DB_CONTAINER="$PLATFORM_DB_CONTAINER"
+export ADMIN_WEB_ENGINE_DB_CONTAINER="$TEST_PREFIX-$DB_SERVICE"
+export ADMIN_WEB_ENGINE_DB_KIND="$TEST_DB"
 if [[ -n "${ADMIN_WEB_CI_ARTIFACT_DIR:-}" && "$ADMIN_WEB_CI_ARTIFACT_DIR" != /* ]]; then
   export ADMIN_WEB_CI_ARTIFACT_DIR="$REPO_ROOT/$ADMIN_WEB_CI_ARTIFACT_DIR"
 fi
