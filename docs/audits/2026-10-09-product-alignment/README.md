@@ -1,5 +1,7 @@
 # 产品界面与蓝图对齐审计
 
+> 最新全量开发核查见 [14-full-development-report.md](14-full-development-report.md)。该报告在 Phase A+B 完成后重新核对当前真实页面、前后端代码规模、305 条需求口径及后续产品化优先级。
+
 日期：2026-10-09
 
 核查对象：管理端作者工作台、LimeSurvey 引擎后台、真实答卷端、蓝图与实施计划
