@@ -19,13 +19,13 @@
 | 管理 | `R19-01`, `R19-03`, `R20-01`, `R20-02`, `R20-03`, `R22-01`, `R22-11`, `R22-12` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 6 |
 | 审批与发布 | `R01-07`, `R01-09` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 通讯录与投放 | `R05-04`, `R05-05`, `R05-06`, `R18-01`, `R18-02`, `R18-03`, `R18-06` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 4 |
-| 投放链接与二维码 | `R05-01`, `R05-07`, `R05-08` | 完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 1 |
+| 投放链接与二维码 | `R05-01`, `R05-07`, `R05-08` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 编辑 | `R01-04`, `R01-05`, `R01-08` | 完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 5 |
-| 导出 | `R06-02`, `R06-03`, `R06-05`, `R06-06`, `R06-07` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 3 |
+| 导出 | `R06-02`, `R06-03`, `R06-05`, `R06-06`, `R06-07` | 部分完成 | 完成 | 部分完成 | 未开始 | 部分完成 | Wave 3 |
 | 导入 | `R01-02` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 5 |
-| 预览 | `R01-07` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 1 |
+| 预览 | `R01-07` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 生产部署 | `R20-11`, `R23-08`, `R23-09`, `R23-10`, `R23-11`, `R23-12` | 部分完成 | 未开始 | 未开始 | 未开始 | 未开始 | Wave 0 |
-| 答卷与摘要 | `R06-01`, `R19-02` | 完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 3 |
+| 答卷与摘要 | `R06-01`, `R19-02` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 3 |
 | 模板与品牌 | `R01-03`, `R01-06`, `R19-05`, `R19-06`, `R19-10` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 2 |
 | 工作台 | `R01-01`, `R19-04` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 6 |
 
@@ -55,9 +55,10 @@
 ### 投放链接与二维码 (`delivery-links`)
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryLinkController.java`](../../services/business/src/main/java/cn/mjy/platform/delivery/DeliveryLinkController.java) 定位 `public class DeliveryLinkController`：投放链接、短链和二维码后端接口已存在。
-- **前端** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `| 投放链接、二维码、短链 |`：核查报告明确记录该能力无管理端页面。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：真实浏览器从发布结果创建链接和二维码，并通过该链接完成正式作答。
+- **前端** （实现）[`platform/apps/admin-web/src/features/publish/PublishedAccessPanel.tsx`](../../apps/admin-web/src/features/publish/PublishedAccessPanel.tsx) 定位 `export function PublishedAccessPanel`：发布后可创建投放链接、展示后端二维码并进入答卷工作区。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R05-01 |`：链接、二维码和短链需求已编号。
-- **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R05-01 | 单测 |`：链接签名和短链测试证据已登记。
+- **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R05-01 | 端到端 |`：链接、二维码和正式作答证据已登记。
 
 ### 编辑 (`editing`)
 
@@ -69,9 +70,10 @@
 ### 导出 (`exports`)
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/response/ResponseExportController.java`](../../services/business/src/main/java/cn/mjy/platform/response/ResponseExportController.java) 定位 `public class ResponseExportController`：导出作业创建、进度、下载和再次授权接口已存在。
-- **前端** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `| 导出任务和下载 |`：核查报告记录导出无前端入口，且 PDF 等子项未完成。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `下载导出文件`：真实浏览器基于正式答卷创建 CSV 导出并完成下载；其他格式继续由专项测试覆盖。
+- **前端** （实现）[`platform/apps/admin-web/src/features/responses/ResponsesPage.tsx`](../../apps/admin-web/src/features/responses/ResponsesPage.tsx) 定位 `创建导出任务`：前端提供真实支持格式选择、任务状态、取消、重试和下载。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R06-02 |`：Excel 和 CSV 导出需求已编号。
-- **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R06-03 |`：SAV 导出的局部自动化证据已登记。
+- **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R06-02 | 端到端 |`：CSV 创建、完成和下载的完整旅程证据已登记。
 
 ### 导入 (`import`)
 
@@ -82,9 +84,11 @@
 
 ### 预览 (`preview`)
 
-- **流程** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `#### Step 5：快速预览`：核查报告明确记录真实运行时预览尚未交付。
-- **前端** （实现）[`platform/apps/admin-web/src/features/preview/PreviewPage.tsx`](../../apps/admin-web/src/features/preview/PreviewPage.tsx) 定位 `export function PreviewRoutePage`：当前页面仅提供不提交答卷的本地草稿快速预览。
+- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/survey/preview/PreviewSessionController.java`](../../services/business/src/main/java/cn/mjy/platform/survey/preview/PreviewSessionController.java) 定位 `public class PreviewSessionController`：隔离预览 session 的创建、查询和显式结束接口已交付。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：真实浏览器验证隔离预览作答不进入正式计数，并继续完成发布后闭环。
+- **前端** （实现）[`platform/apps/admin-web/src/features/preview/PreviewPage.tsx`](../../apps/admin-web/src/features/preview/PreviewPage.tsx) 定位 `export function PreviewRoutePage`：页面同时提供本地快速预览和可重试、可显式结束的 LimeSurvey 真实预览。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R01-07 |`：预览、发布与关闭为复合需求。
+- **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R01-07 | 端到端 |`：真实预览、关闭和正式计数隔离证据已登记。
 
 ### 生产部署 (`production-deployment`)
 
@@ -97,8 +101,10 @@
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/response/ResponseQueryController.java`](../../services/business/src/main/java/cn/mjy/platform/response/ResponseQueryController.java) 定位 `public class ResponseQueryController`：跨版本答卷查询、摘要和字段接口已存在。
 - **后端** （自动化测试）[`platform/services/business/src/test/java/cn/mjy/platform/response/ResponseTenantIsolationTest.java`](../../services/business/src/test/java/cn/mjy/platform/response/ResponseTenantIsolationTest.java) 定位 `class ResponseTenantIsolationTest`：答卷租户隔离已有后端测试。
-- **前端** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `| 答卷列表、摘要、字段 |`：核查报告明确记录答卷列表、摘要和字段无页面。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：真实浏览器验证预览后正式计数仍为零，并在正式作答后看到一份完成答卷。
+- **前端** （实现）[`platform/apps/admin-web/src/features/responses/ResponsesPage.tsx`](../../apps/admin-web/src/features/responses/ResponsesPage.tsx) 定位 `export function ResponsesPage`：答卷摘要、明细、状态与版本筛选已接入统一问卷上下文。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R06-01 |`：答卷查询需求已编号。
+- **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R06-01 | 端到端 |`：正式答卷投影、摘要和明细可见证据已登记。
 
 ### 模板与品牌 (`templates-branding`)
 

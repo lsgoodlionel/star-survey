@@ -1,9 +1,10 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
 import { renderWithQuery } from '../../test/render';
 import { PreviewPage } from './PreviewPage';
+import type { PreviewClient, PreviewSessionView } from '../../shared/api/previews';
 
 const surveyId = '11111111-1111-4111-8111-111111111111';
 const tenantId = 'tenant-a';
@@ -44,10 +45,38 @@ const draft = {
   },
 };
 
-function renderPreview(api: ApiClient) {
+const readySession: PreviewSessionView = {
+  id: '33333333-3333-4333-8333-333333333333',
+  requestId: '44444444-4444-4444-8444-444444444444',
+  surveyId,
+  draftVersion: 7,
+  requestedBy: 'owner-a',
+  engineInstanceId: 'engine-a',
+  engineSid: 123456,
+  generation: 'preview-generation-a',
+  previewUrl: 'https://survey.example/v1/preview/access?token=opaque',
+  expiresAt: '2026-10-09T09:30:00Z',
+  status: 'ready',
+  failure: null,
+  cleanupAttempts: 0,
+  createdAt: '2026-10-09T09:00:00Z',
+  updatedAt: '2026-10-09T09:00:01Z',
+  closedAt: null,
+};
+
+function previewClient(overrides: Partial<PreviewClient> = {}): PreviewClient {
+  return {
+    create: () => Promise.resolve(readySession),
+    get: () => Promise.resolve(readySession),
+    close: () => Promise.resolve({ ...readySession, status: 'closed', closedAt: '2026-10-09T09:05:00Z' }),
+    ...overrides,
+  };
+}
+
+function renderPreview(api: ApiClient, client = previewClient()) {
   return renderWithQuery(
     <MemoryRouter>
-      <PreviewPage api={api} surveyId={surveyId} tenantId={tenantId} />
+      <PreviewPage api={api} previewClient={client} surveyId={surveyId} tenantId={tenantId} />
     </MemoryRouter>,
   );
 }
@@ -113,5 +142,60 @@ describe('PreviewPage', () => {
     expect(frame).toHaveStyle({ width: '390px' });
     expect(screen.getByRole('button', { name: '桌面端' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: '移动端' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('createsOneRealPreviewAtATimeAndOpensTheReadySessionInANewWindow', async () => {
+    let resolveCreate!: (value: PreviewSessionView) => void;
+    const create = vi.fn(() => new Promise<PreviewSessionView>((resolve) => { resolveCreate = resolve; }));
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    renderPreview({ request: () => Promise.resolve(draft) as never }, previewClient({ create }));
+
+    const createButton = await screen.findByRole('button', { name: '创建真实预览' });
+    fireEvent.click(createButton);
+    fireEvent.click(createButton);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(createButton).toBeDisabled();
+    expect(screen.getByText('正在创建隔离预览')).toBeInTheDocument();
+
+    resolveCreate(readySession);
+    expect(await screen.findByText('真实预览已就绪')).toBeInTheDocument();
+    expect(screen.getByText(/2026/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '在新窗口打开真实预览' }));
+    expect(open).toHaveBeenCalledWith(readySession.previewUrl, '_blank', 'noopener,noreferrer');
+    expect(document.querySelector('iframe')).toBeNull();
+    open.mockRestore();
+  });
+
+  test('endsARealPreviewExplicitlyAndShowsTheClosedState', async () => {
+    const close = vi.fn().mockResolvedValue({
+      ...readySession,
+      status: 'closed',
+      closedAt: '2026-10-09T09:05:00Z',
+    });
+    renderPreview({ request: () => Promise.resolve(draft) as never }, previewClient({ close }));
+
+    fireEvent.click(await screen.findByRole('button', { name: '创建真实预览' }));
+    expect(await screen.findByText('真实预览已就绪')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '结束真实预览' }));
+
+    await waitFor(() => expect(close).toHaveBeenCalledWith(readySession.id));
+    expect(await screen.findByText('真实预览已结束')).toBeInTheDocument();
+  });
+
+  test('keepsTheRequestIdAfterFailureAndRetriesTheSameOperation', async () => {
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error('network details must stay hidden'))
+      .mockResolvedValueOnce(readySession);
+    renderPreview({ request: () => Promise.resolve(draft) as never }, previewClient({ create }));
+
+    fireEvent.click(await screen.findByRole('button', { name: '创建真实预览' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('真实预览创建失败，请使用同一请求重试。');
+    expect(screen.getByText(/请求编号：/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重试真实预览' }));
+
+    expect(await screen.findByText('真实预览已就绪')).toBeInTheDocument();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[1].requestId).toBe(create.mock.calls[1]?.[1].requestId);
   });
 });

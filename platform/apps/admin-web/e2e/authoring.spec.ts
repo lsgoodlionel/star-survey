@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page, type Response, type TestInfo } from '@playwright/test';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { assertArtifactContainsNoSecret, redactSecret } from './artifacts';
 import { createResourceEndpoint } from './createResourceEvidence';
 import { recentSanitizedNetworkEvents, trackSanitizedNetworkEvents } from './networkEvidence';
@@ -137,6 +137,25 @@ test('author filters stable resources, restores archive, and publishes the same 
   await expect(page.getByText('您的性别？')).toBeVisible();
   await clickAction(page.getByRole('link', { name: '编辑' }));
   await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
+  await clickAction(page.getByRole('link', { name: '快速预览' }));
+  await expect(page.getByRole('heading', { name: '快速预览' })).toBeVisible();
+
+  const previewPagePromise = page.context().waitForEvent('page');
+  await clickAction(page.getByRole('button', { name: '创建真实预览' }));
+  await expect(page.getByText('真实预览已就绪')).toBeVisible({ timeout: 210_000 });
+  await captureEvidenceScreenshot(page, 'real-preview-desktop.png');
+  await clickAction(page.getByRole('button', { name: '在新窗口打开真实预览' }));
+  const previewPage = await previewPagePromise;
+  await completeLimeSurvey(previewPage);
+  await previewPage.close();
+  await clickAction(page.getByRole('button', { name: '结束真实预览' }));
+  await expect(page.getByText('真实预览已结束')).toBeVisible({ timeout: 210_000 });
+
+  await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', {
+    name: '答卷与导出',
+  }));
+  await expect(page.getByRole('heading', { name: '答卷与导出' })).toBeVisible();
+  await expect(page.getByLabel('已完成 0')).toBeVisible();
 
   await clickAction(page.getByRole('link', { name: '发布与版本' }));
   await clickAction(page.getByRole('button', { name: '提交审批' }));
@@ -146,7 +165,52 @@ test('author filters stable resources, restores archive, and publishes the same 
   await clickAction(page.getByRole('button', { name: '发布问卷' }));
   await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
 
+  await fillAction(page.getByLabel('链接名称'), '正式验收链接');
+  await clickAction(page.getByRole('button', { name: '创建链接' }));
+  const deliveryList = page.getByRole('list', { name: '投放链接' });
+  const deliveryLink = deliveryList.getByRole('link').first();
+  await expect(deliveryLink).toBeVisible();
+  await expect(deliveryList.getByRole('img', { name: '正式验收链接二维码' })).toBeVisible();
+  const deliveryUrl = await deliveryLink.getAttribute('href');
+  expect(deliveryUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
+
+  const respondentPage = await page.context().newPage();
+  await respondentPage.goto(deliveryUrl!);
+  await completeLimeSurvey(respondentPage);
+  await respondentPage.close();
+
+  await expect.poll(async () => {
+    const response = await page.request.get(
+      `${requiredEnv('ADMIN_WEB_BASE_URL')}/v1/surveys/${surveyId}/responses/summary`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok()) return -1;
+    const payload = await response.json() as { total?: { engineCompleted?: number } };
+    return payload.total?.engineCompleted ?? -1;
+  }, {
+    timeout: 60_000,
+    intervals: [1_000, 2_000, 5_000],
+  }).toBe(1);
+  // The app intentionally keeps server queries fresh for 30 seconds. Re-enter
+  // the page after that window so the user journey exercises a real refetch.
+  await page.waitForTimeout(30_500);
+  await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', {
+    name: '答卷与导出',
+  }));
+  await expect(page.getByRole('heading', { name: '答卷与导出' })).toBeVisible();
+  await expect(page.getByLabel('已完成 1')).toBeVisible();
+  await expect(page.getByRole('table')).toContainText('Q9');
+  await expect(page.getByRole('table')).toContainText('A1');
+  await clickAction(page.getByRole('button', { name: '创建导出任务' }));
+  const exportJob = page.locator('.export-job');
+  await expect(exportJob).toContainText('导出完成', { timeout: 60_000 });
+  const downloadPromise = page.waitForEvent('download');
+  await clickAction(page.getByRole('button', { name: '下载导出文件' }));
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/\.(?:csv|zip)$/i);
+
   const versionLink = page.getByRole('link', { name: /查看版本 \d+/ }).first();
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
   const version = Number((await versionLink.textContent())?.match(/\d+/)?.[0]);
   expect(version).toBeGreaterThan(0);
   await clickAction(versionLink);
@@ -168,6 +232,35 @@ test('author filters stable resources, restores archive, and publishes the same 
     version,
   }, token);
 });
+
+async function completeLimeSurvey(enginePage: Page) {
+  await enginePage.waitForLoadState('domcontentloaded');
+  const visibleChoices = enginePage.locator('input[type="radio"]:visible');
+  for (let step = 0; step < 4 && await visibleChoices.count() === 0; step += 1) {
+    const advance = limeSurveyAdvanceButton(enginePage);
+    await expect(advance).toBeVisible({ timeout: 30_000 });
+    await advance.click();
+    await enginePage.waitForLoadState('domcontentloaded');
+  }
+  const firstChoice = visibleChoices.first();
+  await expect(firstChoice).toBeVisible();
+  await firstChoice.check();
+
+  for (let step = 0; step < 4; step += 1) {
+    const submit = limeSurveyAdvanceButton(enginePage);
+    if (await submit.count() === 0) break;
+    await submit.click();
+    await enginePage.waitForLoadState('domcontentloaded');
+    if (await visibleChoices.count() === 0) break;
+  }
+  await expect(visibleChoices).toHaveCount(0, { timeout: 30_000 });
+}
+
+function limeSurveyAdvanceButton(enginePage: Page) {
+  return enginePage.locator(
+    '#ls-button-submit:visible, #ls-button-next:visible, button[type="submit"]:visible, input[type="submit"]:visible',
+  ).last();
+}
 
 test('desktop pointer dragging persists question and group order after refresh', async ({ page }) => {
   const surveyId = await createSortableSurvey(page, 'pointer');
@@ -348,6 +441,24 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
   await assertUsable(page.getByRole('button', { name: '保存草稿' }));
+});
+
+test('@mobile real preview remains usable and closes explicitly', async ({ page }) => {
+  const metadata = await readMetadata();
+  const token = await readToken();
+  const result = await readResult();
+  await login(page, token, metadata);
+  await navigateWithinApp(page, `/surveys/${result.surveyId}/preview`);
+
+  await expect(page.getByRole('heading', { name: '快速预览' })).toBeVisible();
+  await clickAction(page.getByRole('button', { name: '创建真实预览' }));
+  await expect(page.getByText('真实预览已就绪')).toBeVisible({ timeout: 210_000 });
+  await assertTouchTarget(page.getByRole('button', { name: '在新窗口打开真实预览' }));
+  await assertTouchTarget(page.getByRole('button', { name: '结束真实预览' }));
+  await expectNoHorizontalOverflow(page);
+  await captureEvidenceScreenshot(page, 'real-preview-mobile.png');
+  await clickAction(page.getByRole('button', { name: '结束真实预览' }));
+  await expect(page.getByText('真实预览已结束')).toBeVisible({ timeout: 210_000 });
 });
 
 test('@mobile workspace drawer, breadcrumbs and dialog controls remain touch accessible', async ({ page }) => {
@@ -735,6 +846,13 @@ async function writeResult(result: Record<string, unknown>, token: string) {
   const path = requiredEnv('ADMIN_WEB_RESULT_FILE');
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function captureEvidenceScreenshot(page: Page, filename: string) {
+  const outputDir = process.env.ADMIN_WEB_SCREENSHOT_DIR;
+  if (!outputDir) return;
+  await mkdir(outputDir, { recursive: true });
+  await page.screenshot({ path: join(outputDir, filename), fullPage: true });
 }
 
 function networkRecord(response: Response, token: string): NetworkRecord {

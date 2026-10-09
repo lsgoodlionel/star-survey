@@ -29,11 +29,24 @@ ok() { echo "  [ok] $*" >&2; }
 fail() { echo "  [FAIL] $*" >&2; exit 1; }
 step() { echo "== $*" >&2; }
 random_secret() { python3 -c 'import secrets; print(secrets.token_urlsafe(48))'; }
+random_loopback_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
 
 WORK_DIR=""
+ENGINE_RELAY_PID=""
+stop_engine_relay() {
+  if [[ -n "$ENGINE_RELAY_PID" ]]; then
+    kill "$ENGINE_RELAY_PID" >/dev/null 2>&1 || true
+    wait "$ENGINE_RELAY_PID" >/dev/null 2>&1 || true
+    ENGINE_RELAY_PID=""
+  fi
+}
+
 cleanup_run() {
   local status="$1"
   set +e
+  stop_engine_relay
   if [[ -n "${ADMIN_WEB_JWT_FILE:-}" && -f "$ADMIN_WEB_JWT_FILE" ]]; then
     sanitize_test_artifacts "$([[ "$status" == "0" ]] && printf false || printf true)" >/dev/null 2>&1 || true
   fi
@@ -150,11 +163,20 @@ run_browser_tests() {
   rm -f "$ADMIN_WEB_JWT_FILE" "$ADMIN_WEB_RESULT_FILE"
   mkdir -p "$ADMIN_WEB_TEST_RESULTS_DIR"
   issue_browser_token
+  (
+    while true; do
+      docker exec "$CONTAINER" php application/commands/console.php plugin cron >/dev/null 2>&1 || true
+      sleep 2
+    done
+  ) &
+  ENGINE_RELAY_PID=$!
   if ! run_playwright; then
+    stop_engine_relay
     export_failure_artifacts || true
     sanitize_test_artifacts true || true
     return 1
   fi
+  stop_engine_relay
   [[ -f "$ADMIN_WEB_RESULT_FILE" ]] || fail "Playwright did not write the redacted result"
   sanitize_test_artifacts false
 }
@@ -196,6 +218,8 @@ done
 docker info >/dev/null 2>&1 || fail "docker daemon is not running"
 
 WORK_DIR="$(mktemp -d)"
+export ADMIN_WEB_PORT="${ADMIN_WEB_PORT:-$(random_loopback_port)}"
+export ADMIN_WEB_PUBLIC_URL="http://127.0.0.1:$ADMIN_WEB_PORT"
 export ADMIN_WEB_PLATFORM_JAR="$PLATFORM_JAR"
 export ADMIN_WEB_ENGINES_FILE="$WORK_DIR/engines.json"
 export ADMIN_WEB_JWT_FILE="$WORK_DIR/owner.jwt"
@@ -207,9 +231,10 @@ if [[ -n "${ADMIN_WEB_CI_ARTIFACT_DIR:-}" && "$ADMIN_WEB_CI_ARTIFACT_DIR" != /* 
 fi
 EVENT_SECRET_FILE="$WORK_DIR/event-secret"
 
-export PLATFORM_JWT_HMAC_SECRET PLATFORM_ENGINE_EVENTS_SECRET PUBGW_SHARED_SECRET PLATFORM_PUBGW_SECRET
+export PLATFORM_JWT_HMAC_SECRET PLATFORM_ENGINE_EVENTS_SECRET PLATFORM_DELIVERY_SECRET PUBGW_SHARED_SECRET PLATFORM_PUBGW_SECRET
 PLATFORM_JWT_HMAC_SECRET="$(random_secret)"
 PLATFORM_ENGINE_EVENTS_SECRET="$(random_secret)"
+PLATFORM_DELIVERY_SECRET="$(random_secret)"
 PUBGW_SHARED_SECRET="$(random_secret)"
 PLATFORM_PUBGW_SECRET="$PUBGW_SHARED_SECRET"
 ADMIN_PASSWORD="$(random_secret)"
@@ -246,7 +271,7 @@ ok "platform healthy on a random loopback port"
 step "seed: tenant, owner, engine instance and non-sensitive metadata"
 python3 "$GATE" --base-url "$PLATFORM_URL" prepare \
   --instance "$INSTANCE_ID" \
-  --engine-base-url "http://test-web" \
+  --engine-base-url "$ADMIN_WEB_PUBLIC_URL/survey" \
   --metadata-file "$ADMIN_WEB_METADATA_FILE" \
   --event-secret-file "$EVENT_SECRET_FILE"
 
@@ -268,10 +293,15 @@ step "gateway and same-origin admin web: build and start"
 "${COMPOSE[@]}" up -d --build gateway admin-web >/dev/null
 GATEWAY_URL="$(service_url gateway 8080)"
 wait_healthy gateway "$GATEWAY_URL/healthz" "$SERVICE_HEALTH_ATTEMPTS" "$GATEWAY_CONTAINER"
-export ADMIN_WEB_BASE_URL
-ADMIN_WEB_BASE_URL="$(service_url admin-web 80)"
+export ADMIN_WEB_BASE_URL="$ADMIN_WEB_PUBLIC_URL"
 wait_healthy admin-web "$ADMIN_WEB_BASE_URL/actuator/health" "$SERVICE_HEALTH_ATTEMPTS" "$ADMIN_WEB_CONTAINER"
 ok "gateway and admin web healthy"
+
+step "engine: seed an isolated RemoteControl baseline for first-preview reconciliation"
+python3 "$TEST_DIR/seed-empty-engine.py" \
+  --base-url "$ADMIN_WEB_BASE_URL/survey" \
+  --fixture "$REPO_ROOT/platform/tests/fixtures/surveys/mjy-question-slice.lss"
+ok "engine first-preview baseline ready"
 
 step "browser: issue a fresh 10-minute token, then run desktop and mobile checks"
 run_browser_tests

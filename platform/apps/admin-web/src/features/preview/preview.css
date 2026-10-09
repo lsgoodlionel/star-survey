@@ -92,6 +92,77 @@
   overflow-x: auto;
 }
 
+.real-preview-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 0.8fr) auto;
+  align-items: center;
+  gap: 20px;
+  padding: 18px 20px;
+  color: #19383c;
+  background: #f3faf7;
+  border-bottom: 1px solid #b8d5cc;
+}
+
+.real-preview-panel h2,
+.real-preview-panel p {
+  margin: 0;
+}
+
+.real-preview-panel h2 {
+  margin-bottom: 4px;
+  font-size: 18px;
+}
+
+.real-preview-eyebrow {
+  color: #2f6b57;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.real-preview-status {
+  display: grid;
+  gap: 3px;
+  font-size: 13px;
+}
+
+.real-preview-status span {
+  color: #52676b;
+}
+
+.real-preview-status [role='alert'] {
+  color: #9b2c1f;
+}
+
+.real-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.real-preview-actions button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 11px;
+  color: #17483a;
+  background: #fff;
+  border: 1px solid #6f9c8d;
+  border-radius: 4px;
+}
+
+.real-preview-actions button:disabled {
+  color: #68787c;
+  background: #edf1f1;
+}
+
+.real-preview-actions svg {
+  width: 17px;
+  height: 17px;
+}
+
 .draft-preview-frame {
   max-width: 100%;
   min-height: 640px;
@@ -228,6 +299,18 @@
 
   .preview-segments {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .real-preview-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .real-preview-actions {
+    justify-content: stretch;
+  }
+
+  .real-preview-actions button {
+    width: 100%;
   }
 
   .draft-renderer > header h2 {

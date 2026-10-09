@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Monitor, Smartphone } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Monitor, Play, RotateCw, Smartphone, Square } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
 import { surveyWorkflowHref, useSurveyShell } from '../../app/SurveyShell';
@@ -8,11 +8,18 @@ import { useAuth } from '../auth/AuthProvider';
 import { parseDefinition } from '../editor/model/definition';
 import type { ApiClient } from '../../shared/api/http';
 import { getSurveyDraft, surveyDraftQueryKey } from '../../shared/api/surveys';
+import {
+  createPreviewClient,
+  previewSessionQueryKey,
+  type PreviewClient,
+  type PreviewSessionView,
+} from '../../shared/api/previews';
 import { DraftRenderer } from './DraftRenderer';
 import './preview.css';
 
 interface PreviewPageProps {
   api: ApiClient;
+  previewClient: PreviewClient;
   surveyId: string;
   tenantId: string;
 }
@@ -23,8 +30,13 @@ export function PreviewPage(props: PreviewPageProps) {
   return <PreviewPageInstance key={`${props.tenantId}:${props.surveyId}`} {...props} />;
 }
 
-function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
+function PreviewPageInstance({ api, previewClient, surveyId, tenantId }: PreviewPageProps) {
   const [mode, setMode] = useState<PreviewMode>('desktop');
+  const [session, setSession] = useState<PreviewSessionView | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
+  const [action, setAction] = useState<'creating' | 'closing' | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const actionRef = useRef(false);
   const surveyShell = useSurveyShell();
   const [searchParams] = useSearchParams();
   const selectedQuestion = searchParams.get('question');
@@ -32,6 +44,17 @@ function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
     queryKey: surveyDraftQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurveyDraft(api, surveyId, signal),
   });
+  const lifecycleQuery = useQuery({
+    queryKey: previewSessionQueryKey(tenantId, surveyId, session?.id ?? 'pending'),
+    queryFn: ({ signal }) => previewClient.get(session!.id, signal),
+    enabled: Boolean(session && (session.status === 'creating' || session.status === 'closing')),
+    refetchInterval: (query) => {
+      const value = query.state.data;
+      return value?.status === 'creating' || value?.status === 'closing' ? 1_000 : false;
+    },
+  });
+  const sessionPending = session?.status === 'creating' || session?.status === 'closing';
+  const displayedSession = sessionPending ? (lifecycleQuery.data ?? session) : session;
 
   if (draftQuery.isPending) return <p>正在加载快速预览</p>;
   if (draftQuery.isError || !draftQuery.data) return <p role="alert">快速预览暂时不可用。</p>;
@@ -79,6 +102,45 @@ function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
           </div>
         </div>
       </header>
+      <RealPreviewPanel
+        action={action}
+        error={actionError}
+        requestId={requestId}
+        session={displayedSession}
+        onCreate={async () => {
+          if (actionRef.current) return;
+          actionRef.current = true;
+          const stableRequestId = requestId ?? crypto.randomUUID();
+          setRequestId(stableRequestId);
+          setAction('creating');
+          setActionError(null);
+          try {
+            setSession(await previewClient.create(surveyId, {
+              requestId: stableRequestId,
+              ttlSeconds: 1_800,
+            }));
+          } catch {
+            setActionError('真实预览创建失败，请使用同一请求重试。');
+          } finally {
+            actionRef.current = false;
+            setAction(null);
+          }
+        }}
+        onClose={async () => {
+          if (!displayedSession || actionRef.current) return;
+          actionRef.current = true;
+          setAction('closing');
+          setActionError(null);
+          try {
+            setSession(await previewClient.close(displayedSession.id));
+          } catch {
+            setActionError('结束真实预览失败，请稍后重试。');
+          } finally {
+            actionRef.current = false;
+            setAction(null);
+          }
+        }}
+      />
       <div className="preview-stage">
         <div
           className="draft-preview-frame"
@@ -94,13 +156,92 @@ function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
   );
 }
 
+interface RealPreviewPanelProps {
+  action: 'creating' | 'closing' | null;
+  error: string | null;
+  requestId: string | null;
+  session: PreviewSessionView | null;
+  onCreate(): void;
+  onClose(): void;
+}
+
+function RealPreviewPanel({ action, error, requestId, session, onCreate, onClose }: RealPreviewPanelProps) {
+  const status = session?.status;
+  const previewUrl = session?.previewUrl ?? null;
+  const canOpen = status === 'ready' && previewUrl !== null;
+  const canClose = status === 'ready' || status === 'cleanup_failed';
+  const createLabel = error || status === 'failed' ? '重试真实预览' : '创建真实预览';
+  return (
+    <section className="real-preview-panel" aria-labelledby="real-preview-title">
+      <div>
+        <p className="real-preview-eyebrow">LimeSurvey 隔离运行时</p>
+        <h2 id="real-preview-title">真实预览</h2>
+        <p>在独立问卷中验证真实作答体验，不计入正式答卷。</p>
+      </div>
+      <div className="real-preview-status" aria-live="polite">
+        <strong>{previewStatusText(session, action)}</strong>
+        {session ? <span>草稿版本 {session.draftVersion}</span> : null}
+        {session && status !== 'closed' ? <span>有效期至 {formatDateTime(session.expiresAt)}</span> : null}
+        {requestId && (error || status === 'failed') ? <span>请求编号：{requestId.slice(0, 8)}</span> : null}
+        {error ? <p role="alert">{error}</p> : null}
+        {status === 'failed' ? <p role="alert">真实预览创建失败，请使用同一请求重试。</p> : null}
+        {status === 'cleanup_failed' ? <p role="alert">预览结束未完成，请再次结束。</p> : null}
+      </div>
+      <div className="real-preview-actions">
+        {!session || status === 'failed' ? (
+          <button type="button" disabled={action !== null} onClick={onCreate}>
+            {error || status === 'failed' ? <RotateCw aria-hidden="true" /> : <Play aria-hidden="true" />}
+            {createLabel}
+          </button>
+        ) : null}
+        {canOpen ? (
+          <button
+            type="button"
+            onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}
+          >
+            <ExternalLink aria-hidden="true" />
+            在新窗口打开真实预览
+          </button>
+        ) : null}
+        {canClose ? (
+          <button type="button" disabled={action !== null} onClick={onClose}>
+            {status === 'cleanup_failed' ? <RotateCw aria-hidden="true" /> : <Square aria-hidden="true" />}
+            {status === 'cleanup_failed' ? '再次结束真实预览' : '结束真实预览'}
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function previewStatusText(session: PreviewSessionView | null, action: RealPreviewPanelProps['action']) {
+  if (action === 'creating' || session?.status === 'creating') return '正在创建隔离预览';
+  if (action === 'closing' || session?.status === 'closing') return '正在结束真实预览';
+  if (session?.status === 'ready') return '真实预览已就绪';
+  if (session?.status === 'closed') return '真实预览已结束';
+  if (session?.status === 'failed') return '真实预览创建失败';
+  if (session?.status === 'cleanup_failed') return '真实预览结束异常';
+  return '尚未创建';
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(value));
+}
+
 export function PreviewRoutePage() {
-  const { api, session } = useAuth();
+  const { api, logout, session } = useAuth();
   const surveyId = z.string().uuid().safeParse(useParams().surveyId);
+  const previewClient = useMemo(() => createPreviewClient({
+    getToken: () => session?.token ?? null,
+    onUnauthorized: () => logout(),
+  }), [logout, session?.token]);
   if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
   return (
     <PreviewPage
       api={api}
+      previewClient={previewClient}
       surveyId={surveyId.data}
       tenantId={session.me.tenantId}
     />
