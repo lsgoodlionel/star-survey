@@ -18,6 +18,8 @@ EVIDENCE_LAYERS = (
     "production",
     "traceability",
 )
+OBSERVED_AT = "2026-10-09T12:00:00Z"
+COMMIT_SHA = "844d1516"
 
 
 def load_renderer():
@@ -47,11 +49,103 @@ class CapabilityValidationTest(unittest.TestCase):
             "| R01-01 | WP-01 | 空白与应用类型创建 |\n",
             encoding="utf-8",
         )
-        for layer in EVIDENCE_LAYERS:
-            (self.repository_root / f"{layer}.txt").write_text(
-                f"proof:{layer}:R01-01\n",
-                encoding="utf-8",
-            )
+        evidence_contents = {
+            "platform/docs/traceability/requirements.md": "R01-01\nacceptance: creates survey\n",
+            "platform/services/business/src/test/WorkspaceTest.java": "testCreatesWorkspace\n",
+            "platform/apps/admin-web/src/Workspace.test.tsx": "creates workspace\n",
+            "platform/apps/admin-web/e2e/workspace.spec.ts": "browser journey\nartifact: workspace.png\n",
+            "platform/deploy/production/evidence/workspace-run.txt": "production probe passed\n",
+            "platform/docs/traceability/workspace-check.txt": "traceability check passed\nartifact: release.json\n",
+        }
+        for relative_path, contents in evidence_contents.items():
+            path = self.repository_root / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents, encoding="utf-8")
+
+    def accepted_evidence(self):
+        return [
+            {
+                "layer": "requirement",
+                "kind": "requirement-spec",
+                "path": "platform/docs/traceability/requirements.md",
+                "locator": "R01-01",
+                "description": "requirement evidence",
+                "verification": {
+                    "requirementId": "R01-01",
+                    "acceptanceLocator": "acceptance: creates survey",
+                },
+            },
+            {
+                "layer": "backend",
+                "kind": "automated-test",
+                "path": "platform/services/business/src/test/WorkspaceTest.java",
+                "locator": "testCreatesWorkspace",
+                "description": "backend test evidence",
+                "verification": {
+                    "command": "./gradlew test --tests WorkspaceTest.testCreatesWorkspace",
+                    "result": "passed",
+                    "observedAt": OBSERVED_AT,
+                    "commit": COMMIT_SHA,
+                },
+            },
+            {
+                "layer": "frontend",
+                "kind": "automated-test",
+                "path": "platform/apps/admin-web/src/Workspace.test.tsx",
+                "locator": "creates workspace",
+                "description": "frontend test evidence",
+                "verification": {
+                    "command": "npm test -- Workspace.test.tsx",
+                    "result": "passed",
+                    "observedAt": OBSERVED_AT,
+                    "commit": COMMIT_SHA,
+                },
+            },
+            {
+                "layer": "flow",
+                "kind": "browser-test",
+                "path": "platform/apps/admin-web/e2e/workspace.spec.ts",
+                "locator": "browser journey",
+                "description": "browser flow evidence",
+                "verification": {
+                    "command": "npx playwright test workspace.spec.ts",
+                    "result": "passed",
+                    "observedAt": OBSERVED_AT,
+                    "commit": COMMIT_SHA,
+                    "browserArtifactLocator": "artifact: workspace.png",
+                },
+            },
+            {
+                "layer": "production",
+                "kind": "production-run",
+                "path": "platform/deploy/production/evidence/workspace-run.txt",
+                "locator": "production probe passed",
+                "description": "production run evidence",
+                "verification": {
+                    "environment": "production",
+                    "os": "linux",
+                    "arch": "amd64",
+                    "command": "docker compose exec api ./healthcheck",
+                    "result": "passed",
+                    "observedAt": OBSERVED_AT,
+                    "commit": COMMIT_SHA,
+                },
+            },
+            {
+                "layer": "traceability",
+                "kind": "traceability-check",
+                "path": "platform/docs/traceability/workspace-check.txt",
+                "locator": "traceability check passed",
+                "description": "traceability check evidence",
+                "verification": {
+                    "command": "python3 -m reqtrace.cli check",
+                    "result": "passed",
+                    "observedAt": OBSERVED_AT,
+                    "commit": COMMIT_SHA,
+                    "artifactLocator": "artifact: release.json",
+                },
+            },
+        ]
 
     def valid_document(self):
         return {
@@ -66,19 +160,27 @@ class CapabilityValidationTest(unittest.TestCase):
                     "flow": "complete",
                     "production": "complete",
                     "status": "accepted",
-                    "evidence": [
-                        {
-                            "layer": layer,
-                            "path": f"{layer}.txt",
-                            "locator": f"proof:{layer}:R01-01",
-                            "description": f"{layer} evidence",
-                        }
-                        for layer in EVIDENCE_LAYERS
-                    ],
+                    "evidence": self.accepted_evidence(),
                     "nextWave": "Wave 0",
                 }
             ],
         }
+
+    def weak_proof_document(self):
+        document = self.valid_document()
+        document["capabilities"][0]["evidence"] = []
+        for layer in EVIDENCE_LAYERS:
+            path = self.repository_root / f"{layer}.txt"
+            path.write_text(f"proof:{layer}:R01-01\n", encoding="utf-8")
+            document["capabilities"][0]["evidence"].append(
+                {
+                    "layer": layer,
+                    "path": f"{layer}.txt",
+                    "locator": f"proof:{layer}:R01-01",
+                    "description": f"{layer} evidence",
+                }
+            )
+        return document
 
     def schema(self):
         path = self.repository_root / "platform/docs/productization/capabilities.schema.json"
@@ -118,6 +220,81 @@ class CapabilityValidationTest(unittest.TestCase):
         document["capabilities"][0]["evidence"] = document["capabilities"][0]["evidence"][:-1]
         self.assert_invalid(document, "accepted capability workspace is missing evidence layers: traceability")
 
+    def test_rejects_old_temporary_proof_fixture(self):
+        self.assert_invalid(self.weak_proof_document(), "missing required field: kind")
+
+    def test_accepts_layer_typed_evidence_with_structured_verification(self):
+        renderer.validate_document(self.valid_document(), self.repository_root)
+
+    def test_accepted_capability_may_keep_non_qualifying_supporting_evidence(self):
+        path = self.repository_root / "platform/services/business/src/main/Workspace.java"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("class Workspace\n", encoding="utf-8")
+        document = self.valid_document()
+        document["capabilities"][0]["evidence"].append(
+            {
+                "layer": "backend",
+                "kind": "implementation",
+                "path": "platform/services/business/src/main/Workspace.java",
+                "locator": "class Workspace",
+                "description": "supporting implementation evidence",
+            }
+        )
+        renderer.validate_document(document, self.repository_root)
+
+    def test_rejects_kind_incompatible_with_layer(self):
+        document = self.valid_document()
+        document["capabilities"][0]["evidence"][1]["kind"] = "browser-test"
+        self.assert_invalid(document, "kind.*must equal automated-test")
+
+    def test_rejects_accepted_test_evidence_without_command_result_or_commit(self):
+        for missing_field in ("command", "result", "commit"):
+            with self.subTest(missing_field=missing_field):
+                document = self.valid_document()
+                del document["capabilities"][0]["evidence"][1]["verification"][missing_field]
+                self.assert_invalid(document, f"missing required field: {missing_field}")
+
+    def test_rejects_production_run_without_os_or_arch(self):
+        for missing_field in ("os", "arch"):
+            with self.subTest(missing_field=missing_field):
+                document = self.valid_document()
+                del document["capabilities"][0]["evidence"][4]["verification"][missing_field]
+                self.assert_invalid(document, f"missing required field: {missing_field}")
+
+    def test_rejects_browser_test_without_artifact_locator(self):
+        document = self.valid_document()
+        del document["capabilities"][0]["evidence"][3]["verification"]["browserArtifactLocator"]
+        self.assert_invalid(document, "missing required field: browserArtifactLocator")
+
+    def test_rejects_traceability_check_without_artifact_locator(self):
+        document = self.valid_document()
+        del document["capabilities"][0]["evidence"][5]["verification"]["artifactLocator"]
+        self.assert_invalid(document, "missing required field: artifactLocator")
+
+    def test_rejects_invalid_commit_timestamp_or_non_passing_result(self):
+        invalid_values = {
+            "commit": "not-a-sha",
+            "observedAt": "October 9",
+            "result": "failed",
+        }
+        for field, value in invalid_values.items():
+            with self.subTest(field=field):
+                document = self.valid_document()
+                document["capabilities"][0]["evidence"][1]["verification"][field] = value
+                self.assert_invalid(document, f"{field}.*(does not match|must equal passed)")
+
+    def test_rejects_missing_structured_locator_from_referenced_text(self):
+        document = self.valid_document()
+        document["capabilities"][0]["evidence"][3]["verification"]["browserArtifactLocator"] = "artifact: missing.png"
+        self.assert_invalid(document, "browserArtifactLocator not found")
+
+    def test_rejects_accepted_evidence_outside_layer_path_conventions(self):
+        path = self.repository_root / "arbitrary.txt"
+        path.write_text("testCreatesWorkspace\n", encoding="utf-8")
+        document = self.valid_document()
+        document["capabilities"][0]["evidence"][1]["path"] = "arbitrary.txt"
+        self.assert_invalid(document, "backend evidence path does not match accepted conventions")
+
     def test_rejects_accepted_when_one_generic_identity_is_repeated_for_six_layers(self):
         generic_path = self.repository_root / "generic.txt"
         generic_path.write_text("verified\n", encoding="utf-8")
@@ -125,11 +302,13 @@ class CapabilityValidationTest(unittest.TestCase):
         document["capabilities"][0]["evidence"] = [
             {
                 "layer": layer,
+                "kind": self.accepted_evidence()[index]["kind"],
                 "path": "generic.txt",
                 "locator": "verified",
                 "description": f"{layer} evidence",
+                "verification": self.accepted_evidence()[index]["verification"],
             }
-            for layer in EVIDENCE_LAYERS
+            for index, layer in enumerate(EVIDENCE_LAYERS)
         ]
         self.assert_invalid(document, "accepted capability workspace requires six distinct evidence identities")
 
@@ -161,6 +340,20 @@ class CapabilityValidationTest(unittest.TestCase):
         self.write_schema(schema)
         renderer.validate_document(document, self.repository_root)
 
+    def test_accepted_evidence_kind_is_driven_by_the_schema(self):
+        document = self.valid_document()
+        schema = self.schema()
+        accepted_then = schema["$defs"]["capability"]["allOf"][0]["then"]
+        evidence_rules = accepted_then["properties"]["evidence"]["allOf"]
+        backend_rule = next(
+            rule["contains"]
+            for rule in evidence_rules
+            if rule["contains"]["properties"]["layer"].get("const") == "backend"
+        )
+        backend_rule["properties"]["kind"]["const"] = "implementation"
+        self.write_schema(schema)
+        self.assert_invalid(document, "backend evidence kind must equal implementation")
+
 
 class CapabilityRenderingTest(unittest.TestCase):
     def capability(self, capability_id, title):
@@ -174,8 +367,8 @@ class CapabilityRenderingTest(unittest.TestCase):
             "production": "not_started",
             "status": "partial",
             "evidence": [
-                {"layer": "frontend", "path": "z.md", "locator": "frontend locator", "description": "前端证据"},
-                {"layer": "backend", "path": "a.md", "locator": "backend locator", "description": "后端证据"},
+                {"layer": "frontend", "kind": "implementation", "path": "z.md", "locator": "frontend locator", "description": "前端证据"},
+                {"layer": "backend", "kind": "implementation", "path": "a.md", "locator": "backend locator", "description": "后端证据"},
             ],
             "nextWave": "Wave 1",
         }
@@ -205,7 +398,7 @@ class CapabilityRenderingTest(unittest.TestCase):
     def test_schema_requires_structured_evidence_locators(self):
         schema_path = REPOSITORY_ROOT / "platform/docs/productization/capabilities.schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        self.assertEqual(set(schema["$defs"]["evidence"]["required"]), {"layer", "path", "locator", "description"})
+        self.assertEqual(set(schema["$defs"]["evidence"]["required"]), {"layer", "kind", "path", "locator", "description"})
 
     def test_repository_evidence_links_resolve_from_the_generated_document(self):
         document = renderer.load_document(REPOSITORY_ROOT)

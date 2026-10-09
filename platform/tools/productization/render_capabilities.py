@@ -3,7 +3,9 @@ import argparse
 import json
 import posixpath
 import re
+import shlex
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -27,6 +29,18 @@ LAYER_LABELS = {
     "flow": "流程",
     "production": "生产",
     "traceability": "追溯",
+}
+KIND_LABELS = {
+    "requirement-spec": "需求规格",
+    "implementation": "实现",
+    "automated-test": "自动化测试",
+    "audit": "审计",
+    "browser-test": "浏览器测试",
+    "deployment-baseline": "部署基线",
+    "production-run": "生产运行",
+    "traceability-record": "追溯记录",
+    "traceability-check": "追溯检查",
+    "release-attestation": "发布证明",
 }
 
 
@@ -140,16 +154,20 @@ def _accepted_rules(schema):
             continue
         then = condition.get("then", {})
         evidence_rules = then.get("properties", {}).get("evidence", {}).get("allOf", [])
-        layers = {
-            rule.get("contains", {}).get("properties", {}).get("layer", {}).get("const")
-            for rule in evidence_rules
-        }
-        return layers - {None}, bool(then.get("x-requireDistinctEvidenceIdentities"))
-    return set(), False
+        rules = {}
+        for rule in evidence_rules:
+            contained = rule.get("contains", {})
+            layer = contained.get("properties", {}).get("layer", {}).get("const")
+            if layer:
+                rules[layer] = contained
+        return rules, bool(then.get("x-requireDistinctEvidenceIdentities"))
+    return {}, False
 
 
 def _validate_accepted_evidence(document, schema):
-    required_layers, require_distinct = _accepted_rules(schema)
+    rules, require_distinct = _accepted_rules(schema)
+    required_layers = set(rules)
+    selected_evidence_ids = set()
     for capability in document.get("capabilities", []):
         if not isinstance(capability, dict) or capability.get("status") != "accepted":
             continue
@@ -163,23 +181,135 @@ def _validate_accepted_evidence(document, schema):
                 f"accepted capability {capability.get('id', '<unknown>')} "
                 f"is missing evidence layers: {', '.join(missing)}"
             )
+        selected = []
+        for layer, rule in rules.items():
+            candidates = [
+                item for item in evidence
+                if isinstance(item, dict) and item.get("layer") == layer
+            ]
+            for item in candidates:
+                if "kind" not in item:
+                    raise CapabilityValidationError(
+                        f"accepted {layer} evidence missing required field: kind"
+                    )
+            kind_schema = rule.get("properties", {}).get("kind", {})
+            matching = [
+                item for item in candidates
+                if _schema_accepts(item.get("kind"), kind_schema, schema, f"accepted {layer} kind")
+            ]
+            if not matching:
+                expected = kind_schema.get("const") or "/".join(kind_schema.get("enum", []))
+                raise CapabilityValidationError(
+                    f"accepted {layer} evidence kind must equal {expected}"
+                )
+            verification_schema = rule.get("properties", {}).get("verification", {})
+            verified = [
+                item for item in matching
+                if "verification" in item and _schema_accepts(
+                    item["verification"],
+                    verification_schema,
+                    schema,
+                    f"accepted {layer} verification",
+                )
+            ]
+            item = verified[0] if verified else matching[0]
+            if "verification" not in item:
+                raise CapabilityValidationError(
+                    f"accepted {layer} evidence missing required field: verification"
+                )
+            _validate_schema(
+                item["verification"],
+                verification_schema,
+                schema,
+                f"accepted {layer} verification",
+            )
+            selected.append(item)
+            selected_evidence_ids.add(id(item))
         if require_distinct:
             identities = {
                 (item.get("path"), item.get("locator"))
-                for item in evidence
-                if isinstance(item, dict) and item.get("layer") in required_layers
+                for item in selected
             }
             if len(identities) < len(required_layers):
                 raise CapabilityValidationError(
                     f"accepted capability {capability.get('id', '<unknown>')} "
                     "requires six distinct evidence identities"
                 )
+    return selected_evidence_ids
+
+
+def _command_is_structurally_executable(command):
+    if not isinstance(command, str) or "\n" in command or "\0" in command:
+        return False
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+    return bool(parts) and not parts[0].startswith("-")
+
+
+def _path_matches_accepted_layer(layer, path):
+    checks = {
+        "requirement": lambda value: value.startswith("platform/docs/traceability/") and value.endswith(".md"),
+        "backend": lambda value: value.startswith("platform/services/") and "/src/test/" in value,
+        "frontend": lambda value: value.startswith("platform/apps/") and (".test." in value or ".spec." in value),
+        "flow": lambda value: value.startswith("platform/apps/") and "/e2e/" in value and ".spec." in value,
+        "production": lambda value: value.startswith("platform/deploy/production/"),
+        "traceability": lambda value: value.startswith("platform/docs/traceability/"),
+    }
+    return layer in checks and checks[layer](path)
+
+
+def _validate_accepted_semantics(capability, evidence, contents):
+    layer = evidence["layer"]
+    path = evidence["path"]
+    verification = evidence["verification"]
+    if not _path_matches_accepted_layer(layer, path):
+        raise CapabilityValidationError(
+            f"accepted {layer} evidence path does not match accepted conventions: {path}"
+        )
+
+    if layer == "requirement":
+        if verification["requirementId"] not in capability["requirementIds"]:
+            raise CapabilityValidationError(
+                "requirement verification does not name a mapped requirement: "
+                f"{verification['requirementId']}"
+            )
+        if verification["acceptanceLocator"] not in contents:
+            raise CapabilityValidationError(
+                f"acceptanceLocator not found in {path}: {verification['acceptanceLocator']}"
+            )
+        return
+
+    if not _command_is_structurally_executable(verification["command"]):
+        raise CapabilityValidationError(
+            f"accepted {layer} verification command is not structurally executable"
+        )
+    try:
+        observed_at = datetime.fromisoformat(verification["observedAt"].replace("Z", "+00:00"))
+    except ValueError as error:
+        raise CapabilityValidationError(
+            f"accepted {layer} verification observedAt is not a valid ISO timestamp"
+        ) from error
+    if observed_at.tzinfo is None:
+        raise CapabilityValidationError(
+            f"accepted {layer} verification observedAt must include a timezone"
+        )
+
+    locator_field = {
+        "flow": "browserArtifactLocator",
+        "traceability": "artifactLocator",
+    }.get(layer)
+    if locator_field and verification[locator_field] not in contents:
+        raise CapabilityValidationError(
+            f"{locator_field} not found in {path}: {verification[locator_field]}"
+        )
 
 
 def validate_document(document, repository_root=REPOSITORY_ROOT):
     repository_root = Path(repository_root).resolve()
     schema = load_schema(repository_root)
-    _validate_accepted_evidence(document, schema)
+    accepted_evidence_ids = _validate_accepted_evidence(document, schema)
     _validate_schema(document, schema, schema)
 
     known_requirements = _requirement_ids(repository_root)
@@ -218,6 +348,8 @@ def validate_document(document, repository_root=REPOSITORY_ROOT):
                     f"requirement evidence locator does not name a mapped requirement: "
                     f"{evidence['locator']}"
                 )
+            if id(evidence) in accepted_evidence_ids:
+                _validate_accepted_semantics(capability, evidence, contents)
 
 
 def _state_label(value):
@@ -284,6 +416,7 @@ def render_document(document, schema=None):
             evidence_href = posixpath.relpath(evidence["path"], OUTPUT_PATH.parent.as_posix())
             lines.append(
                 f"- **{LAYER_LABELS[evidence['layer']]}** "
+                f"（{KIND_LABELS[evidence['kind']]}）"
                 f"[`{evidence['path']}`]({evidence_href}) "
                 f"定位 `{evidence['locator']}`：{evidence['description']}"
             )

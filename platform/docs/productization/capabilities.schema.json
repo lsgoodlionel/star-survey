@@ -24,13 +24,74 @@
     "deliveryState": {
       "enum": ["complete", "partial", "not_started", "external"]
     },
+    "requirementVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirementId", "acceptanceLocator"],
+      "properties": {
+        "requirementId": {"type": "string", "pattern": "^R[0-9]{2}-[0-9]{2}$"},
+        "acceptanceLocator": {"type": "string", "minLength": 1}
+      }
+    },
+    "testVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "result", "observedAt", "commit"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "result": {"const": "passed"},
+        "observedAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"}
+      }
+    },
+    "browserVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "result", "observedAt", "commit", "browserArtifactLocator"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "result": {"const": "passed"},
+        "observedAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"},
+        "browserArtifactLocator": {"type": "string", "minLength": 1}
+      }
+    },
+    "productionVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environment", "os", "arch", "command", "result", "observedAt", "commit"],
+      "properties": {
+        "environment": {"type": "string", "minLength": 1},
+        "os": {"type": "string", "minLength": 1},
+        "arch": {"type": "string", "minLength": 1},
+        "command": {"type": "string", "minLength": 1},
+        "result": {"const": "passed"},
+        "observedAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"}
+      }
+    },
+    "traceabilityVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "result", "observedAt", "commit", "artifactLocator"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "result": {"const": "passed"},
+        "observedAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"},
+        "artifactLocator": {"type": "string", "minLength": 1}
+      }
+    },
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["layer", "path", "locator", "description"],
+      "required": ["layer", "kind", "path", "locator", "description"],
       "properties": {
         "layer": {
           "enum": ["requirement", "backend", "frontend", "flow", "production", "traceability"]
+        },
+        "kind": {
+          "enum": ["requirement-spec", "implementation", "automated-test", "audit", "browser-test", "deployment-baseline", "production-run", "traceability-record", "traceability-check", "release-attestation"]
         },
         "path": {
           "type": "string",
@@ -43,8 +104,19 @@
         "description": {
           "type": "string",
           "minLength": 1
+        },
+        "verification": {
+          "type": "object"
         }
-      }
+      },
+      "allOf": [
+        {"if": {"properties": {"layer": {"const": "requirement"}}, "required": ["layer"]}, "then": {"properties": {"kind": {"const": "requirement-spec"}}}},
+        {"if": {"properties": {"layer": {"const": "backend"}}, "required": ["layer"]}, "then": {"properties": {"kind": {"enum": ["implementation", "automated-test"]}}}},
+        {"if": {"properties": {"layer": {"const": "frontend"}}, "required": ["layer"]}, "then": {"properties": {"kind": {"enum": ["implementation", "automated-test", "audit"]}}}},
+        {"if": {"properties": {"layer": {"const": "flow"}}, "required": ["layer"]}, "then": {"properties": {"kind": {"enum": ["audit", "browser-test"]}}}},
+        {"if": {"properties": {"layer": {"const": "production"}}, "required": ["layer"]}, "then": {"properties": {"kind": {"enum": ["deployment-baseline", "production-run", "audit"]}}}},
+        {"if": {"properties": {"layer": {"const": "traceability"}}, "required": ["layer"]}, "then": {"properties": {"kind": {"enum": ["traceability-record", "traceability-check", "release-attestation"]}}}}
+      ]
     },
     "capability": {
       "type": "object",
@@ -124,12 +196,12 @@
               "production": {"const": "complete"},
               "evidence": {
                 "allOf": [
-                  {"contains": {"properties": {"layer": {"const": "requirement"}}, "required": ["layer"]}},
-                  {"contains": {"properties": {"layer": {"const": "backend"}}, "required": ["layer"]}},
-                  {"contains": {"properties": {"layer": {"const": "frontend"}}, "required": ["layer"]}},
-                  {"contains": {"properties": {"layer": {"const": "flow"}}, "required": ["layer"]}},
-                  {"contains": {"properties": {"layer": {"const": "production"}}, "required": ["layer"]}},
-                  {"contains": {"properties": {"layer": {"const": "traceability"}}, "required": ["layer"]}}
+                  {"contains": {"required": ["layer", "kind", "verification"], "properties": {"layer": {"const": "requirement"}, "kind": {"const": "requirement-spec"}, "verification": {"$ref": "#/$defs/requirementVerification"}}}},
+                  {"contains": {"required": ["layer", "kind", "verification"], "properties": {"layer": {"const": "backend"}, "kind": {"const": "automated-test"}, "verification": {"$ref": "#/$defs/testVerification"}}}},
+                  {"contains": {"required": ["layer", "kind", "verification"], "properties": {"layer": {"const": "frontend"}, "kind": {"const": "automated-test"}, "verification": {"$ref": "#/$defs/testVerification"}}}},
+                  {"contains": {"required": ["layer", "kind", "verification"], "properties": {"layer": {"const": "flow"}, "kind": {"const": "browser-test"}, "verification": {"$ref": "#/$defs/browserVerification"}}}},
+                  {"contains": {"required": ["layer", "kind", "verification"], "properties": {"layer": {"const": "production"}, "kind": {"const": "production-run"}, "verification": {"$ref": "#/$defs/productionVerification"}}}},
+                  {"contains": {"required": ["layer", "kind", "verification"], "properties": {"layer": {"const": "traceability"}, "kind": {"enum": ["traceability-check", "release-attestation"]}, "verification": {"$ref": "#/$defs/traceabilityVerification"}}}}
                 ]
               }
             }
