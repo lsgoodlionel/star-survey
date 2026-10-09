@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
+import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -47,7 +48,21 @@ def shell_without_heredocs(source: str) -> str:
     return "\n".join(kept)
 
 
-def assert_no_shell_success_bypass(testcase: unittest.TestCase, source: str) -> None:
+REQUIRED_LIFECYCLE_COMMANDS = (
+    'run_ctl install',
+    'run_ctl setup-probe',
+    'write_doctor_evidence "doctor-installed"',
+    'run_ctl backup',
+    'run_ctl upgrade',
+    'write_doctor_evidence "doctor-upgraded"',
+    'run_ctl restore',
+    'write_doctor_evidence "doctor-restored"',
+    'run_ctl uninstall',
+    'acceptance_status="passed"',
+)
+
+
+def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) -> None:
     shell = shell_without_heredocs(source)
     identifiers = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", shell)
     testcase.assertFalse(
@@ -57,6 +72,29 @@ def assert_no_shell_success_bypass(testcase: unittest.TestCase, source: str) -> 
     testcase.assertNotIn("||", shell)
     testcase.assertNotRegex(shell, r"(?m)(?:^|[;&]\s*)continue(?:\s|;|$)")
     testcase.assertNotRegex(shell, r"(?m)\b(?:exit|return)\s+0\b")
+    testcase.assertNotRegex(shell, r"(?m)\b(?:exit|return)(?=\s*(?:;|$))")
+    testcase.assertNotRegex(shell, r"(?m)\bexec\b")
+    exits = re.findall(r"(?m)\bexit\s+([^;\n]+)", shell)
+    testcase.assertEqual(["2", "2", '"$result"'], exits, "native acceptance exit propagation changed")
+    testcase.assertEqual(1, shell.count('acceptance_status="passed"'))
+    testcase.assertIn("trap collect_evidence EXIT", shell)
+    testcase.assertIn("local result=$?", shell)
+    testcase.assertIn('exit "$result"', shell)
+    positions = []
+    for command in REQUIRED_LIFECYCLE_COMMANDS:
+        expected_count = 2 if command == "run_ctl uninstall" else 1
+        testcase.assertEqual(expected_count, shell.count(command), f"required lifecycle command count changed: {command}")
+        positions.append(shell.rindex(command))
+    testcase.assertEqual(sorted(positions), positions, "native lifecycle command order changed")
+
+
+def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dict) -> None:
+    job = workflow["jobs"]["native-acceptance"]
+    step = next(item for item in job["steps"] if item.get("name") == "Execute real clean-host install upgrade restore and uninstall")
+    testcase.assertEqual(
+        "sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh",
+        step["run"],
+    )
 
 
 class NativeAcceptanceWorkflowTest(unittest.TestCase):
@@ -93,6 +131,7 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn("gh release download", job_text(candidate))
         self.assertIn('--arg manifestSha256 "$BASELINE_MANIFEST_SHA256"', self.workflow_text)
         self.assertIn("manifestSha256: $manifestSha256", job_text(candidate))
+        self.assertIn("commit: $commit", job_text(candidate))
         self.assertNotIn("baseline-version", job_text(candidate))
         self.assertEqual(1, job_text(candidate).count("build_release.py"))
 
@@ -143,6 +182,7 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn("release-readiness.json", text)
         self.assertIn("native-release-readiness", text)
         self.assertIn("readiness", text)
+        self.assertIn("verify-readiness", text)
         self.assertIn("if-no-files-found", text)
         self.assertEqual("${{ steps.readiness.outputs.promotable }}", gate["outputs"]["promotable"])
         self.assertEqual("native-release-readiness", gate["outputs"]["readiness-artifact"])
@@ -181,7 +221,8 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
         self.assertIn('[[ "${NATIVE_ACCEPTANCE_REAL:-}" == "1" ]]', self.text)
         self.assertNotIn("continue-on-error", self.text)
         self.assertNotIn("compose-logs", self.text)
-        assert_no_shell_success_bypass(self, self.text)
+        assert_native_acceptance_contract(self, self.text)
+        assert_native_workflow_invocation(self, load_workflow())
 
     def test_success_bypass_mutations_are_rejected(self):
         mutations = (
@@ -192,10 +233,28 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
             'false || exit 0',
             '[[ "${ALLOW_SKIP:-}" != "1" ]] || exit 0',
             'if [[ -n "${BYPASS:-}" ]]; then exit 0; fi',
+            'if [[ -n "${FAST:-}" ]]; then exit; fi',
+            'if [[ -n "${FAST:-}" ]]; then exec /usr/bin/true; fi',
+            'if [[ -n "${FAST:-}" ]]; then acceptance_status="passed"; exit; fi',
         )
         for mutation in mutations:
             with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
-                assert_no_shell_success_bypass(self, self.text + "\n" + mutation + "\n")
+                assert_native_acceptance_contract(self, self.text + "\n" + mutation + "\n")
+
+    def test_deleting_any_required_lifecycle_command_is_rejected(self):
+        for command in REQUIRED_LIFECYCLE_COMMANDS:
+            with self.subTest(command=command), self.assertRaises(AssertionError):
+                assert_native_acceptance_contract(self, self.text.replace(command, "", 1))
+
+    def test_workflow_cannot_swallow_native_acceptance_failure(self):
+        workflow = load_workflow()
+        step = next(
+            item for item in workflow["jobs"]["native-acceptance"]["steps"]
+            if item.get("name") == "Execute real clean-host install upgrade restore and uninstall"
+        )
+        step["run"] += " || exit 0"
+        with self.assertRaises(AssertionError):
+            assert_native_workflow_invocation(self, workflow)
 
     def test_script_verifies_shared_candidate_identity_before_installing(self):
         for required in (
@@ -356,6 +415,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         def identity(version: str, mode: str) -> dict:
             return {
                 "version": version,
+                "commit": "1" * 40,
                 "manifestSha256": "a" * 64,
                 "bundles": {
                     "amd64": {"sha256": "b" * 64},
@@ -369,35 +429,158 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                 "baseline": {"mode": mode},
             }
 
+        def evidence_hashes() -> dict[str, str]:
+            return {
+                f"ubuntu-{ubuntu}-{architecture}": hashlib.sha256(
+                    json.dumps(summary, sort_keys=True).encode("utf-8")
+                ).hexdigest()
+                for summary, (ubuntu, architecture) in zip(summaries("predecessor", True), runners)
+            }
+
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "release-readiness.json"
             with self.assertRaises(self.module.EvidenceError):
                 self.module.write_release_readiness(
                     identity("1.0.0", "bootstrap"),
-                    summaries("bootstrap", False), output,
+                    summaries("bootstrap", False), evidence_hashes(), output,
                 )
             with self.assertRaises(self.module.EvidenceError):
                 self.module.write_release_readiness(
                     identity("1.0.0", "predecessor"),
-                    summaries("predecessor", False), output,
+                    summaries("predecessor", False), evidence_hashes(), output,
                 )
             mismatched = summaries("predecessor", True)
             mismatched[0]["candidate"]["manifestSha256"] = "9" * 64
             with self.assertRaises(self.module.EvidenceError):
-                self.module.write_release_readiness(identity("1.0.0", "predecessor"), mismatched, output)
+                self.module.write_release_readiness(
+                    identity("1.0.0", "predecessor"), mismatched, evidence_hashes(), output,
+                )
             self.module.write_release_readiness(
-                identity("1.0.0", "predecessor"), summaries("predecessor", True), output,
+                identity("1.0.0", "predecessor"), summaries("predecessor", True), evidence_hashes(), output,
             )
             stable = json.loads(output.read_text(encoding="utf-8"))
             self.assertTrue(stable["promotable"])
             self.assertEqual("upgrade-verified", stable["reason"])
+            self.assertEqual({
+                "schemaVersion", "candidateVersion", "candidateCommit", "manifestSha256",
+                "amd64BundleSha256", "arm64BundleSha256", "adminManifestDigest",
+                "platformManifestDigest", "gatewayManifestDigest", "matrixEvidenceSha256",
+                "baselineMode", "nativeMatrixCount", "promotable", "reason",
+            }, set(stable))
+            self.assertEqual("1" * 40, stable["candidateCommit"])
+            self.assertEqual("a" * 64, stable["manifestSha256"])
+            self.assertEqual("b" * 64, stable["amd64BundleSha256"])
+            self.assertEqual("f" * 64, stable["arm64BundleSha256"])
+            self.assertEqual(evidence_hashes(), stable["matrixEvidenceSha256"])
             self.module.write_release_readiness(
                 identity("0.3.0-rc.1", "bootstrap"),
-                summaries("bootstrap", False), output,
+                summaries("bootstrap", False), evidence_hashes(), output,
             )
             bootstrap = json.loads(output.read_text(encoding="utf-8"))
             self.assertFalse(bootstrap["promotable"])
             self.assertEqual("bootstrap-not-promotable", bootstrap["reason"])
+
+    def test_downloaded_assets_are_recomputed_before_readiness_is_trusted(self):
+        runners = (("22.04", "amd64"), ("24.04", "amd64"), ("22.04", "arm64"), ("24.04", "arm64"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate"
+            evidence = root / "evidence"
+            candidate.mkdir()
+            evidence.mkdir()
+            bundle_hashes = {}
+            bundles = {}
+            for architecture in ("amd64", "arm64"):
+                name = f"survey-1.0.0-linux-{architecture}.tar.gz"
+                payload = f"bundle-{architecture}".encode("utf-8")
+                (candidate / name).write_bytes(payload)
+                digest = hashlib.sha256(payload).hexdigest()
+                bundle_hashes[architecture] = digest
+                bundles[architecture] = {"name": name, "sha256": digest}
+            image_digests = {
+                "admin": "sha256:" + "c" * 64,
+                "platform": "sha256:" + "d" * 64,
+                "publish-gateway": "sha256:" + "e" * 64,
+            }
+            manifest = {
+                "version": "1.0.0", "commit": "1" * 40,
+                "assets": {"bundles": bundles},
+                "images": {
+                    "ADMIN_IMAGE": "ghcr.io/example/admin@" + image_digests["admin"],
+                    "PLATFORM_IMAGE": "ghcr.io/example/platform@" + image_digests["platform"],
+                    "PUBLISH_GATEWAY_IMAGE": "ghcr.io/example/gateway@" + image_digests["publish-gateway"],
+                },
+            }
+            manifest_path = candidate / "release.json"
+            manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+            identity = {
+                "schemaVersion": 1, "version": "1.0.0", "commit": "1" * 40,
+                "manifestSha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                "bundles": bundles, "baseline": {"mode": "predecessor"},
+                "images": {
+                    name: {"reference": manifest["images"][key], "digest": image_digests[name]}
+                    for name, key in (("admin", "ADMIN_IMAGE"), ("platform", "PLATFORM_IMAGE"), ("publish-gateway", "PUBLISH_GATEWAY_IMAGE"))
+                },
+            }
+            identity_path = root / "identity.json"
+            identity_path.write_text(json.dumps(identity), encoding="utf-8")
+            for ubuntu, architecture in runners:
+                directory = evidence / f"native-acceptance-{ubuntu}-{architecture}"
+                directory.mkdir()
+                summary = {
+                    "schemaVersion": 1, "status": "passed", "exitCode": 0, "lastStep": "uninstall",
+                    "runner": {"ubuntu": ubuntu, "architecture": architecture},
+                    "candidate": {
+                        "manifestSha256": identity["manifestSha256"],
+                        "bundleSha256": bundle_hashes[architecture], "images": image_digests,
+                    },
+                    "baselineMode": "predecessor", "upgradeVerified": True,
+                    "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": True, "publicAcmeVerified": False},
+                    "preflightDisk": "separately-tested", "completedAt": "2026-10-09T00:00:00+00:00",
+                }
+                (directory / "summary.json").write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
+            readiness_path = root / "release-readiness.json"
+            self.module.write_release_readiness_from_assets(identity_path, candidate, evidence, readiness_path)
+            self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+
+            original = readiness_path.read_text(encoding="utf-8")
+            mutations = {
+                "candidateVersion": "1.0.1", "candidateCommit": "2" * 40,
+                "manifestSha256": "9" * 64, "amd64BundleSha256": "9" * 64,
+                "arm64BundleSha256": "9" * 64,
+                "adminManifestDigest": "sha256:" + "9" * 64,
+                "platformManifestDigest": "sha256:" + "9" * 64,
+                "gatewayManifestDigest": "sha256:" + "9" * 64,
+            }
+            for field, replacement in mutations.items():
+                mutated = json.loads(original)
+                mutated[field] = replacement
+                readiness_path.write_text(json.dumps(mutated), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+            mutated = json.loads(original)
+            mutated["matrixEvidenceSha256"]["ubuntu-22.04-amd64"] = "9" * 64
+            readiness_path.write_text(json.dumps(mutated), encoding="utf-8")
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+            mutated = json.loads(original)
+            mutated["unexpected"] = "forbidden"
+            readiness_path.write_text(json.dumps(mutated), encoding="utf-8")
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+            readiness_path.write_text(original, encoding="utf-8")
+            amd64_bundle = candidate / bundles["amd64"]["name"]
+            original_bundle = amd64_bundle.read_bytes()
+            amd64_bundle.write_bytes(b"mutated bundle")
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+            amd64_bundle.write_bytes(original_bundle)
+            summary_path = evidence / "native-acceptance-22.04-amd64" / "summary.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["completedAt"] = "2026-10-09T00:00:01+00:00"
+            summary_path.write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
 
 
 if __name__ == "__main__":

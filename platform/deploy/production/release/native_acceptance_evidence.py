@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -45,12 +46,19 @@ INLINE_SECRET = re.compile(
 SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+COMMIT = re.compile(r"[0-9a-f]{40}")
 DOCTOR_FILE = re.compile(r"doctor-(installed|upgraded|restored)\.json")
 RUNNERS = {
     ("22.04", "amd64"),
     ("24.04", "amd64"),
     ("22.04", "arm64"),
     ("24.04", "arm64"),
+}
+MATRIX_EVIDENCE_KEYS = {
+    ("22.04", "amd64"): "ubuntu-22.04-amd64",
+    ("24.04", "amd64"): "ubuntu-24.04-amd64",
+    ("22.04", "arm64"): "ubuntu-22.04-arm64",
+    ("24.04", "arm64"): "ubuntu-24.04-arm64",
 }
 
 
@@ -236,11 +244,25 @@ def validate_preflight(value: Any) -> None:
 
 def validate_readiness(value: Any) -> None:
     report = exact_keys(value, {
-        "schemaVersion", "candidateVersion", "baselineMode", "nativeMatrixCount", "promotable", "reason",
+        "schemaVersion", "candidateVersion", "candidateCommit", "manifestSha256",
+        "amd64BundleSha256", "arm64BundleSha256", "adminManifestDigest",
+        "platformManifestDigest", "gatewayManifestDigest", "matrixEvidenceSha256",
+        "baselineMode", "nativeMatrixCount", "promotable", "reason",
     }, "release readiness")
     if report["schemaVersion"] != 1:
         raise EvidenceError("release readiness schemaVersion must be 1")
     string(report["candidateVersion"], "release candidateVersion", 64, SEMVER)
+    string(report["candidateCommit"], "release candidateCommit", 40, COMMIT)
+    for field in ("manifestSha256", "amd64BundleSha256", "arm64BundleSha256"):
+        string(report[field], f"release {field}", 64, SHA256)
+    for field in ("adminManifestDigest", "platformManifestDigest", "gatewayManifestDigest"):
+        string(report[field], f"release {field}", 71, DIGEST)
+    matrix_hashes = exact_keys(
+        report["matrixEvidenceSha256"], set(MATRIX_EVIDENCE_KEYS.values()),
+        "release matrixEvidenceSha256",
+    )
+    for runner, digest in matrix_hashes.items():
+        string(digest, f"release matrix evidence {runner}", 64, SHA256)
     if report["baselineMode"] not in {"bootstrap", "predecessor"}:
         raise EvidenceError("release readiness baselineMode is invalid")
     integer(report["nativeMatrixCount"], "release nativeMatrixCount", 4, 4)
@@ -367,8 +389,11 @@ def write_preflight_evidence(output: Path, actual: int, required: int) -> None:
     })
 
 
-def write_release_readiness(identity: dict[str, Any], summaries: list[dict[str, Any]], output: Path) -> None:
+def build_release_readiness(
+    identity: dict[str, Any], summaries: list[dict[str, Any]], evidence_hashes: dict[str, str],
+) -> dict[str, Any]:
     version = string(identity.get("version"), "identity version", 64, SEMVER)
+    commit = string(identity.get("commit"), "identity commit", 40, COMMIT)
     baseline = identity.get("baseline")
     if not isinstance(baseline, dict) or baseline.get("mode") not in {"bootstrap", "predecessor"}:
         raise EvidenceError("identity baseline mode is invalid")
@@ -380,6 +405,10 @@ def write_release_readiness(identity: dict[str, Any], summaries: list[dict[str, 
     runners = {(item["runner"]["ubuntu"], item["runner"]["architecture"]) for item in summaries}
     if runners != RUNNERS:
         raise EvidenceError("release readiness summaries do not cover the exact native matrix")
+    if set(evidence_hashes) != set(MATRIX_EVIDENCE_KEYS.values()):
+        raise EvidenceError("release readiness evidence hashes do not cover the exact native matrix")
+    for runner, digest in evidence_hashes.items():
+        string(digest, f"native evidence hash {runner}", 64, SHA256)
     if any(item["status"] != "passed" or item["exitCode"] != 0 or item["lastStep"] != "uninstall" for item in summaries):
         raise EvidenceError("native acceptance did not complete successfully")
     if any(item["baselineMode"] != mode for item in summaries):
@@ -419,14 +448,107 @@ def write_release_readiness(identity: dict[str, Any], summaries: list[dict[str, 
         if any(not item["upgradeVerified"] for item in summaries):
             raise EvidenceError("predecessor acceptance must verify upgrade on every native runner")
         promotable, reason = True, "upgrade-verified"
-    write_evidence(output, "readiness", {
+    return {
         "schemaVersion": 1,
         "candidateVersion": version,
+        "candidateCommit": commit,
+        "manifestSha256": manifest_sha,
+        "amd64BundleSha256": string(bundles["amd64"].get("sha256"), "identity bundle amd64", 64, SHA256),
+        "arm64BundleSha256": string(bundles["arm64"].get("sha256"), "identity bundle arm64", 64, SHA256),
+        "adminManifestDigest": expected_images["admin"],
+        "platformManifestDigest": expected_images["platform"],
+        "gatewayManifestDigest": expected_images["publish-gateway"],
+        "matrixEvidenceSha256": dict(sorted(evidence_hashes.items())),
         "baselineMode": mode,
         "nativeMatrixCount": 4,
         "promotable": promotable,
         "reason": reason,
-    })
+    }
+
+
+def write_release_readiness(
+    identity: dict[str, Any], summaries: list[dict[str, Any]], evidence_hashes: dict[str, str], output: Path,
+) -> None:
+    write_evidence(output, "readiness", build_release_readiness(identity, summaries, evidence_hashes))
+
+
+def sha256_file(path: Path, label: str) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise EvidenceError(f"{label} is not an unlinked regular file")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_native_summaries(evidence_directory: Path) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    paths = sorted(evidence_directory.glob("*/summary.json"))
+    summaries: list[dict[str, Any]] = []
+    hashes: dict[str, str] = {}
+    for path in paths:
+        summary = load_json(path)
+        validate_evidence("summary", summary)
+        runner = summary["runner"]
+        key = MATRIX_EVIDENCE_KEYS[(runner["ubuntu"], runner["architecture"])]
+        if key in hashes:
+            raise EvidenceError(f"duplicate native evidence runner: {key}")
+        summaries.append(summary)
+        hashes[key] = sha256_file(path, f"native evidence {key}")
+    return summaries, hashes
+
+
+def verify_candidate_assets(identity: dict[str, Any], candidate_directory: Path) -> None:
+    version = string(identity.get("version"), "identity version", 64, SEMVER)
+    commit = string(identity.get("commit"), "identity commit", 40, COMMIT)
+    manifest_path = candidate_directory / "release.json"
+    manifest = load_json(manifest_path)
+    manifest_sha = sha256_file(manifest_path, "candidate manifest")
+    if manifest_sha != string(identity.get("manifestSha256"), "identity manifestSha256", 64, SHA256):
+        raise EvidenceError("downloaded candidate manifest checksum does not match identity")
+    if manifest.get("version") != version or manifest.get("commit") != commit:
+        raise EvidenceError("downloaded candidate version or commit does not match identity")
+    bundles = identity.get("bundles")
+    if not isinstance(bundles, dict) or set(bundles) != {"amd64", "arm64"}:
+        raise EvidenceError("candidate identity bundles are incomplete")
+    if manifest.get("assets", {}).get("bundles") != bundles:
+        raise EvidenceError("downloaded candidate bundle manifest does not match identity")
+    for architecture, bundle in bundles.items():
+        record = exact_keys(bundle, {"name", "sha256"}, f"identity bundle {architecture}")
+        name = string(record["name"], f"identity bundle {architecture} name", 256, re.compile(r"[A-Za-z0-9._-]+"))
+        expected_sha = string(record["sha256"], f"identity bundle {architecture} sha256", 64, SHA256)
+        if sha256_file(candidate_directory / name, f"candidate bundle {architecture}") != expected_sha:
+            raise EvidenceError(f"downloaded candidate bundle checksum mismatch: {architecture}")
+    images = identity.get("images")
+    if not isinstance(images, dict) or set(images) != {"admin", "platform", "publish-gateway"}:
+        raise EvidenceError("candidate identity images are incomplete")
+    manifest_keys = {
+        "admin": "ADMIN_IMAGE", "platform": "PLATFORM_IMAGE", "publish-gateway": "PUBLISH_GATEWAY_IMAGE",
+    }
+    for name, manifest_key in manifest_keys.items():
+        image = exact_keys(images[name], {"reference", "digest"}, f"identity image {name}")
+        digest = string(image["digest"], f"identity image {name} digest", 71, DIGEST)
+        reference = string(image["reference"], f"identity image {name} reference", 512)
+        if not reference.endswith("@" + digest) or manifest.get("images", {}).get(manifest_key) != reference:
+            raise EvidenceError(f"downloaded candidate image manifest mismatch: {name}")
+
+
+def write_release_readiness_from_assets(
+    identity_path: Path, candidate_directory: Path, evidence_directory: Path, output: Path,
+) -> None:
+    identity = load_json(identity_path)
+    verify_candidate_assets(identity, candidate_directory)
+    summaries, hashes = load_native_summaries(evidence_directory)
+    write_release_readiness(identity, summaries, hashes, output)
+
+
+def verify_release_readiness_assets(
+    readiness_path: Path, identity_path: Path, candidate_directory: Path, evidence_directory: Path,
+) -> None:
+    readiness = load_json(readiness_path)
+    validate_evidence("readiness", readiness)
+    identity = load_json(identity_path)
+    verify_candidate_assets(identity, candidate_directory)
+    summaries, hashes = load_native_summaries(evidence_directory)
+    expected = build_release_readiness(identity, summaries, hashes)
+    if readiness != expected:
+        raise EvidenceError("release readiness does not match independently recomputed downloaded assets")
 
 
 def evidence_kind(path: Path) -> str:
@@ -478,8 +600,14 @@ def parser() -> argparse.ArgumentParser:
     preflight.add_argument("--required-free-bytes", type=int, required=True)
     readiness = sub.add_parser("readiness")
     readiness.add_argument("--identity", type=Path, required=True)
+    readiness.add_argument("--candidate-directory", type=Path, required=True)
     readiness.add_argument("--evidence-directory", type=Path, required=True)
     readiness.add_argument("--output", type=Path, required=True)
+    verify_readiness = sub.add_parser("verify-readiness")
+    verify_readiness.add_argument("--readiness", type=Path, required=True)
+    verify_readiness.add_argument("--identity", type=Path, required=True)
+    verify_readiness.add_argument("--candidate-directory", type=Path, required=True)
+    verify_readiness.add_argument("--evidence-directory", type=Path, required=True)
     scan = sub.add_parser("scan")
     scan.add_argument("--directory", type=Path, required=True)
     return result
@@ -500,8 +628,13 @@ def main() -> int:
         elif args.command == "preflight":
             write_preflight_evidence(args.output, args.actual_free_bytes, args.required_free_bytes)
         elif args.command == "readiness":
-            summaries = [load_json(path) for path in sorted(args.evidence_directory.glob("*/summary.json"))]
-            write_release_readiness(load_json(args.identity), summaries, args.output)
+            write_release_readiness_from_assets(
+                args.identity, args.candidate_directory, args.evidence_directory, args.output,
+            )
+        elif args.command == "verify-readiness":
+            verify_release_readiness_assets(
+                args.readiness, args.identity, args.candidate_directory, args.evidence_directory,
+            )
         else:
             scan_directory(args.directory, secrets)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, EvidenceError) as exc:

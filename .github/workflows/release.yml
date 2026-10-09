@@ -605,6 +605,7 @@ jobs:
           manifest_sha="$(sha256sum release-artifact/candidate/release.json | awk '{print $1}')"
           jq -n \
             --arg version "$CANDIDATE_VERSION" \
+            --arg commit "$GITHUB_SHA" \
             --arg manifestSha256 "$manifest_sha" \
             --arg adminReference "$admin_image" \
             --arg adminDigest "$(jq -er '.digest' image-metadata/admin.json)" \
@@ -615,7 +616,7 @@ jobs:
             --arg baselineMode "$BASELINE_MODE" \
             --argjson bundles "$(jq '.assets.bundles' release-artifact/candidate/release.json)" \
             --argjson baseline "$(if [[ "$BASELINE_MODE" == predecessor ]]; then jq --arg manifestSha256 "$BASELINE_MANIFEST_SHA256" '{mode: "predecessor", manifestSha256: $manifestSha256, version, commit, images, bundles: .assets.bundles}' release-artifact/baseline/release.json; else printf '{"mode":"bootstrap"}'; fi)" \
-            '{schemaVersion: 1, version: $version, manifestSha256: $manifestSha256,
+            '{schemaVersion: 1, version: $version, commit: $commit, manifestSha256: $manifestSha256,
               bundles: $bundles,
               baseline: $baseline,
               images: {
@@ -784,8 +785,14 @@ jobs:
           tar -xzf "release-candidate/candidate/$bundle" -C readiness-runtime release/native_acceptance_evidence.py
           python3 readiness-runtime/release/native_acceptance_evidence.py readiness \
             --identity "$identity" \
+            --candidate-directory release-candidate/candidate \
             --evidence-directory native-evidence \
             --output release-readiness.json
+          python3 readiness-runtime/release/native_acceptance_evidence.py verify-readiness \
+            --readiness release-readiness.json \
+            --identity "$identity" \
+            --candidate-directory release-candidate/candidate \
+            --evidence-directory native-evidence
           printf 'promotable=%s\n' "$(jq -er '.promotable' release-readiness.json)" >> "$GITHUB_OUTPUT"
 
       - name: Preserve the Task 4 promotion gate
