@@ -53,3 +53,23 @@ GREEN after implementation:
 - 全量 Admin Web：25 个文件、211 个测试全部通过。
 - TypeScript typecheck、ESLint、production build、`git diff --check` 全部通过；build 仅有既存的主 chunk 体积提示。
 - 未编辑或暂存 production deployment 文件；工作区中对应改动属于并行 production agent。
+
+## Review Fix Round 2
+
+修复前端已经发送 `filter.versions`、Java 后端却接收后丢弃的问题：
+
+- `ExportRequest.ExportFilter` 新增 nullable `List<Integer> versions`；缺省或空数组继续表示全部版本，兼容旧请求和旧作业快照。
+- `ExportSpec` 校验版本号必须为正整数，并规范化为去重、升序列表；规范化后的字段参与幂等 spec equality 和 API 回显。
+- 创建作业时只冻结筛选命中的发布来源；worker 从持久化 filter 再次约束 `ExportPlan`，只对这些来源对应的 engine sid 执行投影查询。
+- 前端 Zod 将 `versions` 收紧为后端真实 DTO 的必有 nullable 字段，并同步测试夹具。
+- 数据库核对确认 `survey_published_version.version_no`、`response_export_item.version_no` 和作业 `snapshot_version` 均为 `integer`。版本与投影来源通过 `(engine_instance_id, engine_sid)` 映射，因此不需要 migration 或额外 SQL 条件；快照测试直接查询 `response_export_item.version_no` 证明过滤生效。
+
+### TDD 与验证
+
+- RED：先新增 Java API/worker 快照回归，`ResponseExportApiTest` 出现 3 个预期失败：非法版本返回 202、规范化版本未参与幂等 spec、API 响应和快照缺少版本约束。
+- GREEN：定向 `ResponseExportApiTest` 8/8 通过；版本 2 的作业回显 `[2]`、快照只含版本 2、最终 CSV 也只含版本 2。
+- 全部 `ResponseExport*Test`：12 个测试类、55 个测试全部通过，覆盖规模、一致性、恢复、权限、租户隔离和全部导出格式。
+- Admin Web 聚焦测试：2 个文件、17 个测试全部通过。
+- Admin Web 全量测试：25 个文件、211 个测试全部通过。
+- TypeScript typecheck、ESLint、production build 和 `git diff --check` 全部通过；build 仅有既存的主 chunk 体积提示。
+- 未修改或暂存 `platform/deploy/production/**` 及 Task4 的 `platform/README.md` 改动。

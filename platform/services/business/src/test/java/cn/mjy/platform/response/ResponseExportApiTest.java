@@ -121,6 +121,36 @@ class ResponseExportApiTest {
     }
 
     @Test
+    void versionFilterRoundTripsAndOnlyTheSelectedVersionEntersTheSnapshotAndFile() throws Exception {
+        long secondSid = fixture.responses().addVersion(p, List.of("V2Q100", "V2Q101"));
+        fixture.responses().response(p.tenant(), p.instance(), secondSid, GENERATION, 2, COMPLETED);
+        answers.put(p.instance(), secondSid, 2, Map.of("V2Q100", "A2"));
+
+        MvcResult created = mvc.perform(as(p.owner(), post(exportsUrl()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"format\":\"csv\",\"filter\":{"
+                                + "\"states\":[\"engine_completed\"],\"versions\":[2]}}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.filter.states[0]").value("engine_completed"))
+                .andExpect(jsonPath("$.filter.versions[0]").value(2))
+                .andReturn();
+        UUID job = UUID.fromString(JsonPath.read(created.getResponse().getContentAsString(), "$.jobId"));
+
+        worker.process(p.tenant(), job, 1);
+        assertThat(fixture.snapshotVersions(p.tenant(), job)).containsExactly(2);
+        worker.process(p.tenant(), job, Integer.MAX_VALUE);
+
+        MvcResult downloaded = mvc.perform(as(p.owner(), get("/v1/exports/" + job + "/download")))
+                .andExpect(status().isOk())
+                .andReturn();
+        List<List<String>> rows = ExportFixture.unzipCsv(downloaded.getResponse().getContentAsByteArray())
+                .get("responses.csv");
+        assertThat(rows.subList(2, rows.size()))
+                .extracting(row -> row.getFirst())
+                .containsExactly("2");
+    }
+
+    @Test
     void theSameIdempotencyKeyReturnsTheSameJobAndADifferentBodyIs409() throws Exception {
         String key = "export-" + UUID.randomUUID();
         MvcResult first = mvc.perform(as(p.owner(), post(exportsUrl())).header("Idempotency-Key", key)
@@ -136,6 +166,26 @@ class ResponseExportApiTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"format\":\"xlsx\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("idempotency_key_reused"));
+
+        String versionKey = "export-version-" + UUID.randomUUID();
+        MvcResult selected = mvc.perform(as(p.owner(), post(exportsUrl())).header("Idempotency-Key", versionKey)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"format\":\"csv\",\"filter\":{\"versions\":[1,1]}}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.filter.versions[0]").value(1))
+                .andExpect(jsonPath("$.filter.versions.length()").value(1))
+                .andReturn();
+        MvcResult selectedAgain = mvc.perform(as(p.owner(), post(exportsUrl()))
+                        .header("Idempotency-Key", versionKey).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"format\":\"csv\",\"filter\":{\"versions\":[1]}}"))
+                .andExpect(status().isAccepted()).andReturn();
+        assertThat(JsonPath.<String>read(selectedAgain.getResponse().getContentAsString(), "$.jobId"))
+                .isEqualTo(JsonPath.read(selected.getResponse().getContentAsString(), "$.jobId"));
+        mvc.perform(as(p.owner(), post(exportsUrl())).header("Idempotency-Key", versionKey)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"format\":\"csv\",\"filter\":{\"versions\":[2]}}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("idempotency_key_reused"));
     }
 
     @Test
@@ -143,7 +193,9 @@ class ResponseExportApiTest {
         // pdf 还没实现；sav（切片 06.3）与 docx（切片 06.4）都已是合法取值，不能再拿它们当
         // "不认识的格式"的例子。
         for (String body : new String[] {"{\"format\":\"pdf\"}", "{\"format\":\"csv\",\"templateVersion\":\"v9\"}",
-                "{\"format\":\"csv\",\"filter\":{\"states\":[\"bogus\"]}}", "{}", "not json"}) {
+                "{\"format\":\"csv\",\"filter\":{\"states\":[\"bogus\"]}}",
+                "{\"format\":\"csv\",\"filter\":{\"versions\":[0]}}",
+                "{\"format\":\"csv\",\"filter\":{\"versions\":[null]}}", "{}", "not json"}) {
             mvc.perform(as(p.owner(), post(exportsUrl())).contentType(MediaType.APPLICATION_JSON).content(body))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error").value("invalid_request"));

@@ -45,7 +45,7 @@ function baseJob(status: ExportJobView['status']): ExportJobView {
     surveyId,
     format: 'xlsx',
     templateVersion: 'current',
-    filter: { states: ['engine_completed'] },
+    filter: { states: ['engine_completed'], versions: null },
     status,
     sensitiveRevealed: false,
     totalRows: status === 'queued' ? null : 3,

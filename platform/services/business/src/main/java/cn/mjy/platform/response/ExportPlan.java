@@ -44,6 +44,14 @@ record ExportPlan(List<PlannedSource> sources) {
                 .orElseThrow(() -> new IllegalStateException("export plan has no version " + version));
     }
 
+    /** 旧作业没有 versions 字段，按全部版本处理；新作业只保留筛选命中的来源。 */
+    ExportPlan selectVersions(List<Integer> versions) {
+        if (versions == null || versions.isEmpty()) {
+            return this;
+        }
+        return new ExportPlan(sources.stream().filter(source -> versions.contains(source.version())).toList());
+    }
+
     Set<String> sensitiveFieldnames() {
         return sources.stream().flatMap(s -> s.fields().stream()).filter(FieldEntry::sensitive)
                 .map(FieldEntry::fieldname).collect(Collectors.toUnmodifiableSet());
