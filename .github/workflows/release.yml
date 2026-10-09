@@ -16,6 +16,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Existing tagged workflow run containing the release-candidate artifact
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -410,3 +415,271 @@ jobs:
             cosign-${{ matrix.image }}.sigstore.json
           if-no-files-found: warn
           retention-days: 30
+
+  candidate-assets:
+    name: Assemble one immutable release candidate
+    if: needs.policy.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    needs: [policy, quality, publish-images, secure-images]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Docker Buildx for manifest resolution
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR for immutable manifest reads
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all three application image identities
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: image-*-metadata
+          path: image-metadata
+          merge-multiple: true
+
+      - name: Build baseline and candidate bundles once
+        shell: bash
+        env:
+          VERSION: ${{ needs.policy.outputs.version }}
+          CADDY_SOURCE_IMAGE: caddy:2.11.6-alpine
+          ENGINE_SOURCE_IMAGE: ghcr.io/lsgoodlionel/survey-engine:0.1.0
+          POSTGRES_SOURCE_IMAGE: postgres:16.10-alpine
+          MARIADB_SOURCE_IMAGE: mariadb:10.11.14
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifact image-inputs
+
+          python3 - "$VERSION" > image-inputs/versions.env <<'PY'
+          import re
+          import sys
+
+          candidate = sys.argv[1]
+          match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?', candidate)
+          if match is None:
+              raise SystemExit('candidate version is not canonical semantic version')
+          major, minor, patch, rc = (int(value) if value is not None else None for value in match.groups())
+          if rc is None:
+              baseline = f'{major}.{minor}.{patch}-rc.0'
+          elif rc > 0:
+              baseline = f'{major}.{minor}.{patch}-rc.{rc - 1}'
+          elif patch > 0:
+              baseline = f'{major}.{minor}.{patch - 1}'
+          elif minor > 0:
+              baseline = f'{major}.{minor - 1}.0'
+          elif major > 0:
+              baseline = f'{major - 1}.0.0'
+          else:
+              raise SystemExit('v0.0.0-rc.0 has no valid baseline for upgrade acceptance')
+          print(f'CANDIDATE_VERSION={candidate}')
+          print(f'BASELINE_VERSION={baseline}')
+          PY
+          source image-inputs/versions.env
+          printf '%s\n' "$CANDIDATE_VERSION" > image-inputs/candidate-version
+          printf '%s\n' "$BASELINE_VERSION" > image-inputs/baseline-version
+
+          resolve_image() {
+            local reference="$1"
+            local digest
+            digest="$(docker buildx imagetools inspect "$reference" | awk '/^Digest:/ {print $2; exit}')"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf '%s@%s' "${reference%%:*}" "$digest"
+          }
+
+          caddy_image="$(resolve_image "$CADDY_SOURCE_IMAGE")"
+          engine_image="$(resolve_image "$ENGINE_SOURCE_IMAGE")"
+          postgres_image="$(resolve_image "$POSTGRES_SOURCE_IMAGE")"
+          mariadb_image="$(resolve_image "$MARIADB_SOURCE_IMAGE")"
+          admin_image="$(jq -er '.image + "@" + .digest' image-metadata/admin.json)"
+          platform_image="$(jq -er '.image + "@" + .digest' image-metadata/platform.json)"
+          gateway_image="$(jq -er '.image + "@" + .digest' image-metadata/publish-gateway.json)"
+          source_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          database_schema="$(git ls-tree -r --name-only "$GITHUB_SHA" platform/services/business/src/main/resources/db/migration \
+            | sed -n 's#.*V\([0-9][0-9]*\)__.*#\1#p' | sort -n | tail -1)"
+          [[ "$database_schema" =~ ^[0-9]+$ ]]
+
+          common=(
+            --source platform/deploy/production
+            --trusted-root "$GITHUB_WORKSPACE"
+            --commit "$GITHUB_SHA"
+            --database-schema "$database_schema"
+            --backup-schema 2
+            --rollback restore-only
+            --compatible-source-schema "$database_schema"
+            --source-date-epoch "$source_epoch"
+            --image "CADDY_IMAGE=$caddy_image"
+            --image "ADMIN_IMAGE=$admin_image"
+            --image "PLATFORM_IMAGE=$platform_image"
+            --image "PUBLISH_GATEWAY_IMAGE=$gateway_image"
+            --image "ENGINE_IMAGE=$engine_image"
+            --image "POSTGRES_IMAGE=$postgres_image"
+            --image "MARIADB_IMAGE=$mariadb_image"
+          )
+          channel=stable
+          [[ "$CANDIDATE_VERSION" == *-rc.* ]] && channel=candidate
+          python3 platform/deploy/production/release/build_release.py \
+            "${common[@]}" \
+            --output release-artifact/candidate \
+            --version-file image-inputs/candidate-version \
+            --channel "$channel" \
+            --minimum-source-version "$BASELINE_VERSION"
+          python3 platform/deploy/production/release/build_release.py \
+            "${common[@]}" \
+            --output release-artifact/baseline \
+            --version-file image-inputs/baseline-version \
+            --channel candidate \
+            --minimum-source-version 0.0.0
+
+          manifest_sha="$(sha256sum release-artifact/candidate/release.json | awk '{print $1}')"
+          jq -n \
+            --arg version "$CANDIDATE_VERSION" \
+            --arg manifestSha256 "$manifest_sha" \
+            --arg adminReference "$admin_image" \
+            --arg adminDigest "$(jq -er '.digest' image-metadata/admin.json)" \
+            --arg platformReference "$platform_image" \
+            --arg platformDigest "$(jq -er '.digest' image-metadata/platform.json)" \
+            --arg gatewayReference "$gateway_image" \
+            --arg gatewayDigest "$(jq -er '.digest' image-metadata/publish-gateway.json)" \
+            --argjson bundles "$(jq '.assets.bundles' release-artifact/candidate/release.json)" \
+            '{schemaVersion: 1, version: $version, manifestSha256: $manifestSha256,
+              bundles: $bundles,
+              images: {
+                admin: {reference: $adminReference, digest: $adminDigest},
+                platform: {reference: $platformReference, digest: $platformDigest},
+                "publish-gateway": {reference: $gatewayReference, digest: $gatewayDigest}
+              }}' > release-artifact/identity.json
+
+      - name: Upload the single candidate consumed by every native runner
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate
+          path: release-artifact
+          if-no-files-found: error
+          retention-days: 14
+
+  native-acceptance:
+    name: Native acceptance Ubuntu ${{ matrix.ubuntu }} ${{ matrix.architecture }}
+    if: >-
+      always() && !cancelled() && needs.quality.result == 'success' &&
+      (needs.policy.outputs.release == 'true' || inputs.candidate_run_id != '') &&
+      (needs.candidate-assets.result == 'success' || inputs.candidate_run_id != '')
+    runs-on: ${{ matrix.runner }}
+    needs: [policy, quality, candidate-assets]
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            ubuntu: '22.04'
+            architecture: amd64
+            id: ubuntu-22-04-amd64
+          - runner: ubuntu-24.04
+            ubuntu: '24.04'
+            architecture: amd64
+            id: ubuntu-24-04-amd64
+          - runner: ubuntu-22.04-arm
+            ubuntu: '22.04'
+            architecture: arm64
+            id: ubuntu-22-04-arm64
+          - runner: ubuntu-24.04-arm
+            ubuntu: '24.04'
+            architecture: arm64
+            id: ubuntu-24-04-arm64
+    steps:
+      - name: Check out the exact candidate source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download the shared immutable candidate
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-candidate
+          path: candidate-assets
+          run-id: ${{ inputs.candidate_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+
+      - name: Log in to GHCR for native image pulls
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Load the shared candidate identity
+        id: identity
+        shell: bash
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          identity=candidate-assets/identity.json
+          test -f "$identity"
+          printf 'manifest-sha=%s\n' "$(jq -er '.manifestSha256' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'bundle-sha=%s\n' "$(jq -er --arg architecture "$ARCHITECTURE" '.bundles[$architecture].sha256' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'admin-digest=%s\n' "$(jq -er '.images.admin.digest' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'platform-digest=%s\n' "$(jq -er '.images.platform.digest' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'gateway-digest=%s\n' "$(jq -er '.images["publish-gateway"].digest' "$identity")" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the configured public acceptance endpoint
+        id: endpoint
+        shell: bash
+        env:
+          PUBLIC_HOST: ${{ matrix.id }}.${{ vars.SURVEY_ACCEPTANCE_DNS_SUFFIX }}
+        run: |
+          set -euo pipefail
+          [[ "$PUBLIC_HOST" != *'.' ]]
+          public_address="$(getent ahostsv4 "$PUBLIC_HOST" | awk '$1 !~ /^(10\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {print $1; exit}')"
+          [[ -n "$public_address" ]]
+          printf 'host=%s\naddress=%s\n' "$PUBLIC_HOST" "$public_address" >> "$GITHUB_OUTPUT"
+
+      - name: Execute real clean-host install upgrade restore and uninstall
+        timeout-minutes: 90
+        shell: bash
+        env:
+          NATIVE_ACCEPTANCE_REAL: '1'
+          CANDIDATE_DIR: ${{ github.workspace }}/candidate-assets
+          CANDIDATE_IDENTITY: ${{ github.workspace }}/candidate-assets/identity.json
+          CANDIDATE_MANIFEST_SHA256: ${{ steps.identity.outputs.manifest-sha }}
+          CANDIDATE_BUNDLE_SHA256: ${{ steps.identity.outputs.bundle-sha }}
+          ADMIN_IMAGE_DIGEST: ${{ steps.identity.outputs.admin-digest }}
+          PLATFORM_IMAGE_DIGEST: ${{ steps.identity.outputs.platform-digest }}
+          PUBLISH_GATEWAY_IMAGE_DIGEST: ${{ steps.identity.outputs.gateway-digest }}
+          EXPECTED_UBUNTU: ${{ matrix.ubuntu }}
+          EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
+          SURVEY_ACCEPTANCE_PUBLIC_HOST: ${{ steps.endpoint.outputs.host }}
+          SURVEY_ACCEPTANCE_EXPECTED_PUBLIC_ADDRESS: ${{ steps.endpoint.outputs.address }}
+          SURVEY_ACCEPTANCE_ADMIN_EMAIL: native-acceptance@example.com
+          EVIDENCE_DIR: ${{ github.workspace }}/native-evidence
+        run: sudo -E NATIVE_ACCEPTANCE_REAL=1 bash platform/deploy/production/release/native_acceptance.sh
+
+      - name: Preserve redacted native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-acceptance-${{ matrix.ubuntu }}-${{ matrix.architecture }}
+          path: native-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  release-ready:
+    name: Release candidate passed every native host
+    if: needs.policy.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    needs: [policy, candidate-assets, native-acceptance]
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm the blocking native matrix completed
+        shell: bash
+        run: test '${{ needs.native-acceptance.result }}' = success
