@@ -52,6 +52,12 @@
 		}
 	}
 
+	@deployment_health path /.well-known/survey-health
+	handle @deployment_health {
+		header X-Survey-Deployment survey-production-v1
+		respond "survey-production-v1" 200
+	}
+
 	@platform_api path /v1 /v1/*
 	handle @platform_api {
 		reverse_proxy platform:8080 {

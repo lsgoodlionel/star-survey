@@ -66,7 +66,18 @@ def load_module():
 
 
 class FakeRunner:
-    def __init__(self, fail_when=None, unhealthy_service=None, empty_health=False, create_backup=True, stdout="", stderr=""):
+    def __init__(
+        self,
+        fail_when=None,
+        unhealthy_service=None,
+        empty_health=False,
+        create_backup=True,
+        stdout="",
+        stderr="",
+        backup_schema="920",
+        engine_init_exit_code=0,
+        engine_init_health="",
+    ):
         self.commands = []
         self.calls = []
         self.fail_when = fail_when
@@ -75,6 +86,9 @@ class FakeRunner:
         self.create_backup = create_backup
         self.stdout = stdout
         self.stderr = stderr
+        self.backup_schema = backup_schema
+        self.engine_init_exit_code = engine_init_exit_code
+        self.engine_init_health = engine_init_health
 
     def run(self, command, **kwargs):
         command = tuple(str(part) for part in command)
@@ -93,7 +107,7 @@ class FakeRunner:
             (output / "manifest.json").write_text(json.dumps({
                 "schemaVersion": 1,
                 "version": version,
-                "databaseSchema": "920",
+                "databaseSchema": self.backup_schema,
                 "files": {"payload.bin": hashlib.sha256(payload.read_bytes()).hexdigest()},
             }))
         if "ps" in command and "--format" in command:
@@ -106,7 +120,12 @@ class FakeRunner:
                 }
                 for service in services
             ]
-            payload.append({"Service": "engine-init", "State": "exited", "Health": "", "ExitCode": 0})
+            payload.append({
+                "Service": "engine-init",
+                "State": "exited",
+                "Health": self.engine_init_health,
+                "ExitCode": self.engine_init_exit_code,
+            })
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
         return subprocess.CompletedProcess(command, 0, stdout=self.stdout, stderr=self.stderr)
 
@@ -123,6 +142,7 @@ class FakeHostProbe:
             "memory_bytes": 8 * 1024**3,
             "ports_available": True,
             "dns_addresses": ["203.0.113.10"],
+            "local_addresses": ["203.0.113.10"],
             "time_synchronized": True,
             "systemd": True,
             "dns_public": True,
@@ -161,13 +181,14 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.target = self.root / "survey"
 
-    def manager(self, runner=None, probe=None, client=None):
+    def manager(self, runner=None, probe=None, client=None, **kwargs):
         return self.module.SurveyManager(
             target=self.target,
             runner=runner or FakeRunner(),
             host_probe=probe or FakeHostProbe(),
             release_client=client or FakeReleaseClient(),
             source_dir=PRODUCTION_DIR,
+            **kwargs,
         )
 
     def write_bundle_manifest(self, version="0.2.0", rollback="compatible"):
@@ -299,6 +320,45 @@ class SurveyctlAdversarialTest(unittest.TestCase):
             manager.upgrade(next_manifest)
         self.assertFalse(any("pull" in command for command in runner.commands))
 
+    def test_upgrade_rejects_backup_with_wrong_database_schema_before_pull(self):
+        manifest, _ = self.write_bundle_manifest()
+        runner = FakeRunner(backup_schema="919")
+        manager = self.manager(runner=runner)
+        manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+        next_manifest, _ = self.write_bundle_manifest("0.3.0")
+        runner.commands.clear()
+
+        with self.assertRaises(self.module.IntegrityError) as raised:
+            manager.upgrade(next_manifest)
+
+        self.assertEqual(5, raised.exception.exit_code)
+        self.assertFalse(any("pull" in command for command in runner.commands))
+
+    def test_backup_rejects_recursive_unlisted_symlinks_special_files_and_content(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+
+        attacks = ("directory-symlink", "fifo", "unlisted-file")
+        for index, attack in enumerate(attacks):
+            with self.subTest(attack=attack):
+                backup = manager.backup(f"recursive-{index}")
+                if attack == "directory-symlink":
+                    outside = self.root / f"outside-{index}"
+                    outside.mkdir()
+                    (outside / "escaped").write_text("outside")
+                    (backup / "unlisted-link").symlink_to(outside, target_is_directory=True)
+                elif attack == "fifo":
+                    nested = backup / "unlisted-dir"
+                    nested.mkdir()
+                    os.mkfifo(nested / "special")
+                else:
+                    nested = backup / "unlisted-dir"
+                    nested.mkdir()
+                    (nested / "extra").write_text("not in manifest")
+                with self.assertRaises(self.module.IntegrityError):
+                    manager._verify_backup(backup, "0.2.0", "920")
+
     def test_restore_only_upgrade_failure_never_starts_old_images_without_restore(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager()
@@ -343,6 +403,28 @@ class SurveyctlAdversarialTest(unittest.TestCase):
                 with self.assertRaises(self.module.IntegrityError):
                     self.module.load_manifest(path)
 
+    def test_schema_rejects_bool_for_integer_const_and_all_wrong_json_types(self):
+        value = json.loads(FIXTURE_MANIFEST.read_text())
+        value["schemaVersion"] = True
+        path = self.root / "bool-schema-version.json"
+        path.write_text(json.dumps(value))
+        with self.assertRaises(self.module.IntegrityError):
+            self.module.load_manifest(path)
+
+        cases = (
+            ({"type": "integer"}, True),
+            ({"type": "integer"}, 1.0),
+            ({"type": "number"}, True),
+            ({"type": "number"}, "1.5"),
+            ({"type": "string"}, 1),
+            ({"type": "array"}, {}),
+            ({"type": "object"}, []),
+        )
+        for schema, instance in cases:
+            with self.subTest(schema=schema, instance=instance):
+                with self.assertRaises(self.module.IntegrityError):
+                    self.module._validate_json_schema(instance, schema, "$")
+
     def test_preflight_requires_systemd_minimum_versions_target_space_and_tls(self):
         manifest, _ = self.write_bundle_manifest()
         release = self.module.load_manifest(manifest)
@@ -360,6 +442,17 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.manager(probe=probe).preflight(release, "survey.example.com")
         self.assertEqual(self.target, probe.target)
 
+    def test_preflight_requires_dns_to_match_local_or_explicit_expected_address(self):
+        manifest, _ = self.write_bundle_manifest()
+        release = self.module.load_manifest(manifest)
+        probe = FakeHostProbe(dns_addresses=["8.8.8.8"], local_addresses=["203.0.113.10"])
+        with self.assertRaises(self.module.EnvironmentError):
+            self.manager(probe=probe).preflight(release, "survey.example.com")
+
+        manager = self.manager(probe=probe, expected_public_addresses=["8.8.8.8"])
+        values = manager.preflight(release, "survey.example.com")
+        self.assertEqual(["8.8.8.8"], values["dns_addresses"])
+
     def test_post_start_tls_failure_is_runtime_error(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager(probe=FakeHostProbe(tls_valid=False))
@@ -367,6 +460,34 @@ class SurveyctlAdversarialTest(unittest.TestCase):
             manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
         state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
         self.assertEqual("install_failed", state["status"])
+
+    def test_tls_probe_requires_the_deployment_specific_marker(self):
+        class Response:
+            status = 200
+
+            def __init__(self, body, marker):
+                self.body = body
+                self.headers = {"X-Survey-Deployment": marker}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, size):
+                return self.body
+
+        probe = self.module.HostProbe()
+        responses = (
+            (Response(b"unrelated", "survey-production-v1"), False),
+            (Response(b"survey-production-v1\n", "wrong"), False),
+            (Response(b"survey-production-v1\n", "survey-production-v1"), True),
+        )
+        for response, expected in responses:
+            with self.subTest(expected=expected):
+                with mock.patch.object(self.module.urllib.request, "urlopen", return_value=response):
+                    self.assertEqual(expected, probe.verify_tls("survey.example.com"))
 
     def test_purge_refuses_symlink_and_reports_remaining_data(self):
         manifest, _ = self.write_bundle_manifest()
@@ -457,6 +578,16 @@ class SurveyctlAdversarialTest(unittest.TestCase):
                 self.assertEqual(expected, result.returncode, result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
 
+    def test_malformed_health_runtime_payload_returns_exit_four_without_traceback(self):
+        code = f'''\nimport importlib.util, json, subprocess, sys\nfrom pathlib import Path\nspec=importlib.util.spec_from_file_location("surveyctl_cli", {str(MODULE_PATH)!r})\nm=importlib.util.module_from_spec(spec); sys.modules[spec.name]=m; spec.loader.exec_module(m)\nclass Runner:\n    def run(self, command, **kwargs):\n        payload=[{{"Service": name, "State": "running", "Health": "healthy"}} for name in m.LONG_RUNNING_SERVICES]\n        payload.append({{"Service": "engine-init", "State": "exited", "Health": "", "ExitCode": "not-an-integer"}})\n        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")\nreal=m.SurveyManager(Path({str(self.target)!r}), runner=Runner())\nclass Manager:\n    def __init__(self, target): pass\n    def status(self): real._assert_healthy(["docker", "compose"], "malformed health")\nm.SurveyManager=Manager\nraise SystemExit(m.main(["--target", {str(self.target)!r}, "status"]))\n'''
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        self.assertEqual(4, result.returncode, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager = self.manager(runner=FakeRunner(engine_init_exit_code=False))
+            manager._assert_healthy(["docker", "compose"], "malformed health")
+
 
 class SurveyctlTest(unittest.TestCase):
     def setUp(self):
@@ -532,6 +663,7 @@ class SurveyctlTest(unittest.TestCase):
     def test_manifest_requires_schema_and_digest_locked_images(self):
         schema = json.loads((PRODUCTION_DIR / "release.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(1, schema["properties"]["schemaVersion"]["const"])
+        self.assertEqual("integer", schema["properties"]["schemaVersion"]["type"])
         manifest = self.module.load_manifest(FIXTURE_MANIFEST)
         self.assertEqual("0.2.0", manifest.version)
         self.assertEqual("920", manifest.database_schema)

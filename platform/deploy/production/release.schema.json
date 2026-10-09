@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schemaVersion", "version", "channel", "commit", "supportedHosts", "minimumSourceVersion", "database", "images", "assets"],
   "properties": {
-    "schemaVersion": {"const": 1},
+    "schemaVersion": {"type": "integer", "const": 1},
     "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-rc\\.[0-9]+)?$"},
     "channel": {"enum": ["stable", "candidate"]},
     "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},

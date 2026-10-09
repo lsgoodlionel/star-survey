@@ -16,6 +16,7 @@ import secrets
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tarfile
@@ -130,14 +131,15 @@ def _validate_json_schema(value: Any, schema: dict[str, Any], root: dict[str, An
     if "$ref" in schema:
         _validate_json_schema(value, _resolve_schema_ref(root, schema["$ref"]), root, location)
         return
-    if "const" in schema and value != schema["const"]:
+    if "const" in schema and (type(value) is not type(schema["const"]) or value != schema["const"]):
         _schema_error(location, "constant value does not match")
-    if "enum" in schema and value not in schema["enum"]:
+    if "enum" in schema and not any(type(value) is type(item) and value == item for item in schema["enum"]):
         _schema_error(location, "value is not in the allowed set")
     expected = schema.get("type")
     matches = {
         "object": isinstance(value, dict), "array": isinstance(value, list),
         "string": isinstance(value, str), "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
         "boolean": isinstance(value, bool),
     }
     if expected and not matches.get(expected, False):
@@ -279,6 +281,34 @@ class HostProbe:
             for sock in sockets:
                 sock.close()
 
+    def _local_addresses(self) -> list[str]:
+        addresses = set()
+        try:
+            addresses.update(item[4][0] for item in socket.getaddrinfo(socket.gethostname(), None))
+        except socket.gaierror:
+            pass
+        for family, destination in (
+            (socket.AF_INET, ("8.8.8.8", 53)),
+            (socket.AF_INET6, ("2001:4860:4860::8888", 53)),
+        ):
+            sock = socket.socket(family, socket.SOCK_DGRAM)
+            try:
+                sock.connect(destination)
+                addresses.add(sock.getsockname()[0])
+            except OSError:
+                pass
+            finally:
+                sock.close()
+        return sorted(
+            str(address)
+            for value in addresses
+            if not (
+                (address := ipaddress.ip_address(value.split("%", 1)[0])).is_loopback
+                or address.is_link_local
+                or address.is_unspecified
+            )
+        )
+
     def inspect(self, host: str, target: Path) -> dict[str, Any]:
         release = self._os_release()
         try:
@@ -308,14 +338,20 @@ class HostProbe:
             "compose_version": self._command_version(["docker", "compose", "version", "--short"]),
             "free_bytes": shutil.disk_usage(anchor).free, "memory_bytes": memory,
             "ports_available": self._ports_available(), "dns_addresses": dns, "dns_public": dns_public,
+            "local_addresses": self._local_addresses(),
             "time_synchronized": synchronized, "systemd": systemd,
         }
 
     def verify_tls(self, host: str) -> bool:
-        request = urllib.request.Request(f"https://{host}/", headers={"User-Agent": "surveyctl/1"})
+        request = urllib.request.Request(
+            f"https://{host}/.well-known/survey-health",
+            headers={"User-Agent": "surveyctl/1"},
+        )
         try:
             with urllib.request.urlopen(request, timeout=15, context=ssl.create_default_context()) as response:
-                return 200 <= response.status < 500
+                marker = response.headers.get("X-Survey-Deployment", "")
+                body = response.read(64).decode("ascii", errors="replace").strip()
+                return response.status == 200 and marker == "survey-production-v1" and body == marker
         except (OSError, urllib.error.URLError, ssl.SSLError):
             return False
 
@@ -388,7 +424,15 @@ def _extract_safe_tar(archive_path: Path, destination: Path) -> None:
 
 
 class SurveyManager:
-    def __init__(self, target: Path | str, runner=None, host_probe=None, release_client=None, source_dir=None):
+    def __init__(
+        self,
+        target: Path | str,
+        runner=None,
+        host_probe=None,
+        release_client=None,
+        source_dir=None,
+        expected_public_addresses=None,
+    ):
         raw_target = Path(target).expanduser()
         if ".." in raw_target.parts:
             raise InputError("target path cannot contain '..'")
@@ -400,7 +444,20 @@ class SurveyManager:
         self.control_dir = self.target / ".surveyctl"
         self.state_path = self.control_dir / "state.json"
         self.current_path = self.target / "current"
+        self.expected_public_addresses = self._normalize_expected_addresses(expected_public_addresses or [])
         self._reject_symlink_components(self.target)
+
+    @staticmethod
+    def _normalize_expected_addresses(values) -> list[str]:
+        if not isinstance(values, (list, tuple)):
+            raise InputError("expected public addresses must be a list")
+        try:
+            normalized = sorted({str(ipaddress.ip_address(value)) for value in values if isinstance(value, str)})
+        except ValueError as exc:
+            raise InputError("expected public address is invalid") from exc
+        if len(normalized) != len(set(values)) or any(not isinstance(value, str) for value in values):
+            raise InputError("expected public address is invalid")
+        return normalized
 
     def _reject_symlink_components(self, path: Path) -> None:
         absolute = Path(os.path.abspath(os.fspath(path)))
@@ -469,6 +526,11 @@ class SurveyManager:
                 _validate_semver(state["previousVersion"], "previous version")
             except InputError as exc:
                 raise IntegrityError("installation previous version is invalid") from exc
+        if "expectedPublicAddresses" in state:
+            try:
+                state["expectedPublicAddresses"] = self._normalize_expected_addresses(state["expectedPublicAddresses"])
+            except InputError as exc:
+                raise IntegrityError("installation expected public addresses are invalid") from exc
         if require_current and self._read_current() != state["version"]:
             raise IntegrityError("current version pointer does not match installation state")
         return state
@@ -616,7 +678,14 @@ class SurveyManager:
             if by_service[service].get("State") != "running" or by_service[service].get("Health") != "healthy"
         }
         init = by_service["engine-init"]
-        init_ok = init.get("State") in {"exited", "completed"} and int(init.get("ExitCode", 1)) == 0
+        raw_exit_code = init.get("ExitCode", 1)
+        if isinstance(raw_exit_code, bool) or not (
+            isinstance(raw_exit_code, int)
+            or (isinstance(raw_exit_code, str) and re.fullmatch(r"\d+", raw_exit_code) is not None)
+        ):
+            raise RuntimeHealthError(f"{message}: engine-init status is invalid")
+        exit_code = int(raw_exit_code)
+        init_ok = init.get("State") in {"exited", "completed"} and exit_code == 0
         if unhealthy or not init_ok:
             raise RuntimeHealthError(f"{message}: unhealthy={sorted(unhealthy)}, engine-init-ok={init_ok}")
 
@@ -629,7 +698,13 @@ class SurveyManager:
         if not isinstance(admin_email, str) or re.fullmatch(r"[^@\s]+@[^@\s]+", admin_email) is None:
             raise InputError("administrator email is invalid")
 
-    def preflight(self, manifest: ReleaseManifest, host: str, require_ports: bool = True) -> dict[str, Any]:
+    def preflight(
+        self,
+        manifest: ReleaseManifest,
+        host: str,
+        require_ports: bool = True,
+        expected_addresses=None,
+    ) -> dict[str, Any]:
         try:
             values = self.host_probe.inspect(host, self.target)
         except TypeError:
@@ -657,6 +732,16 @@ class SurveyManager:
             failures.append("ports 80 and 443 must be available")
         if not values.get("dns_addresses") or not values.get("dns_public"):
             failures.append("public host DNS must resolve to a public address")
+        try:
+            dns_addresses = {str(ipaddress.ip_address(value)) for value in values.get("dns_addresses", [])}
+            configured = expected_addresses if expected_addresses is not None else self.expected_public_addresses
+            endpoint_addresses = set(self._normalize_expected_addresses(configured or values.get("local_addresses", [])))
+        except (TypeError, ValueError, InputError):
+            dns_addresses, endpoint_addresses = set(), set()
+        if not endpoint_addresses:
+            failures.append("no local or explicitly expected deployment address is available")
+        elif not dns_addresses.intersection(endpoint_addresses):
+            failures.append("public host DNS does not resolve to this deployment endpoint")
         if not values.get("time_synchronized"):
             failures.append("system time must be synchronized")
         if failures:
@@ -823,7 +908,15 @@ class SurveyManager:
         values = self.preflight(manifest, public_host)
         self._mkdir(".")
         self._stage_release(manifest, values["architecture"], public_host, admin_user, admin_email, bundle_path, asset_loader)
-        self._write_state(status="installing", version=manifest.version, databaseSchema=manifest.database_schema, publicHost=public_host, adminUser=admin_user, adminEmail=admin_email)
+        self._write_state(
+            status="installing",
+            version=manifest.version,
+            databaseSchema=manifest.database_schema,
+            publicHost=public_host,
+            adminUser=admin_user,
+            adminEmail=admin_email,
+            expectedPublicAddresses=self.expected_public_addresses,
+        )
         compose = self._compose(manifest.version)
         try:
             self._run(compose + ["pull"], "image pull failed")
@@ -879,7 +972,12 @@ class SurveyManager:
             raise InputError("backup name must be one safe relative path component")
         return self._managed(Path("backups") / relative.name)
 
-    def _verify_backup(self, backup: Path, expected_version: str | None = None) -> dict[str, Any]:
+    def _verify_backup(
+        self,
+        backup: Path,
+        expected_version: str | None = None,
+        expected_database_schema: str | None = None,
+    ) -> dict[str, Any]:
         self._reject_symlink_components(backup)
         if backup.is_symlink() or not backup.is_dir():
             raise IntegrityError("backup artifact must be a real directory")
@@ -900,16 +998,39 @@ class SurveyManager:
             raise IntegrityError("backup version does not match installed version")
         if not isinstance(metadata["databaseSchema"], str) or re.fullmatch(SCHEMA_PATTERN, metadata["databaseSchema"]) is None:
             raise IntegrityError("backup database schema is invalid")
+        if expected_database_schema is not None and metadata["databaseSchema"] != expected_database_schema:
+            raise IntegrityError("backup database schema does not match installed version")
         files = metadata["files"]
         if not isinstance(files, dict) or not files:
             raise IntegrityError("backup file inventory is empty")
-        actual = {path.relative_to(backup).as_posix() for path in backup.rglob("*") if path.is_file() and path != manifest_path}
-        if actual != set(files):
-            raise IntegrityError("backup file inventory does not match artifact")
+        declared, allowed_directories = set(), set()
         for name, expected in files.items():
             pure = PurePosixPath(name)
             if pure.is_absolute() or ".." in pure.parts or re.fullmatch(r"[0-9a-f]{64}", str(expected)) is None:
                 raise IntegrityError("backup inventory contains an unsafe entry")
+            declared.add(pure.as_posix())
+            allowed_directories.update(PurePosixPath(*pure.parts[:index]).as_posix() for index in range(1, len(pure.parts)))
+        actual = set()
+        for root, directories, filenames in os.walk(backup, followlinks=False):
+            root_path = Path(root)
+            for name in directories + filenames:
+                path = root_path / name
+                relative = path.relative_to(backup).as_posix()
+                try:
+                    mode = path.lstat().st_mode
+                except OSError as exc:
+                    raise IntegrityError("backup artifact cannot be inspected") from exc
+                if stat.S_ISLNK(mode) or not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+                    raise IntegrityError(f"backup contains an unsafe filesystem entry: {relative}")
+                if stat.S_ISDIR(mode):
+                    if relative not in allowed_directories:
+                        raise IntegrityError(f"backup contains an unlisted directory: {relative}")
+                elif path != manifest_path:
+                    actual.add(relative)
+        if actual != declared:
+            raise IntegrityError("backup file inventory does not match artifact")
+        for name, expected in files.items():
+            pure = PurePosixPath(name)
             path = backup.joinpath(*pure.parts)
             _regular_file(path, "backup payload")
             self._reject_symlink_components(path)
@@ -925,7 +1046,7 @@ class SurveyManager:
         self._mkdir("backups")
         helper = self._release_dir(state["version"]) / "backup.py"
         self._run([sys.executable, str(helper), "backup", "--target", str(self.target), "--output", str(output), "--version", state["version"]], "backup failed")
-        self._verify_backup(output, state["version"])
+        self._verify_backup(output, state["version"], state["databaseSchema"])
         return output
 
     def restore(self, name) -> None:
@@ -944,11 +1065,16 @@ class SurveyManager:
             raise InputError("upgrade target must be newer than the installed version")
         if _version_key(previous) < _version_key(manifest.raw["minimumSourceVersion"]):
             raise InputError("installed version is below the release minimum source version")
-        values = self.preflight(manifest, state["publicHost"], require_ports=False)
+        values = self.preflight(
+            manifest,
+            state["publicHost"],
+            require_ports=False,
+            expected_addresses=state.get("expectedPublicAddresses"),
+        )
         self._stage_release(manifest, values["architecture"], state["publicHost"], state["adminUser"], state["adminEmail"], bundle_path, asset_loader)
         backup_name = f"pre-upgrade-{previous}-to-{manifest.version}"
         backup = self.backup(backup_name)
-        self._verify_backup(backup, previous)
+        self._verify_backup(backup, previous, state["databaseSchema"])
         compose = self._compose(manifest.version)
         try:
             self._write_state(status="upgrading", previousVersion=previous, recoveryBackup=backup_name)
@@ -1110,6 +1236,12 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--public-host", required=True)
     install.add_argument("--admin-user", required=True)
     install.add_argument("--admin-email", required=True)
+    install.add_argument(
+        "--expected-public-address",
+        action="append",
+        default=[],
+        help="public IP expected for --public-host (repeatable; required behind NAT)",
+    )
     upgrade = sub.add_parser("upgrade")
     upgrade_source = upgrade.add_mutually_exclusive_group(required=True)
     upgrade_source.add_argument("--manifest")
@@ -1134,7 +1266,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        manager = SurveyManager(args.target)
+        manager_options = {}
+        if getattr(args, "expected_public_address", None):
+            manager_options["expected_public_addresses"] = args.expected_public_address
+        manager = SurveyManager(args.target, **manager_options)
         if args.command == "install":
             if args.version:
                 manager.install_version(args.version, args.manifest_sha256, args.public_host, args.admin_user, args.admin_email)

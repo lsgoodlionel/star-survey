@@ -432,6 +432,10 @@ class ProductionComposeTest(unittest.TestCase):
         self.assertNotIn("fsockopen", engine_probe)
         self.assertIn("http://127.0.0.1/.well-known/survey-health", edge_probe)
         self.assertNotIn("caddy version", edge_probe)
+        caddyfile = (PRODUCTION_DIR / "Caddyfile").read_text(encoding="utf-8")
+        self.assertIn("@deployment_health path /.well-known/survey-health", caddyfile)
+        self.assertIn("header X-Survey-Deployment survey-production-v1", caddyfile)
+        self.assertIn('respond "survey-production-v1" 200', caddyfile)
         self.assertTrue(
             any(
                 mount["target"] == "/var/www/html/production-health.php"
