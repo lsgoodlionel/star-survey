@@ -100,3 +100,37 @@ test('rejects a QR response with the wrong media type', async () => {
     ),
   ).rejects.toThrow('二维码响应格式无效');
 });
+
+test('times out a stalled QR request without aborting the caller signal', async () => {
+  vi.useFakeTimers();
+  const caller = new AbortController();
+  const removeEventListener = vi.spyOn(caller.signal, 'removeEventListener');
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+    const signal = init?.signal;
+    return new Promise<Response>((_resolve, reject) => {
+      signal?.addEventListener(
+        'abort',
+        () => reject(new DOMException('Aborted', 'AbortError')),
+        { once: true },
+      );
+    });
+  });
+
+  try {
+    const request = fetchDeliveryQr(
+      { fetchImpl, timeoutMs: 50 },
+      linkId,
+      { signal: caller.signal },
+    );
+    const rejection = expect(request).rejects.toMatchObject({ kind: 'unavailable' });
+
+    await vi.advanceTimersByTimeAsync(50);
+    await rejection;
+
+    expect(caller.signal.aborted).toBe(false);
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).not.toBe(caller.signal);
+    expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+  } finally {
+    vi.useRealTimers();
+  }
+});

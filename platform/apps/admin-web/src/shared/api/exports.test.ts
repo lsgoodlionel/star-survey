@@ -130,3 +130,36 @@ test('rejects a non-success export download status before reading the body', asy
     }).download(jobId),
   ).rejects.toMatchObject({ status: 409 });
 });
+
+test('times out a stalled export download without aborting the caller signal', async () => {
+  vi.useFakeTimers();
+  const caller = new AbortController();
+  const removeEventListener = vi.spyOn(caller.signal, 'removeEventListener');
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+    const signal = init?.signal;
+    return new Promise<Response>((_resolve, reject) => {
+      signal?.addEventListener(
+        'abort',
+        () => reject(new DOMException('Aborted', 'AbortError')),
+        { once: true },
+      );
+    });
+  });
+
+  try {
+    const request = createExportClient({ fetchImpl, timeoutMs: 50 }).download(
+      jobId,
+      caller.signal,
+    );
+    const rejection = expect(request).rejects.toMatchObject({ kind: 'unavailable' });
+
+    await vi.advanceTimersByTimeAsync(50);
+    await rejection;
+
+    expect(caller.signal.aborted).toBe(false);
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).not.toBe(caller.signal);
+    expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+  } finally {
+    vi.useRealTimers();
+  }
+});

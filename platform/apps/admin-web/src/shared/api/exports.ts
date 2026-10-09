@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ApiError, apiErrorForStatus, unavailableApiError, unexpectedApiError } from './errors';
+import { withRequestTimeout } from './http';
 
 export const exportFormatSchema = z.enum(['csv', 'xlsx', 'sav', 'docx', 'attachments']);
 export const exportStatusSchema = z.enum([
@@ -61,6 +62,7 @@ export interface ExportClientOptions {
   fetchImpl?: typeof fetch;
   getToken?: () => string | null;
   onUnauthorized?: (requestToken: string | null) => void | Promise<void>;
+  timeoutMs?: number;
 }
 
 export interface ExportClient {
@@ -76,19 +78,30 @@ export const exportJobQueryKey = (tenantId: string, surveyId: string, jobId: str
 export function createExportClient(options: ExportClientOptions = {}): ExportClient {
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  async function request(path: string, init: RequestInit): Promise<Response> {
+  async function request<T>(
+    path: string,
+    init: RequestInit,
+    consume: (response: Response) => Promise<T>,
+  ): Promise<T> {
     const token = options.getToken?.() ?? null;
     const headers = new Headers(init.headers);
     if (token) headers.set('Authorization', `Bearer ${token}`);
     try {
-      const response = await fetchImpl(path, {
-        ...init,
-        headers,
-        credentials: 'same-origin',
-      });
-      if (response.status === 401) await options.onUnauthorized?.(token);
-      if (!response.ok) throw apiErrorForStatus(response.status, await readErrorPayload(response));
-      return response;
+      return await withRequestTimeout(
+        async (signal) => {
+          const response = await fetchImpl(path, {
+            ...init,
+            headers,
+            credentials: 'same-origin',
+            signal,
+          });
+          if (response.status === 401) await options.onUnauthorized?.(token);
+          if (!response.ok) throw apiErrorForStatus(response.status, await readErrorPayload(response));
+          return consume(response);
+        },
+        init.signal,
+        options.timeoutMs,
+      );
     } catch (error) {
       if (error instanceof ApiError) throw error;
       if (error instanceof DOMException && error.name === 'AbortError') throw unavailableApiError();
@@ -99,8 +112,9 @@ export function createExportClient(options: ExportClientOptions = {}): ExportCli
 
   async function requestJob(path: string, init: RequestInit): Promise<ExportJobView> {
     try {
-      const response = await request(path, init);
-      return exportJobSchema.parse(await response.json());
+      return await request(path, init, async (response) =>
+        exportJobSchema.parse(await response.json()),
+      );
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw unexpectedApiError();
@@ -133,18 +147,20 @@ export function createExportClient(options: ExportClientOptions = {}): ExportCli
         signal,
       }),
     download: async (jobId, signal) => {
-      const response = await request(`/v1/exports/${encodeURIComponent(jobId)}/download`, {
-        method: 'GET',
-        signal,
-      });
-      const filename = parseDownloadFilename(response.headers.get('Content-Disposition'));
-      const contentType = response.headers.get('Content-Type')?.split(';', 1)[0]?.trim();
-      if (!contentType) throw new Error('导出文件响应缺少内容类型');
-      const sha256 = response.headers.get('X-Content-SHA256');
-      if (sha256 !== null && !/^[a-f0-9]{64}$/i.test(sha256)) {
-        throw new Error('导出文件校验值无效');
-      }
-      return { blob: await response.blob(), filename, contentType, sha256 };
+      return request(
+        `/v1/exports/${encodeURIComponent(jobId)}/download`,
+        { method: 'GET', signal },
+        async (response) => {
+          const filename = parseDownloadFilename(response.headers.get('Content-Disposition'));
+          const contentType = response.headers.get('Content-Type')?.split(';', 1)[0]?.trim();
+          if (!contentType) throw new Error('导出文件响应缺少内容类型');
+          const sha256 = response.headers.get('X-Content-SHA256');
+          if (sha256 !== null && !/^[a-f0-9]{64}$/i.test(sha256)) {
+            throw new Error('导出文件校验值无效');
+          }
+          return { blob: await response.blob(), filename, contentType, sha256 };
+        },
+      );
     },
   };
 }
