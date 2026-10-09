@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://star-survey.local/schemas/capabilities.schema.json",
+  "title": "Survey productization capability baseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "capabilities"],
+  "properties": {
+    "$schema": {
+      "const": "./capabilities.schema.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    }
+  },
+  "$defs": {
+    "deliveryState": {
+      "enum": ["not-started", "partial", "complete"]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "path", "description"],
+      "properties": {
+        "layer": {
+          "enum": ["requirement", "backend", "frontend", "flow", "production", "traceability"]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "requirementIds",
+        "backend",
+        "frontend",
+        "flow",
+        "production",
+        "status",
+        "evidence",
+        "nextWave"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirementIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^R[0-9]{2}-[0-9]{2}$"
+          }
+        },
+        "backend": {
+          "$ref": "#/$defs/deliveryState"
+        },
+        "frontend": {
+          "$ref": "#/$defs/deliveryState"
+        },
+        "flow": {
+          "$ref": "#/$defs/deliveryState"
+        },
+        "production": {
+          "$ref": "#/$defs/deliveryState"
+        },
+        "status": {
+          "enum": ["planned", "in-progress", "engineering-complete", "accepted"]
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "nextWave": {
+          "enum": ["Wave 0", "Wave 1", "Wave 2", "Wave 3", "Wave 4", "Wave 5", "Wave 6"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "accepted"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "backend": {"const": "complete"},
+              "frontend": {"const": "complete"},
+              "flow": {"const": "complete"},
+              "production": {"const": "complete"},
+              "evidence": {
+                "allOf": [
+                  {"contains": {"properties": {"layer": {"const": "requirement"}}, "required": ["layer"]}},
+                  {"contains": {"properties": {"layer": {"const": "backend"}}, "required": ["layer"]}},
+                  {"contains": {"properties": {"layer": {"const": "frontend"}}, "required": ["layer"]}},
+                  {"contains": {"properties": {"layer": {"const": "flow"}}, "required": ["layer"]}},
+                  {"contains": {"properties": {"layer": {"const": "production"}}, "required": ["layer"]}},
+                  {"contains": {"properties": {"layer": {"const": "traceability"}}, "required": ["layer"]}}
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

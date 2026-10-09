@@ -1,0 +1,215 @@
+{
+  "$schema": "./capabilities.schema.json",
+  "schemaVersion": 1,
+  "capabilities": [
+    {
+      "id": "workspace",
+      "title": "工作台",
+      "requirementIds": ["R01-01", "R19-04"],
+      "backend": "complete",
+      "frontend": "complete",
+      "flow": "complete",
+      "production": "not-started",
+      "status": "engineering-complete",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "需求索引登记创建与资源协作需求。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/access/ResourceTreeController.java", "description": "资源树后端接口已存在。"},
+        {"layer": "frontend", "path": "platform/apps/admin-web/src/features/workspace/WorkspacePage.tsx", "description": "工作台页面已接入真实资源操作。"},
+        {"layer": "flow", "path": "platform/apps/admin-web/e2e/authoring.spec.ts", "description": "真实浏览器作者链路覆盖工作台创建与进入编辑器。"},
+        {"layer": "traceability", "path": "platform/docs/traceability/requirement-tests.md", "description": "局部断言和验收边界已登记；不代表整条需求 Accepted。"}
+      ],
+      "nextWave": "Wave 6"
+    },
+    {
+      "id": "editing",
+      "title": "编辑",
+      "requirementIds": ["R01-04", "R01-05", "R01-08"],
+      "backend": "complete",
+      "frontend": "partial",
+      "flow": "partial",
+      "production": "not-started",
+      "status": "in-progress",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "基础编辑、分页说明和草稿协作需求已编号。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/SurveyController.java", "description": "草稿读取、保存和版本控制接口已存在。"},
+        {"layer": "frontend", "path": "platform/apps/admin-web/src/features/editor/EditorPage.tsx", "description": "基础题型编辑、排序和保存已接入；高级题型仍只读。"},
+        {"layer": "flow", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "description": "核查报告确认基础作者链路可用，同时记录 Phase C 和高级配置缺口。"}
+      ],
+      "nextWave": "Wave 5"
+    },
+    {
+      "id": "import",
+      "title": "导入",
+      "requirementIds": ["R01-02"],
+      "backend": "complete",
+      "frontend": "complete",
+      "flow": "complete",
+      "production": "not-started",
+      "status": "engineering-complete",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "批量文本导入需求已编号。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/SurveyController.java", "description": "导入预览与提交接口已存在。"},
+        {"layer": "frontend", "path": "platform/apps/admin-web/src/features/import/ImportPage.tsx", "description": "导入页面支持预览、异常行和选择性导入。"},
+        {"layer": "flow", "path": "platform/apps/admin-web/e2e/authoring.spec.ts", "description": "作者浏览器链路覆盖批量导入。"},
+        {"layer": "traceability", "path": "platform/docs/traceability/requirement-tests.md", "description": "R01-02 的后端和管理端局部证据已登记。"}
+      ],
+      "nextWave": "Wave 5"
+    },
+    {
+      "id": "preview",
+      "title": "预览",
+      "requirementIds": ["R01-07"],
+      "backend": "partial",
+      "frontend": "partial",
+      "flow": "partial",
+      "production": "not-started",
+      "status": "in-progress",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "预览、发布与关闭为复合需求。"},
+        {"layer": "frontend", "path": "platform/apps/admin-web/src/features/preview/PreviewPage.tsx", "description": "当前页面仅提供不提交答卷的本地草稿快速预览。"},
+        {"layer": "flow", "path": "docs/audits/2026-10-09-product-alignment/12-current-preview-audit.png", "description": "页面审计证明快速预览可见，不证明真实 LimeSurvey 运行时。"},
+        {"layer": "traceability", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "description": "全量核查明确记录真实运行时预览尚未交付。"}
+      ],
+      "nextWave": "Wave 1"
+    },
+    {
+      "id": "approval-publish",
+      "title": "审批与发布",
+      "requirementIds": ["R01-07", "R01-09"],
+      "backend": "complete",
+      "frontend": "complete",
+      "flow": "complete",
+      "production": "not-started",
+      "status": "engineering-complete",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "发布与审核需求已编号。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/PublishApprovalController.java", "description": "审批状态机与发布接口已存在。"},
+        {"layer": "frontend", "path": "platform/apps/admin-web/src/features/publish/PublishPage.tsx", "description": "审批、发布状态和版本入口已接入。"},
+        {"layer": "flow", "path": "platform/apps/admin-web/e2e/authoring.spec.ts", "description": "真实浏览器链路覆盖提交、批准、发布和版本查看。"},
+        {"layer": "traceability", "path": "platform/docs/traceability/requirement-tests.md", "description": "R01-09 的审批绑定版本和绕过防护证据已登记。"}
+      ],
+      "nextWave": "Wave 1"
+    },
+    {
+      "id": "delivery-links",
+      "title": "投放链接与二维码",
+      "requirementIds": ["R05-01", "R05-07", "R05-08"],
+      "backend": "complete",
+      "frontend": "not-started",
+      "flow": "not-started",
+      "production": "not-started",
+      "status": "in-progress",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "链接、二维码、短链、嵌入和渠道参数需求已编号。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryLinkController.java", "description": "投放链接、短链和二维码后端接口已存在。"},
+        {"layer": "traceability", "path": "platform/docs/traceability/requirement-tests.md", "description": "链接签名、短链和失效隐私测试证据已登记。"},
+        {"layer": "frontend", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "description": "核查报告明确记录该能力无管理端路由和导航。"}
+      ],
+      "nextWave": "Wave 1"
+    },
+    {
+      "id": "responses-summary",
+      "title": "答卷与摘要",
+      "requirementIds": ["R06-01", "R19-02"],
+      "backend": "complete",
+      "frontend": "not-started",
+      "flow": "not-started",
+      "production": "not-started",
+      "status": "in-progress",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "答卷查询和数据分权需求已编号。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/response/ResponseQueryController.java", "description": "跨版本答卷查询、摘要和字段接口已存在。"},
+        {"layer": "backend", "path": "platform/services/business/src/test/java/cn/mjy/platform/response/ResponseTenantIsolationTest.java", "description": "答卷租户隔离已有后端测试。"},
+        {"layer": "frontend", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "description": "核查报告明确记录答卷列表、摘要和字段无页面。"}
+      ],
+      "nextWave": "Wave 3"
+    },
+    {
+      "id": "exports",
+      "title": "导出",
+      "requirementIds": ["R06-02", "R06-03", "R06-05", "R06-06", "R06-07"],
+      "backend": "partial",
+      "frontend": "not-started",
+      "flow": "not-started",
+      "production": "not-started",
+      "status": "in-progress",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "CSV、Excel、SAV、Word、PDF 和附件导出需求已编号。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/response/ResponseExportController.java", "description": "导出作业创建、进度、下载和再次授权接口已存在。"},
+        {"layer": "traceability", "path": "platform/docs/traceability/requirement-tests.md", "description": "SAV、DOCX 和附件作业的局部自动化证据已登记。"},
+        {"layer": "frontend", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "description": "核查报告记录导出无前端入口，且 PDF 等子项未完成。"}
+      ],
+      "nextWave": "Wave 3"
+    },
+    {
+      "id": "templates-branding",
+      "title": "模板与品牌",
+      "requirementIds": ["R01-03", "R01-06", "R19-05", "R19-06", "R19-10"],
+      "backend": "partial",
+      "frontend": "not-started",
+      "flow": "not-started",
+      "production": "not-started",
+      "status": "in-progress",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "模板、外观、主题与多语言需求已编号。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/template/SurveyTemplateController.java", "description": "租户模板生命周期后端接口已存在。"},
+        {"layer": "backend", "path": "platform/contracts/survey-branding-v1.md", "description": "品牌与多语言已定义契约和引擎主题能力。"},
+        {"layer": "traceability", "path": "platform/docs/traceability/requirement-tests.md", "description": "企业模板生命周期局部证据已登记。"},
+        {"layer": "frontend", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "description": "核查报告明确记录模板和品牌均无配置入口。"}
+      ],
+      "nextWave": "Wave 2"
+    },
+    {
+      "id": "contacts-delivery",
+      "title": "通讯录与投放",
+      "requirementIds": ["R05-04", "R05-05", "R05-06", "R18-01", "R18-02", "R18-03", "R18-06"],
+      "backend": "partial",
+      "frontend": "not-started",
+      "flow": "not-started",
+      "production": "not-started",
+      "status": "in-progress",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "通讯录、受众和消息投放需求已编号。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java", "description": "联系人、部门、标签、名单和参与登记后端已形成。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryTaskController.java", "description": "批量任务、回执、退订和催答后端已形成；真实供应商未接入。"},
+        {"layer": "traceability", "path": "platform/docs/traceability/requirement-tests.md", "description": "通讯录隔离、导入去重、发送恢复和催答证据已登记。"},
+        {"layer": "frontend", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "description": "核查报告明确记录通讯录和投放无前端入口。"}
+      ],
+      "nextWave": "Wave 4"
+    },
+    {
+      "id": "administration",
+      "title": "管理",
+      "requirementIds": ["R19-01", "R19-03", "R20-01", "R20-02", "R20-03", "R22-01", "R22-11", "R22-12"],
+      "backend": "partial",
+      "frontend": "not-started",
+      "flow": "not-started",
+      "production": "not-started",
+      "status": "in-progress",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "团队、组织连接、套餐和租户生命周期需求已编号。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/tenant/TenantAdminController.java", "description": "租户生命周期管理后端接口已存在。"},
+        {"layer": "backend", "path": "platform/services/business/src/main/java/cn/mjy/platform/tenant/engine/EngineInstanceAdminController.java", "description": "引擎实例运营接口已存在。"},
+        {"layer": "frontend", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "description": "核查报告记录租户、套餐、组织连接和引擎实例均无运营页面。"}
+      ],
+      "nextWave": "Wave 6"
+    },
+    {
+      "id": "production-deployment",
+      "title": "生产部署",
+      "requirementIds": ["R20-11", "R23-08", "R23-09", "R23-10", "R23-11", "R23-12"],
+      "backend": "partial",
+      "frontend": "not-started",
+      "flow": "not-started",
+      "production": "not-started",
+      "status": "planned",
+      "evidence": [
+        {"layer": "requirement", "path": "platform/docs/traceability/requirement-index.md", "description": "私有部署、安全供应链、备份恢复和验收证据需求已编号。"},
+        {"layer": "backend", "path": "platform/deploy/private/docker-compose.private.yml", "description": "现有私有开发部署提供基础，但不是本设计要求的 Production Compose。"},
+        {"layer": "production", "path": "platform/README.md", "description": "仓库状态明确声明尚无生产部署路径，SSL gate 不代表 production-ready。"},
+        {"layer": "traceability", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "description": "核查报告记录生产部署、TLS、签名和漏洞扫描尚未闭环。"}
+      ],
+      "nextWave": "Wave 0"
+    }
+  ]
+}
