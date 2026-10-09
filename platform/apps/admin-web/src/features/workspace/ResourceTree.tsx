@@ -1,125 +1,125 @@
-import { useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Folder, FolderKanban, FileText } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import type { ApiClient } from '../../shared/api/http';
-import {
-  listResources,
-  resourceQueryKey,
-  type ResourceKind,
-  type ResourceView,
-} from '../../shared/api/resources';
-
-const rootKey = '__root__';
+import { listResources, resourceQueryKey, type ResourceView } from '../../shared/api/resources';
 
 interface ResourceTreeProps {
   api: ApiClient;
   tenantId: string;
-  createdResources: Record<string, ResourceView[]>;
-  pinnedResources: ResourceView[];
-  expandedIds: Set<string>;
+  projectId: string;
+  path: ResourceView[];
   selectedId: string | null;
-  onExpandedChange(id: string, expanded: boolean): void;
   onSelect(resource: ResourceView): void;
 }
 
-export function ResourceTree(props: ResourceTreeProps) {
+export function ResourceTree({
+  api,
+  tenantId,
+  projectId,
+  path,
+  selectedId,
+  onSelect,
+}: ResourceTreeProps) {
+  const pathIds = useMemo(() => new Set(path.map((item) => item.id)), [path]);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+
   return (
-    <ul aria-label="资源列表" className="resource-tree">
-      <ResourceBranch {...props} parentId={null} enabled />
+    <ul className="resource-tree" aria-label="当前项目文件夹">
+      <FolderBranch
+        api={api}
+        tenantId={tenantId}
+        parentId={projectId}
+        pathIds={pathIds}
+        expandedIds={expandedIds}
+        selectedId={selectedId}
+        onExpandedChange={(id) => {
+          setExpandedIds((current) => {
+            const next = new Set(current);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+          });
+        }}
+        onSelect={onSelect}
+      />
     </ul>
   );
 }
 
-interface ResourceBranchProps extends ResourceTreeProps {
-  parentId: string | null;
-  branchLabel?: string;
-  enabled: boolean;
+interface FolderBranchProps {
+  api: ApiClient;
+  tenantId: string;
+  parentId: string;
+  pathIds: Set<string>;
+  expandedIds: Set<string>;
+  selectedId: string | null;
+  onExpandedChange(id: string): void;
+  onSelect(resource: ResourceView): void;
 }
 
-function ResourceBranch({
-  api,
-  tenantId,
-  createdResources,
-  pinnedResources,
-  expandedIds,
-  selectedId,
-  onExpandedChange,
-  onSelect,
-  parentId,
-  branchLabel,
-  enabled,
-}: ResourceBranchProps) {
-  const loadingMoreRef = useRef(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+function FolderBranch(props: FolderBranchProps) {
   const query = useInfiniteQuery({
-    queryKey: resourceQueryKey(tenantId, parentId),
-    queryFn: ({ pageParam, signal }) => listResources(api, { parentId, cursor: pageParam, signal }),
+    queryKey: resourceQueryKey(props.tenantId, props.parentId, {
+      kind: 'folder',
+      archived: 'active',
+      sort: 'name_asc',
+    }),
+    queryFn: ({ pageParam, signal }) =>
+      listResources(props.api, {
+        parentId: props.parentId,
+        cursor: pageParam,
+        kind: 'folder',
+        archived: 'active',
+        sort: 'name_asc',
+        signal,
+      }),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
-    enabled,
   });
-  const fetched = query.data?.pages.flatMap((page) => page.items) ?? [];
-  const created = createdResources[parentId ?? rootKey] ?? [];
-  const pinned = pinnedResources.filter((resource) => resource.parentId === parentId);
-  const resources = [...fetched, ...created, ...pinned].filter(
-    (resource, index, all) => all.findIndex((candidate) => candidate.id === resource.id) === index,
+  const folders = (query.data?.pages.flatMap((page) => page.items) ?? []).filter(
+    (item) => item.kind === 'folder',
   );
 
+  if (query.isPending) return <li className="resource-tree-status" aria-live="polite">正在加载文件夹</li>;
   if (query.isError) {
-    const message = query.error instanceof Error ? query.error.message : '操作失败，请稍后重试';
-    return <li role="alert">{message}</li>;
-  }
-  if (query.isPending) return <li className="resource-tree-status">正在加载资源</li>;
-  if (resources.length === 0 && parentId === null) {
-    return <li className="resource-tree-status">暂无资源</li>;
+    return (
+      <li className="resource-tree-status">
+        <button type="button" onClick={() => void query.refetch()}>重试加载文件夹</button>
+      </li>
+    );
   }
 
   return (
     <>
-      {resources.map((resource) => {
-        const expandable = resource.kind !== 'survey';
-        const expanded = expandedIds.has(resource.id);
+      {folders.map((folder) => {
+        const expanded = props.expandedIds.has(folder.id) || props.pathIds.has(folder.id);
         return (
-          <li key={resource.id} className="resource-tree-node">
+          <li key={folder.id}>
             <div className="resource-tree-row">
-              {expandable ? (
-                <button
-                  type="button"
-                  className="tree-icon-button"
-                  aria-label={`${expanded ? '收起' : '展开'} ${resource.name}`}
-                  onClick={() => onExpandedChange(resource.id, !expanded)}
-                >
-                  {expanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
-                </button>
-              ) : (
-                <span className="tree-icon-placeholder" aria-hidden="true" />
-              )}
               <button
                 type="button"
-                aria-current={selectedId === resource.id ? 'true' : undefined}
-                aria-expanded={expandable ? expanded : undefined}
-                className="resource-tree-item"
-                onClick={() => onSelect(resource)}
+                className="tree-icon-button"
+                aria-label={`${expanded ? '收起' : '展开'} ${folder.name}`}
+                aria-expanded={expanded}
+                onClick={() => props.onExpandedChange(folder.id)}
               >
-                <ResourceIcon kind={resource.kind} />
-                <span>{resource.name}</span>
+                {expanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+              </button>
+              <button
+                type="button"
+                className="resource-tree-item"
+                aria-current={props.selectedId === folder.id ? 'page' : undefined}
+                title={folder.name}
+                onClick={() => props.onSelect(folder)}
+              >
+                <Folder aria-hidden="true" />
+                <span>{folder.name}</span>
               </button>
             </div>
             {expanded ? (
               <ul>
-                <ResourceBranch
-                  api={api}
-                  tenantId={tenantId}
-                  createdResources={createdResources}
-                  pinnedResources={pinnedResources}
-                  expandedIds={expandedIds}
-                  selectedId={selectedId}
-                  onExpandedChange={onExpandedChange}
-                  onSelect={onSelect}
-                  parentId={resource.id}
-                  branchLabel={resource.name}
-                  enabled
-                />
+                <FolderBranch {...props} parentId={folder.id} />
               </ul>
             ) : null}
           </li>
@@ -129,31 +129,13 @@ function ResourceBranch({
         <li className="resource-tree-more">
           <button
             type="button"
-            onClick={() => {
-              if (loadingMoreRef.current) return;
-              loadingMoreRef.current = true;
-              setLoadingMore(true);
-              void query.fetchNextPage().finally(() => {
-                loadingMoreRef.current = false;
-                setLoadingMore(false);
-              });
-            }}
-            disabled={loadingMore || query.isFetchingNextPage}
+            disabled={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
           >
-            {loadingMore || query.isFetchingNextPage
-              ? '正在加载'
-              : `加载更多${branchLabel ? ` ${branchLabel}` : ''}`}
+            {query.isFetchingNextPage ? '正在加载' : '加载更多文件夹'}
           </button>
         </li>
       ) : null}
     </>
   );
 }
-
-function ResourceIcon({ kind }: { kind: ResourceKind }) {
-  if (kind === 'project') return <FolderKanban aria-hidden="true" />;
-  if (kind === 'folder') return <Folder aria-hidden="true" />;
-  return <FileText aria-hidden="true" />;
-}
-
-export { rootKey };
