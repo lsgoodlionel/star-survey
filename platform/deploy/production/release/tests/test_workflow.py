@@ -242,7 +242,8 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
             self.assertIn(required, text)
         self.assertGreaterEqual(text.count("actions/attest@"), 2)
         self.assertIn("@${DIGEST}", text)
-        self.assertNotIn("gh release", self.workflow_text)
+        self.assertNotIn("gh release create", self.workflow_text)
+        self.assertNotIn("gh release upload", self.workflow_text)
 
     def test_every_external_action_is_allowlisted_and_pinned_to_a_full_sha(self):
         for workflow_name, workflow in (("release", self.workflow), ("quality", self.quality)):

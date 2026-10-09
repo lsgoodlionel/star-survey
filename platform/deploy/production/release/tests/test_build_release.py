@@ -190,6 +190,46 @@ class ReleaseBuilderTest(unittest.TestCase):
             digest, name = line.split("  ", 1)
             self.assertEqual(sha256(output / name), digest)
 
+    def test_native_acceptance_profile_is_explicit_fixed_and_orchestrator_is_bundled(self):
+        output = self.root / "native-release"
+        result = self.build(
+            output,
+            "--native-acceptance-profile",
+            "github-actions-native-v1",
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        manifest = json.loads((output / "release.json").read_text(encoding="utf-8"))
+        self.assertEqual({
+            "profile": "github-actions-native-v1",
+            "minimumFreeBytes": 8 * 1024**3,
+            "tlsMode": "local-ca",
+            "diskEvidence": "separately-tested",
+        }, manifest["nativeAcceptance"])
+        with tarfile.open(output / "survey-0.3.0-rc.1-linux-amd64.tar.gz", "r:gz") as archive:
+            names = {member.name for member in archive.getmembers() if member.isfile()}
+        self.assertIn("release/native_acceptance.sh", names)
+        self.assertIn("release/native_acceptance_evidence.py", names)
+
+    def test_manifest_rejects_mutated_native_acceptance_threshold_or_mode(self):
+        output = self.root / "native-release"
+        result = self.build(output, "--native-acceptance-profile", "github-actions-native-v1")
+        self.assertEqual(0, result.returncode, result.stderr)
+        base = json.loads((output / "release.json").read_text(encoding="utf-8"))
+        surveyctl = load_surveyctl()
+        for field, value in (
+            ("minimumFreeBytes", 1),
+            ("minimumFreeBytes", True),
+            ("tlsMode", "insecure"),
+            ("diskEvidence", "pretend"),
+        ):
+            with self.subTest(field=field, value=value):
+                mutated = json.loads(json.dumps(base))
+                mutated["nativeAcceptance"][field] = value
+                path = self.root / f"mutated-{field}-{str(value).lower()}.json"
+                path.write_text(json.dumps(mutated), encoding="utf-8")
+                with self.assertRaises(surveyctl.IntegrityError):
+                    surveyctl.load_manifest(path)
+
     def test_bundle_contains_only_the_allowlisted_production_runtime(self):
         output = self.root / "release"
         result = self.build(output)

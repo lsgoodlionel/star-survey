@@ -20,6 +20,17 @@
       }
     },
     "minimumSourceVersion": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "nativeAcceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "minimumFreeBytes", "tlsMode", "diskEvidence"],
+      "properties": {
+        "profile": {"const": "github-actions-native-v1"},
+        "minimumFreeBytes": {"type": "integer", "const": 8589934592},
+        "tlsMode": {"const": "local-ca"},
+        "diskEvidence": {"const": "separately-tested"}
+      }
+    },
     "database": {
       "type": "object",
       "additionalProperties": false,

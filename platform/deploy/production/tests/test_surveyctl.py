@@ -116,6 +116,11 @@ class FakeRunner:
             raise subprocess.CalledProcessError(1, command)
         if "hash-password" in command:
             return subprocess.CompletedProcess(command, 0, stdout="$2a$14$" + "x" * 53 + "\n", stderr="")
+        if "cp" in command and "root.crt" in " ".join(command):
+            destination = Path(command[-1])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text("test native acceptance CA", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         if "backup.py" in " ".join(command) and "backup" in command and self.create_backup:
             output = Path(command[command.index("--output") + 1])
             version = command[command.index("--version") + 1]
@@ -164,7 +169,8 @@ class FakeHostProbe:
         self.target = target
         return dict(self.values)
 
-    def verify_tls(self, host):
+    def verify_tls(self, host, ca_file=None):
+        self.ca_file = ca_file
         return self.values["tls_valid"]
 
 
@@ -476,6 +482,73 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         probe = FakeHostProbe()
         self.manager(probe=probe).preflight(release, "survey.example.com")
         self.assertEqual(self.target, probe.target)
+
+    def test_native_ci_disk_profile_requires_actions_flag_switch_and_manifest_declaration(self):
+        profile = {
+            "profile": "github-actions-native-v1",
+            "minimumFreeBytes": 8 * 1024**3,
+            "tlsMode": "local-ca",
+            "diskEvidence": "separately-tested",
+        }
+        manifest, _ = write_test_release(self.root, version="0.3.0-rc.1", nativeAcceptance=profile)
+        release = self.module.load_manifest(manifest)
+        probe = FakeHostProbe(
+            free_bytes=9 * 1024**3,
+            dns_addresses=["127.0.0.1"],
+            local_addresses=["127.0.0.1"],
+            dns_public=False,
+        )
+        combinations = (
+            {},
+            {"GITHUB_ACTIONS": "true"},
+            {"SURVEY_NATIVE_ACCEPTANCE": "1"},
+            {"GITHUB_ACTIONS": "false", "SURVEY_NATIVE_ACCEPTANCE": "1"},
+            {"SURVEY_NATIVE_ACCEPTANCE_MIN_DISK_BYTES": "1"},
+        )
+        for environment in combinations:
+            with self.subTest(environment=environment), mock.patch.dict(os.environ, environment, clear=True):
+                with self.assertRaises(self.module.EnvironmentError):
+                    self.manager(probe=probe, expected_public_addresses=["127.0.0.1"]).preflight(release, "survey-native.test")
+
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "SURVEY_NATIVE_ACCEPTANCE": "1"}, clear=True):
+            values = self.manager(probe=probe, expected_public_addresses=["127.0.0.1"]).preflight(release, "survey-native.test")
+        self.assertEqual(8 * 1024**3, values["required_disk_bytes"])
+        self.assertEqual(20 * 1024**3, values["production_required_disk_bytes"])
+        self.assertTrue(values["native_acceptance_profile"])
+
+        ordinary_root = self.root / "ordinary"
+        ordinary_root.mkdir()
+        ordinary_manifest, _ = write_test_release(ordinary_root, version="0.3.0-rc.1")
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "SURVEY_NATIVE_ACCEPTANCE": "1"}, clear=True):
+            with self.assertRaises(self.module.EnvironmentError):
+                self.manager(probe=probe, expected_public_addresses=["127.0.0.1"]).preflight(
+                    self.module.load_manifest(ordinary_manifest), "survey-native.test"
+                )
+
+    def test_native_ci_local_ca_is_copied_and_used_without_weakening_production_tls(self):
+        profile = {
+            "profile": "github-actions-native-v1",
+            "minimumFreeBytes": 8 * 1024**3,
+            "tlsMode": "local-ca",
+            "diskEvidence": "separately-tested",
+        }
+        manifest, _ = write_test_release(self.root, version="0.3.0-rc.1", nativeAcceptance=profile)
+        probe = FakeHostProbe(
+            free_bytes=9 * 1024**3,
+            dns_addresses=["127.0.0.1"],
+            local_addresses=["127.0.0.1"],
+            dns_public=False,
+        )
+        runner = FakeRunner()
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "SURVEY_NATIVE_ACCEPTANCE": "1"}, clear=True):
+            self.manager(runner=runner, probe=probe, expected_public_addresses=["127.0.0.1"]).install(
+                manifest, "survey-native.test", "operations", "operations@example.com"
+            )
+        ca_file = self.target / ".surveyctl" / "native-acceptance-ca.crt"
+        self.assertEqual(ca_file, probe.ca_file)
+        self.assertTrue(ca_file.is_file())
+        env = (self.target / "releases" / "0.3.0-rc.1" / ".env").read_text(encoding="utf-8")
+        self.assertIn("CADDY_TLS_DIRECTIVE=tls internal", env)
 
     def test_preflight_requires_dns_to_match_local_or_explicit_expected_address(self):
         manifest, _ = self.write_bundle_manifest()

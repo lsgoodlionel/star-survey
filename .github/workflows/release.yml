@@ -445,7 +445,100 @@ jobs:
           path: image-metadata
           merge-multiple: true
 
-      - name: Build baseline and candidate bundles once
+      - name: Resolve the explicit predecessor policy
+        id: baseline
+        shell: bash
+        env:
+          VERSION: ${{ needs.policy.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - "$VERSION" .github/release/baseline-policy.json > baseline.env <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          version, policy_path = sys.argv[1], Path(sys.argv[2])
+          policy = json.loads(policy_path.read_text(encoding='utf-8'))
+          if policy.get('schemaVersion') != 1 or set(policy) != {'schemaVersion', 'releases'}:
+              raise SystemExit('baseline policy shape is invalid')
+          rule = policy.get('releases', {}).get(version)
+          if not isinstance(rule, dict) or rule.get('mode') not in {'predecessor', 'bootstrap'}:
+              raise SystemExit('release has no explicit baseline policy')
+          if rule['mode'] == 'bootstrap':
+              if set(rule) != {'mode'}:
+                  raise SystemExit('bootstrap policy cannot name a synthetic predecessor')
+              print('BASELINE_MODE=bootstrap')
+              print('MINIMUM_SOURCE_VERSION=0.0.0')
+          else:
+              if set(rule) != {'mode', 'version', 'manifestSha256'}:
+                  raise SystemExit('predecessor policy shape is invalid')
+              if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?', rule['version']):
+                  raise SystemExit('predecessor version is invalid')
+              if not re.fullmatch(r'[0-9a-f]{64}', rule['manifestSha256']):
+                  raise SystemExit('predecessor manifest checksum is invalid')
+              minimum = rule['version'].split('-rc.', 1)[0]
+              print('BASELINE_MODE=predecessor')
+              print(f'BASELINE_VERSION={rule["version"]}')
+              print(f'BASELINE_MANIFEST_SHA256={rule["manifestSha256"]}')
+              print(f'MINIMUM_SOURCE_VERSION={minimum}')
+          PY
+          source baseline.env
+          cat baseline.env >> "$GITHUB_ENV"
+          printf 'mode=%s\n' "$BASELINE_MODE" >> "$GITHUB_OUTPUT"
+          if [[ "$BASELINE_MODE" == bootstrap ]]; then
+            [[ "$(gh release list --limit 1 --json tagName --jq 'length')" == 0 ]]
+          fi
+
+      - name: Download and verify the real predecessor Release
+        if: steps.baseline.outputs.mode == 'predecessor'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source baseline.env
+          mkdir -p release-artifact/baseline
+          gh release download "v$BASELINE_VERSION" \
+            --pattern "survey-$BASELINE_VERSION-release.json" \
+            --pattern "survey-$BASELINE_VERSION-linux-amd64.tar.gz" \
+            --pattern "survey-$BASELINE_VERSION-linux-arm64.tar.gz" \
+            --dir release-artifact/baseline
+          mv "release-artifact/baseline/survey-$BASELINE_VERSION-release.json" release-artifact/baseline/release.json
+          [[ "$(sha256sum release-artifact/baseline/release.json | awk '{print $1}')" == "$BASELINE_MANIFEST_SHA256" ]]
+          python3 - release-artifact/baseline "$BASELINE_VERSION" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          root, expected_version = Path(sys.argv[1]), sys.argv[2]
+          manifest = json.loads((root / 'release.json').read_text(encoding='utf-8'))
+          if manifest.get('version') != expected_version:
+              raise SystemExit('predecessor manifest version mismatch')
+          expected_profile = {
+              'profile': 'github-actions-native-v1',
+              'minimumFreeBytes': 8 * 1024**3,
+              'tlsMode': 'local-ca',
+              'diskEvidence': 'separately-tested',
+          }
+          if manifest.get('nativeAcceptance') != expected_profile:
+              raise SystemExit('predecessor was not released with the native acceptance profile')
+          bundles = manifest.get('assets', {}).get('bundles', {})
+          if set(bundles) != {'amd64', 'arm64'}:
+              raise SystemExit('predecessor must contain both native bundles')
+          for architecture, asset in bundles.items():
+              path = root / asset.get('name', '')
+              if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != asset.get('sha256'):
+                  raise SystemExit(f'predecessor bundle checksum mismatch: {architecture}')
+          images = manifest.get('images', {})
+          if not images or any(re.fullmatch(r'[^@\s]+@sha256:[0-9a-f]{64}', value) is None for value in images.values()):
+              raise SystemExit('predecessor image manifest digests are invalid')
+          PY
+
+      - name: Build the candidate bundle once
         shell: bash
         env:
           VERSION: ${{ needs.policy.outputs.version }}
@@ -456,34 +549,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-artifact image-inputs
-
-          python3 - "$VERSION" > image-inputs/versions.env <<'PY'
-          import re
-          import sys
-
-          candidate = sys.argv[1]
-          match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?', candidate)
-          if match is None:
-              raise SystemExit('candidate version is not canonical semantic version')
-          major, minor, patch, rc = (int(value) if value is not None else None for value in match.groups())
-          if rc is None:
-              baseline = f'{major}.{minor}.{patch}-rc.0'
-          elif rc > 0:
-              baseline = f'{major}.{minor}.{patch}-rc.{rc - 1}'
-          elif patch > 0:
-              baseline = f'{major}.{minor}.{patch - 1}'
-          elif minor > 0:
-              baseline = f'{major}.{minor - 1}.0'
-          elif major > 0:
-              baseline = f'{major - 1}.0.0'
-          else:
-              raise SystemExit('v0.0.0-rc.0 has no valid baseline for upgrade acceptance')
-          print(f'CANDIDATE_VERSION={candidate}')
-          print(f'BASELINE_VERSION={baseline}')
-          PY
-          source image-inputs/versions.env
+          source baseline.env
+          CANDIDATE_VERSION="$VERSION"
           printf '%s\n' "$CANDIDATE_VERSION" > image-inputs/candidate-version
-          printf '%s\n' "$BASELINE_VERSION" > image-inputs/baseline-version
 
           resolve_image() {
             local reference="$1"
@@ -521,6 +589,7 @@ jobs:
             --image "ENGINE_IMAGE=$engine_image"
             --image "POSTGRES_IMAGE=$postgres_image"
             --image "MARIADB_IMAGE=$mariadb_image"
+            --native-acceptance-profile github-actions-native-v1
           )
           channel=stable
           [[ "$CANDIDATE_VERSION" == *-rc.* ]] && channel=candidate
@@ -529,13 +598,7 @@ jobs:
             --output release-artifact/candidate \
             --version-file image-inputs/candidate-version \
             --channel "$channel" \
-            --minimum-source-version "$BASELINE_VERSION"
-          python3 platform/deploy/production/release/build_release.py \
-            "${common[@]}" \
-            --output release-artifact/baseline \
-            --version-file image-inputs/baseline-version \
-            --channel candidate \
-            --minimum-source-version 0.0.0
+            --minimum-source-version "$MINIMUM_SOURCE_VERSION"
 
           manifest_sha="$(sha256sum release-artifact/candidate/release.json | awk '{print $1}')"
           jq -n \
@@ -547,9 +610,12 @@ jobs:
             --arg platformDigest "$(jq -er '.digest' image-metadata/platform.json)" \
             --arg gatewayReference "$gateway_image" \
             --arg gatewayDigest "$(jq -er '.digest' image-metadata/publish-gateway.json)" \
+            --arg baselineMode "$BASELINE_MODE" \
             --argjson bundles "$(jq '.assets.bundles' release-artifact/candidate/release.json)" \
+            --argjson baseline "$(if [[ "$BASELINE_MODE" == predecessor ]]; then jq --arg manifestSha256 "$BASELINE_MANIFEST_SHA256" '{mode: "predecessor", manifestSha256: $manifestSha256, version, commit, images, bundles: .assets.bundles}' release-artifact/baseline/release.json; else printf '{"mode":"bootstrap"}'; fi)" \
             '{schemaVersion: 1, version: $version, manifestSha256: $manifestSha256,
               bundles: $bundles,
+              baseline: $baseline,
               images: {
                 admin: {reference: $adminReference, digest: $adminDigest},
                 platform: {reference: $platformReference, digest: $platformDigest},
@@ -597,9 +663,6 @@ jobs:
             architecture: arm64
             id: ubuntu-24-04-arm64
     steps:
-      - name: Check out the exact candidate source
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
       - name: Download the shared immutable candidate
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -630,24 +693,29 @@ jobs:
           printf 'admin-digest=%s\n' "$(jq -er '.images.admin.digest' "$identity")" >> "$GITHUB_OUTPUT"
           printf 'platform-digest=%s\n' "$(jq -er '.images.platform.digest' "$identity")" >> "$GITHUB_OUTPUT"
           printf 'gateway-digest=%s\n' "$(jq -er '.images["publish-gateway"].digest' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'baseline-mode=%s\n' "$(jq -er '.baseline.mode' "$identity")" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve the configured public acceptance endpoint
-        id: endpoint
+      - name: Extract the checksum-bound acceptance orchestrator
         shell: bash
         env:
-          PUBLIC_HOST: ${{ matrix.id }}.${{ vars.SURVEY_ACCEPTANCE_DNS_SUFFIX }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+          BUNDLE_SHA256: ${{ steps.identity.outputs.bundle-sha }}
         run: |
           set -euo pipefail
-          [[ "$PUBLIC_HOST" != *'.' ]]
-          public_address="$(getent ahostsv4 "$PUBLIC_HOST" | awk '$1 !~ /^(10\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {print $1; exit}')"
-          [[ -n "$public_address" ]]
-          printf 'host=%s\naddress=%s\n' "$PUBLIC_HOST" "$public_address" >> "$GITHUB_OUTPUT"
+          bundle="$(jq -er --arg architecture "$ARCHITECTURE" '.bundles[$architecture].name' candidate-assets/identity.json)"
+          [[ "$(sha256sum "candidate-assets/candidate/$bundle" | awk '{print $1}')" == "$BUNDLE_SHA256" ]]
+          mkdir -p orchestrator
+          tar -xzf "candidate-assets/candidate/$bundle" -C orchestrator \
+            release/native_acceptance.sh release/native_acceptance_evidence.py
+          chmod 0755 orchestrator/release/native_acceptance.sh orchestrator/release/native_acceptance_evidence.py
 
       - name: Execute real clean-host install upgrade restore and uninstall
         timeout-minutes: 90
         shell: bash
         env:
           NATIVE_ACCEPTANCE_REAL: '1'
+          GITHUB_ACTIONS: 'true'
+          SURVEY_NATIVE_ACCEPTANCE: '1'
           CANDIDATE_DIR: ${{ github.workspace }}/candidate-assets
           CANDIDATE_IDENTITY: ${{ github.workspace }}/candidate-assets/identity.json
           CANDIDATE_MANIFEST_SHA256: ${{ steps.identity.outputs.manifest-sha }}
@@ -657,11 +725,12 @@ jobs:
           PUBLISH_GATEWAY_IMAGE_DIGEST: ${{ steps.identity.outputs.gateway-digest }}
           EXPECTED_UBUNTU: ${{ matrix.ubuntu }}
           EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
-          SURVEY_ACCEPTANCE_PUBLIC_HOST: ${{ steps.endpoint.outputs.host }}
-          SURVEY_ACCEPTANCE_EXPECTED_PUBLIC_ADDRESS: ${{ steps.endpoint.outputs.address }}
+          BASELINE_MODE: ${{ steps.identity.outputs.baseline-mode }}
+          SURVEY_ACCEPTANCE_PUBLIC_HOST: survey-native.test
+          SURVEY_ACCEPTANCE_EXPECTED_PUBLIC_ADDRESS: 127.0.0.1
           SURVEY_ACCEPTANCE_ADMIN_EMAIL: native-acceptance@example.com
           EVIDENCE_DIR: ${{ github.workspace }}/native-evidence
-        run: sudo -E NATIVE_ACCEPTANCE_REAL=1 bash platform/deploy/production/release/native_acceptance.sh
+        run: sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh
 
       - name: Preserve redacted native acceptance evidence
         if: always()

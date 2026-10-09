@@ -34,6 +34,7 @@ EXIT_SUCCESS, EXIT_INPUT, EXIT_ENVIRONMENT, EXIT_RUNTIME, EXIT_INTEGRITY = 0, 2,
 MIN_DOCKER_VERSION = (24, 0, 0)
 MIN_COMPOSE_VERSION = (2, 20, 0)
 MIN_DISK_BYTES = 20 * 1024**3
+NATIVE_ACCEPTANCE_DISK_BYTES = 8 * 1024**3
 MIN_MEMORY_BYTES = 4 * 1024**3
 SEMVER_PATTERN = r"\d+\.\d+\.\d+(?:-rc\.\d+)?"
 SCHEMA_PATTERN = r"[A-Za-z0-9._-]{1,64}"
@@ -346,13 +347,14 @@ class HostProbe:
             "time_synchronized": synchronized, "systemd": systemd,
         }
 
-    def verify_tls(self, host: str) -> bool:
+    def verify_tls(self, host: str, ca_file: Path | None = None) -> bool:
         request = urllib.request.Request(
             f"https://{host}/.well-known/survey-health",
             headers={"User-Agent": "surveyctl/1"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=15, context=ssl.create_default_context()) as response:
+            context = ssl.create_default_context(cafile=str(ca_file)) if ca_file else ssl.create_default_context()
+            with urllib.request.urlopen(request, timeout=15, context=context) as response:
                 marker = response.headers.get("X-Survey-Deployment", "")
                 body = response.read(64).decode("ascii", errors="replace").strip()
                 return response.status == 200 and marker == "survey-production-v1" and body == marker
@@ -712,6 +714,32 @@ class SurveyManager:
         if not isinstance(admin_email, str) or re.fullmatch(r"[^@\s]+@[^@\s]+", admin_email) is None:
             raise InputError("administrator email is invalid")
 
+    @staticmethod
+    def _native_acceptance_profile(manifest: ReleaseManifest) -> dict[str, Any] | None:
+        requested = os.environ.get("SURVEY_NATIVE_ACCEPTANCE") == "1"
+        on_actions = os.environ.get("GITHUB_ACTIONS") == "true"
+        declared = manifest.raw.get("nativeAcceptance")
+        if requested and on_actions:
+            if declared is None and os.environ.get("SURVEY_NATIVE_ACCEPTANCE_PROFILE_MANIFEST"):
+                expected_sha = os.environ.get("SURVEY_NATIVE_ACCEPTANCE_PROFILE_MANIFEST_SHA256", "")
+                if re.fullmatch(r"[0-9a-f]{64}", expected_sha) is None:
+                    raise EnvironmentError("native acceptance profile manifest checksum is required")
+                profile_manifest = load_manifest(
+                    os.environ["SURVEY_NATIVE_ACCEPTANCE_PROFILE_MANIFEST"],
+                    expected_sha,
+                )
+                declared = profile_manifest.raw.get("nativeAcceptance")
+            expected = {
+                "profile": "github-actions-native-v1",
+                "minimumFreeBytes": NATIVE_ACCEPTANCE_DISK_BYTES,
+                "tlsMode": "local-ca",
+                "diskEvidence": "separately-tested",
+            }
+            if declared != expected:
+                raise EnvironmentError("native acceptance requires the fixed manifest profile")
+            return declared
+        return None
+
     def preflight(
         self,
         manifest: ReleaseManifest,
@@ -728,6 +756,8 @@ class SurveyManager:
         except (OSError, KeyError, ValueError) as exc:
             raise EnvironmentError("host preflight could not inspect the environment") from exc
         supported, failures = manifest.raw["supportedHosts"], []
+        native_profile = self._native_acceptance_profile(manifest)
+        required_disk = native_profile["minimumFreeBytes"] if native_profile else MIN_DISK_BYTES
         if values.get("os_id") != "ubuntu" or values.get("os_version") not in supported["ubuntu"]:
             failures.append("unsupported Ubuntu release")
         if values.get("architecture") not in supported["architectures"]:
@@ -738,13 +768,18 @@ class SurveyManager:
             failures.append("Docker Engine 24.0.0 or newer is required")
         if _parse_tool_version(values.get("compose_version")) < MIN_COMPOSE_VERSION:
             failures.append("Docker Compose 2.20.0 or newer is required")
-        if values.get("free_bytes", 0) < MIN_DISK_BYTES:
-            failures.append("at least 20 GiB free disk is required on the target filesystem")
+        if values.get("free_bytes", 0) < required_disk:
+            failures.append(f"at least {required_disk // 1024**3} GiB free disk is required on the target filesystem")
         if values.get("memory_bytes", 0) < MIN_MEMORY_BYTES:
             failures.append("at least 4 GiB memory is required")
         if require_ports and not values.get("ports_available"):
             failures.append("ports 80 and 443 must be available")
-        if not values.get("dns_addresses") or not values.get("dns_public"):
+        local_acceptance_dns = bool(
+            native_profile
+            and host.endswith(".test")
+            and set(values.get("dns_addresses", [])) == {"127.0.0.1"}
+        )
+        if not values.get("dns_addresses") or (not values.get("dns_public") and not local_acceptance_dns):
             failures.append("public host DNS must resolve to a public address")
         try:
             dns_addresses = {str(ipaddress.ip_address(value)) for value in values.get("dns_addresses", [])}
@@ -760,11 +795,26 @@ class SurveyManager:
             failures.append("system time must be synchronized")
         if failures:
             raise EnvironmentError("; ".join(failures))
+        values["required_disk_bytes"] = required_disk
+        values["production_required_disk_bytes"] = MIN_DISK_BYTES
+        values["native_acceptance_profile"] = bool(native_profile)
         return values
 
     def _verify_public_tls(self, host: str) -> None:
+        ca_file = None
         try:
-            valid = self.host_probe.verify_tls(host)
+            state = self._read_state()
+            manifest = self._release_manifest(state["version"])
+            if self._native_acceptance_profile(manifest):
+                ca_file = self._managed(".surveyctl/native-acceptance-ca.crt")
+                self._run(
+                    self._compose(state["version"]) + [
+                        "cp", "edge:/data/caddy/pki/authorities/local/root.crt", str(ca_file),
+                    ],
+                    "native acceptance CA export failed",
+                )
+                os.chmod(ca_file, 0o644)
+            valid = self.host_probe.verify_tls(host, ca_file=ca_file)
         except (OSError, ValueError) as exc:
             raise RuntimeHealthError("public HTTPS verification failed") from exc
         if not valid:
@@ -883,6 +933,8 @@ class SurveyManager:
             "ENGINE_INSTANCE_ID=production-engine-01", f"ENGINE_ADMIN_USER={admin_user}",
             f"ENGINE_ADMIN_EMAIL={admin_email}", f"ENGINES_CONFIG_FILE={release / 'engines.json'}",
         ]
+        if self._native_acceptance_profile(manifest):
+            lines.append("CADDY_TLS_DIRECTIVE=tls internal")
         env_keys = {
             "ENGINE_ADMIN_PASSWORD_HASH_FILE": "engine_admin_password_hash", "ENGINE_ADMIN_PASSWORD_FILE": "engine_admin_password",
             "ENGINE_DB_PASSWORD_FILE": "engine_db_password", "ENGINE_DB_ROOT_PASSWORD_FILE": "engine_db_root_password",

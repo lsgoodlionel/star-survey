@@ -48,6 +48,8 @@ RUNTIME_FILES = (
     "init/production-health.php",
     "init/run-with-secrets.sh",
     "init/start-edge.sh",
+    "release/native_acceptance.sh",
+    "release/native_acceptance_evidence.py",
     "release.schema.json",
     "restore.py",
     "surveyctl",
@@ -341,6 +343,13 @@ def build_release(args: argparse.Namespace) -> None:
             "images": images,
             "assets": {"bundles": bundles},
         }
+        if args.native_acceptance_profile:
+            manifest["nativeAcceptance"] = {
+                "profile": "github-actions-native-v1",
+                "minimumFreeBytes": 8 * 1024**3,
+                "tlsMode": "local-ca",
+                "diskEvidence": "separately-tested",
+            }
         write_json(staging / "release.json", manifest)
         with (staging / "release-notes.md").open("w", encoding="utf-8", newline="\n") as handle:
             handle.write(render_notes(manifest))
@@ -369,6 +378,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--compatible-source-schema", action="append", default=[], required=True)
     result.add_argument("--source-date-epoch", type=int, required=True)
     result.add_argument("--image", action="append", default=[], required=True)
+    result.add_argument("--native-acceptance-profile", choices=("github-actions-native-v1",))
     return result
 
 

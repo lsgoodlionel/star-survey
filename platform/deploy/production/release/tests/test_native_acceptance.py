@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import os
 from pathlib import Path
+import re
 import subprocess
+import sys
+import tempfile
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -11,6 +17,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[5]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "release.yml"
 SCRIPT_PATH = ROOT / "platform" / "deploy" / "production" / "release" / "native_acceptance.sh"
+EVIDENCE_HELPER_PATH = ROOT / "platform" / "deploy" / "production" / "release" / "native_acceptance_evidence.py"
+BASELINE_POLICY_PATH = ROOT / ".github" / "release" / "baseline-policy.json"
 
 
 def load_workflow() -> dict:
@@ -54,6 +62,12 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertEqual({"policy", "quality", "publish-images", "secure-images"}, set(candidate["needs"]))
         self.assertIn("release-candidate", job_text(candidate))
         self.assertIn("identity.json", job_text(candidate))
+        self.assertIn("baseline-policy.json", job_text(candidate))
+        self.assertIn("gh release download", job_text(candidate))
+        self.assertIn('--arg manifestSha256 "$BASELINE_MANIFEST_SHA256"', self.workflow_text)
+        self.assertIn("manifestSha256: $manifestSha256", job_text(candidate))
+        self.assertNotIn("baseline-version", job_text(candidate))
+        self.assertEqual(1, job_text(candidate).count("build_release.py"))
 
         text = job_text(native)
         self.assertIn("actions/download-artifact@", text)
@@ -72,7 +86,10 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         native_text = job_text(self.workflow["jobs"]["native-acceptance"])
         self.assertIn("inputs.candidate_run_id", native_text)
         self.assertIn("github-token", native_text)
-        self.assertNotIn("gh release", self.workflow_text)
+        self.assertNotIn("actions/checkout@", native_text)
+        self.assertIn("orchestrator/release/native_acceptance.sh", native_text)
+        self.assertNotIn("gh release create", self.workflow_text)
+        self.assertNotIn("gh release upload", self.workflow_text)
 
     def test_native_job_runs_real_lifecycle_and_always_uploads_redacted_evidence(self):
         job = self.workflow["jobs"]["native-acceptance"]
@@ -86,12 +103,31 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn("if-no-files-found", text)
         self.assertNotIn("SURVEY_PRODUCTION_E2E", text)
         self.assertNotIn("skip", text.lower())
+        self.assertNotIn("SURVEY_ACCEPTANCE_DNS_SUFFIX", text)
+        self.assertIn("survey-native.test", text)
 
     def test_tag_publication_gate_depends_on_the_complete_native_matrix(self):
         gate = self.workflow["jobs"]["release-ready"]
         self.assertEqual("needs.policy.outputs.release == 'true'", gate["if"])
-        self.assertIn("native-acceptance", gate["needs"])
-        self.assertIn("candidate-assets", gate["needs"])
+        self.assertEqual({"policy", "candidate-assets", "native-acceptance"}, set(gate["needs"]))
+        self.assertEqual(1, len(gate["steps"]))
+        self.assertEqual("test '${{ needs.native-acceptance.result }}' = success", gate["steps"][0]["run"])
+
+    def test_baseline_policy_is_explicit_and_bootstrap_never_claims_upgrade(self):
+        policy = json.loads(BASELINE_POLICY_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(1, policy["schemaVersion"])
+        self.assertIn("releases", policy)
+        for version, rule in policy["releases"].items():
+            with self.subTest(version=version):
+                self.assertIn(rule["mode"], {"predecessor", "bootstrap"})
+                if rule["mode"] == "predecessor":
+                    self.assertRegex(rule["version"], r"^[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?$")
+                    self.assertRegex(rule["manifestSha256"], r"^[0-9a-f]{64}$")
+                else:
+                    self.assertNotIn("version", rule)
+        script = SCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertIn("upgrade_verified=false", script)
+        self.assertIn('"upgradeVerified": sys.argv[5] == "true"', script)
 
 
 class NativeAcceptanceScriptTest(unittest.TestCase):
@@ -107,12 +143,14 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
         self.assertNotRegex(self.text.lower(), r"\bskip(?:ped)?\b")
         self.assertNotIn("continue-on-error", self.text)
         self.assertNotIn("|| true", self.text)
+        self.assertNotIn("compose-logs", self.text)
 
     def test_script_verifies_shared_candidate_identity_before_installing(self):
         for required in (
             "CANDIDATE_IDENTITY",
             "CANDIDATE_MANIFEST_SHA256",
             "CANDIDATE_BUNDLE_SHA256",
+            'baseline.get("manifestSha256")',
             "ADMIN_IMAGE_DIGEST",
             "PLATFORM_IMAGE_DIGEST",
             "PUBLISH_GATEWAY_IMAGE_DIGEST",
@@ -122,32 +160,70 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
             self.assertIn(required, self.text)
 
     def test_script_executes_full_lifecycle_and_restores_into_second_project(self):
-        required_in_order = (
-            "install",
-            "setup-probe",
-            "doctor",
-            "minimal-probe",
-            "backup",
-            "upgrade",
-            "doctor",
-            "restore-target",
-            "restore",
-            "doctor",
-            "uninstall",
-        )
-        position = -1
-        for marker in required_in_order:
-            next_position = self.text.find(marker, position + 1)
-            self.assertGreater(next_position, position, marker)
-            position = next_position
+        calls = re.findall(r"^\s*run_ctl\s+([a-z-]+)", self.text, re.MULTILINE)
+        self.assertEqual(1, calls.count("setup-probe"))
+        for command in ("install", "setup-probe", "doctor", "backup", "restore", "uninstall"):
+            self.assertIn(command, calls)
         self.assertIn("survey-restore-", self.text)
+        self.assertIn("BASELINE_MODE", self.text)
 
     def test_script_redacts_diagnostics_and_writes_success_or_failure_summary(self):
-        self.assertIn("redact", self.text)
+        self.assertIn("native_acceptance_evidence.py", self.text)
         self.assertIn("trap collect_evidence EXIT", self.text)
         self.assertIn("summary.json", self.text)
         self.assertIn("doctor", self.text)
-        self.assertIn("logs", self.text)
+        self.assertIn("scan", self.text)
+        self.assertNotRegex(self.text, r">\s*\"?\$[^\n]*(?:\.log|\.raw)")
+
+    def test_script_uses_local_trusted_ca_and_records_public_acme_as_separate(self):
+        self.assertIn("/etc/hosts", self.text)
+        self.assertIn("SSL_CERT_FILE", self.text)
+        self.assertIn('"publicAcmeVerified": False', self.text)
+        self.assertIn('"preflightDisk": "separately-tested"', self.text)
+
+
+class NativeAcceptanceEvidenceTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("native_acceptance_evidence", EVIDENCE_HELPER_PATH)
+        cls.module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = cls.module
+        spec.loader.exec_module(cls.module)
+
+    def test_nested_keys_authorization_uris_multiline_and_encoded_variants_are_redacted(self):
+        payload = {
+            "password": "json-secret",
+            "nested": {
+                "apiToken": "json-token",
+                "private_key": "line-one\nline-two",
+                "Authorization": "Bearer bearer-secret",
+                "database": "postgres://user:uri-secret@db/app?token=query-secret&safe=yes",
+                "encoded": "https://user:encoded%2Dsecret@example.test/path?password=url%2Dsecret",
+            },
+            "safe": "retained",
+        }
+        sanitized = self.module.sanitize(payload, secret_values={"line-one\nline-two"})
+        rendered = json.dumps(sanitized, sort_keys=True)
+        for secret in ("json-secret", "json-token", "line-one", "line-two", "bearer-secret", "uri-secret", "query-secret", "encoded%2Dsecret", "url%2Dsecret"):
+            self.assertNotIn(secret, rendered)
+        self.assertEqual("retained", sanitized["safe"])
+
+    def test_evidence_writer_keeps_only_allowlisted_doctor_fields_and_scanner_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "doctor-test.json"
+            self.module.write_doctor_evidence({
+                "status": "ok",
+                "checks": [{"id": "tls", "status": "ok", "summary": "secret=hidden", "raw": "forbidden"}],
+                "unexpected": "forbidden",
+            }, output, secret_values={"hidden"})
+            evidence = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual({"schemaVersion", "status", "checks"}, set(evidence))
+            self.assertEqual({"id", "status", "summary"}, set(evidence["checks"][0]))
+            self.module.scan_directory(root, secret_values={"hidden"})
+            (root / "services.json").write_text('{"safe":"Bearer mutation-secret"}', encoding="utf-8")
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.scan_directory(root, secret_values={"hidden"})
 
 
 if __name__ == "__main__":
