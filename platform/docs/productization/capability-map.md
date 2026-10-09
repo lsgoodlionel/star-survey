@@ -89,7 +89,7 @@
 ### 生产部署 (`production-deployment`)
 
 - **后端** （实现）[`platform/deploy/private/docker-compose.private.yml`](../../deploy/private/docker-compose.private.yml) 定位 `services:`：现有私有开发部署提供基础，但不是 Production Compose。
-- **生产** （审计）[`platform/README.md`](../../README.md) 定位 `仓库尚无生产部署路径`：仓库状态明确声明 SSL gate 不代表 production-ready。
+- **生产** （审计）[`platform/README.md`](../../README.md) 定位 `当前仍不能宣称正式 production-ready`：仓库状态明确记录生产代码已存在，但真实 Release 和四平台矩阵仍未完成。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R20-11 |`：本地私有化部署需求已编号。
 - **追溯** （追溯记录）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `生产部署路径、TLS、mTLS`：核查报告记录生产部署和供应链门禁尚未闭环。
 

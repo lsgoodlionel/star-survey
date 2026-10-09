@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/release/**'
       - '.github/workflows/release.yml'
+      - '.github/workflows/platform-quality.yml'
       - 'platform/apps/admin-web/**'
       - 'platform/services/business/**'
       - 'platform/tools/publish-gateway/**'
@@ -36,47 +37,116 @@ jobs:
       release: ${{ steps.event.outputs.release }}
       version: ${{ steps.event.outputs.version }}
     steps:
-      - name: Accept only strict release tags
+      - name: Accept only canonical release versions
         id: event
         shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'
-          release=false
-          version="build-${GITHUB_SHA:0:12}"
-          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            if [[ "$GITHUB_REF" != refs/tags/* || ! "$REF_NAME" =~ $SEMVER_RE ]]; then
-              echo "::error::Only vX.Y.Z and vX.Y.Z-rc.N tags may publish production images"
-              exit 1
-            fi
-            release=true
-            version="${REF_NAME#v}"
-          fi
-          printf 'release=%s\nversion=%s\n' "$release" "$version" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+
+          event = os.environ['GITHUB_EVENT_NAME']
+          ref = os.environ['GITHUB_REF']
+          ref_name = os.environ['GITHUB_REF_NAME']
+          release = False
+          version = f"build-{os.environ['GITHUB_SHA'][:12]}"
+
+          if event == 'push':
+              canonical = re.fullmatch(
+                  r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+                  r'(?:-rc\.(0|[1-9][0-9]*))?',
+                  ref_name,
+              )
+              if not ref.startswith('refs/tags/') or canonical is None:
+                  raise SystemExit('only canonical vX.Y.Z and vX.Y.Z-rc.N tags may publish')
+              release = True
+              version = ref_name[1:]
+
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
+              output.write(f"release={str(release).lower()}\n")
+              output.write(f"version={version}\n")
+          PY
 
   quality:
-    name: Production release quality gate
-    runs-on: ubuntu-24.04
+    name: Complete platform quality gates
+    needs: [policy]
     permissions:
       contents: read
+    uses: ./.github/workflows/platform-quality.yml
+
+  build-local:
+    name: Build ${{ matrix.id }} without registry access
+    if: needs.policy.outputs.release != 'true'
+    runs-on: ubuntu-24.04
+    needs: [policy, quality]
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: admin
+            context: platform/apps/admin-web
+            image: star-survey-admin
+          - id: platform
+            context: platform/services/business
+            image: star-survey-platform
+          - id: publish-gateway
+            context: platform/tools/publish-gateway
+            image: star-survey-publish-gateway
     steps:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Install workflow parser
-        run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
-      - name: Validate release workflow and deterministic bundle
-        run: python3 -m unittest discover -s platform/deploy/production/release/tests -p 'test_*.py'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Validate production deployment contracts
-        run: python3 -m unittest discover -s platform/deploy/production/tests -p 'test_*.py'
+      - name: Read deterministic source timestamp
+        id: source
+        shell: bash
+        run: echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
-  build-images:
-    name: Build ${{ matrix.id }} multi-architecture image
+      - name: Build local multi-architecture OCI archive
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          outputs: type=oci,dest=/tmp/${{ matrix.id }}.tar
+          tags: local/star-survey/${{ matrix.image }}:${{ needs.policy.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.policy.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.policy.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.source.outputs.created }}
+          pull: true
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=${{ matrix.id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.id }}
+
+      - name: Validate local archive and digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -s "/tmp/${{ matrix.id }}.tar"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+  publish-images:
+    name: Publish ${{ matrix.id }} multi-architecture image
+    if: needs.policy.outputs.release == 'true'
     runs-on: ubuntu-24.04
     needs: [policy, quality]
     permissions:
@@ -110,22 +180,21 @@ jobs:
         shell: bash
         run: echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to GHCR for release tags
-        if: needs.policy.outputs.release == 'true'
+      - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and conditionally push manifest
+      - name: Build and push immutable manifest
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.context }}/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ needs.policy.outputs.release == 'true' }}
+          push: true
           tags: ${{ env.REGISTRY }}/lsgoodlionel/${{ matrix.image }}:${{ needs.policy.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
@@ -167,7 +236,7 @@ jobs:
     name: Scan, sign and attest ${{ matrix.image }}
     if: needs.policy.outputs.release == 'true'
     runs-on: ubuntu-24.04
-    needs: [policy, quality, build-images]
+    needs: [policy, quality, publish-images]
     permissions:
       contents: read
       packages: write

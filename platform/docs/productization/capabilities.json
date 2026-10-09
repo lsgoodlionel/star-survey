@@ -200,7 +200,7 @@
       "evidence": [
         {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R20-11 |", "description": "本地私有化部署需求已编号。"},
         {"layer": "backend", "kind": "implementation", "path": "platform/deploy/private/docker-compose.private.yml", "locator": "services:", "description": "现有私有开发部署提供基础，但不是 Production Compose。"},
-        {"layer": "production", "kind": "audit", "path": "platform/README.md", "locator": "仓库尚无生产部署路径", "description": "仓库状态明确声明 SSL gate 不代表 production-ready。"},
+        {"layer": "production", "kind": "audit", "path": "platform/README.md", "locator": "当前仍不能宣称正式 production-ready", "description": "仓库状态明确记录生产代码已存在，但真实 Release 和四平台矩阵仍未完成。"},
         {"layer": "traceability", "kind": "traceability-record", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "生产部署路径、TLS、mTLS", "description": "核查报告记录生产部署和供应链门禁尚未闭环。"}
       ],
       "nextWave": "Wave 0"
