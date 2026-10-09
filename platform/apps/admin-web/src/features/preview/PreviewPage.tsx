@@ -33,8 +33,8 @@ function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
     queryFn: ({ signal }) => getSurveyDraft(api, surveyId, signal),
   });
 
-  if (draftQuery.isPending) return <p>正在加载草稿预览</p>;
-  if (draftQuery.isError || !draftQuery.data) return <p role="alert">草稿预览暂时不可用。</p>;
+  if (draftQuery.isPending) return <p>正在加载快速预览</p>;
+  if (draftQuery.isError || !draftQuery.data) return <p role="alert">快速预览暂时不可用。</p>;
 
   let definition;
   try {
@@ -49,9 +49,9 @@ function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
         {!surveyShell ? (
           <div>
             <p>只读视图</p>
-            <h1>草稿预览</h1>
+            <h1>快速预览</h1>
           </div>
-        ) : <h2 className="sr-only">草稿预览</h2>}
+        ) : <h2 className="sr-only">快速预览</h2>}
         <div className="preview-toolbar-actions">
           {!surveyShell ? (
             <Link to={surveyWorkflowHref(surveyId, 'edit', selectedQuestion)}>
@@ -86,7 +86,7 @@ function PreviewPageInstance({ api, surveyId, tenantId }: PreviewPageProps) {
           data-preview-mode={mode}
           style={{ width: mode === 'desktop' ? '960px' : '390px' }}
         >
-          <div className="draft-preview-label">草稿预览 · 不会提交答案</div>
+          <div className="draft-preview-label">快速预览 · 本地草稿渲染，不会提交答案</div>
           <DraftRenderer definition={definition} />
         </div>
       </div>

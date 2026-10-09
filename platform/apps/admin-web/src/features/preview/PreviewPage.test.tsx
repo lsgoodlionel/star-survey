@@ -63,7 +63,7 @@ describe('PreviewPage', () => {
     );
   });
 
-  test('labelsTheRendererAsDraftPreviewAndNeverCallsTheAnswerEngine', async () => {
+  test('labelsTheRendererAsQuickPreviewAndNeverCallsTheAnswerEngine', async () => {
     const requests: ApiRequest<unknown>[] = [];
     const api: ApiClient = {
       request: (request) => {
@@ -74,7 +74,7 @@ describe('PreviewPage', () => {
 
     renderPreview(api);
 
-    expect(await screen.findByRole('heading', { name: '草稿预览' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '快速预览' })).toBeInTheDocument();
     expect(screen.getByText('员工体验调查')).toBeInTheDocument();
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ path: `/v1/surveys/${surveyId}/draft` });

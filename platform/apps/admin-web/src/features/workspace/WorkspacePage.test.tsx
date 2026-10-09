@@ -511,7 +511,10 @@ test('renamesAndMovesTheCurrentFolderThenExitsAndRefreshesAffectedContexts', asy
   await user.clear(nameInput);
   await user.type(nameInput, '新的资料夹');
   await user.click(within(dialog).getByRole('button', { name: '保存名称' }));
-  expect(await screen.findByRole('button', { name: '新的资料夹' })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent('项目甲/新的资料夹');
+    expect(screen.getByRole('navigation', { name: '当前位置' })).not.toHaveTextContent(folderA.name);
+  });
 
   await user.click(screen.getByRole('button', { name: '移动' }));
   dialog = screen.getByRole('dialog', { name: '移动资源' });
@@ -540,6 +543,45 @@ test('renamesAndMovesTheCurrentFolderThenExitsAndRefreshesAffectedContexts', asy
   });
   expect(invalidate).toHaveBeenCalledWith({
     queryKey: ['resource-capabilities', 'tenant-a', folderA.id],
+  });
+});
+
+test('renamesTheCurrentProjectAcrossItsBreadcrumbAndNavigation', async () => {
+  let currentProject = projectA;
+  server.use(
+    http.get('/v1/resources/:id', ({ params }) =>
+      params.id === currentProject.id
+        ? HttpResponse.json(currentProject)
+        : new HttpResponse(null, { status: 404 }),
+    ),
+    http.get('/v1/resources', ({ request }) => {
+      const url = new URL(request.url);
+      return HttpResponse.json({
+        items: url.searchParams.get('kind') === 'project' ? [currentProject] : [],
+        nextCursor: null,
+      });
+    }),
+    http.patch('/v1/resources/:id', async ({ request }) => {
+      const { name } = (await request.json()) as { name: string };
+      currentProject = { ...currentProject, name };
+      return HttpResponse.json(currentProject);
+    }),
+  );
+  const user = userEvent.setup();
+  renderWorkspace(`/workspace?project=${projectA.id}&parent=${projectA.id}`);
+
+  const projectNav = await screen.findByRole('complementary', { name: '项目与文件夹' });
+  await user.click(await within(projectNav).findByRole('button', { name: projectA.name }));
+  await user.click(await screen.findByRole('button', { name: '重命名' }));
+  const dialog = screen.getByRole('dialog', { name: '重命名资源' });
+  const nameInput = within(dialog).getByLabelText('名称');
+  await user.clear(nameInput);
+  await user.type(nameInput, '更新后的项目甲');
+  await user.click(within(dialog).getByRole('button', { name: '保存名称' }));
+
+  await waitFor(() => {
+    expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent('更新后的项目甲');
+    expect(within(projectNav).getByRole('button', { name: '更新后的项目甲' })).toBeInTheDocument();
   });
 });
 
@@ -679,6 +721,8 @@ test('retainsMutationFormAndFiltersAfterFailureAndRestoresFocusOnClose', async (
 
   expect(await within(dialog).findByRole('alert')).toHaveTextContent('服务暂时不可用，请重试');
   expect(input).toHaveValue('保留的名称');
+  expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent(folderA.name);
+  expect(screen.getByRole('navigation', { name: '当前位置' })).not.toHaveTextContent('保留的名称');
   expect(router.state.location.search).toContain('query=%E8%B5%84%E6%96%99');
   expect(router.state.location.search).toContain('sort=name_asc');
   await user.click(within(dialog).getByRole('button', { name: '取消' }));

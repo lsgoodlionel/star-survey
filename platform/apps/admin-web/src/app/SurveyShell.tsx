@@ -17,7 +17,7 @@ const SurveyShellContext = createContext<SurveyShellContextValue | null>(null);
 const workflowTabs = [
   { path: 'edit', label: '编辑', icon: Pencil },
   { path: 'import', label: '批量导入', icon: FileInput },
-  { path: 'preview', label: '真实预览', icon: Eye },
+  { path: 'preview', label: '快速预览', icon: Eye },
   { path: 'publish', label: '发布与版本', icon: Rocket },
 ] as const;
 

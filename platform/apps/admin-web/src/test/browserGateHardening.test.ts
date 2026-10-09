@@ -93,7 +93,7 @@ describe('browser gate security contract', () => {
 
     expect(spec).not.toMatch(/page\.goto\(`\/surveys\//);
     expect(spec).toContain("getByRole('link', { name: '批量导入' })");
-    expect(spec).toContain("getByRole('link', { name: '真实预览' })");
+    expect(spec).toContain("getByRole('link', { name: '快速预览' })");
     expect(spec).toContain("getByRole('link', { name: '编辑' })");
     expect(spec).toContain("getByRole('link', { name: '发布与版本' })");
     expect(spec).toContain('await navigateWithinApp(page, `/surveys/${result.surveyId}/edit`)');

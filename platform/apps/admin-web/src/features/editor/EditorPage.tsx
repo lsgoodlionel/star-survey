@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type InfiniteData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Eye, FileInput, RefreshCw, Rocket, Save } from 'lucide-react';
 import { Link, useBlocker, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
@@ -7,7 +7,11 @@ import { surveyWorkflowHref, useSurveyShell } from '../../app/SurveyShell';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
-import { getResourceCapabilities } from '../../shared/api/resources';
+import {
+  getResourceCapabilities,
+  type ResourcePage,
+  type ResourceView,
+} from '../../shared/api/resources';
 import {
   getSurvey,
   getSurveyDraft,
@@ -172,11 +176,12 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       return { saved, submittedRevision };
     },
     onSuccess: ({ saved, submittedRevision }) => {
-      synchronizeDraftCache(saved);
+      const savedDefinition = parseDefinition(saved.definition);
+      synchronizeDraftCache(saved, savedDefinition.title);
       setVersion(saved.version);
       setSavedVersion(saved.version);
       if (revisionRef.current === submittedRevision) {
-        setDefinition(parseDefinition(saved.definition));
+        setDefinition(savedDefinition);
         setDirty(false);
       }
       setConflict(false);
@@ -186,14 +191,37 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
     },
   });
 
-  function synchronizeDraftCache(saved: DraftView) {
+  function synchronizeDraftCache(saved: DraftView, savedTitle?: string) {
     queryClient.setQueryData(surveyDraftQueryKey(tenantId, surveyId), saved);
     queryClient.setQueryData<SurveyView>(
       surveyDetailQueryKey(tenantId, surveyId),
       (current) => current
-        ? { ...current, draftVersion: saved.version }
+        ? { ...current, draftVersion: saved.version, title: savedTitle ?? current.title }
         : current,
     );
+    if (savedTitle === undefined) return;
+    queryClient.setQueriesData<ResourceView[]>(
+      { queryKey: ['resource-path', tenantId] },
+      (current) => current?.map((resource) =>
+        resource.id === surveyId ? { ...resource, name: savedTitle } : resource),
+    );
+    queryClient.setQueriesData<InfiniteData<ResourcePage>>(
+      { queryKey: ['resources', tenantId] },
+      (current) => current
+        ? {
+            ...current,
+            pages: current.pages.map((page) => ({
+              ...page,
+              items: page.items.map((resource) =>
+                resource.id === surveyId ? { ...resource, name: savedTitle } : resource),
+            })),
+          }
+        : current,
+    );
+    void queryClient.invalidateQueries({
+      queryKey: ['resources', tenantId],
+      refetchType: 'inactive',
+    });
   }
 
   function changeDefinition(next: EditableSurveyDefinition) {
@@ -277,7 +305,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
               </Link>
               <Link to={surveyWorkflowHref(surveyId, 'preview', requestedQuestionUuid)}>
                 <Eye aria-hidden="true" />
-                草稿预览
+                快速预览
               </Link>
               <Link to={surveyWorkflowHref(surveyId, 'publish', requestedQuestionUuid)}>
                 <Rocket aria-hidden="true" />

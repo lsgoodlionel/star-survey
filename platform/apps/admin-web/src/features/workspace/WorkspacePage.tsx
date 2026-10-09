@@ -286,6 +286,8 @@ export function WorkspacePage() {
       if (result.mutationTenantId !== currentTenantId.current) return;
       setDialogState(null);
       if (result.action === 'rename') {
+        setLocalPath((current) => current.map((resource) =>
+          resource.id === result.updated.id ? result.updated : resource));
         setLocalSelection({
           tenantId: result.mutationTenantId,
           resource: result.updated,

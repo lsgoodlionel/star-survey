@@ -61,8 +61,9 @@ E2E 时间戳资源。这些证据只收口 Phase A+B，不将 `820–1179px` �
   和桌面 E2E，证明“先预览、坏行定位、选择后导入”子链路。
 - `R01-04`：`definition.test.ts` 的 `editsOnlyTheSelectedBasicQuestion`、
   `keepsQuestionAndGroupUuidsStableWhileReordering`，证明基础字段编辑与稳定排序；不证明拖拽排序或高级题型编辑。
-- `R01-07`：`PreviewPage.test.tsx` 的 `labelsTheRendererAsDraftPreviewAndNeverCallsTheAnswerEngine`，以及桌面
-  E2E 的草稿预览、发布成功和不可变版本查看，证明这些子项；不证明真实 LimeSurvey 运行时预览或关闭问卷。
+- `R01-07`：`PreviewPage.test.tsx` 的 `labelsTheRendererAsQuickPreviewAndNeverCallsTheAnswerEngine`，以及桌面
+  E2E 的快速预览、发布成功和不可变版本查看，证明这些子项；快速预览仅使用本地草稿 renderer，
+  不证明真实 LimeSurvey 运行时预览或关闭问卷。
 - `R01-08`：`EditorPage.test.tsx` 的 `savesWithTheCurrentDraftVersionAndAdoptsTheReturnedVersion`、
   `keepsLocalChangesWhenTheServerReturns409`、`recoversTheInMemoryDraftAfterReauthentication`，证明版本保存、
   冲突不覆盖与同页内存恢复；不证明多人实时协同或字段级合并。

@@ -87,7 +87,7 @@
 | 桌面三栏、窄屏标签页 | `EditorPage.tsx`、`editor.css` | 可见 | 768px 出现横向滚动，断点覆盖不完整 |
 | 基础题型结构化编辑 | `QuestionEditor.tsx`、模型测试 | 可见 | 仅基础题型；题型代码仍是英文裸值 |
 | 题组/题目排序 | PR #10、Vitest、Playwright | 可见 | 已支持 pointer/keyboard/按钮；真实触摸拖拽未专项验证 |
-| 批量导入、草稿预览 | import/preview feature | 可见 | 预览是平台本地渲染，不是 LimeSurvey 运行时 |
+| 批量导入、快速预览 | import/preview feature | 可见 | 快速预览是平台本地草稿渲染，不是 LimeSurvey 运行时 |
 | 审批、发布、版本 | publish feature、真实纵切 | 可见 | 已形成基本闭环，工作区缺少状态汇总和待办入口 |
 | 企业模板库 | 后端 `survey.template` 模块 | 不可见 | 管理端无模板库页面，后端完成没有形成产品能力 |
 | 品牌与多语言 | `zh-business`、品牌契约、主题安装工具 | 答卷端部分可见 | 管理端无品牌配置；本地演示未配置 Logo/主色/页脚 |

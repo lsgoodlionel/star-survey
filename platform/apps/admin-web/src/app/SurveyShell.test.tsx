@@ -165,7 +165,7 @@ test('loadsSurveyContextAndPreservesTheSelectedQuestionAcrossWorkflowLinks', asy
   for (const [name, path] of [
     ['编辑', 'edit'],
     ['批量导入', 'import'],
-    ['真实预览', 'preview'],
+    ['快速预览', 'preview'],
     ['发布与版本', 'publish'],
   ] as const) {
     expect(within(tabs).getByRole('link', { name })).toHaveAttribute(

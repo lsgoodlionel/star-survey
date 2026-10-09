@@ -93,7 +93,7 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
                 {
                   path: 'preview',
                   element: (
-                    <Suspense fallback={<p>正在加载草稿预览</p>}>
+                    <Suspense fallback={<p>正在加载快速预览</p>}>
                       <PreviewRoutePage />
                     </Suspense>
                   ),

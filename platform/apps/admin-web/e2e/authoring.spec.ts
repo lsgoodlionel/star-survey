@@ -39,6 +39,7 @@ const ACTION_TIMEOUT_MS = 15_000;
 const RUN_PROJECT_NAME = '浏览器验收项目';
 const RUN_FOLDER_NAME = '产品验收资料';
 const RUN_SURVEY_NAME = '管理端产品对齐验收问卷';
+const SAVED_SURVEY_NAME = '管理端产品对齐验收问卷（已更新）';
 
 const importText = [
   '1. 您的性别？[单选]',
@@ -112,13 +113,15 @@ test('author filters stable resources, restores archive, and publishes the same 
   const { rootProjectId, folderId, surveyId } = await createSurveyResourceTree(page);
 
   await fillAction(page.getByLabel('题目文本'), '这是一份真实浏览器验收问卷');
-  await fillAction(page.getByLabel('标题'), RUN_SURVEY_NAME);
+  await fillAction(page.getByLabel('标题'), SAVED_SURVEY_NAME);
   const saveResponse = page.waitForResponse((response) =>
     response.url().includes(`/v1/surveys/${surveyId}/draft`) && response.request().method() === 'PUT',
   );
   await clickAction(page.getByRole('button', { name: '保存草稿' }));
   expect((await saveResponse).status()).toBe(200);
   await expect(page.getByText(/已保存版本 \d+/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: SAVED_SURVEY_NAME })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: '面包屑' })).toContainText(SAVED_SURVEY_NAME);
 
   await clickAction(page.getByRole('link', { name: '批量导入' }));
   await fillAction(page.getByLabel('待导入文本'), importText);
@@ -129,8 +132,8 @@ test('author filters stable resources, restores archive, and publishes the same 
   await clickAction(page.getByRole('button', { name: '确认导入 1 道题' }));
   await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
 
-  await clickAction(page.getByRole('link', { name: '真实预览' }));
-  await expect(page.getByRole('heading', { name: '草稿预览' })).toBeVisible();
+  await clickAction(page.getByRole('link', { name: '快速预览' }));
+  await expect(page.getByRole('heading', { name: '快速预览' })).toBeVisible();
   await expect(page.getByText('您的性别？')).toBeVisible();
   await clickAction(page.getByRole('link', { name: '编辑' }));
   await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
@@ -150,6 +153,11 @@ test('author filters stable resources, restores archive, and publishes the same 
   await expect(page.getByRole('heading', { name: `已发布版本 ${version}` })).toBeVisible();
   await expect(page.getByText('当前在线')).toBeVisible();
   await expect(page.getByText('字段映射')).toBeVisible();
+
+  await clickAction(page.getByRole('link', { name: '返回工作区' }));
+  await expect(page.getByRole('list', { name: '当前位置资源' }).getByRole('button', {
+    name: SAVED_SURVEY_NAME,
+  })).toBeVisible();
 
   await writeResult({
     rootProjectId,
