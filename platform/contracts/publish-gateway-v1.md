@@ -155,9 +155,14 @@
 ```
 
 - 幂等键固定为 `(tenantId, sessionId, requestId)`；相同请求原样重放，不再次导入，相同键改正文返回 400。
+  prepare、activate、close 均以持久 operation 的 owner/lease CAS 串行执行。并发 follower 等待并重放 owner
+  持久化的同一结果，因此得到相同 SID、token 和响应，不以 409 表示同键操作正在执行。
 - `generation` 必须以 `preview-` 开头，且不得与正式答卷 generation 共用。
 - `expiresAt` 是 UTC RFC 3339 时间；平台负责在到期后调用 `POST /v1/preview/close`，失败状态必须保留并重试。
 - prepare 成功返回 `status=prepared` 和 SID。网络/进程中断导致结果未知时返回 `status=creating`；平台以同一完整请求重放，Gateway 通过持久 operation 和导入 marker 对账，绝不盲目二次导入。
+  owner 在 lease 内失联后，新 owner 必须先检查 marker、SID、active state 与确定性 participant，再决定继续；
+  activate 不得二次激活或签发第二个 token。运行中 operation 的 durable lease 为 210 秒，覆盖网关到引擎
+  最长 180 秒调用及 30 秒裕量；只有 lease 到期才能 takeover。
 - activate、status、close 的正文必须恰有 `tenantId`、`sessionId`、`requestId`。它们只操作该复合键对应的 operation。
 - 网关为预览创建一次性参与者 token，但 token 不出现在公开 URL。公开 URL 指向 Gateway 的 `GET /v1/preview/access`；该入口以 constant-time HMAC 校验完整 identity、SID 和 expires，检查实时 operation 状态与过期时间后才 302 到带短期 token 的引擎 URL。篡改、过期、关闭均拒绝。
 - activate 成功响应如下：
@@ -180,7 +185,9 @@
 到期回收都调用 `POST /v1/preview/close`；close 天然幂等，`cleanup_failed` 必须保留失败原因和重试次数。
 平台只能由成功 CAS `ready|cleanup_failed -> closing` 的 owner 发起 close RPC，并用 owner token 结算，
 避免并发失败覆盖已经成功的关闭。`creating` 的 stale sweeper 必须先对账；已知 SID 且过期时转入关闭，
-不得直接标记 failed 丢失 SID。
+不得直接标记 failed 丢失 SID。平台 close lease 为 150 秒，覆盖 120 秒 Gateway HTTP timeout 及 30 秒裕量；
+lease 未到期的 DELETE 或 sweeper 不得夺取 owner。即使平台因超时稍后重试，Gateway 的 210 秒 durable lease
+仍保证同一 close 只有一个引擎副作用调用，follower 重放最终 `closed` 回执。
 
 ## `GET /healthz`
 

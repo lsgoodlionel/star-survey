@@ -28,6 +28,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -207,6 +208,64 @@ class PreviewSessionApiTest {
     }
 
     @Test
+    void concurrentCreateFollowersReturnTheSameReadySession() throws Exception {
+        UUID request = UUID.randomUUID();
+        gateway.blockPrepare = true;
+        var pool = Executors.newFixedThreadPool(6);
+        try {
+            var first = pool.submit(() -> createResponse(request));
+            assertThat(gateway.prepareEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            var followers = IntStream.range(0, 4).mapToObj(ignored -> pool.submit(() -> createResponse(request))).toList();
+            Thread.sleep(150);
+            gateway.prepareRelease.countDown();
+            var results = new java.util.ArrayList<String>();
+            results.add(first.get(5, TimeUnit.SECONDS));
+            for (var follower : followers) results.add(follower.get(5, TimeUnit.SECONDS));
+
+            assertThat(results).allSatisfy(raw -> {
+                try { assertThat(json.readTree(raw).get("status").asString()).isEqualTo("ready"); }
+                catch (Exception e) { throw new AssertionError(e); }
+            });
+            assertThat(results.stream().map(raw -> json.readTree(raw).get("id").asString()).distinct()).hasSize(1);
+            assertThat(results.stream().map(raw -> json.readTree(raw).get("engineSid").intValue()).distinct()).hasSize(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void closeLeaseOutlivesTheOneHundredTwentySecondGatewayTimeout() throws Exception {
+        String body = create(ws.owner(), survey.id(), UUID.randomUUID()).andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID id = UUID.fromString(json.readTree(body).get("id").asString());
+        gateway.blockClose = true;
+        var pool = Executors.newFixedThreadPool(2);
+        try {
+            var first = pool.submit(() -> mvc.perform(delete("/v1/preview-sessions/" + id)
+                    .header("Authorization", bearer(ws.owner()))).andReturn().getResponse().getStatus());
+            assertThat(gateway.closeEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            tenantScope.run(ws.tenant(), () -> {
+                Integer remaining = jdbc.sql("""
+                        SELECT floor(extract(epoch FROM (close_lease_until - now())))::integer
+                          FROM survey_preview_session WHERE id = :id
+                        """).param("id", id).query(Integer.class).single();
+                assertThat(remaining).isGreaterThan(120);
+                jdbc.sql("UPDATE survey_preview_session SET updated_at = now() - interval '120 seconds' WHERE id = :id")
+                        .param("id", id).update();
+            });
+
+            int follower = mvc.perform(delete("/v1/preview-sessions/" + id)
+                    .header("Authorization", bearer(ws.owner()))).andReturn().getResponse().getStatus();
+            assertThat(follower).isEqualTo(202);
+            assertThat(gateway.closeCalls.get()).isEqualTo(1);
+            gateway.closeRelease.countDown();
+            assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(200);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     void expiredReadySessionIsClosedByTenantCleanup() throws Exception {
         String body = create(ws.owner(), survey.id(), UUID.randomUUID()).andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
@@ -235,6 +294,12 @@ class PreviewSessionApiTest {
         return "Bearer " + tokens.issue(ctx.actorId(), ctx.tenantId().value(), List.of());
     }
 
+    private String createResponse(UUID request) throws Exception {
+        var response = create(ws.owner(), survey.id(), request).andReturn().getResponse();
+        assertThat(response.getStatus()).isIn(200, 201);
+        return response.getContentAsString();
+    }
+
     @TestConfiguration(proxyBeanMethods = false)
     static class GatewayConfig {
         @Bean @Primary FakePreviewGateway fakePreviewGateway() { return new FakePreviewGateway(); }
@@ -244,21 +309,30 @@ class PreviewSessionApiTest {
         final List<CreateRequest> creates = new CopyOnWriteArrayList<>();
         final AtomicInteger sid = new AtomicInteger(880000);
         final AtomicInteger closeCalls = new AtomicInteger();
+        final AtomicInteger activateCalls = new AtomicInteger();
         final Map<UUID, CreateRequest> sessions = new ConcurrentHashMap<>();
         final Map<UUID, Integer> sessionSids = new ConcurrentHashMap<>();
         volatile boolean failClose;
         volatile boolean failCreate;
         volatile boolean blockClose;
+        volatile boolean blockPrepare;
+        volatile CountDownLatch prepareEntered = new CountDownLatch(1);
+        volatile CountDownLatch prepareRelease = new CountDownLatch(1);
         volatile CountDownLatch closeEntered = new CountDownLatch(1);
         volatile CountDownLatch closeRelease = new CountDownLatch(1);
 
         void reset() { creates.clear(); sessions.clear(); sessionSids.clear(); closeCalls.set(0); failClose = false; failCreate = false;
-            blockClose = false; closeEntered = new CountDownLatch(1); closeRelease = new CountDownLatch(1); }
+            blockClose = false; blockPrepare = false; prepareEntered = new CountDownLatch(1);
+            prepareRelease = new CountDownLatch(1); closeEntered = new CountDownLatch(1);
+            closeRelease = new CountDownLatch(1); activateCalls.set(0); }
 
         @Override public boolean isConfigured() { return true; }
 
         @Override public CreateOutcome prepare(CreateRequest request) {
             creates.add(request);
+            prepareEntered.countDown();
+            if (blockPrepare) try { prepareRelease.await(5, TimeUnit.SECONDS); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             if (failCreate) return new CreateOutcome.Unknown("network error");
             sessions.putIfAbsent(request.sessionId(), request);
             int value = sessionSids.computeIfAbsent(request.sessionId(), ignored -> sid.incrementAndGet());
@@ -266,6 +340,7 @@ class PreviewSessionApiTest {
         }
 
         @Override public CreateOutcome activate(Identity request) {
+            activateCalls.incrementAndGet();
             CreateRequest created = sessions.get(request.sessionId());
             int value = sessionSids.get(request.sessionId());
             return new CreateOutcome.Ready(value, created.engineInstanceId(), created.generation(),

@@ -13,6 +13,8 @@ import org.springframework.stereotype.Repository;
 @Repository
 class PreviewSessionRepository {
 
+    static final int CLOSE_LEASE_SECONDS = 150;
+
     private static final String COLUMNS = """
             id, request_id, survey_id, draft_version, requested_by, engine_instance_id, engine_sid,
             generation, preview_url, expires_at, status, failure, cleanup_attempts,
@@ -92,10 +94,12 @@ class PreviewSessionRepository {
         int updated = jdbc.sql("""
                 UPDATE survey_preview_session
                    SET status = 'closing', close_owner = :owner,
+                       close_lease_until = now() + make_interval(secs => :leaseSeconds),
                        cleanup_attempts = cleanup_attempts + 1, updated_at = now()
                  WHERE id = :id AND (status IN ('ready', 'cleanup_failed')
-                       OR (status = 'closing' AND updated_at <= now() - interval '30 seconds'))
-                """).param("id", id).param("owner", owner).update();
+                       OR (status = 'closing' AND close_lease_until <= now()))
+                """).param("id", id).param("owner", owner)
+                .param("leaseSeconds", CLOSE_LEASE_SECONDS).update();
         return updated == 1 ? Optional.of(owner) : Optional.empty();
     }
 
@@ -103,15 +107,18 @@ class PreviewSessionRepository {
         return jdbc.sql("""
                 UPDATE survey_preview_session
                    SET status = 'closing', close_owner = :owner,
+                       close_lease_until = now() + make_interval(secs => :leaseSeconds),
                        cleanup_attempts = cleanup_attempts + 1, updated_at = now()
                  WHERE id = :id AND status = 'creating' AND engine_sid IS NOT NULL
-                """).param("id", id).param("owner", owner).update() == 1;
+                """).param("id", id).param("owner", owner)
+                .param("leaseSeconds", CLOSE_LEASE_SECONDS).update() == 1;
     }
 
     void closed(UUID id, UUID owner) {
         jdbc.sql("""
                 UPDATE survey_preview_session
-                   SET status = 'closed', failure = NULL, closed_at = now(), updated_at = now()
+                   SET status = 'closed', failure = NULL, close_owner = NULL, close_lease_until = NULL,
+                       closed_at = now(), updated_at = now()
                  WHERE id = :id AND status = 'closing' AND close_owner = :owner
                 """).param("id", id).param("owner", owner).update();
     }
@@ -119,7 +126,8 @@ class PreviewSessionRepository {
     void cleanupFailed(UUID id, UUID owner, String failure) {
         jdbc.sql("""
                 UPDATE survey_preview_session
-                   SET status = 'cleanup_failed', failure = :failure, updated_at = now()
+                   SET status = 'cleanup_failed', failure = :failure, close_owner = NULL,
+                       close_lease_until = NULL, updated_at = now()
                  WHERE id = :id AND status = 'closing' AND close_owner = :owner
                 """).param("id", id).param("owner", owner).param("failure", failure).update();
     }
@@ -135,8 +143,8 @@ class PreviewSessionRepository {
     List<UUID> staleClosing(int limit) {
         return jdbc.sql("""
                 SELECT id FROM survey_preview_session
-                 WHERE status = 'closing' AND updated_at <= now() - interval '30 seconds'
-                 ORDER BY updated_at LIMIT :limit
+                 WHERE status = 'closing' AND close_lease_until <= now()
+                 ORDER BY close_lease_until LIMIT :limit
                 """).param("limit", limit).query(UUID.class).list();
     }
 

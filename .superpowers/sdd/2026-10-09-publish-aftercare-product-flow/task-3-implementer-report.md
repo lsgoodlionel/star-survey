@@ -57,3 +57,26 @@
 - Gateway targeted suite passed: preview, publish, drift, RPC allowlist, and HTTP server tests, 82 tests total.
 - `python3 -m compileall -q pubgw tests` and `git diff --check` passed.
 - Release/production files were not modified or staged by this task; concurrent Release work remains outside this change set.
+
+## Review Fix Round 2/5
+
+### Result
+
+- Addressed the concurrent-create Critical and close-lease Important findings from `task-3-fix-review.md`.
+- Business keeps the database unique key on `(tenant_id, request_id)`, rereads the winning row after insert conflict, and resumes the same fixed draft session instead of returning a conflict or terminalizing it.
+- Gateway prepare, activate and close now use a durable SQLite operation owner/lease CAS. Only the owner executes publisher or engine side effects; followers wait for and replay the same persisted response, SID, participant token and preview URL.
+- Prepare and activate takeover is allowed only after the 210-second operation lease expires. A takeover reconciles import marker, active state and deterministic participant before performing any side effect, preventing orphan SID, duplicate activation and duplicate token issuance after a crash.
+- Business close ownership now has an explicit `close_lease_until` persisted by fresh migration `V932__serialize_preview_operations.sql`. Its 150-second lease covers the 120-second Gateway HTTP timeout plus a 30-second margin; stale cleanup only claims an expired lease.
+- Gateway's 210-second close lease covers its 180-second engine transport timeout plus a 30-second margin. Concurrent or early retry callers replay the durable `closed` result and cannot issue a second close operation.
+
+### TDD And Verification
+
+- RED reproduced concurrent prepare as one `200` plus five `409` responses, concurrent close as four engine close writes, and the missing Business `close_lease_until` schema.
+- Added barrier-based multithread tests proving six concurrent prepare and activate calls all return `200` with one SID/result/token while import, activation and participant creation each execute once.
+- Added concurrent close coverage proving all callers replay one `closed` response and only one engine close write occurs.
+- Added crash takeover and movable-clock boundary coverage: ownership cannot be taken at 120 or 209 seconds and becomes claimable exactly at the 210-second Gateway lease boundary.
+- Added Business concurrent-create coverage and a database assertion that the close lease remains beyond the 120-second client timeout.
+- Gateway targeted suite passed: preview, publish, drift, RPC allowlist and server tests, 85 tests total.
+- Java targeted suite passed: `PreviewSessionApiTest`, `PreviewEngineEventIsolationTest`, `ResponseProjectionTest`, `EngineOutboxTest`, and `EngineEventTenancyTest`, 31 tests total.
+- Existing database validation passed at V932 after upgrading from V931. A fresh PostgreSQL database applied all 49 migrations from an empty schema through V932; `PreviewSessionApiTest` then passed 10 tests.
+- Release/production files remain outside this change set.

@@ -35,6 +35,7 @@ import re
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -110,13 +111,21 @@ class _PreviewOperation:
     invitation: Optional[str]
     preview_url: Optional[str]
     response_json: Optional[str]
+    operation_owner: Optional[str]
+    lease_until: Optional[float]
 
 
 class PreviewOperationStore:
     """Durable preview operation registry, independent from formal publish receipts."""
 
-    def __init__(self, path: str):
+    # Engine RPC transport permits 180 seconds; takeover starts only after a 30 second margin.
+    LEASE_SECONDS = 210
+
+    def __init__(self, path: str, now: Callable[[], float] = time.time,
+                 sleep: Callable[[float], None] = time.sleep):
         self._path = path
+        self._now = now
+        self._sleep = sleep
         self._lock = threading.Lock()
         self.fail_after_import_once = False  # deterministic crash boundary used by fault tests
         self.fail_after_activate_once = False
@@ -134,10 +143,17 @@ class PreviewOperationStore:
                     invitation TEXT,
                     preview_url TEXT,
                     response_json TEXT,
+                    operation_owner TEXT,
+                    lease_until REAL,
                     updated_at INTEGER NOT NULL,
                     PRIMARY KEY (tenant_id, session_id, request_id)
                 )
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(preview_operation)")}
+            if "operation_owner" not in columns:
+                db.execute("ALTER TABLE preview_operation ADD COLUMN operation_owner TEXT")
+            if "lease_until" not in columns:
+                db.execute("ALTER TABLE preview_operation ADD COLUMN lease_until REAL")
 
     def _connect(self):
         db = sqlite3.connect(self._path, timeout=30)
@@ -148,7 +164,7 @@ class PreviewOperationStore:
         with self._connect() as db:
             row = db.execute("""
                 SELECT tenant_id, session_id, request_id, fingerprint, request_json, state,
-                       survey_id, invitation, preview_url, response_json
+                       survey_id, invitation, preview_url, response_json, operation_owner, lease_until
                   FROM preview_operation
                  WHERE tenant_id=? AND session_id=? AND request_id=?
             """, key).fetchone()
@@ -162,11 +178,35 @@ class PreviewOperationStore:
                 INSERT OR IGNORE INTO preview_operation
                     (tenant_id, session_id, request_id, fingerprint, request_json, state, updated_at)
                 VALUES (?, ?, ?, ?, ?, 'creating', ?)
-            """, key + (request.fingerprint, request_json, int(time.time())))
+            """, key + (request.fingerprint, request_json, int(self._now())))
         return self.get(key)
 
-    def update(self, operation: _PreviewOperation, state: str, survey_id=None, invitation=None,
-               preview_url=None, response=None) -> _PreviewOperation:
+    def claim(self, key: Tuple[str, str, str], allowed: Tuple[str, ...], running: str,
+              owner: str) -> Optional[_PreviewOperation]:
+        placeholders = ",".join("?" for _ in allowed)
+        now = self._now()
+        with self._lock, self._connect() as db:
+            changed = db.execute("""
+                UPDATE preview_operation
+                   SET state=?, operation_owner=?, lease_until=?, updated_at=?
+                 WHERE tenant_id=? AND session_id=? AND request_id=?
+                   AND (state IN ({}) OR (state=? AND COALESCE(lease_until, 0) <= ?))
+            """.format(placeholders),
+                (running, owner, now + self.LEASE_SECONDS, int(now)) + key + allowed + (running, now,)
+            ).rowcount
+        return self.get(key) if changed == 1 else None
+
+    def progress(self, operation: _PreviewOperation, owner: str, survey_id: int) -> _PreviewOperation:
+        key = (operation.tenant_id, operation.session_id, operation.request_id)
+        with self._lock, self._connect() as db:
+            db.execute("""
+                UPDATE preview_operation SET survey_id=?, updated_at=?
+                 WHERE tenant_id=? AND session_id=? AND request_id=? AND operation_owner=?
+            """, (survey_id, int(self._now())) + key + (owner,))
+        return self.get(key)
+
+    def settle(self, operation: _PreviewOperation, owner: str, state: str, survey_id=None,
+               invitation=None, preview_url=None, response=None) -> _PreviewOperation:
         key = (operation.tenant_id, operation.session_id, operation.request_id)
         response_json = None if response is None else json.dumps(response, sort_keys=True, ensure_ascii=False)
         with self._lock, self._connect() as db:
@@ -174,9 +214,26 @@ class PreviewOperationStore:
                 UPDATE preview_operation
                    SET state=?, survey_id=COALESCE(?, survey_id), invitation=COALESCE(?, invitation),
                        preview_url=COALESCE(?, preview_url), response_json=COALESCE(?, response_json),
-                       updated_at=?
-                 WHERE tenant_id=? AND session_id=? AND request_id=?
-            """, (state, survey_id, invitation, preview_url, response_json, int(time.time())) + key)
+                       operation_owner=NULL, lease_until=NULL, updated_at=?
+                 WHERE tenant_id=? AND session_id=? AND request_id=? AND operation_owner=?
+            """, (state, survey_id, invitation, preview_url, response_json, int(self._now())) + key + (owner,))
+        return self.get(key)
+
+    def abandon(self, operation: _PreviewOperation, owner: str) -> None:
+        key = (operation.tenant_id, operation.session_id, operation.request_id)
+        with self._lock, self._connect() as db:
+            db.execute("""
+                UPDATE preview_operation SET lease_until=0, updated_at=?
+                 WHERE tenant_id=? AND session_id=? AND request_id=? AND operation_owner=?
+            """, (int(self._now()),) + key + (owner,))
+
+    def follow(self, key: Tuple[str, str, str], running: str) -> _PreviewOperation:
+        deadline = time.monotonic() + self.LEASE_SECONDS + 5
+        while time.monotonic() < deadline:
+            operation = self.get(key)
+            if operation.state != running or (operation.lease_until or 0) <= self._now():
+                return operation
+            self._sleep(0.01)
         return self.get(key)
 
 
@@ -286,20 +343,34 @@ class PublishService:
         operation = self._preview_operations.get(identity)
         if operation is None:
             return self._json(404, {"error": "not_found"})
-        if operation.state == "closed":
-            return self._operation_response(operation)
+        while True:
+            if operation.state == "closed":
+                return self._operation_response(operation)
+            owner = str(uuid.uuid4())
+            claimed = self._preview_operations.claim(
+                identity, ("ready", "prepared", "failed"), "closing", owner
+            )
+            if claimed is not None:
+                operation = claimed
+                break
+            operation = self._preview_operations.follow(identity, "closing")
         request = _request_from_operation(operation)
         engine = self._engines.get(request.engine_instance_id)
         if engine is None or operation.survey_id is None:
-            operation = self._preview_operations.update(operation, "closed", response={"status": "closed"})
+            operation = self._preview_operations.settle(
+                operation, owner, "closed", response={"status": "closed"}
+            )
             return self._operation_response(operation)
         response = self._with_engine(
             engine, request.request_id, "close preview sid={}".format(operation.survey_id),
             lambda client: self._close(client, operation.survey_id),
         )
         if response.status == 200:
-            operation = self._preview_operations.update(operation, "closed", response={"status": "closed"})
+            operation = self._preview_operations.settle(
+                operation, owner, "closed", response={"status": "closed"}
+            )
             return self._operation_response(operation)
+        self._preview_operations.abandon(operation, owner)
         return response
 
     def preview_access(self, query: Mapping[str, List[str]]) -> Response:
@@ -503,7 +574,7 @@ class PublishService:
         operation = self._preview_operations.register(request)
         if operation.fingerprint != request.fingerprint:
             return self._invalid()
-        if operation.state != "creating":
+        if operation.state in ("prepared", "ready", "failed", "closed"):
             return self._operation_response(operation)
         engine = self._engines.get(request.engine_instance_id)
         if engine is None:
@@ -516,21 +587,17 @@ class PublishService:
             log.info("request %s: malformed preview definition: %s", request.request_id, error)
             return self._invalid()
 
-        keys = [("preview-request", request.tenant_id, request.session_id, request.request_id),
-                ("preview", engine.instance_id, request.generation)]
-        acquired = self._acquire_all(keys)
-        if acquired is None:
-            return self._json(409, {"status": "conflict", "error": "preview_in_progress"})
-        try:
-            operation = self._preview_operations.get((request.tenant_id, request.session_id, request.request_id))
-            if operation.state != "creating":
+        key = (request.tenant_id, request.session_id, request.request_id)
+        while True:
+            owner = str(uuid.uuid4())
+            claimed = self._preview_operations.claim(key, ("creating",), "preparing", owner)
+            if claimed is not None:
+                return self._prepare_preview(claimed, owner, request, engine, definition)
+            operation = self._preview_operations.follow(key, "preparing")
+            if operation.state != "preparing":
                 return self._operation_response(operation)
-            return self._prepare_preview(operation, request, engine, definition)
-        finally:
-            for key in acquired:
-                self._locks.release(key)
 
-    def _prepare_preview(self, operation: _PreviewOperation, request: _PreviewRequest,
+    def _prepare_preview(self, operation: _PreviewOperation, owner: str, request: _PreviewRequest,
                          engine: EngineConfig, definition: SurveyDefinition) -> Response:
         client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
         try:
@@ -540,7 +607,7 @@ class PublishService:
             compiled = publisher._stage_validate_and_compile(definition, result)
             if compiled is None:
                 payload = {"status": "failed", "result": result.to_dict()}
-                operation = self._preview_operations.update(operation, "failed", response=payload)
+                operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
                 return self._operation_response(operation, 422)
             definition = expand_scoring(definition)
             if result.survey_id is None:
@@ -550,19 +617,21 @@ class PublishService:
                 if self._preview_operations.fail_after_import_once:
                     self._preview_operations.fail_after_import_once = False
                     return self._json(503, {"status": "creating", "error": "result_unknown"})
-            operation = self._preview_operations.update(operation, "creating", survey_id=result.survey_id)
+            operation = self._preview_operations.progress(operation, owner, result.survey_id)
             if publisher._stage_apply(definition, compiled, result) is None:
                 payload = {"status": "failed", "result": result.to_dict()}
-                operation = self._preview_operations.update(operation, "failed", response=payload)
+                operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
                 return self._operation_response(operation, 502)
             payload = {"status": "prepared", "result": _preview_result(operation, request)}
-            operation = self._preview_operations.update(operation, "prepared", response=payload)
+            operation = self._preview_operations.settle(operation, owner, "prepared", response=payload)
             return self._operation_response(operation)
         except RpcError as error:
             log.warning("preview prepare result unknown for %s: %s", request.request_id, self._redact(str(error)))
+            self._preview_operations.abandon(operation, owner)
             return self._json(503, {"status": "creating", "error": "result_unknown"})
         except Exception:  # noqa: BLE001
             log.exception("preview prepare result unknown for %s", request.request_id)
+            self._preview_operations.abandon(operation, owner)
             return self._json(503, {"status": "creating", "error": "result_unknown"})
         finally:
             _logout(client, request.request_id)
@@ -571,10 +640,20 @@ class PublishService:
         operation = self._preview_operations.get(identity)
         if operation is None:
             return self._json(404, {"error": "not_found"})
-        if operation.state == "ready":
-            return self._operation_response(operation)
-        if operation.state != "prepared" or operation.survey_id is None:
-            return self._operation_response(operation, 409)
+        while True:
+            if operation.state in ("ready", "failed", "closed"):
+                return self._operation_response(operation)
+            owner = str(uuid.uuid4())
+            claimed = self._preview_operations.claim(identity, ("prepared",), "activating", owner)
+            if claimed is not None:
+                operation = claimed
+                break
+            operation = self._preview_operations.follow(identity, operation.state)
+            if operation.state == "creating":
+                return self._operation_response(operation, 503)
+        if operation.survey_id is None:
+            self._preview_operations.abandon(operation, owner)
+            return self._json(503, {"status": "creating", "error": "result_unknown"})
         request = _request_from_operation(operation)
         engine = self._engines.get(request.engine_instance_id)
         if engine is None:
@@ -595,7 +674,7 @@ class PublishService:
             definition = expand_scoring(raw_definition)
             if compiled is None:
                 payload = {"status": "failed", "result": result.to_dict()}
-                operation = self._preview_operations.update(operation, "failed", response=payload)
+                operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
                 return self._operation_response(operation, 502)
             active = str(client.get_survey_properties(operation.survey_id).get("active", "N")) == "Y"
             if active:
@@ -607,7 +686,7 @@ class PublishService:
                 result.steps.append(StageStep("activate", True, "reconciled"))
             elif not publisher._stage_activate(definition, result):
                 payload = {"status": "failed", "result": result.to_dict()}
-                operation = self._preview_operations.update(operation, "failed", response=payload)
+                operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
                 return self._operation_response(operation, 502)
             if self._preview_operations.fail_after_activate_once:
                 self._preview_operations.fail_after_activate_once = False
@@ -615,7 +694,7 @@ class PublishService:
             verification = publisher._stage_verify(definition, compiled, result)
             if verification is None:
                 payload = {"status": "failed", "result": result.to_dict()}
-                operation = self._preview_operations.update(operation, "failed", response=payload)
+                operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
                 return self._operation_response(operation, 502)
             result.binding = BindingRecord(engine.instance_id, operation.survey_id, definition.uuid,
                                            compiled.compiler_version, FINGERPRINT_VERSION,
@@ -627,12 +706,13 @@ class PublishService:
             payload = {"status": "ready", "result": dict(_preview_result(operation, request),
                                                               previewUrl=url,
                                                               binding=result.binding.to_dict())}
-            operation = self._preview_operations.update(operation, "ready", invitation=invitation,
+            operation = self._preview_operations.settle(operation, owner, "ready", invitation=invitation,
                                                         preview_url=url, response=payload)
             return self._operation_response(operation)
         except (RpcError, DefinitionError) as error:
             log.warning("preview activation result unknown for %s: %s", request.request_id,
                         self._redact(str(error)))
+            self._preview_operations.abandon(operation, owner)
             return self._json(503, {"status": "creating", "error": "result_unknown"})
         finally:
             _logout(client, request.request_id)

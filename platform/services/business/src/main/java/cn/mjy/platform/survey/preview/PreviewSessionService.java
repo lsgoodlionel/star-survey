@@ -158,7 +158,9 @@ public class PreviewSessionService {
         boolean inserted = sessions.insert(ctx.tenantId(), id, requestId, surveyId, draft, ctx.actorId(),
                 instance, generation, expires);
         if (!inserted) {
-            return sessions.findByRequest(requestId).orElseThrow();
+            PreviewSessionView concurrent = sessions.findByRequest(requestId).orElseThrow();
+            return "creating".equals(concurrent.status())
+                    ? ticket(ctx.tenantId(), concurrent, false) : concurrent;
         }
         return new Ticket(ctx.tenantId(), id, requestId, surveyId, draft.version(), ctx.actorId(), instance,
                 generation, expires, draft.definition(), true);

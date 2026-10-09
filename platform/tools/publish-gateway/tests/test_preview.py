@@ -6,10 +6,15 @@ import tempfile
 import time
 import unittest
 import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from .fixtures import sample_payload
 from .gateway_support import INSTANCE, encode, make_service, new_engine, signed_headers
+from .gateway_support import MovableClock
+from .fakes import FakeEngine
+from pubgw.service import PreviewOperationStore
 from .test_server import RunningServer, now_headers
 
 
@@ -94,10 +99,14 @@ class PreviewGatewayTest(unittest.TestCase):
 
     def test_unknown_prepare_result_is_reconciled_by_marker_without_second_import(self):
         payload = self.payload()
-        self.service._preview_operations.fail_after_import_once = True
+        clock = MovableClock()
+        operations = PreviewOperationStore(self.state_dir + "/prepare-crash.sqlite3", now=clock)
+        service = make_service(self.engine, self.state_dir, clock=clock, preview_operations=operations)
+        operations.fail_after_import_once = True
 
-        first = self.send("preview", payload)
-        second = self.send("preview", payload)
+        first = self.send_with(service, "preview", payload)
+        clock.advance(PreviewOperationStore.LEASE_SECONDS)
+        second = self.send_with(service, "preview", payload)
 
         self.assertEqual(503, first[0])
         self.assertEqual("creating", first[1]["status"])
@@ -107,16 +116,134 @@ class PreviewGatewayTest(unittest.TestCase):
 
     def test_unknown_activation_result_is_reconciled_without_second_activation_or_participant(self):
         payload = self.payload()
-        self.assertEqual("prepared", self.send("preview", payload)[1]["status"])
-        self.service._preview_operations.fail_after_activate_once = True
+        clock = MovableClock()
+        operations = PreviewOperationStore(self.state_dir + "/activate-crash.sqlite3", now=clock)
+        service = make_service(self.engine, self.state_dir, clock=clock, preview_operations=operations)
+        self.assertEqual("prepared", self.send_with(service, "preview", payload)[1]["status"])
+        operations.fail_after_activate_once = True
 
-        first = self.send("activate_preview", self.identity(payload))
-        second = self.send("activate_preview", self.identity(payload))
+        first = self.send_with(service, "activate_preview", self.identity(payload))
+        clock.advance(PreviewOperationStore.LEASE_SECONDS)
+        second = self.send_with(service, "activate_preview", self.identity(payload))
 
         self.assertEqual(503, first[0])
         self.assertEqual("ready", second[1]["status"])
         self.assertEqual(1, self.engine.methods().count("activate_survey"))
         self.assertEqual(1, self.engine.methods().count("add_participants"))
+
+    def test_concurrent_prepare_and_activate_are_single_flight_with_one_durable_result(self):
+        engine = BlockingPreviewEngine()
+        service = make_service(engine, self.state_dir)
+        payload = self.payload()
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            first = pool.submit(self.send_with, service, "preview", payload)
+            self.assertTrue(engine.import_entered.wait(5))
+            followers = [pool.submit(self.send_with, service, "preview", payload) for _ in range(5)]
+            engine.import_release.set()
+            prepared = [first.result(5)] + [future.result(5) for future in followers]
+
+        self.assertTrue(all(status == 200 for status, _ in prepared), prepared)
+        self.assertEqual(1, len({body["result"]["surveyId"] for _, body in prepared}))
+        self.assertEqual(1, engine.methods().count("import_survey"))
+
+        identity = self.identity(payload)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            first = pool.submit(self.send_with, service, "activate_preview", identity)
+            self.assertTrue(engine.activate_entered.wait(5))
+            followers = [pool.submit(self.send_with, service, "activate_preview", identity) for _ in range(5)]
+            engine.activate_release.set()
+            activated = [first.result(5)] + [future.result(5) for future in followers]
+
+        self.assertTrue(all(status == 200 for status, _ in activated), activated)
+        self.assertEqual(1, len({json.dumps(body, sort_keys=True) for _, body in activated}))
+        operation = service._preview_operations.get(
+            (payload["tenantId"], payload["sessionId"], payload["requestId"])
+        )
+        self.assertEqual("tok1", operation.invitation)
+        self.assertEqual(1, engine.methods().count("activate_survey"))
+        self.assertEqual(1, engine.methods().count("add_participants"))
+
+    def test_concurrent_close_is_single_flight_and_followers_replay_closed(self):
+        engine = BlockingPreviewEngine()
+        service = make_service(engine, self.state_dir)
+        payload = self.payload()
+        engine.import_release.set()
+        engine.activate_release.set()
+        self.assertEqual(200, self.send_with(service, "preview", payload)[0])
+        self.assertEqual(200, self.send_with(service, "activate_preview", self.identity(payload))[0])
+        identity = self.identity(payload)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            first = pool.submit(self.send_with, service, "close_preview", identity)
+            self.assertTrue(engine.close_entered.wait(5))
+            followers = [pool.submit(self.send_with, service, "close_preview", identity) for _ in range(5)]
+            engine.close_release.set()
+            closed = [first.result(5)] + [future.result(5) for future in followers]
+
+        self.assertTrue(all(status == 200 for status, _ in closed), closed)
+        self.assertEqual(1, len({json.dumps(body, sort_keys=True) for _, body in closed}))
+        self.assertEqual(1, engine.close_writes)
+
+    def test_operation_lease_cannot_be_taken_at_120_seconds_but_can_at_its_boundary(self):
+        clock = MovableClock()
+        operations = PreviewOperationStore(
+            self.state_dir + "/lease.sqlite3", now=clock, sleep=lambda seconds: None
+        )
+        service = make_service(self.engine, self.state_dir, clock=clock, preview_operations=operations)
+        payload = self.payload(expires_at="2027-01-15T08:30:00Z")
+        self.assertEqual(200, self.send_with(service, "preview", payload)[0])
+        self.assertEqual(200, self.send_with(service, "activate_preview", self.identity(payload))[0])
+        key = (payload["tenantId"], payload["sessionId"], payload["requestId"])
+
+        self.assertIsNotNone(operations.claim(key, ("ready",), "closing", "owner-a"))
+        clock.advance(120)
+        self.assertIsNone(operations.claim(key, ("ready",), "closing", "owner-b"))
+        clock.advance(PreviewOperationStore.LEASE_SECONDS - 121)
+        self.assertIsNone(operations.claim(key, ("ready",), "closing", "owner-b"))
+        clock.advance(1)
+        takeover = operations.claim(key, ("ready",), "closing", "owner-b")
+        self.assertIsNotNone(takeover)
+        self.assertEqual("owner-b", takeover.operation_owner)
+
+    @staticmethod
+    def send_with(service, method, payload):
+        body = encode(payload)
+        response = getattr(service, method)(signed_headers(body), body)
+        return response.status, json.loads(response.body.decode("utf-8"))
+
+
+class BlockingPreviewEngine(FakeEngine):
+    def __init__(self):
+        from .fixtures import sample_definition
+        super().__init__(sample_definition())
+        self.import_entered = threading.Event()
+        self.import_release = threading.Event()
+        self.activate_entered = threading.Event()
+        self.activate_release = threading.Event()
+        self.close_entered = threading.Event()
+        self.close_release = threading.Event()
+        self.close_writes = 0
+
+    def _import_survey(self, key, data, kind, name=None):
+        self.import_entered.set()
+        if not self.import_release.wait(5):
+            raise AssertionError("import barrier was not released")
+        return super()._import_survey(key, data, kind, name)
+
+    def _activate_survey(self, key, sid):
+        self.activate_entered.set()
+        if not self.activate_release.wait(5):
+            raise AssertionError("activate barrier was not released")
+        return super()._activate_survey(key, sid)
+
+    def _set_survey_properties(self, key, sid, properties):
+        if "expires" in properties:
+            self.close_writes += 1
+            self.close_entered.set()
+            if not self.close_release.wait(5):
+                raise AssertionError("close barrier was not released")
+        return super()._set_survey_properties(key, sid, properties)
 
 
 class PreviewHttpRouteTest(unittest.TestCase):
