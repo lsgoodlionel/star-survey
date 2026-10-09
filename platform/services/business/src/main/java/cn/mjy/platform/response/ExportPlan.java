@@ -1,5 +1,6 @@
 package cn.mjy.platform.response;
 
+import cn.mjy.platform.response.ExportRequest.PublishedVersion;
 import cn.mjy.platform.response.FieldDictionary.FieldEntry;
 import java.util.List;
 import java.util.Set;
@@ -45,11 +46,13 @@ record ExportPlan(List<PlannedSource> sources) {
     }
 
     /** 旧作业没有 versions 字段，按全部版本处理；新作业只保留筛选命中的来源。 */
-    ExportPlan selectVersions(List<Integer> versions) {
+    ExportPlan selectVersions(List<PublishedVersion> versions) {
         if (versions == null || versions.isEmpty()) {
             return this;
         }
-        return new ExportPlan(sources.stream().filter(source -> versions.contains(source.version())).toList());
+        return new ExportPlan(sources.stream()
+                .filter(source -> versions.stream().anyMatch(version -> version.value() == source.version()))
+                .toList());
     }
 
     Set<String> sensitiveFieldnames() {

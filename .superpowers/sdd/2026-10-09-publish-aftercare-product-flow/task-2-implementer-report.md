@@ -73,3 +73,21 @@ GREEN after implementation:
 - Admin Web 全量测试：25 个文件、211 个测试全部通过。
 - TypeScript typecheck、ESLint、production build 和 `git diff --check` 全部通过；build 仅有既存的主 chunk 体积提示。
 - 未修改或暂存 `platform/deploy/production/**` 及 Task4 的 `platform/README.md` 改动。
+
+## Review Fix Round 3
+
+收紧 `filter.versions` 的 JSON 输入边界，避免 Jackson 将非整数值静默转换为版本号：
+
+- 新增 `PublishedVersion` JSON 值类型，在反序列化阶段直接检查原始 `JsonNode`，只接受可落入 Java `int` 且大于 0 的 JSON integer token。
+- 明确拒绝浮点数（包括 `2.0`）、数字字符串、布尔值、数组内 `null`、非正数和 `int` overflow；统一返回既有 `400 invalid_request` envelope。
+- `versions` 字段缺省或字段值为 `null` 仍表示全部版本，保持旧请求和旧作业兼容。
+- 有效版本仍以 JSON number 回显，并在 `ExportSpec` 中去重、升序，继续参与幂等 spec equality、快照筛选和 worker 查询。
+
+### TDD 与验证
+
+- RED：先加入 MockMvc 边界测试，`[1.5]` 被旧实现错误接受为 202 并回显为 `[1]`，证明存在 coercion。
+- GREEN：`ResponseExportApiTest` 8/8 通过；非法 token 均返回 `400 invalid_request`，缺省/字段 `null` 和有效整数行为不回归。
+- 全部 `ResponseExport*Test`：12 个测试类、55 个测试全部通过，0 failure/error。
+- Admin Web 聚焦测试：6 个文件、77 个测试全部通过；全量测试：25 个文件、211 个测试全部通过。
+- TypeScript typecheck、ESLint 和 production build 全部通过；build 仅有既存的主 chunk 体积提示。
+- 未修改 production deployment 或 Task4 文件。

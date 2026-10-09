@@ -117,7 +117,13 @@ class ResponseExportApiTest {
                                 + "\"filter\":{\"states\":[\"engine_completed\"]},\"templateVersion\":\"default\"}"))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.surveyId").value(p.surveyId().toString()))
-                .andExpect(jsonPath("$.filter.states[0]").value("engine_completed"));
+                .andExpect(jsonPath("$.filter.states[0]").value("engine_completed"))
+                .andExpect(jsonPath("$.filter.versions").isEmpty());
+
+        mvc.perform(as(p.owner(), post(exportsUrl())).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"format\":\"csv\",\"filter\":{\"versions\":null}}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.filter.versions").isEmpty());
     }
 
     @Test
@@ -195,7 +201,12 @@ class ResponseExportApiTest {
         for (String body : new String[] {"{\"format\":\"pdf\"}", "{\"format\":\"csv\",\"templateVersion\":\"v9\"}",
                 "{\"format\":\"csv\",\"filter\":{\"states\":[\"bogus\"]}}",
                 "{\"format\":\"csv\",\"filter\":{\"versions\":[0]}}",
-                "{\"format\":\"csv\",\"filter\":{\"versions\":[null]}}", "{}", "not json"}) {
+                "{\"format\":\"csv\",\"filter\":{\"versions\":[1.5]}}",
+                "{\"format\":\"csv\",\"filter\":{\"versions\":[2.0]}}",
+                "{\"format\":\"csv\",\"filter\":{\"versions\":[\"2\"]}}",
+                "{\"format\":\"csv\",\"filter\":{\"versions\":[true]}}",
+                "{\"format\":\"csv\",\"filter\":{\"versions\":[null]}}",
+                "{\"format\":\"csv\",\"filter\":{\"versions\":[2147483648]}}", "{}", "not json"}) {
             mvc.perform(as(p.owner(), post(exportsUrl())).contentType(MediaType.APPLICATION_JSON).content(body))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error").value("invalid_request"));
