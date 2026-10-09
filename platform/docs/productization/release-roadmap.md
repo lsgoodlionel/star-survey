@@ -6,17 +6,20 @@
 
 ## 1. 权威来源与责任边界
 
-- 上位设计：`docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md`
-- 总计划：`docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md`
-- 机器能力映射：`platform/docs/productization/capability-map.md`
-- 全量核查报告：`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`
+- 上位设计：[`docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md`](../../../docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md)
+- 总计划：[`docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md`](../../../docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md)
+- 机器能力映射：[`platform/docs/productization/capability-map.md`](capability-map.md)
+- 全量核查报告：[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md)
 
 责任边界：总计划决定首批子计划及 A -> B -> C -> D 合并顺序；本路线图决定 Wave 0-6 的产品依赖、准入条件、
 准出条件和延后项；需求基线定义验收断言；能力映射记录当前机器事实。路线图中的“交付”都是目标，只有六层证据写入真源后
 才能成为当前状态。
 
-审计起点不变：13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入。当前 12 项能力仍为
-11 partial、1 not_started、0 accepted；因此本文件发布时没有任何能力可按 `accepted` 宣传。
+审计起点不变：13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入。
+
+能力摘要（机器事实）：accepted=0，partial=11，not_started=1，external=0。
+
+因此本文件发布时没有任何能力可按 `accepted` 宣传。
 
 ## 2. 冻结范围与出版条件
 

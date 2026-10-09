@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -20,6 +21,27 @@ EVIDENCE_LAYERS = (
 )
 OBSERVED_AT = "2026-10-09T12:00:00Z"
 COMMIT_SHA = "844d1516"
+CAPABILITY_STATUS_ORDER = ("accepted", "partial", "not_started", "external")
+CAPABILITY_SUMMARY_PATTERN = re.compile(
+    r"^能力摘要（机器事实）：accepted=(\d+)，partial=(\d+)，"
+    r"not_started=(\d+)，external=(\d+)。$",
+    flags=re.MULTILINE,
+)
+COUNTED_STATUS_PATTERN = re.compile(
+    r"(?<![A-Za-z_])\d+\s+(?:accepted|partial|not_started|external)(?![A-Za-z_])"
+)
+MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]\n]+)\]\(([^)\n]+)\)")
+MARKDOWN_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)\s*$", flags=re.MULTILINE)
+MANUAL_CAPABILITY_TABLE_PATTERN = re.compile(
+    r"^\|\s*能力\s*\|[^\n]*(?:总体状态|产品验收|accepted|partial|not_started|external)[^\n]*\|$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+CONTRADICTORY_COMPLETION_PATTERNS = (
+    re.compile(r"(?:全部|所有)(?:\s*\d+\s*项)?能力.{0,12}(?:已|均).{0,4}(?:验收通过|完成|accepted)", re.IGNORECASE),
+    re.compile(r"Wave\s*0\s*[-–—至]\s*6.{0,12}(?:全部|均|已).{0,4}(?:完成|交付)", re.IGNORECASE),
+    re.compile(r"生产(?:部署|环境|验收|版本).{0,8}(?:已|均).{0,4}(?:完成|通过|就绪|production-ready)", re.IGNORECASE),
+    re.compile(r"(?:GitHub\s*)?Release.{0,8}(?:已|均).{0,4}(?:完成|发布|通过)", re.IGNORECASE),
+)
 
 
 def load_renderer():
@@ -32,6 +54,121 @@ def load_renderer():
 
 
 renderer = load_renderer()
+
+
+def require_current_capability_summary(contents, repository_root=REPOSITORY_ROOT):
+    matches = CAPABILITY_SUMMARY_PATTERN.findall(contents)
+    if len(matches) != 1:
+        raise AssertionError("capability summary must appear exactly one time")
+    document = renderer.load_document(repository_root)
+    expected = {
+        status: sum(item["status"] == status for item in document["capabilities"])
+        for status in CAPABILITY_STATUS_ORDER
+    }
+    observed = dict(zip(CAPABILITY_STATUS_ORDER, (int(value) for value in matches[0])))
+    if observed != expected:
+        raise AssertionError(
+            f"capability summary does not match machine source: expected {expected}, got {observed}"
+        )
+    legacy_summaries = COUNTED_STATUS_PATTERN.findall(contents)
+    if legacy_summaries:
+        raise AssertionError("capability summary must use the single machine-fact format")
+
+
+def require_no_capability_summary(contents):
+    if CAPABILITY_SUMMARY_PATTERN.search(contents) or COUNTED_STATUS_PATTERN.search(contents):
+        raise AssertionError("capability summary is only allowed in roadmap and status documents")
+
+
+def require_repository_links(document_path, contents, references, repository_root=REPOSITORY_ROOT):
+    links = {}
+    for label, target in MARKDOWN_LINK_PATTERN.findall(contents):
+        normalized_label = label.strip()
+        if normalized_label.startswith("`") and normalized_label.endswith("`"):
+            normalized_label = normalized_label[1:-1]
+        links.setdefault(normalized_label, []).append(target.strip().strip("<>"))
+
+    repository_root = Path(repository_root).resolve()
+    document_directory = (repository_root / document_path).parent
+    for reference in references:
+        targets = links.get(reference, [])
+        if len(targets) != 1:
+            raise AssertionError(f"repository link must appear exactly once: {reference}")
+        resolved = (document_directory / targets[0]).resolve()
+        expected = (repository_root / reference).resolve()
+        if resolved != expected:
+            raise AssertionError(
+                f"link text/path disagree for {reference}: target resolves to {resolved}"
+            )
+        if not resolved.is_file():
+            raise AssertionError(f"link target does not exist for {reference}: {resolved}")
+
+
+def require_document_structure(document_name, contents):
+    required_headings = {
+        "requirements": (
+            (2, "1. 权威来源与责任边界"),
+            (2, "2. 冻结范围与出版条件"),
+            (2, "3. 角色"),
+            (2, "4. 通用交互与错误契约"),
+            (2, "5. 用户旅程需求"),
+            (2, "6. 状态维护规则"),
+        ),
+        "blueprint": (
+            (2, "1. 权威来源与责任边界"),
+            (2, "2. 冻结范围与出版条件"),
+            (2, "3. 信息架构"),
+            (3, "3.1 一级工作区"),
+            (3, "3.2 一级导航规则"),
+            (2, "4. 问卷内工作流"),
+            (2, "6. 引擎边界"),
+            (2, "8. Wave 0-6 在蓝图中的落点"),
+        ),
+        "roadmap": (
+            (2, "1. 权威来源与责任边界"),
+            (2, "2. 冻结范围与出版条件"),
+            (2, "3. 全局门禁"),
+            (3, "3.1 全局准入条件"),
+            (3, "3.2 全局准出条件"),
+            (2, "4. Wave 0-6"),
+            (2, "5. 依赖与发布顺序"),
+            (2, "6. 延后项"),
+        ),
+    }
+    headings = {
+        (len(prefix), title)
+        for prefix, title in MARKDOWN_HEADING_PATTERN.findall(contents)
+    }
+    for heading in required_headings[document_name]:
+        if heading not in headings:
+            raise AssertionError(f"missing required heading: {heading[1]}")
+
+    if document_name == "requirements":
+        journey_matches = list(re.finditer(r"^###\s+5\.\d+\s+.+$", contents, flags=re.MULTILINE))
+        if not journey_matches:
+            raise AssertionError("requirements document has no journey headings")
+        for index, match in enumerate(journey_matches):
+            end = journey_matches[index + 1].start() if index + 1 < len(journey_matches) else contents.find("\n## ", match.end())
+            body = contents[match.end():end if end != -1 else len(contents)]
+            for marker in ("正常流：", "失败流：", "验收断言："):
+                if marker not in body:
+                    raise AssertionError(f"journey heading lacks {marker}: {match.group(0)}")
+
+    if document_name == "roadmap":
+        for wave in range(7):
+            if not any(level == 3 and title.startswith(f"Wave {wave}：") for level, title in headings):
+                raise AssertionError(f"missing required heading: Wave {wave}")
+
+
+def require_no_manual_capability_table(contents):
+    if MANUAL_CAPABILITY_TABLE_PATTERN.search(contents):
+        raise AssertionError("manual capability table is not allowed outside capability-map.md")
+
+
+def require_no_contradictory_completion_claims(contents):
+    for pattern in CONTRADICTORY_COMPLETION_PATTERNS:
+        if pattern.search(contents):
+            raise AssertionError(f"contradictory completion declaration: {pattern.pattern}")
 
 
 class CapabilityValidationTest(unittest.TestCase):
@@ -437,29 +574,30 @@ class ProductizationDocumentationTest(unittest.TestCase):
     def test_canonical_documents_share_the_authority_chain_and_audit_baseline(self):
         for name, contents in self.read_canonical_documents().items():
             with self.subTest(document=name):
-                for reference in self.AUTHORITY_REFERENCES:
-                    self.assertIn(reference, contents)
+                require_repository_links(
+                    self.CANONICAL_DOCUMENTS[name],
+                    contents,
+                    self.AUTHORITY_REFERENCES,
+                )
                 self.assertRegex(contents, self.AUDIT_BASELINE_PATTERN)
-                self.assertIn("冻结范围", contents)
-                self.assertIn("出版条件", contents)
-                self.assertIn("责任边界", contents)
+                require_no_manual_capability_table(contents)
+                require_no_contradictory_completion_claims(contents)
+                if name == "roadmap":
+                    require_current_capability_summary(contents)
+                else:
+                    require_no_capability_summary(contents)
 
     def test_canonical_documents_cover_their_distinct_contracts(self):
         documents = self.read_canonical_documents()
-        for marker in ("角色", "正常流", "失败流", "验收断言"):
-            self.assertIn(marker, documents["requirements"])
-        for marker in ("信息架构", "一级导航", "问卷内工作流", "引擎边界"):
-            self.assertIn(marker, documents["blueprint"])
-        for marker in ("依赖", "准入条件", "准出条件", "延后项"):
-            self.assertIn(marker, documents["roadmap"])
+        for name, contents in documents.items():
+            with self.subTest(document=name):
+                require_document_structure(name, contents)
 
     def test_release_roadmap_covers_every_wave_without_publishing_unaccepted_work(self):
         roadmap = self.read_canonical_documents()["roadmap"]
         for wave in range(7):
             self.assertIn(f"Wave {wave}", roadmap)
-        self.assertIn("11 partial", roadmap)
-        self.assertIn("1 not_started", roadmap)
-        self.assertIn("0 accepted", roadmap)
+        require_current_capability_summary(roadmap)
         self.assertIn("六层证据", roadmap)
 
     def test_repository_status_documents_link_the_canonical_baseline(self):
@@ -468,16 +606,102 @@ class ProductizationDocumentationTest(unittest.TestCase):
             Path("platform/docs/p2/progress.md"),
             Path("platform/docs/traceability/requirement-tests.md"),
         )
-        canonical_paths = tuple(str(path) for path in self.CANONICAL_DOCUMENTS.values())
+        canonical_paths = tuple(str(path) for path in self.CANONICAL_DOCUMENTS.values()) + (
+            "platform/docs/productization/capability-map.md",
+        )
         for relative_path in status_documents:
             with self.subTest(document=str(relative_path)):
                 contents = (REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8")
-                for canonical_path in canonical_paths:
-                    self.assertIn(canonical_path, contents)
+                require_repository_links(relative_path, contents, canonical_paths)
                 self.assertRegex(contents, r"13[^\n]*86[^\n]*191[^\n]*15")
-                self.assertIn("11 partial", contents)
-                self.assertIn("1 not_started", contents)
-                self.assertIn("0 accepted", contents)
+                require_current_capability_summary(contents)
+                require_no_manual_capability_table(contents)
+                require_no_contradictory_completion_claims(contents)
+
+    def test_stale_capability_summary_is_rejected_when_the_machine_source_changes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository_root = Path(temp_dir)
+            source_path = repository_root / "platform/docs/productization/capabilities.json"
+            source_path.parent.mkdir(parents=True)
+            document = renderer.load_document(REPOSITORY_ROOT)
+            changed = next(item for item in document["capabilities"] if item["status"] == "partial")
+            changed["status"] = "external"
+            source_path.write_text(json.dumps(document), encoding="utf-8")
+            roadmap = self.read_canonical_documents()["roadmap"]
+
+            with self.assertRaisesRegex(AssertionError, "capability summary"):
+                require_current_capability_summary(roadmap, repository_root)
+
+    def test_capability_summary_must_appear_exactly_once(self):
+        roadmap = self.read_canonical_documents()["roadmap"]
+        summary = next(
+            line for line in roadmap.splitlines()
+            if line.startswith("能力摘要（机器事实）：")
+        )
+        duplicated = roadmap + f"\n{summary}\n"
+
+        with self.assertRaisesRegex(AssertionError, "exactly one"):
+            require_current_capability_summary(duplicated)
+
+    def test_repository_links_reject_missing_or_disagreeing_targets(self):
+        reference = "docs/superpowers/specs/design.md"
+        document_path = Path("platform/docs/productization/example.md")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository_root = Path(temp_dir)
+            (repository_root / reference).parent.mkdir(parents=True)
+            missing_source = f"[`{reference}`](../../../docs/superpowers/specs/design.md)"
+            with self.assertRaisesRegex(AssertionError, "does not exist"):
+                require_repository_links(
+                    document_path,
+                    missing_source,
+                    (reference,),
+                    repository_root,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository_root = Path(temp_dir)
+            expected = repository_root / reference
+            expected.parent.mkdir(parents=True)
+            expected.write_text("design", encoding="utf-8")
+            other = repository_root / "docs/superpowers/specs/other.md"
+            other.write_text("other", encoding="utf-8")
+            disagreeing_source = f"[`{reference}`](../../../docs/superpowers/specs/other.md)"
+            with self.assertRaisesRegex(AssertionError, "link text/path disagree"):
+                require_repository_links(
+                    document_path,
+                    disagreeing_source,
+                    (reference,),
+                    repository_root,
+                )
+
+    def test_structural_contract_rejects_a_required_heading_changed_to_plain_text(self):
+        blueprint = self.read_canonical_documents()["blueprint"]
+        mutated = blueprint.replace("## 3. 信息架构", "**信息架构**", 1)
+
+        with self.assertRaisesRegex(AssertionError, "heading"):
+            require_document_structure("blueprint", mutated)
+
+    def test_manual_capability_state_table_is_rejected(self):
+        source = self.read_canonical_documents()["requirements"] + """
+
+| 能力 | 总体状态 |
+|---|---|
+| 工作台 | accepted |
+"""
+        with self.assertRaisesRegex(AssertionError, "manual capability table"):
+            require_no_manual_capability_table(source)
+
+    def test_contradictory_completion_declarations_are_rejected(self):
+        declarations = (
+            "全部能力已验收通过。",
+            "Wave 0-6 全部完成。",
+            "生产验收已通过。",
+            "Release 已发布。",
+        )
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                with self.assertRaisesRegex(AssertionError, "completion declaration"):
+                    require_no_contradictory_completion_claims(declaration)
 
 
 if __name__ == "__main__":

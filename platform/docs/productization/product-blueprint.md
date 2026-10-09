@@ -6,17 +6,17 @@
 
 ## 1. 权威来源与责任边界
 
-- 上位设计：`docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md`
-- 总计划：`docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md`
-- 机器能力映射：`platform/docs/productization/capability-map.md`
-- 全量核查报告：`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`
+- 上位设计：[`docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md`](../../../docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md)
+- 总计划：[`docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md`](../../../docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md)
+- 机器能力映射：[`platform/docs/productization/capability-map.md`](capability-map.md)
+- 全量核查报告：[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md)
 
 责任边界：本蓝图定义信息架构、一级导航、问卷内工作流和引擎边界；需求旅程和验收断言见
 `platform/docs/productization/frontend-backend-requirements.md`；波次门禁见
 `platform/docs/productization/release-roadmap.md`；当前状态只认机器能力映射。本文不维护第二份状态表。
 
-审计起点保持 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；机器能力当前仍为
-11 partial、1 not_started、0 accepted。目标信息架构不能反向改写这两个事实。
+审计起点保持 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；机器能力当前状态只引用
+能力映射，不在蓝图复制摘要。目标信息架构不能反向改写这两个事实源。
 
 ## 2. 冻结范围与出版条件
 
@@ -39,7 +39,7 @@
 | 数据 | 回收了什么，如何交付？ | 答卷、摘要、字段、导出任务和下载 | Wave 3 闭环前不进入正式一级导航 |
 | 管理 | 谁能用、系统如何运行？ | 成员、组织连接、套餐、引擎实例、平台模板 | 按租户管理与平台运维分权 |
 
-当前正式路由只有 `/workspace` 与 `/surveys/:surveyId/{edit,import,preview,publish,versions/:version}`。
+当前正式业务工作区路由只有 `/workspace` 与 `/surveys/:surveyId/{edit,import,preview,publish,versions/:version}`。
 上表是 Wave 0-6 的目标 IA，不得把尚无页面的目标项写成当前路由。
 
 ### 3.2 一级导航规则

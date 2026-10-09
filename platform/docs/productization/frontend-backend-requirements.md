@@ -8,10 +8,10 @@
 
 本文必须与以下四个来源一起阅读：
 
-- 上位设计：`docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md`
-- 总计划：`docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md`
-- 机器能力映射：`platform/docs/productization/capability-map.md`
-- 全量核查报告：`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`
+- 上位设计：[`docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md`](../../../docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md)
+- 总计划：[`docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md`](../../../docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md)
+- 机器能力映射：[`platform/docs/productization/capability-map.md`](capability-map.md)
+- 全量核查报告：[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md)
 
 责任边界如下：上位设计决定目标、非目标和六层完成口径；总计划决定子计划顺序；
 `capabilities.json` 及其生成的能力映射保存当前机器事实；核查报告保存审计起点；本文只定义角色、
@@ -19,7 +19,7 @@
 `accepted`。
 
 核查报告的 305 条需求起点保持为：13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入。
-当前能力基线仍是 11 partial、1 not_started、0 accepted。两组数字属于不同口径，变化都必须有证据 diff。
+当前能力状态只引用机器能力映射，不在本文维护第二份摘要；需求审计与能力状态属于不同口径，变化都必须有证据 diff。
 
 ## 2. 冻结范围与出版条件
 

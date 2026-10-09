@@ -26,8 +26,12 @@
 - 机器生成状态：[`platform/docs/productization/capability-map.md`](docs/productization/capability-map.md)
 
 核查报告的需求起点仍为 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；当前机器能力状态仍为
-11 partial、1 not_started、0 accepted。三份 canonical 文档定义角色、用户流、信息架构和 Wave 0-6 门禁，
-不构成状态提升证据；状态只由 `capabilities.json` 的强类型六层证据和生成器决定。
+下列唯一摘要。
+
+能力摘要（机器事实）：accepted=0，partial=11，not_started=1，external=0。
+
+三份 canonical 文档定义角色、用户流、信息架构和 Wave 0-6 门禁，不构成状态提升证据；状态只由
+`capabilities.json` 的强类型六层证据和生成器决定。
 
 **测试基线**
 

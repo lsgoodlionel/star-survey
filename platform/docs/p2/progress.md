@@ -711,11 +711,14 @@ trace；gate 对事件字段、类型、URL 与长度做严格校验，并在 JS
 
 本节只同步执行入口，不改写上文工程波次历史：
 
-- `platform/docs/productization/frontend-backend-requirements.md`：角色、正常流、失败流和验收断言。
-- `platform/docs/productization/product-blueprint.md`：信息架构、一级导航、问卷内工作流和引擎边界。
-- `platform/docs/productization/release-roadmap.md`：Wave 0-6 的依赖、准入条件、准出条件和延后项。
-- `platform/docs/productization/capability-map.md`：由机器真源生成的当前能力状态和证据视图。
+- [`platform/docs/productization/frontend-backend-requirements.md`](../productization/frontend-backend-requirements.md)：角色、正常流、失败流和验收断言。
+- [`platform/docs/productization/product-blueprint.md`](../productization/product-blueprint.md)：信息架构、一级导航、问卷内工作流和引擎边界。
+- [`platform/docs/productization/release-roadmap.md`](../productization/release-roadmap.md)：Wave 0-6 的依赖、准入条件、准出条件和延后项。
+- [`platform/docs/productization/capability-map.md`](../productization/capability-map.md)：由机器真源生成的当前能力状态和证据视图。
 
 全量核查报告的需求审计起点仍为 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；
-机器能力当前仍为 11 partial、1 not_started、0 accepted。Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为
-Accepted；后续只在需求、后端、前端、流程、生产和追溯六层强类型证据齐全后更新状态。
+
+能力摘要（机器事实）：accepted=0，partial=11，not_started=1，external=0。
+
+Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Accepted；后续只在需求、后端、前端、流程、生产和追溯
+六层强类型证据齐全后更新状态。
