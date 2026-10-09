@@ -82,6 +82,20 @@ class TenantLifecycleApiTest {
     }
 
     @Test
+    void anOperatorCanRecoverATenantByItsStableCode() throws Exception {
+        String code = TenantFixtures.uniqueCode("recover");
+        createTenant(fixtures.operatorBearer(), code, "Recoverable").andExpect(status().isCreated());
+
+        mvc.perform(get(TENANTS).param("code", code).header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(code))
+                .andExpect(jsonPath("$.name").value("Recoverable"));
+        mvc.perform(get(TENANTS).param("code", "missing-tenant")
+                        .header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     void theWholeLifecycleWorksAndEveryStateChangeIsAudited() throws Exception {
         String id = createdTenantId();
         String operator = fixtures.operatorBearer();
@@ -160,6 +174,8 @@ class TenantLifecycleApiTest {
         createTenant(user, TenantFixtures.uniqueCode("x"), "X").andExpect(status().isForbidden());
         changeStatus(user, id, "active").andExpect(status().isForbidden());
         mvc.perform(get(TENANTS + "/" + id).header("Authorization", user)).andExpect(status().isForbidden());
+        mvc.perform(get(TENANTS).param("code", "x-1").header("Authorization", user))
+                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -172,5 +188,6 @@ class TenantLifecycleApiTest {
                         .content("{\"status\":\"active\"}"))
                 .andExpect(status().isUnauthorized());
         mvc.perform(get(TENANTS + "/" + id)).andExpect(status().isUnauthorized());
+        mvc.perform(get(TENANTS).param("code", "x-1")).andExpect(status().isUnauthorized());
     }
 }

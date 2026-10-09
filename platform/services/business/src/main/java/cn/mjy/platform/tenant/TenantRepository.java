@@ -35,6 +35,13 @@ public class TenantRepository {
                 .optional();
     }
 
+    public Optional<Tenant> findByCode(String code) {
+        return jdbc.sql("SELECT id, code, name, status, created_at FROM tenant WHERE code = :code")
+                .param("code", code)
+                .query(TenantRepository::map)
+                .optional();
+    }
+
     /** 带前置状态的条件更新：并发下只有一个迁移能成功，返回是否更新到了行。 */
     public boolean updateStatus(TenantId id, TenantStatus from, TenantStatus to) {
         int rows = jdbc.sql("UPDATE tenant SET status = :to WHERE id = :id AND status = :from")
