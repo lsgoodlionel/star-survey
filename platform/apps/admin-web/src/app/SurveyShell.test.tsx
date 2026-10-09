@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { beforeEach, expect, test, vi } from 'vitest';
 import type { ApiClient, ApiRequest } from '../shared/api/http';
+import { VersionDetailPage } from '../features/publish/VersionDetailPage';
 import { createAppRoutes } from './router';
 import { SurveyShell } from './SurveyShell';
 
@@ -17,6 +18,35 @@ const api: ApiClient = {
 };
 
 function handleRequest(request: ApiRequest<unknown>) {
+  if (request.path === `/v1/surveys/${surveyId}/versions/3`) {
+    return {
+      surveyId,
+      version: 3,
+      requestId: '50000000-0000-4000-8000-000000000001',
+      draftVersion: 7,
+      engineInstanceId: 'survey-shell-engine',
+      engineSid: 876543,
+      compilerVersion: '2.1.0',
+      fingerprintVersion: '1',
+      fingerprint: 'sha256:survey-shell-version',
+      language: 'zh-Hans',
+      enginePublishedAt: '2026-10-09T08:30:00Z',
+      publishedBy: 'publisher-1',
+      publishedAt: '2026-10-09T08:30:02Z',
+      fields: [{
+        questionUuid: questionId,
+        code: 'Q1',
+        type: 'L',
+        fieldname: '876543X1X1Q1',
+        aid: '',
+        scale: 0,
+      }],
+      definition: { definitionVersion: 2, title: '客户反馈问卷' },
+      live: true,
+      supersededAt: null,
+      engineClosedAt: null,
+    };
+  }
   if (request.path === `/v1/surveys/${surveyId}`) {
     return {
       id: surveyId,
@@ -83,7 +113,17 @@ function renderSurveyShell(initialEntry: string) {
         { path: 'import', element: <p>导入内容</p> },
         { path: 'preview', element: <p>预览内容</p> },
         { path: 'publish', element: <p>发布内容</p> },
-        { path: 'versions/:version', element: <p>版本内容</p> },
+        {
+          path: 'versions/:version',
+          element: (
+            <VersionDetailPage
+              api={api}
+              surveyId={surveyId}
+              tenantId="tenant-a"
+              version={3}
+            />
+          ),
+        },
       ],
     }],
     { initialEntries: [initialEntry] },
@@ -140,7 +180,7 @@ test('loadsSurveyContextAndPreservesTheSelectedQuestionAcrossWorkflowLinks', asy
   expect(within(tabs).queryByRole('link', { name: /admin/i })).not.toBeInTheDocument();
 });
 
-test('keepsVersionDetailsInsideThePublishAndVersionsTab', async () => {
+test('rendersVersionDetailsAsShellContentWithCollapsedTechnicalInformation', async () => {
   renderSurveyShell(`/surveys/${surveyId}/versions/3?question=${questionId}`);
 
   await screen.findByRole('heading', { name: '客户反馈问卷' });
@@ -149,7 +189,22 @@ test('keepsVersionDetailsInsideThePublishAndVersionsTab', async () => {
     'aria-current',
     'page',
   );
-  expect(screen.getByText('版本内容')).toBeInTheDocument();
+  await screen.findByRole('heading', { name: '已发布版本 3' });
+  expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  expect(screen.getByRole('heading', { level: 2, name: '已发布版本 3' })).toBeInTheDocument();
+
+  const technicalDetails = screen.getByText('技术信息').closest('details');
+  expect(technicalDetails).not.toBeNull();
+  expect(technicalDetails).not.toHaveAttribute('open');
+  for (const value of [
+    'survey-shell-engine',
+    '876543',
+    '2.1.0',
+    'sha256:survey-shell-version',
+    'publisher-1',
+  ]) {
+    expect(within(technicalDetails!).getByText(value)).toBeInTheDocument();
+  }
 });
 
 test('registersSurveyPagesAsChildrenOfTheProtectedSurveyShell', () => {

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { LockKeyhole } from 'lucide-react';
 import { useParams } from 'react-router-dom';
+import { useSurveyShell } from '../../app/SurveyShell';
 import { useAuth } from '../auth/AuthProvider';
 import type { ApiClient } from '../../shared/api/http';
 import { getPublishedVersion, versionQueryKey } from '../../shared/api/approvals';
@@ -15,6 +16,7 @@ interface VersionDetailPageProps {
 }
 
 export function VersionDetailPage({ api, surveyId, tenantId, version }: VersionDetailPageProps) {
+  const surveyShell = useSurveyShell();
   const query = useQuery({
     queryKey: versionQueryKey(tenantId, surveyId, version),
     queryFn: ({ signal }) => getPublishedVersion(api, surveyId, version, signal),
@@ -24,21 +26,32 @@ export function VersionDetailPage({ api, surveyId, tenantId, version }: VersionD
   if (query.error || !query.data) return <p role="alert">该版本不存在或不可访问。</p>;
 
   const item = query.data;
+  const VersionHeading = surveyShell ? 'h2' : 'h1';
   return (
     <main className="version-detail">
       <header className="version-detail__header">
-        <div><p className="publish-eyebrow">不可变发布快照</p><h1>已发布版本 {item.version}</h1></div>
+        <div>
+          <p className="publish-eyebrow">不可变发布快照</p>
+          <VersionHeading>已发布版本 {item.version}</VersionHeading>
+        </div>
         <span className={`live-state ${item.live ? 'live-state--active' : ''}`}><LockKeyhole size={16} aria-hidden="true" />{item.live ? '当前在线' : '历史版本'}</span>
       </header>
 
       <dl className="version-binding">
-        <div><dt>引擎绑定</dt><dd>{item.engineInstanceId} / {item.engineSid}</dd></div>
         <div><dt>发布时间</dt><dd>{formatDate(item.publishedAt)}</dd></div>
-        <div><dt>发布人</dt><dd>{item.publishedBy}</dd></div>
         <div><dt>草稿版本</dt><dd>{item.draftVersion}</dd></div>
-        <div><dt>编译器</dt><dd>{item.compilerVersion}</dd></div>
-        <div><dt>指纹</dt><dd className="version-fingerprint">{item.fingerprint}</dd></div>
       </dl>
+
+      <details className="version-technical">
+        <summary>技术信息</summary>
+        <dl className="version-technical-grid">
+          <div><dt>引擎实例</dt><dd>{item.engineInstanceId}</dd></div>
+          <div><dt>问卷 SID</dt><dd>{item.engineSid}</dd></div>
+          <div><dt>编译器</dt><dd>{item.compilerVersion}</dd></div>
+          <div><dt>指纹</dt><dd className="version-fingerprint">{item.fingerprint}</dd></div>
+          <div><dt>发布人标识</dt><dd>{item.publishedBy}</dd></div>
+        </dl>
+      </details>
 
       <section className="version-fields" aria-labelledby="version-fields-title">
         <h2 id="version-fields-title">题目字段映射</h2>

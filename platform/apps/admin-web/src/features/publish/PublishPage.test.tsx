@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@testing-library/react';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -666,9 +666,13 @@ test('showsPublishedVersionsAsImmutableReadOnlyData', async () => {
     <VersionDetailPage api={api} surveyId={surveyId} tenantId="tenant-a" version={2} />,
   );
 
-  expect(await screen.findByRole('heading', { name: '已发布版本 2' })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { level: 1, name: '已发布版本 2' })).toBeInTheDocument();
   expect(screen.getByText('当前在线')).toBeInTheDocument();
-  expect(screen.getByText('test-engine / 876543')).toBeInTheDocument();
+  const technicalDetails = screen.getByText('技术信息').closest('details');
+  expect(technicalDetails).not.toBeNull();
+  expect(technicalDetails).not.toHaveAttribute('open');
+  expect(within(technicalDetails!).getByText('test-engine')).toBeInTheDocument();
+  expect(within(technicalDetails!).getByText('876543')).toBeInTheDocument();
   expect(screen.getByText('Q1')).toBeInTheDocument();
   expect(screen.getByText('876543X1X1Q1')).toBeInTheDocument();
   expect(screen.getByText(/员工体验调查（发布快照）/)).toBeInTheDocument();
