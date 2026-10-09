@@ -235,6 +235,7 @@ MJY_PLATFORM_EVENTS_SECRET="$(<"$EVENT_SECRET_FILE")"
 export MJY_PLATFORM_EVENTS_SECRET
 rm -f "$EVENT_SECRET_FILE"
 prepare_test_stack
+docker exec "$CONTAINER" rm -rf tmp/runtime/cache
 enable_remote_control
 db_query "DELETE FROM lime_plugins WHERE name = 'MjyPlatformBridge'" >/dev/null
 db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)

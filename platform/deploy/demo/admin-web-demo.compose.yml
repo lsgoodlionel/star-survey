@@ -1,0 +1,106 @@
+services:
+  engine-db:
+    image: mariadb:10.11
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: limesurvey
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - engine-data:/var/lib/mysql
+    networks:
+      default:
+        aliases:
+          - test-db
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  engine:
+    build:
+      context: ../dev
+      dockerfile: Dockerfile
+    image: survey-web
+    ports:
+      - "127.0.0.1::80"
+    volumes:
+      - ../../..:/var/www/html
+      - ../test/config.mysql.php:/var/www/html/application/config/config.php:ro
+      - engine-runtime:/var/www/html/application/runtime
+      - engine-tmp:/var/www/html/tmp
+    environment:
+      MJY_ENGINE_INSTANCE_ID: admin-web-demo-engine-01
+      MJY_PLATFORM_EVENTS_URL: http://platform:8080/internal/engine-events
+      MJY_PLATFORM_EVENTS_SECRET:
+    depends_on:
+      engine-db:
+        condition: service_healthy
+
+  platform-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - platform-data:/var/lib/postgresql/data
+      - ../platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d platform"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  platform:
+    image: maven:3.9-eclipse-temurin-21
+    command: ["java", "-jar", "/app/business.jar"]
+    ports:
+      - "127.0.0.1::8080"
+    volumes:
+      - ${ADMIN_WEB_DEMO_PLATFORM_JAR:?set ADMIN_WEB_DEMO_PLATFORM_JAR}:/app/business.jar:ro
+    environment:
+      PLATFORM_DB_URL: jdbc:postgresql://platform-db:5432/platform
+      PLATFORM_DB_APP_USER: platform_app
+      PLATFORM_DB_APP_PASSWORD: platform_app
+      PLATFORM_DB_OWNER_USER: platform_owner
+      PLATFORM_DB_OWNER_PASSWORD: platform_owner
+      PLATFORM_JWT_HMAC_SECRET:
+      PLATFORM_ENGINE_EVENTS_SECRET:
+      PLATFORM_PUBGW_SECRET: ${PUBGW_SHARED_SECRET}
+      PLATFORM_PUBGW_URL: http://gateway:8080
+    depends_on:
+      platform-db:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: ../../tools/publish-gateway
+    image: survey-publish-gateway:adminweb-demo
+    ports:
+      - "127.0.0.1::8080"
+    volumes:
+      - ${ADMIN_WEB_DEMO_ENGINES_FILE:?set ADMIN_WEB_DEMO_ENGINES_FILE}:/app/engines.json:ro
+    environment:
+      PUBGW_SHARED_SECRET:
+      PUBGW_ENGINES_CONFIG: /app/engines.json
+      PUBGW_ENGINE_ADMIN_WEB_PASSWORD:
+    depends_on:
+      - engine
+
+  admin-web:
+    build:
+      context: ../../apps/admin-web
+      args:
+        VITE_E2E: "true"
+    image: survey-admin-web-demo
+    ports:
+      - "127.0.0.1::80"
+    depends_on:
+      - platform
+
+volumes:
+  engine-data:
+  engine-runtime:
+  engine-tmp:
+  platform-data:

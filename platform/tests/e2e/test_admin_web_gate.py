@@ -41,6 +41,22 @@ def run_bash(script, env=None):
 
 
 class AdminWebGateTest(unittest.TestCase):
+    def test_local_engine_configs_disable_ssl_enforcement_and_alerts(self):
+        config_dir = Path(__file__).parents[2] / "deploy/test"
+        for name in ("config.mysql.php", "config.pgsql.php"):
+            text = (config_dir / name).read_text(encoding="utf-8")
+            self.assertIn("'force_ssl' => 'off'", text)
+            self.assertIn("'ssl_disable_alert' => 1", text)
+
+    def test_runner_clears_settings_cache_after_preparing_the_engine(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        text = runner.read_text(encoding="utf-8")
+        prepare = text.index("prepare_test_stack")
+        clear = text.index("tmp/runtime/cache", prepare)
+        enable = text.index("enable_remote_control", prepare)
+        self.assertLess(prepare, clear)
+        self.assertLess(clear, enable)
+
     def test_browser_token_is_valid_for_exactly_ten_minutes(self):
         gate = load_gate()
         claims = decode_claims(gate.mint_token(
