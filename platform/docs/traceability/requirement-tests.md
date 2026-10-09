@@ -40,7 +40,18 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
 校验直接红。
 
 截至 2026-10-09，校验器自身 **72 tests** 通过；索引含 **305** 条需求，机器登记 **80** 条证据、
-覆盖 **37** 条需求，自有源码引用 **95** 个需求编号，并已与 02 矩阵对账通过。
+覆盖 **37** 条需求，自有源码引用 **114** 个需求编号，并已与 02 矩阵对账通过。
+
+产品化的人读基线现统一为：
+
+- `platform/docs/productization/frontend-backend-requirements.md`
+- `platform/docs/productization/product-blueprint.md`
+- `platform/docs/productization/release-roadmap.md`
+- `platform/docs/productization/capability-map.md`
+
+需求矩阵审计起点保持 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；能力映射当前保持
+11 partial、1 not_started、0 accepted。前三份 canonical 文档只定义需求、IA 和发布门禁；它们不是测试通过证明，
+也不能代替 `capabilities.json` 中需求、后端、前端、流程、生产、追溯六层强类型证据。
 
 ### 管理端首期的局部断言索引
 

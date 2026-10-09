@@ -706,3 +706,16 @@ trace；gate 对事件字段、类型、URL 与长度做严格校验，并在 JS
 - **自动化通过**：Final fix wave 管理端 20 files / 177 tests、typecheck、lint、build 和 Python admin-web gate 67 tests 通过；原 Task 7 backend 1421 tests 保持记录；fresh real-stack Playwright 10/10 及最终全链路核对通过。真实 Chromium 对 768/819/820/1024/1440、焦点、对话框、44px 与 DOM overflow 做行为测量；运行中 `adminweb-demo` 巡检遍历 `客户体验研究 / 2026 Q4 / 品牌跟踪调查` 并拒绝 E2E 时间戳资源。
 - **用户可见**：768、1024、1440 和 Pixel 7 截图人工检查确认固定 demo 名称可见、无明显遮挡或截断，业务导航不链接 `/admin`。截图本身不作为 DOM overflow、44px 或焦点几何的证明。
 - **边界**：`820–1179px` 当前只保留现有布局并由 Task 7 保证不溢出；Phase C 约定的双栏 + 检查器仍未实现，Phase C/D 均保留为后续计划。生产 SSL 仅有部署前真实探测 gate，不是 production-ready。PR #10 于 2026-10-09 再次核验仍为 OPEN、未合并，依赖仍待合并。
+
+## 产品化需求、蓝图与路线图基线（2026-10-09）
+
+本节只同步执行入口，不改写上文工程波次历史：
+
+- `platform/docs/productization/frontend-backend-requirements.md`：角色、正常流、失败流和验收断言。
+- `platform/docs/productization/product-blueprint.md`：信息架构、一级导航、问卷内工作流和引擎边界。
+- `platform/docs/productization/release-roadmap.md`：Wave 0-6 的依赖、准入条件、准出条件和延后项。
+- `platform/docs/productization/capability-map.md`：由机器真源生成的当前能力状态和证据视图。
+
+全量核查报告的需求审计起点仍为 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；
+机器能力当前仍为 11 partial、1 not_started、0 accepted。Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为
+Accepted；后续只在需求、后端、前端、流程、生产和追溯六层强类型证据齐全后更新状态。

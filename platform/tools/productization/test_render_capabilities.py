@@ -412,5 +412,73 @@ class CapabilityRenderingTest(unittest.TestCase):
         self.assertEqual(expected, output_path.read_text(encoding="utf-8"))
 
 
+class ProductizationDocumentationTest(unittest.TestCase):
+    CANONICAL_DOCUMENTS = {
+        "requirements": Path("platform/docs/productization/frontend-backend-requirements.md"),
+        "blueprint": Path("platform/docs/productization/product-blueprint.md"),
+        "roadmap": Path("platform/docs/productization/release-roadmap.md"),
+    }
+    AUTHORITY_REFERENCES = (
+        "docs/superpowers/specs/2026-10-09-platform-productization-production-upgrade-design.md",
+        "docs/superpowers/plans/2026-10-09-platform-productization-production-upgrade.md",
+        "platform/docs/productization/capability-map.md",
+        "docs/audits/2026-10-09-product-alignment/14-full-development-report.md",
+    )
+    AUDIT_BASELINE_PATTERN = r"13[^\n]*86[^\n]*191[^\n]*15"
+
+    def read_canonical_documents(self):
+        contents = {}
+        for name, relative_path in self.CANONICAL_DOCUMENTS.items():
+            path = REPOSITORY_ROOT / relative_path
+            self.assertTrue(path.is_file(), f"missing canonical document: {relative_path}")
+            contents[name] = path.read_text(encoding="utf-8")
+        return contents
+
+    def test_canonical_documents_share_the_authority_chain_and_audit_baseline(self):
+        for name, contents in self.read_canonical_documents().items():
+            with self.subTest(document=name):
+                for reference in self.AUTHORITY_REFERENCES:
+                    self.assertIn(reference, contents)
+                self.assertRegex(contents, self.AUDIT_BASELINE_PATTERN)
+                self.assertIn("冻结范围", contents)
+                self.assertIn("出版条件", contents)
+                self.assertIn("责任边界", contents)
+
+    def test_canonical_documents_cover_their_distinct_contracts(self):
+        documents = self.read_canonical_documents()
+        for marker in ("角色", "正常流", "失败流", "验收断言"):
+            self.assertIn(marker, documents["requirements"])
+        for marker in ("信息架构", "一级导航", "问卷内工作流", "引擎边界"):
+            self.assertIn(marker, documents["blueprint"])
+        for marker in ("依赖", "准入条件", "准出条件", "延后项"):
+            self.assertIn(marker, documents["roadmap"])
+
+    def test_release_roadmap_covers_every_wave_without_publishing_unaccepted_work(self):
+        roadmap = self.read_canonical_documents()["roadmap"]
+        for wave in range(7):
+            self.assertIn(f"Wave {wave}", roadmap)
+        self.assertIn("11 partial", roadmap)
+        self.assertIn("1 not_started", roadmap)
+        self.assertIn("0 accepted", roadmap)
+        self.assertIn("六层证据", roadmap)
+
+    def test_repository_status_documents_link_the_canonical_baseline(self):
+        status_documents = (
+            Path("platform/README.md"),
+            Path("platform/docs/p2/progress.md"),
+            Path("platform/docs/traceability/requirement-tests.md"),
+        )
+        canonical_paths = tuple(str(path) for path in self.CANONICAL_DOCUMENTS.values())
+        for relative_path in status_documents:
+            with self.subTest(document=str(relative_path)):
+                contents = (REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8")
+                for canonical_path in canonical_paths:
+                    self.assertIn(canonical_path, contents)
+                self.assertRegex(contents, r"13[^\n]*86[^\n]*191[^\n]*15")
+                self.assertIn("11 partial", contents)
+                self.assertIn("1 not_started", contents)
+                self.assertIn("0 accepted", contents)
+
+
 if __name__ == "__main__":
     unittest.main()

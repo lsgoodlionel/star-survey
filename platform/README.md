@@ -18,13 +18,24 @@
 | P3 商业与业务应用 | 🔄 考试与测评（WP-09/10）已起步 |
 | P4–P5 | ⬜ |
 
+**产品化需求基线（2026-10-09）**
+
+- 前后端需求：[`platform/docs/productization/frontend-backend-requirements.md`](docs/productization/frontend-backend-requirements.md)
+- 产品蓝图：[`platform/docs/productization/product-blueprint.md`](docs/productization/product-blueprint.md)
+- 发布路线图：[`platform/docs/productization/release-roadmap.md`](docs/productization/release-roadmap.md)
+- 机器生成状态：[`platform/docs/productization/capability-map.md`](docs/productization/capability-map.md)
+
+核查报告的需求起点仍为 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；当前机器能力状态仍为
+11 partial、1 not_started、0 accepted。三份 canonical 文档定义角色、用户流、信息架构和 Wave 0-6 门禁，
+不构成状态提升证据；状态只由 `capabilities.json` 的强类型六层证据和生成器决定。
+
 **测试基线**
 
 | 套件 | 数量 | 说明 |
 |---|---|---|
 | 平台 Java | **1421 通过 / 175 类** | Task 7 新建隔离库；0 失败 0 错误 0 跳过 |
 | 发布网关 Python | **1180 通过** | 0 失败 |
-| 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
+| 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、114 个源码编号；矩阵校验通过 |
 | 管理端 Vitest | **20 个文件 / 174 通过** | lint、typecheck 与 build 同步通过 |
 | 管理端生产构建 | **2089 modules** | 构建通过；大 chunk 提示为非阻断维护项 |
 | 管理端真实 E2E | **10 通过（30.2s，fresh stack）** | 768/819/820/1024/1440/Pixel 7、44px、无溢出、键盘/对话框、最终全链路核对成功后归档 |
