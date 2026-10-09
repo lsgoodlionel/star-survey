@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from collections import namedtuple
@@ -38,11 +39,18 @@ class FakeRunner:
         stdout = kwargs.get("stdout")
         if stdout is not None and hasattr(stdout, "write"):
             if "pg_dump" in command:
-                stdout.write(b"PGDUMP\0consistent")
+                stdout.write(b"PGDMP\0consistent")
             elif any("mariadb-dump" in value for value in command):
                 stdout.write(b"-- MariaDB dump\nconsistent\n")
             elif command[:2] == ("docker", "cp"):
-                stdout.write(b"volume archive")
+                with tarfile.open(fileobj=stdout, mode="w|") as archive:
+                    info = tarfile.TarInfo("data")
+                    info.type = tarfile.DIRTYPE
+                    archive.addfile(info)
+                    payload = b"data"
+                    info = tarfile.TarInfo("data/value.txt")
+                    info.size = len(payload)
+                    archive.addfile(info, io.BytesIO(payload))
         if command[:3] == ("docker", "compose", "-f") and "ps" in command:
             payload = [
                 {"Service": name, "State": "running", "Health": "healthy"}
@@ -81,8 +89,18 @@ class BackupRestoreTest(unittest.TestCase):
         (release / "compose.yml").write_text("name: survey-production\nservices: {}\n")
         (release / ".env").write_text("PUBLIC_HOST=survey.example.com\n")
         (release / "release.json").write_text(json.dumps({
+            "schemaVersion": 1,
             "version": "0.2.0",
+            "minimumSourceVersion": "0.1.0",
             "database": {"schema": "920", "compatibleSourceSchemas": ["920"]},
+            "images": {
+                name: "example/{}@sha256:{}".format(name.lower(), digit * 64)
+                for name, digit in zip(
+                    ("CADDY_IMAGE", "ADMIN_IMAGE", "PLATFORM_IMAGE", "PUBLISH_GATEWAY_IMAGE",
+                     "ENGINE_IMAGE", "POSTGRES_IMAGE", "MARIADB_IMAGE"),
+                    "abcdef1",
+                )
+            },
         }))
         (self.target / "current").write_text("0.2.0\n")
         secret_dir = self.target / "shared" / "secrets"
@@ -103,15 +121,114 @@ class BackupRestoreTest(unittest.TestCase):
         expected = {
             "postgres.dump.enc", "mariadb.sql.enc", "caddy-data.tar.enc", "caddy-config.tar.enc",
             "platform-assets.tar.enc", "platform-exports.tar.enc", "publish-gateway-state.tar.enc",
-            "engine-upload.tar.enc", "engine-runtime.tar.enc", "SHA256SUMS",
+            "engine-upload.tar.enc", "engine-runtime.tar.enc",
         }
         self.assertEqual(expected, set(manifest["files"]))
+        self.assertEqual(2, manifest["schemaVersion"])
         self.assertEqual("920", manifest["databaseSchema"])
+        self.assertEqual(7, len(manifest["images"]))
+        self.assertRegex(manifest["releaseManifestSha256"], r"^[0-9a-f]{64}$")
+        self.assertTrue((output / "CONTROL-HMAC").is_file())
         self.assertFalse(any(path.suffix in {".dump", ".sql", ".tar"} for path in output.iterdir()))
         sums = (output / "SHA256SUMS").read_text().splitlines()
         self.assertEqual(9, len(sums))
         for name, digest in manifest["files"].items():
             self.assertEqual(digest, hashlib.sha256((output / name).read_bytes()).hexdigest())
+
+    def test_control_metadata_and_checksums_are_authenticated(self):
+        for name, mutation in (
+            ("manifest.json", lambda value: value.replace(b'"version":"0.2.0"', b'"version":"9.9.9"')),
+            ("SHA256SUMS", lambda value: value.replace(value[:1], b"0", 1)),
+            ("CONTROL-HMAC", lambda value: b"0" * len(value)),
+        ):
+            with self.subTest(name=name):
+                output = self.create_backup(name="tampered-" + name.lower().replace(".", "-"))
+                path = output / name
+                path.write_bytes(mutation(path.read_bytes()))
+                runner = FakeRunner()
+                with self.assertRaises(self.restore.RestoreIntegrityError):
+                    self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+                self.assertEqual([], runner.calls)
+
+    def test_restore_enforces_authenticated_version_and_image_identity_gates(self):
+        for field in ("version", "images"):
+            with self.subTest(field=field):
+                output = self.create_backup(name="identity-" + field)
+                manifest = json.loads((output / "manifest.json").read_text())
+                if field == "version":
+                    manifest["version"] = "9.9.9"
+                else:
+                    manifest["images"]["ENGINE_IMAGE"] = "example/engine@sha256:" + "9" * 64
+                self.backup.rewrite_authenticated_control(output, self.key_file, manifest)
+                runner = FakeRunner()
+                with self.assertRaises(self.restore.RestoreIntegrityError):
+                    self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+                self.assertEqual([], runner.calls)
+
+    def _malicious_tar(self, attack):
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w:gz" if attack == "decompression-bomb" else "w") as archive:
+            if attack == "duplicate":
+                for payload in (b"first", b"second"):
+                    info = tarfile.TarInfo("same.txt")
+                    info.size = len(payload)
+                    archive.addfile(info, io.BytesIO(payload))
+            elif attack == "case-collision":
+                for name in ("Data.txt", "data.txt"):
+                    info = tarfile.TarInfo(name)
+                    info.size = 1
+                    archive.addfile(info, io.BytesIO(b"x"))
+            elif attack == "count-limit":
+                for index in range(4):
+                    info = tarfile.TarInfo(f"{index}.txt")
+                    info.size = 1
+                    archive.addfile(info, io.BytesIO(b"x"))
+            elif attack == "size-limit":
+                info = tarfile.TarInfo("large.bin")
+                info.size = 9
+                archive.addfile(info, io.BytesIO(b"123456789"))
+            elif attack == "decompression-bomb":
+                payload = b"0" * 4096
+                info = tarfile.TarInfo("compressed.bin")
+                info.size = len(payload)
+                archive.addfile(info, io.BytesIO(payload))
+            else:
+                info = tarfile.TarInfo({"absolute": "/escape", "traversal": "../escape"}.get(attack, "unsafe"))
+                info.type = {
+                    "symlink": tarfile.SYMTYPE,
+                    "hardlink": tarfile.LNKTYPE,
+                    "fifo": tarfile.FIFOTYPE,
+                    "device": tarfile.CHRTYPE,
+                }.get(attack, tarfile.REGTYPE)
+                if attack == "socket":
+                    info.type = b"s"
+                info.linkname = "/run/secrets/platform_jwt_hmac_secret"
+                archive.addfile(info)
+        return stream.getvalue()
+
+    def test_all_seven_volume_archives_reject_unsafe_members_before_docker(self):
+        attacks = ("absolute", "traversal", "symlink", "hardlink", "fifo", "device", "socket",
+                   "duplicate", "case-collision", "count-limit", "size-limit", "decompression-bomb")
+        for index, volume in enumerate(self.backup.VOLUME_SOURCES):
+            for attack in attacks:
+                with self.subTest(volume=volume, attack=attack):
+                    output = self.create_backup(name=f"attack-{index}-{attack}")
+                    plain = self.root / f"{index}-{attack}.tar"
+                    plain.write_bytes(self._malicious_tar(attack))
+                    encrypted = output / f"{volume}.enc"
+                    encrypted.unlink()
+                    FakeCipher().encrypt(plain, encrypted, self.key_file)
+                    self.backup.rewrite_authenticated_control(output, self.key_file)
+                    runner = FakeRunner()
+                    limits = {"max_members": 3, "max_file_bytes": 8, "max_total_bytes": 64}
+                    if attack == "decompression-bomb":
+                        limits = {"max_members": 3, "max_file_bytes": 8192, "max_total_bytes": 8192,
+                                  "max_expansion_ratio": 2, "expansion_slack_bytes": 0}
+                    with self.assertRaises(self.restore.RestoreIntegrityError):
+                        self.restore.RestoreManager(
+                            self.target, runner=runner, cipher=FakeCipher(), archive_limits=limits
+                        ).restore(output)
+                    self.assertEqual([], runner.calls)
 
     def test_real_cipher_round_trip_authenticates_before_decryption(self):
         source = self.root / "plain.bin"
@@ -183,6 +300,14 @@ class BackupRestoreTest(unittest.TestCase):
                 self.assertEqual([], runner.calls)
                 if mutation == "truncate":
                     payload.write_bytes(b"repaired-for-cleanup")
+
+    def test_restore_rejects_unlisted_empty_directory_before_docker(self):
+        output = self.create_backup(name="unexpected-directory")
+        (output / "unlisted").mkdir()
+        runner = FakeRunner()
+        with self.assertRaises(self.restore.RestoreIntegrityError):
+            self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+        self.assertEqual([], runner.calls)
 
     def test_restore_validates_isolated_project_before_touching_production(self):
         output = self.create_backup()

@@ -19,6 +19,20 @@ MODULE_PATH = PRODUCTION_DIR / "surveyctl.py"
 FIXTURE_MANIFEST = Path(__file__).resolve().parent / "fixtures" / "release.json"
 
 
+def write_fake_backup(output, version="0.2.0", schema="920"):
+    output.mkdir(parents=True, exist_ok=True)
+    payload = output / "payload.bin"
+    payload.write_bytes(b"verified backup")
+    digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+    images = json.loads(FIXTURE_MANIFEST.read_text())["images"]
+    (output / "manifest.json").write_text(json.dumps({
+        "schemaVersion": 2, "version": version, "databaseSchema": schema,
+        "releaseManifestSha256": "a" * 64, "images": images, "files": {"payload.bin": digest},
+    }))
+    (output / "SHA256SUMS").write_text(f"{digest}  payload.bin\n")
+    (output / "CONTROL-HMAC").write_text("0" * 64 + "\n")
+
+
 def write_test_release(root, version="0.2.0", rollback="compatible", **updates):
     bundle = Path(root) / f"survey-{version}-linux-arm64.tar.gz"
     files = {
@@ -104,15 +118,7 @@ class FakeRunner:
         if "backup.py" in " ".join(command) and "backup" in command and self.create_backup:
             output = Path(command[command.index("--output") + 1])
             version = command[command.index("--version") + 1]
-            output.mkdir(parents=True)
-            payload = output / "payload.bin"
-            payload.write_bytes(b"verified backup")
-            (output / "manifest.json").write_text(json.dumps({
-                "schemaVersion": 1,
-                "version": version,
-                "databaseSchema": self.backup_schema,
-                "files": {"payload.bin": hashlib.sha256(payload.read_bytes()).hexdigest()},
-            }))
+            write_fake_backup(output, version, self.backup_schema)
         if "ps" in command and "--format" in command:
             services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"]
             payload = [
@@ -388,7 +394,8 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         manager = self.manager()
         manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
         next_manifest, _ = self.write_bundle_manifest("0.3.0", rollback="restore-only")
-        runner = FakeRunner(fail_when=lambda command: ("up" in command and "0.3.0" in " ".join(command)) or "restore.py" in " ".join(command))
+        runner = FakeRunner(fail_when=lambda command: ("up" in command and "0.3.0" in " ".join(command))
+                            or ("restore.py" in " ".join(command) and "restore" in command))
         with self.assertRaises(self.module.RuntimeHealthError):
             self.manager(runner=runner).upgrade(next_manifest)
         old_starts = [command for command in runner.commands if "up" in command and "0.2.0" in " ".join(command)]
@@ -823,15 +830,7 @@ class SurveyctlTest(unittest.TestCase):
     def test_restore_accepts_only_release_declared_source_schemas(self):
         self.install()
         backup = self.target / "backups" / "older-compatible"
-        backup.mkdir(parents=True)
-        payload = backup / "payload.bin"
-        payload.write_bytes(b"compatible backup")
-        (backup / "manifest.json").write_text(json.dumps({
-            "schemaVersion": 1,
-            "version": "0.1.9",
-            "databaseSchema": "919",
-            "files": {"payload.bin": hashlib.sha256(payload.read_bytes()).hexdigest()},
-        }))
+        write_fake_backup(backup, "0.1.9", "919")
         self.runner.commands.clear()
         self.manager().restore("older-compatible")
         self.assertTrue(any("restore.py" in " ".join(command) for command in self.runner.commands))

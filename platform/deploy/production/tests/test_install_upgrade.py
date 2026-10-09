@@ -6,6 +6,7 @@ no fake-success path.
 """
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -15,6 +16,17 @@ import urllib.request
 
 PRODUCTION_DIR = Path(__file__).resolve().parents[1]
 SURVEYCTL = PRODUCTION_DIR / "surveyctl"
+REQUIREMENT = PRODUCTION_DIR / "native-acceptance.requirement.json"
+
+
+class NativeAcceptancePolicyTest(unittest.TestCase):
+    def test_release_plan_has_a_machine_readable_blocking_native_matrix(self):
+        policy = json.loads(REQUIREMENT.read_text(encoding="utf-8"))
+        self.assertTrue(policy["releaseBlocking"])
+        self.assertEqual(["22.04", "24.04"], policy["matrix"]["ubuntu"])
+        self.assertEqual(["amd64", "arm64"], policy["matrix"]["architecture"])
+        self.assertEqual("SURVEY_PRODUCTION_E2E=1", policy["enableEnvironment"])
+        self.assertIn("doctor-restored", policy["requiredJourney"])
 
 
 @unittest.skipUnless(os.environ.get("SURVEY_PRODUCTION_E2E") == "1", "native production acceptance is opt-in")
@@ -52,6 +64,7 @@ class NativeCleanHostAcceptanceTest(unittest.TestCase):
             self.run_ctl(target, "upgrade", "--manifest", upgrade_manifest)
             self.run_ctl(target, "doctor")
             self.run_ctl(target, "restore", "acceptance-before-upgrade")
+            self.run_ctl(target, "doctor")
             self.run_ctl(target, "uninstall")
 
 

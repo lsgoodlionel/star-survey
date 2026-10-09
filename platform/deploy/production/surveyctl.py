@@ -987,8 +987,8 @@ class SurveyManager:
             metadata = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise IntegrityError("backup manifest is invalid") from exc
-        required = {"schemaVersion", "version", "databaseSchema", "files"}
-        if not isinstance(metadata, dict) or set(metadata) != required or metadata.get("schemaVersion") != 1:
+        required = {"schemaVersion", "version", "databaseSchema", "releaseManifestSha256", "images", "files"}
+        if not isinstance(metadata, dict) or set(metadata) != required or metadata.get("schemaVersion") != 2:
             raise IntegrityError("backup metadata shape is invalid")
         try:
             _validate_semver(metadata["version"], "backup version")
@@ -1025,7 +1025,7 @@ class SurveyManager:
                 if stat.S_ISDIR(mode):
                     if relative not in allowed_directories:
                         raise IntegrityError(f"backup contains an unlisted directory: {relative}")
-                elif path != manifest_path:
+                elif path != manifest_path and relative not in {"SHA256SUMS", "CONTROL-HMAC"}:
                     actual.add(relative)
         if actual != declared:
             raise IntegrityError("backup file inventory does not match artifact")
@@ -1036,6 +1036,16 @@ class SurveyManager:
             self._reject_symlink_components(path)
             if not secrets.compare_digest(_sha256(path), expected):
                 raise IntegrityError(f"backup checksum mismatch: {name}")
+        for name in ("SHA256SUMS", "CONTROL-HMAC"):
+            path = backup / name
+            _regular_file(path, f"backup {name}")
+            self._reject_symlink_components(path)
+        state = self._read_state(require_current=True)
+        helper = self._release_dir(state["version"]) / "restore.py"
+        self._run(
+            [sys.executable, str(helper), "verify", "--target", str(self.target), "--backup", str(backup)],
+            "backup restore-grade verification failed",
+        )
         return metadata
 
     def backup(self, name) -> Path:

@@ -28,6 +28,11 @@ VOLUME_SOURCES = {
     "engine-upload.tar": ("engine", "/var/www/html/upload"),
     "engine-runtime.tar": ("engine", "/var/www/html/application/runtime"),
 }
+IMAGE_KEYS = {
+    "CADDY_IMAGE", "ADMIN_IMAGE", "PLATFORM_IMAGE", "PUBLISH_GATEWAY_IMAGE",
+    "ENGINE_IMAGE", "POSTGRES_IMAGE", "MARIADB_IMAGE",
+}
+CONTROL_MAGIC = b"SURVEY-CONTROL-V2\x00"
 
 
 class BackupError(Exception):
@@ -135,6 +140,48 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _backup_key(key_file: Path) -> bytes:
+    try:
+        key = key_file.read_bytes().strip()
+    except OSError as exc:
+        raise BackupError("backup encryption key is unavailable") from exc
+    if len(key) < 32:
+        raise BackupError("backup encryption key is invalid")
+    return key
+
+
+def canonical_manifest(manifest: dict) -> bytes:
+    return (json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode("ascii")
+
+
+def control_authenticator(manifest_bytes: bytes, sums_bytes: bytes, key_file: Path) -> str:
+    mac_key = hashlib.sha256(_backup_key(key_file) + b"\x00survey-backup-control-v2").digest()
+    payload = CONTROL_MAGIC + manifest_bytes + b"\x00" + sums_bytes
+    return hmac.new(mac_key, payload, hashlib.sha256).hexdigest()
+
+
+def rewrite_authenticated_control(directory: Path, key_file: Path, manifest=None) -> None:
+    """Write the canonical inventory and its domain-separated trust-root HMAC."""
+    directory = Path(directory)
+    if manifest is None:
+        try:
+            manifest = json.loads((directory / "manifest.json").read_text(encoding="ascii"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BackupError("backup manifest is invalid") from exc
+    payloads = sorted(directory.glob("*.enc"), key=lambda path: path.name)
+    files = {path.name: sha256(path) for path in payloads}
+    manifest = dict(manifest, files=files)
+    sums_bytes = "".join(f"{digest}  {name}\n" for name, digest in sorted(files.items())).encode("ascii")
+    manifest_bytes = canonical_manifest(manifest)
+    (directory / "manifest.json").write_bytes(manifest_bytes)
+    (directory / "SHA256SUMS").write_bytes(sums_bytes)
+    (directory / "CONTROL-HMAC").write_text(
+        control_authenticator(manifest_bytes, sums_bytes, key_file) + "\n", encoding="ascii"
+    )
+    for name in ("manifest.json", "SHA256SUMS", "CONTROL-HMAC"):
+        os.chmod(directory / name, 0o600)
+
+
 class BackupManager:
     def __init__(self, target, runner=None, cipher=None, disk_usage=None):
         self.target = safe_absolute(target, "target path")
@@ -162,17 +209,29 @@ class BackupManager:
             raise BackupError("installation state is invalid")
         if state and state.get("version") != version:
             raise BackupError("requested backup version is not current")
-        schema = state.get("databaseSchema")
-        if not schema:
-            try:
-                release = json.loads((self._release_dir(version) / "release.json").read_text())
-                schema = release["database"]["schema"]
-            except (OSError, KeyError, json.JSONDecodeError) as exc:
-                raise BackupError("database schema metadata is unavailable") from exc
+        release_path = self._release_dir(version) / "release.json"
+        if release_path.is_symlink() or not release_path.is_file():
+            raise BackupError("release identity metadata is unavailable or unsafe")
+        try:
+            release_bytes = release_path.read_bytes()
+            release = json.loads(release_bytes)
+            schema = state.get("databaseSchema") or release["database"]["schema"]
+            images = release["images"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise BackupError("release identity metadata is unavailable") from exc
         schema = str(schema)
         if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", schema) is None:
             raise BackupError("database schema metadata is invalid")
-        return {"databaseSchema": schema}
+        image_pattern = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+        if not isinstance(images, dict) or set(images) != IMAGE_KEYS or any(
+            not isinstance(value, str) or image_pattern.fullmatch(value) is None for value in images.values()
+        ):
+            raise BackupError("release image identity metadata is invalid")
+        return {
+            "databaseSchema": schema,
+            "releaseManifestSha256": hashlib.sha256(release_bytes).hexdigest(),
+            "images": images,
+        }
 
     def _compose(self, version: str) -> list[str]:
         release = self._release_dir(version)
@@ -240,21 +299,15 @@ class BackupManager:
                     container = self._container_id(compose, service)
                     self._run_to_file(["docker", "cp", f"{container}:{path}/.", "-"], plain)
                     self.cipher.encrypt(plain, staging / f"{name}.enc", key_file)
-            payloads = sorted(staging.glob("*.enc"), key=lambda path: path.name)
-            sums = "".join(f"{sha256(path)}  {path.name}\n" for path in payloads)
-            sums_path = staging / "SHA256SUMS"
-            sums_path.write_text(sums, encoding="ascii")
-            os.chmod(sums_path, 0o600)
-            files = {path.name: sha256(path) for path in [*payloads, sums_path]}
             manifest = {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "version": version,
                 "databaseSchema": state["databaseSchema"],
-                "files": files,
+                "releaseManifestSha256": state["releaseManifestSha256"],
+                "images": state["images"],
+                "files": {},
             }
-            manifest_path = staging / "manifest.json"
-            manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-            os.chmod(manifest_path, 0o600)
+            rewrite_authenticated_control(staging, key_file, manifest)
             os.replace(staging, output)
             return output
         except BackupError:

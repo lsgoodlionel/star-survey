@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "requirementId": "production-native-clean-host-v1",
+  "releaseBlocking": true,
+  "test": "platform/deploy/production/tests/test_install_upgrade.py",
+  "enableEnvironment": "SURVEY_PRODUCTION_E2E=1",
+  "matrix": {
+    "ubuntu": ["22.04", "24.04"],
+    "architecture": ["amd64", "arm64"]
+  },
+  "requiredJourney": [
+    "install",
+    "doctor-before",
+    "minimal-product-journey",
+    "backup",
+    "upgrade",
+    "doctor-after",
+    "restore",
+    "doctor-restored",
+    "uninstall"
+  ],
+  "owner": "multiarch-release-plan-task3"
+}

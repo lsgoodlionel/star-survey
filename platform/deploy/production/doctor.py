@@ -4,18 +4,27 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import http.cookiejar
 import hashlib
+import hmac
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
 import re
-import secrets
 import ssl
 import subprocess
 import sys
+import tempfile
+import time
 from typing import Callable
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
+
+from restore import RestoreIntegrityError, RestoreManager
 
 
 LONG_RUNNING = {"edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"}
@@ -51,8 +60,240 @@ class CleanHostScenario:
             execute(step)
 
 
+class _SurveyFormParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_form = False
+        self.action = ""
+        self.fields = {}
+        self.moves = []
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag == "form" and values.get("id") == "limesurvey":
+            self.in_form = True
+            self.action = values.get("action", "")
+        if not self.in_form:
+            return
+        name = values.get("name")
+        if tag == "input" and name:
+            kind = values.get("type", "text").lower()
+            if kind == "hidden":
+                self.fields[name] = values.get("value", "")
+            elif kind == "text" and not re.search(r"(other|comment)$", name, re.I):
+                self.fields[name] = "production acceptance"
+            elif kind in {"radio", "checkbox"} and name not in self.fields:
+                self.fields[name] = values.get("value") or "Y"
+        elif tag == "button" and name == "move":
+            self.moves.append(values.get("value", ""))
+
+    def handle_endtag(self, tag):
+        if tag == "form" and self.in_form:
+            self.in_form = False
+
+
+class ProductProbe:
+    """One disposable production journey using only short-lived credentials."""
+
+    def __init__(self, target, host, compose, runner, now=time.time, sleep=time.sleep):
+        self.target = Path(target)
+        self.host = host
+        self.compose = compose
+        self.runner = runner
+        self.now = now
+        self.sleep = sleep
+        self.base_url = f"https://{host}"
+
+    @staticmethod
+    def _b64(raw):
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+    def _configuration(self):
+        path = self.target / "shared" / "product-probe.json"
+        if path.is_symlink() or not path.is_file():
+            raise DoctorRuntimeError("product probe identity is not configured")
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise DoctorRuntimeError("product probe identity is invalid") from exc
+        if not isinstance(config, dict) or set(config) != {"tenantId", "actorId"}:
+            raise DoctorRuntimeError("product probe identity is invalid")
+        try:
+            uuid.UUID(config["tenantId"])
+        except (ValueError, TypeError, KeyError) as exc:
+            raise DoctorRuntimeError("product probe tenant is invalid") from exc
+        actor = config.get("actorId")
+        if not isinstance(actor, str) or re.fullmatch(r"[A-Za-z0-9@._:-]{1,128}", actor) is None:
+            raise DoctorRuntimeError("product probe actor is invalid")
+        return config
+
+    def _token(self, config):
+        path = self.target / "shared" / "secrets" / "platform_jwt_hmac_secret"
+        try:
+            secret = path.read_bytes().strip()
+        except OSError as exc:
+            raise DoctorRuntimeError("product probe signing key is unavailable") from exc
+        if path.is_symlink() or len(secret) < 32:
+            raise DoctorRuntimeError("product probe signing key is invalid")
+        now = int(self.now())
+        header = self._b64(b'{"alg":"HS256","typ":"JWT"}')
+        claims = self._b64(json.dumps({
+            "sub": config["actorId"], "tenant_id": config["tenantId"], "roles": [],
+            "iat": now, "exp": now + 300,
+        }, separators=(",", ":")).encode("utf-8"))
+        signed = f"{header}.{claims}".encode("ascii")
+        signature = self._b64(hmac.new(secret, signed, hashlib.sha256).digest())
+        return signed.decode("ascii") + "." + signature
+
+    def _api(self, token, method, path, body=None, raw=False):
+        payload = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(self.base_url + path, data=payload, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=60, context=ssl.create_default_context()) as response:
+                data = response.read(16 * 1024 * 1024)
+                if raw:
+                    return response.status, data
+                return response.status, json.loads(data) if data else None
+        except (OSError, urllib.error.URLError, ValueError) as exc:
+            raise DoctorRuntimeError("product probe API request failed") from exc
+
+    @staticmethod
+    def _expect(status, expected, value, label):
+        if status != expected or not isinstance(value, dict):
+            raise DoctorRuntimeError(f"product probe {label} failed")
+        return value
+
+    def _answer(self, sid):
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        url = f"{self.base_url}/survey/index.php/{sid}?newtest=Y&lang=en"
+        try:
+            for _ in range(8):
+                with opener.open(urllib.request.Request(url, headers={"User-Agent": "survey-product-probe/1"}), timeout=60) as response:
+                    html = response.read(4 * 1024 * 1024).decode("utf-8", "replace")
+                    url = response.geturl()
+                if "completed-wrapper" in html:
+                    return
+                parser = _SurveyFormParser()
+                parser.feed(html)
+                move = "movesubmit" if "movesubmit" in parser.moves else "movenext" if "movenext" in parser.moves else None
+                if not parser.action or move is None:
+                    raise DoctorRuntimeError("product probe public survey form is invalid")
+                data = urllib.parse.urlencode(dict(parser.fields, move=move)).encode("utf-8")
+                url = urllib.parse.urljoin(url, parser.action)
+                request = urllib.request.Request(url, data=data, headers={
+                    "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "survey-product-probe/1",
+                })
+                with opener.open(request, timeout=60) as response:
+                    html = response.read(4 * 1024 * 1024).decode("utf-8", "replace")
+                    url = response.geturl()
+                if "completed-wrapper" in html:
+                    return
+        except (OSError, urllib.error.URLError) as exc:
+            raise DoctorRuntimeError("product probe public answer failed") from exc
+        raise DoctorRuntimeError("product probe public answer did not complete")
+
+    def _close_engine_survey(self, instance, sid):
+        body = json.dumps({"requestId": str(uuid.uuid4()), "engineInstanceId": instance, "surveyId": sid},
+                          separators=(",", ":"))
+        script = (
+            "import hashlib,hmac,os,sys,time,urllib.request;"
+            "b=sys.argv[1].encode();t=str(int(time.time()));"
+            "s=open('/run/secrets/platform_pubgw_secret','rb').read().strip();"
+            "q=urllib.request.Request('http://127.0.0.1:8080/v1/close',data=b,method='POST',headers={"
+            "'Content-Type':'application/json','X-Pubgw-Timestamp':t,'X-Pubgw-Signature':"
+            "hmac.new(s,t.encode()+b'.'+b,hashlib.sha256).hexdigest()});"
+            "r=urllib.request.urlopen(q,timeout=60);sys.exit(0 if r.status==200 else 1)"
+        )
+        try:
+            self.runner.run(self.compose + ["exec", "-T", "publish-gateway", "python", "-c", script, body],
+                            check=True, capture_output=True, text=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise DoctorRuntimeError("product probe engine cleanup failed") from exc
+
+    def run(self):
+        config = self._configuration()
+        token = self._token(config)
+        project_id = survey_id = instance = None
+        sid = None
+        export_id = None
+        failure = None
+        try:
+            status, _ = self._api(token, "GET", "/v1/resources?limit=1")
+            if status != 200:
+                raise DoctorRuntimeError("product probe login failed")
+            suffix = uuid.uuid4().hex[:12]
+            status, project = self._api(token, "POST", "/v1/projects", {"name": "production-probe-" + suffix})
+            project = self._expect(status, 201, project, "project creation")
+            project_id = project.get("id")
+            definition = {
+                "definitionVersion": 1, "uuid": str(uuid.uuid4()), "title": "Production probe " + suffix,
+                "language": "en", "settings": {"anonymized": "N", "datestamp": "Y", "format": "G"},
+                "groups": [{"uuid": str(uuid.uuid4()), "title": "Probe", "questions": [{
+                    "uuid": str(uuid.uuid4()), "code": "PROBE", "type": "S", "text": "Probe response",
+                    "mandatory": True,
+                }]}],
+            }
+            status, survey = self._api(token, "POST", "/v1/surveys", {"parentId": project_id, "definition": definition})
+            survey = self._expect(status, 201, survey, "survey creation")
+            survey_id = survey.get("id")
+            status, outcome = self._api(token, "POST", f"/v1/surveys/{survey_id}/publish")
+            outcome = self._expect(status, 200, outcome, "publish")
+            version = outcome.get("version") or {}
+            sid, instance = version.get("engineSid"), version.get("engineInstanceId")
+            if not isinstance(sid, int) or sid <= 0 or not isinstance(instance, str):
+                raise DoctorRuntimeError("product probe publish binding is invalid")
+            self._answer(sid)
+            for _ in range(30):
+                self.runner.run(self.compose + ["exec", "-T", "engine", "php",
+                                                "application/commands/console.php", "plugin", "cron"],
+                                check=True, capture_output=True, text=True)
+                status, responses = self._api(
+                    token, "GET", f"/v1/surveys/{survey_id}/responses?state=engine_completed&limit=10"
+                )
+                if status == 200 and isinstance(responses, dict) and responses.get("items"):
+                    break
+                self.sleep(2)
+            else:
+                raise DoctorRuntimeError("product probe response projection failed")
+            status, export = self._api(token, "POST", f"/v1/surveys/{survey_id}/exports", {
+                "format": "csv", "filter": {"states": ["engine_completed"], "versions": [1]},
+                "templateVersion": "default",
+            })
+            export = self._expect(status, 202, export, "export creation")
+            export_id = export.get("jobId")
+            for _ in range(30):
+                status, job = self._api(token, "GET", f"/v1/exports/{export_id}")
+                if status == 200 and isinstance(job, dict) and job.get("status") == "completed":
+                    break
+                if status != 200 or (isinstance(job, dict) and job.get("status") in {"failed", "cancelled", "expired"}):
+                    raise DoctorRuntimeError("product probe export failed")
+                self.sleep(2)
+            else:
+                raise DoctorRuntimeError("product probe export timed out")
+            status, data = self._api(token, "GET", f"/v1/exports/{export_id}/download", raw=True)
+            if status != 200 or not data:
+                raise DoctorRuntimeError("product probe export download failed")
+        except (DoctorRuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            failure = exc
+        finally:
+            try:
+                if instance and sid:
+                    self._close_engine_survey(instance, sid)
+                if project_id:
+                    status, _ = self._api(token, "POST", f"/v1/resources/{project_id}/archive")
+                    if status != 200:
+                        raise DoctorRuntimeError("product probe project cleanup failed")
+            except DoctorRuntimeError as cleanup:
+                failure = cleanup
+        if failure is not None:
+            raise DoctorRuntimeError("product probe failed") from failure
+
+
 class Doctor:
-    def __init__(self, target, runner=None, tls_probe=None):
+    def __init__(self, target, runner=None, tls_probe=None, product_probe=None, backup_verifier=None):
         self.target = Path(os.path.abspath(os.fspath(Path(target).expanduser())))
         current = Path(self.target.anchor)
         for component in self.target.parts[1:]:
@@ -63,6 +304,10 @@ class Doctor:
                 break
         self.runner = runner or CommandRunner()
         self.tls_probe = tls_probe or self._tls_probe
+        self.product_probe = product_probe or self._run_product_probe
+        self.backup_verifier = backup_verifier or RestoreManager(
+            self.target, runner=self.runner
+        )
         self._secrets = self._load_secrets()
 
     def _load_secrets(self):
@@ -183,6 +428,67 @@ class Doctor:
             bad.append("engine-init")
         return self._check("containers", "ok" if not bad else "blocked", "all production containers are healthy" if not bad else f"unhealthy services: {', '.join(bad)}")
 
+    def _runtime_exposure_check(self, compose):
+        ps = self._command(compose + ["ps", "--all", "--format", "json"])
+        try:
+            text = (ps.stdout or "").strip()
+            payload = json.loads(text) if text.startswith("[") else [json.loads(line) for line in text.splitlines() if line]
+            rows = payload if isinstance(payload, list) else [payload]
+            ids = [row["ID"] for row in rows if isinstance(row, dict) and row.get("ID")]
+        except (AttributeError, KeyError, json.JSONDecodeError) as exc:
+            raise DoctorRuntimeError("runtime container inventory is invalid") from exc
+        if len(ids) != len(rows) or not ids:
+            return self._check("runtime-exposure", "blocked", "runtime container identity is incomplete")
+        inspected = self._command(["docker", "inspect", *ids])
+        listeners = self._command(["ss", "-H", "-ltnp"])
+        try:
+            containers = json.loads(inspected.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise DoctorRuntimeError("runtime container inspection is invalid") from exc
+        allowed_networks = {
+            "edge": {"edge"}, "admin-web": {"edge"}, "platform": {"edge", "internal"},
+            "publish-gateway": {"internal"}, "engine": {"edge", "internal"},
+            "engine-init": {"internal"}, "platform-db": {"internal"}, "engine-db": {"internal"},
+        }
+        bad = []
+        inspected_services = set()
+        for item in containers if isinstance(containers, list) else []:
+            labels = item.get("Config", {}).get("Labels", {}) or {}
+            service = labels.get("com.docker.compose.service")
+            inspected_services.add(service)
+            bindings = item.get("HostConfig", {}).get("PortBindings") or {}
+            networks = {
+                name.removeprefix("survey-production_")
+                for name in (item.get("NetworkSettings", {}).get("Networks", {}) or {})
+            }
+            if service == "edge":
+                actual_pairs = {
+                    (port.split("/", 1)[0], binding.get("HostPort"))
+                    for port, values in bindings.items() for binding in (values or [])
+                }
+                binding_values = [binding for values in bindings.values() for binding in (values or [])]
+                if actual_pairs != {("80", "80"), ("443", "443")} or any(
+                    binding.get("HostIp", "") not in {"", "0.0.0.0", "::"}
+                    for binding in binding_values
+                ):
+                    bad.append("edge-bindings")
+            elif bindings:
+                bad.append(f"{service}-binding")
+            if service not in allowed_networks or networks != allowed_networks[service]:
+                bad.append(f"{service}-networks")
+        if inspected_services != set(allowed_networks):
+            bad.append("container-inspection-set")
+        listener_ports = {int(value) for value in re.findall(r":(\d+)\s", listeners.stdout or "")}
+        if not {80, 443} <= listener_ports:
+            bad.append("edge-listeners")
+        if {3306, 5432} & listener_ports:
+            bad.append("database-listeners")
+        return self._check(
+            "runtime-exposure", "ok" if not bad else "blocked",
+            "live bindings, networks and host listeners match the production contract"
+            if not bad else "runtime exposure drift detected: " + ", ".join(sorted(set(bad))),
+        )
+
     def _migration_check(self, compose, expected):
         pg = self._command(compose + ["exec", "-T", "platform-db", "psql", "-U", "postgres", "-d", "platform", "-Atqc", "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1"])
         engine = self._command(compose + ["exec", "-T", "engine", "sh", "-c", "php application/commands/console.php productionInit status"])
@@ -208,41 +514,29 @@ class Doctor:
             return self._check("backups", "warning", "no completed backup exists yet")
         valid = 0
         for directory in root.iterdir():
-            manifest = directory / "manifest.json"
-            if directory.is_symlink() or not directory.is_dir() or not manifest.is_file() or manifest.is_symlink():
+            if directory.is_symlink() or not directory.is_dir():
                 continue
             try:
-                data = json.loads(manifest.read_text(encoding="utf-8"))
-                files = data["files"]
-                if files and all((directory / name).is_file() and self._sha256(directory / name) == digest for name, digest in files.items()):
-                    valid += 1
-            except (OSError, KeyError, TypeError, json.JSONDecodeError):
+                with tempfile.TemporaryDirectory(dir=self.target) as temporary:
+                    self.backup_verifier.verify_backup(directory, Path(temporary))
+                valid += 1
+            except (OSError, RestoreIntegrityError):
                 continue
         return self._check("backups", "ok" if valid else "warning", f"{valid} verified backup(s) available" if valid else "no readable verified backup exists")
 
-    @staticmethod
-    def _sha256(path):
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+    def _run_product_probe(self, host, compose):
+        ProductProbe(self.target, host, compose, self.runner).run()
 
-    def _probe_check(self, compose):
-        commands = [
-            compose + ["exec", "-T", "platform", "sh", "-c", "echo probe && wget -q -O /dev/null http://127.0.0.1:8080/actuator/health"],
-            compose + ["exec", "-T", "engine", "sh", "-c", "echo probe && php application/commands/console.php productionInit status >/dev/null"],
-        ]
+    def _probe_check(self, host, compose):
         try:
-            for command in commands:
-                self._command(command)
-            return self._check("minimal-probe", "ok", "read-only application probes succeeded")
+            self.product_probe(host, compose)
+            return self._check("minimal-probe", "ok", "disposable login, publish, answer, query and export journey succeeded")
         except DoctorRuntimeError:
-            return self._check("minimal-probe", "blocked", "read-only application probe failed")
+            return self._check("minimal-probe", "blocked", "disposable product journey failed and was cleaned up")
 
     def run(self):
         version, schema, host, compose = self._load_installation()
-        checks = [*self._config_checks(compose)]
+        checks = [*self._config_checks(compose), self._runtime_exposure_check(compose)]
         tls_ok = self.tls_probe(host)
         checks.extend([
             self._check("tls", "ok" if tls_ok else "blocked", "public TLS deployment marker verified" if tls_ok else "public TLS deployment marker failed"),
@@ -250,7 +544,7 @@ class Doctor:
             self._migration_check(compose, schema),
             self._volume_check(),
             self._backup_check(),
-            self._probe_check(compose),
+            self._probe_check(host, compose),
         ])
         status = "blocked" if any(item["status"] == "blocked" for item in checks) else "warning" if any(item["status"] == "warning" for item in checks) else "ok"
         return self._redact({"schemaVersion": 1, "status": status, "version": version, "checks": checks})
