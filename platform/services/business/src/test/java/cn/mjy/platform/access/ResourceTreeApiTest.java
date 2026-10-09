@@ -179,6 +179,50 @@ class ResourceTreeApiTest {
     }
 
     @Test
+    void rejectsCursorWhenSortOrFiltersChange() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            createProject(ownerA, "项目 " + i).andExpect(status().isCreated());
+        }
+        String first = mvc.perform(get("/v1/resources")
+                        .param("limit", "1").param("query", "项目").param("kind", "project")
+                        .param("archived", "active").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].createdAt").isNotEmpty())
+                .andExpect(jsonPath("$.items[0].updatedAt").isNotEmpty())
+                .andExpect(jsonPath("$.items[0].archivedAt").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        String cursor = JsonPath.read(first, "$.nextCursor");
+
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("query", "项目").param("kind", "project")
+                        .param("archived", "active").param("sort", "updated_desc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("query", "别的条件").param("kind", "project")
+                        .param("archived", "active").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("query", "项目").param("kind", "folder")
+                        .param("archived", "active").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("query", "项目").param("kind", "project")
+                        .param("archived", "archived").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("parentId", UUID.randomUUID().toString())
+                        .param("query", "项目").param("kind", "project")
+                        .param("archived", "active").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void aTokenWithoutTenantIsRejected() throws Exception {
         mvc.perform(get("/v1/resources").header("Authorization", "Bearer " + tokens.issueWithoutTenant("x")))
                 .andExpect(status().isForbidden());

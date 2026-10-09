@@ -3,6 +3,7 @@ package cn.mjy.platform.access;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
+import java.text.Normalizer;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -79,18 +80,26 @@ public class ResourceTreeService {
 
     /** 调用者有 view 的节点（含继承），可按父节点过滤；按 id 排序、游标分页。 */
     public ResourcePage list(TenantContext ctx, UUID parentId, String cursor, Integer limit) {
+        return list(ctx, parentId, cursor, limit, null, null, null, null);
+    }
+
+    /** 控制器只转发原始查询参数；枚举解析、默认值和游标绑定在 ResourceListQuery 内集中处理。 */
+    public ResourcePage list(TenantContext ctx, UUID parentId, String cursor, Integer limit,
+            String query, String kind, String archived, String sort) {
         int pageSize = pageSize(limit);
-        UUID after = ResourceCursor.decode(cursor);
+        ResourceListQuery filters = ResourceListQuery.parse(query, kind, archived, sort);
+        ResourceCursor.Position after = ResourceCursor.decode(cursor, parentId, filters);
         TenantId tenant = ctx.tenantId();
         return tenantScope.call(tenant, () -> {
             requireActiveMember(ctx);
             if (parentId != null && tree.find(tenant, parentId).isEmpty()) {
                 throw new ResourceNotFoundException("resource not found: " + parentId);
             }
-            List<ResourceView> rows = tree.visible(tenant, ctx.actorId(), parentId, after, pageSize + 1);
+            List<ResourceView> rows = tree.visible(tenant, ctx.actorId(), parentId, filters, after, pageSize + 1);
             boolean hasMore = rows.size() > pageSize;
             List<ResourceView> items = hasMore ? rows.subList(0, pageSize) : rows;
-            return new ResourcePage(items, hasMore ? ResourceCursor.encode(items.getLast().id()) : null);
+            return new ResourcePage(items,
+                    hasMore ? ResourceCursor.encode(parentId, filters, items.getLast()) : null);
         });
     }
 
@@ -239,14 +248,14 @@ public class ResourceTreeService {
     }
 
     static String normalizeName(String name) {
-        String trimmed = name == null ? "" : name.strip();
-        if (trimmed.isEmpty()) {
+        String normalized = Normalizer.normalize(name == null ? "" : name.strip(), Normalizer.Form.NFC);
+        if (normalized.isEmpty()) {
             throw new InvalidResourceRequestException("name is required");
         }
-        if (trimmed.length() > MAX_NAME_LENGTH) {
+        if (normalized.length() > MAX_NAME_LENGTH) {
             throw new InvalidResourceRequestException("name is longer than " + MAX_NAME_LENGTH + " characters");
         }
-        return trimmed;
+        return normalized;
     }
 
     private static int pageSize(Integer limit) {

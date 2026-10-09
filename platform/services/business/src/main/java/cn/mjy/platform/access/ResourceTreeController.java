@@ -59,8 +59,10 @@ public class ResourceTreeController {
 
     @GetMapping("/resources")
     public ResourcePage list(@RequestParam(required = false) UUID parentId,
-            @RequestParam(required = false) String cursor, @RequestParam(required = false) Integer limit) {
-        return tree.list(currentTenant.require(), parentId, cursor, limit);
+            @RequestParam(required = false) String cursor, @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String query, @RequestParam(required = false) String kind,
+            @RequestParam(required = false) String archived, @RequestParam(required = false) String sort) {
+        return tree.list(currentTenant.require(), parentId, cursor, limit, query, kind, archived, sort);
     }
 
     @GetMapping("/resources/{id}")

@@ -4,6 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.mjy.platform.shared.TenantContext;
+import java.sql.Timestamp;
+import java.text.Normalizer;
+import java.time.Instant;
+import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -164,6 +169,96 @@ class ResourceTreeTest {
         assertThat(third.nextCursor()).isNull();
         assertThat(java.util.stream.Stream.of(first, second, third).flatMap(p -> p.items().stream())
                 .map(ResourceView::name).distinct()).hasSize(5);
+    }
+
+    @Test
+    void defaultListUsesBusinessOrderAcrossPageBoundaries() {
+        UUID project = tree.createProject(admin, "项目").id();
+        UUID folderZ = tree.createFolder(admin, project, "Z 文件夹").id();
+        UUID folderA = tree.createFolder(admin, project, "A 文件夹").id();
+        UUID surveyZ = fixture.survey(owner.tenantId(), project);
+        UUID surveyA = fixture.survey(owner.tenantId(), project);
+        Instant sameTime = Instant.parse("2026-10-09T08:00:00Z");
+        setOrdering(project, "项目", sameTime);
+        setOrdering(folderZ, "Z 文件夹", sameTime);
+        setOrdering(folderA, "A 文件夹", sameTime);
+        setOrdering(surveyZ, "Z 问卷", sameTime);
+        setOrdering(surveyA, "A 问卷", sameTime);
+
+        ResourcePage first = tree.list(admin, null, null, 2, null, null, null, null);
+        ResourcePage second = tree.list(admin, null, first.nextCursor(), 2, null, null, null, null);
+        ResourcePage third = tree.list(admin, null, second.nextCursor(), 2, null, null, null, null);
+
+        List<UUID> ids = java.util.stream.Stream.of(first, second, third)
+                .flatMap(page -> page.items().stream()).map(ResourceView::id).toList();
+        assertThat(ids).containsExactly(project, folderA, folderZ, surveyA, surveyZ);
+        assertThat(ids).doesNotHaveDuplicates();
+        assertThat(third.nextCursor()).isNull();
+    }
+
+    @Test
+    void nameSortIsStableForNormalizedUnicodeNames() {
+        UUID project = tree.createProject(admin, "项目").id();
+        UUID first = tree.createFolder(admin, project, "e\u0301").id();
+        UUID second = tree.createFolder(admin, project, "\u00e9").id();
+        List<UUID> expected = java.util.stream.Stream.of(first, second)
+                .sorted(Comparator.comparing(UUID::toString)).toList();
+
+        ResourcePage pageOne = tree.list(admin, project, null, 1, null, "folder", null, "name_asc");
+        ResourcePage pageTwo = tree.list(admin, project, pageOne.nextCursor(), 1,
+                null, "folder", null, "name_asc");
+
+        assertThat(pageOne.items().getFirst().name()).isEqualTo("\u00e9");
+        assertThat(pageTwo.items().getFirst().name()).isEqualTo("\u00e9");
+        assertThat(List.of(pageOne.items().getFirst().id(), pageTwo.items().getFirst().id()))
+                .containsExactlyElementsOf(expected);
+    }
+
+    @Test
+    void filtersAfterAuthorizationWithoutLeakingHiddenMatches() {
+        UUID visibleProject = tree.createProject(admin, "可见项目").id();
+        UUID hiddenProject = tree.createProject(admin, "机密命中词").id();
+        TenantContext viewer = fixture.member(owner, "filtered-viewer", "statistics_viewer", visibleProject);
+
+        ResourcePage result = tree.list(viewer, null, null, 20,
+                "机密命中词", "project", "active", "name_asc");
+
+        assertThat(result.items()).isEmpty();
+        assertThat(tree.get(admin, hiddenProject).name()).isEqualTo("机密命中词");
+    }
+
+    @Test
+    void activeVisibilityExcludesArchivedAncestorsAndArchivedListsOnlyDirectlyArchivedNodes() {
+        UUID project = tree.createProject(admin, "归档项目").id();
+        UUID folder = tree.createFolder(admin, project, "未直接归档文件夹").id();
+        UUID survey = fixture.survey(owner.tenantId(), folder);
+        archive(project);
+
+        assertThat(tree.list(admin, null, null, 20, null, null, null, null).items())
+                .extracting(ResourceView::id).doesNotContain(project, folder, survey);
+        assertThat(tree.list(admin, null, null, 20, null, null, "archived", null).items())
+                .extracting(ResourceView::id).containsExactly(project);
+    }
+
+    @Test
+    void businessChangesUpdateTimestampsAndReadsDoNot() {
+        ResourceView project = tree.createProject(admin, "项目");
+        ResourceView folder = tree.createFolder(admin, project.id(), "旧名");
+        UUID target = tree.createFolder(admin, project.id(), "目标").id();
+        assertThat(folder.updatedAt()).isEqualTo(folder.createdAt());
+        assertThat(folder.archivedAt()).isNull();
+        Instant old = Instant.parse("2020-01-01T00:00:00Z");
+        setOrdering(folder.id(), folder.name(), old);
+
+        ResourceView renamed = tree.rename(admin, folder.id(), "新名");
+        assertThat(renamed.updatedAt()).isAfter(old);
+        setOrdering(folder.id(), renamed.name(), old);
+        ResourceView moved = tree.move(admin, folder.id(), target);
+        assertThat(moved.updatedAt()).isAfter(old);
+
+        Instant afterMove = moved.updatedAt();
+        assertThat(tree.get(admin, folder.id()).updatedAt()).isEqualTo(afterMove);
+        assertThat(tree.get(admin, folder.id()).updatedAt()).isEqualTo(afterMove);
     }
 
     @Test
@@ -341,6 +436,24 @@ class ResourceTreeTest {
     private java.util.List<String> visibleNames(TenantContext ctx) {
         return tree.list(ctx, null, null, ResourceTreeService.MAX_PAGE_SIZE).items().stream()
                 .map(ResourceView::name).toList();
+    }
+
+    private void setOrdering(UUID id, String name, Instant updatedAt) {
+        transactions.executeWithoutResult(status -> {
+            jdbc.sql("SELECT set_config('app.tenant_id', :t, true)")
+                    .param("t", owner.tenantId().value().toString()).query(String.class).single();
+            jdbc.sql("UPDATE access_resource SET name = :name, updated_at = :updated WHERE id = :id")
+                    .param("name", Normalizer.normalize(name, Normalizer.Form.NFC))
+                    .param("updated", Timestamp.from(updatedAt)).param("id", id).update();
+        });
+    }
+
+    private void archive(UUID id) {
+        transactions.executeWithoutResult(status -> {
+            jdbc.sql("SELECT set_config('app.tenant_id', :t, true)")
+                    .param("t", owner.tenantId().value().toString()).query(String.class).single();
+            jdbc.sql("UPDATE access_resource SET archived_at = now() WHERE id = :id").param("id", id).update();
+        });
     }
 
     private long auditCount(TenantContext ctx, String action, UUID resource) {
