@@ -160,7 +160,7 @@ public class ResourceTreeService {
                 audit.record(ctx, archived ? AccessAudit.RESOURCE_ARCHIVE : AccessAudit.RESOURCE_RESTORE,
                         describe(id, node.resourceKind(), node.parentId(), node.name()));
             }
-            return changed ? requireNode(tenant, id) : node;
+            return requireNode(tenant, id);
         });
     }
 

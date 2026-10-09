@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.tenant.TenantScope;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -11,7 +12,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -24,6 +28,20 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 class ResourceMoveConcurrencyTest {
 
     private static final int MAX_TREE_DEPTH = 64;
+    private static final long LOCK_WAIT_TIMEOUT_SECONDS = 10;
+    private static final long LOCK_WAIT_POLL_MILLIS = 10;
+    private static final String BLOCKED_ON_MY_RESOURCE_TRANSACTION = """
+            SELECT COUNT(*)
+              FROM pg_locks waiting
+              JOIN pg_locks held ON held.locktype = 'transactionid' AND held.granted
+                                AND held.transactionid = waiting.transactionid
+                                AND held.pid = pg_backend_pid()
+              JOIN pg_locks on_resource ON on_resource.pid = waiting.pid AND on_resource.granted
+                                AND on_resource.locktype = 'relation'
+                                AND on_resource.relation = 'access_resource'::regclass
+             WHERE NOT waiting.granted AND waiting.locktype = 'transactionid'
+               AND waiting.pid <> pg_backend_pid()
+            """;
 
     @Autowired
     private AccessFixture fixture;
@@ -58,6 +76,33 @@ class ResourceMoveConcurrencyTest {
         assertThat(everyNodeReachesAProject(owner, List.of(a, b))).isTrue();
     }
 
+    @Test
+    void concurrentArchiveAndRestoreReturnTheCommittedStateAndAuditOnce() throws Exception {
+        TenantContext owner = fixture.newTenant();
+        UUID project = tree.createProject(owner, "项目").id();
+        Instant originalUpdatedAt = tree.get(owner, project).updatedAt();
+
+        List<ResourceView> archived = runTwiceBehindResourceLock(owner, project,
+                () -> tree.archive(owner, project));
+        ResourceView archivedCurrent = tree.get(owner, project);
+        Instant archivedUpdatedAt = archivedCurrent.updatedAt();
+        List<ResourceView> restored = runTwiceBehindResourceLock(owner, project,
+                () -> tree.restore(owner, project));
+        Instant restoredUpdatedAt = tree.get(owner, project).updatedAt();
+
+        assertThat(archived).extracting(ResourceView::archivedAt)
+                .containsOnly(archivedCurrent.archivedAt());
+        assertThat(archived).extracting(ResourceView::updatedAt)
+                .containsOnly(archivedUpdatedAt);
+        assertThat(archivedUpdatedAt).isAfter(originalUpdatedAt);
+        assertThat(restored).extracting(ResourceView::archivedAt).containsOnlyNulls();
+        assertThat(restored).extracting(ResourceView::updatedAt)
+                .containsOnly(restoredUpdatedAt);
+        assertThat(restoredUpdatedAt).isAfter(archivedUpdatedAt);
+        assertThat(auditCount(owner, AccessAudit.RESOURCE_ARCHIVE, project)).isEqualTo(1);
+        assertThat(auditCount(owner, AccessAudit.RESOURCE_RESTORE, project)).isEqualTo(1);
+    }
+
     private String attempt(CountDownLatch start, TenantContext ctx, UUID node, UUID target) {
         try {
             start.await();
@@ -69,6 +114,56 @@ class ResourceMoveConcurrencyTest {
             Thread.currentThread().interrupt();
             return "interrupted";
         }
+    }
+
+    private List<ResourceView> runTwiceBehindResourceLock(
+            TenantContext ctx, UUID resource, Supplier<ResourceView> operation) throws Exception {
+        CompletableFuture<ResourceView> first = new CompletableFuture<>();
+        CompletableFuture<ResourceView> second = new CompletableFuture<>();
+        tenantScope.run(ctx.tenantId(), () -> {
+            jdbc.sql("SELECT id FROM access_resource WHERE id = :id FOR UPDATE")
+                    .param("id", resource).query(UUID.class).single();
+            completeAsync(first, operation);
+            completeAsync(second, operation);
+            awaitBothBlockedOnThisTransaction(first, second);
+        });
+        return List.of(first.get(20, TimeUnit.SECONDS), second.get(20, TimeUnit.SECONDS));
+    }
+
+    private static void completeAsync(CompletableFuture<ResourceView> result, Supplier<ResourceView> operation) {
+        Thread.ofVirtual().start(() -> {
+            try {
+                result.complete(operation.get());
+            } catch (RuntimeException | Error e) {
+                result.completeExceptionally(e);
+            }
+        });
+    }
+
+    private void awaitBothBlockedOnThisTransaction(CompletableFuture<?> first, CompletableFuture<?> second) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(LOCK_WAIT_TIMEOUT_SECONDS);
+        try {
+            while (jdbc.sql(BLOCKED_ON_MY_RESOURCE_TRANSACTION).query(Long.class).single() < 2) {
+                assertThat(first).as("first operation must wait for the held resource row lock").isNotDone();
+                assertThat(second).as("second operation must wait for the held resource row lock").isNotDone();
+                assertThat(System.nanoTime()).as("both operations should reach the resource row lock")
+                        .isLessThan(deadline);
+                TimeUnit.MILLISECONDS.sleep(LOCK_WAIT_POLL_MILLIS);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private long auditCount(TenantContext ctx, String action, UUID resource) {
+        return tenantScope.call(ctx.tenantId(), () -> jdbc.sql("""
+                        SELECT COUNT(*) FROM audit_log WHERE action = :action AND resource LIKE :pattern
+                        """)
+                .param("action", action)
+                .param("pattern", "%" + resource + "%")
+                .query(Long.class)
+                .single());
     }
 
     /** 从每个节点沿 parent_id 向上走，必须在有限步内到达项目（parent_id 为空）。 */
