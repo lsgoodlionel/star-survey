@@ -86,7 +86,10 @@ test('export query keys are isolated by tenant survey and job', () => {
 });
 
 test('downloads a successful export blob and validates its filename', async () => {
+  vi.useFakeTimers();
   const bytes = new Uint8Array([80, 75, 3, 4]);
+  const caller = new AbortController();
+  const removeEventListener = vi.spyOn(caller.signal, 'removeEventListener');
   const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
     binaryResponse(bytes, {
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -97,14 +100,20 @@ test('downloads a successful export blob and validates its filename', async () =
     }),
   );
 
-  const download = await createExportClient({ fetchImpl }).download('job/id');
+  try {
+    const download = await createExportClient({ fetchImpl }).download('job/id', caller.signal);
 
-  expect(download.filename).toBe('survey-export.xlsx');
-  expect(download.contentType).toBe(
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  );
-  expect(download.sha256).toBe('b'.repeat(64));
-  expect(new Uint8Array(await download.blob.arrayBuffer())).toEqual(bytes);
+    expect(download.filename).toBe('survey-export.xlsx');
+    expect(download.contentType).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    expect(download.sha256).toBe('b'.repeat(64));
+    expect(new Uint8Array(await download.blob.arrayBuffer())).toEqual(bytes);
+    expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test.each([
@@ -159,6 +168,104 @@ test('times out a stalled export download without aborting the caller signal', a
     expect(caller.signal.aborted).toBe(false);
     expect(fetchImpl.mock.calls[0]?.[1]?.signal).not.toBe(caller.signal);
     expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('default timeout cancels an export response whose blob body remains pending', async () => {
+  vi.useFakeTimers();
+  const caller = new AbortController();
+  const removeEventListener = vi.spyOn(caller.signal, 'removeEventListener');
+  let bodyStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    bodyStarted = resolve;
+  });
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+    const signal = init?.signal;
+    return {
+      status: 200,
+      ok: true,
+      headers: new Headers({
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="survey-export.zip"',
+      }),
+      blob: () => new Promise<Blob>((_resolve, reject) => {
+        bodyStarted();
+        signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        );
+      }),
+    } as Response;
+  });
+
+  try {
+    const request = createExportClient({ fetchImpl }).download(jobId, caller.signal);
+    let outcome: unknown = 'pending';
+    void request.catch((error: unknown) => {
+      outcome = error;
+    });
+    await started;
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+
+    expect(outcome).toMatchObject({ kind: 'unavailable' });
+    await expect(request).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(caller.signal.aborted).toBe(false);
+    expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('caller abort cancels a pending export blob and clears timeout resources', async () => {
+  vi.useFakeTimers();
+  const caller = new AbortController();
+  const removeEventListener = vi.spyOn(caller.signal, 'removeEventListener');
+  let bodyStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    bodyStarted = resolve;
+  });
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+    const signal = init?.signal;
+    return {
+      status: 200,
+      ok: true,
+      headers: new Headers({
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="survey-export.zip"',
+      }),
+      blob: () => new Promise<Blob>((_resolve, reject) => {
+        bodyStarted();
+        signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        );
+      }),
+    } as Response;
+  });
+
+  try {
+    const request = createExportClient({ fetchImpl }).download(jobId, caller.signal);
+    let outcome: unknown = 'pending';
+    void request.catch((error: unknown) => {
+      outcome = error;
+    });
+    await started;
+
+    caller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(outcome).toMatchObject({ kind: 'unavailable' });
+    await expect(request).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(caller.signal.aborted).toBe(true);
+    expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
   } finally {
     vi.useRealTimers();
   }

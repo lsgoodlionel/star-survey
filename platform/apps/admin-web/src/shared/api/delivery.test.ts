@@ -73,22 +73,31 @@ test('sends exact delivery list create and revoke requests', async () => {
 });
 
 test('loads the server generated QR as an authenticated blob', async () => {
+  vi.useFakeTimers();
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" />';
+  const caller = new AbortController();
+  const removeEventListener = vi.spyOn(caller.signal, 'removeEventListener');
   const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
     binaryResponse(svg, { contentType: 'image/svg+xml' }),
   );
 
-  const result = await fetchDeliveryQr(
-    { fetchImpl, getToken: () => 'jwt-token' },
-    'link/id',
-    { format: 'svg', moduleSize: 8 },
-  );
+  try {
+    const result = await fetchDeliveryQr(
+      { fetchImpl, getToken: () => 'jwt-token' },
+      'link/id',
+      { format: 'svg', moduleSize: 8, signal: caller.signal },
+    );
 
-  expect(await result.text()).toBe(svg);
-  const [path, init] = fetchImpl.mock.calls[0] ?? [];
-  expect(path).toBe('/v1/delivery/links/link%2Fid/qr?format=svg&moduleSize=8');
-  expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer jwt-token');
-  expect(init).toMatchObject({ credentials: 'same-origin' });
+    expect(await result.text()).toBe(svg);
+    const [path, init] = fetchImpl.mock.calls[0] ?? [];
+    expect(path).toBe('/v1/delivery/links/link%2Fid/qr?format=svg&moduleSize=8');
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer jwt-token');
+    expect(init).toMatchObject({ credentials: 'same-origin' });
+    expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test('rejects a QR response with the wrong media type', async () => {
@@ -130,6 +139,106 @@ test('times out a stalled QR request without aborting the caller signal', async 
     expect(caller.signal.aborted).toBe(false);
     expect(fetchImpl.mock.calls[0]?.[1]?.signal).not.toBe(caller.signal);
     expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('default timeout cancels a QR response whose blob body remains pending', async () => {
+  vi.useFakeTimers();
+  const caller = new AbortController();
+  const removeEventListener = vi.spyOn(caller.signal, 'removeEventListener');
+  let bodyStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    bodyStarted = resolve;
+  });
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+    const signal = init?.signal;
+    return {
+      status: 200,
+      ok: true,
+      headers: new Headers({ 'Content-Type': 'image/png' }),
+      blob: () => new Promise<Blob>((_resolve, reject) => {
+        bodyStarted();
+        signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        );
+      }),
+    } as Response;
+  });
+
+  try {
+    const request = fetchDeliveryQr(
+      { fetchImpl },
+      linkId,
+      { signal: caller.signal },
+    );
+    let outcome: unknown = 'pending';
+    void request.catch((error: unknown) => {
+      outcome = error;
+    });
+    await started;
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+
+    expect(outcome).toMatchObject({ kind: 'unavailable' });
+    await expect(request).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(caller.signal.aborted).toBe(false);
+    expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('caller abort cancels a pending QR blob and clears timeout resources', async () => {
+  vi.useFakeTimers();
+  const caller = new AbortController();
+  const removeEventListener = vi.spyOn(caller.signal, 'removeEventListener');
+  let bodyStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    bodyStarted = resolve;
+  });
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+    const signal = init?.signal;
+    return {
+      status: 200,
+      ok: true,
+      headers: new Headers({ 'Content-Type': 'image/png' }),
+      blob: () => new Promise<Blob>((_resolve, reject) => {
+        bodyStarted();
+        signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        );
+      }),
+    } as Response;
+  });
+
+  try {
+    const request = fetchDeliveryQr(
+      { fetchImpl },
+      linkId,
+      { signal: caller.signal },
+    );
+    let outcome: unknown = 'pending';
+    void request.catch((error: unknown) => {
+      outcome = error;
+    });
+    await started;
+
+    caller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(outcome).toMatchObject({ kind: 'unavailable' });
+    await expect(request).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(caller.signal.aborted).toBe(true);
+    expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
   } finally {
     vi.useRealTimers();
   }
