@@ -38,6 +38,8 @@ const editableCapabilities = {
   canSubmitApproval: true,
   canPublishDirectly: false,
   canApprovePublish: false,
+  canArchive: true,
+  canRestore: false,
 };
 
 type RequestHandler = (request: ApiRequest<unknown>) => unknown | Promise<unknown>;
