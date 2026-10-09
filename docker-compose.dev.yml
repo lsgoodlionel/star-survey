@@ -70,6 +70,8 @@ services:
     profiles: ["test"]
     image: survey-web
     container_name: ${SURVEY_TEST_PREFIX:-survey}-test-web
+    environment:
+      ENGINE_DB_ROOT_PASSWORD: root
     volumes:
       - ./:/var/www/html
       - ./platform/deploy/test/.runtime/config.php:/var/www/html/application/config/config.php

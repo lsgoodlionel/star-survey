@@ -12,7 +12,7 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  reporter: [['line']],
+  reporter: [['line'], ['./e2e/runRootReporter.ts']],
   use: {
     baseURL,
     screenshot: 'off',

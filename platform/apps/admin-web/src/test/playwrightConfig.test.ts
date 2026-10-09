@@ -36,6 +36,17 @@ describe('Playwright result artifact location', () => {
 
     expect(mobile?.dependencies).toEqual(['chromium-desktop']);
   });
+
+  test('registers the run-root reporter after the console reporter', async () => {
+    process.env.ADMIN_WEB_BASE_URL = 'http://127.0.0.1:4173';
+
+    const config = await loadConfig();
+
+    expect(config.reporter).toEqual([
+      ['line'],
+      ['./e2e/runRootReporter.ts'],
+    ]);
+  });
 });
 
 async function loadConfig() {

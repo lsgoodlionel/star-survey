@@ -251,6 +251,9 @@ export function WorkspacePage() {
         queryClient.invalidateQueries({
           queryKey: ['resources', result.mutationTenantId, result.resource.parentId],
         }),
+        queryClient.invalidateQueries({
+          queryKey: ['resource-capabilities', result.mutationTenantId, result.resource.id],
+        }),
       ];
       if (result.action === 'move' && result.value) {
         invalidations.push(

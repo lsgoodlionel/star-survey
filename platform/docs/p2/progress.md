@@ -699,3 +699,10 @@ trace；gate 对事件字段、类型、URL 与长度做严格校验，并在 JS
   人工或专项自动化审计。
 
 这些证据只证明上述工程切片和对应子断言，不把 R01、R19 或 R23 的整条复合需求标为 Accepted。
+
+## 管理端产品对齐 Phase A+B（2026-10-09）
+
+- **代码存在**：稳定 demo/E2E 资源、工作台搜索/过滤/排序、归档恢复、AppShell/SurveyShell、900px 响应式切换、44px 主操作和成功后根项目归档已落库。
+- **自动化通过**：管理端 17 files / 165 tests；平台 1421 tests；Python gate 37 tests；demo/SSL predeploy 27 tests；fresh real-stack Playwright 10/10 及全链路核对通过。
+- **用户可见**：768、1024、1440 和 Pixel 7 截图无异常遮挡、无横向溢出、无 E2E 命名污染；业务导航不链接 `/admin`；键盘流程覆盖可见焦点、对话框和问卷 tabs。
+- **边界**：Phase C/D 保留为后续计划；生产 SSL 仅有部署前真实探测 gate，不是 production-ready。PR #10 仍为 OPEN、未合并，依赖仍待合并。

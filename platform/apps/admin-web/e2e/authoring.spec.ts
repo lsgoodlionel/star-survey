@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page, type Response, type TestInfo } from '@playwright/test';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { assertArtifactContainsNoSecret, redactSecret } from './artifacts';
 import { recentSanitizedNetworkEvents, trackSanitizedNetworkEvents } from './networkEvidence';
 import { redactSensitiveInputs } from './redaction';
@@ -22,6 +22,8 @@ interface MePayload {
 }
 
 interface JourneyResult {
+  rootProjectId: string;
+  folderId: string;
   surveyId: string;
   version: number;
 }
@@ -32,6 +34,9 @@ interface OutlineGroupOrder {
 }
 
 const ACTION_TIMEOUT_MS = 15_000;
+const RUN_PROJECT_NAME = '浏览器验收项目';
+const RUN_FOLDER_NAME = '产品验收资料';
+const RUN_SURVEY_NAME = '管理端产品对齐验收问卷';
 
 const importText = [
   '1. 您的性别？[单选]',
@@ -93,7 +98,7 @@ async function writeSanitizedTraceSummary(page: Page, testInfo: TestInfo) {
   );
 }
 
-test('author creates, imports, approves and publishes a survey', async ({ page }) => {
+test('author filters stable resources, restores archive, and publishes the same survey', async ({ page }) => {
   const metadata = await readMetadata();
   const token = await readToken();
   const network: NetworkRecord[] = [];
@@ -101,11 +106,11 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
 
   const me = await login(page, token, metadata);
 
-  const suffix = Date.now().toString(36);
-  const surveyId = await createSurveyResourceTree(page, 'E2E', suffix);
+  await expect(page.getByText(/^E2E(?:项目|文件夹|问卷).*[0-9a-z]{6,}$/i)).toHaveCount(0);
+  const { rootProjectId, folderId, surveyId } = await createSurveyResourceTree(page);
 
   await fillAction(page.getByLabel('题目文本'), '这是一份真实浏览器验收问卷');
-  await fillAction(page.getByLabel('标题'), `作者工作台验收 ${suffix}`);
+  await fillAction(page.getByLabel('标题'), RUN_SURVEY_NAME);
   const saveResponse = page.waitForResponse((response) =>
     response.url().includes(`/v1/surveys/${surveyId}/draft`) && response.request().method() === 'PUT',
   );
@@ -122,13 +127,13 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
   await clickAction(page.getByRole('button', { name: '确认导入 1 道题' }));
   await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
 
-  await clickAction(page.getByRole('link', { name: '草稿预览' }));
+  await clickAction(page.getByRole('link', { name: '真实预览' }));
   await expect(page.getByRole('heading', { name: '草稿预览' })).toBeVisible();
   await expect(page.getByText('您的性别？')).toBeVisible();
-  await clickAction(page.getByRole('link', { name: '返回编辑' }));
+  await clickAction(page.getByRole('link', { name: '编辑' }));
   await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}/edit$`));
 
-  await clickAction(page.getByRole('link', { name: '发布管理' }));
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
   await clickAction(page.getByRole('button', { name: '提交审批' }));
   await expect(page.getByRole('button', { name: '批准申请' })).toBeVisible();
   await clickAction(page.getByRole('button', { name: '批准申请' }));
@@ -144,7 +149,14 @@ test('author creates, imports, approves and publishes a survey', async ({ page }
   await expect(page.getByText('当前在线')).toBeVisible();
   await expect(page.getByText('字段映射')).toBeVisible();
 
-  await writeResult({ network, surveyId, tenantId: me.tenantId, version }, token);
+  await writeResult({
+    rootProjectId,
+    folderId,
+    network,
+    surveyId,
+    tenantId: me.tenantId,
+    version,
+  }, token);
 });
 
 test('desktop pointer dragging persists question and group order after refresh', async ({ page }) => {
@@ -180,15 +192,13 @@ test('desktop explicit sorting controls persist the same order after refresh', a
   await expectOutlineOrder(page, sortedOutlineOrder);
 });
 
-test('desktop keyboard dragging persists question order after refresh', async ({ page }) => {
+test('desktop keyboard sorting controls persist question order after refresh', async ({ page }) => {
   const surveyId = await createSortableSurvey(page, 'keyboard');
-  const handle = page.getByRole('button', { name: '拖动题目 QNOTE' });
+  const moveDown = page.getByRole('button', { name: '下移 QNOTE' });
 
-  await handle.focus();
-  await page.keyboard.press('Space');
-  await expect(handle.locator('xpath=..')).toHaveAttribute('data-dragging', 'true');
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Space');
+  await moveDown.focus();
+  await expectFocusedWithVisibleOutline(moveDown);
+  await moveDown.press('Enter');
   await expect(sortStatus(page)).toContainText('题目 QNOTE 已移动到题组 导入的题目 第 1 位');
 
   await saveAndReloadDraft(page, surveyId);
@@ -196,6 +206,101 @@ test('desktop keyboard dragging persists question order after refresh', async ({
     { title: '第一题组', questions: [] },
     { title: '导入的题目', questions: ['QNOTE', 'Q1'] },
   ]);
+});
+
+test('desktop breakpoints keep workspace, breadcrumbs, dialogs and editor controls usable', async ({ page }) => {
+  const metadata = await readMetadata();
+  const token = await readToken();
+  const result = await readResult();
+
+  for (const width of [768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await login(page, token, metadata);
+    await navigateWithinApp(
+      page,
+      `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`,
+    );
+    await expect(page.getByRole('navigation', { name: '当前位置' })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await assertTouchTarget(page.getByLabel('搜索资源'));
+    await assertTouchTarget(page.getByLabel('资源类型'));
+    await assertTouchTarget(page.getByLabel('资源状态'));
+    await assertTouchTarget(page.getByLabel('排序方式'));
+
+    const projectToggle = page.getByRole('button', { name: '打开项目导航' });
+    if (width === 768) {
+      await assertTouchTarget(projectToggle);
+      await clickAction(projectToggle);
+      const drawer = page.getByRole('complementary', { name: '项目与文件夹' });
+      await expect(drawer).toBeVisible();
+      await expect(drawer).toBeInViewport();
+      const closeDrawer = drawer.getByRole('button', { name: '关闭项目导航' });
+      await assertTouchTarget(closeDrawer);
+      await clickAction(closeDrawer);
+    } else {
+      await expect(projectToggle).toBeHidden();
+    }
+
+    await openCreateDialog(page, '新建文件夹');
+    const dialog = page.getByRole('dialog', { name: '新建文件夹' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toBeInViewport();
+    await expectFocusedWithVisibleOutline(dialog.getByRole('textbox'));
+    await assertTouchTarget(dialog.getByRole('button', { name: '取消' }));
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expectNoHorizontalOverflow(page);
+
+    await navigateWithinApp(page, `/surveys/${result.surveyId}/edit`);
+    await expect(page.getByRole('navigation', { name: '面包屑' })).toBeVisible();
+    await assertTouchTarget(page.getByRole('button', { name: '保存草稿' }));
+    await expectNoHorizontalOverflow(page);
+  }
+});
+
+test('keyboard-only workspace and narrow editor flow exposes focus and dialogs', async ({ page }) => {
+  const metadata = await readMetadata();
+  const token = await readToken();
+  const result = await readResult();
+  await page.setViewportSize({ width: 768, height: 900 });
+  await login(page, token, metadata);
+  await navigateWithinApp(
+    page,
+    `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`,
+  );
+
+  const search = page.getByLabel('搜索资源');
+  await search.focus();
+  await expectFocusedWithVisibleOutline(search);
+  await page.keyboard.press('Tab');
+  await expect(page.getByLabel('资源类型')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByLabel('资源状态')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByLabel('排序方式')).toBeFocused();
+  await page.keyboard.press('Tab');
+  const create = page.getByRole('button', { name: '新建' });
+  await expect(create).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('menuitem', { name: '新建项目' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: '新建项目' });
+  await expect(dialog).toBeVisible();
+  await expectFocusedWithVisibleOutline(dialog.getByRole('textbox'));
+  await page.keyboard.press('Escape');
+  await expect(create).toBeFocused();
+
+  await navigateWithinApp(page, `/surveys/${result.surveyId}/edit`);
+  for (const name of ['大纲', '编辑', '属性']) {
+    const tab = page.getByRole('tab', { name });
+    await tab.focus();
+    await expectFocusedWithVisibleOutline(tab);
+    await page.keyboard.press('Enter');
+    await expect(tab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('tabpanel', { name })).toBeVisible();
+  }
+  await expectNoHorizontalOverflow(page);
 });
 
 test('@mobile editor keeps tabs and primary actions usable without horizontal overflow', async ({ page }) => {
@@ -228,6 +333,45 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
   await assertUsable(page.getByRole('button', { name: '保存草稿' }));
+});
+
+test('@mobile workspace drawer, breadcrumbs and dialog controls remain touch accessible', async ({ page }) => {
+  const metadata = await readMetadata();
+  const token = await readToken();
+  const result = await readResult();
+  await login(page, token, metadata);
+  await navigateWithinApp(
+    page,
+    `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`,
+  );
+
+  await expect(page.getByRole('navigation', { name: '当前位置' })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  for (const control of [
+    page.getByLabel('搜索资源'),
+    page.getByLabel('资源类型'),
+    page.getByLabel('资源状态'),
+    page.getByLabel('排序方式'),
+    page.getByRole('button', { name: '打开项目导航' }),
+  ]) {
+    await assertTouchTarget(control);
+  }
+
+  await page.getByRole('button', { name: '打开项目导航' }).tap();
+  const drawer = page.getByRole('complementary', { name: '项目与文件夹' });
+  await expect(drawer).toBeVisible();
+  const closeDrawer = drawer.getByRole('button', { name: '关闭项目导航' });
+  await assertTouchTarget(closeDrawer);
+  await closeDrawer.tap();
+
+  await openCreateDialog(page, '新建文件夹');
+  const dialog = page.getByRole('dialog', { name: '新建文件夹' });
+  await expect(dialog).toBeVisible();
+  await expectFocusedWithVisibleOutline(dialog.getByRole('textbox'));
+  await assertTouchTarget(dialog.getByRole('button', { name: '取消' }));
+  await assertTouchTarget(dialog.getByRole('button', { name: '创建文件夹' }));
+  await page.keyboard.press('Escape');
+  await expectNoHorizontalOverflow(page);
 });
 
 test('@mobile touch-accessible sorting persists without horizontal overflow', async ({ page }) => {
@@ -277,8 +421,15 @@ async function createSortableSurvey(page: Page, label: string) {
   const token = await readToken();
   await login(page, token, metadata);
 
-  const suffix = `${label}-${Date.now().toString(36)}`;
-  const surveyId = await createSurveyResourceTree(page, '排序验收', suffix);
+  const result = await readResult();
+  await navigateWithinApp(
+    page,
+    `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`,
+  );
+  await expect(page.getByRole('heading', { name: '资源工作台' })).toBeVisible();
+  await createResource(page, '新建问卷', '创建问卷', `排序验收问卷 ${label}`);
+  await expect(page).toHaveURL(/\/surveys\/[0-9a-f-]{36}\/edit/);
+  const surveyId = surveyIdFrom(page.url());
 
   await clickAction(page.getByRole('link', { name: '批量导入' }));
   await fillAction(page.getByLabel('待导入文本'), importText);
@@ -292,12 +443,80 @@ async function createSortableSurvey(page: Page, label: string) {
   return surveyId;
 }
 
-async function createSurveyResourceTree(page: Page, prefix: string, suffix: string) {
-  await createResource(page, '新建项目', '创建项目', `${prefix}项目 ${suffix}`);
-  await createResource(page, '新建文件夹', '创建文件夹', `${prefix}文件夹 ${suffix}`);
-  await createResource(page, '新建问卷', '创建问卷', `${prefix}问卷 ${suffix}`);
+async function createSurveyResourceTree(page: Page) {
+  await createResource(page, '新建项目', '创建项目', RUN_PROJECT_NAME);
+  await testWorkspaceRequestControls(page);
+  await clickAction(currentResource(page, RUN_PROJECT_NAME));
+  await expect(page.getByLabel('所选资源操作')).toBeVisible();
+  const rootProjectId = new URL(page.url()).searchParams.get('project');
+  expect(rootProjectId).toMatch(/^[0-9a-f-]{36}$/i);
+  await writeRunRootId(rootProjectId!);
+  await testArchiveRestore(page);
+
+  await createResource(page, '新建文件夹', '创建文件夹', RUN_FOLDER_NAME);
+  await clickAction(currentResource(page, RUN_FOLDER_NAME));
+  const folderId = new URL(page.url()).searchParams.get('parent');
+  expect(folderId).toMatch(/^[0-9a-f-]{36}$/i);
+  await createResource(page, '新建问卷', '创建问卷', RUN_SURVEY_NAME);
   await expect(page).toHaveURL(/\/surveys\/[0-9a-f-]{36}\/edit/);
-  return surveyIdFrom(page.url());
+  return { rootProjectId: rootProjectId!, folderId: folderId!, surveyId: surveyIdFrom(page.url()) };
+}
+
+async function testWorkspaceRequestControls(page: Page) {
+  await fillAction(page.getByLabel('搜索资源'), '归档恢复');
+  await expect.poll(() => new URL(page.url()).searchParams.get('query')).toBe('归档恢复');
+  await page.getByLabel('资源类型').selectOption('folder');
+  await expect.poll(() => new URL(page.url()).searchParams.get('kind')).toBe('folder');
+  const responsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === '/v1/resources'
+      && url.searchParams.get('query') === '归档恢复'
+      && url.searchParams.get('kind') === 'folder'
+      && url.searchParams.get('archived') === 'active'
+      && url.searchParams.get('sort') === 'name_asc';
+  });
+  await page.getByLabel('排序方式').selectOption('name_asc');
+  expect((await responsePromise).status()).toBe(200);
+  const url = new URL(page.url());
+  expect(url.searchParams.get('query')).toBe('归档恢复');
+  expect(url.searchParams.get('kind')).toBe('folder');
+  expect(url.searchParams.get('archived')).toBe('active');
+  expect(url.searchParams.get('sort')).toBe('name_asc');
+
+  await navigateWithinApp(page, '/workspace');
+  expect(new URL(page.url()).search).toBe('');
+  await expect(page.getByLabel('搜索资源')).toHaveValue('');
+  await expect(page.getByLabel('资源类型')).toHaveValue('');
+  await expect(page.getByLabel('排序方式')).toHaveValue('updated_desc');
+  await expect(currentResource(page, RUN_PROJECT_NAME)).toBeVisible();
+}
+
+async function testArchiveRestore(page: Page) {
+  const name = '归档恢复验收';
+  const projectId = new URL(page.url()).searchParams.get('project');
+  expect(projectId).toMatch(/^[0-9a-f-]{36}$/i);
+  await createResource(page, '新建文件夹', '创建文件夹', name);
+  await clickAction(currentResource(page, name));
+  await clickAction(page.getByRole('button', { name: '归档', exact: true }));
+  const archiveDialog = page.getByRole('dialog', { name: '归档资源' });
+  await expectFocusedWithVisibleOutline(archiveDialog.getByRole('button', { name: '取消' }));
+  await clickAction(archiveDialog.getByRole('button', { name: '确认归档' }));
+  await expect(archiveDialog).toBeHidden();
+
+  await page.getByLabel('资源状态').selectOption('archived');
+  await clickAction(currentResource(page, name));
+  await clickAction(page.getByRole('button', { name: '恢复', exact: true }));
+  const restoreDialog = page.getByRole('dialog', { name: '恢复资源' });
+  await expectFocusedWithVisibleOutline(restoreDialog.getByRole('button', { name: '取消' }));
+  await clickAction(restoreDialog.getByRole('button', { name: '确认恢复' }));
+  await expect(restoreDialog).toBeHidden();
+  await navigateWithinApp(page, `/workspace?project=${projectId}&parent=${projectId}`);
+  await expect(currentResource(page, name)).toBeVisible();
+}
+
+function currentResource(page: Page, name: string) {
+  return page.getByRole('list', { name: '当前位置资源' })
+    .getByRole('button', { name, exact: true });
 }
 
 async function dragWithPointer(page: Page, source: Locator, target: Locator) {
@@ -370,16 +589,29 @@ async function expectNoHorizontalOverflow(page: Page) {
   )).toBe(true);
 }
 
+async function expectFocusedWithVisibleOutline(locator: Locator) {
+  await expect(locator).toBeFocused();
+  expect(await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return style.outlineStyle !== 'none' && style.outlineWidth !== '0px';
+  })).toBe(true);
+}
+
 function sortStatus(page: Page) {
   return page.locator('.editor-outline > [role="status"][aria-live="polite"]');
 }
 
 async function createResource(page: Page, trigger: string, submit: string, value: string) {
-  await clickAction(page.getByRole('button', { name: trigger }));
+  await openCreateDialog(page, trigger);
   const dialog = page.getByRole('dialog', { name: trigger });
   await fillAction(dialog.getByRole('textbox'), value);
   await clickAction(dialog.getByRole('button', { name: submit }));
   await expect(dialog).toBeHidden();
+}
+
+async function openCreateDialog(page: Page, trigger: string) {
+  await clickAction(page.getByRole('button', { name: '新建', exact: true }));
+  await clickAction(page.getByRole('menuitem', { name: trigger }));
 }
 
 async function login(page: Page, token: string, metadata: TestMetadata) {
@@ -447,6 +679,10 @@ async function readResult(): Promise<JourneyResult> {
     await readFile(requiredEnv('ADMIN_WEB_RESULT_FILE'), 'utf8'),
   );
   if (!isRecord(payload)
+    || typeof payload.rootProjectId !== 'string'
+    || !/^[0-9a-f-]{36}$/i.test(payload.rootProjectId)
+    || typeof payload.folderId !== 'string'
+    || !/^[0-9a-f-]{36}$/i.test(payload.folderId)
     || typeof payload.surveyId !== 'string'
     || !/^[0-9a-f-]{36}$/i.test(payload.surveyId)
     || typeof payload.version !== 'number'
@@ -454,7 +690,22 @@ async function readResult(): Promise<JourneyResult> {
     || payload.version < 1) {
     throw new Error('ADMIN_WEB_RESULT_FILE does not contain a completed desktop journey');
   }
-  return { surveyId: payload.surveyId, version: payload.version };
+  return {
+    rootProjectId: payload.rootProjectId,
+    folderId: payload.folderId,
+    surveyId: payload.surveyId,
+    version: payload.version,
+  };
+}
+
+async function writeRunRootId(rootProjectId: string) {
+  const resultsDir = requiredEnv('ADMIN_WEB_TEST_RESULTS_DIR');
+  await mkdir(resultsDir, { recursive: true });
+  await writeFile(
+    resolve(resultsDir, 'run-root-resource-id.txt'),
+    `${rootProjectId}\n`,
+    { mode: 0o600 },
+  );
 }
 
 async function writeResult(result: Record<string, unknown>, token: string) {

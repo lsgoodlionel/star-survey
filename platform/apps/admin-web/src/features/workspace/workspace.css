@@ -597,6 +597,11 @@
   border-radius: 4px;
 }
 
+.workspace-dialog button:focus {
+  outline: 3px solid #0b6bcb;
+  outline-offset: 2px;
+}
+
 .workspace-dialog-actions .secondary-action {
   color: #25383f;
   background: #fff;

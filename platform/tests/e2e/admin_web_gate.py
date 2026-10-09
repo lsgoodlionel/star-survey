@@ -33,6 +33,8 @@ OPERATOR_ACTOR = "admin-web-e2e-operator"
 OWNER_ACTOR = "admin-web-e2e-owner"
 OPERATOR_ROLE = "platform_operator"
 RESULT_FIELDS = {
+    "rootProjectId",
+    "folderId",
     "surveyId",
     "tenantId",
     "version",
@@ -398,6 +400,24 @@ def export_sanitized_failure_evidence(
                     raise StepFailed("sanitized failure screenshot did not pass validation")
                 exports.append((prefix + "-sanitized-failure.png", screenshot_bytes))
 
+        root_ids = [
+            candidate for candidate in _walk_artifact_files(source)
+            if candidate.name == "run-root-resource-id.txt"
+        ]
+        if len(root_ids) > 1:
+            raise StepFailed("run root resource evidence is duplicated")
+        if root_ids:
+            root_bytes = root_ids[0].read_bytes()
+            if _bytes_contain_secret(root_bytes, secret):
+                raise StepFailed("run root resource evidence contains the browser credential")
+            try:
+                root_id = root_bytes.decode("ascii").strip()
+            except UnicodeDecodeError as error:
+                raise StepFailed("run root resource evidence is not ASCII") from error
+            if not _valid_uuid(root_id):
+                raise StepFailed("run root resource evidence is not a canonical UUID")
+            exports.append(("run-root-resource-id.txt", (root_id + "\n").encode("ascii")))
+
         if not exports:
             return 0
         resolved_destination.mkdir(parents=True, exist_ok=False)
@@ -437,6 +457,8 @@ def _valid_uuid(value: Any) -> bool:
 
 def validate_result(payload: Dict[str, Any]) -> Dict[str, Any]:
     expect(set(payload) == RESULT_FIELDS, "result uses the exact schema")
+    expect(_valid_uuid(payload.get("rootProjectId")), "result rootProjectId is a canonical UUID")
+    expect(_valid_uuid(payload.get("folderId")), "result folderId is a canonical UUID")
     expect(_valid_uuid(payload.get("surveyId")), "result surveyId is a canonical UUID")
     expect(_valid_uuid(payload.get("tenantId")), "result tenantId is a canonical UUID")
     expect(payload.get("version") == 1, "result identifies published version 1")
@@ -456,6 +478,21 @@ def validate_result(payload: Dict[str, Any]) -> Dict[str, Any]:
             )
         expect(valid_record, "network metadata contains only method, status and URL")
     return payload
+
+
+def archive_run_root(api: Api, root_id: str) -> None:
+    if not _valid_uuid(root_id):
+        raise StepFailed("run root resource ID is not a canonical UUID")
+    status, resource = api.call("POST", "/v1/resources/{}/archive".format(root_id))
+    valid = (
+        status == 200
+        and isinstance(resource, dict)
+        and resource.get("id") == root_id
+        and resource.get("kind") == "project"
+        and isinstance(resource.get("archivedAt"), str)
+        and bool(resource["archivedAt"])
+    )
+    expect(valid, "successful browser suite archived its run root")
 
 
 def validate_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -603,6 +640,17 @@ def cmd_export_sanitized_evidence(args: argparse.Namespace) -> None:
     print("  [ok] exported {} sanitized failure evidence files".format(count), file=sys.stderr)
 
 
+def cmd_archive_run_root(args: argparse.Namespace) -> None:
+    try:
+        token = Path(args.jwt_file).read_text(encoding="utf-8").strip()
+        root_id = Path(args.root_id_file).read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError) as error:
+        raise StepFailed("run root archive inputs are unavailable") from error
+    if not token:
+        raise StepFailed("browser credential is empty during run root archive")
+    archive_run_root(Api(args.base_url, token), root_id)
+
+
 def _run(command: List[str], input_text: Optional[str] = None) -> str:
     completed = subprocess.run(
         command,
@@ -741,6 +789,11 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     export.add_argument("--output-dir", required=True)
     export.add_argument("--allowed-root", required=True)
     export.set_defaults(handler=cmd_export_sanitized_evidence)
+
+    archive = commands.add_parser("archive-run-root")
+    archive.add_argument("--jwt-file", required=True)
+    archive.add_argument("--root-id-file", required=True)
+    archive.set_defaults(handler=cmd_archive_run_root)
 
     verify = commands.add_parser("verify")
     verify.add_argument("--metadata-file", required=True)

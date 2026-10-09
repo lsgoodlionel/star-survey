@@ -538,6 +538,9 @@ test('renamesAndMovesTheCurrentFolderThenExitsAndRefreshesAffectedContexts', asy
   expect(invalidate).toHaveBeenCalledWith({
     queryKey: ['resource-path', 'tenant-a'],
   });
+  expect(invalidate).toHaveBeenCalledWith({
+    queryKey: ['resource-capabilities', 'tenant-a', folderA.id],
+  });
 });
 
 test('archivesASurveyWithPublicLinkWarningAndRemovesItFromActiveView', async () => {
@@ -615,6 +618,9 @@ test('archivesTheCurrentFolderThenReturnsToItsParentAndClearsCachedChildren', as
   });
   expect(invalidate).toHaveBeenCalledWith({
     queryKey: ['resource-path', 'tenant-a'],
+  });
+  expect(invalidate).toHaveBeenCalledWith({
+    queryKey: ['resource-capabilities', 'tenant-a', folderA.id],
   });
 });
 

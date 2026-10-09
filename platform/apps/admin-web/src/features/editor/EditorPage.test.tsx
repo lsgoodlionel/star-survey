@@ -590,7 +590,7 @@ describe('EditorPage', () => {
 
   test('switchesOutlineEditorAndPropertiesAsTabsOnNarrowScreens', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
-      matches: query === '(max-width: 760px)',
+      matches: query === '(max-width: 900px)',
       media: query,
       onchange: null,
       addEventListener: vi.fn(),

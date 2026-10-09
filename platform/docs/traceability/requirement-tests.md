@@ -44,6 +44,10 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
 
 ### 管理端首期的局部断言索引
 
+Task 7 将证据分为三层：**代码存在**由下列定位符与组件测试证明；**自动化通过**由 17 files / 165 Vitest、
+1421 backend、37 gate、27 demo 和 fresh Playwright 10/10 证明；**用户可见**由 `docs/audits/2026-10-09-product-alignment/07-admin-workspace-*.png`
+四档人工检查证明。这些证据只收口 Phase A+B，不将 Phase C/D 或 production SSL 部署标为完成。
+
 当前定位符校验器只解析 `.py`、`.java`、`.php` 和 `.sh`，尚不能把 Vitest 的 `.ts/.tsx` 符号加入
 上面的 80 条机器登记。下列补充索引给出可直接核对的测试名，并明确只证明复合需求中的局部断言：
 
@@ -79,7 +83,8 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
   隐藏敏感控件；不代表完整安全供应链与审计要求。
 - `R23-12`：`platform/deploy/test/run-admin-web-e2e.sh` 串起浏览器、平台、平台库、发布网关和引擎库，并由
   `AdminWebGateTest.test_verify_evidence_rejects_a_platform_or_engine_mismatch` 反向证明任一段不一致会失败；这是
-  管理端首期纵向验收证据，不把 305 条需求整体视为完成。
+  管理端首期纵向验收证据。Task 7 还覆盖稳定资源名、请求参数、同一问卷往返、归档恢复、
+  768/1024/1440/Pixel 7 无溢出、44px 和键盘流程，仅在 suite 全部成功后归档根项目；不把 305 条需求整体视为完成。
 
 ## WP-01 创建与编辑
 

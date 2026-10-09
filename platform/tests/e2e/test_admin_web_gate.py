@@ -48,6 +48,13 @@ class AdminWebGateTest(unittest.TestCase):
             self.assertIn("'force_ssl' => 'off'", text)
             self.assertIn("'ssl_disable_alert' => 1", text)
 
+    def test_standard_test_web_receives_its_isolated_database_password(self):
+        compose = Path(__file__).parents[3] / "docker-compose.dev.yml"
+        text = compose.read_text(encoding="utf-8")
+        test_web = text[text.index("  test-web:"):]
+
+        self.assertIn("ENGINE_DB_ROOT_PASSWORD: root", test_web)
+
     def test_runner_clears_settings_cache_after_preparing_the_engine(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
         text = runner.read_text(encoding="utf-8")
@@ -131,6 +138,8 @@ class AdminWebGateTest(unittest.TestCase):
     def test_result_schema_rejects_missing_or_unknown_fields(self):
         gate = load_gate()
         valid = {
+            "rootProjectId": "33333333-3333-4333-8333-333333333333",
+            "folderId": "44444444-4444-4444-8444-444444444444",
             "surveyId": "22222222-2222-4222-8222-222222222222",
             "tenantId": "11111111-1111-4111-8111-111111111111",
             "version": 1,
@@ -146,6 +155,8 @@ class AdminWebGateTest(unittest.TestCase):
     def test_verify_evidence_rejects_a_platform_or_engine_mismatch(self):
         gate = load_gate()
         result = gate.validate_result({
+            "rootProjectId": "33333333-3333-4333-8333-333333333333",
+            "folderId": "44444444-4444-4444-8444-444444444444",
             "surveyId": "22222222-2222-4222-8222-222222222222",
             "tenantId": "11111111-1111-4111-8111-111111111111",
             "version": 1,
@@ -505,18 +516,85 @@ class AdminWebGateTest(unittest.TestCase):
             (case / "trace.zip").write_bytes(b"raw playwright trace")
             (case / "raw-failure.png").write_bytes(b"\x89PNG\r\n\x1a\nraw")
             (case / "network.txt").write_text("Bearer " + token, encoding="utf-8")
+            (source / "run-root-resource-id.txt").write_text(
+                "33333333-3333-4333-8333-333333333333\n", encoding="ascii"
+            )
 
             exported = gate.export_sanitized_failure_evidence(
                 secret, source, destination, allowed_root
             )
 
-            self.assertEqual(2, exported)
+            self.assertEqual(3, exported)
             self.assertEqual({
                 "chromium-desktop-desktop-authoring-sanitized-failure.png",
                 "chromium-desktop-desktop-authoring-sanitized-trace-summary.json",
+                "run-root-resource-id.txt",
             }, {path.name for path in destination.iterdir()})
             for artifact in destination.iterdir():
                 self.assertNotIn(token.encode("ascii"), artifact.read_bytes())
+
+    def test_export_rejects_a_non_uuid_run_root_id_and_clears_output(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, "header.payload.signature")
+            source.mkdir()
+            (source / "run-root-resource-id.txt").write_text(
+                "not-a-resource-id\n", encoding="ascii"
+            )
+
+            with self.assertRaises(gate.StepFailed):
+                gate.export_sanitized_failure_evidence(
+                    secret, source, destination, allowed_root
+                )
+
+            self.assertFalse(destination.exists())
+
+    def test_archive_run_root_posts_archive_and_confirms_the_same_resource(self):
+        gate = load_gate()
+        root_id = "33333333-3333-4333-8333-333333333333"
+
+        class RecordingApi:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, method, path, body=None):
+                self.calls.append((method, path, body))
+                return 200, {
+                    "id": root_id,
+                    "kind": "project",
+                    "archivedAt": "2026-10-09T04:00:00Z",
+                }
+
+        api = RecordingApi()
+
+        gate.archive_run_root(api, root_id)
+
+        self.assertEqual([
+            ("POST", "/v1/resources/{}/archive".format(root_id), None),
+        ], api.calls)
+
+    def test_archive_run_root_rejects_invalid_ids_before_any_request(self):
+        gate = load_gate()
+
+        class RecordingApi:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, method, path, body=None):
+                self.calls.append((method, path, body))
+                return 200, {}
+
+        api = RecordingApi()
+
+        with self.assertRaises(gate.StepFailed):
+            gate.archive_run_root(api, "not-a-resource-id")
+
+        self.assertEqual([], api.calls)
 
     def test_export_preserves_a_bounded_sanitized_network_sequence(self):
         gate = load_gate()

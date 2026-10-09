@@ -429,11 +429,11 @@ function normalizedSearch(params: URLSearchParams) {
 
 function useNarrowViewport() {
   const [narrow, setNarrow] = useState(
-    () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches,
+    () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches,
   );
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return;
-    const media = window.matchMedia('(max-width: 760px)');
+    const media = window.matchMedia('(max-width: 900px)');
     const update = () => setNarrow(media.matches);
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
