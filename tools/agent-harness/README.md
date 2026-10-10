@@ -1,3 +1,4 @@
+<!-- harness-delivery-status: local_validated_sync_pending -->
 # 自治工程 Harness
 
 这是一个 Python 3.11+、仅依赖标准库的确定性控制套件。它把批准计划、Git 身份、路径策略、质量门、
@@ -48,6 +49,8 @@ HEAD、工作区和工具环境。审批路径、真实秘密、依赖新增、�
 - `docs/agent/PROTECTED_PATHS.yaml`：`deny/approval_required/review_required/generated` 路径策略。
 - `docs/agent/STATE_SCHEMA.json`：持久化 wire contract。
 - `docs/agent/PROJECT_MEMORY.md`：宿主项目稳定事实，不保存临时运行状态。
+- `docs/agent/HARNESS_HOST.json`：active plan、secret policy、fixture scope、宿主文档与交付 manifest 路径。
+- `docs/agent/HARNESS_DELIVERY.json`：计划 checkbox、ledger、implementation commit、验证证据和外部同步状态的唯一清单。
 - `docs/superpowers/plans/`：已经人工确认、包含唯一 Milestone 与明确文件范围的计划。
 
 `GATE_MATRIX.yaml` 与 `PROTECTED_PATHS.yaml` 使用 JSON 语法（YAML 1.2 子集），无需 PyYAML。命令只能是非空
@@ -65,22 +68,22 @@ Harness 套件、fake drills、危险参数扫描和计划/记忆漂移检查。
 默认 drill 全部使用临时目录和 fake 命令：
 
 ```sh
-python3.11 tools/agent-harness/drills/run_drills.py
-python3.11 tools/agent-harness/drills/run_drills.py --check-forbidden-options
-python3.11 tools/agent-harness/drills/run_drills.py --check-docs \
-  --plan docs/superpowers/plans/approved-plan.md \
-  --memory docs/agent/PROJECT_MEMORY.md
+scripts/agent-harness --python tools/agent-harness/drills/run_drills.py
+scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --check-forbidden-options
+scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --check-docs
 ```
 
 真实 Codex smoke 只能人工显式运行一次，并且只操作由当前 HEAD 创建的 disposable worktree：
 
 ```sh
-python3.11 tools/agent-harness/drills/run_drills.py --allow-real-codex
+scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --allow-real-codex
 ```
 
-runner 在调用 Codex 前拒绝生产 secret-shaped 路径，固定一个 cycle，只允许修改 fixture，并清理临时 worktree
-和分支。登录、配额、CLI 或受控环境失败必须得到脱敏 `paused` 证据；runner 自身或清理不变量失败则返回
-`failed`，不能伪装成可接受的暂停。CI 永不使用 `--allow-real-codex`。
+runner 在调用 Codex 前按宿主配置检查 tracked、untracked 和 ignored inventory，拒绝秘密路径、目录 symlink 与解析逃逸；
+plan/fixture 采用拒绝 symlink 的防跟随原子创建。它固定一个 cycle，只允许修改 fixture，并验证临时 worktree、分支和
+路径均已清理。`completed` 还要求 fixture 精确语义、非空 required Gates 全部以当前 HEAD 的退出码 0 证据通过；登录、
+配额、CLI 或受控环境失败必须得到脱敏 `paused` 证据。runner 自身或清理不变量失败返回 `failed`，不能声称清理完成。
+CI 永不使用 `--allow-real-codex`。
 
 本地裸 `python3` 若低于 3.11 会按设计失败；Harness 测试应使用版本化入口选择受控 runtime：
 

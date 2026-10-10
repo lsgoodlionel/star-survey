@@ -1,8 +1,9 @@
+<!-- harness-delivery-status: local_validated_sync_pending -->
 # 自治工程 SOP
 
 权威设计：[已确认 spec](../superpowers/specs/2026-10-10-autonomous-engineering-control-plane-design.md)。
-本阶段提供规则、策略和状态格式；CLI、状态持久化、路径匹配、Gate 执行、脱敏、Codex 适配与 CI 由后续任务交付。
-未交付的执行功能不得视为安全保障已经生效。
+CLI、状态持久化、路径匹配、Gate 执行、脱敏、Codex 适配与只读 CI 已在本地实现并通过自动验证。
+当前交付状态由 [HARNESS_DELIVERY.json](HARNESS_DELIVERY.json) 唯一记录；独立审查、GitHub 与 Obsidian 同步仍待完成。
 
 ## 准入与实施
 
@@ -29,7 +30,8 @@ documentation 包含配置/路径契约、追溯和能力一致性检查；人�
 先规范化真实仓库路径；拒绝绝对路径、父级逃逸、符号链接逃逸与无法解析路径，按真实大小写判定。
 deny 立即拒绝并暂停；approval_required 需要对应范围的人类批准；generated 只允许指定 generator 修改；
 review_required 允许实现但完成前需要独立审查。无匹配路径不能隐式获得批准。
-秘密策略采用保守覆盖，包括 .env.* 模板；需要放行无秘密模板时另行审批策略变更。
+真实 smoke 的秘密路径 pattern 与模板 allowlist 由版本化 [HARNESS_HOST.json](HARNESS_HOST.json) 提供；新增模板放行须
+经宿主策略变更，不得在核心 runner 内写死项目特例。
 控制平面规则本身属于 approval_required，防止自治执行降低自身边界。
 新增依赖、越界或未批准的保护路径变更立即暂停；既有 Task 的明确授权对指定范围有效。
 

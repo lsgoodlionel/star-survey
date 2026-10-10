@@ -1,3 +1,4 @@
+<!-- harness-delivery-status: local_validated_sync_pending -->
 # Survey 永久项目记忆
 
 稳定事实核对日期：2026-10-10。来源是当前源码、现有 CI 与批准设计；本文不保存运行状态。
@@ -28,7 +29,8 @@
 - 本地 Docker 入口 docker-compose.dev.yml、platform/deploy/test/ 与 platform/deploy/platform-dev/。
 - 生产与 Release 入口 platform/deploy/production/，运行手册与环境和本地开发明确分离。
 - 控制平面 tools/agent-harness/ 使用 Python 3.11+ 标准库，配置不依赖 PyYAML；确定性 CLI、状态恢复、Gate、
-  脱敏诊断、受控 Codex adapter、fake drills 与只读治理 CI 已交付。核心套件、项目策略模板和宿主集成保持分层。
+  脱敏诊断、受控 Codex adapter、fake drills 与只读治理 CI 已在本地实现和验证。核心套件、项目策略模板和宿主集成
+  保持分层；独立审查、GitHub 与 Obsidian 同步状态以 [HARNESS_DELIVERY.json](HARNESS_DELIVERY.json) 为准。
 
 ## 现有质量门
 
@@ -46,7 +48,7 @@
 - 浏览器纵向：platform/deploy/test/run-admin-web-e2e.sh --fresh；三进程 P1：platform/deploy/test/run-p1-e2e.sh。
 - 引擎与策略端到端脚本位于 platform/deploy/test/；数据库相关场景按现有约定双库执行。
 - Harness：仓库根 `scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests -p 'test_*.py' -v`；
-  fake drills 使用 Python 3.11+ 运行 `tools/agent-harness/drills/run_drills.py`。
+  fake drills 使用 `scripts/agent-harness --python tools/agent-harness/drills/run_drills.py`。
 
 ## 已确认边界与维护
 

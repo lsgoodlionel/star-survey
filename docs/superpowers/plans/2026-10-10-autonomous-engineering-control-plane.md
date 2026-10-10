@@ -68,29 +68,29 @@ Task 3、4、5 分别只拥有 `git_guard.py`、`gate_runner.py`、`diagnostics.
 - Consumes: approved design and existing repository test commands.
 - Produces: `GateDefinition`, `GateMatrix`, `PathRule`, `PolicyConfig`; `load_gate_matrix(path: Path) -> GateMatrix`; `load_protected_paths(path: Path) -> PolicyConfig`.
 
-- [ ] **Step 1: Write failing configuration tests**
+- [x] **Step 1: Write failing configuration tests**
 
 Add tests named `test_loads_json_compatible_yaml_without_dependency`, `test_rejects_unknown_top_level_keys`, `test_rejects_shell_string_commands`, `test_gate_ids_are_unique`, and `test_path_rule_actions_are_closed_enum`.
 
 Assert that commands are arrays of non-empty strings, timeouts are positive integers, allowed actions are exactly `deny`, `approval_required`, `review_required`, `generated`, duplicate IDs fail, and no PyYAML import is required.
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
 Run: `python3 -m unittest discover -s tools/agent-harness/tests -p 'test_config.py' -v`
 
 Expected: FAIL because `agent_harness.config` and policy files do not exist.
 
-- [ ] **Step 3: Implement the configuration model and parser**
+- [x] **Step 3: Implement the configuration model and parser**
 
 In `config.py`, define immutable dataclasses and exact loaders from the Interfaces block. Reject unknown keys, relative repository escapes, empty path patterns, string-valued commands, duplicate IDs and unsupported actions with `ConfigError`.
 
-- [ ] **Step 4: Write the project rule and policy documents**
+- [x] **Step 4: Write the project rule and policy documents**
 
 Keep `AGENTS.md` under 200 lines and link detailed procedures. Populate stable project facts in `PROJECT_MEMORY.md`, including source paths, current stack, existing quality gates and the rule that mutable runtime facts must be revalidated.
 
 Configure initial Gate profiles for `admin-web`, `platform-java`, `publish-gateway`, `production-release`, `cross-stack-e2e`, `documentation`, and `agent-harness`. Configure protected categories for secrets, production/release, migrations/auth, generated files and normal review paths.
 
-- [ ] **Step 5: Ignore raw run state and verify configuration**
+- [x] **Step 5: Ignore raw run state and verify configuration**
 
 Add `/var/agent-harness/` to `.gitignore` and verify:
 
@@ -98,7 +98,7 @@ Run: `python3 -m unittest discover -s tools/agent-harness/tests -p 'test_config.
 
 Expected: all tests PASS and `git check-ignore var/agent-harness/runs/example/state.json` reports `.gitignore`.
 
-- [ ] **Step 6: Commit the rule contract**
+- [x] **Step 6: Commit the rule contract**
 
 ```bash
 git add AGENTS.md .gitignore docs/agent tools/agent-harness
@@ -118,29 +118,29 @@ git commit -m "feat: add autonomous engineering policy contract"
 - Consumes: `docs/agent/STATE_SCHEMA.json` and repository-relative `Path` values.
 - Produces: `RunStatus`, `GateStatus`, `GateEvidence`, `AttemptState`, `RunState`; `sha256_file(path: Path) -> str`; `load_state(path: Path) -> RunState`; `save_state_atomic(path: Path, state: RunState) -> None`; `transition(state: RunState, target: RunStatus, reason: str) -> RunState`; `append_event(path: Path, event_type: str, payload: Mapping[str, object]) -> str`; `read_events(path: Path) -> list[dict[str, object]]`.
 
-- [ ] **Step 1: Write failing model and transition tests**
+- [x] **Step 1: Write failing model and transition tests**
 
 Add tests for exact states `planned`, `active`, `verifying`, `repairing`, `completed`, `paused`, `blocked`; allow only the transitions in the design; reject `active -> completed`; reject missing required fields and unknown schema versions.
 
-- [ ] **Step 2: Write failing atomicity and event-chain tests**
+- [x] **Step 2: Write failing atomicity and event-chain tests**
 
 Add `test_atomic_save_preserves_previous_state_when_replace_fails`, `test_event_chain_detects_modified_middle_record`, and `test_event_reader_rejects_truncated_final_line` using temporary directories and patched filesystem calls.
 
-- [ ] **Step 3: Run the focused tests and verify failure**
+- [x] **Step 3: Run the focused tests and verify failure**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_state.py -v`
 
 Expected: FAIL because `agent_harness.state` does not exist.
 
-- [ ] **Step 4: Implement immutable state types and transition validation**
+- [x] **Step 4: Implement immutable state types and transition validation**
 
 Serialize timestamps as UTC RFC 3339 with `Z`. Preserve unknown runtime data only when the schema explicitly allows it; otherwise fail closed. A state transition returns a new dataclass instance and updates `updatedAt`.
 
-- [ ] **Step 5: Implement atomic state writes and chained events**
+- [x] **Step 5: Implement atomic state writes and chained events**
 
 Write state to a same-directory temporary file, flush, `os.fsync`, then `os.replace`. Each event stores `previousDigest` and its own digest over canonical JSON. Reject any malformed or mismatched chain during read.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_state.py -v`
 
@@ -163,29 +163,29 @@ git commit -m "feat: add atomic autonomous run state"
 - Consumes: `PolicyConfig` from Task 1 and `RunState` from Task 2.
 - Produces: `GitSnapshot`; `capture_snapshot(repo: Path) -> GitSnapshot`; `changed_paths(repo: Path, base: str, head: str | None = None) -> tuple[str, ...]`; `classify_paths(repo: Path, paths: Iterable[str], policy: PolicyConfig) -> tuple[PathDecision, ...]`; `validate_resume(snapshot: GitSnapshot, state: RunState) -> ResumeDecision`; `assert_worktree_isolated(repo: Path) -> None`.
 
-- [ ] **Step 1: Write failing temporary-repository tests**
+- [x] **Step 1: Write failing temporary-repository tests**
 
 Cover clean and dirty snapshots, branch and HEAD capture, detached HEAD rejection, untracked files, unrelated pre-existing changes, and a valid child commit produced by the same run.
 
-- [ ] **Step 2: Write failing path-boundary tests**
+- [x] **Step 2: Write failing path-boundary tests**
 
 Add tests for `../` escape, absolute paths, symlink escape, normalized duplicate separators and case-sensitive path matching. Assert escaped or unresolved paths receive `deny` before any lower-priority rule.
 
-- [ ] **Step 3: Run the focused tests and verify failure**
+- [x] **Step 3: Run the focused tests and verify failure**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_git_guard.py -v`
 
 Expected: FAIL because `agent_harness.git_guard` does not exist.
 
-- [ ] **Step 4: Implement Git queries without shell interpolation**
+- [x] **Step 4: Implement Git queries without shell interpolation**
 
 Use `subprocess.run([...], cwd=repo, text=True, capture_output=True, check=False)` with fixed argument arrays. Normalize porcelain-v2 output and return explicit errors for non-repositories, shared checkout use, detached HEAD and ambiguous ancestry.
 
-- [ ] **Step 5: Implement protected-path classification and resume decisions**
+- [x] **Step 5: Implement protected-path classification and resume decisions**
 
 Evaluate canonical repository-relative paths with precedence `deny > approval_required > generated > review_required`. `validate_resume` must distinguish exact match, explainable descendant commit, dirty drift, branch drift and rewritten history.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_git_guard.py -v`
 
@@ -208,29 +208,29 @@ git commit -m "feat: enforce autonomous git boundaries"
 - Consumes: `GateMatrix` from Task 1, `RunState` and `GateEvidence` from Task 2, changed repository paths from Task 3.
 - Produces: `resolve_required_gates(matrix: GateMatrix, changed_paths: Iterable[str]) -> tuple[GateDefinition, ...]`; `run_gate(repo: Path, gate: GateDefinition, evidence_dir: Path, head_commit: str) -> GateEvidence`; `invalidate_stale_evidence(state: RunState, current_head: str) -> RunState`.
 
-- [ ] **Step 1: Write failing gate-resolution tests**
+- [x] **Step 1: Write failing gate-resolution tests**
 
 Assert that one path selects its profile, multiple areas produce a stable deduplicated union, unknown implementation paths fail closed, documentation-only changes select documentation checks, and a developer may add but not remove inferred Gate IDs.
 
-- [ ] **Step 2: Write failing execution tests**
+- [x] **Step 2: Write failing execution tests**
 
 Cover success, non-zero exit, timeout, missing executable, fixed working directory, stdout/stderr evidence files and argument-array execution. Assert no `shell=True` path exists.
 
-- [ ] **Step 3: Write failing evidence-invalidation test**
+- [x] **Step 3: Write failing evidence-invalidation test**
 
 Create passed evidence for HEAD A, change to HEAD B, call `invalidate_stale_evidence`, and assert every code-sensitive Gate returns to `pending` while retaining the old evidence only as historical data.
 
-- [ ] **Step 4: Run the focused tests and verify failure**
+- [x] **Step 4: Run the focused tests and verify failure**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_gate_runner.py -v`
 
 Expected: FAIL because `agent_harness.gate_runner` does not exist.
 
-- [ ] **Step 5: Implement gate planning and execution**
+- [x] **Step 5: Implement gate planning and execution**
 
 Run commands with fixed arrays, configured relative `cwd`, `timeout`, controlled environment inheritance and text output. Save metadata separately from logs; never infer success from output text when the exit code failed.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_gate_runner.py -v`
 
@@ -253,29 +253,29 @@ git commit -m "feat: add scoped autonomous quality gates"
 - Consumes: failed `GateEvidence`, `RunState`, changed paths and decision summaries.
 - Produces: `normalize_failure(text: str) -> str`; `failure_fingerprint(exit_code: int, stdout: str, stderr: str) -> str`; `record_failure(state: RunState, fingerprint: str, diff_digest: str) -> RetryDecision`; `redact_text(text: str, secret_names: Iterable[str] = ()) -> str`; `render_diagnostics(state: RunState, evidence: Iterable[GateEvidence], output: Path) -> None`.
 
-- [ ] **Step 1: Write failing fingerprint and budget tests**
+- [x] **Step 1: Write failing fingerprint and budget tests**
 
 Assert timestamps, ANSI colors, random ports and temporary paths do not change a fingerprint. Assert attempt 3 for one fingerprint pauses, total failed cycle 5 pauses, and two identical diff/fingerprint/gate-result cycles pause as `no_progress`.
 
-- [ ] **Step 2: Write failing redaction tests**
+- [x] **Step 2: Write failing redaction tests**
 
 Use fake values to cover URL userinfo, bearer/basic Authorization, Cookie, JWT-shaped strings, GitHub/OpenAI-style tokens, PEM private keys, `PASSWORD=`, `TOKEN=`, and caller-supplied secret names. Assert labels remain useful while values become `[REDACTED]`.
 
-- [ ] **Step 3: Write failing diagnostics-content test**
+- [x] **Step 3: Write failing diagnostics-content test**
 
 Assert a paused report contains plan, Milestone, branch, HEAD, changed paths, failed Gate, fingerprint, attempts, stop reason and exact resume command, but contains none of the fake secrets or raw full log.
 
-- [ ] **Step 4: Run the focused tests and verify failure**
+- [x] **Step 4: Run the focused tests and verify failure**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_diagnostics.py -v`
 
 Expected: FAIL because `agent_harness.diagnostics` does not exist.
 
-- [ ] **Step 5: Implement normalization, budget decisions and redaction**
+- [x] **Step 5: Implement normalization, budget decisions and redaction**
 
 Use compiled regular expressions with bounded input size. Fingerprint normalized first-error context plus exit code using SHA-256. Return explicit decision codes `repair_allowed`, `same_failure_limit`, `total_attempt_limit`, and `no_progress`.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_diagnostics.py -v`
 
@@ -303,33 +303,33 @@ git commit -m "feat: add autonomous failure escalation"
 - Consumes: Tasks 1-5 public interfaces.
 - Produces: `main(argv: Sequence[str] | None = None) -> int`; `run_doctor(repo: Path) -> DoctorReport`; `RunService.init(plan: Path, milestone: str) -> RunState`; `RunService.next_action(run_id: str) -> NextAction`; `RunService.record_decision(run_id: str, decision_type: str, summary: str) -> RunState`; `RunService.pause(run_id: str, reason: str) -> Path`; `RunService.resume(run_id: str) -> RunState`; `RunService.run_gates(run_id: str, extra_gate_ids: Sequence[str]) -> RunState`; `RunService.finalize(run_id: str) -> Path`.
 
-- [ ] **Step 1: Write failing CLI contract tests**
+- [x] **Step 1: Write failing CLI contract tests**
 
 Cover `doctor`, `init`, `status --json`, `next`, `gate`, `record-decision`, `pause`, `resume`, and `finalize`; assert stable exit codes `0` success, `2` invalid input/config, `3` policy refusal, `4` Gate failure, `5` paused/blocked. `next` only reports the current actionable operation and must never mutate state or advance a Milestone.
 
-- [ ] **Step 2: Write failing doctor tests**
+- [x] **Step 2: Write failing doctor tests**
 
 Patch subprocess discovery for Git, Docker, Node 22, Java 21, Python 3.11+, Codex and disk availability. Assert missing tools are reported without cleanup or mutation, and the JSON report separates `ok`, `warning`, and `error` checks.
 
-- [ ] **Step 3: Write failing lifecycle integration tests**
+- [x] **Step 3: Write failing lifecycle integration tests**
 
 In a temporary Git worktree, test plan binding and SHA-256, initialization refusal on dirty/unapproved plan, Gate success, evidence invalidation after HEAD change, pause/resume, atomic completion, and generation of a sanitized `docs/agent/run-history/<run-id>.md` for both paused and completed terminal records.
 
-- [ ] **Step 4: Run the focused tests and verify failure**
+- [x] **Step 4: Run the focused tests and verify failure**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_cli.py tools/agent-harness/tests/test_doctor.py tools/agent-harness/tests/test_run_service.py -v`
 
 Expected: FAIL because the CLI and service do not exist.
 
-- [ ] **Step 5: Implement doctor and orchestration service**
+- [x] **Step 5: Implement doctor and orchestration service**
 
 `init` accepts only a plan containing an approved-status marker and a matching Milestone heading. `resume` re-runs doctor and Git validation. `finalize` requires all inferred Gates passed for the current HEAD and no unresolved approval-required path.
 
-- [ ] **Step 6: Implement CLI and portable wrapper**
+- [x] **Step 6: Implement CLI and portable wrapper**
 
 The wrapper resolves repository root and prepends `tools/agent-harness` to `PYTHONPATH`; it must work from any subdirectory. Human output is Chinese and concise; `--json` emits one valid JSON object with no ANSI codes.
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 Run: `python3 -m unittest discover -s tools/agent-harness/tests -v`
 
@@ -358,33 +358,33 @@ git commit -m "feat: add autonomous harness lifecycle cli"
 - Consumes: `RunService`, retry decisions and diagnostics from Tasks 5-6.
 - Produces: `CodexResult`; `build_codex_command(repo: Path, schema: Path, prompt: str, resume_session: str | None = None) -> tuple[str, ...]`; `run_codex(command: Sequence[str], timeout_seconds: int, event_log: Path) -> CodexResult`; `RunService.run_autonomous(run_id: str, max_cycles: int) -> RunState`.
 
-- [ ] **Step 1: Write failing command-policy tests**
+- [x] **Step 1: Write failing command-policy tests**
 
 Assert the command contains `exec`, `--sandbox workspace-write`, `--approve-for-me`, `--strict-config`, `--json`, `--output-schema` and `--cd <worktree>`; assert it never contains either dangerous bypass flag, `danger-full-access`, `--add-dir`, arbitrary config overrides or secrets.
 
-- [ ] **Step 2: Write failing JSONL and schema tests**
+- [x] **Step 2: Write failing JSONL and schema tests**
 
 Cover a valid completed event stream, non-zero exit, timeout, malformed JSONL, oversized event, missing session ID, missing final response and final response that violates the response schema. Every invalid case returns a typed failure without throwing raw log contents into diagnostics.
 
-- [ ] **Step 3: Write failing bounded-loop tests**
+- [x] **Step 3: Write failing bounded-loop tests**
 
 Use a fake adapter to verify: successful code change triggers Gate execution; Gate failure produces a focused repair prompt; same fingerprint stops on attempt 3; total failures stop on 5; two no-progress cycles stop; approval-required path stops immediately; completion is impossible until current-HEAD Gates pass.
 
-- [ ] **Step 4: Run the focused tests and verify failure**
+- [x] **Step 4: Run the focused tests and verify failure**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_codex_adapter.py tools/agent-harness/tests/test_autonomous_loop.py -v`
 
 Expected: FAIL because the adapter and loop do not exist.
 
-- [ ] **Step 5: Implement the output schema and subprocess adapter**
+- [x] **Step 5: Implement the output schema and subprocess adapter**
 
 The final response contains exactly `status`, `summary`, `changedPaths`, `testsRequested`, `needsHuman`, and `sessionId`. Save raw JSONL only under the run directory; expose only typed metadata to the state service.
 
-- [ ] **Step 6: Implement the bounded loop**
+- [x] **Step 6: Implement the bounded loop**
 
 Each cycle re-reads state and Git, validates scope, invokes Codex, runs inferred Gates, fingerprints failures, records an event and either repairs, completes or pauses. Prompt content is bounded to the Milestone, approved file paths, current failure summary and remaining attempt count.
 
-- [ ] **Step 7: Verify with fake adapter and guarded local smoke test**
+- [x] **Step 7: Verify with fake adapter and guarded local smoke test**
 
 Run: `python3 -m unittest tools/agent-harness/tests/test_codex_adapter.py tools/agent-harness/tests/test_autonomous_loop.py -v`
 
@@ -392,7 +392,7 @@ Run: `scripts/agent-harness run-codex --help`
 
 Expected: tests PASS; help exits 0 without invoking Codex. A real Codex smoke run is deferred to Task 8's disposable worktree drill.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add tools/agent-harness/agent_harness tools/agent-harness/tests
@@ -440,9 +440,10 @@ Run: `scripts/agent-harness doctor --json`
 
 Expected: all tests and fake drills PASS; doctor produces a valid report. Record exact counts and environment warnings in the final run history.
 
-Evidence (2026-10-10): controlled Python 3.12 ran 364 tests: 358 passed, 6 existing Linux/Docker fixture tests skipped and 0 failed;
-11/11 fake drills passed. Doctor returned 0 errors and warnings for Java not being 21 plus the expected dirty task worktree.
-The host's bare `python3` is 3.9 and therefore fails the documented Python 3.11+ floor; it was not treated as a Harness failure.
+Evidence (2026-10-10 review fix): controlled Python 3.12 ran 379 tests: 372 passed, 7 Linux wrapper fixture tests skipped with
+`linux-fixture:docker-cli-missing`, and 0 failed; CI treats every skip as failure. 11/11 fake drills passed. Doctor returned 0 errors;
+missing Docker/Node/Codex, Java not being 21 and the expected dirty documentation worktree were typed warnings. The host's bare `python3`
+is 3.9 and therefore fails the documented Python 3.11+ floor; it was not treated as a Harness failure.
 
 - [x] **Step 5: Run the disposable real-Codex smoke drill**
 
@@ -472,13 +473,13 @@ Dispatch one reviewer for security and state recovery, one for developer ergonom
 Not completed: the Task instruction prohibited every subagent. The implementer performed three explicit self-review passes and fixed all
 Important findings with RED→GREEN tests, but an author self-review is not independent review and is not marked complete.
 
-- [x] **Step 8: Synchronize documentation and mark the plan complete**
+- [ ] **Step 8: Synchronize documentation and mark the plan complete**
 
 Document install/use/resume/escalation commands, final test evidence, remaining limitations and the first eligible real product Milestone. Update this plan's checkboxes only from actual evidence and add the implementation commit references.
 
-Implementation commit: `1101f824` (`ci: add governance and fault drills`). Documentation synchronization is recorded by the commit
-containing this plan update. The first candidate product Milestone is Phase C-1's `820–1179px` two-column and inspector shell, subject to
-independent review, host synchronization and a fresh approved file scope.
+Local documentation is synchronized to the review-fix implementation commit `37a9bea0`, but this step remains open because the plan cannot
+be marked complete before independent review and external synchronization. The first candidate product Milestone is Phase C-1's
+`820–1179px` two-column and inspector shell, subject to independent review, host synchronization and a fresh approved file scope.
 
 - [ ] **Step 9: Commit, push, and update Obsidian**
 
@@ -491,7 +492,7 @@ git push
 Update the Survey project overview/progress note with date, branch, commit range, test evidence, completed scope, known limitations and the next product-development Milestone. Do not record credentials or raw run logs.
 
 Partially completed: Task 8 changes are committed locally. Per the controller instruction, this implementer does not push and does not update
-Obsidian; those two delivery actions remain for the controller.
+Obsidian; independent review and those two delivery actions remain open, so Task 8 and the plan remain in progress.
 
 ## Final Acceptance
 
