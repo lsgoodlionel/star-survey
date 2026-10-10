@@ -287,7 +287,8 @@
         "platform/services/business/src/**",
         "platform/tools/publish-gateway/pubgw/**",
         "plugins/Mjy*/**",
-        "platform/deploy/test/**"
+        "platform/deploy/test/**",
+        "platform/tests/e2e/**"
       ],
       "gates": [
         "admin-e2e",
