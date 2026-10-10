@@ -61,6 +61,13 @@ class DrillRefused(ValueError):
     pass
 
 
+class WorkflowRefused(DrillRefused):
+    def __init__(self, line: int, reason: str):
+        super().__init__(reason)
+        self.line = line
+        self.reason = reason
+
+
 _RUN_ID = "11111111-1111-4111-8111-111111111111"
 _DEFAULT_HOST_CONFIG = Path("docs/agent/HARNESS_HOST.json")
 _DANGEROUS_CODEX_ARGUMENT = re.compile(
@@ -609,18 +616,26 @@ def _contains_decoded_run_key(source: str) -> bool:
     return False
 
 
-def _contains_codex_exec(source: str) -> bool:
-    try:
-        arguments = shlex.split(source, posix=True)
-    except ValueError:
-        arguments = source.split()
-    return any(
-        _could_resolve_to_codex(value) and "exec" in arguments[index + 1:]
-        for index, value in enumerate(arguments)
-    )
+def _decode_inline_run_scalar(value: str, line: int) -> str:
+    value = value.strip()
+    if not value:
+        return value
+    if value.startswith("'"):
+        if re.fullmatch(r"'(?:[^']|'')*'", value) is None:
+            raise WorkflowRefused(line, "workflow run value uses unsupported YAML quoting")
+        return value[1:-1].replace("''", "'")
+    if value.startswith('"'):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            raise WorkflowRefused(line, "workflow run value uses unsupported YAML quoting") from None
+        if not isinstance(decoded, str):
+            raise WorkflowRefused(line, "workflow run value is not a string")
+        return decoded
+    return value
 
 
-def _workflow_run_blocks(text: str) -> tuple[str, ...]:
+def _workflow_run_blocks(text: str) -> tuple[tuple[int, str], ...]:
     lines = text.splitlines()
     blocks = []
     index = 0
@@ -633,15 +648,18 @@ def _workflow_run_blocks(text: str) -> tuple[str, ...]:
                          lines[index])
         if not match:
             if _contains_decoded_run_key(lines[index]):
-                raise DrillRefused("workflow run key uses unsupported YAML syntax")
+                raise WorkflowRefused(index + 1, "workflow run key uses unsupported YAML syntax")
+            if re.search(r'''(?:^|\s)![^\s]+\s+(?:run|"run"|'run')\s*:''',
+                         lines[index]):
+                raise WorkflowRefused(index + 1, "workflow run key uses unsupported YAML syntax")
             if "{" in stripped and re.search(
                     r'''(?:^|[{,])\s*(?:run|"run"|'run')\s*:''', stripped):
-                raise DrillRefused("workflow run step uses unsupported YAML flow syntax")
-            if _contains_codex_exec(lines[index]):
-                raise DrillRefused("Codex-like command uses unsupported YAML syntax")
+                raise WorkflowRefused(index + 1,
+                                      "workflow run step uses unsupported YAML flow syntax")
             index += 1
             continue
         indent, value = len(match[1]), match[2]
+        start_line = index + 1
         if value in ("|", ">", "|-", ">-"):
             values = []
             index += 1
@@ -651,11 +669,12 @@ def _workflow_run_blocks(text: str) -> tuple[str, ...]:
                     break
                 values.append(following.strip())
                 index += 1
-            blocks.append("\n".join(values).strip())
+            separator = " " if value.startswith(">") else "\n"
+            blocks.append((start_line, separator.join(values).strip()))
             continue
         if value.startswith(("|", ">", "!", "&", "*")):
-            raise DrillRefused("workflow run value uses unsupported YAML syntax")
-        blocks.append(value.strip())
+            raise WorkflowRefused(start_line, "workflow run value uses unsupported YAML syntax")
+        blocks.append((start_line, _decode_inline_run_scalar(value, start_line)))
         index += 1
     return tuple(blocks)
 
@@ -664,35 +683,60 @@ def _could_resolve_to_codex(value: str) -> bool:
     name = Path(value).name.lower()
     if name == "codex":
         return True
+    if fnmatchcase("codex", name):
+        return True
+    brace = re.search(r"\{([^{}]+)\}", name)
+    if brace is not None:
+        return any(
+            _could_resolve_to_codex(name[:brace.start()] + alternative + name[brace.end():])
+            for alternative in brace[1].split(",")
+        )
     without_expansions = re.sub(r"\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`", "", name)
     if Path(without_expansions).name == "codex":
         return True
     return "$" in name and name.startswith("co") and name.endswith("dex")
 
 
-def _validate_codex_shell(source: str) -> bool:
-    if re.search(r"(?:\$|`|\\).*\bexec\b.*--sandbox", source, re.DOTALL):
-        raise DrillRefused("Codex-like exec command uses dynamic shell syntax")
-    try:
-        arguments = shlex.split(source, posix=True)
-    except ValueError:
-        arguments = source.split()
-    position = 0
-    while position < len(arguments) and re.fullmatch(
-            r"[A-Za-z_][A-Za-z0-9_]*=.*", arguments[position]):
-        position += 1
-    candidates = [index for index, value in enumerate(arguments) if _could_resolve_to_codex(value)]
-    primary = position < len(arguments) and _could_resolve_to_codex(arguments[position])
-    if not primary:
-        if candidates:
-            command = Path(arguments[position]).name.lower() if position < len(arguments) else ""
-            if command in {"echo", "printf"} and not re.search(r"[;&|<>]|[\r\n]", source):
-                return False
-            raise DrillRefused("Codex workflow command uses an unsupported executable wrapper")
-        return False
+def _looks_codex_like(source: str) -> bool:
+    lowered = source.lower()
+    return "codex" in lowered or re.search(
+        r"co(?:(?:[\"']{2}|\$\{[^}]*\})+dex|(?:\[[^]]+\]|\{[^}]+\}|[?*])ex)",
+        lowered,
+    ) is not None
+
+
+def _shell_segments(source: str) -> tuple[tuple[str, ...], ...]:
+    segments = []
+    logical_source = source.replace("\\\n", " ")
+    for line in logical_source.splitlines() or [logical_source]:
+        if not _looks_codex_like(line):
+            continue
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|<>")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        current = []
+        try:
+            tokens = tuple(lexer)
+        except ValueError:
+            raise DrillRefused("workflow command uses unsupported shell quoting") from None
+        for token in tokens:
+            if token and all(character in ";&|<>" for character in token):
+                if current:
+                    segments.append(tuple(current))
+                    current = []
+                continue
+            current.append(token)
+        if current:
+            segments.append(tuple(current))
+    return tuple(segments)
+
+
+def _validate_direct_codex(arguments: tuple[str, ...], source: str) -> None:
+    executable = arguments[0]
+    if executable != "codex":
+        raise DrillRefused("Codex workflow command uses an unsupported executable wrapper")
     if re.search(r"[\"'`$\\;&|<>]|[\r\n]", source):
         raise DrillRefused("Codex workflow command uses unsupported shell syntax")
-    arguments = arguments[position:]
     if len(arguments) < 2 or arguments[1] != "exec":
         raise DrillRefused("Codex workflow command is not an allowed exec invocation")
     if _DANGEROUS_CODEX_ARGUMENT.search(" ".join(arguments)):
@@ -724,7 +768,57 @@ def _validate_codex_shell(source: str) -> bool:
         raise DrillRefused("Codex workflow sandbox is not workspace-write")
     if len(positionals) != 1:
         raise DrillRefused("Codex workflow command must contain one normalized prompt argument")
+
+
+def _validate_command_segment(arguments: tuple[str, ...], source: str) -> bool:
+    position = 0
+    while position < len(arguments) and re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*=.*", arguments[position]):
+        position += 1
+    if position >= len(arguments):
+        return False
+    executable = arguments[position]
+    name = Path(executable).name.lower()
+    remaining = arguments[position + 1:]
+    if name in {"sh", "bash", "zsh"}:
+        if (len(remaining) >= 2 and remaining[0].startswith("-")
+                and "c" in remaining[0][1:]):
+            return _validate_codex_shell(remaining[1])
+        if _looks_codex_like(" ".join(remaining)):
+            raise DrillRefused("Codex workflow command uses unsupported shell interpreter syntax")
+        return False
+    if name == "eval" and remaining:
+        nested = remaining[1:] if remaining[0] == "--" else remaining
+        return _validate_codex_shell(" ".join(nested))
+    if name == "env":
+        nested = 0
+        while nested < len(remaining) and (
+                remaining[nested].startswith("-")
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", remaining[nested])):
+            nested += 1
+        if nested < len(remaining) and _could_resolve_to_codex(remaining[nested]):
+            raise DrillRefused("Codex workflow command uses an unsupported executable wrapper")
+        return False
+    if name == "command":
+        nested = 0
+        while nested < len(remaining) and remaining[nested].startswith("-"):
+            nested += 1
+        if nested < len(remaining) and _could_resolve_to_codex(remaining[nested]):
+            raise DrillRefused("Codex workflow command uses an unsupported executable wrapper")
+        return False
+    if not _could_resolve_to_codex(executable):
+        return False
+    _validate_direct_codex(tuple(arguments[position:]), source)
     return True
+
+
+def _validate_codex_shell(source: str) -> bool:
+    if re.search(r"(?:\$|`|\\).*\bexec\b.*--sandbox", source, re.DOTALL):
+        raise DrillRefused("Codex-like exec command uses dynamic shell syntax")
+    if not _looks_codex_like(source):
+        return False
+    return any(_validate_command_segment(arguments, source)
+               for arguments in _shell_segments(source))
 
 
 def check_forbidden_options(repo: Path) -> None:
@@ -738,9 +832,17 @@ def check_forbidden_options(repo: Path) -> None:
     for pattern in ("*.yml", "*.yaml"):
         for workflow in workflows.glob(pattern):
             text = workflow.read_text(encoding="utf-8")
-            for source in _workflow_run_blocks(text):
-                if _validate_codex_shell(source):
-                    contexts.append(source)
+            relative = workflow.relative_to(repo).as_posix()
+            try:
+                blocks = _workflow_run_blocks(text)
+            except WorkflowRefused as error:
+                raise DrillRefused(f"{relative}:{error.line}: {error.reason}") from None
+            for line, source in blocks:
+                try:
+                    if _validate_codex_shell(source):
+                        contexts.append(source)
+                except DrillRefused as error:
+                    raise DrillRefused(f"{relative}:{line}: {error}") from None
     if any(_DANGEROUS_CODEX_ARGUMENT.search(context) for context in contexts):
         raise DrillRefused("Codex command contains a forbidden permission override")
 
@@ -779,6 +881,38 @@ def _canonical_review_verdicts(content: str) -> tuple[str, str]:
     )
     if match is None:
         raise ValueError()
+    start = match.start()
+    if content[start:start + 1] == "\n":
+        start += 1
+    if start and not content[:start].endswith("\n\n"):
+        raise ValueError()
+    prefix = content[:start]
+    fence = None
+    in_comment = False
+    for line in prefix.splitlines():
+        comment_position = 0
+        while comment_position < len(line):
+            if in_comment:
+                closing = line.find("-->", comment_position)
+                if closing < 0:
+                    break
+                in_comment = False
+                comment_position = closing + 3
+            else:
+                opening = line.find("<!--", comment_position)
+                if opening < 0:
+                    break
+                in_comment = True
+                comment_position = opening + 4
+        fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence_match is not None and not in_comment:
+            marker = fence_match[1]
+            if fence is None:
+                fence = (marker[0], len(marker))
+            elif marker[0] == fence[0] and len(marker) >= fence[1]:
+                fence = None
+    if fence is not None or in_comment:
+        raise ValueError()
     return match[1], match[2]
 
 
@@ -806,6 +940,8 @@ def _validate_review_evidence(root: Path, manifest: dict, complete: bool) -> Non
         raise ValueError()
     commit = manifest["implementationCommit"]
     seen = set()
+    seen_paths = set()
+    seen_digests = set()
     for report in reports:
         keys = {"reviewer", "path", "reviewedCommit", "reviewedRange", "sha256",
                 "specVerdict", "codeQualityVerdict"}
@@ -824,6 +960,13 @@ def _validate_review_evidence(root: Path, manifest: dict, complete: bool) -> Non
         if ancestor.returncode:
             raise ValueError()
         path = _repo_path(root, report["path"])
+        absolute_path = path.absolute()
+        resolved_path = path.resolve(strict=True)
+        if (absolute_path != resolved_path or report["path"] in seen_paths
+                or report["sha256"] in seen_digests):
+            raise ValueError()
+        seen_paths.add(report["path"])
+        seen_digests.add(report["sha256"])
         tracked = _run(["git", "ls-files", "--error-unmatch", "--", report["path"]], root,
                        check=False)
         content = path.read_text(encoding="utf-8")

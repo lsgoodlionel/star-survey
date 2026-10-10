@@ -47,7 +47,8 @@ class FaultInjectionTests(unittest.TestCase):
             report_path = root / f"reviews/{reviewer}.md"
             report_path.parent.mkdir(exist_ok=True)
             report_path.write_text(
-                "Reviewed range: `" + reviewed_range + "`\n\n" + content,
+                "Reviewer: " + reviewer + "\nReviewed range: `" + reviewed_range + "`\n\n"
+                + content,
                 encoding="utf-8",
             )
             reports.append({
@@ -69,6 +70,37 @@ class FaultInjectionTests(unittest.TestCase):
         completed = subprocess.CompletedProcess([], 0, "", "")
         with patch.object(self.runner, "_run", return_value=completed):
             self.runner._validate_review_evidence(root, manifest, True)
+
+    def review_manifest(self, root):
+        root = root.resolve()
+        base = "a" * 40
+        commit = "b" * 40
+        reviewed_range = base + ".." + commit
+        reports = []
+        for reviewer in ("security", "dx_ci", "whole_branch"):
+            report_path = root / f"reviews/{reviewer}.md"
+            report_path.parent.mkdir(exist_ok=True)
+            report_path.write_text(
+                "# " + reviewer + "\n\nReviewed range: `" + reviewed_range + "`\n\n"
+                "SPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n",
+                encoding="utf-8",
+            )
+            reports.append({
+                "reviewer": reviewer,
+                "path": report_path.relative_to(root).as_posix(),
+                "reviewedCommit": commit,
+                "reviewedRange": reviewed_range,
+                "sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+                "specVerdict": "APPROVED",
+                "codeQualityVerdict": "APPROVED",
+            })
+        return {
+            "implementationCommit": commit,
+            "reviewEvidence": {
+                "requiredReviewers": ["security", "dx_ci", "whole_branch"],
+                "reports": reports,
+            },
+        }
 
     def test_process_termination_before_atomic_replace_keeps_old_state(self):
         self.assert_drill_passes("atomic-before-replace")
@@ -219,7 +251,10 @@ class FaultInjectionTests(unittest.TestCase):
             workflow.parent.mkdir(parents=True)
             workflow.write_text("jobs:\n  ok:\n    steps:\n      - run: docker --config /tmp build .\n",
                                 encoding="utf-8")
-            self.runner.check_forbidden_options(repo)
+            try:
+                self.runner.check_forbidden_options(repo)
+            except self.runner.DrillRefused as error:
+                self.fail(f"ordinary workflow content was refused: {error}")
 
     def test_forbidden_scan_rejects_shell_token_rewriting_in_codex_run(self):
         sources = (
@@ -229,6 +264,8 @@ class FaultInjectionTests(unittest.TestCase):
             'codex exec --sandbox "$(printf danger-full-access)" task',
             'printf safe; codex exec --sandbox danger-full-access task',
             '$(printf codex) exec --sandbox danger-full-access task',
+            'codex exec --sandbox workspace-write task; '
+            'codex exec --sandbox danger-full-access task',
         )
         for index, source in enumerate(sources):
             with self.subTest(source=source), tempfile.TemporaryDirectory() as directory:
@@ -275,6 +312,7 @@ class FaultInjectionTests(unittest.TestCase):
     def test_forbidden_scan_rejects_codex_executable_wrappers(self):
         commands = (
             "command codex exec --sandbox danger-full-access task",
+            "command -- codex exec --sandbox danger-full-access task",
             "env codex exec --sandbox danger-full-access task",
             "env NAME=value codex exec --sandbox danger-full-access task",
             "/usr/bin/env codex exec --sandbox danger-full-access task",
@@ -295,6 +333,115 @@ class FaultInjectionTests(unittest.TestCase):
                 with self.assertRaises(self.runner.DrillRefused):
                     self.runner.check_forbidden_options(repo)
 
+    def test_forbidden_scan_decodes_supported_quoted_inline_scalars(self):
+        steps = (
+            ("- run: 'printf safe'", False),
+            ('- run: "printf safe"', False),
+            ("- run: 'codex exec --sandbox danger-full-access task'", True),
+            ('- run: "codex\\u0020exec --sandbox danger-full-access task"', True),
+        )
+        for index, (step, refused) in enumerate(steps):
+            with self.subTest(step=step), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                matrix = repo / "docs/agent/GATE_MATRIX.yaml"
+                matrix.parent.mkdir(parents=True)
+                matrix.write_text('{"version":1,"gates":[],"profiles":{}}', encoding="utf-8")
+                workflow = repo / f".github/workflows/quoted-{index}.yaml"
+                workflow.parent.mkdir(parents=True)
+                workflow.write_text("jobs:\n  x:\n    steps:\n      " + step + "\n",
+                                    encoding="utf-8")
+                if refused:
+                    with self.assertRaises(self.runner.DrillRefused):
+                        self.runner.check_forbidden_options(repo)
+                else:
+                    self.runner.check_forbidden_options(repo)
+
+    def test_forbidden_scan_rejects_codex_execution_sinks_and_expansions(self):
+        commands = (
+            "/bin/sh -c 'codex exec --sandbox danger-full-access task'",
+            'bash -c "codex exec --sandbox danger-full-access task"',
+            "bash -lc 'codex exec --sandbox danger-full-access task'",
+            "zsh -c 'codex exec --sandbox danger-full-access task'",
+            "eval 'codex exec --sandbox danger-full-access task'",
+            "eval -- 'codex exec --sandbox danger-full-access task'",
+            "./co[d]ex exec --sandbox danger-full-access task",
+            "./co{d,d}ex exec --sandbox danger-full-access task",
+            "/usr/local/bin/codex exec --sandbox danger-full-access task",
+        )
+        for index, command in enumerate(commands):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                matrix = repo / "docs/agent/GATE_MATRIX.yaml"
+                matrix.parent.mkdir(parents=True)
+                matrix.write_text('{"version":1,"gates":[],"profiles":{}}', encoding="utf-8")
+                workflow = repo / f".github/workflows/sink-{index}.yml"
+                workflow.parent.mkdir(parents=True)
+                scalar = "|\n          " + command if index == 2 else command
+                workflow.write_text("jobs:\n  x:\n    steps:\n      - run: " + scalar + "\n",
+                                    encoding="utf-8")
+                with self.assertRaises(self.runner.DrillRefused):
+                    self.runner.check_forbidden_options(repo)
+
+    def test_forbidden_scan_allows_metadata_data_arguments_and_safe_nested_shell(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            matrix = repo / "docs/agent/GATE_MATRIX.yaml"
+            matrix.parent.mkdir(parents=True)
+            matrix.write_text('{"version":1,"gates":[],"profiles":{}}', encoding="utf-8")
+            workflow = repo / ".github/workflows/ordinary.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "name: codex exec documentation\n"
+                "jobs:\n  x:\n    steps:\n"
+                "      - run: grep codex exec docs/reference.txt\n"
+                "      - run: python tool.py codex exec docs\n"
+                "      - run: /bin/sh -c 'printf safe'\n"
+                "      - run: |\n"
+                "          jq -n --arg image \"$IMAGE\" \\\n"
+                "            '{image: $image}' > out.json\n",
+                encoding="utf-8",
+            )
+            try:
+                self.runner.check_forbidden_options(repo)
+            except self.runner.DrillRefused as error:
+                self.fail(f"ordinary workflow content was refused: {error}")
+
+    def test_forbidden_scan_folds_supported_yaml_block_scalar(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            matrix = repo / "docs/agent/GATE_MATRIX.yaml"
+            matrix.parent.mkdir(parents=True)
+            matrix.write_text('{"version":1,"gates":[],"profiles":{}}', encoding="utf-8")
+            workflow = repo / ".github/workflows/folded.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n  x:\n    steps:\n      - run: >\n"
+                "          codex exec\n"
+                "          --sandbox workspace-write task\n",
+                encoding="utf-8",
+            )
+            self.runner.check_forbidden_options(repo)
+
+    def test_forbidden_scan_reports_relative_workflow_path_and_line_without_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            matrix = repo / "docs/agent/GATE_MATRIX.yaml"
+            matrix.parent.mkdir(parents=True)
+            matrix.write_text('{"version":1,"gates":[],"profiles":{}}', encoding="utf-8")
+            workflow = repo / ".github/workflows/second.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n  x:\n    steps:\n      - run: "
+                "codex exec --sandbox danger-full-access fake-secret-value\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(self.runner.DrillRefused) as raised:
+                self.runner.check_forbidden_options(repo)
+            message = str(raised.exception)
+            self.assertIn(".github/workflows/second.yml:4:", message)
+            self.assertNotIn("fake-secret-value", message)
+            self.assertNotIn("codex exec", message)
+
     def test_forbidden_scan_rejects_unsupported_yaml_with_codex_commands(self):
         workflows = (
             '- { run: codex exec --sandbox danger-full-access task }',
@@ -306,6 +453,8 @@ class FaultInjectionTests(unittest.TestCase):
             '- run: &command codex exec --sandbox danger-full-access task',
             '- run: *command',
             '- run: |+\n          codex exec --sandbox danger-full-access task',
+            "- run: 'unterminated",
+            '- run: "unterminated',
         )
         for index, step in enumerate(workflows):
             with self.subTest(step=step), tempfile.TemporaryDirectory() as directory:
@@ -370,6 +519,25 @@ class FaultInjectionTests(unittest.TestCase):
             "trailing_text": (
                 "SPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\nLater note\n"
             ),
+            "unclosed_fence": (
+                "```text\nSPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n"
+            ),
+            "unclosed_html_comment": (
+                "<!--\nSPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n"
+            ),
+            "closed_html_comment": (
+                "<!--\nSPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n-->\n"
+            ),
+            "indented_code": (
+                "    SPEC_COMPLIANCE=APPROVED\n    CODE_QUALITY=APPROVED\n"
+            ),
+            "lazy_blockquote": (
+                "> quoted review\nSPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n"
+            ),
+            "nested_list_container": (
+                "- review result\n\n  SPEC_COMPLIANCE=APPROVED\n"
+                "  CODE_QUALITY=APPROVED\n"
+            ),
         }
         for name, content in rejected.items():
             with self.subTest(case=name), tempfile.TemporaryDirectory() as directory, \
@@ -384,6 +552,54 @@ class FaultInjectionTests(unittest.TestCase):
                 self.validate_review_document(
                     Path(directory), content, manifest_verdict=manifest_verdict
                 )
+
+    def test_review_evidence_requires_three_unique_paths_and_digests(self):
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            manifest = self.review_manifest(root)
+            with patch.object(self.runner, "_run", return_value=completed):
+                self.runner._validate_review_evidence(root, manifest, True)
+
+            reports = manifest["reviewEvidence"]["reports"]
+            duplicate_cases = {
+                "two_same": ((1, 0),),
+                "all_same": ((1, 0), (2, 0)),
+            }
+            for name, replacements in duplicate_cases.items():
+                with self.subTest(case=name):
+                    duplicate = json.loads(json.dumps(manifest))
+                    for target, source in replacements:
+                        duplicate["reviewEvidence"]["reports"][target]["path"] = \
+                            reports[source]["path"]
+                        duplicate["reviewEvidence"]["reports"][target]["sha256"] = \
+                            reports[source]["sha256"]
+                    with patch.object(self.runner, "_run", return_value=completed), \
+                            self.assertRaises(ValueError):
+                        self.runner._validate_review_evidence(root, duplicate, True)
+
+            same_digest = json.loads(json.dumps(manifest))
+            second = root / same_digest["reviewEvidence"]["reports"][1]["path"]
+            first = root / reports[0]["path"]
+            second.write_bytes(first.read_bytes())
+            same_digest["reviewEvidence"]["reports"][1]["sha256"] = hashlib.sha256(
+                second.read_bytes()).hexdigest()
+            with patch.object(self.runner, "_run", return_value=completed), \
+                    self.assertRaises(ValueError):
+                self.runner._validate_review_evidence(root, same_digest, True)
+
+    def test_review_evidence_rejects_symlink_alias(self):
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            manifest = self.review_manifest(root)
+            reports = manifest["reviewEvidence"]["reports"]
+            alias = root / "reviews/dx-alias.md"
+            alias.symlink_to(root / reports[1]["path"])
+            reports[1]["path"] = alias.relative_to(root).as_posix()
+            with patch.object(self.runner, "_run", return_value=completed), \
+                    self.assertRaises(ValueError):
+                self.runner._validate_review_evidence(root, manifest, True)
 
     def test_smoke_inputs_refuse_symlinks_without_touching_external_files(self):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
@@ -615,7 +831,7 @@ class FaultInjectionTests(unittest.TestCase):
                 report = repo / f"reviews/{reviewer}.md"
                 report.parent.mkdir(exist_ok=True)
                 report.write_text(
-                    "# Review\n\nReviewed range: `" + base + ".." + head + "`\n\n"
+                    "# Review: " + reviewer + "\n\nReviewed range: `" + base + ".." + head + "`\n\n"
                     "SPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n",
                     encoding="utf-8",
                 )
