@@ -647,6 +647,8 @@ def _workflow_run_blocks(text: str) -> tuple[tuple[int, str], ...]:
         match = re.match(r'''^(\s*)-?\s*(?:run|"run"|'run')\s*:\s*(.*)$''',
                          lines[index])
         if not match:
+            if re.match(r"^\s*-\s*\?\s*$", lines[index]):
+                raise WorkflowRefused(index + 1, "workflow explicit run key is unsupported")
             if re.match(r'''^\s*-?\s*(?:[&!][^\s]+\s+|\?\s+)(?:run|"run"|'run')\b''',
                         lines[index]):
                 raise WorkflowRefused(index + 1, "workflow run key uses unsupported YAML syntax")
@@ -705,10 +707,13 @@ def _could_resolve_to_codex(value: str) -> bool:
 
 def _looks_codex_like(source: str) -> bool:
     lowered = re.sub(r'["\']', "", source.lower())
-    return "codex" in lowered or re.search(
+    return ("codex" in lowered or re.search(
         r"co(?:(?:[\"']{2}|\$\{[^}]*\})+dex|(?:\[[^]]+\]|\{[^}]+\}|[?*])ex)",
         lowered,
-    ) is not None
+    ) is not None or re.search(
+        r"(?:^|[\s/])[^\s;|]*[?*\[\]{}][^\s;|]*\s+exec\b.*--sandbox",
+        lowered,
+    ) is not None)
 
 
 def _shell_segments(source: str) -> tuple[tuple[str, ...], ...]:
@@ -831,8 +836,6 @@ def _validate_command_segment(arguments: tuple[str, ...], source: str) -> bool:
 def _validate_codex_shell(source: str) -> bool:
     if re.search(r"(?:\$|`|\\).*\bexec\b.*--sandbox", source, re.DOTALL):
         raise DrillRefused("Codex-like exec command uses dynamic shell syntax")
-    if not _looks_codex_like(source):
-        return False
     return any(_validate_command_segment(arguments, source)
                for arguments in _shell_segments(source))
 
@@ -905,7 +908,8 @@ def _canonical_review_verdicts(content: str) -> tuple[str, str]:
     prefix = content[:start]
     if (re.search(r"(?is)<(?:script|pre|style|textarea|xmp|iframe|noframes|plaintext|title)\b",
                   prefix)
-            or "<?" in prefix or "<![CDATA[" in prefix):
+            or "<?" in prefix or "<![CDATA[" in prefix
+            or re.search(r"(?m)^ {0,3}<![A-Z]", prefix)):
         raise ValueError()
     fence = None
     in_comment = False
