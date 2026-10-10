@@ -121,6 +121,13 @@ test('validates the complete dashboard contract and every enum value', () => {
 test('rejects missing and unknown dashboard fields at every object boundary', () => {
   const withoutGeneratedAt: Partial<DashboardView> = { ...dashboard };
   delete withoutGeneratedAt.generatedAt;
+  const surveyWithoutName = { ...dashboard.surveys[0] } as Partial<DashboardView['surveys'][number]>;
+  delete surveyWithoutName.name;
+  const recentWorkWithoutVisitedAt = {
+    ...dashboard.recentWork[0],
+  } as Partial<DashboardView['recentWork'][number]>;
+  delete recentWorkWithoutVisitedAt.visitedAt;
+
   expect(() => dashboardViewSchema.parse(withoutGeneratedAt)).toThrow();
   expect(() => dashboardViewSchema.parse({ ...dashboard, internalNote: 'secret' })).toThrow();
   expect(() => dashboardViewSchema.parse({
@@ -131,6 +138,29 @@ test('rejects missing and unknown dashboard fields at every object boundary', ()
     ...dashboard,
     tasks: [{ ...dashboard.tasks[0], internalStatus: 'secret' }],
   })).toThrow();
+  expect(() => dashboardViewSchema.parse({
+    ...dashboard,
+    surveys: [surveyWithoutName],
+  })).toThrow();
+  expect(() => dashboardViewSchema.parse({
+    ...dashboard,
+    surveys: [{ ...dashboard.surveys[0], internalStatus: 'secret' }],
+  })).toThrow();
+  expect(() => dashboardViewSchema.parse({
+    ...dashboard,
+    recentWork: [recentWorkWithoutVisitedAt],
+  })).toThrow();
+  expect(() => dashboardViewSchema.parse({
+    ...dashboard,
+    recentWork: [{ ...dashboard.recentWork[0], internalStatus: 'secret' }],
+  })).toThrow();
+});
+
+test('accepts a survey without a published version', () => {
+  expect(() => dashboardViewSchema.parse({
+    ...dashboard,
+    surveys: [{ ...dashboard.surveys[0], publishedVersion: null }],
+  })).not.toThrow();
 });
 
 test('accepts only existing survey-relative target routes for the matching survey', () => {
@@ -175,6 +205,39 @@ test('serializes dashboard limits and parses the response', async () => {
   expect(fetchImpl.mock.calls[0]?.[0]).toBe('/v1/dashboard?surveyLimit=12&taskLimit=7');
 });
 
+test('accepts dashboard limit boundaries', async () => {
+  const fetchImpl = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(dashboard))
+    .mockResolvedValueOnce(jsonResponse(dashboard));
+  const api = createApiClient({ fetchImpl });
+
+  await getDashboard(api, { surveyLimit: 1, taskLimit: 1 });
+  await getDashboard(api, { surveyLimit: 50, taskLimit: 50 });
+
+  expect(fetchImpl.mock.calls.map(([path]) => path)).toEqual([
+    '/v1/dashboard?surveyLimit=1&taskLimit=1',
+    '/v1/dashboard?surveyLimit=50&taskLimit=50',
+  ]);
+});
+
+test.each([
+  ['surveyLimit', 0],
+  ['surveyLimit', 51],
+  ['surveyLimit', 1.5],
+  ['surveyLimit', Number.MAX_SAFE_INTEGER + 1],
+  ['surveyLimit', Number.NaN],
+  ['taskLimit', 0],
+  ['taskLimit', 51],
+  ['taskLimit', 1.5],
+  ['taskLimit', Number.MAX_SAFE_INTEGER + 1],
+  ['taskLimit', Number.POSITIVE_INFINITY],
+] as const)('rejects invalid dashboard option %s=%s before requesting', (key, value) => {
+  const request = vi.fn();
+
+  expect(() => getDashboard({ request }, { [key]: value })).toThrow();
+  expect(request).not.toHaveBeenCalled();
+});
+
 test('uses server defaults when dashboard limits are omitted', async () => {
   const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(dashboard));
 
@@ -198,6 +261,41 @@ test('records recent work through the ApiClient 204 convention', async () => {
       JSON.stringify({ surveyId, page: 'version', version: 3 }),
     ],
   ]);
+});
+
+test('accepts recent work command integer boundaries', async () => {
+  const request = vi.fn().mockResolvedValue(undefined);
+  const api = { request };
+
+  await recordRecentWork(api, { surveyId, page: 'edit', version: null });
+  await recordRecentWork(api, { surveyId, page: 'version', version: 1 });
+  await recordRecentWork(api, {
+    surveyId,
+    page: 'version',
+    version: Number.MAX_SAFE_INTEGER,
+  });
+
+  expect(request.mock.calls.map(([request]) => request.body)).toEqual([
+    { surveyId, page: 'edit', version: null },
+    { surveyId, page: 'version', version: 1 },
+    { surveyId, page: 'version', version: Number.MAX_SAFE_INTEGER },
+  ]);
+});
+
+test.each([
+  { surveyId: 'not-a-uuid', page: 'edit', version: null },
+  { surveyId, page: 'edit' },
+  { surveyId, page: 'edit', version: 1 },
+  { surveyId, page: 'version', version: null },
+  { surveyId, page: 'version', version: 0 },
+  { surveyId, page: 'version', version: 1.5 },
+  { surveyId, page: 'version', version: Number.MAX_SAFE_INTEGER + 1 },
+  { surveyId, page: 'version', version: 1, targetPath: '/surveys/anything/edit' },
+])('rejects invalid recent work command before requesting: $page/$version', (command) => {
+  const request = vi.fn();
+
+  expect(() => recordRecentWork({ request }, command as never)).toThrow();
+  expect(request).not.toHaveBeenCalled();
 });
 
 test('isolates dashboard query keys by tenant', () => {

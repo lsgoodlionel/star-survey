@@ -41,16 +41,40 @@ export const dashboardPublishStateSchema = z.enum([
 ]);
 
 export const dashboardActionSchema = z.enum(['edit', 'preview', 'publish', 'responses']);
-export const recentWorkPageSchema = z.enum([
+const recentWorkNonVersionPages = [
   'edit',
   'import',
   'preview',
   'publish',
   'responses',
+] as const;
+export const recentWorkPageSchema = z.enum([
+  ...recentWorkNonVersionPages,
   'version',
 ]);
 
 const surveyIdSchema = z.string().uuid();
+const safePositiveIntegerSchema = z.number()
+  .int()
+  .positive()
+  .refine(Number.isSafeInteger, 'must be a safe integer');
+export const dashboardLimitSchema = z.number()
+  .int()
+  .min(1)
+  .max(50)
+  .refine(Number.isSafeInteger, 'must be a safe integer');
+export const recentWorkCommandSchema = z.union([
+  z.strictObject({
+    surveyId: surveyIdSchema,
+    page: z.enum(recentWorkNonVersionPages),
+    version: z.null(),
+  }),
+  z.strictObject({
+    surveyId: surveyIdSchema,
+    page: z.literal('version'),
+    version: safePositiveIntegerSchema,
+  }),
+]);
 const surveyTargetPathSchema = z.string()
   .regex(
     /^\/surveys\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/(?:edit|import|preview|publish|responses|versions\/[1-9][0-9]*)$/,
@@ -139,6 +163,7 @@ export type DashboardTaskKind = z.infer<typeof dashboardTaskKindSchema>;
 export type DashboardPublishState = z.infer<typeof dashboardPublishStateSchema>;
 export type DashboardAction = z.infer<typeof dashboardActionSchema>;
 export type RecentWorkPage = z.infer<typeof recentWorkPageSchema>;
+export type RecentWorkCommand = z.infer<typeof recentWorkCommandSchema>;
 export type DashboardSummary = z.infer<typeof dashboardSummarySchema>;
 export type DashboardTask = z.infer<typeof dashboardTaskSchema>;
 export type DashboardSurvey = z.infer<typeof dashboardSurveySchema>;
