@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import tomllib
 from typing import Sequence
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -49,10 +50,15 @@ def _source(value, *, origin_only=False):
     if not isinstance(value, str) or not value.strip():
         return None
     value = value.strip()
-    candidate = value[4:] if value.startswith("git+") else value
+    vcs = next((prefix for prefix in ("git+", "hg+", "svn+", "bzr+") if value.startswith(prefix)), None)
+    candidate = value[len(vcs):] if vcs else value
     parsed = urlsplit(candidate)
     if parsed.scheme and parsed.netloc:
-        path = "" if origin_only else parsed.path.rstrip("/")
+        path = parsed.path.rstrip("/")
+        if vcs and "@" in path.rsplit("/", 1)[-1]:
+            path = path.rsplit("@", 1)[0]
+        if origin_only:
+            path = ""
         return parsed.scheme.lower() + "://" + parsed.netloc.lower() + path
     if value.startswith(("file:", "path:", "link:")):
         return value.split("#", 1)[0]
@@ -71,61 +77,6 @@ def _python_requirement(value):
         return (re.sub(r"[-_.]+", "-", egg[1]).lower() if egg else value), _source(value)
     name = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^]]+\])?", value)
     return (re.sub(r"[-_.]+", "-", name[1]).lower(), None) if name else (None, None)
-
-
-def _toml_sections(text):
-    headers = list(re.finditer(r"(?m)^\s*\[\[?([^\]\n]+)\]\]?\s*(?:#.*)?$", text))
-    for index, header in enumerate(headers):
-        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
-        yield header[1].strip(), text[header.end():end]
-
-
-def _toml_assignments(body):
-    pending = ""
-    depth = 0
-    quote = None
-    for raw in body.splitlines():
-        line = ""
-        escaped = False
-        for char in raw:
-            if escaped:
-                line += char
-                escaped = False
-            elif char == "\\" and quote == '"':
-                line += char
-                escaped = True
-            elif quote:
-                line += char
-                if char == quote:
-                    quote = None
-            elif char in "\"'":
-                quote = char
-                line += char
-            elif char == "#":
-                break
-            else:
-                line += char
-        pending = (pending + "\n" + line.strip()).strip()
-        for char in line:
-            if char in "[{":
-                depth += 1
-            elif char in "]}":
-                depth -= 1
-        if pending and depth == 0:
-            match = re.match(r"^([A-Za-z0-9_.-]+|\"[^\"]+\"|'[^']+')\s*=\s*(.+)$", pending, re.S)
-            if not match:
-                raise ValueError("Invalid TOML assignment")
-            yield match[1].strip("\"'"), match[2].strip()
-            pending = ""
-    if pending or depth != 0 or quote:
-        raise ValueError("Incomplete TOML assignment")
-
-
-def _toml_strings(value):
-    strings = []
-    for match in re.finditer(r'"((?:\\.|[^"\\])*)"|\'([^\']*)\'', value):
-        strings.append(json.loads('"' + match[1] + '"') if match[1] is not None else match[2])
-    return strings
 
 
 def _dependency_snapshot(path, data):
@@ -179,70 +130,103 @@ def _dependency_snapshot(path, data):
                 continue
             option = re.match(r"^(?:--index-url|--extra-index-url|--find-links|--trusted-host|-i|-f)(?:=|\s+)(\S+)", line)
             include = re.match(r"^(?:--requirement|-r|--constraint|-c)(?:=|\s+)(\S+)", line)
+            editable = re.match(r"^(?:-e|--editable)(?:=|\s+)(\S.+|\S+)$", line)
             if option:
                 sources.add(_source(option[1]) or option[1])
             elif include:
                 sources.add("include:" + include[1])
+            elif editable:
+                target = editable[1].strip()
+                dependency, source = _python_requirement(target)
+                if source is None:
+                    source = "local:" + os.path.normpath(target)
+                if dependency:
+                    dependencies.add(dependency)
+                sources.add(source)
             elif not line.startswith("-"):
-                dependency, source = _python_requirement(line.split(" ;", 1)[0])
+                target = line.split(" ;", 1)[0]
+                dependency, source = _python_requirement(target)
+                if dependency:
+                    dependencies.add(dependency)
+                if source is None and target.startswith(("./", "../", "/", "~")):
+                    source = "local:" + os.path.normpath(target)
+                if source:
+                    sources.add(source)
+    elif name == "pyproject.toml":
+        document = tomllib.loads(text)
+        project = document.get("project", {})
+        groups = []
+        if isinstance(project, dict):
+            groups.append(project.get("dependencies", []))
+            optional = project.get("optional-dependencies", {})
+            if isinstance(optional, dict):
+                groups.extend(optional.values())
+        build = document.get("build-system", {})
+        if isinstance(build, dict):
+            groups.append(build.get("requires", []))
+        for group in groups:
+            if not isinstance(group, list) or not all(isinstance(value, str) for value in group):
+                raise ValueError("Invalid Python dependency list")
+            for value in group:
+                dependency, source = _python_requirement(value)
                 if dependency:
                     dependencies.add(dependency)
                 if source:
                     sources.add(source)
-    elif name == "pyproject.toml":
-        for section, body in _toml_sections(text):
-            values = dict(_toml_assignments(body))
-            arrays = ((section == "project" and "dependencies" in values)
-                      or section == "project.optional-dependencies"
-                      or (section == "build-system" and "requires" in values))
-            if arrays:
-                selected = values.values() if section == "project.optional-dependencies" else (
-                    values["dependencies"] if section == "project" else values["requires"],)
-                for value in selected:
-                    for requirement in _toml_strings(value):
-                        dependency, source = _python_requirement(requirement)
-                        if dependency:
-                            dependencies.add(dependency)
-                        if source:
-                            sources.add(source)
-            if section == "tool.poetry.dependencies" or re.fullmatch(r"tool\.poetry\.group\.[^.]+\.dependencies", section):
-                for key, value in values.items():
+        tool = document.get("tool", {})
+        poetry = tool.get("poetry", {}) if isinstance(tool, dict) else {}
+        if isinstance(poetry, dict):
+            sections = [poetry.get("dependencies", {})]
+            poetry_groups = poetry.get("group", {})
+            if isinstance(poetry_groups, dict):
+                sections.extend(value.get("dependencies", {}) for value in poetry_groups.values() if isinstance(value, dict))
+            for section in sections:
+                if not isinstance(section, dict):
+                    raise ValueError("Invalid Poetry dependency table")
+                for key, value in section.items():
                     if key.lower() != "python":
                         dependencies.add(re.sub(r"[-_.]+", "-", key).lower())
-                    for source_key in ("git", "url", "path"):
-                        match = re.search(r"\b" + source_key + r"\s*=\s*(['\"])(.*?)\1", value)
-                        if match:
-                            sources.add(_source(match[2]) or source_key + ":" + match[2])
-            if section == "tool.poetry.source" and "url" in values:
-                source_values = _toml_strings(values["url"])
-                if source_values and _source(source_values[0]):
-                    sources.add(_source(source_values[0]))
-            if section == "tool.uv.sources":
-                for value in values.values():
-                    for source_key in ("git", "url", "path", "index"):
-                        match = re.search(r"\b" + source_key + r"\s*=\s*(['\"])(.*?)\1", value)
-                        if match:
-                            sources.add(_source(match[2]) or "uv-" + source_key + ":" + match[2])
-            if section == "tool.uv.index" and "url" in values:
-                source_values = _toml_strings(values["url"])
-                if source_values and _source(source_values[0]):
-                    sources.add(_source(source_values[0]))
+                    if isinstance(value, dict):
+                        for source_key in ("git", "url", "path"):
+                            if source_key in value:
+                                source_value = str(value[source_key])
+                                sources.add(_source(source_value) or source_key + ":" + source_value)
+            poetry_sources = poetry.get("source", [])
+            if isinstance(poetry_sources, list):
+                for value in poetry_sources:
+                    if isinstance(value, dict) and _source(value.get("url")):
+                        sources.add(_source(value["url"]))
+        uv = tool.get("uv", {}) if isinstance(tool, dict) else {}
+        if isinstance(uv, dict):
+            uv_sources = uv.get("sources", {})
+            if isinstance(uv_sources, dict):
+                for value in uv_sources.values():
+                    if isinstance(value, dict):
+                        for source_key in ("git", "url", "path", "index"):
+                            if source_key in value:
+                                source_value = str(value[source_key])
+                                sources.add(_source(source_value) or "uv-" + source_key + ":" + source_value)
+            uv_indexes = uv.get("index", [])
+            if isinstance(uv_indexes, list):
+                for value in uv_indexes:
+                    if isinstance(value, dict) and _source(value.get("url")):
+                        sources.add(_source(value["url"]))
     elif name in ("poetry.lock", "uv.lock"):
-        for section, body in _toml_sections(text):
-            values = dict(_toml_assignments(body))
-            if section == "package" and "name" in values:
-                package_names = _toml_strings(values["name"])
-                if package_names:
-                    lock_entries.add(re.sub(r"[-_.]+", "-", package_names[0]).lower())
+        document = tomllib.loads(text)
+        packages = document.get("package", [])
+        if not isinstance(packages, list):
+            raise ValueError("Invalid Python lock package table")
+        for package in packages:
+            if not isinstance(package, dict) or not isinstance(package.get("name"), str):
+                raise ValueError("Invalid Python lock package")
+            lock_entries.add(re.sub(r"[-_.]+", "-", package["name"]).lower())
+            source = package.get("source", {})
+            if isinstance(source, dict):
                 for key in ("url", "git", "registry"):
-                    match = re.search(r"\b" + key + r"\s*=\s*(['\"])(.*?)\1", values.get("source", ""))
-                    if match:
-                        sources.add(_source(match[2], origin_only=key in ("url", "registry")) or key + ":" + match[2])
-            if section in ("package.source", "source"):
-                for key in ("url", "git", "registry"):
-                    source_values = _toml_strings(values.get(key, ""))
-                    if source_values:
-                        sources.add(_source(source_values[0], origin_only=key == "url") or key + ":" + source_values[0])
+                    if key in source:
+                        source_value = str(source[key])
+                        sources.add(_source(source_value, origin_only=key in ("url", "registry"))
+                                    or key + ":" + source_value)
     elif name == "Pipfile.lock":
         document = json.loads(text, object_pairs_hook=_unique_fields)
         for section in ("default", "develop"):

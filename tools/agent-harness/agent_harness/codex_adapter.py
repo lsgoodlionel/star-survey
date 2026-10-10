@@ -29,6 +29,44 @@ _DISCOVERED_CODEX = shutil.which("codex")
 _BOUND_CODEX = str(Path(_DISCOVERED_CODEX).resolve(strict=True)) if _DISCOVERED_CODEX else None
 
 
+@dataclass(frozen=True)
+class _BoundTool:
+    name: str
+    entry: str | None
+    target: str | None
+    directory: str | None
+
+
+def _bound_tool(name, entry=None, *, target_directory=False):
+    value = entry or shutil.which(name)
+    try:
+        path = Path(value)
+        if not path.is_absolute() or redact_text(str(path)) != str(path):
+            raise ValueError()
+        target = path.resolve(strict=True)
+        directory = target.parent if target_directory else path.parent.resolve(strict=True)
+        return _BoundTool(name, str(path), str(target), str(directory))
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return _BoundTool(name, None, None, None)
+
+
+def _discover_tools():
+    node = shutil.which("node")
+    try:
+        candidates = sorted((Path.home() / ".nvm/versions/node").glob("v22*/bin/node"))
+        if candidates:
+            node = str(candidates[-1])
+    except (OSError, RuntimeError):
+        pass
+    npm = str(Path(node).with_name("npm")) if node else None
+    return (_bound_tool("python3.11", target_directory=True),
+            _bound_tool("node", node), _bound_tool("npm", npm),
+            _bound_tool("docker"), _bound_tool("git"), _bound_tool("java"))
+
+
+_BOUND_TOOLS = _discover_tools()
+
+
 class CodexFailure(str, Enum):
     COMMAND_POLICY = "command_policy"
     ENVIRONMENT_POLICY = "environment_policy"
@@ -228,7 +266,7 @@ def _environment_path(value, *, multiple=False):
     for item in values:
         try:
             resolved.append(Path(item).resolve(strict=True))
-        except OSError:
+        except (OSError, RuntimeError):
             if not multiple:
                 raise
     resolved = tuple(resolved)
@@ -239,11 +277,42 @@ def _environment_path(value, *, multiple=False):
     return os.pathsep.join(str(item) for item in resolved)
 
 
-def _environment():
+def _trusted_tool_directory(repo, tool):
+    if not all((tool.entry, tool.target, tool.directory)):
+        raise ValueError("Required project tool is unavailable")
+    entry = Path(tool.entry)
+    target = entry.resolve(strict=True)
+    directory = entry.parent.resolve(strict=True)
+    expected_directory = Path(tool.directory)
+    if tool.name == "python3.11":
+        directory = target.parent
+    root = Path(repo).resolve(strict=True)
+    temporary = Path(tempfile.gettempdir()).resolve(strict=True)
+    values = (entry, target, directory)
+    if (target != Path(tool.target) or directory != expected_directory
+            or any(redact_text(str(value)) != str(value) for value in values)
+            or any(value.is_relative_to(root) or value.is_relative_to(temporary) for value in values)):
+        raise ValueError("Project tool identity is not trusted")
+    metadata = target.stat()
+    if not stat.S_ISREG(metadata.st_mode) or not os.access(entry, os.X_OK):
+        raise ValueError("Project tool is not executable")
+    for parent in (directory, *directory.parents):
+        if parent.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("Project tool parent is broadly writable")
+    return directory
+
+
+def _environment(repo):
     environment = {}
-    path_value = os.environ.get("PATH", os.defpath)
-    _environment_path(path_value, multiple=True)
-    environment["PATH"] = _environment_path(os.defpath, multiple=True)
+    if "PATH" in os.environ and (redact_text(os.environ["PATH"]) != os.environ["PATH"] or "\x00" in os.environ["PATH"]):
+        raise ValueError("Unsafe inherited PATH")
+    directories = [_trusted_tool_directory(repo, tool) for tool in _BOUND_TOOLS]
+    system_bin = Path("/bin").resolve(strict=True)
+    if (system_bin.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or system_bin.is_relative_to(Path(repo).resolve(strict=True))):
+        raise ValueError("System tool directory is not trusted")
+    directories.append(system_bin)
+    environment["PATH"] = os.pathsep.join(dict.fromkeys(str(path) for path in directories))
     for name in ("HOME", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "WINDIR"):
         if name in os.environ:
             environment[name] = _environment_path(os.environ[name])
@@ -277,8 +346,9 @@ def _close_resource(resource):
 def run_codex(command: Sequence[str], timeout_seconds: int, event_log: Path) -> CodexResult:
     """Never return arbitrary exception/log text; kill and reap owned processes."""
     try:
-        environment = _environment()
-    except (OSError, ValueError, TypeError):
+        root_hint = Path(command[10])
+        environment = _environment(root_hint)
+    except (IndexError, OSError, RuntimeError, TypeError, ValueError):
         return CodexResult(failure=CodexFailure.ENVIRONMENT_POLICY)
     try:
         command, root = _command(command)

@@ -218,6 +218,29 @@ class LoopCase(WorktreeCase):
         result = self.dependency_run("poetry.lock", before, after)
         self.assertFalse(result.gates)
 
+    def test_python_editable_direct_local_and_include_entries_pause_before_gate(self):
+        additions = (
+            "-e git+https://example.invalid/repo.git#egg=demo",
+            "-e=git+https://example.invalid/repo.git#egg=demo",
+            "--editable git+https://example.invalid/repo.git#egg=demo",
+            "--editable=git+https://example.invalid/repo.git#egg=demo",
+            "demo @ https://packages.example.invalid/demo.whl",
+            "-e ../local-demo",
+            "--requirement=extra-requirements.txt",
+            "-c constraints.txt",
+        )
+        for addition in additions:
+            with self.subTest(addition=addition):
+                result = self.dependency_run("requirements.txt", "requests==2.0\n",
+                                             "requests==2.0\n" + addition + "\n")
+                self.assertFalse(result.gates)
+
+    def test_python_editable_vcs_revision_change_is_not_a_new_source(self):
+        before = "-e git+https://example.invalid/repo.git@v1#egg=demo\n"
+        after = "--editable=git+https://example.invalid/repo.git@v2#egg=demo\n"
+        result = self.dependency_run("requirements.txt", before, after)
+        self.assertIn("unit", result.gates)
+
     def test_python_uv_manifest_and_lock_sources_pause_before_gate(self):
         before = '[project]\ndependencies = ["requests==2.0"]\n'
         after = before + ('\n[tool.uv.sources]\nrequests = { index = "internal" }\n'

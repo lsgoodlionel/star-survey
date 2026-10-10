@@ -141,16 +141,46 @@ class AdapterCase(WorktreeCase):
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
             with patch.dict("os.environ", {"PATH": first + os.pathsep + second, "HOME": first,
                                             "TMPDIR": second, "LANG": "C.UTF-8", "TZ": "UTC"}, clear=True):
-                environment = self.adapter._environment()
-            self.assertEqual(environment["PATH"], self.adapter._environment_path(os.defpath, multiple=True))
+                environment = self.adapter._environment(self.repo)
+            self.assertNotIn(first, environment["PATH"])
             self.assertEqual(environment["HOME"], str(Path(first).resolve()))
-        for index, values in enumerate(({"PATH": "relative"}, {"PATH": "/does/not/exist"},
-                                        {"HOME": "relative"}, {"TMPDIR": "/does/not/exist"},
+        for index, values in enumerate(({"HOME": "relative"}, {"TMPDIR": "/does/not/exist"},
                                         {"LANG": "bad value"}, {"LC_ALL": "bad value"},
                                         {"TZ": "../escape"}, {"SYSTEMROOT": "relative"}, {"WINDIR": "relative"})):
             with self.subTest(values=values), patch.dict("os.environ", values, clear=True):
                 result = self.adapter.run_codex(self.command, 2, self.directory / ("bad-env-" + str(index) + ".jsonl"))
                 self.assertEqual(result.failure.value, "environment_policy")
+
+    def test_controlled_path_exposes_project_tools_and_ignores_path_poisoning(self):
+        poisoned = self.repo / "poisoned"
+        poisoned.mkdir()
+        for name in ("git", "node", "npm", "docker", "python3.11"):
+            executable = poisoned / name
+            self.write(executable, "#!/bin/sh\nexit 99\n")
+            executable.chmod(0o755)
+        with patch.dict("os.environ", {"PATH": str(poisoned), "HOME": str(Path.home())}, clear=True):
+            environment = self.adapter._environment(self.repo)
+        self.assertNotIn(str(poisoned), environment["PATH"].split(os.pathsep))
+        for name in ("git", "node", "npm", "docker", "python3.11", "python3"):
+            with self.subTest(name=name):
+                executable = shutil.which(name, path=environment["PATH"])
+                self.assertIsNotNone(executable)
+                self.assertFalse(Path(executable).is_relative_to(self.repo))
+        project = Path(__file__).resolve().parents[3]
+        probe = subprocess.run([str(project / "scripts/agent-harness"), "--python", "--version"],
+                               cwd=project, env=environment, text=True, capture_output=True, check=False)
+        self.assertEqual(probe.returncode, 0)
+        self.assertRegex(probe.stdout, r"^Python 3\.1[1-9]\.")
+
+    def test_environment_path_resolution_runtime_errors_are_typed(self):
+        loop = self.root / "environment-loop"
+        loop.symlink_to(loop, target_is_directory=True)
+        with patch.dict("os.environ", {"HOME": str(loop)}, clear=True), \
+                patch("agent_harness.codex_adapter.subprocess.Popen") as spawn:
+            result = self.adapter.run_codex(self.command, 2, self.directory / "loop.jsonl")
+        self.assertEqual(result.failure.value, "environment_policy")
+        self.assertNotIn(str(loop), repr(result))
+        spawn.assert_not_called()
 
     def test_valid_stream_returns_only_sanitized_typed_metadata(self):
         response = dict(self.response, summary="TOKEN=fake-secret")
