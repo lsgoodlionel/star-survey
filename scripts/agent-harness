@@ -1,0 +1,385 @@
+#!/bin/sh
+set -eu
+
+case "$0" in
+    /*) wrapper_path=$0 ;;
+    *) wrapper_path=$(pwd -P)/$0 ;;
+esac
+wrapper_dir=${wrapper_path%/*}
+wrapper_dir=$(CDPATH='' cd -P -- "$wrapper_dir" && printf '%s\n' "$PWD") || exit 2
+wrapper_path=$wrapper_dir/${wrapper_path##*/}
+
+ci_python_location=${pythonLocation-}
+ci_mode=${AGENT_HARNESS_CI-}
+
+PATH=/usr/bin:/bin
+TMPDIR=/tmp
+export PATH TMPDIR
+
+bootstrap_error() {
+    printf '%s\n' '{"error":"没有可信的 Python bootstrap","exitCode":2}'
+    exit 2
+}
+
+if [ ! -x /usr/bin/stat ] || [ ! -x /usr/bin/readlink ]; then
+    bootstrap_error
+fi
+if /usr/bin/stat -c '%d|%i|%u|%a' /usr/bin/stat >/dev/null 2>&1; then
+    stat_style=gnu
+elif /usr/bin/stat -f '%d|%i|%u|%Lp' /usr/bin/stat >/dev/null 2>&1; then
+    stat_style=bsd
+else
+    bootstrap_error
+fi
+
+bootstrap_metadata() {
+    if [ "$stat_style" = gnu ]; then
+        /usr/bin/stat -c '%d|%i|%u|%a' -- "$1"
+    else
+        /usr/bin/stat -f '%d|%i|%u|%Lp' "$1"
+    fi
+}
+
+bootstrap_safe_mode() {
+    case "$1" in
+        ''|*[!0-7]*) return 1 ;;
+    esac
+    group_digit=$((($1 / 10) % 10))
+    other_digit=$(($1 % 10))
+    case "$group_digit:$other_digit" in
+        2:*|3:*|6:*|7:*|*:2|*:3|*:6|*:7) return 1 ;;
+    esac
+}
+
+bootstrap_matching_root() {
+    if [ -n "$3" ]; then
+        case "$1" in
+            "$3"|"$3"/*) printf '%s\n' "$3"; return 0 ;;
+        esac
+    fi
+    case "$1" in
+        "$2"|"$2"/*) printf '%s\n' "$2" ;;
+        *) return 1 ;;
+    esac
+}
+
+bootstrap_trusted_parents() {
+    parent=${1%/*}
+    while :; do
+        canonical=$(CDPATH='' cd -P -- "$parent" 2>/dev/null && printf '%s\n' "$PWD") || return 1
+        root=$(bootstrap_matching_root "$canonical" "$2" "$3") || return 1
+        metadata=$(bootstrap_metadata "$canonical") || return 1
+        old_ifs=$IFS
+        IFS='|'
+        read -r _ _ owner mode <<EOF
+$metadata
+EOF
+        IFS=$old_ifs
+        { [ "$owner" = 0 ] || [ "$owner" = "$4" ]; } && bootstrap_safe_mode "$mode" \
+            && [ -d "$canonical" ] || return 1
+        [ "$canonical" = "$root" ] && return 0
+        parent=${canonical%/*}
+    done
+}
+
+bootstrap_fingerprint() {
+    current=$1
+    primary_root=$2
+    secondary_root=$3
+    fingerprint=
+    seen='|'
+    depth=0
+    while [ "$depth" -lt 17 ]; do
+        root=$(bootstrap_matching_root "$current" "$primary_root" "$secondary_root") || return 1
+        bootstrap_trusted_parents "$current" "$primary_root" "$secondary_root" "$4" || return 1
+        metadata=$(bootstrap_metadata "$current") || return 1
+        old_ifs=$IFS
+        IFS='|'
+        read -r device inode owner mode <<EOF
+$metadata
+EOF
+        IFS=$old_ifs
+        [ "$owner" = 0 ] || [ "$owner" = "$4" ] || return 1
+        case "$seen" in
+            *"|$current|"*) return 1 ;;
+        esac
+        seen=$seen$current'|'
+        fingerprint=$fingerprint$current'|'$device'|'$inode'|'$owner'|'$mode';'
+        if [ -L "$current" ]; then
+            target=$(/usr/bin/readlink "$current") || return 1
+            case "$target" in
+                /*) next=$target ;;
+                *) next=${current%/*}/$target ;;
+            esac
+            next_parent=$(CDPATH='' cd -P -- "${next%/*}" 2>/dev/null && printf '%s\n' "$PWD") || return 1
+            current=$next_parent/${next##*/}
+            depth=$((depth + 1))
+            continue
+        fi
+        [ -f "$current" ] && [ -x "$current" ] && bootstrap_safe_mode "$mode" || return 1
+        printf '%s\n' "$fingerprint"
+        return 0
+    done
+    return 1
+}
+
+bootstrap=
+bootstrap_root=
+bootstrap_extra_root=
+bootstrap_identity=
+bootstrap_owner=0
+ci_candidate=
+if [ "$ci_mode" = 1 ]; then
+    case "$ci_python_location" in
+        /opt/hostedtoolcache/Python/*/x64) ci_root=/opt/hostedtoolcache/Python ;;
+        /Users/runner/hostedtoolcache/Python/*/x64|/Users/runner/hostedtoolcache/Python/*/arm64)
+            ci_root=/Users/runner/hostedtoolcache/Python ;;
+        *) ci_root= ;;
+    esac
+    if [ -n "$ci_root" ]; then
+        ci_version=${ci_python_location#"$ci_root"/}
+        ci_version=${ci_version%/*}
+        case "$ci_version" in
+            3.11.*|3.12.*|3.13.*|3.14.*)
+                ci_patch=${ci_version#3.??.}
+                case "$ci_patch" in
+                    ''|*[!0-9]*) ;;
+                    *) ci_candidate=$ci_python_location/bin/python ;;
+                esac
+                ;;
+        esac
+    fi
+fi
+current_uid=$(/usr/bin/id -u 2>/dev/null || printf '0\n')
+try_bootstrap_candidate() {
+    candidate=$1
+    allowed_owner=0
+    case "$candidate" in
+        /opt/hostedtoolcache/Python/*)
+            primary=/opt/hostedtoolcache/Python; secondary=; allowed_owner=$current_uid ;;
+        /Users/runner/hostedtoolcache/Python/*)
+            primary=/Users/runner/hostedtoolcache/Python; secondary=; allowed_owner=$current_uid ;;
+        /usr/local/*) primary=/usr/local; secondary= ;;
+        /usr/*)
+            primary=/usr
+            if [ -d /etc/alternatives ]; then secondary=/etc/alternatives; else secondary=; fi
+            ;;
+        *) return 1 ;;
+    esac
+    if identity=$(bootstrap_fingerprint "$candidate" "$primary" "$secondary" "$allowed_owner" 2>/dev/null); then
+        bootstrap=$candidate
+        bootstrap_root=$primary
+        bootstrap_extra_root=$secondary
+        bootstrap_identity=$identity
+        bootstrap_owner=$allowed_owner
+        return 0
+    fi
+    return 1
+}
+if [ -n "$ci_candidate" ]; then
+    try_bootstrap_candidate "$ci_candidate" || true
+fi
+if [ -z "$bootstrap" ]; then
+    for candidate in /usr/local/bin/python3.14 /usr/local/bin/python3.13 \
+            /usr/local/bin/python3.12 /usr/local/bin/python3.11 /usr/bin/python3; do
+        try_bootstrap_candidate "$candidate" && break
+    done
+fi
+[ -n "$bootstrap" ] || bootstrap_error
+
+exec "$bootstrap" -I - "$wrapper_path" "$bootstrap" "$bootstrap_root" "$bootstrap_extra_root" "$bootstrap_identity" "$bootstrap_owner" "$@" <<'PY'
+import glob
+import os
+from pathlib import Path
+import pwd
+import stat
+import sys
+
+
+def fail(message):
+    print('{"error":"' + message + '","exitCode":2}')
+    raise SystemExit(2)
+
+
+def trusted_bootstrap(candidate, roots, expected, allowed_owner):
+    try:
+        candidate = Path(candidate)
+        roots = tuple(Path(root).resolve(strict=True) for root in roots if root)
+        current = candidate
+        seen = set()
+        fingerprint = []
+        target = None
+        for _ in range(17):
+            matching = [root for root in roots if current.is_relative_to(root)]
+            if not matching or current in seen:
+                return None
+            root = max(matching, key=lambda value: len(value.parts))
+            seen.add(current)
+            parent = current.parent.resolve(strict=True)
+            while True:
+                metadata = parent.stat()
+                if metadata.st_uid not in (0, allowed_owner) or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                    return None
+                if parent == root:
+                    break
+                if parent == parent.parent or not parent.is_relative_to(root):
+                    return None
+                parent = parent.parent
+            metadata = current.lstat()
+            mode = oct(stat.S_IMODE(metadata.st_mode))[2:]
+            fingerprint.append(f"{current}|{metadata.st_dev}|{metadata.st_ino}|{metadata.st_uid}|{mode};")
+            if stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid not in (0, allowed_owner):
+                    return None
+                linked = Path(os.readlink(current))
+                value = linked if linked.is_absolute() else current.parent / linked
+                current = value.parent.resolve(strict=True) / value.name
+                continue
+            if (not stat.S_ISREG(metadata.st_mode) or not os.access(current, os.X_OK)
+                    or metadata.st_uid not in (0, allowed_owner)
+                    or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+                return None
+            target = current
+            break
+        if target is None or "".join(fingerprint) != expected:
+            return None
+        actual = Path(sys.executable).resolve(strict=True)
+        expected_versioned_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        hosted = any(str(root).endswith("/hostedtoolcache/Python") for root in roots)
+        require_version_binding = candidate.name != "python3" or hosted
+        if (require_version_binding and actual != target.resolve(strict=True)
+                or require_version_binding and target.name.startswith("python3.")
+                and (not (3, 11) <= sys.version_info[:2] <= (3, 14)
+                     or target.name != expected_versioned_name)
+                or hosted and not (3, 11) <= sys.version_info[:2] <= (3, 14)):
+            return None
+        return target
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def trusted_runtime(candidate, root, owner):
+    try:
+        candidate = Path(candidate)
+        root = Path(root).resolve(strict=True)
+        allowed_names = {"python", "python3", *(f"python3.{minor}" for minor in range(11, 15))}
+        if (not candidate.is_absolute() or candidate.is_symlink()
+                or candidate.name not in allowed_names):
+            return None
+        if candidate.name == "python" and not str(root).endswith("/hostedtoolcache/Python"):
+            return None
+        target = candidate.resolve(strict=True)
+        if target != candidate or not target.is_relative_to(root):
+            return None
+        metadata = target.stat()
+        if (not stat.S_ISREG(metadata.st_mode) or not os.access(target, os.X_OK)
+                or metadata.st_uid not in (0, owner)
+                or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+            return None
+        if candidate.name in {"python", "python3"} and (
+                target != Path(sys.executable).resolve(strict=True)
+                or not (3, 11) <= sys.version_info[:2] <= (3, 14)):
+            return None
+        current = target.parent
+        while True:
+            metadata = current.stat()
+            if (metadata.st_uid not in (0, owner)
+                    or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+                return None
+            if current == root:
+                return target
+            if current == current.parent or not current.is_relative_to(root):
+                return None
+            current = current.parent
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+try:
+    wrapper = Path(sys.argv[1]).resolve(strict=True)
+    bootstrap = trusted_bootstrap(sys.argv[2], sys.argv[3:5], sys.argv[5], int(sys.argv[6]))
+    if bootstrap is None:
+        fail("Python bootstrap 身份变化")
+    repo = wrapper.parent.parent
+    expected = repo / "scripts/agent-harness"
+    version_probe = sys.argv[7:] == ["--python", "--version"]
+    if (wrapper != expected or wrapper.is_symlink()
+            or not version_probe and not (repo / "tools/agent-harness/agent_harness").is_dir()):
+        fail("Harness 入口位置不可信")
+    account = pwd.getpwuid(os.getuid())
+    home = Path(account.pw_dir).resolve(strict=True)
+except (KeyError, OSError, RuntimeError, ValueError):
+    fail("无法建立 Harness 信任根")
+
+candidates = [(str(bootstrap), sys.argv[3], int(sys.argv[6]))]
+for prefix in ("/usr", "/usr/local"):
+    candidates.extend((f"{prefix}/bin/python3.{minor}", prefix, 0) for minor in range(14, 10, -1))
+uv_root = home / ".local/share/uv/python"
+if uv_root.is_dir():
+    for minor in range(14, 10, -1):
+        for value in sorted(glob.glob(str(uv_root / f"cpython-3.{minor}.*-*/bin/python3.{minor}")), reverse=True):
+            candidates.append((value, str(uv_root), os.getuid()))
+
+runtime = next((value for candidate, root, owner in candidates
+                if (value := trusted_runtime(candidate, root, owner)) is not None), None)
+if runtime is None:
+    fail("需要可信的 Python 3.11-3.14 runtime")
+
+arguments = sys.argv[7:]
+environment = {
+    "HOME": str(home),
+    "PATH": "/usr/bin:/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONNOUSERSITE": "1",
+    "PYTHONPATH": str(repo / "tools/agent-harness"),
+}
+if arguments[:1] == ["--python"]:
+    command = arguments[1:]
+    allowed = (command == ["--version"]
+               or command[:2] == ["-m", "unittest"] and len(command) > 2
+               or len(command) in (4, 5) and command[:2] == ["-m", "agent_harness.distribution"]
+               and command[2] in {"install", "upgrade", "uninstall"}
+               or command[:1] == ["tools/agent-harness/run_tests.py"]
+               or command[:1] == ["tools/agent-harness/drills/run_drills.py"])
+    if not allowed:
+        fail("不允许的 Python Gate 入口")
+    if command == ["--version"]:
+        os.execve(runtime, [str(runtime), "--version"], environment)
+    os.execve(runtime, [str(runtime), *command], environment)
+else:
+    target = ["-m", "agent_harness.cli", "--repo", str(repo), *arguments]
+
+help_commands = {
+    "doctor", "init", "status", "next", "gate", "run-codex", "record-decision",
+    "record-review", "pause", "resume", "finalize",
+}
+pure_help = (arguments in (["-h"], ["--help"])
+             or len(arguments) == 2
+             and arguments[0] in help_commands
+             and arguments[1] in ("-h", "--help"))
+if pure_help:
+    os.execve(runtime, [str(runtime), *target], environment)
+if any(argument in ("-h", "--help") for argument in arguments):
+    fail("帮助参数不能与操作参数混用")
+
+launcher = r'''
+import os
+from pathlib import Path
+import sys
+
+from agent_harness.codex_adapter import _environment
+
+repo = Path(sys.argv[1])
+try:
+    environment = _environment(repo, required_tools=(), require_codex=False,
+                               optional_tools=("git", "node", "npm", "docker", "java", "python"))
+except (OSError, RuntimeError, TypeError, ValueError):
+    print('{"error":"受控工具不可用或不受信任","exitCode":2}')
+    raise SystemExit(2)
+environment["PYTHONDONTWRITEBYTECODE"] = "1"
+environment["PYTHONNOUSERSITE"] = "1"
+environment["PYTHONPATH"] = str(repo / "tools/agent-harness")
+os.execve(sys.executable, [sys.executable, *sys.argv[2:]], environment)
+'''
+os.execve(runtime, [str(runtime), "-c", launcher, str(repo), *target], environment)
+PY

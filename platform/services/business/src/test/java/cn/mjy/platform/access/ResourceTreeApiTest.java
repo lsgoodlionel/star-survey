@@ -140,17 +140,62 @@ class ResourceTreeApiTest {
                 .andExpect(jsonPath("$.canEdit").value(true))
                 .andExpect(jsonPath("$.canSubmitApproval").value(true))
                 .andExpect(jsonPath("$.canPublishDirectly").value(false))
-                .andExpect(jsonPath("$.canApprovePublish").value(false));
+                .andExpect(jsonPath("$.canApprovePublish").value(false))
+                .andExpect(jsonPath("$.canArchive").value(true))
+                .andExpect(jsonPath("$.canRestore").value(false));
         mvc.perform(get("/v1/resource-capabilities").param("resourceId", folderA)
                         .header("Authorization", bearer(viewer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.canCreateChildren").value(false))
-                .andExpect(jsonPath("$.canEdit").value(false));
+                .andExpect(jsonPath("$.canEdit").value(false))
+                .andExpect(jsonPath("$.canArchive").value(false))
+                .andExpect(jsonPath("$.canRestore").value(false));
         mvc.perform(get("/v1/resource-capabilities").param("resourceId", projectB)
                         .header("Authorization", bearer(ownerA)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("not_found"));
         mvc.perform(get("/v1/resource-capabilities").param("resourceId", UUID.randomUUID().toString())
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+    }
+
+    @Test
+    void archiveAndRestoreEndpointsReturnTheUpdatedResourceAndPreservePrivacy() throws Exception {
+        String projectA = idOf(createProject(ownerA, "A 的项目"));
+        String folderA = idOf(createFolder(ownerA, projectA, "A 的文件夹"));
+        String projectB = idOf(createProject(ownerB, "B 的项目"));
+        String unknown = UUID.randomUUID().toString();
+
+        mvc.perform(post("/v1/resources/" + folderA + "/archive")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(folderA))
+                .andExpect(jsonPath("$.archivedAt").isNotEmpty());
+        mvc.perform(get("/v1/resource-capabilities").param("resourceId", folderA)
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canArchive").value(false))
+                .andExpect(jsonPath("$.canRestore").value(true));
+        mvc.perform(post("/v1/resources/" + folderA + "/restore")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(folderA))
+                .andExpect(jsonPath("$.archivedAt").doesNotExist());
+
+        mvc.perform(post("/v1/resources/" + projectB + "/archive")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+        mvc.perform(post("/v1/resources/" + projectB + "/restore")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+        mvc.perform(post("/v1/resources/" + unknown + "/archive")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("not_found"));
+        mvc.perform(post("/v1/resources/" + unknown + "/restore")
                         .header("Authorization", bearer(ownerA)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("not_found"));
@@ -176,6 +221,50 @@ class ResourceTreeApiTest {
         mvc.perform(get("/v1/resources").param("limit", "0").header("Authorization", bearer(ownerA)))
                 .andExpect(status().isBadRequest());
         createProject(ownerA, " ").andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void rejectsCursorWhenSortOrFiltersChange() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            createProject(ownerA, "项目 " + i).andExpect(status().isCreated());
+        }
+        String first = mvc.perform(get("/v1/resources")
+                        .param("limit", "1").param("query", "项目").param("kind", "project")
+                        .param("archived", "active").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].createdAt").isNotEmpty())
+                .andExpect(jsonPath("$.items[0].updatedAt").isNotEmpty())
+                .andExpect(jsonPath("$.items[0].archivedAt").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        String cursor = JsonPath.read(first, "$.nextCursor");
+
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("query", "项目").param("kind", "project")
+                        .param("archived", "active").param("sort", "updated_desc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("query", "别的条件").param("kind", "project")
+                        .param("archived", "active").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("query", "项目").param("kind", "folder")
+                        .param("archived", "active").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("query", "项目").param("kind", "project")
+                        .param("archived", "archived").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/resources").param("cursor", cursor)
+                        .param("parentId", UUID.randomUUID().toString())
+                        .param("query", "项目").param("kind", "project")
+                        .param("archived", "active").param("sort", "name_asc")
+                        .header("Authorization", bearer(ownerA)))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

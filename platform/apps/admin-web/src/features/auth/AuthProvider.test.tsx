@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { useState, type ReactNode } from 'react';
@@ -19,16 +19,28 @@ const me = {
 function SessionProbe() {
   const { api, authenticateWithToken, logout, session } = useAuth();
   const [requestFinished, setRequestFinished] = useState(false);
+  const [authAttemptsFinished, setAuthAttemptsFinished] = useState(0);
+  const authenticate = (token: string, signal?: AbortSignal) => {
+    void authenticateWithToken(token, 600, signal)
+      .catch(() => undefined)
+      .finally(() => setAuthAttemptsFinished((count) => count + 1));
+  };
 
   return (
     <>
       <output aria-label="会话状态">{session?.me.actorId ?? '未登录'}</output>
-      <button type="button" onClick={() => void authenticateWithToken('memory-token', 600)}>
+      <button type="button" onClick={() => authenticate('memory-token')}>
         建立会话
       </button>
-      <button type="button" onClick={() => void authenticateWithToken('new-token', 600)}>
+      <button type="button" onClick={() => authenticate('new-token')}>
         建立新会话
       </button>
+      <button type="button" onClick={() => authenticate('failed-token')}>尝试失败会话</button>
+      <button type="button" onClick={() => {
+        const controller = new AbortController();
+        authenticate('aborted-token', controller.signal);
+        controller.abort();
+      }}>尝试取消会话</button>
       <button type="button" onClick={() => void logout()}>
         退出登录
       </button>
@@ -55,6 +67,7 @@ function SessionProbe() {
         并发请求过期接口
       </button>
       {requestFinished ? <span>请求结束</span> : null}
+      <output aria-label="认证尝试完成数">{authAttemptsFinished}</output>
     </>
   );
 }
@@ -237,6 +250,89 @@ test('logoutClearsPriorUserQueriesBeforeCrossUserRelogin', async () => {
   fireEvent.click(screen.getByRole('button', { name: '建立新会话' }));
   expect(await screen.findByText('new-user')).toBeInTheDocument();
   expect(queryClient.getQueryData(['private-profile'])).toBeUndefined();
+});
+
+test('clearsAuthorizedQueriesWhenAuthenticationReplacesTheActorInTheSameTenant', async () => {
+  server.use(
+    http.get('/v1/me', ({ request }) =>
+      HttpResponse.json({
+        tenantId: 'tenant-a',
+        actorId: request.headers.get('Authorization') === 'Bearer new-token' ? 'new-user' : 'old-user',
+        roles: ['editor'],
+      }),
+    ),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const clear = vi.spyOn(queryClient, 'clear');
+  renderAuth(<SessionProbe />, { queryClient });
+
+  fireEvent.click(screen.getByRole('button', { name: '建立会话' }));
+  expect(await screen.findByText('old-user')).toBeInTheDocument();
+  queryClient.setQueryData(['authorized-survey', 'tenant-a'], { owner: 'old-user' });
+
+  fireEvent.click(screen.getByRole('button', { name: '建立新会话' }));
+  expect(await screen.findByText('new-user')).toBeInTheDocument();
+  expect(clear).toHaveBeenCalledTimes(1);
+  expect(queryClient.getQueryData(['authorized-survey', 'tenant-a'])).toBeUndefined();
+});
+
+test('keepsTheNewestAuthenticationWhenAnOlderMeRequestFinishesLast', async () => {
+  const oldRequest = createDeferred();
+  const newRequest = createDeferred();
+  server.use(
+    http.get('/v1/me', async ({ request }) => {
+      const token = request.headers.get('Authorization');
+      await (token === 'Bearer new-token' ? newRequest.promise : oldRequest.promise);
+      return HttpResponse.json({
+        tenantId: 'tenant-a',
+        actorId: token === 'Bearer new-token' ? 'new-user' : 'old-user',
+        roles: ['editor'],
+      });
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const clear = vi.spyOn(queryClient, 'clear');
+  renderAuth(<SessionProbe />, { queryClient });
+
+  fireEvent.click(screen.getByRole('button', { name: '建立会话' }));
+  fireEvent.click(screen.getByRole('button', { name: '建立新会话' }));
+  newRequest.resolve();
+  expect(await screen.findByText('new-user')).toBeInTheDocument();
+  queryClient.setQueryData(['new-user-private-data'], { owner: 'new-user' });
+
+  oldRequest.resolve();
+  await waitFor(() => expect(screen.getByLabelText('认证尝试完成数')).toHaveTextContent('2'));
+  expect(screen.getByLabelText('会话状态')).toHaveTextContent('new-user');
+  expect(clear).not.toHaveBeenCalled();
+  expect(queryClient.getQueryData(['new-user-private-data'])).toEqual({ owner: 'new-user' });
+});
+
+test('failedAndAbortedAuthenticationAttemptsDoNotDisturbTheCurrentSession', async () => {
+  server.use(
+    http.get('/v1/me', async ({ request }) => {
+      const token = request.headers.get('Authorization');
+      if (token === 'Bearer failed-token') {
+        return HttpResponse.json({ error: 'unavailable' }, { status: 500 });
+      }
+      if (token === 'Bearer aborted-token') {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return HttpResponse.json(me);
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const clear = vi.spyOn(queryClient, 'clear');
+  renderAuth(<SessionProbe />, { queryClient });
+
+  fireEvent.click(screen.getByRole('button', { name: '建立会话' }));
+  expect(await screen.findByText('author-7')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '尝试失败会话' }));
+  fireEvent.click(screen.getByRole('button', { name: '尝试取消会话' }));
+
+  await waitFor(() => expect(screen.getByLabelText('认证尝试完成数')).toHaveTextContent('3'));
+  await act(async () => undefined);
+  expect(screen.getByLabelText('会话状态')).toHaveTextContent('author-7');
+  expect(clear).not.toHaveBeenCalled();
 });
 
 test('doesNotRenderTheDevTokenEntryInAProductionBuild', async () => {

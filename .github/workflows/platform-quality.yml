@@ -9,6 +9,7 @@ name: MJY 平台 - 质量闸门
 #   admin-web-e2e      重；真实浏览器串起管理端、平台、发布网关与引擎
 #   gateway-parity-e2e 重，要起引擎栈；WP-03.4 双执行比对，mysql 与 pgsql 各跑一遍
 on:
+  workflow_call:
   pull_request:
     branches:
       - main
@@ -25,9 +26,9 @@ jobs:
     name: 跨端一致性与对账（单测）
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
@@ -54,13 +55,38 @@ jobs:
         working-directory: platform/tools/traceability
         run: python3 -m reqtrace.cli check
 
+  productization-production:
+    name: 产品化与生产发布门禁
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装锁定的 Workflow YAML 解析器
+        run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+
+      - name: 产品化能力映射测试
+        run: python3 -m unittest discover -s platform/tools/productization -p 'test_render_capabilities.py'
+
+      - name: 产品化能力映射一致性
+        run: python3 platform/tools/productization/render_capabilities.py --check
+
+      - name: Release 构建与 Workflow 策略测试
+        run: python3 -m unittest discover -s platform/deploy/production/release/tests -p 'test_*.py'
+
+      - name: Production 部署与生命周期测试
+        run: python3 -m unittest discover -s platform/deploy/production/tests -p 'test_*.py'
+
   admin-web:
     name: 管理端前端质量闸门
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -100,13 +126,13 @@ jobs:
       COMPOSE_PROJECT_NAME: adminweb-ci
       ADMIN_WEB_CI_ARTIFACT_DIR: platform/apps/admin-web/test-results/ci-artifacts
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -128,7 +154,7 @@ jobs:
 
       - name: 上传脱敏失败证据
         if: "${{ failure() && steps.admin_web_e2e.outcome == 'failure' }}"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: admin-web-e2e-sanitized-failure
           path: platform/apps/admin-web/test-results/ci-artifacts/
@@ -150,9 +176,9 @@ jobs:
       SURVEY_TEST_PREFIX: ci-${{ matrix.db }}
       COMPOSE_PROJECT_NAME: ci-${{ matrix.db }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
@@ -200,14 +226,14 @@ jobs:
       PLATFORM_DB_URL: jdbc:postgresql://localhost:5432/platform
       PGPASSWORD: postgres
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # 对账脚本是 Python 的。
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '21'
@@ -226,7 +252,7 @@ jobs:
 
       - name: 留存 surefire 报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: surefire-reports
           path: platform/services/business/target/surefire-reports/
@@ -256,9 +282,9 @@ jobs:
       SURVEY_TEST_PREFIX: ap-${{ matrix.db }}
       COMPOSE_PROJECT_NAME: ap-${{ matrix.db }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
@@ -291,13 +317,13 @@ jobs:
       # platform-db 仍由 compose 起（脚本要把平台容器接到它的网络上）；
       # PLATFORM_DB_URL 由脚本自己按 PLATFORM_DB_NAME 组装，这里不设。
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '21'

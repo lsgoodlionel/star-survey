@@ -1,0 +1,218 @@
+{
+  "$schema": "./capabilities.schema.json",
+  "schemaVersion": 1,
+  "capabilities": [
+    {
+      "id": "workspace",
+      "title": "工作台",
+      "requirementIds": ["R01-01", "R19-04"],
+      "backend": "complete",
+      "frontend": "complete",
+      "flow": "complete",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R01-01 |", "description": "空白与应用类型创建需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/dashboard/DashboardController.java", "locator": "public class DashboardController", "description": "Dashboard 在一个授权快照中汇总摘要、任务、问卷和最近工作；资源树接口继续服务完整项目与问卷管理。"},
+        {"layer": "backend", "kind": "automated-test", "path": "platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardTenantIsolationTest.java", "locator": "class DashboardTenantIsolationTest", "description": "集成测试覆盖角色可见性、租户隔离和固定查询预算。"},
+        {"layer": "backend", "kind": "automated-test", "path": "platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkTenantIsolationTest.java", "locator": "class DashboardRecentWorkTenantIsolationTest", "description": "集成测试覆盖最近工作在跨租户、归档和失权场景下的过滤。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/dashboard/DashboardPage.tsx", "locator": "export function DashboardPage", "description": "登录首页展示授权摘要、待办、问卷快捷操作和可恢复的最近工作；完整资源管理保留在项目与问卷页。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/dashboard.spec.ts", "locator": "pending approval is visible only to a real publish reviewer", "description": "真实栈验证登录落 Dashboard、发布与答卷往返、重新认证后的最近工作、真实项目级角色隔离、移动导航及 819/820/1179/1180px DOM 几何。"},
+        {"layer": "flow", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/15-business-dashboard-v1-follow-up.md", "locator": "## 2. 已被新证据取代的结论", "description": "跟进审计明确列出 2026-10-09 基线中已被 Dashboard v1 和发布后闭环取代的判断。"}
+      ],
+      "nextWave": "Wave 6"
+    },
+    {
+      "id": "editing",
+      "title": "编辑",
+      "requirementIds": ["R01-04", "R01-05", "R01-08"],
+      "backend": "complete",
+      "frontend": "partial",
+      "flow": "partial",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R01-04 |", "description": "基础编辑需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/SurveyController.java", "locator": "public class SurveyController", "description": "草稿读取、保存和版本控制接口已存在。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/editor/EditorPage.tsx", "locator": "export function EditorRoutePage", "description": "基础题型编辑、排序和保存已接入；高级题型仍只读。"},
+        {"layer": "flow", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "#### Step 3：问卷编辑", "description": "核查报告确认基础作者链路可用，同时记录 Phase C 缺口。"}
+      ],
+      "nextWave": "Wave 5"
+    },
+    {
+      "id": "import",
+      "title": "导入",
+      "requirementIds": ["R01-02"],
+      "backend": "complete",
+      "frontend": "complete",
+      "flow": "complete",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R01-02 |", "description": "批量文本导入需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/SurveyController.java", "locator": "@PostMapping(\"/{id}/import/preview\")", "description": "导入预览与提交接口已存在。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/import/ImportPage.tsx", "locator": "export function ImportRoutePage", "description": "导入页面支持预览、异常行和选择性导入。"},
+        {"layer": "traceability", "kind": "traceability-record", "path": "platform/docs/traceability/requirement-tests.md", "locator": "| R01-02 | 单测 |", "description": "后端导入行为已有登记证据。"}
+      ],
+      "nextWave": "Wave 5"
+    },
+    {
+      "id": "preview",
+      "title": "预览",
+      "requirementIds": ["R01-07"],
+      "backend": "complete",
+      "frontend": "complete",
+      "flow": "complete",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R01-07 |", "description": "预览、发布与关闭为复合需求。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/preview/PreviewSessionController.java", "locator": "public class PreviewSessionController", "description": "隔离预览 session 的创建、查询和显式结束接口已交付。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/preview/PreviewPage.tsx", "locator": "export function PreviewRoutePage", "description": "页面同时提供快速预览和隔离真实预览；轮询失败可恢复，终态可新建且保留旧 session 审计。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/authoring.spec.ts", "locator": "readPreviewIsolationSnapshot", "description": "真实预览事件投递后直接比较正式 version、binding、route、outbox 和 response 计数，五项前后均为零。"},
+        {"layer": "traceability", "kind": "traceability-record", "path": "platform/docs/traceability/requirement-tests.md", "locator": "| R01-07 | 端到端 |", "description": "真实预览、关闭和正式计数隔离证据已登记。"}
+      ],
+      "nextWave": "Wave 1"
+    },
+    {
+      "id": "approval-publish",
+      "title": "审批与发布",
+      "requirementIds": ["R01-07", "R01-09"],
+      "backend": "complete",
+      "frontend": "complete",
+      "flow": "complete",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R01-09 |", "description": "发布审核需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/PublishApprovalController.java", "locator": "public class PublishApprovalController", "description": "审批状态机与发布接口已存在。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/publish/PublishPage.tsx", "locator": "export function PublishRoutePage", "description": "审批、发布状态和版本入口已接入。"},
+        {"layer": "traceability", "kind": "traceability-record", "path": "platform/docs/traceability/requirement-tests.md", "locator": "| R01-09 | 集成 |", "description": "审批绑定版本和绕过防护证据已登记。"}
+      ],
+      "nextWave": "Wave 1"
+    },
+    {
+      "id": "delivery-links",
+      "title": "投放链接与二维码",
+      "requirementIds": ["R05-01", "R05-07", "R05-08"],
+      "backend": "complete",
+      "frontend": "complete",
+      "flow": "complete",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R05-01 |", "description": "链接、二维码和短链需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryLinkController.java", "locator": "public class DeliveryLinkController", "description": "投放链接、短链和二维码后端接口已存在。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/publish/PublishedAccessPanel.tsx", "locator": "export function PublishedAccessPanel", "description": "发布后可创建投放链接、展示后端二维码并进入答卷工作区。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/authoring.spec.ts", "locator": "decodeQrImage", "description": "真实浏览器确认二维码图像完成加载，用 jsQR 解码渲染像素并逐字比对新建链接 URL，再完成正式作答。"},
+        {"layer": "traceability", "kind": "traceability-record", "path": "platform/docs/traceability/requirement-tests.md", "locator": "| R05-01 | 端到端 |", "description": "链接、二维码和正式作答证据已登记。"}
+      ],
+      "nextWave": "Wave 1"
+    },
+    {
+      "id": "responses-summary",
+      "title": "答卷与摘要",
+      "requirementIds": ["R06-01", "R19-02"],
+      "backend": "complete",
+      "frontend": "complete",
+      "flow": "complete",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R06-01 |", "description": "答卷查询需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/response/ResponseQueryController.java", "locator": "public class ResponseQueryController", "description": "跨版本答卷查询、摘要和字段接口已存在。"},
+        {"layer": "backend", "kind": "automated-test", "path": "platform/services/business/src/test/java/cn/mjy/platform/response/ResponseTenantIsolationTest.java", "locator": "class ResponseTenantIsolationTest", "description": "答卷租户隔离已有后端测试。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/responses/ResponsesPage.tsx", "locator": "刷新答卷数据", "description": "答卷摘要与明细设为即时过期查询，并提供常显手动刷新及中文进度反馈。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/authoring.spec.ts", "locator": "刷新答卷数据", "description": "正式作答后不使用固定 sleep，通过有界 UI 刷新 eventual 验证一份完成答卷可见。"},
+        {"layer": "traceability", "kind": "traceability-record", "path": "platform/docs/traceability/requirement-tests.md", "locator": "| R06-01 | 端到端 |", "description": "正式答卷投影、摘要和明细可见证据已登记。"}
+      ],
+      "nextWave": "Wave 3"
+    },
+    {
+      "id": "exports",
+      "title": "导出",
+      "requirementIds": ["R06-02", "R06-03", "R06-05", "R06-06", "R06-07"],
+      "backend": "partial",
+      "frontend": "complete",
+      "flow": "partial",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R06-02 |", "description": "Excel 和 CSV 导出需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/response/ResponseExportController.java", "locator": "public class ResponseExportController", "description": "导出作业创建、进度、下载和再次授权接口已存在。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/responses/ResponsesPage.tsx", "locator": "创建导出任务", "description": "前端提供真实支持格式选择、任务状态、取消、重试和下载。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/authoring.spec.ts", "locator": "assertDownloadedCsvContainsFormalResponse", "description": "真实浏览器解包下载 ZIP，校验 CSV UTF-8 BOM/CRLF，并通过 fields.csv 字段字典确认唯一正式答卷的真实字段值为 A1；其他格式继续由专项测试覆盖。"},
+        {"layer": "traceability", "kind": "traceability-record", "path": "platform/docs/traceability/requirement-tests.md", "locator": "| R06-02 | 端到端 |", "description": "CSV 创建、完成和下载的完整旅程证据已登记。"}
+      ],
+      "nextWave": "Wave 3"
+    },
+    {
+      "id": "templates-branding",
+      "title": "模板与品牌",
+      "requirementIds": ["R01-03", "R01-06", "R19-05", "R19-06", "R19-10"],
+      "backend": "partial",
+      "frontend": "not_started",
+      "flow": "not_started",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R19-05 |", "description": "企业模板库需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/template/SurveyTemplateController.java", "locator": "class SurveyTemplateController", "description": "租户模板生命周期后端接口已存在。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/contracts/survey-branding-v1.md", "locator": "# 问卷品牌与多语言 v1", "description": "品牌与多语言已定义契约。"},
+        {"layer": "frontend", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "| 模板库与平台模板 |", "description": "核查报告明确记录模板和品牌均无配置入口。"}
+      ],
+      "nextWave": "Wave 2"
+    },
+    {
+      "id": "contacts-delivery",
+      "title": "通讯录与投放",
+      "requirementIds": ["R05-04", "R05-05", "R05-06", "R18-01", "R18-02", "R18-03", "R18-06"],
+      "backend": "partial",
+      "frontend": "not_started",
+      "flow": "not_started",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R18-01 |", "description": "通讯录导入与同步需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java", "locator": "class ContactController", "description": "联系人、部门、标签和名单后端已形成。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryTaskController.java", "locator": "public class DeliveryTaskController", "description": "批量任务、回执、退订和催答后端已形成；真实供应商未接入。"},
+        {"layer": "frontend", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "| 通讯录、部门、标签、名单 |", "description": "核查报告明确记录通讯录和投放无前端入口。"}
+      ],
+      "nextWave": "Wave 4"
+    },
+    {
+      "id": "administration",
+      "title": "管理",
+      "requirementIds": ["R19-01", "R19-03", "R20-01", "R20-02", "R20-03", "R22-01", "R22-11", "R22-12"],
+      "backend": "partial",
+      "frontend": "not_started",
+      "flow": "not_started",
+      "production": "not_started",
+      "status": "partial",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R19-01 |", "description": "多用户与项目分配需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/tenant/TenantAdminController.java", "locator": "public class TenantAdminController", "description": "租户生命周期管理后端接口已存在。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/tenant/engine/EngineInstanceAdminController.java", "locator": "public class EngineInstanceAdminController", "description": "引擎实例运营接口已存在。"},
+        {"layer": "frontend", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "**运营后台**", "description": "核查报告记录运营后台仍待产品化。"}
+      ],
+      "nextWave": "Wave 6"
+    },
+    {
+      "id": "production-deployment",
+      "title": "生产部署",
+      "requirementIds": ["R20-11", "R23-08", "R23-09", "R23-10", "R23-11", "R23-12"],
+      "backend": "partial",
+      "frontend": "not_started",
+      "flow": "not_started",
+      "production": "not_started",
+      "status": "not_started",
+      "evidence": [
+        {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R20-11 |", "description": "本地私有化部署需求已编号。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/deploy/private/docker-compose.private.yml", "locator": "services:", "description": "现有私有开发部署提供基础，但不是 Production Compose。"},
+        {"layer": "production", "kind": "audit", "path": "platform/README.md", "locator": "当前仍不能宣称正式 production-ready", "description": "仓库状态明确记录生产代码已存在，但真实 Release 和四平台矩阵仍未完成。"},
+        {"layer": "traceability", "kind": "traceability-record", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "生产部署路径、TLS、mTLS", "description": "核查报告记录生产部署和供应链门禁尚未闭环。"}
+      ],
+      "nextWave": "Wave 0"
+    }
+  ]
+}

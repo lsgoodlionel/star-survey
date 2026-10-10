@@ -11,6 +11,7 @@
 ``PUBGW_STATE_DIR``         幂等结果 SQLite 所在目录（必填）
 ``PUBGW_HOST``              监听地址，缺省 127.0.0.1（容器里设为 0.0.0.0）
 ``PUBGW_PORT``              监听端口，缺省 8080
+``PUBGW_PUBLIC_URL``        Preview 签名访问入口的外部基址（反向代理后的 HTTPS 地址）
 ``PUBGW_RESULT_TTL_SECONDS``     完整回执的留存期，缺省 7 天，下限 24 小时
 ``PUBGW_TOMBSTONE_TTL_SECONDS``  墓碑的留存期，缺省 90 天，不得短于回执留存期
 ``PUBGW_INVITATION_TTL_SECONDS`` 带邀请码的回执的留存期，缺省 24 小时，下限 2 小时，
@@ -34,14 +35,14 @@ import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Mapping, Optional
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from .attachments import ATTACHMENT_PATH, AttachmentReadService, AttachmentStream
 from .auth import check_secret
 from .engines import ConfigError, EngineConfig, load_engines
 from .responses import READ_PATH, ResponseReadService
 from .uploads import UPLOADS_PATH, UploadReadService
-from .service import PublishService, Response
+from .service import PreviewOperationStore, PublishService, Response
 from .store import RESULTS_FILE, PruneScheduler, ResultStore, Retention, retention_from_env
 
 log = logging.getLogger("pubgw.server")
@@ -54,6 +55,11 @@ READ_TIMEOUT_SECONDS = 30
 EXIT_CONFIG = 2
 
 PUBLISH_PATH = "/v1/publish"
+PREVIEW_PATH = "/v1/preview"
+PREVIEW_ACTIVATE_PATH = "/v1/preview/activate"
+PREVIEW_STATUS_PATH = "/v1/preview/status"
+PREVIEW_CLOSE_PATH = "/v1/preview/close"
+PREVIEW_ACCESS_PATH = "/v1/preview/access"
 CLOSE_PATH = "/v1/close"
 DRIFT_CHECK_PATH = "/v1/drift-check"
 REVOKE_PATH = "/v1/participants/revoke"
@@ -61,6 +67,10 @@ HEALTH_PATH = "/healthz"
 #: POST 路径 → PublishService 上的处理方法名（契约 v1、v1.2 与 v1.4）。
 POST_ROUTES = {
     PUBLISH_PATH: "publish",
+    PREVIEW_PATH: "preview",
+    PREVIEW_ACTIVATE_PATH: "activate_preview",
+    PREVIEW_STATUS_PATH: "preview_status",
+    PREVIEW_CLOSE_PATH: "close_preview",
     CLOSE_PATH: "close",
     DRIFT_CHECK_PATH: "drift_check",
     REVOKE_PATH: "revoke_participant",
@@ -79,6 +89,7 @@ class Settings:
     host: str
     port: int
     retention: Retention
+    preview_public_url: str
 
 
 def load_settings(env: Mapping[str, str]) -> Settings:
@@ -106,6 +117,8 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         host=env.get("PUBGW_HOST", "") or DEFAULT_HOST,
         port=_port(env.get("PUBGW_PORT", "")),
         retention=_retention(env),
+        preview_public_url=env.get("PUBGW_PUBLIC_URL", "") or
+                           "http://127.0.0.1:{}".format(_port(env.get("PUBGW_PORT", ""))),
     )
 
 
@@ -133,6 +146,8 @@ def build_service(settings: Settings, store: Optional[ResultStore] = None) -> Pu
         engines=settings.engines,
         store=store if store is not None else build_store(settings),
         secret=settings.secret,
+        preview_operations=PreviewOperationStore(os.path.join(settings.state_dir, "preview-operations.sqlite3")),
+        preview_public_url=settings.preview_public_url,
     )
 
 
@@ -180,6 +195,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = self._path()
         if path == HEALTH_PATH:
             self._send(Response(200, _json({"status": "ok"})))
+        elif path == PREVIEW_ACCESS_PATH:
+            self._send(self.server.service.preview_access(parse_qs(urlsplit(self.path).query, keep_blank_values=True)))
         elif path in POST_ROUTES or path in (READ_PATH, UPLOADS_PATH, ATTACHMENT_PATH):
             self._method_not_allowed("POST")
         else:
@@ -257,7 +274,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(response.body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        for name, value in (extra_headers or {}).items():
+        headers = dict(response.headers or {})
+        headers.update(extra_headers or {})
+        for name, value in headers.items():
             self.send_header(name, value)
         self.end_headers()
         self.wfile.write(response.body)

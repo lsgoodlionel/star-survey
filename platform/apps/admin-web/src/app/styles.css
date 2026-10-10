@@ -23,7 +23,9 @@ input {
 
 button:focus-visible,
 textarea:focus-visible,
-input:focus-visible {
+input:focus-visible,
+a:focus-visible,
+summary:focus-visible {
   outline: 3px solid #0b6bcb;
   outline-offset: 2px;
 }
@@ -35,34 +37,268 @@ input:focus-visible {
 }
 
 .app-header {
+  position: relative;
+  z-index: 40;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 22px;
   padding: 0 20px;
   color: #fff;
   background: #164e63;
   border-bottom: 1px solid #0e3d4d;
 }
 
-.account-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.app-brand {
+  flex: 0 0 auto;
+  color: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  text-decoration: none;
 }
 
-.account-actions button {
-  width: 34px;
-  height: 34px;
+.app-navigation {
+  align-self: stretch;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.app-navigation a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: #e7f3f6;
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+}
+
+.app-navigation a:hover {
+  color: #fff;
+  background: rgb(255 255 255 / 8%);
+  border-bottom-color: #8ec7d4;
+}
+
+.app-navigation svg,
+.app-navigation-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+.app-navigation-toggle {
+  display: none;
+}
+
+.account-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.account-menu {
+  position: relative;
+}
+
+.account-menu > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.account-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.account-menu > summary small {
+  color: #bcd7de;
+}
+
+.account-menu-panel {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  width: 280px;
+  padding: 14px;
+  color: #223238;
+  background: #fff;
+  border: 1px solid #aab8bd;
+  border-radius: 6px;
+  box-shadow: 0 12px 34px rgb(18 38 46 / 22%);
+}
+
+.account-menu-panel strong {
+  font-size: 13px;
+}
+
+.account-menu-panel dl {
   display: grid;
-  place-items: center;
-  color: inherit;
-  background: transparent;
-  border: 1px solid #91b7c4;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.account-menu-panel dl div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.account-menu-panel dt {
+  color: #5d6b70;
+  font-size: 12px;
+}
+
+.account-menu-panel dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.account-menu-panel button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 10px;
+  color: #223238;
+  background: #fff;
+  border: 1px solid #87989e;
   border-radius: 4px;
 }
 
 .app-content {
   min-width: 0;
+}
+
+.survey-shell {
+  min-width: 0;
+  min-height: calc(100vh - 52px);
+  background: #fff;
+}
+
+.survey-shell-header {
+  background: #fff;
+  border-bottom: 1px solid #cbd5d8;
+}
+
+.survey-breadcrumb {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 20px 0;
+  overflow-x: auto;
+  color: #5b6b71;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.survey-breadcrumb > * + *::before {
+  margin-right: 7px;
+  color: #8a989d;
+  content: '/';
+}
+
+.survey-breadcrumb a {
+  color: #315864;
+  text-decoration: none;
+}
+
+.survey-shell-heading {
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 8px 20px 12px;
+}
+
+.survey-shell-heading h1 {
+  margin: 0;
+  color: #182b31;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.survey-shell-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 6px;
+  color: #5a6b71;
+  font-size: 13px;
+}
+
+.survey-unsaved {
+  color: #8a4b00;
+  font-weight: 600;
+}
+
+.survey-workspace-return {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  color: #244b58;
+  text-decoration: none;
+  border: 1px solid #a9c1c8;
+  border-radius: 4px;
+}
+
+.survey-workspace-return svg,
+.survey-workflow-tabs svg {
+  width: 17px;
+  height: 17px;
+}
+
+.survey-workflow-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 20px;
+  overflow-x: auto;
+}
+
+.survey-workflow-tabs a {
+  min-height: 44px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  color: #44565d;
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+}
+
+.survey-workflow-tabs a[aria-current='page'] {
+  color: #0e566a;
+  background: #edf6f8;
+  border-bottom-color: #0e6b82;
+  font-weight: 600;
+}
+
+.survey-shell-loading {
+  padding: 28px;
+  color: #52636b;
+}
+
+.embedded-page-toolbar {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 20px;
+  color: #52636b;
+  border-bottom: 1px solid #d8dfe1;
+  font-size: 13px;
 }
 
 .workspace-empty {
@@ -112,4 +348,95 @@ input:focus-visible {
 
 [role='alert'] {
   color: #b42318;
+}
+
+@media (max-width: 819px) {
+  .app-header {
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  .app-brand {
+    margin-right: auto;
+  }
+
+  .app-navigation-toggle {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    padding: 0;
+    color: #fff;
+    background: transparent;
+    border: 1px solid #85aeb9;
+    border-radius: 4px;
+  }
+
+  .app-navigation {
+    position: absolute;
+    top: 51px;
+    left: 0;
+    width: min(320px, 100%);
+    display: none;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0;
+    padding: 8px;
+    background: #164e63;
+    border-right: 1px solid #0e3d4d;
+    border-bottom: 1px solid #0e3d4d;
+    box-shadow: 0 14px 28px rgb(19 49 59 / 22%);
+  }
+
+  .app-navigation[data-open='true'] {
+    display: flex;
+  }
+
+  .app-navigation a {
+    min-height: 44px;
+    border-bottom: 0;
+  }
+
+  .account-menu > summary small {
+    display: none;
+  }
+
+  .survey-shell-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .survey-workspace-return {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 520px) {
+  .app-brand {
+    font-size: 15px;
+  }
+
+  .account-menu > summary span {
+    display: none;
+  }
+
+  .account-menu-panel {
+    position: fixed;
+    top: 52px;
+    right: 8px;
+    width: min(280px, calc(100vw - 16px));
+  }
+
+  .survey-breadcrumb,
+  .survey-shell-heading,
+  .survey-workflow-tabs {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .survey-shell-heading h1 {
+    font-size: 20px;
+  }
 }

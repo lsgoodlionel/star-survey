@@ -1,0 +1,80 @@
+{
+  "activePlan": "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md",
+  "deliveryManifest": "docs/agent/HARNESS_DELIVERY.json",
+  "deliverySyncPaths": [
+    "AGENTS.md",
+    "docs/agent/AUTONOMY.md",
+    "docs/agent/HARNESS_DELIVERY.json",
+    "docs/agent/PROGRESS.md",
+    "docs/agent/PROJECT_MEMORY.md",
+    "docs/agent/reviews/2026-10-10-task-8-dx-ci.md",
+    "docs/agent/reviews/2026-10-10-task-8-security.md",
+    "docs/agent/reviews/2026-10-10-task-8-whole-branch.md",
+    "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md"
+  ],
+  "documentation": {
+    "statusMarkerPaths": [
+      "AGENTS.md",
+      "docs/agent/AUTONOMY.md",
+      "docs/agent/PROJECT_MEMORY.md"
+    ]
+  },
+  "expectedRepository": "lsgoodlionel/star-survey",
+  "fixture": {
+    "baseline": "baseline\n",
+    "expected": "baseline\nsmoke-ok\n",
+    "path": "tests/fixtures/real_executor_smoke.txt",
+    "planPath": "docs/superpowers/plans/real-executor-smoke.md"
+  },
+  "historyBoundary": {
+    "allowedShallowCommits": [
+      "4c20c68033c8e37140f26af80a65f659b40f8a45"
+    ],
+    "trustedHeadRefs": [
+      "refs/remotes/limesurvey-fork/master"
+    ]
+  },
+  "ledger": "docs/agent/PROGRESS.md",
+  "repositoryAttestation": {
+    "provider": "github-artifact-attestation",
+    "signerWorkflow": ".github/workflows/agent-governance.yml",
+    "sourceRef": "refs/heads/main"
+  },
+  "secretPolicy": {
+    "allowlist": [
+      ".env.example",
+      "**/.env.example",
+      "editor/.env",
+      "editor/.env.*",
+      "**/tests/fixtures/**"
+    ],
+    "patterns": [
+      ".env",
+      ".env.*",
+      "**/.env",
+      "**/.env.*",
+      ".aws",
+      ".aws/**",
+      "**/.aws",
+      "**/.aws/**",
+      ".ssh",
+      ".ssh/**",
+      "**/.ssh",
+      "**/.ssh/**",
+      "secrets/**",
+      "**/secrets/**",
+      "id_rsa*",
+      "**/id_rsa*",
+      "id_ed25519*",
+      "**/id_ed25519*",
+      "*.pem",
+      "**/*.pem",
+      "*.key",
+      "**/*.key",
+      "application/config/config.php",
+      "application/config/security.php",
+      "application/config/allowed_hosts.php"
+    ]
+  },
+  "version": 1
+}

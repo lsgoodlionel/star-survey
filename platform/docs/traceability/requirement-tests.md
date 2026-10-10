@@ -39,10 +39,31 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
 `requirement=`，凡是声明了需求归属的主题，本表里必须有它的测试证据——新加主题而不补证据，
 校验直接红。
 
-截至 2026-10-09，校验器自身 **72 tests** 通过；索引含 **305** 条需求，机器登记 **80** 条证据、
-覆盖 **37** 条需求，自有源码引用 **95** 个需求编号，并已与 02 矩阵对账通过。
+截至 2026-10-09，校验器自身 **72 tests** 通过；索引含 **305** 条需求，机器登记 **84** 条证据、
+覆盖 **40** 条需求，自有源码引用 **114** 个需求编号，并已与 02 矩阵对账通过。
+
+产品化的人读基线现统一为：
+
+- [`platform/docs/productization/frontend-backend-requirements.md`](../productization/frontend-backend-requirements.md)
+- [`platform/docs/productization/product-blueprint.md`](../productization/product-blueprint.md)
+- [`platform/docs/productization/release-roadmap.md`](../productization/release-roadmap.md)
+- [`platform/docs/productization/capability-map.md`](../productization/capability-map.md)
+
+需求矩阵审计起点保持 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入。
+
+能力摘要（机器事实）：accepted=0，partial=11，not_started=1，external=0。
+
+前三份 canonical 文档只定义需求、IA 和发布门禁；它们不是测试通过证明，也不能代替 `capabilities.json` 中需求、后端、
+前端、流程、生产、追溯六层强类型证据。
 
 ### 管理端首期的局部断言索引
+
+Task 7 将证据分为三层：**代码存在**由下列定位符与组件测试证明；**自动化通过**由 Fix Round 1 frontend
+20 files / 174 tests、typecheck、lint、build、Python gate 40 tests、运行中 demo Chromium gate 和 fresh Playwright 11/11，
+以及原 Task 7 backend 1421 tests 证明；**用户可见**由
+`docs/audits/2026-10-09-product-alignment/07-admin-workspace-*.png` 四档人工检查证明固定名称可见且无明显遮挡、截断或入口混淆。
+截图不证明 `scrollWidth`、44px 或焦点几何；这些由 Playwright DOM 行为测量。运行中 demo 另由 Chromium 自动遍历固定三层并拒绝
+E2E 时间戳资源。这些证据只收口 Phase A+B，不将 `820–1179px` 的 Phase C 双栏 + 检查器、其他 Phase C/D 或 production SSL 部署标为完成。
 
 当前定位符校验器只解析 `.py`、`.java`、`.php` 和 `.sh`，尚不能把 Vitest 的 `.ts/.tsx` 符号加入
 上面的 80 条机器登记。下列补充索引给出可直接核对的测试名，并明确只证明复合需求中的局部断言：
@@ -54,8 +75,16 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
   和桌面 E2E，证明“先预览、坏行定位、选择后导入”子链路。
 - `R01-04`：`definition.test.ts` 的 `editsOnlyTheSelectedBasicQuestion`、
   `keepsQuestionAndGroupUuidsStableWhileReordering`，证明基础字段编辑与稳定排序；不证明拖拽排序或高级题型编辑。
-- `R01-07`：`PreviewPage.test.tsx` 的 `labelsTheRendererAsDraftPreviewAndNeverCallsTheAnswerEngine`，以及桌面
-  E2E 的草稿预览、发布成功和不可变版本查看，证明这些子项；不证明真实 LimeSurvey 运行时预览或关闭问卷。
+- `R01-07`：`PreviewPage.test.tsx` 覆盖防重复创建、轮询失败恢复、到期收口、同 request ID
+  重试、终态新建和旧 session 审计。`e2e/authoring.spec.ts` 等待真实预览事件投递后，直接比较
+  `survey_published_version`、`survey_question_binding`、official route、`engine_outbox` 和
+  `response_projection` 五项前后均为 0，再完成审批发布。桌面与 Pixel 7 截图位于
+  `platform/docs/productization/evidence/task4/`。
+- `R05-01`／`R05-07`／`R05-08`：发布后管理端真实创建投放链接；浏览器等待二维码像素完成加载，
+  用 jsQR 解码并与 create response 的作答 URL 逐字比对，再经短链进入 LimeSurvey 正式作答。
+- `R06-01`／`R06-02`：正式作答后通过有界 UI 手动刷新 eventual 观测摘要为 1 和明细值可见，
+  不再等待固定缓存时间；随后解包真实 CSV 制品，校验 UTF-8 BOM、CRLF、字段字典映射、
+  一条正式答卷及其 `A1` 值。其他导出格式不因该旅程提升为完整验收。
 - `R01-08`：`EditorPage.test.tsx` 的 `savesWithTheCurrentDraftVersionAndAdoptsTheReturnedVersion`、
   `keepsLocalChangesWhenTheServerReturns409`、`recoversTheInMemoryDraftAfterReauthentication`，证明版本保存、
   冲突不覆盖与同页内存恢复；不证明多人实时协同或字段级合并。
@@ -79,7 +108,10 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
   隐藏敏感控件；不代表完整安全供应链与审计要求。
 - `R23-12`：`platform/deploy/test/run-admin-web-e2e.sh` 串起浏览器、平台、平台库、发布网关和引擎库，并由
   `AdminWebGateTest.test_verify_evidence_rejects_a_platform_or_engine_mismatch` 反向证明任一段不一致会失败；这是
-  管理端首期纵向验收证据，不把 305 条需求整体视为完成。
+  管理端首期纵向验收证据。Task 7 还覆盖稳定资源名、请求参数、同一问卷往返、归档恢复、
+  768/819/820/1024/1440/Pixel 7 DOM 无溢出、44px 和键盘流程，并在 Playwright 成功 marker、平台 API/DB、网关与引擎 DB
+  全部核对成功后才归档根项目；运行中 demo 的浏览器检查遍历固定三层并拒绝 E2E 时间戳资源。不把 305 条需求整体视为完成，
+  也不据此声称 `820–1179px` 的 Phase C 双栏 + 检查器已交付。
 
 ## WP-01 创建与编辑
 
@@ -88,6 +120,7 @@ cd platform/tools/traceability && python3 -m reqtrace.cli report
 | R01-02 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/survey/SurveyTextImportTest.java::previewSplitsTheTextIntoQuestionsWithTheirRecognisedTypeOptionsAndLineNumbers` | 多题多选项可预览，题号与顺序一致 |
 | R01-02 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/survey/SurveyTextImportTest.java::aBadLineIsReportedWithItsLineNumberAndDoesNotStopTheRestOfTheBatch` | 异常格式可定位到行，不中断整批 |
 | R01-02 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/survey/SurveyTextImportTest.java::questionsWithBlockingProblemsArePreviewedButMarkedNotImportable` | 先预览后落库 |
+| R01-07 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 预览事件投递后正式 version/binding/route/outbox/response 五项前后不变，再显式结束与发布 |
 | R01-09 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/survey/PublishApprovalFlowTest.java::anApprovedRequestLetsTheApplicantPublishExactlyTheApprovedVersion` | 批准绑定提交时的草稿版本 |
 | R01-09 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/survey/PublishApprovalFlowTest.java::editingTheDraftAfterApprovalVoidsTheApprovalAndPublishIsRefused` | 批准后改稿即失效 |
 | R01-09 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/survey/PublishApprovalApiTest.java::aSubAccountMustGoThroughApprovalToPublishOverTheApi` | 子账户经 API 也绕不过审批 |
@@ -154,6 +187,7 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | 需求ID | 层级 | 证据定位符 | 说明 |
 |---|---|---|---|
 | R05-01 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryLinkTest.java::theLinkPointsAtTheEnginesurveyAndCarriesTheSignedParameters` | 投放链接带签名参数 |
+| R05-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 二维码像素可解码且 payload 等于刚创建的作答 URL，再经链接完成正式作答 |
 | R05-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliverySendTest.java::aCrashMidTaskResumesWithoutSendingAnythingTwice` | 批量投放：恢复不重发 |
 | R05-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReceiptTest.java::aDeliveredReceiptIsCountedOnceNoMatterHowOftenItIsRedelivered` | 回执重复投递只计一次 |
 | R05-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReceiptTest.java::aReceiptWithoutAValidSignatureIsRejectedAndLeavesNoTrace` | 渠道商回执验签 |
@@ -172,6 +206,8 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 
 | 需求ID | 层级 | 证据定位符 | 说明 |
 |---|---|---|---|
+| R06-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 正式作答经引擎事件投影后，通过有界 UI 刷新在摘要和明细页可见 |
+| R06-02 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 下载的 ZIP 含 UTF-8 BOM/CRLF CSV，字段字典映射到一条真实答卷值 `A1` |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::valueLabelsAreAttachedToBothNumericAndShortStringVariables` | SPSS 值标签 |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::cellsRoundTripWithSystemMissingForBlanksAndUtf8SafeTruncation` | 缺失值与 UTF-8 截断 |
 | R06-03 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportSavTest.java::theBundleHasTheDatasetItsVariableDictionaryAndTheUsualSideSheets` | 整条作业链路产出 SPSS 包与变量字典 |

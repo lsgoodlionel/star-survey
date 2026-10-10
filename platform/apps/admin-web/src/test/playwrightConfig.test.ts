@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import RunRootReporter from '../../e2e/runRootReporter';
 
 const originalBaseUrl = process.env.ADMIN_WEB_BASE_URL;
 const originalResultsDir = process.env.ADMIN_WEB_TEST_RESULTS_DIR;
@@ -28,13 +32,40 @@ describe('Playwright result artifact location', () => {
     expect(config.outputDir).toBe('./test-results');
   });
 
-  test('runs the mobile project only after the desktop journey succeeds', async () => {
+  test('runs dashboard after desktop and mobile only after dashboard succeeds', async () => {
     process.env.ADMIN_WEB_BASE_URL = 'http://127.0.0.1:4173';
 
     const config = await loadConfig();
+    const dashboard = config.projects?.find((project) => project.name === 'chromium-dashboard');
     const mobile = config.projects?.find((project) => project.name === 'chromium-mobile');
 
-    expect(mobile?.dependencies).toEqual(['chromium-desktop']);
+    expect(dashboard?.dependencies).toEqual(['chromium-desktop']);
+    expect(dashboard?.testMatch).toEqual(/dashboard\.spec\.ts/);
+    expect(mobile?.dependencies).toEqual(['chromium-dashboard']);
+  });
+
+  test('registers the run-root reporter after the console reporter', async () => {
+    process.env.ADMIN_WEB_BASE_URL = 'http://127.0.0.1:4173';
+
+    const config = await loadConfig();
+
+    expect(config.reporter).toEqual([
+      ['line'],
+      ['./e2e/runRootReporter.ts'],
+    ]);
+  });
+
+  test('reporter writes a success marker without archiving the validated root', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'admin-web-reporter-'));
+    const rootId = '11111111-1111-4111-8111-111111111111';
+    process.env.ADMIN_WEB_TEST_RESULTS_DIR = directory;
+    await writeFile(join(directory, 'run-root-resource-id.txt'), `${rootId}\n`);
+
+    const result = await new RunRootReporter().onEnd({ status: 'passed' } as never);
+
+    expect(result).toBeUndefined();
+    expect(await readFile(join(directory, 'playwright-suite-success.txt'), 'utf8')).toBe('passed\n');
+    expect(await readFile(join(directory, 'run-root-resource-id.txt'), 'utf8')).toBe(`${rootId}\n`);
   });
 });
 

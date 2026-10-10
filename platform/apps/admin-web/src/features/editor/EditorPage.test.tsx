@@ -9,6 +9,7 @@ import { AppProviders } from '../../app/App';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
+import { resourceQueryKey } from '../../shared/api/resources';
 import { surveyDetailQueryKey, surveyDraftQueryKey } from '../../shared/api/surveys';
 import gatewayFixture from '../../test/fixtures/publish-gateway.json';
 import { server } from '../../test/server';
@@ -38,6 +39,8 @@ const editableCapabilities = {
   canSubmitApproval: true,
   canPublishDirectly: false,
   canApprovePublish: false,
+  canArchive: true,
+  canRestore: false,
 };
 
 type RequestHandler = (request: ApiRequest<unknown>) => unknown | Promise<unknown>;
@@ -108,7 +111,7 @@ describe('EditorPage', () => {
       'href',
       `/surveys/${surveyId}/import`,
     );
-    expect(screen.getByRole('link', { name: '草稿预览' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '快速预览' })).toHaveAttribute(
       'href',
       `/surveys/${surveyId}/preview`,
     );
@@ -268,6 +271,90 @@ describe('EditorPage', () => {
     expect(await screen.findByText('已保存版本 6')).toBeInTheDocument();
 
     expect(writes.map((body) => body.expectedVersion)).toEqual([4, 5]);
+  });
+
+  test('synchronizesTheSavedTitleAcrossSurveyAndWorkspaceCaches', async () => {
+    const api = editorApi({
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => ({
+        surveyId,
+        version: 5,
+        definition: (request.body as Record<string, unknown>).definition,
+      }),
+    });
+    const rendered = renderEditor(api);
+    const pathKey = ['resource-path', 'tenant-a', surveyId] as const;
+    const listKey = resourceQueryKey('tenant-a', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    const surveyResource = {
+      id: surveyId,
+      kind: 'survey' as const,
+      parentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: overview.title,
+      createdAt: '2026-10-08T08:00:00Z',
+      updatedAt: '2026-10-09T08:00:00Z',
+      archivedAt: null,
+    };
+
+    const title = await screen.findByLabelText('标题');
+    rendered.queryClient.setQueryData(pathKey, [surveyResource]);
+    rendered.queryClient.setQueryData(listKey, {
+      pages: [{ items: [surveyResource], nextCursor: null }],
+      pageParams: [null],
+    });
+    fireEvent.change(title, { target: { value: '保存后的新标题' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    expect(await screen.findByText('已保存版本 5')).toBeInTheDocument();
+    expect(rendered.queryClient.getQueryData(surveyDetailQueryKey('tenant-a', surveyId))).toMatchObject({
+      title: '保存后的新标题',
+      draftVersion: 5,
+    });
+    expect(rendered.queryClient.getQueryData(pathKey)).toMatchObject([
+      { id: surveyId, name: '保存后的新标题' },
+    ]);
+    expect(rendered.queryClient.getQueryData(listKey)).toMatchObject({
+      pages: [{ items: [{ id: surveyId, name: '保存后的新标题' }] }],
+    });
+  });
+
+  test('doesNotPolluteSurveyOrWorkspaceCachesWhenTitleSaveFails', async () => {
+    const api = editorApi({
+      [`PUT /v1/surveys/${surveyId}/draft`]: () => {
+        throw new Error('保存失败');
+      },
+    });
+    const rendered = renderEditor(api);
+    const pathKey = ['resource-path', 'tenant-a', surveyId] as const;
+    const listKey = resourceQueryKey('tenant-a', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    const surveyResource = {
+      id: surveyId,
+      kind: 'survey' as const,
+      parentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: overview.title,
+      createdAt: '2026-10-08T08:00:00Z',
+      updatedAt: '2026-10-09T08:00:00Z',
+      archivedAt: null,
+    };
+
+    const title = await screen.findByLabelText('标题');
+    rendered.queryClient.setQueryData(pathKey, [surveyResource]);
+    rendered.queryClient.setQueryData(listKey, {
+      pages: [{ items: [surveyResource], nextCursor: null }],
+      pageParams: [null],
+    });
+    fireEvent.change(title, { target: { value: '不应进入缓存的标题' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('保存失败');
+    expect(rendered.queryClient.getQueryData(surveyDetailQueryKey('tenant-a', surveyId))).toMatchObject({
+      title: overview.title,
+      draftVersion: overview.draftVersion,
+    });
+    expect(rendered.queryClient.getQueryData(pathKey)).toMatchObject([
+      { id: surveyId, name: overview.title },
+    ]);
+    expect(rendered.queryClient.getQueryData(listKey)).toMatchObject({
+      pages: [{ items: [{ id: surveyId, name: overview.title }] }],
+    });
   });
 
   test('usesTheSavedVersionWhenImportMountsAgainstTheProductionFreshCache', async () => {
@@ -586,9 +673,12 @@ describe('EditorPage', () => {
     expect(screen.queryByRole('dialog', { name: '未保存的修改' })).not.toBeInTheDocument();
   });
 
-  test('switchesOutlineEditorAndPropertiesAsTabsOnNarrowScreens', async () => {
+  test.each([
+    [819, true],
+    [820, false],
+  ])('uses the approved tab boundary at %ipx', async (width, expectsTabs) => {
     vi.stubGlobal('matchMedia', (query: string) => ({
-      matches: query === '(max-width: 760px)',
+      matches: query === '(max-width: 819px)' && width <= 819,
       media: query,
       onchange: null,
       addEventListener: vi.fn(),
@@ -599,7 +689,12 @@ describe('EditorPage', () => {
     }));
     renderEditor(editorApi(), `/surveys/${surveyId}/edit?question=${singleUuid}`);
 
-    expect(await screen.findByRole('tablist', { name: '编辑区域' })).toBeInTheDocument();
+    await screen.findByRole('heading', { name: '问卷大纲' });
+    if (!expectsTabs) {
+      expect(screen.queryByRole('tablist', { name: '编辑区域' })).not.toBeInTheDocument();
+      return;
+    }
+    expect(screen.getByRole('tablist', { name: '编辑区域' })).toBeInTheDocument();
     expect(screen.getByRole('tabpanel', { name: '大纲' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: '编辑' }));
     expect(screen.getByRole('tabpanel', { name: '编辑' })).toBeInTheDocument();

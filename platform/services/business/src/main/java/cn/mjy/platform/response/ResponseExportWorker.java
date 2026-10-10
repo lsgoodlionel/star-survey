@@ -193,8 +193,9 @@ public class ResponseExportWorker {
     }
 
     private Run run(TenantId tenant, UUID token, ExportJob job) {
-        ExportPlan plan = json.readValue(job.planJson(), ExportPlan.class);
-        List<String> states = json.readValue(job.filterJson(), ExportFilter.class).states();
+        ExportFilter filter = json.readValue(job.filterJson(), ExportFilter.class);
+        ExportPlan plan = json.readValue(job.planJson(), ExportPlan.class).selectVersions(filter.versions());
+        List<String> states = filter.states();
         return new Run(tenant, job.id(), token, job, plan, new ExportLayout(plan), states,
                 job.createdAt().atOffset(ZoneOffset.UTC));
     }

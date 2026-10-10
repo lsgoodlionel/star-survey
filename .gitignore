@@ -10,6 +10,7 @@
 ## such as various IDE folders .idea .netbeans .vscode
 ## or development environment things like .vagrant etc
 .*
+!.agent-harness-install.json
 !.htaccess
 !.scrutinizer.yml
 !.bowerrc
@@ -285,3 +286,6 @@ docker/
 # Python 字节码（网关与工具链用 Python；容器里跑测试会生成，别进仓库）
 __pycache__/
 *.py[cod]
+
+# Raw autonomous engineering state and unsanitized evidence stay local.
+/var/agent-harness/

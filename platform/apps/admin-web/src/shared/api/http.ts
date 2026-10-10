@@ -27,6 +27,25 @@ interface ApiClientOptions {
   onUnauthorized?: (requestToken: string | null) => void | Promise<void>;
 }
 
+export async function withRequestTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  callerSignal?: AbortSignal | null,
+  timeoutMs = 15_000,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  const abort = () => controller.abort();
+  if (callerSignal?.aborted) controller.abort();
+  else callerSignal?.addEventListener('abort', abort, { once: true });
+
+  try {
+    return await operation(controller.signal);
+  } finally {
+    window.clearTimeout(timeout);
+    callerSignal?.removeEventListener('abort', abort);
+  }
+}
+
 export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   const fetchImpl = options.fetchImpl ?? fetch;
   const locationOrigin = new URL(options.locationOrigin ?? window.location.origin).origin;
@@ -34,38 +53,38 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   return {
     request: async <T>(request: ApiRequest<T>) => {
       const requestPath = resolveApiPath(request.path, locationOrigin);
-      const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), request.timeoutMs ?? 15_000);
-      const abort = () => controller.abort();
-      if (request.signal?.aborted) controller.abort();
-      else request.signal?.addEventListener('abort', abort, { once: true });
 
       try {
-        const token = options.getToken?.();
-        const headers = new Headers({ Accept: 'application/json' });
-        if (request.body !== undefined) headers.set('Content-Type', 'application/json');
-        if (token) headers.set('Authorization', `Bearer ${token}`);
+        return await withRequestTimeout(
+          async (signal) => {
+            const token = options.getToken?.();
+            const headers = new Headers({ Accept: 'application/json' });
+            if (request.body !== undefined) headers.set('Content-Type', 'application/json');
+            if (token) headers.set('Authorization', `Bearer ${token}`);
 
-        const response = await fetchImpl(requestPath, {
-          method: request.method ?? 'GET',
-          headers,
-          body: request.body === undefined ? undefined : JSON.stringify(request.body),
-          credentials: 'same-origin',
-          signal: controller.signal,
-        });
-        if (response.status === 401) await options.onUnauthorized?.(token ?? null);
-        const payload = response.ok ? await readPayload(response) : await readErrorPayload(response);
-        if (response.status === 202 || !response.ok) throw apiErrorForStatus(response.status, payload);
+            const response = await fetchImpl(requestPath, {
+              method: request.method ?? 'GET',
+              headers,
+              body: request.body === undefined ? undefined : JSON.stringify(request.body),
+              credentials: 'same-origin',
+              signal,
+            });
+            if (response.status === 401) await options.onUnauthorized?.(token ?? null);
+            const payload = response.ok ? await readPayload(response) : await readErrorPayload(response);
+            if (response.status === 202 || !response.ok) {
+              throw apiErrorForStatus(response.status, payload);
+            }
 
-        return request.schema.parse(payload);
+            return request.schema.parse(payload);
+          },
+          request.signal,
+          request.timeoutMs,
+        );
       } catch (error) {
         if (error instanceof ApiError) throw error;
         if (error instanceof DOMException && error.name === 'AbortError') throw unavailableApiError();
         if (error instanceof TypeError) throw unavailableApiError();
         throw unexpectedApiError();
-      } finally {
-        window.clearTimeout(timeout);
-        request.signal?.removeEventListener('abort', abort);
       }
     },
   };

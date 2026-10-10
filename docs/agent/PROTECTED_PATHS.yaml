@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "secrets",
+      "patterns": [
+        ".env",
+        ".env.*",
+        "**/.env",
+        "**/.env.*",
+        "*.pem",
+        "**/*.pem",
+        "*.key",
+        "**/*.key",
+        "id_rsa*",
+        "id_ed25519*",
+        "**/id_rsa*",
+        "**/id_ed25519*",
+        ".ssh/**",
+        "**/.ssh/**",
+        ".aws/**",
+        "**/.aws/**",
+        "secrets/**",
+        "**/secrets/**",
+        "application/config/config.php",
+        "application/config/config.*.php",
+        "application/config/security.php",
+        "application/config/allowed_hosts.php",
+        "var/agent-harness/**"
+      ],
+      "operations": [
+        "add",
+        "modify",
+        "delete"
+      ],
+      "action": "deny"
+    },
+    {
+      "id": "production-release",
+      "patterns": [
+        "platform/deploy/production/**",
+        ".github/workflows/**"
+      ],
+      "operations": [
+        "add",
+        "modify",
+        "delete"
+      ],
+      "action": "approval_required"
+    },
+    {
+      "id": "migrations-auth",
+      "patterns": [
+        "platform/services/business/src/main/resources/db/migration/**",
+        "platform/services/business/src/main/java/cn/mjy/platform/shared/security/**",
+        "platform/services/business/src/main/java/cn/mjy/platform/shared/tenant/**",
+        "platform/services/business/src/main/java/cn/mjy/platform/engine/EventSignatureVerifier.java",
+        "platform/services/business/src/main/java/cn/mjy/platform/engine/EngineEventsSecurityConfig.java",
+        "platform/services/business/src/main/java/cn/mjy/platform/engine/EngineEventSignatureFilter.java",
+        "platform/services/business/src/main/java/cn/mjy/platform/engine/EngineEventKeys.java",
+        "platform/services/business/src/main/java/cn/mjy/platform/access/**",
+        "platform/services/business/src/main/java/cn/mjy/platform/identity/**",
+        "platform/services/business/src/main/java/cn/mjy/platform/tenant/**",
+        "platform/tools/publish-gateway/pubgw/auth.py",
+        "plugins/MjyRuntimePolicy/**",
+        "plugins/MjyQuestionExtensions/MjyChannelAuth.php"
+      ],
+      "operations": [
+        "add",
+        "modify",
+        "delete"
+      ],
+      "action": "approval_required"
+    },
+    {
+      "id": "control-plane-policy",
+      "patterns": [
+        "AGENTS.md",
+        "docs/agent/GATE_MATRIX.yaml",
+        "docs/agent/PROTECTED_PATHS.yaml",
+        "docs/agent/STATE_SCHEMA.json",
+        "docs/agent/AUTONOMY.md"
+      ],
+      "operations": [
+        "add",
+        "modify",
+        "delete"
+      ],
+      "action": "approval_required"
+    },
+    {
+      "id": "capability-map",
+      "patterns": [
+        "platform/docs/productization/capability-map.md"
+      ],
+      "operations": [
+        "add",
+        "modify",
+        "delete"
+      ],
+      "action": "generated",
+      "generator": [
+        "python3",
+        "platform/tools/productization/render_capabilities.py"
+      ]
+    },
+    {
+      "id": "normal-review",
+      "patterns": [
+        "**"
+      ],
+      "operations": [
+        "add",
+        "modify",
+        "delete"
+      ],
+      "action": "review_required"
+    }
+  ]
+}

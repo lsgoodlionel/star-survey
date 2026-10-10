@@ -2,6 +2,7 @@ package cn.mjy.platform.onboarding;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -53,6 +54,21 @@ class OnboardingApiTest {
     }
 
     @Test
+    void anOperatorCanRecoverTheLatestPlanByStableCode() throws Exception {
+        String body = planBody(5);
+        String code = JsonPath.read(body, "$.planCode");
+        publishPlan(body).andExpect(status().isCreated());
+        publishPlan(body).andExpect(status().isCreated());
+
+        mvc.perform(get(PLANS + "/" + code).header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.planCode").value(code))
+                .andExpect(jsonPath("$.version").value(2));
+        mvc.perform(get(PLANS + "/missing-plan").header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     void onlyOperatorsMayPublishPlans() throws Exception {
         TenantId tenant = fixtures.activeTenant();
 
@@ -61,6 +77,9 @@ class OnboardingApiTest {
                 .andExpect(status().isForbidden());
         mvc.perform(post(PLANS).contentType(MediaType.APPLICATION_JSON).content(planBody(5)))
                 .andExpect(status().isUnauthorized());
+        mvc.perform(get(PLANS + "/forbidden").header("Authorization", fixtures.userBearer(tenant)))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(PLANS + "/forbidden")).andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -127,8 +146,12 @@ class OnboardingApiTest {
     }
 
     private ResultActions publishPlan(long seats) throws Exception {
+        return publishPlan(planBody(seats));
+    }
+
+    private ResultActions publishPlan(String body) throws Exception {
         return mvc.perform(post(PLANS).header("Authorization", fixtures.operatorBearer())
-                .contentType(MediaType.APPLICATION_JSON).content(planBody(seats)));
+                .contentType(MediaType.APPLICATION_JSON).content(body));
     }
 
     private ResultActions onboard(TenantId tenant, String planId, String owner) throws Exception {

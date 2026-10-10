@@ -7,6 +7,7 @@ import cn.mjy.platform.engine.ResponseProjectionQuery;
 import cn.mjy.platform.engine.ResponseState;
 import cn.mjy.platform.response.ExportPlan.PlannedSource;
 import cn.mjy.platform.response.ExportRequest.ExportFilter;
+import cn.mjy.platform.response.ExportRequest.PublishedVersion;
 import cn.mjy.platform.response.ResponseExportRepository.NewJob;
 import cn.mjy.platform.response.ResponseSources.Source;
 import cn.mjy.platform.shared.TenantContext;
@@ -82,7 +83,7 @@ public class ResponseExportService {
         if (replay.isPresent()) {
             return replay.get();
         }
-        List<Source> surveySources = sources.sources(ctx, surveyId);
+        List<Source> surveySources = selectedSources(sources.sources(ctx, surveyId), spec.filter().versions());
         ExportPlan plan = tenantScope.call(ctx.tenantId(), () -> plan(surveySources));
         boolean reveal = fieldPolicies.forExport(ctx, surveyId, plan.sensitiveFieldnames()).revealsSensitiveFields();
         NewJob job = new NewJob(ctx.tenantId(), UUID.randomUUID(), surveyId, ctx.actorId(), spec.format(),
@@ -187,6 +188,15 @@ public class ResponseExportService {
                 .toList());
     }
 
+    private static List<Source> selectedSources(List<Source> surveySources, List<PublishedVersion> versions) {
+        if (versions == null || versions.isEmpty()) {
+            return surveySources;
+        }
+        return surveySources.stream()
+                .filter(source -> versions.stream().anyMatch(version -> version.value() == source.version()))
+                .toList();
+    }
+
     private static List<String> extensionQuestions(Source source) {
         if (source.extensionQuestions().size() > AnswerQuery.MAX_EXTENSION_QUESTIONS) {
             throw new InvalidResponseQueryException("version " + source.version() + " has more than "
@@ -241,7 +251,8 @@ public class ResponseExportService {
             if (template != null && !template.isEmpty() && !DEFAULT_TEMPLATE.equals(template)) {
                 throw new InvalidResponseQueryException("templateVersion must be empty or default");
             }
-            return new ExportSpec(surveyId, format, new ExportFilter(states(request.filter())));
+            return new ExportSpec(surveyId, format,
+                    new ExportFilter(states(request.filter()), versions(request.filter())));
         }
 
         private static List<String> states(ExportFilter filter) {
@@ -256,6 +267,18 @@ public class ResponseExportService {
                     .map(ResponseState::dbValue)
                     .filter(s -> requested.isEmpty() || requested.contains(s))
                     .toList();
+        }
+
+        private static List<PublishedVersion> versions(ExportFilter filter) {
+            List<PublishedVersion> requested =
+                    filter == null || filter.versions() == null ? List.of() : filter.versions();
+            if (requested.stream().anyMatch(version -> version == null || version.value() < 1)) {
+                throw new InvalidResponseQueryException(
+                        "filter.versions must contain positive published version numbers");
+            }
+            List<PublishedVersion> normalized = requested.stream().distinct()
+                    .sorted(java.util.Comparator.comparingInt(PublishedVersion::value)).toList();
+            return normalized.isEmpty() ? null : normalized;
         }
     }
 }

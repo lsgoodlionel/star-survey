@@ -1,0 +1,78 @@
+name: agent-governance
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  agent-governance-unit:
+    runs-on: ubuntu-24.04
+    env:
+      AGENT_HARNESS_CI: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Harden controlled Python directory chain
+        run: chmod go-w /opt/hostedtoolcache/Python "${pythonLocation%/*}" "$pythonLocation" "$pythonLocation/bin" "$pythonLocation/bin/python3.11"
+
+      - name: Verify controlled Python 3.11 entry
+        run: scripts/agent-harness --python --version 2>&1 | grep '^Python 3\.11\.'
+
+      - name: Validate Harness configuration
+        run: scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests -p 'test_config.py' -v
+
+      - name: Run Harness unit tests with deterministic fake tools
+        run: >-
+          scripts/agent-harness --python tools/agent-harness/run_tests.py
+          --exclude-substring linux_wrapper --fail-on-skip
+
+      - name: Run deterministic fault drills
+        run: scripts/agent-harness --python tools/agent-harness/drills/run_drills.py
+
+      - name: Scan governed commands for forbidden options
+        run: scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --check-forbidden-options
+
+      - name: Check plan and memory references
+        run: >-
+          scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --check-docs
+
+  agent-governance-integration:
+    needs: agent-governance-unit
+    runs-on: ubuntu-24.04
+    env:
+      AGENT_HARNESS_CI: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Harden controlled Python directory chain
+        run: chmod go-w /opt/hostedtoolcache/Python "${pythonLocation%/*}" "$pythonLocation" "$pythonLocation/bin" "$pythonLocation/bin/python3.11"
+
+      - name: Verify controlled Python 3.11 integration runtime
+        run: scripts/agent-harness --python --version 2>&1 | grep '^Python 3\.11\.'
+
+      - name: Prepare declared Docker integration fixture
+        run: docker pull python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+
+      - name: Run Linux wrapper integration tests with zero skips
+        run: >-
+          scripts/agent-harness --python tools/agent-harness/run_tests.py
+          --include-substring linux_wrapper --fail-on-skip --ci
+          --linux-image python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+          --docker /usr/bin/docker

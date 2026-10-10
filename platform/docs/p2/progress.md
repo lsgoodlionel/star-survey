@@ -1,3 +1,4 @@
+<!-- harness-delivery-status: fully_synchronized -->
 # P2 进度：通用问卷与本土入口
 
 更新：2026-10-08
@@ -655,7 +656,7 @@ Java 三次都是「标题少了 `[结构化作答]`」）。**一处例外**：
 - 浏览项目、文件夹和问卷资源树，创建项目、文件夹和空白中文问卷；动作显示以服务端返回的资源能力为准。
 - 编辑说明文字、单选、多选、短文本和长文本；未知字段与复杂题型只读并无损往返，保存使用 `draftVersion`
   乐观锁，409 时保留本地内容，401 重新认证时保留同租户同问卷的内存恢复稿。
-- 批量文本先预览，再按原始行号展示坏行、选择合法题目并确认导入；草稿预览明确标为“草稿预览”。
+- 批量文本先预览，再按原始行号展示坏行、选择合法题目并确认导入；本地草稿 renderer 明确标为“快速预览”。
 - 提交、批准、驳回、撤回发布审批，区分 `202` 待核对、失败、人工复核与孤儿引擎问卷；发布成功后查看
   不可变版本详情。
 - 桌面采用资源树和三栏编辑，窄屏切换为大纲／编辑／属性标签页；真实 Playwright 验证关键控件可达、
@@ -694,8 +695,72 @@ trace；gate 对事件字段、类型、URL 与长度做严格校验，并在 JS
 
 - **拖拽排序**：首期提供按钮式稳定排序与 UUID 保持，不含拖拽交互。
 - **高级题型**：复杂题型只读并无损保存，不含全部题型的可视化配置器。
-- **真实运行时预览**：当前是本地“草稿预览”，不声称与 LimeSurvey 作答运行时一致。
+- **真实运行时预览**：当前只有“快速预览”（本地草稿 renderer），不声称与 LimeSurvey 作答运行时一致。
 - **专门的屏幕阅读器审计**：已有语义、键盘、焦点和状态播报的基础自动化检查，但没有独立的读屏器
   人工或专项自动化审计。
 
 这些证据只证明上述工程切片和对应子断言，不把 R01、R19 或 R23 的整条复合需求标为 Accepted。
+
+## 管理端产品对齐 Phase A+B（2026-10-09）
+
+- **代码存在**：稳定 demo/E2E 资源、工作台搜索/过滤/排序、归档恢复、AppShell/SurveyShell、`<820px` tabs、44px 主操作，以及仅在浏览器和平台/网关/引擎最终核对全绿后归档根项目，均已落库；现有本地草稿 renderer 统一标为“快速预览”，标题保存同步问卷页头、面包屑和工作区 cache，项目/文件夹改名同步当前路径。
+- **自动化通过**：Final fix wave 管理端 20 files / 177 tests、typecheck、lint、build 和 Python admin-web gate 67 tests 通过；原 Task 7 backend 1421 tests 保持记录；fresh real-stack Playwright 10/10 及最终全链路核对通过。真实 Chromium 对 768/819/820/1024/1440、焦点、对话框、44px 与 DOM overflow 做行为测量；运行中 `adminweb-demo` 巡检遍历 `客户体验研究 / 2026 Q4 / 品牌跟踪调查` 并拒绝 E2E 时间戳资源。
+- **用户可见**：768、1024、1440 和 Pixel 7 截图人工检查确认固定 demo 名称可见、无明显遮挡或截断，业务导航不链接 `/admin`。截图本身不作为 DOM overflow、44px 或焦点几何的证明。
+- **边界**：`820–1179px` 当前只保留现有布局并由 Task 7 保证不溢出；Phase C 约定的双栏 + 检查器仍未实现，Phase C/D 均保留为后续计划。生产 SSL 仅有部署前真实探测 gate，不是 production-ready。PR #10 于 2026-10-09 再次核验仍为 OPEN、未合并，依赖仍待合并。
+
+## 产品化需求、蓝图与路线图基线（2026-10-09）
+
+本节只同步执行入口，不改写上文工程波次历史：
+
+- [`platform/docs/productization/frontend-backend-requirements.md`](../productization/frontend-backend-requirements.md)：角色、正常流、失败流和验收断言。
+- [`platform/docs/productization/product-blueprint.md`](../productization/product-blueprint.md)：信息架构、一级导航、问卷内工作流和引擎边界。
+- [`platform/docs/productization/release-roadmap.md`](../productization/release-roadmap.md)：Wave 0-6 的依赖、准入条件、准出条件和延后项。
+- [`platform/docs/productization/capability-map.md`](../productization/capability-map.md)：由机器真源生成的当前能力状态和证据视图。
+
+全量核查报告的需求审计起点仍为 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；
+
+能力摘要（机器事实）：accepted=0，partial=11，not_started=1，external=0。
+
+Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Accepted；后续只在需求、后端、前端、流程、生产和追溯
+六层强类型证据齐全后更新状态。
+
+## 自治工程控制平面 Task 8（2026-10-10）
+
+- **实现**：最终实现提交 `79e85b72` 在既有 workflow/review 防护上，使用 setup-python 官方承诺的可执行入口，将
+  hosted/versioned Python bootstrap 绑定到实际执行的 `sys.executable` 与 Python minor，隔离 deterministic fake Codex，
+  并为审查祖先验证获取完整 Git 历史。歧义环境路径和错误命名的 versioned symlink 继续失败关闭。
+- **验证**：受控本地非 Linux Harness 402/402 通过；sandbox 外固定 digest Linux integration 8/8 通过、零 skip；
+  GitHub Actions run `38064236869` 绑定 `79e85b72` 并成功完成 hosted unit 401 与 Linux integration 8/8。11/11 fake drills、productization 37 tests、
+  capability check、forbidden-option scan、docs drift 和 `git diff --check` 通过。doctor 0 error；缺 Docker/Node/Codex 及
+  Java 非 21 均为 typed warning，未阻止纯治理启动。
+- **真实 smoke**：恰好执行一次 Codex cycle；结果 `paused`，fixture 改动 0、通过 Gate 0。临时 run-history 在清理前
+  已验证存在且脱敏，disposable worktree 已移除，遗留的临时分支已删除，主工作树状态未变化；未接触生产或发布。
+- **限制**：当次 smoke 使用的旧摘要格式未保留脱敏 stop reason，之后已补回归测试和摘要字段但按“一次 smoke”约束
+  未重跑。最终修复已由三路 security、DX/CI、whole-branch 独立复审双 `APPROVED`，GitHub hosted 零 skip 已绑定；
+  Obsidian 项目状态已同步，Task 8 完成。
+- **下一步候选**：按已确认设计和新实施计划启动 Business Dashboard v1，再与既有七波
+  产品化路线合流；后续 Phase C-1 的 `820–1179px` 双栏与检查器壳层仍按独立 Milestone 推进。
+
+## Business Dashboard v1 Task 7（2026-10-11）
+
+- **代码存在**：`/` 与成功登录进入 `/dashboard`，`/workspace` 保留完整资源管理；Dashboard 以一个授权快照
+  呈现摘要、待办、问卷动作和最近工作。发布、答卷与导出均指向已有真实页面，最近工作由服务端持久化并按
+  租户、角色和资源权限过滤。
+- **真实角色**：E2E 在隔离 PostgreSQL 中建立项目级 `editor`、`publish_reviewer` 与 `raw_data_viewer` 成员授权，使用各自短期签名
+  token 登录。编辑者可编辑并提交审批但看不到“待我审批”，审核员只看到授权项目的审批任务并可进入审批页；
+  数据角色只看到获授权的统计、答卷与导出事实和动作；未放宽生产权限，也未注入前端 fixture。
+- **自动化通过**：管理端 30 files / 299 tests、lint、typecheck、build（2101 modules）和 production-bundle
+  assertion（18 files）通过；fresh-stack Playwright 15/15 及平台 API、平台 DB、gateway、engine DB 最终一致性
+  核验通过。Python 管理端 gate 45/45、Dashboard repository focused 16/16、平台全量 1478 cases / 182 test classes（0 failure / error / skip）、
+  MySQL P1 发布/答卷投影/重发/恢复纵向 gate、productization 37/37、能力文档生成与 check 均通过。
+- **响应式证据**：真实 Chromium 在 819/820/1179/1180px 检查页面无横向滚动、业务元素无重叠、主操作未裁切；
+  819px 另实测刷新、任务、问卷和最近工作操作至少 44×44，并逐项点击验证路由后返回 Dashboard。四张全页截图
+  等待全部异步区块和底部“最近工作”稳定后生成，只通过现有凭据扫描及文件名、尺寸、路径白名单导出；gate 解析
+  PNG IHDR 并核对 viewport、document、image 尺寸和全页覆盖。人工检查确认 819px 为抽屉导航与单列摘要，
+  820/1179px 为紧凑列表，1180px 为完整表格，均无可见重叠或操作裁切。详细结果记录在
+  `docs/audits/2026-10-09-product-alignment/15-business-dashboard-v1-follow-up.md`。
+- **状态边界**：`workspace` 能力补充 Dashboard 的 backend/frontend/flow 证据但仍为 `partial`，因为生产层和复合
+  要求尚未验收。Wave 2 模板与品牌、Wave 4 通讯录与批量投放、Wave 5 高级编辑、Wave 6 平台运营，以及原生
+  Release/生产 TLS 均未改变。
+- **交付控制**：本轮暂不 commit、不 push；自治 run `d1a22d5b-6d14-469d-b77c-676f83e3c9a1` 必须先由用户运行
+  Harness gate 绑定当前 dirty paths，之后才能进入提交、独立复审和 GitHub/Obsidian 同步。

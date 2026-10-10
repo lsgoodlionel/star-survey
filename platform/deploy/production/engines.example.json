@@ -1,0 +1,8 @@
+{
+  "production-engine-01": {
+    "rpcUrl": "http://engine/index.php/admin/remotecontrol",
+    "user": "replace-with-operations-user",
+    "passwordEnv": "PUBGW_ENGINE_ADMIN_PASSWORD",
+    "channelSecretEnv": "PUBGW_ENGINE_CHANNEL_SECRET"
+  }
+}

@@ -1,3 +1,4 @@
+<!-- harness-delivery-status: fully_synchronized -->
 # MJY 平台（LimeSurvey 本土化）
 
 多租户 SaaS ＋ 私有化交付的问卷／考试／测评平台。引擎用 LimeSurvey 7.1.2，**引擎源码与上游逐文件一致**，本项目的全部内容都是新增文件（P0-00.2 结论，见 [docs/p0/upstream-diff.md](docs/p0/upstream-diff.md)）。
@@ -14,20 +15,36 @@
 |---|---|
 | P0 基线与可行性 | ✅（供应商询证与法务意见待业务侧） |
 | P1 租户与平台骨架 | ✅ 闸门通过 |
-| P2 通用问卷与本土入口 | 🔄 管理端创作链路与大纲拖拽排序已交付并通过真实浏览器验收 |
+| P2 通用问卷与本土入口 | 🔄 Business Dashboard v1 与管理端 Phase A+B 已通过真实浏览器验收；Wave 2–6 仍按路线图推进 |
 | P3 商业与业务应用 | 🔄 考试与测评（WP-09/10）已起步 |
 | P4–P5 | ⬜ |
+
+**产品化需求基线（2026-10-09）**
+
+- 前后端需求：[`platform/docs/productization/frontend-backend-requirements.md`](docs/productization/frontend-backend-requirements.md)
+- 产品蓝图：[`platform/docs/productization/product-blueprint.md`](docs/productization/product-blueprint.md)
+- 发布路线图：[`platform/docs/productization/release-roadmap.md`](docs/productization/release-roadmap.md)
+- 机器生成状态：[`platform/docs/productization/capability-map.md`](docs/productization/capability-map.md)
+
+核查报告的需求起点仍为 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；当前机器能力状态仍为
+下列唯一摘要。
+
+能力摘要（机器事实）：accepted=0，partial=11，not_started=1，external=0。
+
+三份 canonical 文档定义角色、用户流、信息架构和 Wave 0-6 门禁，不构成状态提升证据；状态只由
+`capabilities.json` 的强类型六层证据和生成器决定。
 
 **测试基线**
 
 | 套件 | 数量 | 说明 |
 |---|---|---|
-| 平台 Java | **1403 通过 / 175 类** | 0 失败 0 错误 0 跳过 |
+| 平台 Java | **1478 通过 / 182 类** | Task 7 Dashboard focused 16/16；0 失败 0 错误 0 跳过 |
 | 发布网关 Python | **1180 通过** | 0 失败 |
-| 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
-| 管理端 Vitest | **14 个文件 / 142 通过** | lint、typecheck 同步通过 |
-| 管理端生产构建 | **2084 modules / 13 个产物文件检查** | production bundle 不含开发令牌入口 |
-| 管理端真实 E2E | **7 通过（19.7s，本地）** | 完整创作、pointer/键盘/按钮排序、移动端响应式与敏感控件遮蔽 |
+| 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、114 个源码编号；矩阵校验通过 |
+| 管理端 Vitest | **30 个文件 / 299 通过** | lint、typecheck 与 build 同步通过 |
+| 管理端生产构建 | **2101 modules** | 构建通过；大 chunk 提示为非阻断维护项 |
+| 管理端真实 E2E | **15 通过（fresh stack）** | 登录落 Dashboard、发布/答卷/导出、真实角色隔离、最近工作、移动导航及 819/820/1179/1180px DOM 几何；最终全链路核对成功后归档 |
+| 自治工程 Harness | **共 399：392 通过 / 7 typed skip** | Python 3.12 受控 runtime；sandbox 内 Docker 权限受限；历史独立 Docker integration 7/7 零 skip；11/11 fake drills |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
@@ -76,8 +93,8 @@
 
 | 路径 | 内容 |
 |---|---|
-| `platform/apps/admin-web/` | 作者工作台 SPA：内存会话、资源树、基础编辑、大纲拖拽排序、批量导入、草稿预览、审批发布与版本查看 |
-| `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
+| `platform/apps/admin-web/` | 作者管理 SPA：内存会话、业务 Dashboard、资源树、基础编辑、大纲拖拽排序、批量导入、快速/真实预览、审批发布、投放链接、答卷与导出 |
+| `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、dashboard、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
 | `platform/tools/publish-gateway/` | 发布网关：定义 → LSS → 导入 → 激活 → 回读校验 → 回滚；答卷读取；插件通道客户端 |
 | `platform/tools/engine-theme/` | 把随镜像发布的作答主题装进引擎库 |
 | `platform/tools/log-shipper/` | 错误日志脱敏、去重、上报 |
@@ -88,6 +105,7 @@
 | `platform/docs/adr/` | 架构决策记录（19 份） |
 | `platform/docs/p0|p1|p2/` | 逐阶段进度与证据 |
 | `platform/deploy/test/` | 与 CI 一致的测试配置与 14 个端到端脚本 |
+| `platform/deploy/production/` | 单机生产 Compose、`surveyctl`、加密备份/隔离恢复、脱敏 doctor 与 clean-host 验收入口 |
 | `platform/deploy/platform-dev/` | 容器化 Maven（本机无需装 JDK）与平台数据库 |
 | `platform/tests/e2e/` | 端到端驱动脚本 |
 | `plugins/MjyPlatformBridge/` | 答卷生命周期事件日志与补偿扫描 |
@@ -159,6 +177,12 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 摘要而非 Playwright raw trace。gate 会在 JSON 解码、percent decode、NFKC 规范化后检查所有字符串，并复扫
 最终输出 bytes；JWT、headers、body、临时元数据、raw trace 和原始截图不会上传。
 
+Task 7 Dashboard 用户可见证据保留在 `platform/apps/admin-web/test-results/ci-artifacts/`：819、820、1179、1180px
+均为等待异步区块和底部“最近工作”稳定后的全页截图。导出 gate 解析 PNG IHDR，并核对 viewport、document 与 image
+真实尺寸及全页覆盖；人工检查确认无明显遮挡、裁切或重叠。横向溢出和 44px 控件仍由真实 Playwright DOM 测量，截图不替代
+行为断言。详细边界和结果见 `docs/audits/2026-10-09-product-alignment/15-business-dashboard-v1-follow-up.md`。
+仓库已具备单机生产部署和 Release publication 代码路径，详见 [`platform/deploy/production/README.md`](deploy/production/README.md)：固定 digest Compose、`surveyctl` 生命周期、加密备份、隔离恢复、脱敏 doctor、RC 制品签名/证明、四节点 native readiness、stable 原字节推广，以及 GitHub Release 页面身份与资产字节的幂等核对均有自动化契约与故障注入。当前仍不能宣称正式 production-ready：本任务没有创建真实 tag、GitHub Release 或正式 Engine 多架构镜像，Ubuntu 22.04/24.04 × AMD64/ARM64 的真实 GitHub runner 与公网 TLS clean-host 证据仍须在首个 RC 流水线中产生。PR #10 于 2026-10-09 重新核验仍为 OPEN、未合并，依赖仍待合并。
+
 ### 跑测试的三条硬规矩（都是真实踩出来的）
 
 1. **必须 `clean test`**。Maven 不删被改名或删除的资源，`target/classes` 里会留旧文件。迁移改名后只跑 `test`，轻则看到 935 个报错的**假故障**，重则旧迁移恰好可重复执行而给出**假成功**。
@@ -185,7 +209,7 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 
 | 工作包 | 状态 | 内容 |
 |---|---|---|
-| 管理端创作链路 | 🟡 | 组织免登安全交接、资源树和项目/文件夹/问卷创建、说明文字与单选/多选/短文本/长文本编辑、题组及题目拖拽/按钮/键盘排序、无损保存与冲突保护、批量文本导入、草稿预览、审批发布和不可变版本查看；桌面与移动端已有真实 E2E |
+| 管理端创作链路 | 🟡 | 组织免登安全交接、资源树和项目/文件夹/问卷创建、说明文字与单选/多选/短文本/长文本编辑、题组及题目拖拽/按钮/键盘排序、无损保存与冲突保护、批量文本导入、快速预览（本地草稿渲染）、审批发布和不可变版本查看；桌面与移动端已有真实 E2E |
 | WP-23 共同基础 | 🟡 | 租户隔离（RLS）、公开路由、身份绑定、每实例事件密钥、审计；事件日志与补偿扫描；催答完成对账。跨系统对账报表、隐私删除、监控 ⬜ |
 | WP-22 套餐与计量 | 🟡 | 套餐版本、试用／付费订阅、有效答卷计量、席位额度、租户开通；赠送有效期 ⬜ |
 | WP-19 团队与品牌 | 🟡 | 角色目录、资源树授权继承、字段与导出权限、席位联动；企业模板库；`zh-business` 主题与多语言。协作员到期、自定义域名 ⬜ |
@@ -199,6 +223,26 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 | WP-20 集成 | 🟡 | 企微／钉钉／飞书授权与免登、事件回调、定时同步。真实联调待凭据 ⏳ |
 | WP-09/10 考试测评 | 🔄 | 本波进行中 |
 
+
+### 自治工程治理
+
+2026-10-10 已完成自治工程控制平面 Task 8 的本地实现与最终独立审查，实现提交 `9031fcd5`；Task 8 仍为
+`in_progress`。可复用核心位于
+`tools/agent-harness/` 与 `scripts/agent-harness`；Survey 的 Gate/保护路径、项目记忆和计划属于项目策略模板；
+`.github/workflows/agent-governance.yml` 属于当前仓库的只读宿主集成。三层边界、安装、使用、恢复和升级命令见
+[`tools/agent-harness/README.md`](../tools/agent-harness/README.md)。
+
+本轮本地证据为 Harness 共 406 tests：399 通过，7 个 Linux wrapper 用例在 sandbox 内因 Docker socket 权限以
+`linux-fixture:permission-denied` skip；sandbox 外以固定 digest 和受信 `/usr/local/bin/docker` 重跑 7/7 通过、零 skip。
+CI 会把任何 skip 判为失败。11/11 fake drills 通过，productization 37 tests 与 capability check 通过。唯一一次
+disposable real-Codex smoke
+安全暂停：没有文件改动、没有 Gate 运行，脱敏运行历史在 worktree 清理前完成验证；主 worktree 与生产/发布均未接触。
+当前本机 `java` 不是项目要求的 21，裸 `python3` 是 3.9，需继续使用版本化 Harness runtime；真实 smoke 的停止
+分类未被当次旧版 runner 摘要保留，不能据此宣称 Codex 登录/配额/CLI 已可用。
+
+Task 8 已取得 security、DX/CI、whole-branch 三路双 `APPROVED`，审查证据已绑定最终 implementation commit。
+GitHub hosted 零 skip run 与 Obsidian 同步尚未完成，
+不能宣称完整同步。首个候选真实产品 Milestone 是管理端 Phase C-1 的 `820-1179px` 双栏与检查器壳层。
 
 ### 持续集成
 
@@ -237,6 +281,8 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 
 ## 7. 已知遗留
 
+单机生产运行手册、命令与当前验收边界见 [`deploy/production/README.md`](deploy/production/README.md)。本地故障注入通过不替代 Release CI 的真实主机矩阵；备份加密密钥的异地保管和备份保留策略仍由部署运维负责。
+
 **部署前必须处理**
 
 - 发布网关的并发锁与限流**都在进程内**：网关只能单副本运行；多副本时实际限额 ＝ 缺省值 × 副本数。真实按 IP 限流需入口层提供客户端地址（不信任 `X-Forwarded-For`）。
@@ -259,7 +305,7 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 
 **功能缺口**
 
-- 管理端已交付题组与题目的 pointer 拖拽、键盘排序和移动端按钮替代操作；仍未交付高级题型可视化配置、真实 LimeSurvey 运行时预览和专门的屏幕阅读器审计。当前复杂题型仍是只读无损往返，预览仍是明确标注的“草稿预览”。
+- 管理端已交付题组与题目的 pointer 拖拽、键盘排序和移动端按钮替代操作；仍未交付高级题型可视化配置、真实 LimeSurvey 运行时预览和专门的屏幕阅读器审计。当前复杂题型仍是只读无损往返，现有入口明确标注为“快速预览”，仅使用本地草稿 renderer。
 - PDF 导出卡在中文字体（已决定随仓库交付思源黑体，SIL OFL 1.1）。
 - 附件打包卡在 `get_uploaded_files`——它一次把**整份答卷**的全部文件 base64 塞进一个 JSON 应答。
 - 字典节点上限 8000（由定义快照 1 MiB 倒推）：到区县够用，到乡镇街道不够。

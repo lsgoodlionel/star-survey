@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@testing-library/react';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -96,6 +96,12 @@ function standardApi(overrides: Partial<Record<string, RequestHandler>> = {}) {
     if (key === `GET /v1/resource-capabilities?resourceId=${surveyId}`) return baseCapabilities;
     if (key === `GET /v1/surveys/${surveyId}/approval-requests`) return [baseApproval];
     if (key === `GET /v1/surveys/${surveyId}/versions`) return [baseVersion];
+    if (key === `GET /v1/delivery/surveys/${surveyId}/links`) return [];
+    if (key === `GET /v1/surveys/${surveyId}/responses/summary`) return {
+      surveyId,
+      versions: [],
+      total: { inProgress: 0, engineCompleted: 0, deleted: 0 },
+    };
     throw new Error(`Unhandled request: ${key}`);
   });
 }
@@ -124,6 +130,11 @@ describe('PublishPage', () => {
     expect(await screen.findByRole('link', { name: '查看版本 2' })).toHaveAttribute(
       'href',
       `/surveys/${surveyId}/versions/2`,
+    );
+    expect(screen.getByRole('heading', { name: '投放与答卷' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '答卷与导出' })).toHaveAttribute(
+      'href',
+      `/surveys/${surveyId}/responses`,
     );
   });
 
@@ -666,9 +677,13 @@ test('showsPublishedVersionsAsImmutableReadOnlyData', async () => {
     <VersionDetailPage api={api} surveyId={surveyId} tenantId="tenant-a" version={2} />,
   );
 
-  expect(await screen.findByRole('heading', { name: '已发布版本 2' })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { level: 1, name: '已发布版本 2' })).toBeInTheDocument();
   expect(screen.getByText('当前在线')).toBeInTheDocument();
-  expect(screen.getByText('test-engine / 876543')).toBeInTheDocument();
+  const technicalDetails = screen.getByText('技术信息').closest('details');
+  expect(technicalDetails).not.toBeNull();
+  expect(technicalDetails).not.toHaveAttribute('open');
+  expect(within(technicalDetails!).getByText('test-engine')).toBeInTheDocument();
+  expect(within(technicalDetails!).getByText('876543')).toBeInTheDocument();
   expect(screen.getByText('Q1')).toBeInTheDocument();
   expect(screen.getByText('876543X1X1Q1')).toBeInTheDocument();
   expect(screen.getByText(/员工体验调查（发布快照）/)).toBeInTheDocument();
@@ -676,15 +691,17 @@ test('showsPublishedVersionsAsImmutableReadOnlyData', async () => {
   expect(screen.queryByRole('button', { name: /保存|编辑|恢复/ })).not.toBeInTheDocument();
 });
 
-test('registersPublishAndImmutableVersionRoutesUnderProtectedShell', () => {
+test('registersPublishResponsesAndImmutableVersionRoutesUnderProtectedShell', () => {
   const routes = createAppRoutes(false);
   const protectedRoute = routes.find((route) => route.children?.some((child) => child.children));
   const appShell = protectedRoute?.children?.find((route) => route.children);
-  const protectedPaths = appShell?.children?.map((route) => route.path).filter(Boolean);
+  const surveyShell = appShell?.children?.find((route) => route.path === 'surveys/:surveyId');
+  const protectedPaths = surveyShell?.children?.map((route) => route.path).filter(Boolean);
 
   expect(protectedPaths).toEqual(expect.arrayContaining([
-    'surveys/:surveyId/publish',
-    'surveys/:surveyId/versions/:version',
+    'publish',
+    'responses',
+    'versions/:version',
   ]));
   expect(routes.map((route) => route.path).filter(Boolean)).not.toEqual(expect.arrayContaining([
     'surveys/:surveyId/publish',

@@ -34,8 +34,10 @@ services:
       PLATFORM_DB_OWNER_PASSWORD: platform_owner
       PLATFORM_JWT_HMAC_SECRET:
       PLATFORM_ENGINE_EVENTS_SECRET:
+      PLATFORM_DELIVERY_SECRET:
       PLATFORM_PUBGW_SECRET:
       PLATFORM_PUBGW_URL: http://gateway:8080
+      PLATFORM_PUBLIC_BASE_URL: ${ADMIN_WEB_PUBLIC_URL:?set ADMIN_WEB_PUBLIC_URL}
     depends_on:
       admin-web-platform-db:
         condition: service_healthy
@@ -53,6 +55,7 @@ services:
       PUBGW_SHARED_SECRET:
       PUBGW_ENGINES_CONFIG: /app/engines.json
       PUBGW_ENGINE_ADMIN_WEB_PASSWORD:
+      PUBGW_PUBLIC_URL: ${ADMIN_WEB_PUBLIC_URL:?set ADMIN_WEB_PUBLIC_URL}
 
   admin-web:
     build:
@@ -62,9 +65,17 @@ services:
     image: survey-admin-web-e2e:${SURVEY_TEST_PREFIX:-adminweb}
     container_name: ${SURVEY_TEST_PREFIX:-adminweb}-admin-web
     ports:
-      - "127.0.0.1::80"
+      - "127.0.0.1:${ADMIN_WEB_PORT:?set ADMIN_WEB_PORT}:80"
+    volumes:
+      - ./platform/deploy/test/admin-web-e2e.nginx.conf:/etc/nginx/templates/default.conf.template:ro
+    environment:
+      PLATFORM_UPSTREAM: http://platform:8080
+      GATEWAY_UPSTREAM: http://gateway:8080
+      ENGINE_UPSTREAM: http://test-web:80
     depends_on:
       - platform
+      - gateway
+      - test-web
 
   test-web:
     environment:

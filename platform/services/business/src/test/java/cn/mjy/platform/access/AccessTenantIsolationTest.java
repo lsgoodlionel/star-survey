@@ -6,12 +6,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -39,6 +47,15 @@ class AccessTenantIsolationTest {
 
     @Autowired
     private JdbcClient jdbc;
+
+    @Value("${spring.flyway.url}")
+    private String flywayUrl;
+
+    @Value("${spring.flyway.user}")
+    private String flywayUser;
+
+    @Value("${spring.flyway.password}")
+    private String flywayPassword;
 
     private TenantContext ownerA;
     private TenantContext ownerB;
@@ -152,6 +169,47 @@ class AccessTenantIsolationTest {
     void tenantASettingsDoNotAffectTenantB() {
         assertThat(settings.isPublishApprovalRequired(tenantA)).isFalse();
         assertThat(settings.isPublishApprovalRequired(tenantB)).isTrue();
+    }
+
+    @Test
+    void migrationBackfillsUpdatedAtFromCreatedAt() throws Exception {
+        String schema = "resource_migration_" + UUID.randomUUID().toString().replace("-", "");
+        Instant created = Instant.parse("2020-02-03T04:05:06Z");
+        try (Connection connection = DriverManager.getConnection(flywayUrl, flywayUser, flywayPassword);
+             Statement statement = connection.createStatement()) {
+            statement.execute("CREATE SCHEMA " + schema);
+            try {
+                statement.execute("SET search_path TO " + schema);
+                statement.execute("""
+                        CREATE TABLE access_resource (
+                            tenant_id uuid NOT NULL,
+                            id uuid NOT NULL,
+                            kind text NOT NULL,
+                            parent_id uuid,
+                            name text NOT NULL,
+                            created_at timestamptz NOT NULL DEFAULT now(),
+                            PRIMARY KEY (tenant_id, id)
+                        )
+                        """);
+                statement.execute("INSERT INTO access_resource (tenant_id, id, kind, name, created_at) VALUES ("
+                        + "'00000000-0000-0000-0000-000000000001', "
+                        + "'00000000-0000-0000-0000-000000000002', 'project', '历史项目', '" + created + "')");
+                try (InputStream migration = getClass().getResourceAsStream(
+                        "/db/migration/V403__access_resource_workspace.sql")) {
+                    assertThat(migration).isNotNull();
+                    statement.execute(new String(migration.readAllBytes(), StandardCharsets.UTF_8));
+                }
+                try (ResultSet row = statement.executeQuery(
+                        "SELECT created_at, updated_at, archived_at FROM access_resource")) {
+                    assertThat(row.next()).isTrue();
+                    assertThat(row.getTimestamp("updated_at").toInstant()).isEqualTo(created);
+                    assertThat(row.getTimestamp("created_at").toInstant()).isEqualTo(created);
+                    assertThat(row.getTimestamp("archived_at")).isNull();
+                }
+            } finally {
+                statement.execute("DROP SCHEMA " + schema + " CASCADE");
+            }
+        }
     }
 
     private long countFor(TenantId viewer, String table) {

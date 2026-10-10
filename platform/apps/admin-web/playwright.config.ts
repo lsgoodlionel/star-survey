@@ -12,7 +12,7 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  reporter: [['line']],
+  reporter: [['line'], ['./e2e/runRootReporter.ts']],
   use: {
     baseURL,
     screenshot: 'off',
@@ -27,8 +27,14 @@ export default defineConfig({
       grepInvert: /@mobile/,
     },
     {
-      name: 'chromium-mobile',
+      name: 'chromium-dashboard',
       dependencies: ['chromium-desktop'],
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /dashboard\.spec\.ts/,
+    },
+    {
+      name: 'chromium-mobile',
+      dependencies: ['chromium-dashboard'],
       use: { ...devices['Pixel 7'] },
       testMatch: /authoring\.spec\.ts/,
       grep: /@mobile/,

@@ -92,6 +92,126 @@
   overflow-x: auto;
 }
 
+.real-preview-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 0.8fr) auto;
+  align-items: center;
+  gap: 20px;
+  padding: 18px 20px;
+  color: #19383c;
+  background: #f3faf7;
+  border-bottom: 1px solid #b8d5cc;
+}
+
+.real-preview-panel h2,
+.real-preview-panel p {
+  margin: 0;
+}
+
+.real-preview-panel h2 {
+  margin-bottom: 4px;
+  font-size: 18px;
+}
+
+.real-preview-eyebrow {
+  color: #2f6b57;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.real-preview-status {
+  display: grid;
+  gap: 3px;
+  font-size: 13px;
+}
+
+.real-preview-status span {
+  color: #52676b;
+}
+
+.real-preview-status [role='alert'] {
+  color: #9b2c1f;
+}
+
+.real-preview-query-error {
+  display: grid;
+  gap: 6px;
+}
+
+.real-preview-query-error button {
+  width: fit-content;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  color: #7f1d1d;
+  background: #fff;
+  border: 1px solid #d7a29a;
+  border-radius: 4px;
+}
+
+.real-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.real-preview-actions button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 11px;
+  color: #17483a;
+  background: #fff;
+  border: 1px solid #6f9c8d;
+  border-radius: 4px;
+}
+
+.real-preview-actions button:disabled {
+  color: #68787c;
+  background: #edf1f1;
+}
+
+.real-preview-actions svg {
+  width: 17px;
+  height: 17px;
+}
+
+.real-preview-history {
+  grid-column: 1 / -1;
+  padding-top: 12px;
+  border-top: 1px solid #c9ddd6;
+}
+
+.real-preview-history h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.real-preview-history ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.real-preview-history li {
+  display: grid;
+  grid-template-columns: 90px minmax(140px, 1fr) auto;
+  gap: 10px;
+  color: #52676b;
+  font-size: 13px;
+}
+
+.real-preview-history strong {
+  color: #19383c;
+}
+
 .draft-preview-frame {
   max-width: 100%;
   min-height: 640px;
@@ -228,6 +348,26 @@
 
   .preview-segments {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .real-preview-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .real-preview-actions {
+    justify-content: stretch;
+  }
+
+  .real-preview-actions button {
+    width: 100%;
+  }
+
+  .real-preview-history li {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .real-preview-history time {
+    grid-column: 1 / -1;
   }
 
   .draft-renderer > header h2 {
