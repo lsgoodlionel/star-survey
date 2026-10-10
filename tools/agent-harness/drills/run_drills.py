@@ -599,14 +599,46 @@ def atomic_create(repo: Path, path: Path, content: str) -> None:
             os.close(directory)
 
 
+def _contains_decoded_run_key(source: str) -> bool:
+    for match in re.finditer(r'("(?:\\.|[^"\\])*")\s*:', source):
+        try:
+            if json.loads(match[1]) == "run":
+                return True
+        except json.JSONDecodeError:
+            continue
+    return False
+
+
+def _contains_codex_exec(source: str) -> bool:
+    try:
+        arguments = shlex.split(source, posix=True)
+    except ValueError:
+        arguments = source.split()
+    return any(
+        _could_resolve_to_codex(value) and "exec" in arguments[index + 1:]
+        for index, value in enumerate(arguments)
+    )
+
+
 def _workflow_run_blocks(text: str) -> tuple[str, ...]:
     lines = text.splitlines()
     blocks = []
     index = 0
     while index < len(lines):
+        stripped = lines[index].strip()
+        if not stripped or stripped.startswith("#"):
+            index += 1
+            continue
         match = re.match(r'''^(\s*)-?\s*(?:run|"run"|'run')\s*:\s*(.*)$''',
                          lines[index])
         if not match:
+            if _contains_decoded_run_key(lines[index]):
+                raise DrillRefused("workflow run key uses unsupported YAML syntax")
+            if "{" in stripped and re.search(
+                    r'''(?:^|[{,])\s*(?:run|"run"|'run')\s*:''', stripped):
+                raise DrillRefused("workflow run step uses unsupported YAML flow syntax")
+            if _contains_codex_exec(lines[index]):
+                raise DrillRefused("Codex-like command uses unsupported YAML syntax")
             index += 1
             continue
         indent, value = len(match[1]), match[2]
@@ -621,6 +653,8 @@ def _workflow_run_blocks(text: str) -> tuple[str, ...]:
                 index += 1
             blocks.append("\n".join(values).strip())
             continue
+        if value.startswith(("|", ">", "!", "&", "*")):
+            raise DrillRefused("workflow run value uses unsupported YAML syntax")
         blocks.append(value.strip())
         index += 1
     return tuple(blocks)
@@ -650,8 +684,11 @@ def _validate_codex_shell(source: str) -> bool:
     candidates = [index for index, value in enumerate(arguments) if _could_resolve_to_codex(value)]
     primary = position < len(arguments) and _could_resolve_to_codex(arguments[position])
     if not primary:
-        if candidates and re.search(r"[;&|<>]|[\r\n]", source):
-            raise DrillRefused("Codex workflow command uses unsupported shell control syntax")
+        if candidates:
+            command = Path(arguments[position]).name.lower() if position < len(arguments) else ""
+            if command in {"echo", "printf"} and not re.search(r"[;&|<>]|[\r\n]", source):
+                return False
+            raise DrillRefused("Codex workflow command uses an unsupported executable wrapper")
         return False
     if re.search(r"[\"'`$\\;&|<>]|[\r\n]", source):
         raise DrillRefused("Codex workflow command uses unsupported shell syntax")
@@ -731,6 +768,28 @@ def _plan_checkboxes(text: str) -> dict:
     return result
 
 
+def _canonical_review_verdicts(content: str) -> tuple[str, str]:
+    keys = re.findall(r"\b(SPEC_COMPLIANCE|CODE_QUALITY)\s*=", content)
+    if keys.count("SPEC_COMPLIANCE") != 1 or keys.count("CODE_QUALITY") != 1:
+        raise ValueError()
+    match = re.search(
+        r"(?:\A|\n)SPEC_COMPLIANCE=([A-Z][A-Z_]*)\n"
+        r"CODE_QUALITY=([A-Z][A-Z_]*)\n?\Z",
+        content,
+    )
+    if match is None:
+        raise ValueError()
+    return match[1], match[2]
+
+
+def _validate_report_verdicts(content: str, *, spec_verdict: str,
+                              code_quality_verdict: str) -> None:
+    verdicts = _canonical_review_verdicts(content)
+    expected = (spec_verdict, code_quality_verdict)
+    if verdicts != expected or verdicts != ("APPROVED", "APPROVED"):
+        raise ValueError()
+
+
 def _validate_review_evidence(root: Path, manifest: dict, complete: bool) -> None:
     evidence = manifest["reviewEvidence"]
     required = ["security", "dx_ci", "whole_branch"]
@@ -769,10 +828,13 @@ def _validate_review_evidence(root: Path, manifest: dict, complete: bool) -> Non
                        check=False)
         content = path.read_text(encoding="utf-8")
         if (tracked.returncode or hashlib.sha256(path.read_bytes()).hexdigest() != report["sha256"]
-                or report["reviewedRange"] not in content
-                or re.search(r"(?m)^SPEC_COMPLIANCE=APPROVED\s*$", content) is None
-                or re.search(r"(?m)^CODE_QUALITY=APPROVED\s*$", content) is None):
+                or report["reviewedRange"] not in content):
             raise ValueError()
+        _validate_report_verdicts(
+            content,
+            spec_verdict=report["specVerdict"],
+            code_quality_verdict=report["codeQualityVerdict"],
+        )
     if seen != set(required):
         raise ValueError()
 

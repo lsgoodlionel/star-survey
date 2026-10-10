@@ -37,6 +37,39 @@ class FaultInjectionTests(unittest.TestCase):
         self.assertEqual(result.status, "passed", result.detail)
         self.assertNotIn("fake-secret", result.detail)
 
+    def validate_review_document(self, root, content, *, manifest_verdict="APPROVED"):
+        root = root.resolve()
+        base = "a" * 40
+        commit = "b" * 40
+        reviewed_range = base + ".." + commit
+        reports = []
+        for reviewer in ("security", "dx_ci", "whole_branch"):
+            report_path = root / f"reviews/{reviewer}.md"
+            report_path.parent.mkdir(exist_ok=True)
+            report_path.write_text(
+                "Reviewed range: `" + reviewed_range + "`\n\n" + content,
+                encoding="utf-8",
+            )
+            reports.append({
+                "reviewer": reviewer,
+                "path": report_path.relative_to(root).as_posix(),
+                "reviewedCommit": commit,
+                "reviewedRange": reviewed_range,
+                "sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+                "specVerdict": manifest_verdict,
+                "codeQualityVerdict": manifest_verdict,
+            })
+        manifest = {
+            "implementationCommit": commit,
+            "reviewEvidence": {
+                "requiredReviewers": ["security", "dx_ci", "whole_branch"],
+                "reports": reports,
+            },
+        }
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with patch.object(self.runner, "_run", return_value=completed):
+            self.runner._validate_review_evidence(root, manifest, True)
+
     def test_process_termination_before_atomic_replace_keeps_old_state(self):
         self.assert_drill_passes("atomic-before-replace")
 
@@ -239,6 +272,58 @@ class FaultInjectionTests(unittest.TestCase):
                 with self.assertRaises(self.runner.DrillRefused):
                     self.runner.check_forbidden_options(repo)
 
+    def test_forbidden_scan_rejects_codex_executable_wrappers(self):
+        commands = (
+            "command codex exec --sandbox danger-full-access task",
+            "env codex exec --sandbox danger-full-access task",
+            "env NAME=value codex exec --sandbox danger-full-access task",
+            "/usr/bin/env codex exec --sandbox danger-full-access task",
+            "/usr/bin/command codex exec --sandbox danger-full-access task",
+        )
+        for index, command in enumerate(commands):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                matrix = repo / "docs/agent/GATE_MATRIX.yaml"
+                matrix.parent.mkdir(parents=True)
+                matrix.write_text('{"version":1,"gates":[],"profiles":{}}', encoding="utf-8")
+                workflow = repo / f".github/workflows/wrapper-{index}.yml"
+                workflow.parent.mkdir(parents=True)
+                workflow.write_text(
+                    "jobs:\n  bad:\n    steps:\n      - run: " + command + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaises(self.runner.DrillRefused):
+                    self.runner.check_forbidden_options(repo)
+
+    def test_forbidden_scan_rejects_unsupported_yaml_with_codex_commands(self):
+        workflows = (
+            '- { run: codex exec --sandbox danger-full-access task }',
+            '- { "run": codex exec --sandbox danger-full-access task }',
+            '- { "\\u0072un": codex exec --sandbox danger-full-access task }',
+            '- "\\u0072un": codex exec --sandbox danger-full-access task',
+            '- !!str run: codex exec --sandbox danger-full-access task',
+            '- run: !!str codex exec --sandbox danger-full-access task',
+            '- run: &command codex exec --sandbox danger-full-access task',
+            '- run: *command',
+            '- run: |+\n          codex exec --sandbox danger-full-access task',
+        )
+        for index, step in enumerate(workflows):
+            with self.subTest(step=step), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                matrix = repo / "docs/agent/GATE_MATRIX.yaml"
+                matrix.parent.mkdir(parents=True)
+                matrix.write_text('{"version":1,"gates":[],"profiles":{}}', encoding="utf-8")
+                workflow = repo / f".github/workflows/yaml-{index}.yaml"
+                workflow.parent.mkdir(parents=True)
+                prefix = "x-command: &command codex exec --sandbox danger-full-access task\n" \
+                    if "*command" in step else ""
+                workflow.write_text(
+                    prefix + "jobs:\n  bad:\n    steps:\n      " + step + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaises(self.runner.DrillRefused):
+                    self.runner.check_forbidden_options(repo)
+
     def test_forbidden_scan_allows_only_normalized_codex_argv(self):
         commands = (
             ("codex exec --sandbox workspace-write --json task", False),
@@ -260,6 +345,45 @@ class FaultInjectionTests(unittest.TestCase):
                         self.runner.check_forbidden_options(repo)
                 else:
                     self.runner.check_forbidden_options(repo)
+
+    def test_review_verdict_requires_one_canonical_approved_block_at_eof(self):
+        approved = "# Review\n\nSPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n"
+        with tempfile.TemporaryDirectory() as directory:
+            self.validate_review_document(Path(directory), approved)
+        rejected = {
+            "historical_then_final": (
+                "SPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n\n"
+                "SPEC_COMPLIANCE=CHANGES_REQUIRED\nCODE_QUALITY=CHANGES_REQUIRED\n"
+            ),
+            "quoted": (
+                "> SPEC_COMPLIANCE=APPROVED\n> CODE_QUALITY=APPROVED\n"
+            ),
+            "code_block": (
+                "```text\nSPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n```\n"
+            ),
+            "duplicate": (
+                "SPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n\n"
+                "SPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n"
+            ),
+            "missing": "SPEC_COMPLIANCE=APPROVED\n",
+            "reversed": "CODE_QUALITY=APPROVED\nSPEC_COMPLIANCE=APPROVED\n",
+            "trailing_text": (
+                "SPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\nLater note\n"
+            ),
+        }
+        for name, content in rejected.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory, \
+                    self.assertRaises(ValueError):
+                self.validate_review_document(Path(directory), content)
+
+    def test_review_verdicts_must_match_manifest_and_be_approved(self):
+        content = "SPEC_COMPLIANCE=CHANGES_REQUIRED\nCODE_QUALITY=CHANGES_REQUIRED\n"
+        for manifest_verdict in ("APPROVED", "CHANGES_REQUIRED"):
+            with self.subTest(manifest=manifest_verdict), \
+                    tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
+                self.validate_review_document(
+                    Path(directory), content, manifest_verdict=manifest_verdict
+                )
 
     def test_smoke_inputs_refuse_symlinks_without_touching_external_files(self):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
