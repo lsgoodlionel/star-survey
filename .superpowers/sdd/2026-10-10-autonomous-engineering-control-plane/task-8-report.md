@@ -5,8 +5,8 @@
 
 ## 交付状态
 
-Task 8 三轮审查修复已在本地完成，implementation commit 为
-`09e84c0aa005538565eb85b68c8949b5a3064612`。当前结构化状态为
+Task 8 round-4 审查修复已在本地完成，implementation commit 为
+`3bb8706d4dd85746864266fb4c2c92f7b8b560d3`。当前结构化状态为
 `local_validated_sync_pending`：独立复审、GitHub 与 Obsidian 均为 `pending`，因此 Task 8 与总计划保持
 `in_progress`，不宣称完整交付、CI 已运行或完整同步。
 
@@ -66,18 +66,36 @@ Round 3 同样先建立可复现 RED，再作最小修复：
 - 零 skip integration 首次真实执行发现混合 help 参数可令 argparse 提前退出；已有 RED 捕获后，wrapper 对非纯 help 组合
   fail closed，重跑 7/7 PASS。
 
+Round 4 先以独立最小 fixture 重现 round-3 finding，再作受限实现：
+
+- workflow parser 只接受 block-style `run:`、literal quoted `run` key、inline scalar 与 `|`、`>`、`|-`、`>-`；flow mapping、
+  escaped key、tag、anchor/alias、其他 scalar indicator 和未解析但含 Codex-like `exec` 的表示全部 fail closed。
+- Codex shell 只接受裸 executable；`command`、`env`、`env NAME=value`、绝对路径或其他 wrapper 全部拒绝，同时保留无执行
+  语义的 `echo "codex"`。
+- review evidence 只解析报告 EOF 的 canonical verdict block；两个 key 全文各出现一次、顺序固定、值与 manifest 一致且都为
+  `APPROVED`。历史/引用/code block APPROVED、后续 CHANGES_REQUIRED、重复、缺失、逆序与尾随文本均拒绝。
+- `docs/agent/HARNESS_DELIVERY.json` 继续保持 `independentReview: pending` 和空 `reviewEvidence.reports`；计划 Step 7 未勾选。
+
+## Round 4 提交与文件
+
+- 实现提交：`3bb8706d4dd85746864266fb4c2c92f7b8b560d3`。
+- 证据/docs：本报告所在后续提交；准确 SHA 由最终交接记录，避免文档自引用 commit。
+- 实现文件：`tools/agent-harness/drills/run_drills.py`、`tools/agent-harness/tests/test_fault_injection.py`。
+- 证据与说明：`docs/agent/HARNESS_DELIVERY.json`、`tools/agent-harness/README.md`、本实施计划、平台 README/进度及本 report/ledger。
+
 ## 验证证据
 
-- Task 8 focused：92 tests，85 PASS、7 typed skip，44.018s；同 7 项随后在 Docker integration 7/7 PASS、0 skip，5.085s。
-- 完整 Harness：395 tests，388 PASS、7 typed skip、0 failure，350.268s。7 个本地 sandbox skip 均为
-  `linux-fixture:permission-denied`；固定 digest integration 已在 sandbox 外实际通过，CI 仍会将任意 skip 判为失败。
+- Task 8 focused：96 tests，89 PASS、7 typed skip、0 failure，45.461s。
+- 完整 Harness：399 tests，392 PASS、7 typed skip、0 failure，347.911s。7 个本地 sandbox skip 均为
+  `linux-fixture:permission-denied`；本轮未重跑 Docker integration，上一轮固定 digest integration 7/7 零 skip 仍仅作历史证据，
+  CI 仍会将任意 skip 判为失败。
 - Fake drills：11/11 PASS；success flow 为
   `init → fake-adapter → gate → review → finalize → history`，终态 `completed`。
 - 受控入口：Python 3.12.13；宿主 `/usr/bin/python3` 低于 3.11 时返回简洁诊断、exit 2、无 traceback。
-- Governance：forbidden-option policy 与结构化 plan/memory drift check 均 PASS。
 - Doctor：0 error；clean worktree 下 22 项 ok、4 项 warning。受控 PATH 内未发现 Docker、Node、Codex，Java 非 21；
   这些可选工具未阻止纯治理启动，Docker integration 另由显式受信绝对路径验证。
 - Productization：37/37 PASS；capability map current。
+- Governance：round-4 forbidden-option policy、plan/memory docs drift 与 13/13 governance tests 均 PASS。
 - `git diff --check`：PASS。
 
 ## 唯一真实 smoke
@@ -94,7 +112,8 @@ Round 3 同样先建立可复现 RED，再作最小修复：
 
 ## 残余顾虑
 
-- security、DX/CI 和 whole-branch rereview-2 均为 `CHANGES_REQUIRED`；round 3 修复后仍须由控制器取得三路双 APPROVED。
+- round-3 security 与 whole-branch 仍为 `CHANGES_REQUIRED`；round-4 修复后仍须由控制器取得同一 commit/range 的三路双
+  APPROVED，当前没有任何 round-4 approval，不能提前提升 independentReview 或 Step 7。
 - 本机固定镜像 integration 已 7/7 零 skip；GitHub Ubuntu 24.04 的绑定 run 仍未执行，Task 8 Step 4 不能勾选。
 - GitHub push 与 Obsidian 同步明确未执行。
 - 唯一真实 smoke 的具体暂停分类不可恢复，且按“一次真实 cycle”约束不重跑。

@@ -68,6 +68,15 @@ manifest 在独立复审 pending 时必须保留空 `reviewEvidence.reports`。�
 三份已跟踪报告后才能标记 complete；每份报告都必须绑定 implementation commit/range、内容 SHA-256，并同时包含
 `SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED`。本地实现者不能自行填充这些证据。
 
+workflow 的 forbidden-option scanner 只支持 block-style `run:`、`"run":`、`'run':`，以及 inline scalar 或
+`|`、`>`、`|-`、`>-` block scalar。flow mapping、转义 key、显式 tag、anchor/alias 和其他 scalar indicator 在
+`run` 上均失败关闭；未被该子集解析但含 Codex-like `exec` 的表示同样拒绝。Codex 必须是裸 executable，不能由
+`command`、`env`、绝对路径 wrapper 或其他命令包装；无执行语义的 `echo "codex"` 文本仍允许。
+
+review report 的批准证据只接受文件 EOF 的 canonical 两行 block，顺序固定为 `SPEC_COMPLIANCE=APPROVED`、
+`CODE_QUALITY=APPROVED`，每个 key 在全文只能出现一次且必须与 manifest 一致。历史段落、引用、code block、重复或
+后续 `CHANGES_REQUIRED` 均不能提升 `independentReview`。
+
 宿主可把自己的 Node、Java、Docker、双数据库、浏览器或产品化检查登记进 Gate 矩阵；核心套件不会猜测这些
 命令。GitHub 分支同步、PR、Obsidian 和生产审批同样属于宿主交付流程，不由 Harness 自动完成。
 

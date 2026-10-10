@@ -468,14 +468,15 @@ Expected: all commands PASS.
 
 Dispatch one reviewer for security and state recovery, one for developer ergonomics and CI, and one whole-branch reviewer. Re-run all Harness tests after accepted fixes and record rejected findings with technical reasons in the run summary.
 
-Pending: security、DX/CI 和 whole-branch rereview-2 均为 `CHANGES_REQUIRED`。只有控制器在同一 implementation commit/range
-取得三路 `SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED` 报告并填入结构化 manifest 后才能勾选本步。
+Pending: round-3 security 与 whole-branch 复审仍为 `CHANGES_REQUIRED`；round-4 implementation commit `3bb8706d`
+已按 RED→GREEN 修复，但尚未取得任何 round-4 approval。只有控制器在同一 implementation commit/range 取得三路
+`SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED` canonical EOF verdict 并填入结构化 manifest 后才能勾选本步。
 
 - [ ] **Step 8: Synchronize documentation and mark the plan complete**
 
 Document install/use/resume/escalation commands, final test evidence, remaining limitations and the first eligible real product Milestone. Update this plan's checkboxes only from actual evidence and add the implementation commit references.
 
-Local documentation is synchronized to the round-3 implementation commit `09e84c0a`, but this step remains open because the plan cannot
+Local documentation is synchronized to the round-4 implementation commit `3bb8706d`, but this step remains open because the plan cannot
 be marked complete before the bound GitHub run and Obsidian synchronization. The first candidate product Milestone is Phase C-1's
 `820–1179px` two-column and inspector shell, subject to host synchronization and a fresh approved file scope.
 
