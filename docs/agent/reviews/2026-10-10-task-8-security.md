@@ -1,55 +1,63 @@
-# Task 8 security Python entry scoped re-review
+# Task 8 最终独立安全边界复核
 
-日期：2026-10-10
+审查角色：安全边界审查
+审查方式：只读静态审查与确定性测试复核；未修改 tracked 文件，未提交、未推送，未运行真实 Codex。
 
-角色：shell 输入处理与运行时身份边界 reviewer
+Reviewed range: `c7b9366142ab6f8b0570d208c156fc0392c007f1..79e85b7208d9647781e978e2dff90158d28f2f0a`
+Reviewed commit: `79e85b7208d9647781e978e2dff90158d28f2f0a`
 
-最终候选：`1fb396777cce6274a44989755e6859fa2a3b2ed5`
+## 结论
 
-完整范围：`c7b9366142ab6f8b0570d208c156fc0392c007f1..1fb396777cce6274a44989755e6859fa2a3b2ed5`
+未发现可报告的安全漏洞、沙盒边界绕过、真实 Codex 意外执行路径、工具身份替换路径或交付证据伪造路径。变更符合已确认的自治控制平面规范，代码质量满足本轮最终复核要求。
 
-证据修正：`b1b5d7c0b954bead0cad6eeb7af4bf8e4ea323b7..1fb396777cce6274a44989755e6859fa2a3b2ed5`
+当前 tracked `docs/agent/HARNESS_DELIVERY.json` 仍以 `locally_reviewed_sync_pending` 绑定较早审查提交，这是本次最终报告尚未由交付控制器回填前的预期状态，不代表 `79e85b72` 已完成 GitHub/Obsidian 最终同步。本报告可作为后续更新最终三路审查证据链的安全审查输入。
 
-方式：只读 Git diff、源码、测试和固定 digest Linux integration 复核；未修改 tracked 文件，未 commit/push，未运行真实 Codex。
+## 重点边界
 
-## Findings
+### Hosted Python 信任链
 
-无阻断 finding。
+- 两个 GitHub Actions job 均使用固定 SHA 的 `actions/checkout` 与 `actions/setup-python`，并在 wrapper 执行前对 `/opt/hostedtoolcache/Python`、版本目录、`bin` 目录和最终 `python3.11` 文件执行 `chmod go-w`。
+- `pythonLocation` 仅接受 `/opt/hostedtoolcache/Python/3.11.<数字>/x64`；空格、Tab、换行及伪造 suffix 不能拆分为额外路径。
+- shell 层验证固定根、父目录所有者与写权限、符号链接深度/环路、设备号、inode、uid 和 mode；Python 隔离层再次验证同一链、最终 `sys.executable`、版本化文件名及 3.11-3.14 范围。
+- hosted 入口不满足约束时 fail closed 或回退到受信任的系统候选，不接受 PATH 中的仓库可写程序。
 
-## Scoped evidence correction
+### Fake Codex CI 隔离
 
-- 唯一增量是 `tools/agent-harness/tests/test_codex_adapter.py:512-515` 的测试证据修正，没有修改生产 wrapper 或运行时实现。
-- 旧写法 `"$(printf '\\n')"` 受 POSIX command substitution 规则影响，会删除尾随 newline，实际向循环传入空字符串，不能证明 newline 输入已覆盖。
-- 新写法用跨行单引号赋值：`newline='`、字面换行、`'`。单引号保留该字符，不经过 command substitution 的尾随换行删除。
-- 循环以 `"$newline"` 传递单一参数，并在每次迭代先执行 `test "${#separator}" -eq 1 || exit 95`。空字符串、多个字符或意外展开都会在运行 wrapper 前失败。
-- 测试仍断言三次可信 `Python 3.11.*` 输出，并在每次调用后确认攻击者 marker 不存在。结合三种 separator 的长度断言，空格、Tab、字面 newline 三条路径均实际执行且均未选择恶意入口。
+- 普通治理 workflow 未传入 `--allow-real-codex`，默认 fault drill 仅调用 `run_fake_drills()`。
+- 自治循环测试显式 patch `build_codex_command` 与 `run_codex`；adapter 测试使用临时 fixture executable 或受控 subprocess stub，不调用真实 Codex。
+- 真实 smoke 只能由显式 `--allow-real-codex` 进入，并位于独立 disposable worktree 流程；本次复核没有调用该入口。
+- workflow 权限仅为 `contents: read`，不存在 push、merge、release、deploy 或写权限配置。
 
-## Shell 输入边界
+### 工具身份指纹
 
-- `scripts/agent-harness:133-142` 仅在 `AGENT_HARNESS_CI=1` 时考虑 hosted 候选；完整值先匹配 `/opt/hostedtoolcache/Python/3.11.*/x64`，再剥离固定前后缀并以 `''|*[!0-9]*` 拒绝空 patch 或任何非数字字符。
-- 空格、Tab、newline、额外 slash、字母及其他路径拼接均不能形成 `ci_candidate`。patch component 仍严格为非空纯数字。
-- `try_bootstrap_candidate "$ci_candidate"` 把 `pythonLocation` 作为单一路径参数传递；函数以 `candidate=$1` 接收，后续文件系统消费点保持引用。不存在未引用变量扩展导致的 field splitting。
-- hosted 候选无效时只进入静态版本化 fallback 列表；恶意路径 marker regression 证明三种空白输入都不会执行攻击者文件。
+- 受控工具绑定固定候选根、入口与最终目标，身份字段包含 `st_dev`、`st_ino`、`st_uid`、`st_mode`、`st_size`、`st_ctime_ns`，并保存完整符号链接链。
+- 执行前重新校验入口、目标、父目录、根策略、身份字段和符号链接链；同长度篡改、ctime 变化、可写目标、临时目录或仓库目录中的工具均被拒绝。
+- Codex argv 固定为 `workspace-write`、`--approve-for-me`、`--strict-config`、JSON schema 与固定 worktree；环境按 allowlist 重建，原始日志被限制在 ignored run 目录。
 
-## Runtime identity boundary
+### 完整历史与交付证据
 
-- setup-python hosted entry 仍为 `$pythonLocation/bin/python`；普通文件 copy 与 `bin/python -> python3.11` symlink 两种合法布局均通过同一 fingerprint、owner/mode、trusted parent 与 canonical root 校验。
-- `trusted_bootstrap()` 重建 symlink chain 并比较 device/inode/owner/mode fingerprint。hosted 或 versioned target 必须与当前 `sys.executable` 的 resolved identity 相同。
-- 若 target 名为 `python3.N`，`N` 必须与实际 `sys.version_info` minor 一致；hosted 实际版本与最终 runtime 均继续限制为 Python 3.11-3.14。实际 3.11 冒充 `python3.12` 的 fixture 仍失败关闭。
-- 本次测试提交未改动 candidate 列表、trusted roots、owner policy、symlink policy、identity/minor binding 或 runtime selection，因而没有放宽非 hosted 行为。非 hosted unversioned `python` 仍不被接受，`/usr/bin/python3` 仅保留受控 discovery 兼容路径。
+- 两个 CI checkout 均设置 `fetch-depth: 0`，为 `merge-base --is-ancestor` 与 review range 验证提供完整历史。
+- resume 拒绝 shallow repository、历史回退、非线性提交、缺少唯一 `Agent-Run-Id` trailer 的后继提交及超出批准范围的 touched paths。
+- delivery 校验绑定 implementation commit 与 evidence HEAD，要求三名固定 reviewer、三个不同 tracked 非 symlink 报告、不同 SHA-256、range 终点等于 implementation commit、起点为其祖先，并且报告 EOF canonical verdict 与 manifest 一致且双 APPROVED。
+- Gate/finalize 重新绑定当前 HEAD、工作区摘要、命令、cwd、timeout、exit code 和原始证据位置；HEAD 或内容变化会使旧证据失效。
 
-## Verification evidence
+## 验证证据
 
-- 用户提供的固定 digest integration：8/8 PASS，0 skip。
-- reviewer 独立复跑固定 digest Linux wrapper integration：8/8 PASS，0 skip，使用 `python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce`；其中 newline 长度断言与三次输出断言均通过。
-- `sh -n scripts/agent-harness`：PASS。
-- `git diff --check c7b9366142ab6f8b0570d208c156fc0392c007f1..1fb396777cce6274a44989755e6859fa2a3b2ed5`：PASS。
-- `git diff --check b1b5d7c0b954bead0cad6eeb7af4bf8e4ea323b7..1fb396777cce6274a44989755e6859fa2a3b2ed5`：PASS。
-- 候选 HEAD 已核对为 `1fb396777cce6274a44989755e6859fa2a3b2ed5`；报告写入前 tracked/staged 工作区为空。
+- 用户提供的 GitHub Actions run `38064236869`：全部通过；描述为 unit 401、确定性故障演练、docs/forbidden checks，以及 Linux integration 8/8 zero skip。
+- 本地非 Linux 分区：`scripts/agent-harness --python tools/agent-harness/run_tests.py --exclude-substring linux_wrapper --fail-on-skip`，402 tests，全部通过，0 skip，379.603s。
+- 本地治理测试：15 tests，全部通过。
+- 本地 `--check-forbidden-options`：`PASS forbidden-option-policy`。
+- 本地 `--check-docs`：`PASS plan-memory-drift`。
+- `git diff --check c7b93661..79e85b72`：通过。
+- 静态计数为 410 个 test 方法；本地分区为 402 + Linux 8。用户提供的 hosted unit 401 与当前静态计数相差 1，属于待交付控制器按 GitHub 原始 run 明细校准的证据摘要口径，不构成代码或安全发现。
+- 本地 Linux integration 复跑因当前沙盒无 Docker socket 权限而返回 8 个 `linux-fixture:permission-denied`，没有进入断言执行；Linux 通过结论使用用户提供的 hosted 8/8 zero-skip 证据，不把本地环境阻断记为产品失败。
+- Codex Security diff scan `244dc355-187d-44ea-9b95-f0cc367cdf9a`：14 个 source review item 全覆盖，4 个重点安全面均为 `no_issue_found`，0 findings，coverage complete。
 
-## Conclusion
+## 发现
 
-`1fb39677` 正确修复了 newline regression 的证据缺口：测试现在传入并验证一个字面 newline，而不是被 command substitution 删除后的空值。生产实现与此前批准的 shell 单路径处理、numeric patch、hosted copy/symlink、Python 3.11-3.14 identity/minor 及非 hosted 边界完全相同，批准结论继续成立。
+无可报告发现。
+
+剩余交付动作不属于本只读审查：由交付控制器将最终三路报告复制到 tracked canonical review 路径，更新 manifest 的 reviewed commit/range/digest，依据 GitHub 原始 run 校准测试计数，并继续完成 GitHub 与 Obsidian 状态同步。
 
 SPEC_COMPLIANCE=APPROVED
 CODE_QUALITY=APPROVED

@@ -430,7 +430,7 @@ Cover process termination before and after atomic replace, truncated events, cha
 
 The drill runner operates only in temporary directories, uses fake commands by default, requires `--allow-real-codex` for one disposable worktree smoke run, and refuses a repository containing production secret paths.
 
-- [ ] **Step 4: Run all Harness verification**
+- [x] **Step 4: Run all Harness verification**
 
 Run: `scripts/agent-harness --python tools/agent-harness/run_tests.py --start-directory tools/agent-harness/tests --pattern 'test_*.py'`
 
@@ -442,6 +442,10 @@ Expected: all tests and fake drills PASS; doctor produces a valid report. Record
 
 Local evidence may include typed Linux integration skips when Docker is unavailable. This step remains open until a bound GitHub Ubuntu 24.04
 run proves both jobs use Python 3.11 and complete with zero skips. Local exact counts are recorded in the Task 8 report.
+
+Completed (2026-10-10): implementation `79e85b7208d9647781e978e2dff90158d28f2f0a` passed GitHub Actions run
+`38064236869`; the Ubuntu fixed-digest integration job ran 8/8 with zero skips. The local non-Linux suite passed 402 tests,
+and the hosted unit partition passed its complete 401-test Linux selection.
 
 - [x] **Step 5: Run the disposable real-Codex smoke drill**
 
@@ -468,7 +472,7 @@ Expected: all commands PASS.
 
 Dispatch one reviewer for security and state recovery, one for developer ergonomics and CI, and one whole-branch reviewer. Re-run all Harness tests after accepted fixes and record rejected findings with technical reasons in the run summary.
 
-Completed: final implementation `1fb396777cce6274a44989755e6859fa2a3b2ed5` 已取得 security、DX/CI、
+Completed: final implementation `79e85b7208d9647781e978e2dff90158d28f2f0a` 已取得 security、DX/CI、
 whole-branch 三路独立 `SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED`，报告已纳入
 `docs/agent/reviews/` 并由结构化 manifest 绑定 commit、range、path 与 SHA-256。
 
@@ -476,7 +480,7 @@ whole-branch 三路独立 `SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED`
 
 Document install/use/resume/escalation commands, final test evidence, remaining limitations and the first eligible real product Milestone. Update this plan's checkboxes only from actual evidence and add the implementation commit references.
 
-Local documentation is synchronized to the final implementation commit `1fb39677`, but this step remains open because the plan cannot
+Local documentation is synchronized to the final implementation commit `79e85b72`, but this step remains open because the plan cannot
 be marked complete before the bound GitHub run and Obsidian synchronization. The first candidate product Milestone is Phase C-1's
 `820–1179px` two-column and inspector shell, subject to host synchronization and a fresh approved file scope.
 
@@ -490,10 +494,10 @@ git push
 
 Update the Survey project overview/progress note with date, branch, commit range, test evidence, completed scope, known limitations and the next product-development Milestone. Do not record credentials or raw run logs.
 
-Partially completed: two hosted runs failed before the final candidate. Run `38058476411` exposed the initial setup-python entry mismatch;
-run `38059629731` proved the wrapper was still selecting the undocumented `bin/python3`. Final implementation `1fb39677` uses the documented
-`bin/python`, binds runtime identity, rejects ambiguous environment paths and has three independent approvals plus local 8/8 zero-skip
-integration evidence. A successful hosted run and Obsidian synchronization remain open, so Task 8 and the plan remain in progress.
+Partially completed: earlier hosted runs exposed the setup-python entry and runtime-identity defects. Final implementation `79e85b72`
+uses the documented executable, binds runtime identity, fetches full history for review ancestry validation, and passed GitHub run
+`38064236869` with Linux integration 8/8 and zero skips. GitHub synchronization is complete; Obsidian synchronization remains open,
+so Task 8 and the plan remain in progress.
 
 ## Final Acceptance
 
@@ -502,5 +506,5 @@ integration evidence. A successful hosted run and Obsidian synchronization remai
 - [x] CLI supports `doctor/init/status/next/gate/record-decision/pause/resume/run-codex/finalize` with stable exit codes.
 - [x] Real Codex execution is bounded to an isolated worktree and cannot select dangerous bypass flags.
 - [x] Success, repeated failure, no progress, interrupted write, plan drift and CLI timeout drills all produce expected terminal states.
-- [ ] GitHub governance runs independently and cannot merge, release or deploy.
+- [x] GitHub governance runs independently and cannot merge, release or deploy.
 - [ ] Repository docs, GitHub branch and Obsidian project status agree on the delivered scope and remaining product work.

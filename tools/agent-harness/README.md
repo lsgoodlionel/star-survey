@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: locally_reviewed_sync_pending -->
+<!-- harness-delivery-status: github_synced_obsidian_pending -->
 # 自治工程 Harness
 
 这是一个 Python 3.11+、仅依赖标准库的确定性控制套件。它把批准计划、Git 身份、路径策略、质量门、
@@ -113,3 +113,8 @@ scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests
 
 当前限制：没有常驻队列或 Web 控制台；不自动批准 protected path、依赖、review、push、merge 或生产动作；
 真实工具可用性仍取决于宿主登录、配额和安装状态；临时工作区删除后只保留调用方主动记录的脱敏摘要。
+
+Task 8 final hosted closure (2026-10-10): commit `79e85b72` hardens the documented setup-python executable,
+deterministic fake-Codex CI isolation and full-history checkout required for ancestry validation. GitHub Actions run
+`38064236869` completed successfully; Linux integration is 8/8 with zero skips, the local non-Linux suite is 402/402,
+and three final tracked reviews bind `c7b93661..79e85b72` with double `APPROVED`. Only Obsidian synchronization remains.

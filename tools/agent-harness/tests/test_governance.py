@@ -94,7 +94,9 @@ class GovernanceWorkflowTests(unittest.TestCase):
         manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(
             encoding="utf-8"))
         self.assertEqual(manifest["externalSync"]["independentReview"], "complete")
-        self.assertEqual(manifest["deliveryStatus"], "locally_reviewed_sync_pending")
+        self.assertEqual(manifest["deliveryStatus"], "github_synced_obsidian_pending")
+        self.assertEqual(manifest["externalSync"]["github"], "complete")
+        self.assertEqual(manifest["externalSync"]["obsidian"], "pending")
         evidence = manifest["reviewEvidence"]
         self.assertEqual(evidence["requiredReviewers"],
                          ["security", "dx_ci", "whole_branch"])
