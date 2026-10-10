@@ -15,15 +15,13 @@ from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 import xml.etree.ElementTree as ET
 
-from .config import (ConfigError, load_gate_matrix, load_history_boundary_policy,
-                     load_protected_paths, validate_gate_id)
+from .config import load_gate_matrix, load_protected_paths, validate_gate_id
 from .diagnostics import redact_text, render_diagnostics, failure_fingerprint, record_failure, _read_log, _first_error
 from .codex_adapter import build_codex_command, controlled_tool_errors, run_codex, run_with_controlled_tools
 from .doctor import run_doctor
 from .gate_runner import invalidate_stale_evidence, resolve_required_gates, run_gate
-from .git_guard import (GitGuardError, assert_worktree_isolated, capture_snapshot,
-                        changed_paths, classify_paths, validate_history_ancestry,
-                        validate_resume)
+from .generated_verifier import generated_binding_is_current, verify_generated_outputs
+from .git_guard import assert_worktree_isolated, capture_snapshot, changed_paths, classify_paths, validate_resume
 from .state import (AttemptState, GateStatus, RunState, RunStatus,
                     append_event, load_state, read_events, save_state_atomic,
                     sha256_file, transition)
@@ -409,15 +407,6 @@ class RunService:
         return (load_gate_matrix(self._path(Path("docs/agent/GATE_MATRIX.yaml"))),
                 load_protected_paths(self._path(Path("docs/agent/PROTECTED_PATHS.yaml"))))
 
-    def _history_boundary(self):
-        path = self._path(Path("docs/agent/HARNESS_HOST.json"))
-        if not path.is_file():
-            return None
-        try:
-            return load_history_boundary_policy(path)
-        except ConfigError:
-            raise ServiceError("宿主历史边界配置不可用", 5) from None
-
     def _binding(self):
         return {name: sha256_file(self._path(Path("docs/agent") / name))
                 for name in ("GATE_MATRIX.yaml", "PROTECTED_PATHS.yaml")}
@@ -549,7 +538,7 @@ class RunService:
     def record_decision(self, run_id: str, decision_type: str, summary: str) -> RunState:
         state = self._load(run_id)
         self._operable(state)
-        if decision_type in ("policy_binding", "history_artifact", "verification_snapshot", "transition", "evidence_invalidated", "resumed", "review_evidence", "authorized_paths", "observed_paths", "autonomous_snapshot", "codex_session", "failure_cycle"):
+        if decision_type in ("policy_binding", "history_artifact", "verification_snapshot", "transition", "evidence_invalidated", "resumed", "review_evidence", "generated_verification", "authorized_paths", "observed_paths", "autonomous_snapshot", "codex_session", "failure_cycle"):
             raise ServiceError("此决定类型由 Harness 管理")
         return self._save(self._decision(state, decision_type, summary), "decision_recorded")
 
@@ -562,13 +551,74 @@ class RunService:
         return tuple(Path(p) for p, decision in zip(paths, classified)
                      if not Path(decision.path).is_relative_to(Path("docs/agent/run-history")))
 
-    def _readonly_paths(self, state):
+    def _generated_bindings_current(self, state, decisions):
+        expected = {}
+        for decision in decisions:
+            if decision.action == "generated":
+                expected.setdefault(decision.generator, set()).add(decision.path)
+        if not expected:
+            return True
+        records = [d for d in state.decisions if d["type"] == "generated_verification"]
+        for command, outputs in expected.items():
+            binding = None
+            for record in reversed(records):
+                try:
+                    candidate = json.loads(record["summary"], object_pairs_hook=_unique_fields)
+                except (TypeError, ValueError):
+                    continue
+                if (candidate.get("command") == list(command)
+                        and set(candidate.get("outputs", {})) == outputs):
+                    binding = candidate
+                    break
+            if binding is None or not generated_binding_is_current(self.repo, binding):
+                return False
+            try:
+                metadata_path = self._path(Path(binding["metadataPath"]))
+                if not metadata_path.is_relative_to(self._directory(state.run_id) / "evidence/generated"):
+                    return False
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"),
+                                      object_pairs_hook=_unique_fields)
+                if metadata.get("binding") != binding:
+                    return False
+            except (OSError, TypeError, ValueError, KeyError):
+                return False
+        return True
+
+    def _readonly_paths(self, state, *, allow_unverified_generated=False):
         _, policy = self._configs()
         paths = tuple(p for p in changed_paths(self.repo, state.base_commit) if p != self._trusted_history(state))
         decisions = classify_paths(self.repo, paths, policy)
-        if any(p.action in ("deny", "approval_required", "generated") for p in decisions):
+        if any(p.action in ("deny", "approval_required") for p in decisions):
             raise ServiceError("路径策略拒绝自动执行", 5)
+        if (not allow_unverified_generated
+                and not self._generated_bindings_current(state, decisions)):
+            raise ServiceError("生成物缺少当前输入与输出绑定的重生成证据", 5)
         return decisions
+
+    def _verify_generated(self, state, decisions):
+        generated = tuple(decision for decision in decisions if decision.action == "generated")
+        if not generated:
+            return state
+        results = verify_generated_outputs(
+            self.repo, generated, self._directory(state.run_id) / "evidence/generated",
+        )
+        for result in results:
+            state = self._decision(state, "generated_verification",
+                                   json.dumps(dict(result.binding), sort_keys=True))
+        failed = next((result for result in results if not result.passed), None)
+        if failed is not None:
+            self._stop(state, "生成物重生成验证拒绝：" + str(failed.failure_kind), 5)
+        for result in results:
+            if not generated_binding_is_current(self.repo, result.binding):
+                diagnostic = dict(result.binding)
+                diagnostic["status"] = "failed"
+                diagnostic["failureKind"] = "binding_drift"
+                state = self._decision(
+                    state, "generated_verification",
+                    json.dumps(diagnostic, sort_keys=True),
+                )
+                self._stop(state, "生成物重生成验证拒绝：binding_drift", 5)
+        return state
 
     def _review_scope(self, decisions):
         return hashlib.sha256(json.dumps(sorted({p.path for p in decisions}),
@@ -680,15 +730,13 @@ class RunService:
         return result.stdout
 
     def _check_ancestry(self, state):
-        try:
-            validate_history_ancestry(
-                self.repo, state.base_commit, state.head_commit, self._history_boundary())
-        except GitGuardError:
-            raise ServiceError("无法验证 Git 提交归属", 5) from None
+        if self._git("rev-parse", "--is-shallow-repository").strip() != "false":
+            raise ServiceError("浅克隆无法验证提交归属", 5)
+        self._git("merge-base", "--is-ancestor", state.base_commit, state.head_commit)
 
     def _resume_git_allowed(self, raw, filtered, state):
         scoped = replace(state, changed_paths=self._authorized_paths(state))
-        decision = validate_resume(raw, scoped, self._history_boundary())
+        decision = validate_resume(raw, scoped)
         if decision.allowed:
             return True
         if (decision.reason not in ("dirty_drift", "unexplained_head") or filtered.dirty_paths
@@ -907,14 +955,16 @@ class RunService:
         trusted = self._trusted_history(state)
         paths = tuple(p for p in paths if p != trusted)
         decisions = classify_paths(self.repo, paths, policy)
-        if any(p.action in ("deny", "approval_required", "generated") for p in decisions):
+        if any(p.action in ("deny", "approval_required") for p in decisions):
             if readonly:
                 raise ServiceError("改动触及受保护路径，需要人工处理", 3)
             self._stop(replace(state, changed_paths=tuple(Path(p) for p in paths)),
                        "改动触及受保护路径，需要人工处理", 3)
+        if readonly and not self._generated_bindings_current(state, decisions):
+            raise ServiceError("生成物缺少当前输入与输出绑定的重生成证据", 5)
         definitions = resolve_required_gates(matrix, (state.plan_path.as_posix(), *paths),
                                               additional_gate_ids=(*state.required_gates, *extra))
-        return paths, definitions
+        return paths, definitions, decisions
 
     def _workspace_stamp(self, state):
         raw, snapshot = self._snapshot(state)
@@ -944,11 +994,14 @@ class RunService:
         self._operable(state)
         try:
             synced, _ = self._sync(state, allow_dirty=True)
+        except ServiceError as error:
+            self._stop(state, str(error), 5)
         except (ValueError, OSError):
             self._stop(state, "计划、策略或 Git 漂移", 5)
-        paths, definitions = self._paths_and_gates(synced, extra_gate_ids)
+        paths, definitions, decisions = self._paths_and_gates(synced, extra_gate_ids)
         state = replace(synced, changed_paths=tuple(Path(p) for p in paths),
                         required_gates=tuple(g.id for g in definitions))
+        state = self._verify_generated(state, decisions)
         state = self._decision(state, "authorized_paths", json.dumps(list(paths)))
         if state.status == RunStatus.PLANNED:
             state = transition(state, RunStatus.ACTIVE, "gate requested")
@@ -1002,7 +1055,7 @@ class RunService:
                     # authenticated paused report; do not persist this view.
                     view = replace(state, decisions=state.decisions + (records[-1],))
         synced, _ = self._sync(view)
-        paths, definitions = self._paths_and_gates(synced, (), readonly=True)
+        paths, definitions, _ = self._paths_and_gates(synced, (), readonly=True)
         initial = self._workspace_stamp(synced)
         self._verify_snapshot(synced)
         for definition in definitions:
@@ -1055,13 +1108,13 @@ class RunService:
             if Path(path).as_posix() != path or path == "." or target.is_relative_to(self.repo / "var/agent-harness"):
                 raise ServiceError("批准文件范围无效", 5)
         _, policy = self._configs()
-        if any(p.action in ("deny", "approval_required", "generated") for p in classify_paths(self.repo, paths, policy)):
+        if any(p.action in ("deny", "approval_required") for p in classify_paths(self.repo, paths, policy)):
             raise ServiceError("批准文件清单包含须人工处理的保护路径", 5)
         return tuple(paths)
 
     def _autonomous_check(self, state, scope, *, before=False):
         synced, snapshot = self._sync(state, allow_dirty=True)
-        self._readonly_paths(synced)
+        self._readonly_paths(synced, allow_unverified_generated=True)
         paths = tuple(p for p in changed_paths(self.repo, state.base_commit) if p != self._trusted_history(synced))
         if not set(paths) <= set(scope):
             raise ServiceError("改动超出批准 Milestone 文件范围", 5)

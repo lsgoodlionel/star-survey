@@ -51,12 +51,6 @@ class PolicyConfig:
     rules: Tuple[PathRule, ...]
 
 
-@dataclass(frozen=True)
-class HistoryBoundaryPolicy:
-    allowed_shallow_commits: Tuple[str, ...]
-    trusted_head_refs: Tuple[str, ...] = ()
-
-
 def _unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -180,25 +174,3 @@ def load_protected_paths(path: Path) -> PolicyConfig:
             operations, action, generator,
         ))
     return PolicyConfig(1, tuple(rules))
-
-
-def load_history_boundary_policy(path: Path) -> HistoryBoundaryPolicy:
-    optional = ("activePlan", "deliveryManifest", "ledger", "secretPolicy",
-                "fixture", "documentation")
-    document = _object(_read(path), ("version", "historyBoundary"), optional)
-    _version(document)
-    boundary = _object(document["historyBoundary"],
-                       ("allowedShallowCommits", "trustedHeadRefs"))
-    commits = _array(boundary["allowedShallowCommits"])
-    if (any(not isinstance(commit, str)
-            or re.fullmatch(r"[0-9a-f]{40}", commit) is None for commit in commits)
-            or len(set(commits)) != len(commits)):
-        raise ConfigError("History boundary commits must be unique full SHA-1 identifiers")
-    refs = _array(boundary["trustedHeadRefs"])
-    if (any(not isinstance(ref, str)
-            or re.fullmatch(r"refs/(?:heads|remotes)/[A-Za-z0-9][A-Za-z0-9._/-]*", ref) is None
-            or ".." in ref or "//" in ref or "@{" in ref
-            or ref.endswith(("/", ".", ".lock")) for ref in refs)
-            or len(set(refs)) != len(refs)):
-        raise ConfigError("History boundary refs must be unique canonical head refs")
-    return HistoryBoundaryPolicy(tuple(commits), tuple(refs))

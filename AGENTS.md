@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: fully_synchronized -->
+<!-- harness-delivery-status: not_started -->
 # Survey 项目协作规则
 
 ## 事实与任务入口

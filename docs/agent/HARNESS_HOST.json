@@ -1,32 +1,37 @@
 {
-  "activePlan": "docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md",
+  "activePlan": "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md",
   "deliveryManifest": "docs/agent/HARNESS_DELIVERY.json",
+  "deliverySyncPaths": [
+    "AGENTS.md",
+    ".superpowers/sdd/2026-10-10-business-dashboard-v1/progress.md",
+    "docs/agent/AUTONOMY.md",
+    "docs/agent/HARNESS_DELIVERY.json",
+    "docs/agent/PROJECT_MEMORY.md",
+    "docs/agent/reviews/2026-10-10-task-8-dx-ci.md",
+    "docs/agent/reviews/2026-10-10-task-8-security.md",
+    "docs/agent/reviews/2026-10-10-task-8-whole-branch.md",
+    "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md"
+  ],
   "documentation": {
     "statusMarkerPaths": [
       "AGENTS.md",
       "docs/agent/AUTONOMY.md",
-      "docs/agent/PROJECT_MEMORY.md",
-      "tools/agent-harness/README.md",
-      "platform/README.md",
-      "platform/docs/p2/progress.md",
-      ".superpowers/sdd/2026-10-10-autonomous-engineering-control-plane/task-8-report.md"
+      "docs/agent/PROJECT_MEMORY.md"
     ]
   },
+  "expectedRepository": "lsgoodlionel/star-survey",
   "fixture": {
     "baseline": "baseline\n",
     "expected": "baseline\nreal-codex-smoke-ok\n",
     "path": "tools/agent-harness/tests/fixtures/real_codex_smoke.txt",
     "planPath": "docs/superpowers/plans/real-codex-smoke.md"
   },
-  "historyBoundary": {
-    "allowedShallowCommits": [
-      "4c20c68033c8e37140f26af80a65f659b40f8a45"
-    ],
-    "trustedHeadRefs": [
-      "refs/remotes/limesurvey-fork/master"
-    ]
+  "ledger": ".superpowers/sdd/2026-10-10-business-dashboard-v1/progress.md",
+  "repositoryAttestation": {
+    "provider": "github-artifact-attestation",
+    "signerWorkflow": ".github/workflows/agent-governance.yml",
+    "sourceRef": "refs/heads/main"
   },
-  "ledger": ".superpowers/sdd/2026-10-10-autonomous-engineering-control-plane/progress.md",
   "secretPolicy": {
     "allowlist": [
       ".env.example",

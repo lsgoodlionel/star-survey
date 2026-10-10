@@ -1,10 +1,10 @@
-<!-- harness-delivery-status: fully_synchronized -->
+<!-- harness-delivery-status: not_started -->
 # 自治工程 SOP
 
 权威设计：[已确认 spec](../superpowers/specs/2026-10-10-autonomous-engineering-control-plane-design.md)。
 CLI、状态持久化、路径匹配、Gate 执行、脱敏、Codex 适配与只读 CI 已在本地实现并通过自动验证。
-当前交付状态由 [HARNESS_DELIVERY.json](HARNESS_DELIVERY.json) 唯一记录；三路独立复审、GitHub hosted 零 skip
-run 与 Obsidian 项目状态同步均已完成。只有交付控制器可依据三份结构化证据提升独立复审状态。
+当前交付状态由 [HARNESS_DELIVERY.json](HARNESS_DELIVERY.json) 唯一记录；只有交付控制器可依据三份结构化证据
+提升独立复审状态，GitHub repository attestation 与知识库同步未完成前保持 pending。
 
 ## 准入与实施
 
@@ -33,11 +33,8 @@ deny 立即拒绝并暂停；approval_required 需要对应范围的人类批准
 review_required 允许实现但完成前需要独立审查。无匹配路径不能隐式获得批准。
 真实 smoke 的秘密路径 pattern 与模板 allowlist 由版本化 [HARNESS_HOST.json](HARNESS_HOST.json) 提供；新增模板放行须
 经宿主策略变更，不得在核心 runner 内写死项目特例。
-本仓库有意以固定 LimeSurvey 上游提交建立 shallow 历史边界。`HARNESS_HOST.json` 只能用完整 SHA 显式列出允许的
-shallow commit，并以完整 ref 名固定承载该上游历史的 trusted head。Harness 仅在 `.git/shallow` 与该集合精确相等、
-每个 boundary 均为当前 HEAD 或显式 trusted head 的祖先，且 run 的 base/head ancestry 可由 Git 证明时继续。
-缺少配置、ref 缺失或验证期间移动、额外或变化的 boundary、无法解析的 commit 与不确定 ancestry 一律暂停；
-不得删除 shallow 元数据或把策略放宽为任意 shallow repository。
+仓库身份必须与 `HARNESS_HOST.json` 的 `expectedRepository` 精确一致；交付完成状态还必须通过固定 signer workflow、
+source ref 与 implementation commit 的 GitHub artifact attestation 验证。本地环境变量和未签名清单不能替代证明。
 控制平面规则本身属于 approval_required，防止自治执行降低自身边界。
 新增依赖、越界或未批准的保护路径变更立即暂停；既有 Task 的明确授权对指定范围有效。
 

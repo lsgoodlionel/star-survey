@@ -131,15 +131,24 @@ bootstrap_owner=0
 ci_candidate=
 if [ "$ci_mode" = 1 ]; then
     case "$ci_python_location" in
-        /opt/hostedtoolcache/Python/3.11.*/x64)
-            ci_patch=${ci_python_location#/opt/hostedtoolcache/Python/3.11.}
-            ci_patch=${ci_patch%/x64}
-            case "$ci_patch" in
-                ''|*[!0-9]*) ;;
-                *) ci_candidate=$ci_python_location/bin/python ;;
-            esac
-            ;;
+        /opt/hostedtoolcache/Python/*/x64) ci_root=/opt/hostedtoolcache/Python ;;
+        /Users/runner/hostedtoolcache/Python/*/x64|/Users/runner/hostedtoolcache/Python/*/arm64)
+            ci_root=/Users/runner/hostedtoolcache/Python ;;
+        *) ci_root= ;;
     esac
+    if [ -n "$ci_root" ]; then
+        ci_version=${ci_python_location#"$ci_root"/}
+        ci_version=${ci_version%/*}
+        case "$ci_version" in
+            3.11.*|3.12.*|3.13.*|3.14.*)
+                ci_patch=${ci_version#3.??.}
+                case "$ci_patch" in
+                    ''|*[!0-9]*) ;;
+                    *) ci_candidate=$ci_python_location/bin/python ;;
+                esac
+                ;;
+        esac
+    fi
 fi
 current_uid=$(/usr/bin/id -u 2>/dev/null || printf '0\n')
 try_bootstrap_candidate() {
@@ -148,6 +157,8 @@ try_bootstrap_candidate() {
     case "$candidate" in
         /opt/hostedtoolcache/Python/*)
             primary=/opt/hostedtoolcache/Python; secondary=; allowed_owner=$current_uid ;;
+        /Users/runner/hostedtoolcache/Python/*)
+            primary=/Users/runner/hostedtoolcache/Python; secondary=; allowed_owner=$current_uid ;;
         /usr/local/*) primary=/usr/local; secondary= ;;
         /usr/*)
             primary=/usr
@@ -234,7 +245,7 @@ def trusted_bootstrap(candidate, roots, expected, allowed_owner):
             return None
         actual = Path(sys.executable).resolve(strict=True)
         expected_versioned_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
-        hosted = any(str(root).startswith("/opt/hostedtoolcache/Python") for root in roots)
+        hosted = any(str(root).endswith("/hostedtoolcache/Python") for root in roots)
         require_version_binding = candidate.name != "python3" or hosted
         if (require_version_binding and actual != target.resolve(strict=True)
                 or require_version_binding and target.name.startswith("python3.")
@@ -255,7 +266,7 @@ def trusted_runtime(candidate, root, owner):
         if (not candidate.is_absolute() or candidate.is_symlink()
                 or candidate.name not in allowed_names):
             return None
-        if candidate.name == "python" and not str(root).startswith("/opt/hostedtoolcache/Python"):
+        if candidate.name == "python" and not str(root).endswith("/hostedtoolcache/Python"):
             return None
         target = candidate.resolve(strict=True)
         if target != candidate or not target.is_relative_to(root):
@@ -301,7 +312,7 @@ except (KeyError, OSError, RuntimeError, ValueError):
     fail("无法建立 Harness 信任根")
 
 candidates = [(str(bootstrap), sys.argv[3], int(sys.argv[6]))]
-for prefix in ("/usr", "/usr/local", "/opt/homebrew"):
+for prefix in ("/usr", "/usr/local"):
     candidates.extend((f"{prefix}/bin/python3.{minor}", prefix, 0) for minor in range(14, 10, -1))
 uv_root = home / ".local/share/uv/python"
 if uv_root.is_dir():
@@ -326,10 +337,10 @@ if arguments[:1] == ["--python"]:
     command = arguments[1:]
     allowed = (command == ["--version"]
                or command[:2] == ["-m", "unittest"] and len(command) > 2
+               or len(command) in (4, 5) and command[:2] == ["-m", "agent_harness.distribution"]
+               and command[2] in {"install", "upgrade", "uninstall"}
                or command[:1] == ["tools/agent-harness/run_tests.py"]
-               or command[:1] == ["tools/agent-harness/drills/run_drills.py"]
-               or command == ["-m", "reqtrace.cli", "check"]
-               or command == ["platform/tools/productization/render_capabilities.py", "--check"])
+               or command[:1] == ["tools/agent-harness/drills/run_drills.py"])
     if not allowed:
         fail("不允许的 Python Gate 入口")
     if command == ["--version"]:

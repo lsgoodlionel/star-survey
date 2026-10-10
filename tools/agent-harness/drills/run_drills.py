@@ -33,10 +33,10 @@ HARNESS = REPO / "tools/agent-harness"
 sys.path.insert(0, str(HARNESS))
 
 from agent_harness.codex_adapter import CodexFailure, CodexResult, run_codex
-from agent_harness.config import ConfigError, load_history_boundary_policy
 from agent_harness.diagnostics import record_failure, redact_text, render_diagnostics
 from agent_harness.doctor import run_doctor
-from agent_harness.git_guard import capture_snapshot, validate_resume
+from agent_harness.generated_verifier import verify_generated_outputs
+from agent_harness.git_guard import PathDecision, capture_snapshot, validate_resume
 from agent_harness.run_service import RunService
 from agent_harness.state import (
     AttemptState,
@@ -407,6 +407,47 @@ def _drill_codex_timeout() -> None:
             raise AssertionError("Codex timeout was not bounded and typed")
 
 
+def _drill_generated_verification() -> str:
+    with tempfile.TemporaryDirectory() as directory:
+        repo = Path(directory).resolve() / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-b", "main")
+        _git(repo, "config", "user.email", "drill@example.invalid")
+        _git(repo, "config", "user.name", "Harness Drill")
+        source = repo / "input.txt"
+        renderer = repo / "render.py"
+        output = repo / "generated.txt"
+        source.write_text("bound\n", encoding="utf-8")
+        renderer.write_text(
+            "from pathlib import Path\n"
+            "Path('generated.txt').write_bytes(Path('input.txt').read_bytes())\n",
+            encoding="utf-8",
+        )
+        output.write_text("bound\n", encoding="utf-8")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-m", "generated drill fixture")
+        decision = PathDecision(
+            "generated.txt", "generated", ("generated",), "policy_rule",
+            (sys.executable, "render.py"),
+        )
+        evidence = repo / "var/agent-harness/runs/drill/evidence/generated"
+        valid, = verify_generated_outputs(repo, (decision,), evidence, timeout_seconds=5)
+        if not valid.passed:
+            raise AssertionError("exact generated output was rejected")
+        renderer.write_text(
+            "from pathlib import Path\n"
+            "Path('generated.txt').write_bytes(Path('input.txt').read_bytes())\n"
+            "Path('unexpected.txt').write_text('escape')\n",
+            encoding="utf-8",
+        )
+        refused, = verify_generated_outputs(repo, (decision,), evidence, timeout_seconds=5)
+        if refused.passed or refused.failure_kind != "out_of_scope_write":
+            raise AssertionError("out-of-scope generator write was accepted")
+        if (repo / "unexpected.txt").exists():
+            raise AssertionError("isolated generator modified the source worktree")
+        return "exact regeneration passed; isolated out-of-scope write refused"
+
+
 _DRILLS: dict[str, Callable[[], Optional[str]]] = {
     "success": _drill_success,
     "atomic-before-replace": _drill_atomic_before,
@@ -419,6 +460,7 @@ _DRILLS: dict[str, Callable[[], Optional[str]]] = {
     "repeated-gate-failure": _drill_repeated_gate_failure,
     "no-progress": _drill_no_progress,
     "codex-timeout": _drill_codex_timeout,
+    "generated-verification": _drill_generated_verification,
 }
 
 
@@ -458,30 +500,116 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
     path = _repo_path(root, Path(relative).as_posix())
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
-        required = {"version", "activePlan", "deliveryManifest", "ledger", "secretPolicy",
-                    "fixture", "documentation", "historyBoundary"}
+        required = {"version", "activePlan", "deliveryManifest", "deliverySyncPaths",
+                    "expectedRepository", "repositoryAttestation", "ledger",
+                    "secretPolicy", "fixture", "documentation"}
         if set(document) != required or document["version"] != 1:
             raise ValueError()
         policy = document["secretPolicy"]
         fixture = document["fixture"]
         docs = document["documentation"]
+        attestation = document["repositoryAttestation"]
+        sync_paths = document["deliverySyncPaths"]
         if (set(policy) != {"patterns", "allowlist"}
                 or not all(isinstance(value, str) and value for value in (*policy["patterns"], *policy["allowlist"]))
                 or set(fixture) != {"path", "planPath", "baseline", "expected"}
-                or not isinstance(docs.get("statusMarkerPaths"), list)):
+                or not isinstance(docs.get("statusMarkerPaths"), list)
+                or not isinstance(sync_paths, list) or not sync_paths
+                or not all(isinstance(value, str) and value for value in sync_paths)
+                or len(set(sync_paths)) != len(sync_paths)
+                or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
+                                document["expectedRepository"]) is None
+                or set(attestation) != {"provider", "signerWorkflow", "sourceRef"}
+                or attestation["provider"] != "github-artifact-attestation"
+                or re.fullmatch(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml",
+                                attestation["signerWorkflow"]) is None
+                or re.fullmatch(r"refs/heads/[A-Za-z0-9._/-]+",
+                                attestation["sourceRef"]) is None
+                or ".." in attestation["sourceRef"].split("/")):
             raise ValueError()
         for value in (document["activePlan"], document["deliveryManifest"], document["ledger"],
                       fixture["path"], fixture["planPath"], *docs["statusMarkerPaths"]):
             _repo_path(root, value, must_exist=False)
+        contract_docs = {
+            document["activePlan"], document["deliveryManifest"], document["ledger"],
+            *docs["statusMarkerPaths"],
+        }
+        for value in sync_paths:
+            _repo_path(root, value, must_exist=False)
+            if any(character in value for character in "*?[]"):
+                raise ValueError()
+            if value not in contract_docs:
+                review_path = Path(value)
+                if (review_path.suffix.lower() != ".md"
+                        or review_path.parts[0] not in {"docs", "reviews"}):
+                    raise ValueError()
+        if not contract_docs.issubset(sync_paths):
+            raise ValueError()
         plan_root = Path("docs/superpowers/plans")
         if (not Path(document["activePlan"]).is_relative_to(plan_root)
                 or not Path(fixture["planPath"]).is_relative_to(plan_root)):
             raise ValueError()
-        load_history_boundary_policy(path)
-    except (ConfigError, KeyError, TypeError, ValueError, OSError, UnicodeError,
-            json.JSONDecodeError):
+    except (KeyError, TypeError, ValueError, OSError, UnicodeError, json.JSONDecodeError):
         raise DrillRefused("invalid Harness host configuration") from None
     return document
+
+
+def _delivery_history_paths(root: Path, implementation_commit: str) -> tuple[bytes, ...]:
+    history = _run(
+        ["git", "rev-list", "--reverse", "--topo-order", "--parents",
+         implementation_commit + "..HEAD"],
+        root,
+        check=False,
+    )
+    if history.returncode:
+        raise ValueError()
+    changed = []
+    for line in history.stdout.splitlines():
+        revisions = line.split()
+        if len(revisions) < 2:
+            raise ValueError()
+        commit, parents = revisions[0], revisions[1:]
+        for parent in parents:
+            diff = subprocess.run(
+                ["git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames",
+                 "-r", "-z", parent, commit, "--"],
+                cwd=root,
+                capture_output=True,
+                check=False,
+            )
+            if diff.returncode:
+                raise ValueError()
+            changed.extend(path for path in diff.stdout.split(b"\0") if path)
+    return tuple(changed)
+
+
+def _validate_repository_attestation(root: Path, host: dict,
+                                     implementation_commit: str) -> None:
+    policy = host["repositoryAttestation"]
+    signer = ("https://github.com/" + host["expectedRepository"] + "/"
+              + policy["signerWorkflow"])
+    try:
+        with tempfile.TemporaryDirectory(prefix="agent-harness-attestation-") as directory:
+            archive = Path(directory) / "implementation.tar"
+            archived = _run([
+                "git", "archive", "--format=tar", "--output", str(archive),
+                implementation_commit,
+            ], root, check=False)
+            if archived.returncode or not archive.is_file() or archive.is_symlink():
+                raise DrillRefused("implementation attestation subject could not be created")
+            verified = _run([
+                "gh", "attestation", "verify", str(archive),
+                "--repo", host["expectedRepository"],
+                "--signer-workflow", signer,
+                "--source-digest", implementation_commit,
+                "--source-ref", policy["sourceRef"],
+            ], root, check=False)
+            if verified.returncode:
+                raise DrillRefused("repository artifact attestation verification failed")
+    except DrillRefused:
+        raise
+    except (OSError, subprocess.SubprocessError):
+        raise DrillRefused("repository artifact attestation verification unavailable") from None
 
 
 def _matches(path: str, patterns) -> bool:
@@ -1024,26 +1152,54 @@ def check_docs(repo: Path, host: dict) -> None:
             raise ValueError()
         commit = manifest["implementationCommit"]
         evidence = manifest["evidence"]
-        if (re.fullmatch(r"[0-9a-f]{40}", commit) is None
-                or evidence.get("headCommit") != commit or evidence.get("status") != "passed"
-                or not evidence.get("commands")):
-            raise ValueError()
-        commit_check = _run(["git", "cat-file", "-e", commit + "^{commit}"], root, check=False)
-        if commit_check.returncode:
-            raise ValueError()
         if _plan_checkboxes(plan_path.read_text(encoding="utf-8")) != manifest["taskSteps"]:
             raise ValueError()
         external = manifest["externalSync"]
-        allowed_status = {
+        legacy_status = {
             ("pending", "pending", "pending"): "local_validated_sync_pending",
             ("complete", "pending", "pending"): "locally_reviewed_sync_pending",
             ("complete", "complete", "pending"): "github_synced_obsidian_pending",
             ("complete", "complete", "complete"): "fully_synchronized",
         }
-        key = (external.get("independentReview"), external.get("github"), external.get("obsidian"))
-        if allowed_status.get(key) != manifest["deliveryStatus"]:
+        generic_status = {
+            ("pending", "pending", "pending"): "local_validated_sync_pending",
+            ("complete", "pending", "pending"): "locally_reviewed_sync_pending",
+            ("complete", "complete", "pending"): "repository_synced_knowledge_base_pending",
+            ("complete", "complete", "complete"): "fully_synchronized",
+        }
+        if set(external) == {"independentReview", "repository", "knowledgeBase"}:
+            key = (external["independentReview"], external["repository"],
+                   external["knowledgeBase"])
+            expected_status = generic_status.get(key)
+        elif set(external) == {"independentReview", "github", "obsidian"}:
+            key = (external["independentReview"], external["github"], external["obsidian"])
+            expected_status = legacy_status.get(key)
+        else:
             raise ValueError()
-        _validate_review_evidence(root, manifest, external.get("independentReview") == "complete")
+        bootstrap = manifest["deliveryStatus"] == "not_started"
+        if bootstrap:
+            if (commit is not None or evidence != {"commands": [], "headCommit": None, "status": "pending"}
+                    or key != ("pending", "pending", "pending") or manifest["taskSteps"]):
+                raise ValueError()
+        else:
+            if (re.fullmatch(r"[0-9a-f]{40}", commit) is None
+                    or evidence.get("headCommit") != commit or evidence.get("status") != "passed"
+                    or not evidence.get("commands") or expected_status != manifest["deliveryStatus"]):
+                raise ValueError()
+            commit_check = _run(["git", "cat-file", "-e", commit + "^{commit}"], root, check=False)
+            if commit_check.returncode:
+                raise ValueError()
+            ancestor = _run(["git", "merge-base", "--is-ancestor", commit, "HEAD"], root,
+                            check=False)
+            allowed = {os.fsencode(path) for path in host["deliverySyncPaths"]}
+            if (ancestor.returncode
+                    or any(path not in allowed
+                           for path in _delivery_history_paths(root, commit))):
+                raise ValueError()
+            repository_status = external.get("repository", external.get("github"))
+            if repository_status == "complete":
+                _validate_repository_attestation(root, host, commit)
+        _validate_review_evidence(root, manifest, not bootstrap and external.get("independentReview") == "complete")
         ledger = ledger_path.read_text(encoding="utf-8")
         for task, steps in manifest["taskSteps"].items():
             if not task.isdigit():

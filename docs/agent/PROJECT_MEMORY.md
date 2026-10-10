@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: fully_synchronized -->
+<!-- harness-delivery-status: not_started -->
 # Survey 永久项目记忆
 
 稳定事实核对日期：2026-10-10。来源是当前源码、现有 CI 与批准设计；本文不保存运行状态。
@@ -13,9 +13,8 @@
   [产品蓝图](../../platform/docs/productization/product-blueprint.md)、[发布路线图](../../platform/docs/productization/release-roadmap.md)。
 - 能力状态由 [capabilities.json](../../platform/docs/productization/capabilities.json) 与生成器决定，人工文档不能提升状态。
 - 设计与计划的唯一权威目录为 docs/superpowers/specs/、docs/superpowers/plans/；任务报告 .superpowers/sdd/ 是证据索引。
-- 当前控制平面依据：[2026-10-10 已确认设计](../superpowers/specs/2026-10-10-autonomous-engineering-control-plane-design.md)。
-- 当前控制平面实施计划：`docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md`
-  （[文档链接](../superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md)）；
+- 当前产品实施计划：`docs/superpowers/plans/2026-10-10-business-dashboard-v1.md`
+  （[文档链接](../superpowers/plans/2026-10-10-business-dashboard-v1.md)）；
   安装、使用、恢复与分层边界见 [Harness 指南](../../tools/agent-harness/README.md)。
 - Obsidian 同步入口为对应 Survey 项目的“项目总览”或“进度与路线图”；定位实际笔记后再写，不能猜测路径。
 
@@ -53,10 +52,8 @@
 ## 已确认边界与维护
 
 - 2026-10-10 决策：规则、状态、证据外置，复用现有 CI、Git 与 Docker；不建平行管理平台。
-- 2026-10-11 决策：本仓库保留 LimeSurvey commit `4c20c68033c8e37140f26af80a65f659b40f8a45`
-  作为有意的 shallow 上游历史边界。Harness 只信任 `HARNESS_HOST.json` 固定且与 Git shallow 列表精确匹配的
-  boundary，以 `refs/remotes/limesurvey-fork/master` 锚定这段独立上游历史，并继续验证 boundary 到当前或受信 head
-  及 run base/head 的 ancestry；ref 漂移、未知、额外或变化的 boundary 仍暂停。
+- 2026-10-11 决策：控制平面核心由独立仓库 `lsgoodlionel/Autonomous-Engineering-Control` 维护，Survey 只保留
+  宿主策略、运行状态和通过 ownership manifest 安装的 runtime；升级不得覆盖宿主配置与产品文档。
 - 同一指纹 3 次、每 Milestone 5 个失败修复周期、连续 2 轮无进展暂停；不能绕过审批和沙盒。
 - `.github/workflows/agent-governance.yml` 只有只读权限，固定 action commit，验证配置、Harness、drills、危险参数
   与计划/记忆引用；不负责合并、发布或部署。
