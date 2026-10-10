@@ -471,8 +471,8 @@ print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": 
     def test_linux_wrapper_bootstraps_setup_python_hosted_toolcache(self):
         hosted = self.linux_wrapper(r"""
 mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
-cp -L /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3
-chmod 0755 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3
+cp -L /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python
+chmod 0755 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python
 rm /usr/local/bin/python3.11
 AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
   /repo/scripts/agent-harness --python --version
@@ -483,7 +483,7 @@ AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
         mismatched = self.linux_wrapper(r"""
 mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
 cp -L /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.12
-ln -s python3.12 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3
+ln -s python3.12 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python
 rm /usr/local/bin/python3.11
 AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
   /repo/scripts/agent-harness --python --version

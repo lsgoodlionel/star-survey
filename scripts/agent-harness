@@ -132,7 +132,7 @@ ci_candidate=
 if [ "$ci_mode" = 1 ]; then
     case "$ci_python_location" in
         /opt/hostedtoolcache/Python/3.11.*/x64)
-            ci_candidate=$ci_python_location/bin/python3
+            ci_candidate=$ci_python_location/bin/python
             ;;
     esac
 fi
@@ -236,9 +236,11 @@ def trusted_runtime(candidate, root, owner):
     try:
         candidate = Path(candidate)
         root = Path(root).resolve(strict=True)
-        allowed_names = {"python3", *(f"python3.{minor}" for minor in range(11, 15))}
+        allowed_names = {"python", "python3", *(f"python3.{minor}" for minor in range(11, 15))}
         if (not candidate.is_absolute() or candidate.is_symlink()
                 or candidate.name not in allowed_names):
+            return None
+        if candidate.name == "python" and not str(root).startswith("/opt/hostedtoolcache/Python"):
             return None
         target = candidate.resolve(strict=True)
         if target != candidate or not target.is_relative_to(root):
@@ -248,7 +250,7 @@ def trusted_runtime(candidate, root, owner):
                 or metadata.st_uid not in (0, owner)
                 or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
             return None
-        if candidate.name == "python3" and (
+        if candidate.name in {"python", "python3"} and (
                 target != Path(sys.executable).resolve(strict=True)
                 or not (3, 11) <= sys.version_info[:2] <= (3, 14)):
             return None
