@@ -103,32 +103,37 @@ def run_gate(repo: Path, gate: GateDefinition, evidence_dir: Path,
         if not cwd.is_dir():
             failure_kind = "missing_cwd"
         else:
+            process = None
             try:
-                with subprocess.Popen(
+                process = subprocess.Popen(
                     tuple(gate.command), cwd=cwd, env=_environment(), shell=False,
                     stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, text=True,
                     start_new_session=(os.name == "posix"),
-                ) as process:
-                    try:
-                        exit_code = process.wait(timeout=gate.timeout_seconds)
-                        status = GateStatus.PASSED if exit_code == 0 else GateStatus.FAILED
-                        if exit_code != 0:
-                            failure_kind = "nonzero_exit"
-                    except subprocess.TimeoutExpired:
-                        # Also stop descendants on POSIX: they may still own the logs.
-                        if os.name == "posix":
-                            try:
-                                os.killpg(process.pid, signal.SIGKILL)
-                            except ProcessLookupError:
-                                pass
-                        else:
-                            process.kill()
-                        process.wait()
-                        status, failure_kind = GateStatus.TIMED_OUT, "timeout"
+                )
+                try:
+                    exit_code = process.wait(timeout=gate.timeout_seconds)
+                    status = GateStatus.PASSED if exit_code == 0 else GateStatus.FAILED
+                    if exit_code != 0:
+                        failure_kind = "nonzero_exit"
+                except subprocess.TimeoutExpired:
+                    status, failure_kind = GateStatus.TIMED_OUT, "timeout"
             except FileNotFoundError:
                 failure_kind = "missing_executable"
             except OSError:
                 failure_kind = "spawn_error"
+            finally:
+                if process is not None:
+                    # Descendants inherit logs even after the leader exits.
+                    # Stop our group and reap the leader before closing logs.
+                    try:
+                        if os.name == "posix":
+                            os.killpg(process.pid, signal.SIGKILL)
+                        elif process.poll() is None:
+                            process.kill()
+                    except ProcessLookupError:
+                        pass
+                    finally:
+                        process.wait()
     ended_at = datetime.now(timezone.utc)
     evidence = GateEvidence(gate.id, status, exit_code, started_at, ended_at,
                             metadata_path.relative_to(root), head_commit)
@@ -140,11 +145,20 @@ def run_gate(repo: Path, gate: GateDefinition, evidence_dir: Path,
         "stdoutPath": "stdout.log", "stderrPath": "stderr.log",
         "failureKind": failure_kind,
     }
-    with metadata_path.open("x", encoding="utf-8") as stream:
-        json.dump(metadata, stream, ensure_ascii=True, sort_keys=True)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=attempt,
+                                         prefix=".metadata.", suffix=".tmp",
+                                         delete=False) as stream:
+            temporary_path = Path(stream.name)
+            json.dump(metadata, stream, ensure_ascii=True, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, metadata_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     return evidence
 
 

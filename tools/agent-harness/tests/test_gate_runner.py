@@ -4,9 +4,11 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -155,6 +157,195 @@ class GateExecutionTests(unittest.TestCase):
         self.assertEqual(metadata["failureKind"], "timeout")
         self.assertEqual((directory / "stdout.log").read_text(), "partial\n")
         self.assertEqual((directory / "stderr.log").read_text(), "partial-error\n")
+
+    def wait_for(self, predicate):
+        deadline = time.monotonic() + 5
+        while not predicate():
+            if time.monotonic() >= deadline:
+                self.fail("Real process fixture did not become ready")
+            time.sleep(0.01)
+
+    def cleanup_process(self, process):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+
+    def child_is_running(self, pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        # Linux may retain an orphan zombie until init reaps it; it cannot write.
+        try:
+            status = Path("/proc/{}/stat".format(pid)).read_text()
+        except FileNotFoundError:
+            return True
+        return status.rsplit(") ", 1)[1].split()[0] != "Z"
+
+    def descendant_gate(self, exit_code, *, timeout=False):
+        child = (
+            "import os,sys,time; from pathlib import Path; "
+            "Path('child.pid.tmp').write_text(str(os.getpid())); "
+            "Path('child.pid.tmp').replace('child.pid'); "
+            "\nwhile not Path('release').exists(): time.sleep(0.01)"
+            "\nprint('late-output', flush=True)"
+            "\nprint('late-error', file=sys.stderr, flush=True)"
+            "\ntime.sleep(30)"
+        )
+        parent = (
+            "import subprocess,sys,time; from pathlib import Path; "
+            "subprocess.Popen([sys.executable, '-c', " + repr(child) + "]); "
+            "\nwhile not Path('child.pid').exists(): time.sleep(0.01)"
+            "\n" + ("time.sleep(30)" if timeout else "sys.exit(" + str(exit_code) + ")")
+        )
+        return self.gate(parent, timeout=1 if timeout else 5)
+
+    def assert_descendant_stopped(self, evidence):
+        _, directory = self.artifacts(evidence)
+        stdout = (directory / "stdout.log").read_bytes()
+        stderr = (directory / "stderr.log").read_bytes()
+        pid = int((self.repo / "child.pid").read_text())
+        (self.repo / "release").touch()
+        deadline = time.monotonic() + 1
+        while self.child_is_running(pid) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual((directory / "stdout.log").read_bytes(), stdout)
+        self.assertEqual((directory / "stderr.log").read_bytes(), stderr)
+        self.assertFalse(self.child_is_running(pid), "Ordinary descendant still running")
+
+    def execute_tracked(self, gate):
+        real_spawn = subprocess.Popen
+
+        def spawn(*args, **kwargs):
+            process = real_spawn(*args, **kwargs)
+            self.addCleanup(self.cleanup_process, process)
+            return process
+
+        with patch("agent_harness.gate_runner.subprocess.Popen", side_effect=spawn):
+            return self.execute(gate)
+
+    @unittest.skipUnless(os.name == "posix", "Owned POSIX process-group regression")
+    def test_normal_exit_stops_ordinary_descendant_before_sealing_logs(self):
+        evidence = self.execute_tracked(self.descendant_gate(0))
+        self.assertEqual(evidence.status, GateStatus.PASSED)
+        self.assert_descendant_stopped(evidence)
+
+    @unittest.skipUnless(os.name == "posix", "Owned POSIX process-group regression")
+    def test_nonzero_exit_stops_ordinary_descendant_before_sealing_logs(self):
+        evidence = self.execute_tracked(self.descendant_gate(7))
+        self.assertEqual(evidence.status, GateStatus.FAILED)
+        self.assertEqual(evidence.exit_code, 7)
+        self.assert_descendant_stopped(evidence)
+
+    @unittest.skipUnless(os.name == "posix", "Owned POSIX process-group regression")
+    def test_timeout_stops_ordinary_descendant_before_sealing_logs(self):
+        evidence = self.execute_tracked(self.descendant_gate(0, timeout=True))
+        self.assertEqual(evidence.status, GateStatus.TIMED_OUT)
+        self.assert_descendant_stopped(evidence)
+
+    @unittest.skipUnless(os.name == "posix", "Owned POSIX process-group regression")
+    def test_keyboard_interrupt_reaps_real_process_before_closing_logs(self):
+        ready = self.repo / "ready"
+        real_spawn, real_killpg = subprocess.Popen, os.killpg
+        processes, log_handles = [], []
+
+        def spawn(*args, **kwargs):
+            process = real_spawn(*args, **kwargs)
+            original_wait = process.wait
+            interrupted = False
+
+            def wait(timeout=None):
+                nonlocal interrupted
+                if not interrupted:
+                    interrupted = True
+                    self.wait_for(ready.exists)
+                    raise KeyboardInterrupt("Injected first wait interruption")
+                return original_wait(timeout=timeout)
+
+            process.wait = wait
+            self.addCleanup(self.cleanup_process, process)
+            processes.append(process)
+            log_handles.extend((kwargs["stdout"], kwargs["stderr"]))
+            return process
+
+        def killpg(pid, sig):
+            self.assertTrue(all(not stream.closed for stream in log_handles))
+            return real_killpg(pid, sig)
+
+        with patch("agent_harness.gate_runner.subprocess.Popen", side_effect=spawn), \
+                patch("agent_harness.gate_runner.os.killpg", side_effect=killpg):
+            with self.assertRaises(KeyboardInterrupt):
+                self.execute(self.gate("from pathlib import Path; import time; "
+                                       "Path('ready').touch(); time.sleep(30)"))
+        self.assertIsNotNone(processes[0].returncode, "Interrupted direct process not reaped")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(processes[0].pid, 0)
+        self.assertTrue(all(stream.closed for stream in log_handles))
+        self.assertEqual(list(self.evidence_dir.glob("*/metadata.json")), [])
+
+    def test_partial_metadata_serialization_failure_never_publishes_final(self):
+        def fail_after_partial_write(metadata, stream, **kwargs):
+            stream.write('{"gateId":')
+            stream.flush()
+            raise OSError("Injected partial JSON write")
+
+        with patch("agent_harness.gate_runner.json.dump", side_effect=fail_after_partial_write):
+            with self.assertRaises(OSError):
+                self.execute(self.gate("print('retained-log')"))
+        attempt, = self.evidence_dir.iterdir()
+        self.assertFalse((attempt / "metadata.json").exists())
+        self.assertEqual({path.name for path in attempt.iterdir()}, {"stdout.log", "stderr.log"})
+        self.assertEqual((attempt / "stdout.log").read_text(), "retained-log\n")
+
+    def test_metadata_fsync_failure_removes_unpublished_files(self):
+        with patch("agent_harness.gate_runner.os.fsync", side_effect=OSError("Injected fsync")):
+            with self.assertRaises(OSError):
+                self.execute(self.gate("print('retained-log')"))
+        attempt, = self.evidence_dir.iterdir()
+        self.assertFalse((attempt / "metadata.json").exists())
+        self.assertEqual({path.name for path in attempt.iterdir()}, {"stdout.log", "stderr.log"})
+
+    def test_metadata_replace_failure_removes_unpublished_files(self):
+        with patch("agent_harness.gate_runner.os.replace", side_effect=OSError("Injected replace")):
+            with self.assertRaises(OSError):
+                self.execute(self.gate("print('retained-log')"))
+        attempt, = self.evidence_dir.iterdir()
+        self.assertFalse((attempt / "metadata.json").exists())
+        self.assertEqual({path.name for path in attempt.iterdir()}, {"stdout.log", "stderr.log"})
+
+    def test_metadata_publication_uses_closed_synced_same_directory_temporary(self):
+        real_dump, real_fsync, real_replace = json.dump, os.fsync, os.replace
+        streams, synced_inodes, publications = [], [], []
+
+        def dump(metadata, stream, **kwargs):
+            streams.append(stream)
+            return real_dump(metadata, stream, **kwargs)
+
+        def fsync(fd):
+            synced_inodes.append(os.fstat(fd).st_ino)
+            return real_fsync(fd)
+
+        def publish(source, destination):
+            source, destination = Path(source), Path(destination)
+            self.assertEqual(source.parent, destination.parent)
+            self.assertNotEqual(source.name, destination.name)
+            self.assertFalse(destination.exists())
+            self.assertTrue(streams[0].closed)
+            self.assertIn(source.stat().st_ino, synced_inodes)
+            self.assertEqual(json.loads(source.read_text())["status"], "passed")
+            publications.append(destination)
+            return real_replace(source, destination)
+
+        with patch("agent_harness.gate_runner.json.dump", side_effect=dump), \
+                patch("agent_harness.gate_runner.os.fsync", side_effect=fsync), \
+                patch("agent_harness.gate_runner.os.replace", side_effect=publish):
+            evidence = self.execute(self.gate("print('complete')"))
+        self.assertEqual(publications, [self.repo / evidence.evidence_path])
+        _, directory = self.artifacts(evidence)
+        self.assertEqual({path.name for path in directory.iterdir()},
+                         {"stdout.log", "stderr.log", "metadata.json"})
 
     def test_missing_executable_creates_failed_evidence(self):
         evidence = self.execute(GateDefinition("unit", ("absent-gate-tool-96b36b",), ".", 5))
