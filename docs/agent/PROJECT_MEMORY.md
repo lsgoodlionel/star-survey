@@ -13,6 +13,9 @@
 - 能力状态由 [capabilities.json](../../platform/docs/productization/capabilities.json) 与生成器决定，人工文档不能提升状态。
 - 设计与计划的唯一权威目录为 docs/superpowers/specs/、docs/superpowers/plans/；任务报告 .superpowers/sdd/ 是证据索引。
 - 当前控制平面依据：[2026-10-10 已确认设计](../superpowers/specs/2026-10-10-autonomous-engineering-control-plane-design.md)。
+- 当前控制平面实施计划：`docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md`
+  （[文档链接](../superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md)）；
+  安装、使用、恢复与分层边界见 [Harness 指南](../../tools/agent-harness/README.md)。
 - Obsidian 同步入口为对应 Survey 项目的“项目总览”或“进度与路线图”；定位实际笔记后再写，不能猜测路径。
 
 ## 源码与技术栈
@@ -24,7 +27,8 @@
 - 发布网关：platform/tools/publish-gateway/，Python；三端契约涉及 Java 平台、Python 网关与 PHP 插件。
 - 本地 Docker 入口 docker-compose.dev.yml、platform/deploy/test/ 与 platform/deploy/platform-dev/。
 - 生产与 Release 入口 platform/deploy/production/，运行手册与环境和本地开发明确分离。
-- 控制平面 tools/agent-harness/ 使用 Python 3.11+ 标准库，配置不依赖 PyYAML；这是新增基础契约，不代表 CLI 已交付。
+- 控制平面 tools/agent-harness/ 使用 Python 3.11+ 标准库，配置不依赖 PyYAML；确定性 CLI、状态恢复、Gate、
+  脱敏诊断、受控 Codex adapter、fake drills 与只读治理 CI 已交付。核心套件、项目策略模板和宿主集成保持分层。
 
 ## 现有质量门
 
@@ -41,12 +45,15 @@
 - 需求追溯目录 platform/tools/traceability：python3 -m unittest discover -s tests -t . -q 与 python3 -m reqtrace.cli check。
 - 浏览器纵向：platform/deploy/test/run-admin-web-e2e.sh --fresh；三进程 P1：platform/deploy/test/run-p1-e2e.sh。
 - 引擎与策略端到端脚本位于 platform/deploy/test/；数据库相关场景按现有约定双库执行。
-- Harness：仓库根 python3 -m unittest discover -s tools/agent-harness/tests -p 'test_*.py' -v。
+- Harness：仓库根 `scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests -p 'test_*.py' -v`；
+  fake drills 使用 Python 3.11+ 运行 `tools/agent-harness/drills/run_drills.py`。
 
 ## 已确认边界与维护
 
 - 2026-10-10 决策：规则、状态、证据外置，复用现有 CI、Git 与 Docker；不建平行管理平台。
 - 同一指纹 3 次、每 Milestone 5 个失败修复周期、连续 2 轮无进展暂停；不能绕过审批和沙盒。
+- `.github/workflows/agent-governance.yml` 只有只读权限，固定 action commit，验证配置、Harness、drills、危险参数
+  与计划/记忆引用；不负责合并、发布或部署。
 - 秘密、生产/发布、迁移/认证、生成文件与普通审查路径由 [保护契约](PROTECTED_PATHS.yaml) 分类。
 - var/agent-harness/runs/ 原始状态不提交；docs/agent/run-history/ 仅脱敏摘要。
 - 正常工作使用任务分支与独立 worktree，长期分支 main 经 PR 合并；本任务授权可明确禁止 push。

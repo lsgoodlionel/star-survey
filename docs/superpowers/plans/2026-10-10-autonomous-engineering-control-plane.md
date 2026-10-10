@@ -418,19 +418,19 @@ git commit -m "feat: add bounded codex autonomous loop"
 - Consumes: the complete Harness from Tasks 1-7 and existing repository quality workflow.
 - Produces: GitHub `agent-governance` checks, reproducible local drills, final run-history evidence and synchronized project documentation.
 
-- [ ] **Step 1: Write failing governance-policy tests**
+- [x] **Step 1: Write failing governance-policy tests**
 
 Assert the workflow uses Ubuntu, Python 3.11, read-only default permissions, pinned action commits, Harness unit tests, config validation, forbidden-option scan and plan/memory drift checks. Assert it has no write permission, deployment, release creation or auto-merge step.
 
-- [ ] **Step 2: Write failing fault-injection tests**
+- [x] **Step 2: Write failing fault-injection tests**
 
 Cover process termination before and after atomic replace, truncated events, changed plan digest, rewritten Git history, missing Docker/Node/Java, fake-secret diagnostics, repeated Gate failure and Codex timeout.
 
-- [ ] **Step 3: Implement the governance workflow and drill runner**
+- [x] **Step 3: Implement the governance workflow and drill runner**
 
 The drill runner operates only in temporary directories, uses fake commands by default, requires `--allow-real-codex` for one disposable worktree smoke run, and refuses a repository containing production secret paths.
 
-- [ ] **Step 4: Run all Harness verification**
+- [x] **Step 4: Run all Harness verification**
 
 Run: `python3 -m unittest discover -s tools/agent-harness/tests -v`
 
@@ -440,13 +440,22 @@ Run: `scripts/agent-harness doctor --json`
 
 Expected: all tests and fake drills PASS; doctor produces a valid report. Record exact counts and environment warnings in the final run history.
 
-- [ ] **Step 5: Run the disposable real-Codex smoke drill**
+Evidence (2026-10-10): controlled Python 3.12 ran 364 tests: 358 passed, 6 existing Linux/Docker fixture tests skipped and 0 failed;
+11/11 fake drills passed. Doctor returned 0 errors and warnings for Java not being 21 plus the expected dirty task worktree.
+The host's bare `python3` is 3.9 and therefore fails the documented Python 3.11+ floor; it was not treated as a Harness failure.
+
+- [x] **Step 5: Run the disposable real-Codex smoke drill**
 
 Create a temporary worktree from the current branch and select a fixture-only Milestone whose permitted change is adding one expected line to a disposable test fixture. Run exactly one Codex cycle with `--allow-real-codex`, then verify changed paths, Gate evidence, run history and worktree cleanup instructions.
 
 Expected: Codex runs in `workspace-write`, touches only the permitted fixture, and either completes with passing Gate evidence or pauses with sanitized diagnostics. Either outcome must leave the primary worktree unchanged.
 
-- [ ] **Step 6: Run repository integration gates**
+Evidence (2026-10-10): exactly one real Codex cycle ran and returned `paused` with 0 changed paths and 0 passed Gates.
+The temporary run-history existed and passed the sanitized-history check before cleanup; the disposable worktree and branch were removed,
+and the primary worktree identity was unchanged. The then-current summary omitted the sanitized stop classification; the runner now retains it,
+but the smoke was not repeated because this Task permits exactly one real cycle.
+
+- [x] **Step 6: Run repository integration gates**
 
 Run: `python3 -m unittest discover -s platform/tools/productization -p 'test_render_capabilities.py'`
 
@@ -460,9 +469,16 @@ Expected: all commands PASS.
 
 Dispatch one reviewer for security and state recovery, one for developer ergonomics and CI, and one whole-branch reviewer. Re-run all Harness tests after accepted fixes and record rejected findings with technical reasons in the run summary.
 
-- [ ] **Step 8: Synchronize documentation and mark the plan complete**
+Not completed: the Task instruction prohibited every subagent. The implementer performed three explicit self-review passes and fixed all
+Important findings with RED→GREEN tests, but an author self-review is not independent review and is not marked complete.
+
+- [x] **Step 8: Synchronize documentation and mark the plan complete**
 
 Document install/use/resume/escalation commands, final test evidence, remaining limitations and the first eligible real product Milestone. Update this plan's checkboxes only from actual evidence and add the implementation commit references.
+
+Implementation commit: `1101f824` (`ci: add governance and fault drills`). Documentation synchronization is recorded by the commit
+containing this plan update. The first candidate product Milestone is Phase C-1's `820–1179px` two-column and inspector shell, subject to
+independent review, host synchronization and a fresh approved file scope.
 
 - [ ] **Step 9: Commit, push, and update Obsidian**
 
@@ -474,12 +490,15 @@ git push
 
 Update the Survey project overview/progress note with date, branch, commit range, test evidence, completed scope, known limitations and the next product-development Milestone. Do not record credentials or raw run logs.
 
+Partially completed: Task 8 changes are committed locally. Per the controller instruction, this implementer does not push and does not update
+Obsidian; those two delivery actions remain for the controller.
+
 ## Final Acceptance
 
-- [ ] Root rules, permanent memory, machine policy and raw runtime separation are present and documented.
-- [ ] State writes, event chains, Git drift checks, protected paths, Gate planning, evidence invalidation, retry limits and redaction pass automated tests.
-- [ ] CLI supports `doctor/init/status/next/gate/record-decision/pause/resume/run-codex/finalize` with stable exit codes.
-- [ ] Real Codex execution is bounded to an isolated worktree and cannot select dangerous bypass flags.
-- [ ] Success, repeated failure, no progress, interrupted write, plan drift and CLI timeout drills all produce expected terminal states.
-- [ ] GitHub governance runs independently and cannot merge, release or deploy.
+- [x] Root rules, permanent memory, machine policy and raw runtime separation are present and documented.
+- [x] State writes, event chains, Git drift checks, protected paths, Gate planning, evidence invalidation, retry limits and redaction pass automated tests.
+- [x] CLI supports `doctor/init/status/next/gate/record-decision/pause/resume/run-codex/finalize` with stable exit codes.
+- [x] Real Codex execution is bounded to an isolated worktree and cannot select dangerous bypass flags.
+- [x] Success, repeated failure, no progress, interrupted write, plan drift and CLI timeout drills all produce expected terminal states.
+- [x] GitHub governance runs independently and cannot merge, release or deploy.
 - [ ] Repository docs, GitHub branch and Obsidian project status agree on the delivered scope and remaining product work.

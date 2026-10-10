@@ -722,3 +722,18 @@ trace；gate 对事件字段、类型、URL 与长度做严格校验，并在 JS
 
 Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Accepted；后续只在需求、后端、前端、流程、生产和追溯
 六层强类型证据齐全后更新状态。
+
+## 自治工程控制平面 Task 8（2026-10-10）
+
+- **实现**：`1101f824` 新增只读 `agent-governance` workflow、治理策略测试、故障注入测试和临时目录 drill runner；
+  默认只运行 fake commands，真实 Codex 必须显式 `--allow-real-codex`，固定一个 cycle 和一个 fixture scope。
+- **验证**：受控 Python 3.12 下 Harness 共 364 tests：358 通过，6 个既有 Linux wrapper 测试因本机缺
+  `python:3.11-slim` fixture image 按设计 skip；11/11 fake drills、productization 37 tests、capability check、
+  forbidden-option scan 和 `git diff --check` 通过。doctor 无 error，warning 为本机 Java 非 21 与任务工作区有改动。
+- **真实 smoke**：恰好执行一次 Codex cycle；结果 `paused`，fixture 改动 0、通过 Gate 0。临时 run-history 在清理前
+  已验证存在且脱敏，disposable worktree 已移除，遗留的临时分支已删除，主工作树状态未变化；未接触生产或发布。
+- **限制**：当次 smoke 使用的旧摘要格式未保留脱敏 stop reason，之后已补回归测试和摘要字段但按“一次 smoke”约束
+  未重跑；裸 `python3` 为 3.9，不满足 Harness 3.11+ 下限。用户禁止 subagent，因此只完成作者的安全/恢复、CI/体验和
+  全分支三遍自审，未满足计划里的三名独立 reviewer。按要求未 push、未更新 Obsidian。
+- **下一步候选**：在独立 reviewer、GitHub/Obsidian 同步和真实 Codex 环境就绪后，另行批准管理端 Phase C-1：
+  `820–1179px` 双栏与检查器壳层；不得把本 Task 的治理交付当作该产品 Milestone 已开始或已完成。

@@ -43,6 +43,7 @@
 | 管理端 Vitest | **20 个文件 / 174 通过** | lint、typecheck 与 build 同步通过 |
 | 管理端生产构建 | **2089 modules** | 构建通过；大 chunk 提示为非阻断维护项 |
 | 管理端真实 E2E | **10 通过（30.2s，fresh stack）** | 768/819/820/1024/1440/Pixel 7、44px、无溢出、键盘/对话框、最终全链路核对成功后归档 |
+| 自治工程 Harness | **共 364：358 通过 / 6 环境 skip** | Python 3.12 受控 runtime；11/11 fake drills；只读 governance workflow |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
@@ -222,6 +223,23 @@ Phase A+B；Phase C/D 仍是后续工作。
 | WP-20 集成 | 🟡 | 企微／钉钉／飞书授权与免登、事件回调、定时同步。真实联调待凭据 ⏳ |
 | WP-09/10 考试测评 | 🔄 | 本波进行中 |
 
+
+### 自治工程治理
+
+2026-10-10 已完成自治工程控制平面 Task 8，实现提交 `1101f824`。可复用核心位于
+`tools/agent-harness/` 与 `scripts/agent-harness`；Survey 的 Gate/保护路径、项目记忆和计划属于项目策略模板；
+`.github/workflows/agent-governance.yml` 属于当前仓库的只读宿主集成。三层边界、安装、使用、恢复和升级命令见
+[`tools/agent-harness/README.md`](../tools/agent-harness/README.md)。
+
+最终本地证据为 Harness 共 364 tests：358 通过，6 个依赖本机缺失 Docker fixture image 的 Linux wrapper 用例 skip，
+11/11 fake drills 通过，productization 37 tests 与 capability check 通过。唯一一次 disposable real-Codex smoke
+安全暂停：没有文件改动、没有 Gate 运行，脱敏运行历史在 worktree 清理前完成验证；主 worktree 与生产/发布均未接触。
+当前本机 `java` 不是项目要求的 21，裸 `python3` 是 3.9，需继续使用版本化 Harness runtime；真实 smoke 的停止
+分类未被当次旧版 runner 摘要保留，不能据此宣称 Codex 登录/配额/CLI 已可用。
+
+Task 8 按用户要求不 push、不更新 Obsidian，且禁止 subagent，因此三名独立 reviewer 门尚未满足；本任务只完成
+安全、状态恢复、开发体验和 CI 的作者自审。首个候选真实产品 Milestone 是管理端 Phase C-1 的
+`820-1179px` 双栏与检查器壳层，须在独立 reviewer、GitHub/Obsidian 同步和 Codex 环境就绪后另行批准精确文件范围。
 
 ### 持续集成
 

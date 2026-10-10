@@ -1,48 +1,92 @@
-# Agent Harness 配置契约
+# 自治工程 Harness
 
-本 Task 仅交付配置模型/解析、策略文档和状态 Schema。CLI、状态持久化、路径匹配、Gate runner、脱敏和 Codex 适配尚未交付。
+这是一个 Python 3.11+、仅依赖标准库的确定性控制套件。它把批准计划、Git 身份、路径策略、质量门、
+重试预算、脱敏诊断和受控 Codex 执行组合成可恢复的单 Milestone 状态机。它不是项目管理平台，也不会
+自动合并、发布或部署。
 
-仓库根验证：
+## 核心套件
+
+可独立提取复用的代码位于 `tools/agent-harness/agent_harness/`、`tools/agent-harness/drills/` 和
+`scripts/agent-harness`：
+
+- CLI：`doctor/init/status/next/gate/record-decision/record-review/pause/resume/run-codex/finalize`，使用稳定退出码。
+- 状态与恢复：原子 `state.json`、摘要链接的 `events.jsonl`、Git 分支/HEAD/工作区漂移检测。
+- 策略与 Gate：按实际改动取 Gate 并集，禁止计划删减自动 Gate；路径逃逸、符号链接和未知路径均失败关闭。
+- 终止条件：同一失败指纹第 3 次、总失败周期第 5 次、连续第 2 轮无进展时暂停。
+- 诊断：原始输出只写 ignored runtime，提交摘要对 URL 凭据、Header、Token、JWT、私钥和命名秘密脱敏。
+- Codex：只在独立 worktree 中使用固定 `workspace-write` 参数数组；不接受权限绕过参数或任意执行器。
+
+安装到另一个仓库时，复制上述三个入口，保留目录相对关系，并提供下一节的版本化策略文件。目标主机必须有
+Python 3.11-3.14 和 Git；Node、Java、Docker、Codex 是否必需由宿主 Gate 与实际 Milestone 决定。
+
+仓库根常用命令：
 
 ```sh
-python3 -m unittest discover -s tools/agent-harness/tests -p 'test_config.py' -v
-python3 -m unittest discover -s tools/agent-harness/tests -p 'test_*.py' -v
-git check-ignore -v var/agent-harness/runs/example/state.json
+scripts/agent-harness doctor --json
+scripts/agent-harness init --plan docs/superpowers/plans/approved-plan.md --milestone task-1
+scripts/agent-harness status --run-id <run-id> --json
+scripts/agent-harness next --run-id <run-id> --json
+scripts/agent-harness gate --run-id <run-id>
+scripts/agent-harness record-decision --run-id <run-id> --type <type> --summary <summary>
+scripts/agent-harness pause --run-id <run-id> --reason <sanitized-reason>
+scripts/agent-harness resume --run-id <run-id>
+scripts/agent-harness run-codex --run-id <run-id> --max-cycles 1
+scripts/agent-harness finalize --run-id <run-id>
 ```
 
-目标 Python 3.11+，实现只用标准库。加载模块时将 tools/agent-harness 放入 Python 模块搜索路径。
-权威规则：[AGENTS.md](../../AGENTS.md)、[SOP](../../docs/agent/AUTONOMY.md)、[永久记忆](../../docs/agent/PROJECT_MEMORY.md)。
+恢复前先运行 `doctor`，再运行 `status` 与 `next`；`resume` 会重新核对计划摘要、策略绑定、worktree、分支、
+HEAD、工作区和工具环境。审批路径、真实秘密、依赖新增、生产/发布、认证或迁移等情况必须暂停，由宿主人工
+流程处理；不能用 `record-decision` 绕过路径策略。
 
-## 公共接口
+## 项目策略模板
 
-config.py 提供 ConfigError、不可变 dataclass GateDefinition、GateMatrix、PathRule、PolicyConfig，及：
+每个宿主仓库负责维护以下版本化输入；它们是模板边界，不属于核心套件的通用业务事实：
 
-```python
-load_gate_matrix(path: Path) -> GateMatrix
-load_protected_paths(path: Path) -> PolicyConfig
+- `AGENTS.md`：稳定强制规则与详细文档入口。
+- `docs/agent/AUTONOMY.md`：准入、恢复、升级和发布边界。
+- `docs/agent/GATE_MATRIX.yaml`：路径 profile 到固定参数数组 Gate 的映射。
+- `docs/agent/PROTECTED_PATHS.yaml`：`deny/approval_required/review_required/generated` 路径策略。
+- `docs/agent/STATE_SCHEMA.json`：持久化 wire contract。
+- `docs/agent/PROJECT_MEMORY.md`：宿主项目稳定事实，不保存临时运行状态。
+- `docs/superpowers/plans/`：已经人工确认、包含唯一 Milestone 与明确文件范围的计划。
+
+`GATE_MATRIX.yaml` 与 `PROTECTED_PATHS.yaml` 使用 JSON 语法（YAML 1.2 子集），无需 PyYAML。命令只能是非空
+字符串数组；加载器拒绝未知字段、重复 key/ID、无效引用、非正整数 timeout、绝对路径、Windows 路径与 `..`。
+原始运行目录必须是被 Git 忽略且未跟踪的 `var/agent-harness/runs/<UUID>/`。
+
+## 宿主集成
+
+`.github/workflows/agent-governance.yml` 是当前宿主的只读 CI 接线：固定 action commit，运行配置测试、完整
+Harness 套件、fake drills、危险参数扫描和计划/记忆漂移检查。它不持有写权限，也不执行合并、制品发布或部署。
+
+宿主可把自己的 Node、Java、Docker、双数据库、浏览器或产品化检查登记进 Gate 矩阵；核心套件不会猜测这些
+命令。GitHub 分支同步、PR、Obsidian 和生产审批同样属于宿主交付流程，不由 Harness 自动完成。
+
+默认 drill 全部使用临时目录和 fake 命令：
+
+```sh
+python3.11 tools/agent-harness/drills/run_drills.py
+python3.11 tools/agent-harness/drills/run_drills.py --check-forbidden-options
+python3.11 tools/agent-harness/drills/run_drills.py --check-docs \
+  --plan docs/superpowers/plans/approved-plan.md \
+  --memory docs/agent/PROJECT_MEMORY.md
 ```
 
-GateDefinition 字段为 id、command（tuple）、cwd（仓库相对路径）、timeout_seconds（正整数）。
-GateMatrix 包含 version、gates（GateDefinition tuple）、profiles（profile 名到 Gate ID tuple 的只读映射）、
-paths（profile 名到路径 pattern tuple 的只读映射）。后续 runner 按 paths 选 profile 并对 Gate ID 取并集。
-PathRule 包含 id、patterns、operations、action 和可选 generator（参数 tuple）。PolicyConfig 包含 version、rules tuple。
+真实 Codex smoke 只能人工显式运行一次，并且只操作由当前 HEAD 创建的 disposable worktree：
 
-## 磁盘格式
+```sh
+python3.11 tools/agent-harness/drills/run_drills.py --allow-real-codex
+```
 
-[GATE_MATRIX.yaml](../../docs/agent/GATE_MATRIX.yaml) 和 [PROTECTED_PATHS.yaml](../../docs/agent/PROTECTED_PATHS.yaml)
-使用 JSON 语法，即 YAML 1.2 子集，由 json 解析，不接受一般 YAML。version 必须为整数 1。
+runner 在调用 Codex 前拒绝生产 secret-shaped 路径，固定一个 cycle，只允许修改 fixture，并清理临时 worktree
+和分支。登录、配额、CLI 或受控环境失败必须得到脱敏 `paused` 证据；runner 自身或清理不变量失败则返回
+`failed`，不能伪装成可接受的暂停。CI 永不使用 `--allow-real-codex`。
 
-Gate 文件只有 version、gates、profiles 三个顶层字段。每个 Gate 必须有 id、command、cwd、timeout_seconds；
-每个 profile 必须有 paths 和 gates 数组。引用必须存在且无重复。
-策略文件只有 version、rules；每条规则必须有 id、patterns、operations、action，generated 还必须有 generator。
-operations 只接受 add、modify、delete；action 只接受 deny、approval_required、review_required、generated。
-generator 仅用于 generated。命令必须是非空字符串数组，不接受 Shell 字符串。
+本地裸 `python3` 若低于 3.11 会按设计失败；Harness 测试应使用版本化入口选择受控 runtime：
 
-加载器拒绝未知/缺失字段、重复 JSON key/ID、空集合、非法引用、无效类型（包括将 bool 当整数）、非有限 JSON 数字、
-空路径与 NUL、绝对路径、Windows 路径和含 .. 的路径。相对 cwd 允许 .。
-所有错误显式抛 ConfigError；加载器只读取与验证，不执行命令或判断批准是否存在。
-符号链接真实路径、匹配大小写、操作判定与规则优先级由后续 Git guard 实施；优先级见 SOP。
+```sh
+scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests -p 'test_*.py' -v
+```
 
-[STATE_SCHEMA.json](../../docs/agent/STATE_SCHEMA.json) 使用 JSON Schema draft 2020-12，版本 1，
-仅定义机器状态结构。运行转换、摘要校验、证据有效性和预算由后续状态/执行层检查。
-原始证据只写 var/agent-harness/；[run-history](../../docs/agent/run-history/README.md) 定义脱敏历史格式。
+当前限制：没有常驻队列或 Web 控制台；不自动批准 protected path、依赖、review、push、merge 或生产动作；
+真实工具可用性仍取决于宿主登录、配额和安装状态；临时工作区删除后只保留调用方主动记录的脱敏摘要。
