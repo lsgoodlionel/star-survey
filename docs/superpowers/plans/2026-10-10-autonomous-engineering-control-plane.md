@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-10-autonomous-engineering-control-plane-design.md`
 
-**Status:** 待用户书面确认
+**Status:** 已于 2026-10-10 获用户书面确认
 
 ## Global Constraints
 
