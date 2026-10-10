@@ -6,12 +6,13 @@
 ## 交付状态
 
 Task 8 本地实现与三路独立审查已完成，当前获批 implementation commit 为
-`ef5e1d3b61f2944731ba1be6aa5996548a88cf31`。当前结构化状态为
+`1fb396777cce6274a44989755e6859fa2a3b2ed5`。当前结构化状态为
 `locally_reviewed_sync_pending`：独立复审为 `complete`，GitHub hosted run 与 Obsidian 仍为 `pending`，因此 Task 8 与
 总计划保持 `in_progress`，不宣称 hosted CI 或完整同步已经完成。
 
-本任务未修改产品业务代码；Survey 分支已首次 push 以触发 hosted CI。失败 run `38058476411` 定位到 setup-python
-入口选择错误，最终修复已获三路复核批准，但新的 hosted run 尚未触发，Obsidian 未更新。
+本任务未修改产品业务代码。失败 run `38058476411` 定位到初始 setup-python 入口问题，run `38059629731` 又证明
+`bin/python3` 并非 setup-python 承诺入口。最终修复已获三路复核批准，但绑定 `1fb39677` 的 hosted run 尚未触发，
+Obsidian 未更新。
 
 ## RED→GREEN
 
@@ -147,7 +148,7 @@ Obsidian 仍保持 pending。
 
 ## Hosted Python identity closure
 
-首次 GitHub run `38058476411` 在 setup-python 提供的 hosted toolcache 布局下未选择实际 `bin/python3`，因此按预期失败，
+首次 GitHub run `38058476411` 在 setup-python 提供的 hosted toolcache 布局下未选择可执行入口，因此按预期失败，
 没有被描述为成功。提交 `717c1d82` 修正候选入口后，独立复核又发现 versioned symlink 名称可能与实际解释器 minor
 不一致；最终提交 `ef5e1d3b61f2944731ba1be6aa5996548a88cf31` 将 hosted/versioned bootstrap 绑定到当前
 `sys.executable`，并验证目标 basename 与实际 Python 3.11-3.14 minor 一致。
@@ -155,4 +156,17 @@ Obsidian 仍保持 pending。
 最终固定 digest Linux integration 为 7/7 PASS、零 skip；focused adapter 38/38 PASS，governance 13/13 PASS，
 三份 final closure report 均绑定
 `c7b9366142ab6f8b0570d208c156fc0392c007f1..ef5e1d3b61f2944731ba1be6aa5996548a88cf31` 并双
-`APPROVED`。新的 GitHub Ubuntu 24.04 run 尚待 push 触发，因此 manifest 仍保持 `github: pending`。
+`APPROVED`。这组修复仍错误假设 `bin/python3` 是 setup-python 的稳定入口，后续已由下一节的官方 `bin/python`
+契约修复取代。新的 GitHub Ubuntu 24.04 run 尚待 push 触发，因此 manifest 仍保持 `github: pending`。
+
+## Documented setup-python entry and path validation
+
+GitHub run `38059629731` 在 `pythonLocation=/opt/hostedtoolcache/Python/3.11.17/x64` 下仍于入口验证失败，并跳过后续 unit
+与 integration job。依据 setup-python 官方契约，提交 `37f86a8d` 将 CI 入口改为 `$pythonLocation/bin/python`；提交
+`b1b5d7c0` 将环境路径作为单一引用参数处理，只接受纯数字 patch component，避免在 bootstrap 前发生字段拆分；提交
+`1fb39677` 修正 newline fixture，确保空格、Tab、字面换行都被真实覆盖。
+
+最终证据：完整 Harness 408 tests（400 PASS、8 个本地 Docker 权限 typed skip、0 failure）；同一固定 digest Linux
+integration 8/8 PASS、零 skip；security、DX/CI、whole-branch 三份报告均绑定
+`c7b9366142ab6f8b0570d208c156fc0392c007f1..1fb396777cce6274a44989755e6859fa2a3b2ed5` 并双
+`APPROVED`。GitHub 与 Obsidian 仍保持 pending。

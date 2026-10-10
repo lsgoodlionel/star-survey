@@ -1,36 +1,55 @@
-# Task 8 Security Final Closure Review
+# Task 8 security Python entry scoped re-review
 
-## Scope And Identity
+日期：2026-10-10
 
-- Exact reviewed control-plane range: `c7b9366142ab6f8b0570d208c156fc0392c007f1..ef5e1d3b61f2944731ba1be6aa5996548a88cf31`.
-- Final hosted-runtime focus diff: `717c1d82cbe77ccd55cf19a4949583ab03c9571b..ef5e1d3b61f2944731ba1be6aa5996548a88cf31`.
-- Local identity verification confirmed `HEAD=ef5e1d3b61f2944731ba1be6aa5996548a88cf31` and both range endpoints.
-- The focus diff changes the wrapper, its adapter regression tests, and three status documents. No tracked file was edited during this review, no push was performed, and no real Codex process was run.
+角色：shell 输入处理与运行时身份边界 reviewer
+
+最终候选：`1fb396777cce6274a44989755e6859fa2a3b2ed5`
+
+完整范围：`c7b9366142ab6f8b0570d208c156fc0392c007f1..1fb396777cce6274a44989755e6859fa2a3b2ed5`
+
+证据修正：`b1b5d7c0b954bead0cad6eeb7af4bf8e4ea323b7..1fb396777cce6274a44989755e6859fa2a3b2ed5`
+
+方式：只读 Git diff、源码、测试和固定 digest Linux integration 复核；未修改 tracked 文件，未 commit/push，未运行真实 Codex。
 
 ## Findings
 
-No residual security or code-quality finding was identified. The prior P1 hosted bootstrap identity/version mismatch is closed. PATH-poisoning and bootstrap identity-change controls remain effective.
+无阻断 finding。
 
-## Closure Evidence
+## Scoped evidence correction
 
-1. **P1 hosted identity mismatch: closed.** The trusted bootstrap now always resolves the running process image at `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:220`. Hosted candidates and all versioned candidates require that resolved `sys.executable` equal the fingerprinted final target. At `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:223`, `require_version_binding` is true for the hosted root even when the entry is named only `python3`; the comparison at `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:224` therefore cannot be bypassed by the unversioned entry name.
+- 唯一增量是 `tools/agent-harness/tests/test_codex_adapter.py:512-515` 的测试证据修正，没有修改生产 wrapper 或运行时实现。
+- 旧写法 `"$(printf '\\n')"` 受 POSIX command substitution 规则影响，会删除尾随 newline，实际向循环传入空字符串，不能证明 newline 输入已覆盖。
+- 新写法用跨行单引号赋值：`newline='`、字面换行、`'`。单引号保留该字符，不经过 command substitution 的尾随换行删除。
+- 循环以 `"$newline"` 传递单一参数，并在每次迭代先执行 `test "${#separator}" -eq 1 || exit 95`。空字符串、多个字符或意外展开都会在运行 wrapper 前失败。
+- 测试仍断言三次可信 `Python 3.11.*` 输出，并在每次调用后确认攻击者 marker 不存在。结合三种 separator 的长度断言，空格、Tab、字面 newline 三条路径均实际执行且均未选择恶意入口。
 
-2. **Actual minor is bound to the final versioned target.** When the resolved target is named `python3.x`, `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:225` requires both a supported 3.11-3.14 interpreter and exact agreement between the target basename and the current process's actual major/minor. The hosted branch independently enforces the supported range at `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:228`. The positive `python3 -> python3.11` case passes; the negative `python3 -> python3.12` name backed by an actual 3.11 executable is rejected with the typed bootstrap identity error. These cases are fixed at `/Users/lionel/Develop/survey/.worktrees/admin-web/tools/agent-harness/tests/test_codex_adapter.py:471`.
+## Shell 输入边界
 
-3. **Legacy unversioned /usr bootstrap remains discovery-only for old Python.** Non-hosted unversioned `python3` may start the isolated discovery code, preserving compatibility with an old system bootstrap, but `trusted_runtime` at `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:235` only permits unversioned or explicitly supported versioned names. Its `python3` branch at `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:251` binds the candidate to the current resolved executable and requires version 3.11-3.14. An old bootstrap therefore cannot itself become the controlled runtime; a separate trusted supported runtime must be discovered.
+- `scripts/agent-harness:133-142` 仅在 `AGENT_HARNESS_CI=1` 时考虑 hosted 候选；完整值先匹配 `/opt/hostedtoolcache/Python/3.11.*/x64`，再剥离固定前后缀并以 `''|*[!0-9]*` 拒绝空 patch 或任何非数字字符。
+- 空格、Tab、newline、额外 slash、字母及其他路径拼接均不能形成 `ci_candidate`。patch component 仍严格为非空纯数字。
+- `try_bootstrap_candidate "$ci_candidate"` 把 `pythonLocation` 作为单一路径参数传递；函数以 `candidate=$1` 接收，后续文件系统消费点保持引用。不存在未引用变量扩展导致的 field splitting。
+- hosted 候选无效时只进入静态版本化 fallback 列表；恶意路径 marker regression 证明三种空白输入都不会执行攻击者文件。
 
-4. **PATH poisoning remains closed.** The wrapper still replaces caller `PATH` with `/usr/bin:/bin` at `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:15`, uses absolute bootstrap utilities, and searches only approved absolute roots. The escaped/writable candidate fixture at `/Users/lionel/Develop/survey/.worktrees/admin-web/tools/agent-harness/tests/test_codex_adapter.py:522` passed without executing attacker-controlled candidates. Host-side caller-PATH, writable executable, controlled-path, and alternatives-chain tests also passed.
+## Runtime identity boundary
 
-5. **Identity-change protection remains closed.** Shell-side trusted-root, owner/mode, symlink-depth, executable and device/inode fingerprint checks remain unchanged. The Python phase reconstructs and compares that fingerprint before proceeding at `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:218`. The mutation fixture at `/Users/lionel/Develop/survey/.worktrees/admin-web/tools/agent-harness/tests/test_codex_adapter.py:538` continues to return exit 2 with a typed bootstrap error.
+- setup-python hosted entry 仍为 `$pythonLocation/bin/python`；普通文件 copy 与 `bin/python -> python3.11` symlink 两种合法布局均通过同一 fingerprint、owner/mode、trusted parent 与 canonical root 校验。
+- `trusted_bootstrap()` 重建 symlink chain 并比较 device/inode/owner/mode fingerprint。hosted 或 versioned target 必须与当前 `sys.executable` 的 resolved identity 相同。
+- 若 target 名为 `python3.N`，`N` 必须与实际 `sys.version_info` minor 一致；hosted 实际版本与最终 runtime 均继续限制为 Python 3.11-3.14。实际 3.11 冒充 `python3.12` 的 fixture 仍失败关闭。
+- 本次测试提交未改动 candidate 列表、trusted roots、owner policy、symlink policy、identity/minor binding 或 runtime selection，因而没有放宽非 hosted 行为。非 hosted unversioned `python` 仍不被接受，`/usr/bin/python3` 仅保留受控 discovery 兼容路径。
 
-## Verification
+## Verification evidence
 
-- Fixed-digest Linux integration using `python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce`: 7 tests passed, zero skipped. This included the hosted positive and identity/minor mismatch negative cases, path poisoning, and identity mutation.
-- Complete adjacent adapter and governance suite: 58 tests executed; 51 passed and 7 Docker tests were sandbox-skipped. The same 7 tests independently passed with zero skips in the authorized fixed-digest Docker run above.
-- Current repository workflow scan returned `PASS forbidden-option-policy`.
-- Status/document drift check returned `PASS plan-memory-drift`.
-- `git diff --check c7b9366142ab6f8b0570d208c156fc0392c007f1..ef5e1d3b61f2944731ba1be6aa5996548a88cf31` returned clean.
-- Codex Security review of the focus diff completed with zero reportable findings across hosted identity/minor binding, PATH poisoning, and identity-change surfaces.
+- 用户提供的固定 digest integration：8/8 PASS，0 skip。
+- reviewer 独立复跑固定 digest Linux wrapper integration：8/8 PASS，0 skip，使用 `python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce`；其中 newline 长度断言与三次输出断言均通过。
+- `sh -n scripts/agent-harness`：PASS。
+- `git diff --check c7b9366142ab6f8b0570d208c156fc0392c007f1..1fb396777cce6274a44989755e6859fa2a3b2ed5`：PASS。
+- `git diff --check b1b5d7c0b954bead0cad6eeb7af4bf8e4ea323b7..1fb396777cce6274a44989755e6859fa2a3b2ed5`：PASS。
+- 候选 HEAD 已核对为 `1fb396777cce6274a44989755e6859fa2a3b2ed5`；报告写入前 tracked/staged 工作区为空。
+
+## Conclusion
+
+`1fb39677` 正确修复了 newline regression 的证据缺口：测试现在传入并验证一个字面 newline，而不是被 command substitution 删除后的空值。生产实现与此前批准的 shell 单路径处理、numeric patch、hosted copy/symlink、Python 3.11-3.14 identity/minor 及非 hosted 边界完全相同，批准结论继续成立。
 
 SPEC_COMPLIANCE=APPROVED
 CODE_QUALITY=APPROVED

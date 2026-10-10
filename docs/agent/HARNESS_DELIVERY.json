@@ -2,10 +2,10 @@
   "deliveryStatus": "locally_reviewed_sync_pending",
   "evidence": {
     "commands": [
-      "task8-final-focused-104",
-      "harness-full-final-407",
+      "adapter-nondocker-38",
+      "harness-full-final-408",
       "fake-drills",
-      "docker-linux-integration-7",
+      "docker-linux-integration-8",
       "hosted-runtime-identity-binding",
       "governance-checks",
       "doctor",
@@ -13,7 +13,7 @@
       "capability-check",
       "git-diff-check"
     ],
-    "headCommit": "ef5e1d3b61f2944731ba1be6aa5996548a88cf31",
+    "headCommit": "1fb396777cce6274a44989755e6859fa2a3b2ed5",
     "status": "passed"
   },
   "externalSync": {
@@ -21,7 +21,7 @@
     "independentReview": "complete",
     "obsidian": "pending"
   },
-  "implementationCommit": "ef5e1d3b61f2944731ba1be6aa5996548a88cf31",
+  "implementationCommit": "1fb396777cce6274a44989755e6859fa2a3b2ed5",
   "planPath": "docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md",
   "taskSteps": {
     "1": {"completed": [1, 2, 3, 4, 5, 6], "pending": []},
@@ -40,27 +40,27 @@
       {
         "reviewer": "security",
         "path": "docs/agent/reviews/2026-10-10-task-8-security.md",
-        "reviewedCommit": "ef5e1d3b61f2944731ba1be6aa5996548a88cf31",
-        "reviewedRange": "c7b9366142ab6f8b0570d208c156fc0392c007f1..ef5e1d3b61f2944731ba1be6aa5996548a88cf31",
-        "sha256": "6e4748d9aa8b39df8bfe174a6e70a5f1178fac8f717d4a40c15d1763b9ad8d24",
+        "reviewedCommit": "1fb396777cce6274a44989755e6859fa2a3b2ed5",
+        "reviewedRange": "c7b9366142ab6f8b0570d208c156fc0392c007f1..1fb396777cce6274a44989755e6859fa2a3b2ed5",
+        "sha256": "7454ed5345af9cb2da26b0314ba73f96d4b3496e75522575bcd8dccdf6677165",
         "specVerdict": "APPROVED",
         "codeQualityVerdict": "APPROVED"
       },
       {
         "reviewer": "dx_ci",
         "path": "docs/agent/reviews/2026-10-10-task-8-dx-ci.md",
-        "reviewedCommit": "ef5e1d3b61f2944731ba1be6aa5996548a88cf31",
-        "reviewedRange": "c7b9366142ab6f8b0570d208c156fc0392c007f1..ef5e1d3b61f2944731ba1be6aa5996548a88cf31",
-        "sha256": "7c1093c4fff35eb6dcc1afb2c9500369c8d5e41e6bfdc1b6a9d81195acb886eb",
+        "reviewedCommit": "1fb396777cce6274a44989755e6859fa2a3b2ed5",
+        "reviewedRange": "c7b9366142ab6f8b0570d208c156fc0392c007f1..1fb396777cce6274a44989755e6859fa2a3b2ed5",
+        "sha256": "70bf9d1dd4a0e591390bf5fd8b77c82d75cda8050c37c23ed9cc86aa263ddf6d",
         "specVerdict": "APPROVED",
         "codeQualityVerdict": "APPROVED"
       },
       {
         "reviewer": "whole_branch",
         "path": "docs/agent/reviews/2026-10-10-task-8-whole-branch.md",
-        "reviewedCommit": "ef5e1d3b61f2944731ba1be6aa5996548a88cf31",
-        "reviewedRange": "c7b9366142ab6f8b0570d208c156fc0392c007f1..ef5e1d3b61f2944731ba1be6aa5996548a88cf31",
-        "sha256": "5f923647a7620875a43323bdeeb4bf3293571d3b6f9dbc9cf142f75973555df1",
+        "reviewedCommit": "1fb396777cce6274a44989755e6859fa2a3b2ed5",
+        "reviewedRange": "c7b9366142ab6f8b0570d208c156fc0392c007f1..1fb396777cce6274a44989755e6859fa2a3b2ed5",
+        "sha256": "9c8a9be13f5a1bad862b64ad249e33fe0eaa567ec857cb54f29d30ad9f4d6455",
         "specVerdict": "APPROVED",
         "codeQualityVerdict": "APPROVED"
       }
