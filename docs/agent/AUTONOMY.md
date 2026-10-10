@@ -33,6 +33,11 @@ deny 立即拒绝并暂停；approval_required 需要对应范围的人类批准
 review_required 允许实现但完成前需要独立审查。无匹配路径不能隐式获得批准。
 真实 smoke 的秘密路径 pattern 与模板 allowlist 由版本化 [HARNESS_HOST.json](HARNESS_HOST.json) 提供；新增模板放行须
 经宿主策略变更，不得在核心 runner 内写死项目特例。
+本仓库有意以固定 LimeSurvey 上游提交建立 shallow 历史边界。`HARNESS_HOST.json` 只能用完整 SHA 显式列出允许的
+shallow commit，并以完整 ref 名固定承载该上游历史的 trusted head。Harness 仅在 `.git/shallow` 与该集合精确相等、
+每个 boundary 均为当前 HEAD 或显式 trusted head 的祖先，且 run 的 base/head ancestry 可由 Git 证明时继续。
+缺少配置、ref 缺失或验证期间移动、额外或变化的 boundary、无法解析的 commit 与不确定 ancestry 一律暂停；
+不得删除 shallow 元数据或把策略放宽为任意 shallow repository。
 控制平面规则本身属于 approval_required，防止自治执行降低自身边界。
 新增依赖、越界或未批准的保护路径变更立即暂停；既有 Task 的明确授权对指定范围有效。
 

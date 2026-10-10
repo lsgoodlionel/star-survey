@@ -12,7 +12,7 @@ from unittest.mock import patch
 HARNESS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS))
 
-from agent_harness.config import PathRule, PolicyConfig  # noqa: E402
+from agent_harness.config import HistoryBoundaryPolicy, PathRule, PolicyConfig  # noqa: E402
 from agent_harness.state import load_state  # noqa: E402
 from agent_harness import git_guard  # noqa: E402
 from agent_harness.git_guard import (  # noqa: E402
@@ -357,6 +357,80 @@ class GitGuardTests(GitRepoFixture):
         result = validate_resume(snapshot, state)
         self.assertFalse(result.allowed)
         self.assertEqual(result.reason, "ambiguous_ancestry")
+
+    def test_exact_host_trusted_shallow_boundary_allows_proven_ancestry(self):
+        (self.main / "tracked.txt").write_text("main child\n")
+        self.git("add", "--", "tracked.txt", repo=self.main)
+        self.git("commit", "-m", "main child", repo=self.main)
+        clone = self.root / "trusted-shallow"
+        self.git("clone", "--depth=2", self.main.as_uri(), str(clone), repo=self.root)
+        linked = self.root / "trusted-shallow-worktree"
+        self.git("worktree", "add", "-b", "feat/trusted-shallow", str(linked), repo=clone)
+        shallow = Path(self.git("rev-parse", "--git-path", "shallow", repo=linked))
+        boundary = shallow.read_text(encoding="ascii").strip()
+        snapshot = capture_snapshot(linked)
+        state = replace(self.state, worktree_path=linked, branch="feat/trusted-shallow",
+                        base_commit=boundary, head_commit=snapshot.head_commit)
+        policy = HistoryBoundaryPolicy((boundary,))
+        result = validate_resume(snapshot, state, policy)
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.reason, "exact_match")
+
+    def test_host_trusted_shallow_boundary_requires_exact_actual_set(self):
+        clone = self.root / "changed-shallow"
+        self.git("clone", "--depth=1", self.main.as_uri(), str(clone), repo=self.root)
+        linked = self.root / "changed-shallow-worktree"
+        self.git("worktree", "add", "-b", "feat/changed-shallow", str(linked), repo=clone)
+        snapshot = capture_snapshot(linked)
+        state = replace(self.state, worktree_path=linked, branch="feat/changed-shallow",
+                        base_commit=snapshot.head_commit, head_commit=snapshot.head_commit)
+        for allowed in (("f" * 40,), (snapshot.head_commit, "f" * 40)):
+            with self.subTest(allowed=allowed):
+                result = validate_resume(snapshot, state, HistoryBoundaryPolicy(allowed))
+                self.assertFalse(result.allowed)
+                self.assertEqual(result.reason, "ambiguous_ancestry")
+
+    def test_host_trusted_shallow_boundary_must_be_head_ancestor(self):
+        clone = self.root / "unrelated-shallow"
+        self.git("clone", "--depth=1", self.main.as_uri(), str(clone), repo=self.root)
+        self.git("switch", "--orphan", "unrelated", repo=clone)
+        (clone / "tracked.txt").unlink(missing_ok=True)
+        (clone / "unrelated.txt").write_text("unrelated\n")
+        self.git("add", "unrelated.txt", repo=clone)
+        self.git("commit", "-m", "unrelated", repo=clone)
+        unrelated = self.git("rev-parse", "HEAD", repo=clone)
+        self.git("switch", "main", repo=clone)
+        shallow = Path(self.git("rev-parse", "--git-path", "shallow", repo=clone))
+        if not shallow.is_absolute():
+            shallow = clone / shallow
+        shallow.write_text(unrelated + "\n", encoding="ascii")
+        linked = self.root / "unrelated-shallow-worktree"
+        self.git("worktree", "add", "-b", "feat/unrelated-shallow", str(linked), repo=clone)
+        snapshot = capture_snapshot(linked)
+        state = replace(self.state, worktree_path=linked, branch="feat/unrelated-shallow",
+                        base_commit=snapshot.head_commit, head_commit=snapshot.head_commit)
+        result = validate_resume(snapshot, state, HistoryBoundaryPolicy((unrelated,)))
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason, "ambiguous_ancestry")
+
+    def test_disconnected_host_boundary_requires_explicit_trusted_head_ref(self):
+        self.git("switch", "--orphan", "upstream", repo=self.main)
+        (self.main / "tracked.txt").unlink(missing_ok=True)
+        (self.main / "upstream.txt").write_text("upstream\n")
+        self.git("add", "upstream.txt", repo=self.main)
+        self.git("commit", "-m", "upstream boundary", repo=self.main)
+        boundary = self.git("rev-parse", "HEAD", repo=self.main)
+        self.git("update-ref", "refs/remotes/upstream/master", boundary, repo=self.main)
+        self.git("switch", "main", repo=self.main)
+        shallow = Path(self.git("rev-parse", "--git-path", "shallow", repo=self.repo))
+        shallow.write_text(boundary + "\n", encoding="ascii")
+        snapshot = capture_snapshot(self.repo)
+        rejected = validate_resume(snapshot, self.state, HistoryBoundaryPolicy((boundary,)))
+        self.assertFalse(rejected.allowed)
+        policy = HistoryBoundaryPolicy((boundary,), ("refs/remotes/upstream/master",))
+        result = validate_resume(snapshot, self.state, policy)
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.reason, "exact_match")
 
     def test_owned_merge_cannot_hide_foreign_history(self):
         self.git("switch", "-c", "side")

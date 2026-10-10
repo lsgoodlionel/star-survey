@@ -49,13 +49,20 @@ HEAD、工作区和工具环境。审批路径、真实秘密、依赖新增、�
 - `docs/agent/PROTECTED_PATHS.yaml`：`deny/approval_required/review_required/generated` 路径策略。
 - `docs/agent/STATE_SCHEMA.json`：持久化 wire contract。
 - `docs/agent/PROJECT_MEMORY.md`：宿主项目稳定事实，不保存临时运行状态。
-- `docs/agent/HARNESS_HOST.json`：active plan、secret policy、fixture scope、宿主文档与交付 manifest 路径。
+- `docs/agent/HARNESS_HOST.json`：active plan、secret policy、fixture scope、受信 shallow history boundary、宿主文档与交付 manifest 路径。
 - `docs/agent/HARNESS_DELIVERY.json`：计划 checkbox、ledger、implementation commit、验证证据和外部同步状态的唯一清单。
 - `docs/superpowers/plans/`：已经人工确认、包含唯一 Milestone 与明确文件范围的计划。
 
 `GATE_MATRIX.yaml` 与 `PROTECTED_PATHS.yaml` 使用 JSON 语法（YAML 1.2 子集），无需 PyYAML。命令只能是非空
 字符串数组；加载器拒绝未知字段、重复 key/ID、无效引用、非正整数 timeout、绝对路径、Windows 路径与 `..`。
 原始运行目录必须是被 Git 忽略且未跟踪的 `var/agent-harness/runs/<UUID>/`。
+
+宿主若有意保留固定 shallow 历史，必须在 `historyBoundary.allowedShallowCommits` 中逐项填写完整 40 位 commit SHA，
+并在 `trustedHeadRefs` 中填写承载这些历史的完整 `refs/heads/...` 或 `refs/remotes/...` 名称。这不是通用 shallow
+开关：Harness 会读取 Git 实际 shallow 文件并要求集合精确相等，证明每个 boundary 都是当前 HEAD 或显式 trusted
+head 的祖先，同时独立证明 run 的 `baseCommit -> headCommit` ancestry；ref 在验证前后还必须保持同一 commit。
+配置缺失、未知字段、缩写 SHA、重复项、ref 缺失或漂移、额外或变化的实际 boundary、不可解析对象及任何不确定
+ancestry 都失败关闭。完整仓库继续按原有 ancestry 规则运行。
 
 ## 宿主集成
 

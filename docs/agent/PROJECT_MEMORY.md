@@ -53,6 +53,10 @@
 ## 已确认边界与维护
 
 - 2026-10-10 决策：规则、状态、证据外置，复用现有 CI、Git 与 Docker；不建平行管理平台。
+- 2026-10-11 决策：本仓库保留 LimeSurvey commit `4c20c68033c8e37140f26af80a65f659b40f8a45`
+  作为有意的 shallow 上游历史边界。Harness 只信任 `HARNESS_HOST.json` 固定且与 Git shallow 列表精确匹配的
+  boundary，以 `refs/remotes/limesurvey-fork/master` 锚定这段独立上游历史，并继续验证 boundary 到当前或受信 head
+  及 run base/head 的 ancestry；ref 漂移、未知、额外或变化的 boundary 仍暂停。
 - 同一指纹 3 次、每 Milestone 5 个失败修复周期、连续 2 轮无进展暂停；不能绕过审批和沙盒。
 - `.github/workflows/agent-governance.yml` 只有只读权限，固定 action commit，验证配置、Harness、drills、危险参数
   与计划/记忆引用；不负责合并、发布或部署。

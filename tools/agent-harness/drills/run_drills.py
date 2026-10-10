@@ -33,6 +33,7 @@ HARNESS = REPO / "tools/agent-harness"
 sys.path.insert(0, str(HARNESS))
 
 from agent_harness.codex_adapter import CodexFailure, CodexResult, run_codex
+from agent_harness.config import ConfigError, load_history_boundary_policy
 from agent_harness.diagnostics import record_failure, redact_text, render_diagnostics
 from agent_harness.doctor import run_doctor
 from agent_harness.git_guard import capture_snapshot, validate_resume
@@ -458,7 +459,7 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
         required = {"version", "activePlan", "deliveryManifest", "ledger", "secretPolicy",
-                    "fixture", "documentation"}
+                    "fixture", "documentation", "historyBoundary"}
         if set(document) != required or document["version"] != 1:
             raise ValueError()
         policy = document["secretPolicy"]
@@ -476,7 +477,9 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
         if (not Path(document["activePlan"]).is_relative_to(plan_root)
                 or not Path(fixture["planPath"]).is_relative_to(plan_root)):
             raise ValueError()
-    except (KeyError, TypeError, ValueError, OSError, UnicodeError, json.JSONDecodeError):
+        load_history_boundary_policy(path)
+    except (ConfigError, KeyError, TypeError, ValueError, OSError, UnicodeError,
+            json.JSONDecodeError):
         raise DrillRefused("invalid Harness host configuration") from None
     return document
 

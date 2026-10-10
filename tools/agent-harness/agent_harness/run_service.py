@@ -15,12 +15,15 @@ from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 import xml.etree.ElementTree as ET
 
-from .config import load_gate_matrix, load_protected_paths, validate_gate_id
+from .config import (ConfigError, load_gate_matrix, load_history_boundary_policy,
+                     load_protected_paths, validate_gate_id)
 from .diagnostics import redact_text, render_diagnostics, failure_fingerprint, record_failure, _read_log, _first_error
 from .codex_adapter import build_codex_command, controlled_tool_errors, run_codex, run_with_controlled_tools
 from .doctor import run_doctor
 from .gate_runner import invalidate_stale_evidence, resolve_required_gates, run_gate
-from .git_guard import assert_worktree_isolated, capture_snapshot, changed_paths, classify_paths, validate_resume
+from .git_guard import (GitGuardError, assert_worktree_isolated, capture_snapshot,
+                        changed_paths, classify_paths, validate_history_ancestry,
+                        validate_resume)
 from .state import (AttemptState, GateStatus, RunState, RunStatus,
                     append_event, load_state, read_events, save_state_atomic,
                     sha256_file, transition)
@@ -406,6 +409,15 @@ class RunService:
         return (load_gate_matrix(self._path(Path("docs/agent/GATE_MATRIX.yaml"))),
                 load_protected_paths(self._path(Path("docs/agent/PROTECTED_PATHS.yaml"))))
 
+    def _history_boundary(self):
+        path = self._path(Path("docs/agent/HARNESS_HOST.json"))
+        if not path.is_file():
+            return None
+        try:
+            return load_history_boundary_policy(path)
+        except ConfigError:
+            raise ServiceError("宿主历史边界配置不可用", 5) from None
+
     def _binding(self):
         return {name: sha256_file(self._path(Path("docs/agent") / name))
                 for name in ("GATE_MATRIX.yaml", "PROTECTED_PATHS.yaml")}
@@ -668,13 +680,15 @@ class RunService:
         return result.stdout
 
     def _check_ancestry(self, state):
-        if self._git("rev-parse", "--is-shallow-repository").strip() != "false":
-            raise ServiceError("浅克隆无法验证提交归属", 5)
-        self._git("merge-base", "--is-ancestor", state.base_commit, state.head_commit)
+        try:
+            validate_history_ancestry(
+                self.repo, state.base_commit, state.head_commit, self._history_boundary())
+        except GitGuardError:
+            raise ServiceError("无法验证 Git 提交归属", 5) from None
 
     def _resume_git_allowed(self, raw, filtered, state):
         scoped = replace(state, changed_paths=self._authorized_paths(state))
-        decision = validate_resume(raw, scoped)
+        decision = validate_resume(raw, scoped, self._history_boundary())
         if decision.allowed:
             return True
         if (decision.reason not in ("dirty_drift", "unexplained_head") or filtered.dirty_paths

@@ -880,6 +880,8 @@ class FaultInjectionTests(unittest.TestCase):
             config = repo / "docs/HOST.json"
             config.write_text(json.dumps({
                 "version": 1,
+                "historyBoundary": {"allowedShallowCommits": ["a" * 40],
+                                    "trustedHeadRefs": ["refs/remotes/upstream/main"]},
                 "activePlan": "docs/superpowers/plans/custom.md",
                 "deliveryManifest": "docs/DELIVERY.json",
                 "ledger": ".sdd/progress.md",
@@ -964,6 +966,8 @@ class FaultInjectionTests(unittest.TestCase):
             config = repo / "docs/HOST.json"
             config.write_text(json.dumps({
                 "version": 1,
+                "historyBoundary": {"allowedShallowCommits": ["a" * 40],
+                                    "trustedHeadRefs": ["refs/remotes/upstream/main"]},
                 "activePlan": "docs/superpowers/plans/active.md",
                 "deliveryManifest": "docs/DELIVERY.json",
                 "ledger": "docs/progress.md",
@@ -992,6 +996,8 @@ class FaultInjectionTests(unittest.TestCase):
             config.parent.mkdir()
             config.write_text(json.dumps({
                 "version": 1,
+                "historyBoundary": {"allowedShallowCommits": ["a" * 40],
+                                    "trustedHeadRefs": ["refs/remotes/upstream/main"]},
                 "activePlan": "docs/superpowers/plans/portable.md",
                 "deliveryManifest": "docs/agent/PORTABLE_DELIVERY.json",
                 "ledger": "docs/agent/portable-progress.md",

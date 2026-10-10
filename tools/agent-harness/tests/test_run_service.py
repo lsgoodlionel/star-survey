@@ -114,6 +114,35 @@ class WorktreeCase(unittest.TestCase):
 
 
 class RunServiceTests(WorktreeCase):
+    def test_next_accepts_only_exact_host_trusted_shallow_boundary(self):
+        boundary = self.git("rev-parse", "HEAD")
+        host = self.repo / "docs/agent/HARNESS_HOST.json"
+        self.write(host, json.dumps({
+            "version": 1,
+            "historyBoundary": {
+                "allowedShallowCommits": [boundary],
+                "trustedHeadRefs": ["refs/heads/feat/test"],
+            },
+        }))
+        self.git("add", "docs/agent/HARNESS_HOST.json")
+        self.git("commit", "-m", "host history boundary")
+        common = Path(self.git("rev-parse", "--git-common-dir"))
+        if not common.is_absolute():
+            common = (self.repo / common).resolve()
+        (common / "shallow").write_text(boundary + "\n", encoding="ascii")
+        self.init_run()
+        self.assertEqual(self.service.next_action(self.state.run_id).operation, "develop")
+        self.write(host, json.dumps({
+            "version": 1,
+            "historyBoundary": {
+                "allowedShallowCommits": ["f" * 40],
+                "trustedHeadRefs": ["refs/heads/feat/test"],
+            },
+        }))
+        with self.assertRaises(ServiceError) as rejected:
+            self.service.next_action(self.state.run_id)
+        self.assertEqual(rejected.exception.exit_code, 5)
+
     def test_recovery_revalidates_review_before_appending_completed_event(self):
         self.init_run()
         self.changed_commit()

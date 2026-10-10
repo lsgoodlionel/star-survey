@@ -86,6 +86,10 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertIn("activePlan", document)
         self.assertIn("deliveryManifest", document)
         self.assertIn("secretPolicy", document)
+        self.assertEqual(document["historyBoundary"]["allowedShallowCommits"],
+                         ["4c20c68033c8e37140f26af80a65f659b40f8a45"])
+        self.assertEqual(document["historyBoundary"]["trustedHeadRefs"],
+                         ["refs/remotes/limesurvey-fork/master"])
         self.assertIn("fixture", document)
         self.assertIn("documentation", document)
         self.assertIn(".env.example", document["secretPolicy"]["allowlist"])

@@ -14,6 +14,7 @@ HARNESS = Path(__file__).resolve().parents[1]
 REPO = HARNESS.parents[1]
 sys.path.insert(0, str(HARNESS))
 
+from agent_harness import config as harness_config  # noqa: E402
 from agent_harness.config import (  # noqa: E402
     ConfigError, GateDefinition, GateMatrix, PathRule, PolicyConfig,
     load_gate_matrix, load_protected_paths,
@@ -64,6 +65,71 @@ class ConfigTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_history_boundary_requires_unique_full_commit_ids(self):
+        self.assertTrue(hasattr(harness_config, "load_history_boundary_policy"),
+                        "history-boundary loader is missing")
+        boundary = "4c20c68033c8e37140f26af80a65f659b40f8a45"
+        policy = harness_config.load_history_boundary_policy(self.write({
+            "version": 1,
+            "historyBoundary": {
+                "allowedShallowCommits": [boundary],
+                "trustedHeadRefs": ["refs/remotes/limesurvey-fork/master"],
+            },
+        }))
+        self.assertIsInstance(policy, harness_config.HistoryBoundaryPolicy)
+        self.assertEqual(policy.allowed_shallow_commits, (boundary,))
+        self.assertEqual(policy.trusted_head_refs,
+                         ("refs/remotes/limesurvey-fork/master",))
+        for commits in ([], [boundary, boundary], ["4c20c680"], ["G" * 40],
+                        [boundary, 7], boundary):
+            with self.subTest(commits=commits):
+                with self.assertRaises(ConfigError):
+                    harness_config.load_history_boundary_policy(self.write({
+                        "version": 1,
+                        "historyBoundary": {
+                            "allowedShallowCommits": commits,
+                            "trustedHeadRefs": ["refs/remotes/limesurvey-fork/master"],
+                        },
+                    }))
+
+    def test_history_boundary_rejects_missing_unknown_or_malformed_schema(self):
+        self.assertTrue(hasattr(harness_config, "load_history_boundary_policy"),
+                        "history-boundary loader is missing")
+        boundary = "4c20c68033c8e37140f26af80a65f659b40f8a45"
+        invalid = (
+            {"version": 1},
+            {"version": 1, "historyBoundary": {
+                "allowedShallowCommits": [boundary],
+                "trustedHeadRefs": ["refs/remotes/limesurvey-fork/master"],
+            },
+             "override": True},
+            {"version": 1, "historyBoundary": {
+                "allowedShallowCommits": [boundary],
+                "trustedHeadRefs": ["refs/remotes/limesurvey-fork/master"],
+                "allowAnyShallow": True}},
+            {"version": 2, "historyBoundary": {
+                "allowedShallowCommits": [boundary],
+                "trustedHeadRefs": ["refs/remotes/limesurvey-fork/master"],
+            }},
+        )
+        for document in invalid:
+            with self.subTest(document=document), self.assertRaises(ConfigError):
+                harness_config.load_history_boundary_policy(self.write(document))
+
+    def test_history_boundary_rejects_ambiguous_or_untrusted_ref_names(self):
+        boundary = "4c20c68033c8e37140f26af80a65f659b40f8a45"
+        for refs in ([], "refs/remotes/upstream/main", ["main"], ["HEAD"],
+                     ["refs/remotes/upstream/*"], ["refs/remotes/upstream/../main"],
+                     ["refs/remotes/upstream/main", "refs/remotes/upstream/main"]):
+            with self.subTest(refs=refs), self.assertRaises(ConfigError):
+                harness_config.load_history_boundary_policy(self.write({
+                    "version": 1,
+                    "historyBoundary": {
+                        "allowedShallowCommits": [boundary],
+                        "trustedHeadRefs": refs,
+                    },
+                }))
 
     def test_rejects_unknown_top_level_keys(self):
         for loader, value in ((load_gate_matrix, self.matrix),
