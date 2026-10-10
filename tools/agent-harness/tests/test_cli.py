@@ -15,6 +15,25 @@ from agent_harness.cli import main
 
 
 class CliTests(WorktreeCase):
+    def test_next_reports_registered_dirty_gate_failure_as_repair_read_only(self):
+        path = self.repo / "docs/agent/GATE_MATRIX.yaml"
+        matrix = json.loads(path.read_text())
+        matrix["gates"][0]["command"] = [sys.executable, "-c", "raise SystemExit(7)"]
+        self.write(path, json.dumps(matrix))
+        self.git("add", str(path.relative_to(self.repo)))
+        self.git("commit", "-m", "failure fixture")
+        self.init_run()
+        self.write(self.repo / "src/example.txt", "dirty repair")
+        self.assertEqual(self.call("gate", "--json")[0], 4)
+        before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+        code, output, stderr = self.call("next", "--json")
+        self.assertEqual(code, 0, output + stderr)
+        self.assertEqual(json.loads(output)["operation"], "repair")
+        self.assertEqual(before, {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()})
+        self.write(self.repo / "src/new.txt", "unknown")
+        before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+        self.assertEqual(self.call("next", "--json")[0], 5)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()})
     def test_record_review_cli_binds_current_scope_and_next_remains_read_only(self):
         self.init_run()
         self.changed_commit()

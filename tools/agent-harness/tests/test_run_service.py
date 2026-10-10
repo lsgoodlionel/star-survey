@@ -114,6 +114,188 @@ class WorktreeCase(unittest.TestCase):
 
 
 class RunServiceTests(WorktreeCase):
+    def test_recovery_revalidates_review_before_appending_completed_event(self):
+        self.init_run()
+        self.changed_commit()
+        self.service.run_gates(self.state.run_id)
+        self.service.record_review(self.state.run_id, "independent-reviewer", self.review_report())
+        binding = json.loads([d for d in self.reload().decisions if d["type"] == "review_evidence"][-1]["summary"])
+        review = self.repo / binding["reportPath"]
+        history = self.repo / "docs/agent/run-history" / (self.state.run_id + ".md")
+        atomic = self.service._atomic_text
+        def stop_history(path, text):
+            if path == history:
+                raise SystemExit("before history")
+            return atomic(path, text)
+        with patch.object(self.service, "_atomic_text", side_effect=stop_history), self.assertRaises(SystemExit):
+            self.service.finalize(self.state.run_id)
+        events_path = self.state_path().parent / "events.jsonl"
+        events = events_path.read_bytes()
+        def publish_then_delete_review(path, text):
+            result = atomic(path, text)
+            if path == history:
+                review.unlink()
+            return result
+        with patch.object(self.service, "_atomic_text", side_effect=publish_then_delete_review), self.assertRaises(ServiceError) as rejected:
+            self.service.finalize(self.state.run_id)
+        self.assertEqual(rejected.exception.exit_code, 3)
+        self.assertEqual(events, events_path.read_bytes())
+        with self.assertRaises(ServiceError) as status:
+            self.service.status(self.state.run_id)
+        self.assertEqual(status.exception.exit_code, 5)
+    def test_completed_recovery_with_invalid_review_does_not_publish_or_advance_status(self):
+        from agent_harness import run_service as module
+        self.init_run()
+        self.changed_commit()
+        self.service.run_gates(self.state.run_id)
+        self.service.record_review(self.state.run_id, "independent-reviewer", self.review_report())
+        directory = self.state_path().parent
+        baseline = {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+        history = self.repo / "docs/agent/run-history" / (self.state.run_id + ".md")
+        binding = json.loads([d for d in self.reload().decisions if d["type"] == "review_evidence"][-1]["summary"])
+        review = self.repo / binding["reportPath"]
+        for boundary in ("history", "event"):
+            for drift in ("tampered", "deleted"):
+                with self.subTest(boundary=boundary, drift=drift):
+                    for p in directory.rglob("*"):
+                        if p.is_file() and p not in baseline:
+                            p.unlink()
+                    for p, content in baseline.items():
+                        self.write(p, content.decode())
+                    history.unlink(missing_ok=True)
+                    atomic, append = self.service._atomic_text, module.append_event
+                    def stop_history(path, text):
+                        if boundary == "history" and path == history:
+                            raise SystemExit("before history")
+                        return atomic(path, text)
+                    def stop_event(path, kind, payload):
+                        if boundary == "event" and kind == "completed":
+                            raise SystemExit("before completed event")
+                        return append(path, kind, payload)
+                    with patch.object(self.service, "_atomic_text", side_effect=stop_history), patch.object(module, "append_event", side_effect=stop_event), self.assertRaises(SystemExit):
+                        self.service.finalize(self.state.run_id)
+                    with self.assertRaises(ServiceError) as status:
+                        self.service.status(self.state.run_id)
+                    self.assertEqual(status.exception.exit_code, 5)
+                    if drift == "tampered":
+                        review.write_bytes(review.read_bytes() + b" ")
+                    else:
+                        review.unlink()
+                    before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+                    with self.assertRaises(ServiceError) as rejected:
+                        self.service.finalize(self.state.run_id)
+                    self.assertEqual(rejected.exception.exit_code, 3)
+                    self.assertEqual(before, {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()})
+                    with self.assertRaises(ServiceError) as status:
+                        self.service.status(self.state.run_id)
+                    self.assertEqual(status.exception.exit_code, 5)
+                    review.write_bytes(baseline[review])
+                    self.service.finalize(self.state.run_id)
+                    self.assertEqual(self.service.status(self.state.run_id).status, RunStatus.COMPLETED)
+
+    def test_completed_recovery_revalidates_git_policy_and_gate_before_publication(self):
+        self.init_run()
+        self.service.run_gates(self.state.run_id)
+        history = self.repo / "docs/agent/run-history" / (self.state.run_id + ".md")
+        atomic = self.service._atomic_text
+        def stop_history(path, text):
+            if path == history:
+                raise SystemExit("before history")
+            return atomic(path, text)
+        with patch.object(self.service, "_atomic_text", side_effect=stop_history), self.assertRaises(SystemExit):
+            self.service.finalize(self.state.run_id)
+        matrix = self.repo / "docs/agent/GATE_MATRIX.yaml"
+        metadata = self.repo / self.reload().gates["unit"].evidence_path
+        for drift, code in (("gate", 4), ("policy", 5), ("content", 5), ("head", 5)):
+            with self.subTest(drift=drift):
+                target = metadata if drift == "gate" else matrix if drift == "policy" else self.repo / "src/example.txt"
+                original = target.read_bytes()
+                if drift == "head":
+                    self.git("commit", "--allow-empty", "-m", "foreign")
+                elif drift == "gate":
+                    document = json.loads(original)
+                    document["exitCode"] = 7
+                    target.write_text(json.dumps(document))
+                else:
+                    target.write_bytes(original + b"\n")
+                before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+                with self.assertRaises(ServiceError) as rejected:
+                    self.service.finalize(self.state.run_id)
+                self.assertEqual(rejected.exception.exit_code, code)
+                self.assertEqual(before, {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()})
+                with self.assertRaises(ServiceError):
+                    self.service.status(self.state.run_id)
+                if drift == "head":
+                    self.git("update-ref", "HEAD", self.state.head_commit)
+                else:
+                    target.write_bytes(original)
+
+    def test_completed_recovery_after_prior_pause_authenticates_previous_history(self):
+        self.init_run()
+        history = self.service.pause(self.state.run_id, "first")
+        self.service.resume(self.state.run_id)
+        self.service.run_gates(self.state.run_id)
+        atomic = self.service._atomic_text
+        def stop_history(path, text):
+            if path == history:
+                raise SystemExit("before replacement history")
+            return atomic(path, text)
+        with patch.object(self.service, "_atomic_text", side_effect=stop_history), self.assertRaises(SystemExit):
+            self.service.finalize(self.state.run_id)
+        self.service.finalize(self.state.run_id)
+        self.assertEqual(self.service.status(self.state.run_id).status, RunStatus.COMPLETED)
+
+    def test_next_accepts_only_exact_registered_dirty_repair_or_active_snapshot(self):
+        matrix_path = self.repo / "docs/agent/GATE_MATRIX.yaml"
+        matrix = json.loads(matrix_path.read_text())
+        matrix["gates"][0]["command"] = [sys.executable, "-c", "raise SystemExit(7)"]
+        self.write(matrix_path, json.dumps(matrix))
+        self.git("add", str(matrix_path.relative_to(self.repo)))
+        self.git("commit", "-m", "failed gate fixture")
+        self.init_run()
+        source = self.repo / "src/example.txt"
+        self.write(source, "registered dirty repair")
+        with self.assertRaises(ServiceError) as failed:
+            self.service.run_gates(self.state.run_id)
+        self.assertEqual(failed.exception.exit_code, 4)
+        registered = self.reload()
+        for status, operation in ((RunStatus.REPAIRING, "repair"), (RunStatus.ACTIVE, "develop")):
+            with self.subTest(status=status):
+                save_state_atomic(self.state_path(), replace(registered, status=status))
+                before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+                self.assertEqual(self.service.next_action(self.state.run_id).operation, operation)
+                self.assertEqual(before, {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()})
+                for drift in ("content", "new", "scope", "snapshot", "branch", "head", "policy"):
+                    with self.subTest(drift=drift):
+                        state = replace(registered, status=status)
+                        policy = self.repo / "docs/agent/PROTECTED_PATHS.yaml"
+                        policy_bytes = policy.read_bytes()
+                        if drift == "content":
+                            self.write(source, "changed since Gate")
+                        elif drift == "new":
+                            self.write(self.repo / "src/new.txt", "unknown")
+                        elif drift in ("scope", "snapshot"):
+                            kind = "authorized_paths" if drift == "scope" else "verification_snapshot"
+                            state = replace(state, decisions=tuple(d for d in state.decisions if d["type"] != kind))
+                        elif drift == "branch":
+                            self.git("checkout", "-B", "feat/other")
+                        elif drift == "head":
+                            self.git("commit", "--allow-empty", "-m", "foreign")
+                        else:
+                            policy.write_bytes(policy_bytes + b"\n")
+                        save_state_atomic(self.state_path(), state)
+                        before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+                        with self.assertRaises(ServiceError) as rejected:
+                            self.service.next_action(self.state.run_id)
+                        self.assertEqual(rejected.exception.exit_code, 5)
+                        self.assertEqual(before, {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()})
+                        self.write(source, "registered dirty repair")
+                        (self.repo / "src/new.txt").unlink(missing_ok=True)
+                        if drift == "branch":
+                            self.git("checkout", "feat/test")
+                        elif drift == "head":
+                            self.git("update-ref", "HEAD", self.state.head_commit)
+                        policy.write_bytes(policy_bytes)
     def test_next_uses_same_trusted_history_exclusion_as_gate_planning(self):
         path = self.repo / "docs/agent/GATE_MATRIX.yaml"
         matrix = json.loads(path.read_text())

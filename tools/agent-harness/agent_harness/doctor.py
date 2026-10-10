@@ -1,10 +1,12 @@
 """Read-only, bounded discovery of the local Harness environment."""
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 
@@ -22,6 +24,22 @@ class DoctorReport:
         return {name: list(getattr(self, name)) for name in ("ok", "warning", "error")}
 
 
+def _regular_path(root, path):
+    return (not any(p.is_symlink() for p in (path, *path.parents) if p.is_relative_to(root))
+            and stat.S_ISREG(path.lstat().st_mode) and path.resolve() == path)
+
+
+def _trusted_runtime_file(root, relative, snapshot):
+    path = root / relative
+    if not _regular_path(root, path) or relative in snapshot.dirty_paths:
+        return False
+    result = subprocess.run(["git", "--no-optional-locks", "--no-replace-objects",
+                             "show", snapshot.head_commit + ":" + relative],
+                            cwd=root, capture_output=True, check=False, timeout=5,
+                            stdin=subprocess.DEVNULL)
+    return result.returncode == 0 and result.stdout == path.read_bytes()
+
+
 def run_doctor(repo: Path) -> DoctorReport:
     checks = {"ok": [], "warning": [], "error": []}
 
@@ -29,6 +47,7 @@ def run_doctor(repo: Path) -> DoctorReport:
         checks[level].append({"id": identifier, "message": message})
 
     root = Path(repo).resolve()
+    snapshot = None
     for name, required, major in (("git", True, None), ("docker", False, None),
                                   ("node", False, 22), ("java", False, 21),
                                   ("codex", False, None)):
@@ -76,23 +95,39 @@ def run_doctor(repo: Path) -> DoctorReport:
         matrix = load_gate_matrix(root / "docs/agent/GATE_MATRIX.yaml")
         load_protected_paths(root / "docs/agent/PROTECTED_PATHS.yaml")
         add("ok", "config", "策略配置有效")
-        for gate in matrix.gates:
-            wrapper = len(gate.command) > 1 and gate.command[1] == "--python"
-            if not wrapper and not Path(gate.command[0]).name.startswith("python"):
-                continue
-            command = ([str((root / gate.cwd / gate.command[0]).resolve()), "--python", "--version"]
-                       if wrapper else [gate.command[0], "--version"])
+        python_ids = {"gateway-tests", "release-tests", "production-tests", "productization-tests",
+                      "capability-consistency", "traceability", "harness-tests"}
+        python_gates = [g for g in matrix.gates if g.id in python_ids or "--python" in g.command
+                        or Path(g.command[0]).name.startswith(("python", "agent-harness"))
+                        or g.command[1:3] in (("-m", "unittest"), ("-m", "reqtrace.cli"))]
+        wrapper = root / "scripts/agent-harness"
+        entries_valid = all(
+            g.command[:2] == (Path(os.path.relpath(wrapper, root / g.cwd)).as_posix(), "--python")
+            and not any(p.is_symlink() for p in (root / g.cwd, *(root / g.cwd).parents) if p.is_relative_to(root))
+            and (root / g.cwd).resolve() == root / g.cwd
+            and (root / g.cwd).is_dir()
+            for g in python_gates
+        )
+        runtime_valid = False
+        if python_gates and entries_valid and not checks["error"] and snapshot is not None:
             try:
-                result = subprocess.run(command, cwd=root / gate.cwd, text=True,
-                                        capture_output=True, check=False, timeout=5,
-                                        stdin=subprocess.DEVNULL)
-                version = re.fullmatch(r"Python (\d+)\.(\d+)\.\d+\s*", result.stdout)
-                valid = result.returncode == 0 and version is not None and tuple(map(int, version.groups())) >= (3, 11)
+                trusted = all(_trusted_runtime_file(root, relative, snapshot)
+                              for relative in ("docs/agent/GATE_MATRIX.yaml", "scripts/agent-harness"))
+                if trusted and capture_snapshot(root) == snapshot:
+                    # The matrix supplies no executable for doctor. Only the
+                    # fixed, HEAD-authenticated wrapper is probed, once.
+                    result = subprocess.run([str(wrapper), "--python", "--version"], cwd=root,
+                                            text=True, capture_output=True, check=False, timeout=5,
+                                            stdin=subprocess.DEVNULL)
+                    version = re.fullmatch(r"Python (\d+)\.(\d+)\.\d+\s*", result.stdout)
+                    runtime_valid = (result.returncode == 0 and version is not None
+                                     and tuple(map(int, version.groups())) >= (3, 11))
             except (OSError, ValueError, subprocess.TimeoutExpired):
-                valid = False
-            add("ok" if valid else "error", "gate-python:" + gate.id,
-                "Gate Python 3.11+ 可用" if valid else "Gate Python 缺失或低于 3.11")
-    except ValueError:
+                pass
+        for gate in python_gates:
+            add("ok" if runtime_valid else "error", "gate-python:" + gate.id,
+                "固定 Gate Python 3.11+ 可用" if runtime_valid else "Gate 入口、信任状态或 Python runtime 无效")
+    except (OSError, ValueError, RuntimeError):
         add("error", "config", "策略配置无效")
     for port in (3000, 8080):
         try:

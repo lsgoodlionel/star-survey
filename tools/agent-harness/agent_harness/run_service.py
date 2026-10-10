@@ -205,7 +205,10 @@ class RunService:
     def next_action(self, run_id: str) -> NextAction:
         state = self._load(run_id)
         if state.status in (RunStatus.PLANNED, RunStatus.ACTIVE, RunStatus.REPAIRING, RunStatus.VERIFYING):
-            state, _ = self._sync(state)
+            registered_dirty = state.status in (RunStatus.ACTIVE, RunStatus.REPAIRING)
+            state, snapshot = self._sync(state, allow_dirty=registered_dirty)
+            if snapshot.dirty_paths:
+                self._verify_registered_dirty(state)
             self._readonly_paths(state)
         operation = {RunStatus.PLANNED: "develop", RunStatus.ACTIVE: "develop",
                      RunStatus.REPAIRING: "repair", RunStatus.COMPLETED: "done",
@@ -231,6 +234,19 @@ class RunService:
             except (OSError, ValueError):
                 pass
         return NextAction(operation, state.status.value, run_id)
+
+    def _verify_registered_dirty(self, state):
+        records = [d for d in state.decisions if d["type"] == "verification_snapshot"]
+        paths = {p for p in changed_paths(self.repo, state.base_commit) if p != self._trusted_history(state)}
+        authorized = {p.as_posix() for p in self._authorized_paths(state)}
+        try:
+            stamp = self._workspace_stamp(state)
+            valid = (bool(records) and not stamp["clean"] and paths == authorized
+                     and json.loads(records[-1]["summary"]) == stamp)
+        except (OSError, ValueError, KeyError, TypeError):
+            valid = False
+        if not valid:
+            raise ServiceError("dirty 路径或内容与已登记 Gate 快照不符", 5)
 
     def record_decision(self, run_id: str, decision_type: str, summary: str) -> RunState:
         state = self._load(run_id)
@@ -511,21 +527,20 @@ class RunService:
                     or candidate.decisions[-1]["summary"] != intent["historySha256"]):
                 raise ValueError()
             if status == RunStatus.COMPLETED:
-                verified, _ = self._sync(state)
+                verified = self._validate_completion(state)
                 if verified.head_commit != candidate.head_commit:
                     raise ValueError()
-                self._verify_snapshot(verified)
-                _, definitions = self._paths_and_gates(verified, ())
-                for definition in definitions:
-                    self._verify_evidence(verified, definition)
-                self._verify_review(verified, self._readonly_paths(verified))
             self._assert_raw_storage(state.run_id)
             save_state_atomic(directory / "state.json", candidate)
             return candidate
+        except ServiceError:
+            raise
         except (OSError, ValueError, KeyError, TypeError, IndexError):
             raise ServiceError("终态恢复意图缺失、过期或不匹配", 5) from None
 
     def _recover_history(self, state):
+        if state.status == RunStatus.COMPLETED:
+            self._validate_completion(state)
         history = self._path(self._history_relative(state))
         records = [d["summary"] for d in state.decisions if d["type"] == "history_artifact"]
         if not records:
@@ -538,6 +553,8 @@ class RunService:
         if not self._trusted_history(state):
             self._atomic_text(history, pending.read_text(encoding="utf-8"))
         if not self._terminal_event_present(state):
+            if state.status == RunStatus.COMPLETED:
+                self._validate_completion(state)
             self._assert_raw_storage(state.run_id)
             append_event(self._path(self._directory(state.run_id).relative_to(self.repo) / "events.jsonl"),
                          "reconciled", {"historySha256": records[-1], "headCommit": state.head_commit,
@@ -582,13 +599,15 @@ class RunService:
                                  "headCommit": synced.head_commit, "gatesInvalidated": True})
         return self._save(resumed, "resumed")
 
-    def _paths_and_gates(self, state, extra):
+    def _paths_and_gates(self, state, extra, *, readonly=False):
         matrix, policy = self._configs()
         paths = changed_paths(self.repo, state.base_commit)
         trusted = self._trusted_history(state)
         paths = tuple(p for p in paths if p != trusted)
         decisions = classify_paths(self.repo, paths, policy)
         if any(p.action in ("deny", "approval_required", "generated") for p in decisions):
+            if readonly:
+                raise ServiceError("改动触及受保护路径，需要人工处理", 3)
             self._stop(replace(state, changed_paths=tuple(Path(p) for p in paths)),
                        "改动触及受保护路径，需要人工处理", 3)
         definitions = resolve_required_gates(matrix, (state.plan_path.as_posix(), *paths),
@@ -669,29 +688,44 @@ class RunService:
         except (OSError, ValueError, KeyError, TypeError):
             raise ServiceError("Gate 证据缺失或不匹配", 4) from None
 
-    def finalize(self, run_id: str) -> Path:
-        state = self._load(run_id, allow_incomplete=True)
-        state = self._recover_pending_terminal(state, RunStatus.COMPLETED)
-        if state.status == RunStatus.COMPLETED:
-            self._recover_history(state)
-        if state.status not in (RunStatus.VERIFYING, RunStatus.COMPLETED):
-            self._operable(state)
-            raise ServiceError("须先运行质量门", 4)
-        try:
-            synced, _ = self._sync(state)
-        except (ValueError, OSError):
-            self._stop(state, "计划、策略或 Git 漂移", 5)
-        paths, definitions = self._paths_and_gates(synced, ())
+    def _validate_completion(self, state):
+        view = state
+        if state.status == RunStatus.COMPLETED and not self._trusted_history(state):
+            history = self._path(self._history_relative(state))
+            if history.is_file():
+                digest = sha256_file(history)
+                records = [d for d in state.decisions if d["type"] == "history_artifact" and d["summary"] == digest]
+                if records:
+                    # An interrupted replacement may still expose this run's
+                    # authenticated paused report; do not persist this view.
+                    view = replace(state, decisions=state.decisions + (records[-1],))
+        synced, _ = self._sync(view)
+        paths, definitions = self._paths_and_gates(synced, (), readonly=True)
         initial = self._workspace_stamp(synced)
         self._verify_snapshot(synced)
         for definition in definitions:
             self._verify_evidence(synced, definition)
         self._verify_review(synced, self._readonly_paths(synced))
         if self._workspace_stamp(synced) != initial:
-            self._stop(state, "收尾期间 Git 状态发生变化", 5)
-        state = replace(synced, changed_paths=tuple(Path(p) for p in paths),
-                        required_gates=tuple(g.id for g in definitions))
+            raise ServiceError("收尾期间 Git 状态发生变化", 5)
+        return replace(synced, decisions=state.decisions, changed_paths=tuple(Path(p) for p in paths),
+                       required_gates=tuple(g.id for g in definitions))
+
+    def finalize(self, run_id: str) -> Path:
+        state = self._load(run_id, allow_incomplete=True)
+        state = self._recover_pending_terminal(state, RunStatus.COMPLETED)
         if state.status == RunStatus.COMPLETED:
-            return self._path(self._history_relative(state))
-        completed = transition(state, RunStatus.COMPLETED, "current HEAD gates passed") if state.status != RunStatus.COMPLETED else state
-        return self._terminal(state, completed)
+            return self._recover_history(state)
+        if state.status != RunStatus.VERIFYING:
+            self._operable(state)
+            raise ServiceError("须先运行质量门", 4)
+        try:
+            verified = self._validate_completion(state)
+        except ServiceError as error:
+            if error.exit_code == 5:
+                self._stop(state, "计划、策略或 Git 漂移", 5)
+            raise
+        except (ValueError, OSError):
+            self._stop(state, "计划、策略或 Git 漂移", 5)
+        completed = transition(verified, RunStatus.COMPLETED, "current HEAD gates passed")
+        return self._terminal(verified, completed)
