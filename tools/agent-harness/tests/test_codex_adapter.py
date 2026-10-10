@@ -471,8 +471,8 @@ print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": 
     def test_linux_wrapper_bootstraps_setup_python_hosted_toolcache(self):
         hosted = self.linux_wrapper(r"""
 mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
-cp -L /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11
-chmod 0755 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11
+cp -L /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3
+chmod 0755 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3
 rm /usr/local/bin/python3.11
 AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
   /repo/scripts/agent-harness --python --version
