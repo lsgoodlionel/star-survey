@@ -18,6 +18,37 @@ from test_run_service import WorktreeCase
 
 
 class AdapterCase(WorktreeCase):
+    @classmethod
+    def setUpClass(cls):
+        from agent_harness import codex_adapter
+        project = Path(__file__).resolve().parents[3]
+        cls.tool_fixture = tempfile.TemporaryDirectory(prefix="task8-tools-", dir=project.parents[2])
+        root = Path(cls.tool_fixture.name).resolve()
+        bound = {tool.name: tool for tool in codex_adapter._BOUND_TOOLS}
+        for name in ("node", "npm", "docker", "java"):
+            executable = root / "bin" / name
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            bound[name] = codex_adapter._bound_tool(name, ((str(executable), str(root)),),
+                                                     allow_link=True if name == "npm" else None)
+        codex = root / "bin/codex"
+        codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        codex.chmod(0o755)
+        bound_codex = codex_adapter._bound_tool("codex", ((str(codex), str(root)),))
+        cls.tool_patch = patch.multiple(
+            codex_adapter,
+            _BOUND_TOOLS=tuple(bound[name] for name in ("python", "node", "npm", "docker", "git", "java")),
+            _BOUND_CODEX_TOOL=bound_codex,
+            _BOUND_CODEX=str(codex),
+        )
+        cls.tool_patch.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tool_patch.stop()
+        cls.tool_fixture.cleanup()
+
     def setUp(self):
         super().setUp()
         from agent_harness import codex_adapter
@@ -171,7 +202,10 @@ class AdapterCase(WorktreeCase):
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
             with patch.dict("os.environ", {"PATH": first + os.pathsep + second, "HOME": first,
                                             "TMPDIR": second, "LANG": "C.UTF-8", "TZ": "UTC"}, clear=True):
-                environment = self.adapter._environment(self.repo)
+                environment = self.adapter._environment(
+                    self.repo, required_tools=("git",), require_codex=False,
+                    optional_tools=("python",)
+                )
             self.assertNotIn(first, environment["PATH"])
             self.assertEqual(environment["HOME"], str(Path(first).resolve()))
         for index, values in enumerate(({"HOME": "relative"}, {"TMPDIR": "/does/not/exist"},
@@ -189,9 +223,12 @@ class AdapterCase(WorktreeCase):
             self.write(executable, "#!/bin/sh\nexit 99\n")
             executable.chmod(0o755)
         with patch.dict("os.environ", {"PATH": str(poisoned), "HOME": str(Path.home())}, clear=True):
-            environment = self.adapter._environment(self.repo)
+            environment = self.adapter._environment(
+                self.repo, required_tools=("git",), require_codex=False,
+                optional_tools=("python",)
+            )
         self.assertNotIn(str(poisoned), environment["PATH"].split(os.pathsep))
-        for name in ("git", "node", "npm", "docker"):
+        for name in ("git",):
             with self.subTest(name=name):
                 executable = shutil.which(name, path=environment["PATH"])
                 self.assertIsNotNone(executable)
@@ -225,9 +262,10 @@ import sys
 from agent_harness import codex_adapter
 
 project = Path(sys.argv[1])
-environment = codex_adapter._environment(project)
+environment = codex_adapter._environment(project, required_tools=("git",), require_codex=False,
+                                        optional_tools=("python",))
 tools = {name: shutil.which(name, path=environment["PATH"])
-         for name in ("git", "node", "npm", "docker", "java")}
+         for name in ("git",)}
 tools["python"] = next((shutil.which(f"python3.{minor}", path=environment["PATH"])
                         for minor in range(11, 15)
                         if shutil.which(f"python3.{minor}", path=environment["PATH"])), None)
@@ -242,7 +280,6 @@ print(json.dumps({"path": environment["PATH"], "tools": tools, "codex": codex_ad
         self.assertEqual(probe.returncode, 0, probe.stderr)
         result = json.loads(probe.stdout)
         self.assertNotIn(str(poisoned), result["path"].split(os.pathsep))
-        self.assertFalse(Path(result["codex"]).is_relative_to(poisoned), result)
         self.assertTrue(all(result["tools"].values()), result)
         self.assertTrue(all(not Path(value).is_relative_to(poisoned)
                             for value in result["tools"].values()), result)
@@ -400,9 +437,15 @@ print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": 
     def test_linux_wrapper_bootstraps_setup_python_hosted_toolcache(self):
         hosted = self.linux_wrapper(r"""
 mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
-cp /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11
+cat > /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11 <<'EOF'
+#!/bin/sh
+printf 'invoked\n' >> /tmp/hosted-python-invocations
+exec /usr/local/bin/python3.11 "$@"
+EOF
+chmod 0755 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11
 AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
   /repo/scripts/agent-harness --python --version
+test "$(wc -l < /tmp/hosted-python-invocations)" -eq 2
 """)
         self.assertEqual(hosted.returncode, 0, hosted.stderr or hosted.stdout)
         self.assertRegex(hosted.stdout, r"^Python 3\.11\.")

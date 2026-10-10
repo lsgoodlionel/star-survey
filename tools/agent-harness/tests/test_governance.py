@@ -12,6 +12,8 @@ import unittest
 REPO = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO / ".github/workflows/agent-governance.yml"
 HOST_CONFIG = REPO / "docs/agent/HARNESS_HOST.json"
+PLAN = REPO / "docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md"
+README = REPO / "tools/agent-harness/README.md"
 
 
 class GovernanceWorkflowTests(unittest.TestCase):
@@ -82,6 +84,39 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("unexpected skips: 1", result.stderr)
 
+    def test_ci_test_runner_partitions_unit_and_integration_without_skips(self):
+        runner = REPO / "tools/agent-harness/run_tests.py"
+        with tempfile.TemporaryDirectory() as directory:
+            test_file = Path(directory) / "test_partition.py"
+            test_file.write_text(
+                "import unittest\n"
+                "class Partition(unittest.TestCase):\n"
+                "    def test_unit(self): pass\n"
+                "    @unittest.skip('integration unavailable')\n"
+                "    def test_linux_wrapper_fixture(self): pass\n",
+                encoding="utf-8",
+            )
+            unit = subprocess.run([
+                sys.executable, str(runner), "--start-directory", directory,
+                "--exclude-substring", "linux_wrapper", "--fail-on-skip",
+            ], text=True, capture_output=True, check=False)
+            integration = subprocess.run([
+                sys.executable, str(runner), "--start-directory", directory,
+                "--include-substring", "linux_wrapper", "--fail-on-skip",
+            ], text=True, capture_output=True, check=False)
+        self.assertEqual(unit.returncode, 0, unit.stdout + unit.stderr)
+        self.assertEqual(integration.returncode, 2, integration.stdout + integration.stderr)
+
+    def test_workflow_separates_fake_tool_units_from_real_linux_integration(self):
+        self.assertIn("agent-governance-unit:", self.text)
+        self.assertIn("agent-governance-integration:", self.text)
+        self.assertIn("needs: agent-governance-unit", self.text)
+        self.assertIn("--exclude-substring linux_wrapper", self.text)
+        self.assertIn("--include-substring linux_wrapper", self.text)
+        unit, integration = self.text.split("agent-governance-integration:", 1)
+        self.assertNotIn("docker pull", unit)
+        self.assertIn("docker pull", integration)
+
     def test_workflow_cannot_merge_release_or_deploy(self):
         forbidden = (
             r"\bgh\s+pr\s+merge\b",
@@ -96,6 +131,15 @@ class GovernanceWorkflowTests(unittest.TestCase):
         for pattern in forbidden:
             with self.subTest(pattern=pattern):
                 self.assertNotRegex(self.text.lower(), pattern)
+
+    def test_plan_readme_and_workflow_use_the_controlled_python_entry(self):
+        task8 = PLAN.read_text(encoding="utf-8").split("### Task 8:", 1)[1]
+        readme = README.read_text(encoding="utf-8")
+        self.assertNotRegex(task8, r"(?m)^Run: `python3(?:\.11)?\s")
+        self.assertNotRegex(readme, r"(?m)^python3(?:\.11)?\s+tools/agent-harness")
+        for command in ("tools/agent-harness/drills/run_drills.py",
+                        "platform/tools/productization/render_capabilities.py --check"):
+            self.assertIn("scripts/agent-harness --python " + command, task8 + readme + self.text)
 
 
 if __name__ == "__main__":

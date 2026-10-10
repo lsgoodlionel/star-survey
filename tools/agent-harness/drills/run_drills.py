@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -334,31 +335,52 @@ def _fake_adapter_commit(repo: Path, run_id: str) -> CodexResult:
 def _drill_success() -> str:
     with _fixture_worktree() as (_, repo, service):
         state = service.init(Path("docs/superpowers/plans/drill.md"), "m1")
-        scope = service._autonomous_scope(state)
-        state = service._save(
-            service._decision(state, "authorized_paths", json.dumps(list(scope))),
-            "fake_adapter_started",
-        )
-        adapter = _fake_adapter_commit(repo, state.run_id)
-        if adapter.status != "completed" or adapter.needs_human:
-            raise AssertionError("fake adapter did not produce a controlled commit")
-        state = service.run_gates(state.run_id, adapter.tests_requested)
-        decisions = service._readonly_paths(state)
-        report = service._directory(state.run_id) / "review-input.json"
-        report.write_text(json.dumps({
-            "version": 1,
-            "verdict": "approved",
-            "reviewer": "deterministic-drill",
-            "headCommit": state.head_commit,
-            "changedPathsSha256": service._review_scope(decisions),
-        }, sort_keys=True), encoding="utf-8")
-        service.record_review(state.run_id, "deterministic-drill", report.relative_to(repo))
-        history = service.finalize(state.run_id)
-        final = service.status(state.run_id)
+        real_gates = service.run_gates
+
+        def fake_codex(command, timeout, event_log):
+            return _fake_adapter_commit(repo, state.run_id)
+
+        def reviewed_gates(run_id, extra_gate_ids):
+            gated = real_gates(run_id, extra_gate_ids)
+            decisions = service._readonly_paths(gated)
+            scope = service._review_scope(decisions)
+            report = service._directory(run_id) / "review-input.json"
+            report.write_text(json.dumps({
+                "version": 1,
+                "verdict": "approved",
+                "reviewer": "deterministic-drill",
+                "headCommit": gated.head_commit,
+                "changedPathsSha256": scope,
+            }, sort_keys=True), encoding="utf-8")
+            service.record_review(run_id, "deterministic-drill", report.relative_to(repo))
+            return gated
+
+        command = ("fake-codex", "exec", "--sandbox", "workspace-write", "--approve-for-me",
+                   "--strict-config", "--json", "--output-schema", "schema", "--cd", str(repo), "prompt")
+        with patch("agent_harness.run_service.build_codex_command", return_value=command), \
+                patch("agent_harness.run_service.run_codex", side_effect=fake_codex), \
+                patch.object(service, "run_gates", side_effect=reviewed_gates):
+            final = service.run_autonomous(state.run_id, 1)
+        history = repo / "docs/agent/run-history" / (state.run_id + ".md")
         if final.status != RunStatus.COMPLETED or not history.is_file():
             raise AssertionError("RunService did not publish completed history")
-        return json.dumps({"flow": ["init", "fake-adapter", "gate", "review", "finalize", "history"],
-                           "status": final.status.value}, sort_keys=True)
+        events = read_events(service._directory(state.run_id) / "events.jsonl")
+        review_binding = json.loads(next(
+            decision["summary"] for decision in reversed(final.decisions)
+            if decision["type"] == "review_evidence"
+        ))
+        expected_scope = service._review_scope(service._readonly_paths(final))
+        gate = final.gates["unit"]
+        return json.dumps({
+            "events": [event["type"] for event in events],
+            "status": final.status.value,
+            "headCommit": final.head_commit,
+            "gateHead": gate.head_commit,
+            "reviewHead": review_binding["headCommit"],
+            "reviewScope": review_binding["changedPathsSha256"],
+            "expectedReviewScope": expected_scope,
+            "historyPublished": history.is_file(),
+        }, sort_keys=True)
 
 
 def _drill_codex_timeout() -> None:
@@ -442,6 +464,10 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
         for value in (document["activePlan"], document["deliveryManifest"], document["ledger"],
                       fixture["path"], fixture["planPath"], *docs["statusMarkerPaths"]):
             _repo_path(root, value, must_exist=False)
+        plan_root = Path("docs/superpowers/plans")
+        if (not Path(document["activePlan"]).is_relative_to(plan_root)
+                or not Path(fixture["planPath"]).is_relative_to(plan_root)):
+            raise ValueError()
     except (KeyError, TypeError, ValueError, OSError, UnicodeError, json.JSONDecodeError):
         raise DrillRefused("invalid Harness host configuration") from None
     return document
@@ -497,46 +523,146 @@ def atomic_create(repo: Path, path: Path, content: str) -> None:
         relative = target.relative_to(root)
     except ValueError:
         raise DrillRefused("smoke input path escapes the worktree") from None
-    current = root
-    for part in relative.parent.parts:
-        current /= part
-        if current.is_symlink():
-            raise DrillRefused("smoke input parent is a symlink")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        target.lstat()
-    except FileNotFoundError:
-        pass
-    else:
-        raise DrillRefused("smoke input path already exists")
+    if not relative.parts or relative.name in ("", ".", "..") or not hasattr(os, "O_NOFOLLOW"):
+        raise DrillRefused("smoke input path is unsupported")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptors = []
+    identities = []
+    temporary = "." + relative.name + "." + uuid4().hex + ".tmp"
     descriptor = None
-    temporary = target.parent / ("." + target.name + "." + uuid4().hex + ".tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(temporary, flags, 0o600)
+        descriptors.append(os.open(root, directory_flags))
+        identities.append(os.fstat(descriptors[-1]))
+        for part in relative.parent.parts:
+            try:
+                os.mkdir(part, 0o755, dir_fd=descriptors[-1])
+            except FileExistsError:
+                pass
+            child = os.open(part, directory_flags, dir_fd=descriptors[-1])
+            metadata = os.stat(part, dir_fd=descriptors[-1], follow_symlinks=False)
+            opened = os.fstat(child)
+            if (not stat.S_ISDIR(metadata.st_mode)
+                    or (metadata.st_dev, metadata.st_ino) != (opened.st_dev, opened.st_ino)):
+                os.close(child)
+                raise DrillRefused("smoke input parent identity changed")
+            descriptors.append(child)
+            identities.append(opened)
+
+        def verify_chain():
+            for index, part in enumerate(relative.parent.parts):
+                metadata = os.stat(part, dir_fd=descriptors[index], follow_symlinks=False)
+                expected = identities[index + 1]
+                if (not stat.S_ISDIR(metadata.st_mode)
+                        or (metadata.st_dev, metadata.st_ino) != (expected.st_dev, expected.st_ino)):
+                    raise DrillRefused("smoke input parent identity changed")
+
+        parent = descriptors[-1]
+        try:
+            os.stat(relative.name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise DrillRefused("smoke input path already exists")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        descriptor = os.open(temporary, flags, 0o600, dir_fd=parent)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             descriptor = None
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
         try:
-            target.lstat()
+            os.stat(relative.name, dir_fd=parent, follow_symlinks=False)
         except FileNotFoundError:
             pass
         else:
             raise DrillRefused("smoke input path changed during creation")
-        os.replace(temporary, target)
-        directory = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        verify_chain()
+        os.replace(temporary, relative.name, src_dir_fd=parent, dst_dir_fd=parent)
+        verify_chain()
+        os.fsync(parent)
+    except (OSError, RuntimeError) as error:
+        if isinstance(error, DrillRefused):
+            raise
+        raise DrillRefused("smoke input could not be created safely") from None
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        temporary.unlink(missing_ok=True)
+        if descriptors:
+            try:
+                os.unlink(temporary, dir_fd=descriptors[-1])
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+        for directory in reversed(descriptors):
+            os.close(directory)
+
+
+def _workflow_run_blocks(text: str) -> tuple[str, ...]:
+    lines = text.splitlines()
+    blocks = []
+    index = 0
+    while index < len(lines):
+        match = re.match(r"^(\s*)-?\s*run:\s*(.*)$", lines[index])
+        if not match:
+            index += 1
+            continue
+        indent, value = len(match[1]), match[2]
+        if value in ("|", ">", "|-", ">-"):
+            values = []
+            index += 1
+            while index < len(lines):
+                following = lines[index]
+                if following.strip() and len(following) - len(following.lstrip()) <= indent:
+                    break
+                values.append(following.strip())
+                index += 1
+            blocks.append("\n".join(values).strip())
+            continue
+        blocks.append(value.strip())
+        index += 1
+    return tuple(blocks)
+
+
+def _validate_codex_shell(source: str) -> None:
+    if re.search(r"[\"'`$\\;&|<>]|[\r\n]", source):
+        raise DrillRefused("Codex workflow command uses unsupported shell syntax")
+    arguments = source.split()
+    positions = [index for index, value in enumerate(arguments) if Path(value).name == "codex"]
+    if not positions:
+        return
+    arguments = arguments[positions[0]:]
+    if len(arguments) < 2 or arguments[1] != "exec":
+        raise DrillRefused("Codex workflow command is not an allowed exec invocation")
+    if _DANGEROUS_CODEX_ARGUMENT.search(" ".join(arguments)):
+        raise DrillRefused("Codex command contains a forbidden permission override")
+    positionals = []
+    sandbox = None
+    index = 2
+    while index < len(arguments):
+        value = arguments[index]
+        if value == "--json":
+            index += 1
+            continue
+        if value in ("--sandbox", "--output-schema"):
+            if index + 1 >= len(arguments) or arguments[index + 1].startswith("-"):
+                raise DrillRefused("Codex workflow option is missing its value")
+            if value == "--sandbox":
+                sandbox = arguments[index + 1]
+            index += 2
+            continue
+        if value.startswith("--sandbox="):
+            sandbox = value.partition("=")[2]
+            index += 1
+            continue
+        if value.startswith("-"):
+            raise DrillRefused("Codex workflow command contains an unsupported option")
+        positionals.append(value)
+        index += 1
+    if sandbox != "workspace-write":
+        raise DrillRefused("Codex workflow sandbox is not workspace-write")
+    if len(positionals) != 1:
+        raise DrillRefused("Codex workflow command must contain one normalized prompt argument")
 
 
 def check_forbidden_options(repo: Path) -> None:
@@ -550,9 +676,10 @@ def check_forbidden_options(repo: Path) -> None:
     for pattern in ("*.yml", "*.yaml"):
         for workflow in workflows.glob(pattern):
             text = workflow.read_text(encoding="utf-8")
-            contexts.extend(match.group(0) for match in re.finditer(
-                r"(?im)\bcodex(?:\s+exec)?\b[^\n]*(?:\n[ \t]{8,}[^\n]*)*", text
-            ))
+            for source in _workflow_run_blocks(text):
+                if re.search(r"\bcodex\b", source, re.IGNORECASE):
+                    _validate_codex_shell(source)
+                    contexts.append(source)
     if any(_DANGEROUS_CODEX_ARGUMENT.search(context) for context in contexts):
         raise DrillRefused("Codex command contains a forbidden permission override")
 
@@ -607,6 +734,8 @@ def check_docs(repo: Path, host: dict) -> None:
         external = manifest["externalSync"]
         allowed_status = {
             ("pending", "pending", "pending"): "local_validated_sync_pending",
+            ("complete", "pending", "pending"): "locally_reviewed_sync_pending",
+            ("complete", "complete", "pending"): "github_synced_obsidian_pending",
             ("complete", "complete", "complete"): "fully_synchronized",
         }
         key = (external.get("independentReview"), external.get("github"), external.get("obsidian"))
@@ -686,28 +815,53 @@ def validate_real_smoke_terminal(repo: Path, state: RunState, changed: tuple[str
             raise AssertionError("completed smoke Gate evidence is unavailable")
 
 
-def cleanup_real_smoke(primary: Path, worktree: Path, branch: Optional[str]) -> tuple[str, ...]:
+def cleanup_real_smoke(primary: Path, worktree: Path, branch: Optional[str], *, execute=_run) -> tuple[str, ...]:
     errors = []
-    if worktree.exists():
-        result = _run(["git", "worktree", "remove", "--force", str(worktree)], primary, check=False)
+    try:
+        present = worktree.exists()
+    except OSError:
+        present = True
+        errors.append("worktree-path-precheck-oserror")
+    if present:
+        try:
+            result = execute(["git", "worktree", "remove", "--force", str(worktree)], primary, check=False)
+            if result.returncode:
+                errors.append("worktree-remove-exit-" + str(result.returncode))
+        except OSError:
+            errors.append("worktree-remove-oserror")
+    try:
+        result = execute(["git", "worktree", "prune"], primary, check=False)
         if result.returncode:
-            errors.append("worktree-remove-exit-" + str(result.returncode))
-    result = _run(["git", "worktree", "prune"], primary, check=False)
-    if result.returncode:
-        errors.append("worktree-prune-exit-" + str(result.returncode))
+            errors.append("worktree-prune-exit-" + str(result.returncode))
+    except OSError:
+        errors.append("worktree-prune-oserror")
     if branch:
-        result = _run(["git", "branch", "-D", branch], primary, check=False)
-        if result.returncode:
-            errors.append("branch-delete-exit-" + str(result.returncode))
-    listing = _run(["git", "worktree", "list", "--porcelain"], primary, check=False)
-    if listing.returncode or str(worktree) in listing.stdout:
-        errors.append("worktree-registration-present")
+        try:
+            result = execute(["git", "branch", "-D", branch], primary, check=False)
+            if result.returncode:
+                errors.append("branch-delete-exit-" + str(result.returncode))
+        except OSError:
+            errors.append("branch-delete-oserror")
+    try:
+        listing = execute(["git", "worktree", "list", "--porcelain"], primary, check=False)
+        if listing.returncode or str(worktree) in listing.stdout:
+            errors.append("worktree-registration-present")
+    except OSError:
+        errors.append("worktree-registration-check-oserror")
     if branch:
-        reference = _run(["git", "show-ref", "--verify", "--quiet", "refs/heads/" + branch],
-                         primary, check=False)
-        if reference.returncode not in (0, 1) or reference.returncode == 0:
-            errors.append("branch-reference-present")
-    if worktree.exists():
+        try:
+            reference = execute(["git", "show-ref", "--verify", "--quiet", "refs/heads/" + branch],
+                                primary, check=False)
+            if reference.returncode not in (0, 1) or reference.returncode == 0:
+                errors.append("branch-reference-present")
+        except OSError:
+            errors.append("branch-reference-check-oserror")
+    try:
+        present = worktree.exists()
+    except OSError:
+        present = True
+        errors.append("worktree-path-postcheck-oserror")
+    if present:
         errors.append("worktree-path-present")
     return tuple(errors)
 

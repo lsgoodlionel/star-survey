@@ -274,7 +274,7 @@ try:
 except (KeyError, OSError, RuntimeError, ValueError):
     fail("无法建立 Harness 信任根")
 
-candidates = []
+candidates = [(str(bootstrap), sys.argv[3], int(sys.argv[6]))]
 for prefix in ("/usr", "/usr/local", "/opt/homebrew"):
     candidates.extend((f"{prefix}/bin/python3.{minor}", prefix, 0) for minor in range(14, 10, -1))
 uv_root = home / ".local/share/uv/python"
