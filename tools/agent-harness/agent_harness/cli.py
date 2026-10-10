@@ -11,8 +11,8 @@ from collections.abc import Mapping
 from typing import Sequence
 
 from .diagnostics import redact_text
-from .doctor import run_doctor
-from .codex_adapter import controlled_tool_errors
+from .doctor import DoctorReport, run_doctor
+from .codex_adapter import controlled_tool_errors, run_with_controlled_tools
 from .run_service import RunService, ServiceError
 from .state import RunState, RunStatus
 
@@ -94,10 +94,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return int(error.code)
         root = args.repo or _root()
         if args.command == "doctor":
-            result = run_doctor(root)
             policy_errors = controlled_tool_errors(root)
-            if policy_errors:
-                result = type(result)(result.ok, result.warning, result.error + policy_errors)
+            result = (DoctorReport((), (), policy_errors) if policy_errors
+                      else run_with_controlled_tools(root, run_doctor))
             code = 2 if result.error else 0
         else:
             service = RunService(root)

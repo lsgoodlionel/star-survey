@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 
 from .config import load_gate_matrix, load_protected_paths, validate_gate_id
 from .diagnostics import redact_text, render_diagnostics, failure_fingerprint, record_failure, _read_log, _first_error
-from .codex_adapter import build_codex_command, run_codex
+from .codex_adapter import build_codex_command, controlled_tool_errors, run_codex, run_with_controlled_tools
 from .doctor import run_doctor
 from .gate_runner import invalidate_stale_evidence, resolve_required_gates, run_gate
 from .git_guard import assert_worktree_isolated, capture_snapshot, changed_paths, classify_paths, validate_resume
@@ -93,9 +93,49 @@ def _npm_source(value):
         return "npm-source:" + source
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]*", value):
         return None
-    if re.fullmatch(r"[vV<>=~^*0-9xX|.,\-+\s]+(?:[A-Za-z][A-Za-z0-9.-]*)?", value):
+    if _npm_registry_range(value):
         return None
     return "npm-unknown:" + value
+
+
+def _npm_registry_range(value):
+    version = r"[vV]?(?:\d+|[xX*])(?:\.(?:\d+|[xX*])){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
+    comparator = re.compile(r"^(?:<=|>=|<|>|=|~|\^)?" + version + r"$")
+    if re.fullmatch(r"[0-9A-Za-z*XxvV.+<>=~^|\-\s]+", value) is None:
+        return False
+    groups = value.split("||")
+    if any(not group.strip() for group in groups):
+        return False
+    for group in groups:
+        tokens = group.split()
+        if not tokens or any(token != "-" and comparator.fullmatch(token) is None for token in tokens):
+            return False
+        if "-" in tokens and (tokens.count("-") != 1 or tokens.index("-") in (0, len(tokens) - 1)):
+            return False
+    return True
+
+
+def _requirement_lines(text):
+    pending = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if pending:
+            line = pending + line
+        if line.endswith("\\"):
+            pending = line[:-1].rstrip() + " "
+            continue
+        pending = ""
+        yield line
+    if pending:
+        yield pending.rstrip()
+
+
+def _strip_requirement_hashes(line):
+    pattern = re.compile(r"(?:^|\s)--hash(?:=|\s+)([A-Za-z0-9_.+-]+:[A-Fa-f0-9]+)(?=\s|$)")
+    stripped, count = pattern.subn("", line)
+    if "--hash" in stripped:
+        return line, False
+    return stripped.strip(), count > 0
 
 
 def _python_requirement(value):
@@ -157,10 +197,12 @@ def _dependency_snapshot(path, data):
                 if _source(value):
                     sources.add(_source(value))
     elif re.fullmatch(r"requirements(?:[-_.][A-Za-z0-9_.-]+)?\.txt", name, re.I):
-        for raw in text.splitlines():
-            line = raw.strip()
+        for line in _requirement_lines(text):
             if not line or line.startswith("#"):
                 continue
+            line_without_hashes, had_hash = _strip_requirement_hashes(line)
+            if had_hash and line_without_hashes and not line_without_hashes.startswith("-"):
+                line = line_without_hashes
             option = re.match(r"^(?:--index-url|--extra-index-url|--find-links|--trusted-host|-i|-f)(?:=|\s+)(\S+)", line)
             include = re.match(r"^(?:--(?:requirement|constraint)(?:=|\s+)|-[rc](?:=|\s*)?)(\S+)$", line)
             editable = re.match(r"^(?:--editable(?:=|\s+)|-e(?:=|\s*)?)(\S.+|\S+)$", line)
@@ -176,6 +218,8 @@ def _dependency_snapshot(path, data):
                 if dependency:
                     dependencies.add(dependency)
                 sources.add(source)
+            elif re.search(r"\s--[A-Za-z]", line):
+                sources.add("unknown-option:" + line)
             elif line.startswith("-"):
                 sources.add("unknown-option:" + line)
             else:
@@ -820,7 +864,8 @@ class RunService:
         state = self._load(run_id)
         if state.status != RunStatus.PAUSED:
             raise ServiceError("仅暂停运行可以恢复", 5)
-        if run_doctor(self.repo).error:
+        if (controlled_tool_errors(self.repo)
+                or run_with_controlled_tools(self.repo, run_doctor).error):
             raise ServiceError("doctor 检查未通过，运行保持暂停", 5)
         try:
             self._recover_history(state)

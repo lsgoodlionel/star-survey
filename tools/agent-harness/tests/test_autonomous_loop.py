@@ -244,6 +244,10 @@ class LoopCase(WorktreeCase):
                                      "requests==2.0\n--unknown-source packages.invalid\n")
         self.assertEqual(result.status, RunStatus.PAUSED)
         self.assertFalse(result.gates)
+        result = self.dependency_run("requirements.txt", "requests==2.0\n",
+                                     "requests==2.0 \\\n    --unknown-source packages.invalid\n")
+        self.assertEqual(result.status, RunStatus.PAUSED)
+        self.assertFalse(result.gates)
 
     def test_npm_non_registry_specs_pause_before_gate(self):
         specifications = (
@@ -313,6 +317,27 @@ class LoopCase(WorktreeCase):
 
         result = self.dependency_run("requirements.txt", "requests==2.0\n", "requests==3.0\n")
         self.assertIn("unit", result.gates)
+
+    def test_hashed_requirement_version_change_reaches_gate(self):
+        before = "requests==2.0 \\\n    --hash=sha256:" + "a" * 64 + "\n"
+        after = "requests==3.0 \\\n    --hash sha256:" + "b" * 64 + "\n"
+        result = self.dependency_run("requirements.txt", before, after)
+        self.assertIn("unit", result.gates)
+
+    def test_complex_npm_registry_ranges_and_tags_reach_gate(self):
+        changes = (
+            ("1.2.3-beta.1+build.5", "1.2.4-beta.2+build.6"),
+            ("1.2.3-beta.1 || >=2.0.0", "1.2.4-beta.1 || >=2.0.0"),
+            ("1.2.3 - 2.3.4", "1.2.4 - 2.4.0"),
+            (">=1.2.3 <2.0.0", ">=1.3.0 <3.0.0"),
+            ("latest", "next"),
+        )
+        for before_spec, after_spec in changes:
+            with self.subTest(before_spec=before_spec):
+                before = json.dumps({"dependencies": {"pkg": before_spec}})
+                after = json.dumps({"dependencies": {"pkg": after_spec}})
+                result = self.dependency_run("package.json", before, after)
+                self.assertIn("unit", result.gates)
 
     def test_plain_manifest_text_change_is_not_a_dependency_addition(self):
         before = json.dumps({"name": "fixture", "dependencies": {"pkg": "1.0.0"}})
@@ -410,6 +435,19 @@ class LoopCase(WorktreeCase):
         self.assertEqual(result.status, RunStatus.PAUSED)
         self.assertEqual(result.attempts.total, 3)
         self.assertFalse(self.prompts)
+
+    def test_resume_runs_doctor_only_through_controlled_tools(self):
+        result = self.run_loop(self.fake([None], needs_human=True))
+        calls = []
+        def controlled(repo, operation):
+            calls.append((repo, operation))
+            return operation(repo)
+        with patch("agent_harness.run_service.controlled_tool_errors", return_value=()), \
+                patch("agent_harness.run_service.run_with_controlled_tools", side_effect=controlled):
+            resumed = self.service.resume(result.run_id)
+        self.assertEqual(resumed.status, RunStatus.ACTIVE)
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0][1], self.service.__class__.resume.__globals__["run_doctor"])
 
     def test_cli_help_and_fake_run_have_stable_exit_and_single_json(self):
         from agent_harness.cli import main

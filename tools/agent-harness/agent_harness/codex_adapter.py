@@ -34,39 +34,35 @@ class _BoundTool:
     target: str | None
     directory: str | None
     root: str | None
+    trusted_roots: tuple[str, ...] | None
     entry_identity: tuple[int, int, int, int] | None
     target_identity: tuple[int, int, int, int] | None
+    chain_identities: tuple[tuple[str, tuple[int, int, int, int]], ...] | None
 
 
 def _identity(metadata):
     return metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_mode
 
 
+def _expected_entry_name(name, path):
+    if name == "python":
+        return re.fullmatch(r"python(?:3(?:\.1[1-4])?)?", path.name) is not None
+    return path.name == name
+
+
 def _expected_target_name(name, target):
-    return target.name == name or (name == "npm" and target.name == "npm-cli.js")
+    return (_expected_entry_name(name, target)
+            or (name == "npm" and target.name == "npm-cli.js"))
 
 
-def _discover_codex():
-    candidates = ()
+def _codex_candidates():
     if sys.platform == "darwin":
-        candidates = (Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/"
-                           "CodexCLI.app/Contents/MacOS/codex"),)
-    elif sys.platform.startswith("linux"):
-        candidates = (Path("/usr/bin/codex"), Path("/usr/local/bin/codex"))
-    for path in candidates:
-        try:
-            metadata = path.lstat()
-            if (path.name != "codex" or stat.S_ISLNK(metadata.st_mode)
-                    or path.resolve(strict=True) != path or not stat.S_ISREG(metadata.st_mode)
-                    or metadata.st_uid not in (0, os.getuid()) or not os.access(path, os.X_OK)):
-                continue
-            return str(path), _identity(metadata)
-        except (OSError, RuntimeError, ValueError):
-            continue
-    return None, None
-
-
-_BOUND_CODEX, _BOUND_CODEX_IDENTITY = _discover_codex()
+        return (("/Applications/ChatGPT.app/Contents/Resources/codex-cli/"
+                 "CodexCLI.app/Contents/MacOS/codex", "/Applications/ChatGPT.app"),)
+    if sys.platform.startswith("linux"):
+        system_roots = ("/usr", "/etc/alternatives") if Path("/etc/alternatives").is_dir() else "/usr"
+        return (("/usr/bin/codex", system_roots), ("/usr/local/bin/codex", "/usr/local"))
+    return ()
 
 
 def _account_home():
@@ -88,7 +84,9 @@ def _candidate_roots(name):
             candidates.append(fixed[name])
     elif sys.platform.startswith("linux"):
         for prefix in ("/usr", "/usr/local", "/opt/homebrew"):
-            candidates.append((prefix + "/bin/" + name, prefix))
+            roots = ((prefix, "/etc/alternatives")
+                     if prefix == "/usr" and Path("/etc/alternatives").is_dir() else prefix)
+            candidates.append((prefix + "/bin/" + name, roots))
     else:
         return ()
     if name not in ("git", "java", "docker") or sys.platform != "darwin":
@@ -100,9 +98,16 @@ def _candidate_roots(name):
 def _versioned_candidates(name):
     try:
         home = _account_home()
-        if name == "python3.11":
+        if name == "python":
             root = home / ".local/share/uv/python"
-            values = sorted(root.glob("cpython-3.11.*-*/bin/python3.11"), reverse=True)
+            values = []
+            if (3, 11) <= sys.version_info[:2] <= (3, 14):
+                executable = Path(sys.executable).resolve(strict=True)
+                if executable.is_relative_to(root.resolve(strict=True)):
+                    values.append(executable)
+            for minor in range(11, 15):
+                values.extend(root.glob(f"cpython-3.{minor}.*-*/bin/python3.{minor}"))
+            values = sorted(set(values), reverse=True)
             return tuple((str(value), str(root)) for value in values)
         if name == "node":
             root = home / ".nvm/versions/node"
@@ -113,28 +118,88 @@ def _versioned_candidates(name):
     return ()
 
 
-def _bound_tool(name, candidates, *, target_directory=False, allow_link=False):
-    empty = _BoundTool(name, None, None, None, None, None, None)
+def _matching_root(path, roots):
+    matches = [root for root in roots if path.is_relative_to(root)]
+    if not matches:
+        raise ValueError("Tool path escaped its trusted roots")
+    return max(matches, key=lambda value: len(value.parts))
+
+
+def _symlink_chain(path, roots):
+    chain, current, seen = [], path, set()
+    for _ in range(17):
+        if current in seen:
+            raise ValueError("Tool symlink escaped its trusted root")
+        _matching_root(current, roots)
+        seen.add(current)
+        metadata = current.lstat()
+        chain.append((str(current), _identity(metadata)))
+        if not stat.S_ISLNK(metadata.st_mode):
+            return tuple(chain), current
+        target = Path(os.readlink(current))
+        current = Path(os.path.abspath(target if target.is_absolute() else current.parent / target))
+    raise ValueError("Tool symlink chain is too deep")
+
+
+def _trusted_directories(path, root, owner):
+    current = path
+    while True:
+        metadata = current.stat()
+        if metadata.st_uid not in (0, owner) or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("Project tool parent is not trusted")
+        if current == root:
+            return
+        if current == current.parent or not current.is_relative_to(root):
+            raise ValueError("Project tool escaped its fixed root")
+        current = current.parent
+
+
+def _bound_tool(name, candidates, *, target_directory=False, allow_link=None):
+    empty = _BoundTool(name, None, None, None, None, None, None, None, None)
     for value, allowed in candidates:
         try:
-            path, root = Path(value), Path(allowed).resolve(strict=True)
-            if (not path.is_absolute() or path.name != name or redact_text(str(path)) != str(path)
-                    or not path.is_relative_to(root)):
+            path = Path(value)
+            allowed_values = allowed if isinstance(allowed, (tuple, list)) else (allowed,)
+            roots = tuple(Path(item).resolve(strict=True) for item in allowed_values)
+            root = _matching_root(path, roots)
+            root_owner = root.stat().st_uid
+            allowed_owners = (0, root_owner)
+            if (not path.is_absolute() or not _expected_entry_name(name, path)
+                    or redact_text(str(path)) != str(path)):
                 continue
             entry_metadata = path.lstat()
-            if stat.S_ISLNK(entry_metadata.st_mode) and not allow_link:
+            link_allowed = (allow_link is True or (allow_link is None and sys.platform.startswith("linux")))
+            if stat.S_ISLNK(entry_metadata.st_mode) and not link_allowed:
                 continue
+            chain, chain_target = _symlink_chain(path, roots)
             target = path.resolve(strict=True)
-            if not target.is_relative_to(root) or not _expected_target_name(name, target):
+            target_root = _matching_root(target, roots)
+            if not _expected_target_name(name, target):
                 continue
             target_metadata = target.stat()
+            target_owner = target_root.stat().st_uid
             if (not stat.S_ISREG(target_metadata.st_mode) or not os.access(path, os.X_OK)
+                    or target_metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+                    or entry_metadata.st_uid not in allowed_owners
+                    or target_metadata.st_uid not in (0, target_owner)
                     or entry_metadata.st_uid not in (0, os.getuid())
                     or target_metadata.st_uid not in (0, os.getuid())):
                 continue
+            if any(identity[2] not in (0, _matching_root(Path(item), roots).stat().st_uid)
+                   or (not stat.S_ISLNK(identity[3]) and identity[3] & (stat.S_IWGRP | stat.S_IWOTH))
+                   for item, identity in chain):
+                continue
+            if chain_target.resolve(strict=True) != target:
+                continue
             directory = target.parent if target_directory else path.parent.resolve(strict=True)
+            for item, _ in chain:
+                item_path = Path(item)
+                item_root = _matching_root(item_path, roots)
+                _trusted_directories(item_path.parent, item_root, item_root.stat().st_uid)
+            _trusted_directories(target.parent, target_root, target_owner)
             return _BoundTool(name, str(path), str(target), str(directory), str(root),
-                              _identity(entry_metadata), _identity(target_metadata))
+                              tuple(str(item) for item in roots),
+                              _identity(entry_metadata), _identity(target_metadata), chain)
         except (OSError, RuntimeError, TypeError, ValueError):
             continue
     return empty
@@ -150,7 +215,10 @@ def _npm_candidates(node):
 
 
 def _discover_tools():
-    python = _bound_tool("python3.11", _versioned_candidates("python3.11") + _candidate_roots("python3.11"),
+    python_system = tuple((prefix + "/bin/python3." + str(minor), prefix)
+                          for prefix in ("/usr", "/usr/local", "/opt/homebrew")
+                          for minor in range(11, 15))
+    python = _bound_tool("python", _versioned_candidates("python") + python_system,
                          target_directory=True)
     node = _bound_tool("node", _versioned_candidates("node") + _candidate_roots("node"))
     npm = _bound_tool("npm", _npm_candidates(node), allow_link=True)
@@ -161,6 +229,8 @@ def _discover_tools():
 
 
 _BOUND_TOOLS = _discover_tools()
+_BOUND_CODEX_TOOL = _bound_tool("codex", _codex_candidates())
+_BOUND_CODEX = _BOUND_CODEX_TOOL.entry
 
 
 class CodexFailure(str, Enum):
@@ -221,27 +291,17 @@ def _trusted_codex(repo, candidate=None):
     value = candidate if candidate is not None else _BOUND_CODEX
     if not value or not Path(value).is_absolute() or ".." in Path(value).parts:
         raise ValueError("Codex executable is not an absolute trusted path")
-    path = Path(value).resolve(strict=True)
-    if _BOUND_CODEX is None or path != Path(_BOUND_CODEX):
+    entry = Path(value)
+    path = entry.resolve(strict=True)
+    if (_BOUND_CODEX is None or entry != Path(_BOUND_CODEX)
+            or path != Path(_BOUND_CODEX_TOOL.target)):
         raise ValueError("Codex executable does not match the bound identity")
     root = Path(repo).resolve(strict=True)
     temporary = Path(tempfile.gettempdir()).resolve(strict=True)
     if path.is_relative_to(root) or path.is_relative_to(temporary):
         raise ValueError("Codex executable is inside an autonomous writable root")
-    metadata = os.stat(path, follow_symlinks=False)
-    if _identity(metadata) != _BOUND_CODEX_IDENTITY:
-        raise ValueError("Codex executable identity changed")
-    application_bundle = Path("/Applications/ChatGPT.app")
-    bundled = application_bundle.exists() and path.is_relative_to(application_bundle.resolve(strict=True))
-    if not stat.S_ISREG(metadata.st_mode) or not os.access(path, os.X_OK) or (os.access(path, os.W_OK) and not bundled):
-        raise ValueError("Codex executable is not a regular executable")
-    if not bundled:
-        current = path.parent
-        while current != current.parent:
-            if os.access(current, os.W_OK):
-                raise ValueError("Codex executable parent is writable by autonomous execution")
-            current = current.parent
-    return path
+    _trusted_tool_directory(repo, _BOUND_CODEX_TOOL)
+    return entry
 
 
 def build_codex_command(repo: Path, schema: Path, prompt: str,
@@ -376,47 +436,56 @@ def _environment_path(value, *, multiple=False):
 
 
 def _trusted_tool_directory(repo, tool):
-    if not all((tool.entry, tool.target, tool.directory, tool.root,
+    if not all((tool.entry, tool.target, tool.directory, tool.root, tool.trusted_roots,
                 tool.entry_identity, tool.target_identity)):
         raise ValueError("Required project tool is unavailable")
     entry = Path(tool.entry)
     root_policy = Path(tool.root)
+    trusted_roots = tuple(Path(value) for value in tool.trusted_roots)
+    root_owner = root_policy.stat().st_uid
     entry_metadata = entry.lstat()
     target = entry.resolve(strict=True)
     directory = entry.parent.resolve(strict=True)
     expected_directory = Path(tool.directory)
-    if tool.name == "python3.11":
+    if tool.name == "python":
         directory = target.parent
     root = Path(repo).resolve(strict=True)
     temporary = Path(tempfile.gettempdir()).resolve(strict=True)
-    values = (entry, target, directory, root_policy)
+    target_root = _matching_root(target, trusted_roots)
+    target_owner = target_root.stat().st_uid
+    values = (entry, target, directory, *trusted_roots)
     if (target != Path(tool.target) or directory != expected_directory
+            or not _expected_entry_name(tool.name, entry)
             or not _expected_target_name(tool.name, target)
             or _identity(entry_metadata) != tool.entry_identity
             or _identity(target.stat()) != tool.target_identity
-            or not entry.is_relative_to(root_policy) or not target.is_relative_to(root_policy)
+            or _symlink_chain(entry, trusted_roots)[0] != tool.chain_identities
+            or _matching_root(entry, trusted_roots) != root_policy
+            or not any(target.is_relative_to(value) for value in trusted_roots)
             or any(redact_text(str(value)) != str(value) for value in values)
             or any(value.is_relative_to(root) or value.is_relative_to(temporary) for value in values)):
         raise ValueError("Project tool identity is not trusted")
     metadata = target.stat()
-    if (entry.name != tool.name or not stat.S_ISREG(metadata.st_mode) or not os.access(entry, os.X_OK)
+    if (not stat.S_ISREG(metadata.st_mode) or not os.access(entry, os.X_OK)
+            or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or entry_metadata.st_uid not in (0, root_owner) or metadata.st_uid not in (0, target_owner)
             or entry_metadata.st_uid not in (0, os.getuid()) or metadata.st_uid not in (0, os.getuid())):
         raise ValueError("Project tool is not executable")
-    current = directory
-    while True:
-        parent = current.stat()
-        if parent.st_uid not in (0, os.getuid()) or parent.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-            raise ValueError("Project tool parent is broadly writable")
-        if current == root_policy:
-            break
-        if current == current.parent or not current.is_relative_to(root_policy):
-            raise ValueError("Project tool escaped its fixed root")
-        current = current.parent
+    for item, _ in tool.chain_identities:
+        item_path = Path(item)
+        item_root = _matching_root(item_path, trusted_roots)
+        _trusted_directories(item_path.parent, item_root, item_root.stat().st_uid)
+    _trusted_directories(target.parent, target_root, target_owner)
     return directory
 
 
 def controlled_tool_errors(repo):
     errors = []
+    try:
+        _trusted_codex(repo)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        errors.append({"id": "controlled-tool:codex",
+                       "message": "受控工具不可用或不受信任"})
     for tool in _BOUND_TOOLS:
         try:
             _trusted_tool_directory(repo, tool)
@@ -426,11 +495,27 @@ def controlled_tool_errors(repo):
     return tuple(errors)
 
 
+def run_with_controlled_tools(repo, operation):
+    errors = controlled_tool_errors(repo)
+    if errors:
+        raise ValueError("Controlled tools are unavailable")
+    environment = _environment(repo)
+    previous = dict(os.environ)
+    try:
+        os.environ.clear()
+        os.environ.update(environment)
+        return operation(repo)
+    finally:
+        os.environ.clear()
+        os.environ.update(previous)
+
+
 def _environment(repo):
     environment = {}
     if "PATH" in os.environ and (redact_text(os.environ["PATH"]) != os.environ["PATH"] or "\x00" in os.environ["PATH"]):
         raise ValueError("Unsafe inherited PATH")
-    directories = [_trusted_tool_directory(repo, tool) for tool in _BOUND_TOOLS]
+    directories = [_trusted_codex(repo).parent]
+    directories.extend(_trusted_tool_directory(repo, tool) for tool in _BOUND_TOOLS)
     system_bin = Path("/bin").resolve(strict=True)
     if (system_bin.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH)
             or system_bin.is_relative_to(Path(repo).resolve(strict=True))):

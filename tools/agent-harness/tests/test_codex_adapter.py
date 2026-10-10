@@ -162,11 +162,15 @@ class AdapterCase(WorktreeCase):
         with patch.dict("os.environ", {"PATH": str(poisoned), "HOME": str(Path.home())}, clear=True):
             environment = self.adapter._environment(self.repo)
         self.assertNotIn(str(poisoned), environment["PATH"].split(os.pathsep))
-        for name in ("git", "node", "npm", "docker", "python3.11", "python3"):
+        for name in ("git", "node", "npm", "docker"):
             with self.subTest(name=name):
                 executable = shutil.which(name, path=environment["PATH"])
                 self.assertIsNotNone(executable)
                 self.assertFalse(Path(executable).is_relative_to(self.repo))
+        python = next((shutil.which(f"python3.{minor}", path=environment["PATH"])
+                       for minor in range(11, 15)
+                       if shutil.which(f"python3.{minor}", path=environment["PATH"])), None)
+        self.assertIsNotNone(python)
         project = Path(__file__).resolve().parents[3]
         probe = subprocess.run([str(project / "scripts/agent-harness"), "--python", "--version"],
                                cwd=project, env=environment, text=True, capture_output=True, check=False)
@@ -194,7 +198,10 @@ from agent_harness import codex_adapter
 project = Path(sys.argv[1])
 environment = codex_adapter._environment(project)
 tools = {name: shutil.which(name, path=environment["PATH"])
-         for name in ("git", "node", "npm", "docker", "python3.11", "java")}
+         for name in ("git", "node", "npm", "docker", "java")}
+tools["python"] = next((shutil.which(f"python3.{minor}", path=environment["PATH"])
+                        for minor in range(11, 15)
+                        if shutil.which(f"python3.{minor}", path=environment["PATH"])), None)
 wrapper = subprocess.run([str(project / "scripts/agent-harness"), "--python", "--version"],
                          cwd=project, env=environment, text=True, capture_output=True, check=False)
 print(json.dumps({"path": environment["PATH"], "tools": tools, "codex": codex_adapter._BOUND_CODEX,
@@ -224,6 +231,144 @@ print(json.dumps({"path": environment["PATH"], "tools": tools, "codex": codex_ad
             code = main(["--repo", str(self.repo), "doctor", "--json"])
         self.assertEqual(code, 2)
         self.assertEqual(json.loads(output.getvalue())["error"], [issue])
+
+    def test_doctor_never_executes_path_candidates_before_controlled_validation(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task7-doctor-", dir=project.parents[2]) as directory:
+            poisoned = Path(directory)
+            marker = poisoned / "executed"
+            script_body = "#!/bin/sh\nprintf x >> '" + str(marker) + "'\nprintf 'v22.0.0\\n'\n"
+            for name in ("codex", "git", "node", "npm", "docker", "python3.11", "java"):
+                executable = poisoned / name
+                self.write(executable, script_body)
+                executable.chmod(0o755)
+            script = """
+import contextlib
+import io
+import json
+from pathlib import Path
+import sys
+
+from agent_harness.cli import main
+
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    code = main(["--repo", sys.argv[1], "doctor", "--json"])
+print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": output.getvalue()}))
+"""
+            environment = {"PATH": str(poisoned), "PYTHONPATH": str(project / "tools/agent-harness")}
+            probe = subprocess.run([sys.executable, "-c", script, str(project), str(marker)], env=environment,
+                                   text=True, capture_output=True, check=False)
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        result = json.loads(probe.stdout)
+        self.assertFalse(result["marker"], result)
+        self.assertIn(result["code"], (0, 2))
+
+    def test_controlled_tool_errors_include_codex(self):
+        with patch("agent_harness.codex_adapter._trusted_codex", side_effect=ValueError("fixture")):
+            errors = self.adapter.controlled_tool_errors(self.repo)
+        self.assertIn("controlled-tool:codex", {error["id"] for error in errors})
+
+    def test_linux_trusted_root_symlinks_and_supported_python_are_bound(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task7-linux-", dir=project.parents[2]) as directory:
+            root = Path(directory)
+            java_target = root / "lib/jvm/java-21/bin/java"
+            java_target.parent.mkdir(parents=True)
+            self.write(java_target, "#!/bin/sh\nexit 0\n")
+            java_target.chmod(0o755)
+            entry = root / "bin/java"
+            entry.parent.mkdir()
+            entry.symlink_to(Path("../lib/jvm/java-21/bin/java"))
+            with patch("agent_harness.codex_adapter.sys.platform", "linux"):
+                bound = self.adapter._bound_tool("java", ((str(entry), str(root)),))
+            self.assertEqual(bound.target, str(java_target))
+            self.assertEqual(self.adapter._trusted_tool_directory(self.repo, bound), entry.parent)
+
+            codex_target = root / "lib/codex/codex"
+            codex_target.parent.mkdir(parents=True)
+            self.write(codex_target, "#!/bin/sh\nexit 0\n")
+            codex_target.chmod(0o755)
+            codex_entry = root / "bin/codex"
+            codex_entry.symlink_to(Path("../lib/codex/codex"))
+            with patch("agent_harness.codex_adapter.sys.platform", "linux"):
+                bound_codex = self.adapter._bound_tool("codex", ((str(codex_entry), str(root)),))
+            self.assertEqual(bound_codex.target, str(codex_target))
+            with patch("agent_harness.codex_adapter._BOUND_CODEX_TOOL", bound_codex), \
+                    patch("agent_harness.codex_adapter._BOUND_CODEX", str(codex_entry)):
+                self.assertEqual(self.adapter._trusted_codex(self.repo, str(codex_entry)), codex_entry)
+
+            python = root / "bin/python3.13"
+            self.write(python, "#!/bin/sh\nexit 0\n")
+            python.chmod(0o755)
+            bound_python = self.adapter._bound_tool("python", ((str(python), str(root)),),
+                                                     target_directory=True)
+            self.assertEqual(bound_python.target, str(python))
+
+    def test_linux_symlink_policy_rejects_escape_writable_and_identity_changes(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task7-linux-negative-", dir=project.parents[2]) as directory:
+            root = Path(directory)
+            binary = root / "lib/java"
+            binary.parent.mkdir()
+            self.write(binary, "#!/bin/sh\nexit 0\n")
+            binary.chmod(0o755)
+            entry = root / "bin/java"
+            entry.parent.mkdir()
+            entry.symlink_to(Path("../lib/java"))
+            with patch("agent_harness.codex_adapter.sys.platform", "linux"):
+                bound = self.adapter._bound_tool("java", ((str(entry), str(root)),))
+            entry.parent.chmod(0o777)
+            with self.assertRaises(ValueError):
+                self.adapter._trusted_tool_directory(self.repo, bound)
+            entry.parent.chmod(0o755)
+            binary.chmod(0o775)
+            with self.assertRaises(ValueError):
+                self.adapter._trusted_tool_directory(self.repo, bound)
+            binary.chmod(0o755)
+            with patch("agent_harness.codex_adapter.os.getuid", return_value=os.getuid() + 1), \
+                    self.assertRaises(ValueError):
+                self.adapter._trusted_tool_directory(self.repo, bound)
+            entry.unlink()
+            entry.symlink_to(Path("../lib/java"))
+            with self.assertRaises(ValueError):
+                self.adapter._trusted_tool_directory(self.repo, bound)
+
+            external = root.parent / (root.name + "-outside")
+            self.write(external, "#!/bin/sh\nexit 0\n")
+            external.chmod(0o755)
+            escaping = root / "bin/codex"
+            escaping.symlink_to(external)
+            with patch("agent_harness.codex_adapter.sys.platform", "linux"):
+                rejected = self.adapter._bound_tool("codex", ((str(escaping), str(root)),))
+            self.assertIsNone(rejected.entry)
+            external.unlink()
+
+    def test_linux_alternatives_chain_across_approved_roots_is_revalidated(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task7-linux-alternatives-",
+                                         dir=project.parents[2]) as directory:
+            fixture = Path(directory)
+            usr, alternatives = fixture / "usr", fixture / "etc/alternatives"
+            target = usr / "lib/jvm/java-21/bin/java"
+            target.parent.mkdir(parents=True)
+            alternatives.mkdir(parents=True)
+            self.write(target, "#!/bin/sh\nexit 0\n")
+            target.chmod(0o755)
+            intermediate = alternatives / "java"
+            intermediate.symlink_to(target)
+            entry = usr / "bin/java"
+            entry.parent.mkdir(parents=True)
+            entry.symlink_to(intermediate)
+            with patch("agent_harness.codex_adapter.sys.platform", "linux"):
+                bound = self.adapter._bound_tool("java", ((str(entry), (str(usr), str(alternatives))),))
+            self.assertEqual(bound.target, str(target))
+            self.assertEqual(len(bound.chain_identities), 3)
+            self.assertEqual(self.adapter._trusted_tool_directory(self.repo, bound), entry.parent)
+            intermediate.unlink()
+            intermediate.symlink_to(target)
+            with self.assertRaises(ValueError):
+                self.adapter._trusted_tool_directory(self.repo, bound)
 
     def test_environment_path_resolution_runtime_errors_are_typed(self):
         loop = self.root / "environment-loop"
