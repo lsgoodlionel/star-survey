@@ -740,3 +740,27 @@ Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Acc
   Obsidian 项目状态已同步，Task 8 完成。
 - **下一步候选**：按已确认设计和新实施计划启动 Business Dashboard v1，再与既有七波
   产品化路线合流；后续 Phase C-1 的 `820–1179px` 双栏与检查器壳层仍按独立 Milestone 推进。
+
+## Business Dashboard v1 Task 7（2026-10-11）
+
+- **代码存在**：`/` 与成功登录进入 `/dashboard`，`/workspace` 保留完整资源管理；Dashboard 以一个授权快照
+  呈现摘要、待办、问卷动作和最近工作。发布、答卷与导出均指向已有真实页面，最近工作由服务端持久化并按
+  租户、角色和资源权限过滤。
+- **真实角色**：E2E 在隔离 PostgreSQL 中建立项目级 `editor`、`publish_reviewer` 与 `raw_data_viewer` 成员授权，使用各自短期签名
+  token 登录。编辑者可编辑并提交审批但看不到“待我审批”，审核员只看到授权项目的审批任务并可进入审批页；
+  数据角色只看到获授权的统计、答卷与导出事实和动作；未放宽生产权限，也未注入前端 fixture。
+- **自动化通过**：管理端 30 files / 299 tests、lint、typecheck、build（2101 modules）和 production-bundle
+  assertion（18 files）通过；fresh-stack Playwright 15/15 及平台 API、平台 DB、gateway、engine DB 最终一致性
+  核验通过。Python 管理端 gate 45/45、Dashboard repository focused 16/16、平台全量 1478 cases / 182 test classes（0 failure / error / skip）、
+  MySQL P1 发布/答卷投影/重发/恢复纵向 gate、productization 37/37、能力文档生成与 check 均通过。
+- **响应式证据**：真实 Chromium 在 819/820/1179/1180px 检查页面无横向滚动、业务元素无重叠、主操作未裁切；
+  819px 另实测刷新、任务、问卷和最近工作操作至少 44×44，并逐项点击验证路由后返回 Dashboard。四张全页截图
+  等待全部异步区块和底部“最近工作”稳定后生成，只通过现有凭据扫描及文件名、尺寸、路径白名单导出；gate 解析
+  PNG IHDR 并核对 viewport、document、image 尺寸和全页覆盖。人工检查确认 819px 为抽屉导航与单列摘要，
+  820/1179px 为紧凑列表，1180px 为完整表格，均无可见重叠或操作裁切。详细结果记录在
+  `docs/audits/2026-10-09-product-alignment/15-business-dashboard-v1-follow-up.md`。
+- **状态边界**：`workspace` 能力补充 Dashboard 的 backend/frontend/flow 证据但仍为 `partial`，因为生产层和复合
+  要求尚未验收。Wave 2 模板与品牌、Wave 4 通讯录与批量投放、Wave 5 高级编辑、Wave 6 平台运营，以及原生
+  Release/生产 TLS 均未改变。
+- **交付控制**：本轮暂不 commit、不 push；自治 run `d1a22d5b-6d14-469d-b77c-676f83e3c9a1` 必须先由用户运行
+  Harness gate 绑定当前 dirty paths，之后才能进入提交、独立复审和 GitHub/Obsidian 同步。

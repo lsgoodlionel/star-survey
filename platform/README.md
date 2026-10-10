@@ -15,7 +15,7 @@
 |---|---|
 | P0 基线与可行性 | ✅（供应商询证与法务意见待业务侧） |
 | P1 租户与平台骨架 | ✅ 闸门通过 |
-| P2 通用问卷与本土入口 | 🔄 管理端 Phase A+B 已交付并通过真实浏览器验收；Phase C/D 待后续计划 |
+| P2 通用问卷与本土入口 | 🔄 Business Dashboard v1 与管理端 Phase A+B 已通过真实浏览器验收；Wave 2–6 仍按路线图推进 |
 | P3 商业与业务应用 | 🔄 考试与测评（WP-09/10）已起步 |
 | P4–P5 | ⬜ |
 
@@ -38,12 +38,12 @@
 
 | 套件 | 数量 | 说明 |
 |---|---|---|
-| 平台 Java | **1421 通过 / 175 类** | Task 7 新建隔离库；0 失败 0 错误 0 跳过 |
+| 平台 Java | **1478 通过 / 182 类** | Task 7 Dashboard focused 16/16；0 失败 0 错误 0 跳过 |
 | 发布网关 Python | **1180 通过** | 0 失败 |
 | 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、114 个源码编号；矩阵校验通过 |
-| 管理端 Vitest | **20 个文件 / 174 通过** | lint、typecheck 与 build 同步通过 |
-| 管理端生产构建 | **2089 modules** | 构建通过；大 chunk 提示为非阻断维护项 |
-| 管理端真实 E2E | **10 通过（30.2s，fresh stack）** | 768/819/820/1024/1440/Pixel 7、44px、无溢出、键盘/对话框、最终全链路核对成功后归档 |
+| 管理端 Vitest | **30 个文件 / 299 通过** | lint、typecheck 与 build 同步通过 |
+| 管理端生产构建 | **2101 modules** | 构建通过；大 chunk 提示为非阻断维护项 |
+| 管理端真实 E2E | **15 通过（fresh stack）** | 登录落 Dashboard、发布/答卷/导出、真实角色隔离、最近工作、移动导航及 819/820/1179/1180px DOM 几何；最终全链路核对成功后归档 |
 | 自治工程 Harness | **共 399：392 通过 / 7 typed skip** | Python 3.12 受控 runtime；sandbox 内 Docker 权限受限；历史独立 Docker integration 7/7 零 skip；11/11 fake drills |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
@@ -93,8 +93,8 @@
 
 | 路径 | 内容 |
 |---|---|
-| `platform/apps/admin-web/` | 作者工作台 SPA：内存会话、资源树、基础编辑、大纲拖拽排序、批量导入、快速预览（本地草稿渲染）、审批发布与版本查看 |
-| `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
+| `platform/apps/admin-web/` | 作者管理 SPA：内存会话、业务 Dashboard、资源树、基础编辑、大纲拖拽排序、批量导入、快速/真实预览、审批发布、投放链接、答卷与导出 |
+| `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、dashboard、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
 | `platform/tools/publish-gateway/` | 发布网关：定义 → LSS → 导入 → 激活 → 回读校验 → 回滚；答卷读取；插件通道客户端 |
 | `platform/tools/engine-theme/` | 把随镜像发布的作答主题装进引擎库 |
 | `platform/tools/log-shipper/` | 错误日志脱敏、去重、上报 |
@@ -177,11 +177,10 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 摘要而非 Playwright raw trace。gate 会在 JSON 解码、percent decode、NFKC 规范化后检查所有字符串，并复扫
 最终输出 bytes；JWT、headers、body、临时元数据、raw trace 和原始截图不会上传。
 
-Task 7 用户可见证据位于 `docs/audits/2026-10-09-product-alignment/07-admin-workspace-*.png`：截图人工检查只证明四档画面中
-固定 demo 名称可见、无明显遮挡或截断，且业务导航未混入引擎 `/admin`。横向溢出、44px 控件、819/820 边界、焦点与对话框
-由真实 Playwright DOM 测量；另有运行中 `adminweb-demo` 的 Chromium 巡检遍历固定三层并拒绝 E2E 时间戳资源。Task 7 在
-`820–1179px` 只提供现有布局的不溢出临时保障，Phase C 约定的双栏 + 检查器尚未实现。代码、自动化和用户可见证据仅支持
-Phase A+B；Phase C/D 仍是后续工作。
+Task 7 Dashboard 用户可见证据保留在 `platform/apps/admin-web/test-results/ci-artifacts/`：819、820、1179、1180px
+均为等待异步区块和底部“最近工作”稳定后的全页截图。导出 gate 解析 PNG IHDR，并核对 viewport、document 与 image
+真实尺寸及全页覆盖；人工检查确认无明显遮挡、裁切或重叠。横向溢出和 44px 控件仍由真实 Playwright DOM 测量，截图不替代
+行为断言。详细边界和结果见 `docs/audits/2026-10-09-product-alignment/15-business-dashboard-v1-follow-up.md`。
 仓库已具备单机生产部署和 Release publication 代码路径，详见 [`platform/deploy/production/README.md`](deploy/production/README.md)：固定 digest Compose、`surveyctl` 生命周期、加密备份、隔离恢复、脱敏 doctor、RC 制品签名/证明、四节点 native readiness、stable 原字节推广，以及 GitHub Release 页面身份与资产字节的幂等核对均有自动化契约与故障注入。当前仍不能宣称正式 production-ready：本任务没有创建真实 tag、GitHub Release 或正式 Engine 多架构镜像，Ubuntu 22.04/24.04 × AMD64/ARM64 的真实 GitHub runner 与公网 TLS clean-host 证据仍须在首个 RC 流水线中产生。PR #10 于 2026-10-09 重新核验仍为 OPEN、未合并，依赖仍待合并。
 
 ### 跑测试的三条硬规矩（都是真实踩出来的）

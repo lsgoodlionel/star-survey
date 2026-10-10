@@ -120,6 +120,50 @@ class DashboardTenantIsolationTest {
     }
 
     @Test
+    void previewExceptionsRespectStatusPermissionAndUpdatedAt() {
+        SurveyView permitted = fixture.newSurvey(tenantA);
+        SurveyView denied = fixture.newSurvey(tenantA);
+        TenantContext editor = fixture.member(tenantA, "preview-editor", "editor", permitted.id());
+        Instant failedAt = Instant.parse("2026-10-10T09:00:00Z");
+        Instant cleanupFailedAt = Instant.parse("2026-10-10T10:00:00Z");
+        insertPreview(tenantA, permitted.id(), "failed", failedAt);
+        insertPreview(tenantA, permitted.id(), "cleanup_failed", cleanupFailedAt);
+        insertPreview(tenantA, permitted.id(), "ready", Instant.parse("2026-10-10T11:00:00Z"));
+        insertPreview(tenantA, denied.id(), "failed", Instant.parse("2026-10-10T12:00:00Z"));
+
+        DashboardView view = dashboard.getDashboard(editor, 50, 50);
+
+        assertThat(view.tasks()).filteredOn(task -> task.kind().equals("preview_exception"))
+                .extracting(DashboardTaskView::surveyId, DashboardTaskView::status, DashboardTaskView::updatedAt)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(permitted.id(), "预览关闭失败", cleanupFailedAt),
+                        org.assertj.core.groups.Tuple.tuple(permitted.id(), "预览创建失败", failedAt));
+    }
+
+    @Test
+    void exportExceptionsRespectStatusRequesterPermissionAndTimestampFallback() {
+        SurveyView permitted = fixture.newSurvey(tenantA);
+        SurveyView denied = fixture.newSurvey(tenantA);
+        TenantContext dataViewer = fixture.member(tenantA, "data-viewer", "raw_data_viewer", permitted.id());
+        Instant createdAt = Instant.parse("2026-10-10T08:00:00Z");
+        Instant startedAt = Instant.parse("2026-10-10T09:00:00Z");
+        Instant finishedAt = Instant.parse("2026-10-10T10:00:00Z");
+        insertExport(tenantA, permitted.id(), dataViewer.actorId(), "failed", createdAt, startedAt, finishedAt);
+        insertExport(tenantA, permitted.id(), dataViewer.actorId(), "expired", createdAt, startedAt, null);
+        insertExport(tenantA, permitted.id(), dataViewer.actorId(), "queued", createdAt, null, null);
+        insertExport(tenantA, permitted.id(), "another-actor", "failed", createdAt, startedAt, finishedAt);
+        insertExport(tenantA, denied.id(), dataViewer.actorId(), "failed", createdAt, startedAt, finishedAt);
+
+        DashboardView view = dashboard.getDashboard(dataViewer, 50, 50);
+
+        assertThat(view.tasks()).filteredOn(task -> task.kind().equals("export_exception"))
+                .extracting(DashboardTaskView::surveyId, DashboardTaskView::status, DashboardTaskView::updatedAt)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(permitted.id(), "导出失败", finishedAt),
+                        org.assertj.core.groups.Tuple.tuple(permitted.id(), "导出文件已过期", startedAt));
+    }
+
+    @Test
     void tenantWidePermissionsRemainVisibleWithoutAnySurveyData() {
         TenantContext reviewer = access.activeMember(tenantA.owner(), "tenant-reviewer");
         access.grants().grant(tenantA.owner(),
@@ -295,6 +339,55 @@ class DashboardTenantIsolationTest {
                 .param("survey", surveyId)
                 .param("applicant", applicant)
                 .param("submitted", Timestamp.from(submittedAt))
+                .update());
+    }
+
+    private void insertPreview(Workspace workspace, UUID surveyId, String status, Instant updatedAt) {
+        int engineSid = 100_000 + Math.floorMod(UUID.randomUUID().hashCode(), 800_000);
+        tenantScope.run(workspace.tenant(), () -> jdbc.sql("""
+                        INSERT INTO survey_preview_session
+                            (tenant_id, id, request_id, survey_id, draft_version, definition,
+                             requested_by, engine_instance_id, engine_sid, generation,
+                             expires_at, status, updated_at)
+                        SELECT :tenant, :id, :request, id, draft_version, draft_definition,
+                               :actor, :instance, :sid, :generation,
+                               :expires, :status, :updated
+                        FROM survey WHERE id = :survey
+                        """)
+                .param("tenant", workspace.tenant().value())
+                .param("id", UUID.randomUUID())
+                .param("request", UUID.randomUUID())
+                .param("actor", workspace.owner().actorId())
+                .param("instance", workspace.engineInstanceId())
+                .param("sid", engineSid)
+                .param("generation", "preview-" + UUID.randomUUID())
+                .param("expires", Timestamp.from(updatedAt.plusSeconds(3600)))
+                .param("status", status)
+                .param("updated", Timestamp.from(updatedAt))
+                .param("survey", surveyId)
+                .update());
+    }
+
+    private void insertExport(Workspace workspace, UUID surveyId, String actor, String status,
+            Instant createdAt, Instant startedAt, Instant finishedAt) {
+        tenantScope.run(workspace.tenant(), () -> jdbc.sql("""
+                        INSERT INTO response_export_job
+                            (tenant_id, id, survey_id, requested_by, format,
+                             filter_snapshot, plan, reveal_sensitive, batch_size,
+                             status, expires_at, created_at, started_at, finished_at)
+                        VALUES (:tenant, :id, :survey, :actor, 'csv',
+                                '{}'::jsonb, '{}'::jsonb, false, 100,
+                                :status, :expires, :created, :started, :finished)
+                        """)
+                .param("tenant", workspace.tenant().value())
+                .param("id", UUID.randomUUID())
+                .param("survey", surveyId)
+                .param("actor", actor)
+                .param("status", status)
+                .param("expires", Timestamp.from(createdAt.plusSeconds(86_400)))
+                .param("created", Timestamp.from(createdAt))
+                .param("started", startedAt == null ? null : Timestamp.from(startedAt))
+                .param("finished", finishedAt == null ? null : Timestamp.from(finishedAt))
                 .update());
     }
 

@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -31,6 +32,10 @@ TOKEN_TTL_SECONDS = 600
 HTTP_TIMEOUT_SECONDS = 300
 OPERATOR_ACTOR = "admin-web-e2e-operator"
 OWNER_ACTOR = "admin-web-e2e-owner"
+EDITOR_ACTOR = "admin-web-e2e-editor"
+REVIEWER_ACTOR = "admin-web-e2e-reviewer"
+DATA_ACTOR = "admin-web-e2e-data"
+TEST_BROWSER_ACTORS = {OWNER_ACTOR, EDITOR_ACTOR, REVIEWER_ACTOR, DATA_ACTOR}
 OPERATOR_ROLE = "platform_operator"
 RESULT_FIELDS = {
     "rootProjectId",
@@ -62,14 +67,37 @@ MAX_SANITIZED_NETWORK_URL_LENGTH = 768
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 UUID_PATH = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 ADMIN_WEB_PATH = re.compile(
-    r"^(?:/|/workspace|/login|/auth/callback|/dev/token|"
-    r"/surveys/" + UUID_PATH + r"/(?:edit|import|preview|publish)|"
+    r"^(?:/|/dashboard|/workspace|/login|/auth/callback|/dev/token|"
+    r"/surveys/" + UUID_PATH + r"/(?:edit|import|preview|publish|responses)|"
     r"/surveys/" + UUID_PATH + r"/versions/[1-9][0-9]*)$"
 )
+DASHBOARD_SCREENSHOT_WIDTHS = (819, 820, 1179, 1180)
+DASHBOARD_SCREENSHOT_MANIFEST_FIELDS = {
+    "schemaVersion", "kind", "project", "screenshots",
+}
+DASHBOARD_SCREENSHOT_FIELDS = {
+    "bottomEvidence",
+    "documentHeight",
+    "filename",
+    "imageHeight",
+    "imageWidth",
+    "path",
+    "viewportHeight",
+    "viewportWidth",
+}
 
 
 class StepFailed(Exception):
     """A gate assertion failed without exposing sensitive material."""
+
+
+def _png_dimensions(content: bytes) -> Tuple[int, int]:
+    if len(content) < 24 or not content.startswith(PNG_SIGNATURE) or content[12:16] != b"IHDR":
+        raise StepFailed("dashboard screenshot is not a PNG with an IHDR")
+    width, height = struct.unpack(">II", content[16:24])
+    if width < 1 or height < 1:
+        raise StepFailed("dashboard screenshot has invalid dimensions")
+    return width, height
 
 
 def expect(condition: bool, label: str, detail: str = "") -> None:
@@ -359,14 +387,24 @@ def export_sanitized_failure_evidence(
     source: Path,
     destination: Path,
     allowed_root: Path,
+    additional_secret_files: Optional[List[Path]] = None,
 ) -> int:
     resolved_destination = _clear_sanitized_evidence(destination, allowed_root)
-    try:
-        secret = secret_file.read_bytes().strip()
-    except OSError as error:
-        raise StepFailed("browser credential is unavailable for evidence export") from error
-    if not secret:
-        raise StepFailed("browser credential is empty during evidence export")
+    secrets = []
+    for credential in [secret_file, *(additional_secret_files or [])]:
+        try:
+            secret = credential.read_bytes().strip()
+        except OSError as error:
+            raise StepFailed("browser credential is unavailable for evidence export") from error
+        if not secret:
+            raise StepFailed("browser credential is empty during evidence export")
+        secrets.append(secret)
+
+    def contains_secret(raw: bytes) -> bool:
+        return any(_bytes_contain_secret(raw, secret) for secret in secrets)
+
+    def value_contains_secret(value: Any) -> bool:
+        return any(_value_contains_secret(value, secret) for secret in secrets)
 
     summaries: List[Tuple[Path, Dict[str, Any]]] = []
     seen = set()
@@ -375,10 +413,10 @@ def export_sanitized_failure_evidence(
             if candidate.name != "sanitized-trace-summary.json":
                 continue
             raw = candidate.read_bytes()
-            if _bytes_contain_secret(raw, secret):
+            if contains_secret(raw):
                 raise StepFailed("sanitized trace summary contains the browser credential")
             payload = _validate_sanitized_trace(json.loads(raw.decode("utf-8")))
-            if _value_contains_secret(payload, secret):
+            if value_contains_secret(payload):
                 raise StepFailed("decoded sanitized trace summary contains the browser credential")
             identity = (payload["project"], payload["testId"])
             if identity in seen:
@@ -395,10 +433,74 @@ def export_sanitized_failure_evidence(
                 screenshot_bytes = screenshot.read_bytes()
                 if (
                     not screenshot_bytes.startswith(PNG_SIGNATURE)
-                    or _bytes_contain_secret(screenshot_bytes, secret)
+                    or contains_secret(screenshot_bytes)
                 ):
                     raise StepFailed("sanitized failure screenshot did not pass validation")
                 exports.append((prefix + "-sanitized-failure.png", screenshot_bytes))
+
+        manifests = [
+            candidate for candidate in _walk_artifact_files(source)
+            if candidate.name == "dashboard-screenshot-manifest.json"
+        ]
+        if len(manifests) > 1:
+            raise StepFailed("dashboard screenshot manifest is duplicated")
+        if manifests:
+            manifest_path = manifests[0]
+            manifest_bytes = manifest_path.read_bytes()
+            if contains_secret(manifest_bytes):
+                raise StepFailed("dashboard screenshot manifest contains the browser credential")
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+            if not isinstance(manifest, dict) or set(manifest) != DASHBOARD_SCREENSHOT_MANIFEST_FIELDS:
+                raise StepFailed("dashboard screenshot manifest uses an unexpected schema")
+            screenshots = manifest.get("screenshots")
+            valid_manifest = (
+                manifest.get("schemaVersion") == 1
+                and manifest.get("kind") == "sanitized-dashboard-screenshot-set"
+                and manifest.get("project") == "chromium-dashboard"
+                and isinstance(screenshots, list)
+                and len(screenshots) == len(DASHBOARD_SCREENSHOT_WIDTHS)
+            )
+            if not valid_manifest:
+                raise StepFailed("dashboard screenshot manifest contains a non-allowlisted value")
+            observed_widths = []
+            for item in screenshots:
+                if not isinstance(item, dict) or set(item) != DASHBOARD_SCREENSHOT_FIELDS:
+                    raise StepFailed("dashboard screenshot entry uses an unexpected schema")
+                width = item.get("viewportWidth")
+                filename = item.get("filename")
+                if (
+                    width not in DASHBOARD_SCREENSHOT_WIDTHS
+                    or item.get("viewportHeight") != 900
+                    or not isinstance(item.get("documentHeight"), int)
+                    or isinstance(item.get("documentHeight"), bool)
+                    or item.get("documentHeight") < item.get("viewportHeight")
+                    or item.get("imageWidth") != width
+                    or not isinstance(item.get("imageHeight"), int)
+                    or isinstance(item.get("imageHeight"), bool)
+                    or item.get("imageHeight") < item.get("documentHeight")
+                    or item.get("bottomEvidence") != "最近工作"
+                    or item.get("path") != "/dashboard"
+                    or filename != "dashboard-{}.png".format(width)
+                ):
+                    raise StepFailed("dashboard screenshot entry contains a non-allowlisted value")
+                observed_widths.append(width)
+                screenshot_path = manifest_path.parent / filename
+                screenshot_bytes = screenshot_path.read_bytes()
+                image_width, image_height = _png_dimensions(screenshot_bytes)
+                if (
+                    image_width != item.get("imageWidth")
+                    or image_height != item.get("imageHeight")
+                    or image_height < item.get("documentHeight")
+                    or contains_secret(screenshot_bytes)
+                ):
+                    raise StepFailed("dashboard screenshot did not pass validation")
+                exports.append(("chromium-dashboard-" + filename, screenshot_bytes))
+            if sorted(observed_widths) != list(DASHBOARD_SCREENSHOT_WIDTHS):
+                raise StepFailed("dashboard screenshot widths are incomplete or duplicated")
+            exports.append((
+                "chromium-dashboard-dashboard-screenshot-manifest.json",
+                manifest,
+            ))
 
         root_ids = [
             candidate for candidate in _walk_artifact_files(source)
@@ -408,7 +510,7 @@ def export_sanitized_failure_evidence(
             raise StepFailed("run root resource evidence is duplicated")
         if root_ids:
             root_bytes = root_ids[0].read_bytes()
-            if _bytes_contain_secret(root_bytes, secret):
+            if contains_secret(root_bytes):
                 raise StepFailed("run root resource evidence contains the browser credential")
             try:
                 root_id = root_bytes.decode("ascii").strip()
@@ -427,7 +529,7 @@ def export_sanitized_failure_evidence(
                 _write_json(output, content)
             else:
                 output.write_bytes(content)
-            if _bytes_contain_secret(output.read_bytes(), secret):
+            if contains_secret(output.read_bytes()):
                 raise StepFailed("final sanitized evidence contains the browser credential")
         return len(exports)
     except (OSError, UnicodeDecodeError, ValueError) as error:
@@ -617,8 +719,11 @@ def cmd_prepare(args: argparse.Namespace) -> None:
 
 def cmd_issue_browser_token(args: argparse.Namespace) -> None:
     metadata = validate_metadata(_load_object(Path(args.metadata_file), "metadata"))
-    owner_token = mint_token(jwt_secret(), metadata["actorId"], metadata["tenantId"], [])
-    write_private(Path(args.jwt_file), owner_token)
+    actor_id = getattr(args, "actor_id", None) or metadata["actorId"]
+    if actor_id not in TEST_BROWSER_ACTORS:
+        raise StepFailed("browser credential actor is not allowlisted")
+    browser_token = mint_token(jwt_secret(), actor_id, metadata["tenantId"], [])
+    write_private(Path(args.jwt_file), browser_token)
     print("  [ok] short-lived browser credential issued (value withheld)", file=sys.stderr)
 
 
@@ -631,11 +736,13 @@ def cmd_scan_artifacts(args: argparse.Namespace) -> None:
 
 
 def cmd_export_sanitized_evidence(args: argparse.Namespace) -> None:
+    secret_files = [Path(path) for path in args.jwt_file]
     count = export_sanitized_failure_evidence(
-        Path(args.jwt_file),
+        secret_files[0],
         Path(args.source_dir),
         Path(args.output_dir),
         Path(args.allowed_root),
+        additional_secret_files=secret_files[1:],
     )
     print("  [ok] exported {} sanitized failure evidence files".format(count), file=sys.stderr)
 
@@ -775,6 +882,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     issue = commands.add_parser("issue-browser-token")
     issue.add_argument("--metadata-file", required=True)
     issue.add_argument("--jwt-file", required=True)
+    issue.add_argument("--actor-id", choices=sorted(TEST_BROWSER_ACTORS))
     issue.set_defaults(handler=cmd_issue_browser_token)
 
     scan = commands.add_parser("scan-artifacts")
@@ -784,7 +892,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     scan.set_defaults(handler=cmd_scan_artifacts)
 
     export = commands.add_parser("export-sanitized-evidence")
-    export.add_argument("--jwt-file", required=True)
+    export.add_argument("--jwt-file", action="append", required=True)
     export.add_argument("--source-dir", required=True)
     export.add_argument("--output-dir", required=True)
     export.add_argument("--allowed-root", required=True)

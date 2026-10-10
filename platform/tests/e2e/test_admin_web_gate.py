@@ -5,9 +5,11 @@ import io
 import json
 import os
 import stat
+import struct
 import subprocess
 import tempfile
 import unittest
+import zlib
 from argparse import Namespace
 from pathlib import Path
 from unittest import mock
@@ -40,7 +42,46 @@ def run_bash(script, env=None):
     )
 
 
+def png(width, height):
+    def chunk(kind, payload):
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(
+            ">I", zlib.crc32(kind + payload) & 0xFFFFFFFF
+        )
+
+    rows = b"".join(b"\x00" + b"\x00\x00\x00" * width for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+
+
 class AdminWebGateTest(unittest.TestCase):
+    def test_issue_browser_token_accepts_a_scoped_test_actor(self):
+        gate = load_gate()
+        tenant_id = "11111111-1111-4111-8111-111111111111"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = root / "metadata.json"
+            token_file = root / "reviewer.jwt"
+            metadata.write_text(json.dumps({
+                "schemaVersion": 1,
+                "tenantId": tenant_id,
+                "actorId": gate.OWNER_ACTOR,
+                "engineInstanceId": "admin-web-engine-01",
+            }), encoding="utf-8")
+            args = Namespace(
+                metadata_file=str(metadata),
+                jwt_file=str(token_file),
+                actor_id="admin-web-e2e-reviewer",
+            )
+            with mock.patch.dict(os.environ, {"PLATFORM_JWT_HMAC_SECRET": "x" * 48}):
+                gate.cmd_issue_browser_token(args)
+
+            self.assertEqual("admin-web-e2e-reviewer", decode_claims(token_file.read_text())["sub"])
+            self.assertEqual(0o600, stat.S_IMODE(token_file.stat().st_mode))
+
     def test_local_engine_configs_disable_ssl_enforcement_and_alerts(self):
         config_dir = Path(__file__).parents[2] / "deploy/test"
         for name in ("config.mysql.php", "config.pgsql.php"):
@@ -223,7 +264,10 @@ class AdminWebGateTest(unittest.TestCase):
         self.assertIn("tmpfs:", text)
         self.assertNotIn("platform-db_default", text)
         self.assertGreaterEqual(text.count('127.0.0.1::8080'), 2)
-        self.assertIn('      - "127.0.0.1::80"\n', text)
+        self.assertIn(
+            '      - "127.0.0.1:${ADMIN_WEB_PORT:?set ADMIN_WEB_PORT}:80"\n',
+            text,
+        )
         for service in ("platform:", "gateway:", "admin-web:"):
             self.assertIn(service, text)
 
@@ -532,6 +576,126 @@ class AdminWebGateTest(unittest.TestCase):
             }, {path.name for path in destination.iterdir()})
             for artifact in destination.iterdir():
                 self.assertNotIn(token.encode("ascii"), artifact.read_bytes())
+
+    def test_export_copies_only_allowlisted_dashboard_screenshot_evidence(self):
+        gate = load_gate()
+        token = "header.payload.never-export-this-signature"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            evidence = source / "dashboard-evidence"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, token)
+            evidence.mkdir(parents=True)
+            screenshots = []
+            for width in (819, 820, 1179, 1180):
+                filename = "dashboard-{}.png".format(width)
+                document_height = 901 + width % 3
+                (evidence / filename).write_bytes(png(width, document_height))
+                screenshots.append({
+                    "bottomEvidence": "最近工作",
+                    "documentHeight": document_height,
+                    "filename": filename,
+                    "imageHeight": document_height,
+                    "imageWidth": width,
+                    "path": "/dashboard",
+                    "viewportHeight": 900,
+                    "viewportWidth": width,
+                })
+            (evidence / "dashboard-screenshot-manifest.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "kind": "sanitized-dashboard-screenshot-set",
+                "project": "chromium-dashboard",
+                "screenshots": screenshots,
+            }), encoding="utf-8")
+            (evidence / "raw.png").write_bytes(b"\x89PNG\r\n\x1a\nnot-allowlisted")
+
+            exported = gate.export_sanitized_failure_evidence(
+                secret, source, destination, allowed_root
+            )
+
+            self.assertEqual(5, exported)
+            self.assertEqual({
+                "chromium-dashboard-dashboard-819.png",
+                "chromium-dashboard-dashboard-820.png",
+                "chromium-dashboard-dashboard-1179.png",
+                "chromium-dashboard-dashboard-1180.png",
+                "chromium-dashboard-dashboard-screenshot-manifest.json",
+            }, {path.name for path in destination.iterdir()})
+
+    def test_export_rejects_dashboard_manifest_that_lies_about_png_or_full_page_coverage(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = root / "owner.jwt"
+            source = root / "private-results"
+            evidence = source / "dashboard-evidence"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(secret, "header.payload.signature")
+            evidence.mkdir(parents=True)
+            screenshots = []
+            for width in (819, 820, 1179, 1180):
+                filename = "dashboard-{}.png".format(width)
+                (evidence / filename).write_bytes(png(width, 900))
+                screenshots.append({
+                    "bottomEvidence": "最近工作",
+                    "documentHeight": 1200,
+                    "filename": filename,
+                    "imageHeight": 1200,
+                    "imageWidth": width,
+                    "path": "/dashboard",
+                    "viewportHeight": 900,
+                    "viewportWidth": width,
+                })
+            (evidence / "dashboard-screenshot-manifest.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "kind": "sanitized-dashboard-screenshot-set",
+                "project": "chromium-dashboard",
+                "screenshots": screenshots,
+            }), encoding="utf-8")
+
+            with self.assertRaises(gate.StepFailed):
+                gate.export_sanitized_failure_evidence(secret, source, destination, allowed_root)
+
+            self.assertFalse(destination.exists())
+
+    def test_export_scans_every_role_credential_before_writing_evidence(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            owner = root / "owner.jwt"
+            reviewer = root / "reviewer.jwt"
+            source = root / "private-results"
+            case = source / "authoring-failed"
+            allowed_root = root / "app" / "test-results"
+            destination = allowed_root / "ci-artifacts"
+            gate.write_private(owner, "header.payload.owner-signature")
+            gate.write_private(reviewer, "header.payload.reviewer-signature")
+            case.mkdir(parents=True)
+            (case / "sanitized-failure.png").write_bytes(
+                b"\x89PNG\r\n\x1a\nsafe-prefix-header.payload.reviewer-signature"
+            )
+            (case / "sanitized-trace-summary.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "kind": "sanitized-playwright-trace-summary",
+                "project": "chromium-desktop",
+                "testId": "desktop-authoring",
+                "status": "failed",
+                "durationMs": 1,
+                "lastPath": "/workspace",
+                "network": [],
+            }), encoding="utf-8")
+
+            with self.assertRaises(gate.StepFailed):
+                gate.export_sanitized_failure_evidence(
+                    owner, source, destination, allowed_root,
+                    additional_secret_files=[reviewer],
+                )
+
+            self.assertFalse(destination.exists())
 
     def test_export_rejects_a_non_uuid_run_root_id_and_clears_output(self):
         gate = load_gate()
@@ -899,7 +1063,11 @@ ADMIN_WEB_JWT_FILE="$JWT"
 ADMIN_WEB_RESULT_FILE="$RESULT"
 ADMIN_WEB_TEST_RESULTS_DIR="$PRIVATE_RESULTS"
 ADMIN_WEB_CI_ARTIFACT_DIR="$ARTIFACT_DIR"
-issue_browser_token() { printf '%s' "$TOKEN" >"$JWT"; chmod 600 "$JWT"; }
+issue_browser_token() {
+  local token_file="${2:-$JWT}"
+  printf '%s' "$TOKEN" >"$token_file"
+  chmod 600 "$token_file"
+}
 run_playwright() {
   mkdir -p "$PRIVATE_RESULTS/case"
   printf '\211PNG\r\n\032\nsafe-pixels' >"$PRIVATE_RESULTS/case/sanitized-failure.png"
@@ -952,7 +1120,7 @@ test ! -e "$PRIVATE_DIR"
             self.assertEqual(0, completed.returncode, completed.stderr)
             self.assertNotIn("secret", completed.stdout + completed.stderr)
 
-    def test_browser_token_is_issued_immediately_before_playwright(self):
+    def test_all_browser_tokens_are_issued_after_build_and_before_playwright(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
         with tempfile.TemporaryDirectory() as directory:
             trace = Path(directory, "trace")
@@ -967,7 +1135,12 @@ ADMIN_WEB_JWT_FILE="$JWT"
 ADMIN_WEB_RESULT_FILE="$RESULT"
 ADMIN_WEB_TEST_RESULTS_DIR="$TEST_RESULTS"
 ADMIN_WEB_DIR="$APP"
-issue_browser_token() { echo issue >>"$TRACE"; printf token >"$JWT"; chmod 600 "$JWT"; }
+issue_browser_token() {
+  local token_file="${2:-$JWT}"
+  echo issue >>"$TRACE"
+  printf token >"$token_file"
+  chmod 600 "$token_file"
+}
 run_playwright() { echo playwright >>"$TRACE"; printf '{}' >"$RESULT"; }
 sanitize_test_artifacts() { return 0; }
 run_browser_tests
@@ -982,7 +1155,38 @@ run_browser_tests
             })
 
             self.assertEqual(0, completed.returncode, completed.stderr)
-            self.assertEqual(["issue", "playwright"], trace.read_text(encoding="utf-8").splitlines())
+            events = trace.read_text(encoding="utf-8").splitlines()
+            issue_indexes = [index for index, event in enumerate(events) if event == "issue"]
+            self.assertEqual(4, len(issue_indexes))
+            self.assertTrue(all(index < events.index("playwright") for index in issue_indexes))
+
+    def test_owner_token_issue_is_nounset_safe_without_an_actor_argument(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jwt = root / "owner.jwt"
+            trace = root / "trace"
+            script = r'''
+source "$RUNNER"
+GATE=gate.py
+PLATFORM_URL=http://127.0.0.1:1
+ADMIN_WEB_METADATA_FILE=metadata.json
+ADMIN_WEB_JWT_FILE="$JWT"
+python3() {
+  printf '%s\n' "$*" >"$TRACE"
+  printf token >"$ADMIN_WEB_JWT_FILE"
+  chmod 600 "$ADMIN_WEB_JWT_FILE"
+}
+issue_browser_token
+'''
+            completed = run_bash(script, {
+                "RUNNER": str(runner),
+                "JWT": str(jwt),
+                "TRACE": str(trace),
+            })
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertNotIn("--actor-id", trace.read_text(encoding="utf-8"))
 
     def test_main_issues_browser_token_after_cold_stack_is_ready(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
@@ -1016,8 +1220,9 @@ python3() {
 }
 issue_browser_token() {
   echo issue-token >>"$TRACE"
-  printf browser-token >"$ADMIN_WEB_JWT_FILE"
-  chmod 600 "$ADMIN_WEB_JWT_FILE"
+  local token_file="${2:-$ADMIN_WEB_JWT_FILE}"
+  printf browser-token >"$token_file"
+  chmod 600 "$token_file"
 }
 run_playwright() {
   echo playwright >>"$TRACE"
@@ -1039,11 +1244,12 @@ main --fresh
             events = trace.read_text(encoding="utf-8").splitlines()
             engine_index = events.index("engine-installed")
             build_index = next(i for i, event in enumerate(events) if "up -d --build gateway admin-web" in event)
-            issue_index = events.index("issue-token")
+            issue_indexes = [i for i, event in enumerate(events) if event == "issue-token"]
             playwright_index = events.index("playwright")
-            self.assertLess(engine_index, issue_index)
-            self.assertLess(build_index, issue_index)
-            self.assertEqual(issue_index + 1, playwright_index)
+            self.assertEqual(4, len(issue_indexes))
+            self.assertLess(engine_index, issue_indexes[0])
+            self.assertLess(build_index, issue_indexes[0])
+            self.assertTrue(all(index < playwright_index for index in issue_indexes))
 
     def test_post_playwright_verify_failure_does_not_archive(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"

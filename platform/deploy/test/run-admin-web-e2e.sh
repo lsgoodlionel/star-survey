@@ -122,31 +122,55 @@ ensure_node22() {
 }
 
 issue_browser_token() {
-  python3 "$GATE" --base-url "$PLATFORM_URL" issue-browser-token \
-    --metadata-file "$ADMIN_WEB_METADATA_FILE" \
-    --jwt-file "$ADMIN_WEB_JWT_FILE"
-  [[ "$(private_mode "$ADMIN_WEB_JWT_FILE")" == "600" ]] || fail "JWT file is not mode 0600"
+  local actor_id="${1:-}" jwt_file="${2:-$ADMIN_WEB_JWT_FILE}"
+  if [[ -n "$actor_id" ]]; then
+    python3 "$GATE" --base-url "$PLATFORM_URL" issue-browser-token \
+      --metadata-file "$ADMIN_WEB_METADATA_FILE" \
+      --jwt-file "$jwt_file" \
+      --actor-id "$actor_id"
+  else
+    python3 "$GATE" --base-url "$PLATFORM_URL" issue-browser-token \
+      --metadata-file "$ADMIN_WEB_METADATA_FILE" \
+      --jwt-file "$jwt_file"
+  fi
+  [[ "$(private_mode "$jwt_file")" == "600" ]] || fail "JWT file is not mode 0600"
 }
 
 sanitize_test_artifacts() {
   local remove_media="$1"
-  local arguments=(
-    --base-url "${PLATFORM_URL:-http://127.0.0.1}"
-    scan-artifacts
-    --jwt-file "$ADMIN_WEB_JWT_FILE"
-    --path "$ADMIN_WEB_RESULT_FILE"
-    --path "$ADMIN_WEB_TEST_RESULTS_DIR"
-  )
-  if [[ "$remove_media" == "true" ]]; then
-    arguments+=(--remove-media)
+  local jwt_file arguments
+  local jwt_files=("$ADMIN_WEB_JWT_FILE")
+  if [[ -n "${ADMIN_WEB_EDITOR_JWT_FILE:-}" ]]; then
+    jwt_files+=("$ADMIN_WEB_EDITOR_JWT_FILE")
   fi
-  python3 "$GATE" "${arguments[@]}"
+  if [[ -n "${ADMIN_WEB_REVIEWER_JWT_FILE:-}" ]]; then
+    jwt_files+=("$ADMIN_WEB_REVIEWER_JWT_FILE")
+  fi
+  if [[ -n "${ADMIN_WEB_DATA_JWT_FILE:-}" ]]; then
+    jwt_files+=("$ADMIN_WEB_DATA_JWT_FILE")
+  fi
+  for jwt_file in "${jwt_files[@]}"; do
+    arguments=(
+      --base-url "${PLATFORM_URL:-http://127.0.0.1}"
+      scan-artifacts
+      --jwt-file "$jwt_file"
+      --path "$ADMIN_WEB_RESULT_FILE"
+      --path "$ADMIN_WEB_TEST_RESULTS_DIR"
+    )
+    if [[ "$remove_media" == "true" ]]; then
+      arguments+=(--remove-media)
+    fi
+    python3 "$GATE" "${arguments[@]}"
+  done
 }
 
 export_failure_artifacts() {
   [[ -n "${ADMIN_WEB_CI_ARTIFACT_DIR:-}" ]] || return 0
   python3 "$GATE" --base-url "${PLATFORM_URL:-http://127.0.0.1}" export-sanitized-evidence \
     --jwt-file "$ADMIN_WEB_JWT_FILE" \
+    --jwt-file "$ADMIN_WEB_EDITOR_JWT_FILE" \
+    --jwt-file "$ADMIN_WEB_REVIEWER_JWT_FILE" \
+    --jwt-file "$ADMIN_WEB_DATA_JWT_FILE" \
     --source-dir "$ADMIN_WEB_TEST_RESULTS_DIR" \
     --output-dir "$ADMIN_WEB_CI_ARTIFACT_DIR" \
     --allowed-root "$ADMIN_WEB_DIR/test-results"
@@ -160,9 +184,17 @@ run_playwright() {
 }
 
 run_browser_tests() {
-  rm -f "$ADMIN_WEB_JWT_FILE" "$ADMIN_WEB_RESULT_FILE"
+  export ADMIN_WEB_EDITOR_JWT_FILE="${ADMIN_WEB_EDITOR_JWT_FILE:-$(dirname "$ADMIN_WEB_JWT_FILE")/editor.jwt}"
+  export ADMIN_WEB_REVIEWER_JWT_FILE="${ADMIN_WEB_REVIEWER_JWT_FILE:-$(dirname "$ADMIN_WEB_JWT_FILE")/reviewer.jwt}"
+  export ADMIN_WEB_DATA_JWT_FILE="${ADMIN_WEB_DATA_JWT_FILE:-$(dirname "$ADMIN_WEB_JWT_FILE")/data.jwt}"
+  rm -f "$ADMIN_WEB_JWT_FILE" "$ADMIN_WEB_EDITOR_JWT_FILE" "$ADMIN_WEB_REVIEWER_JWT_FILE" \
+    "$ADMIN_WEB_DATA_JWT_FILE" \
+    "$ADMIN_WEB_RESULT_FILE"
   mkdir -p "$ADMIN_WEB_TEST_RESULTS_DIR"
   issue_browser_token
+  issue_browser_token admin-web-e2e-editor "$ADMIN_WEB_EDITOR_JWT_FILE"
+  issue_browser_token admin-web-e2e-reviewer "$ADMIN_WEB_REVIEWER_JWT_FILE"
+  issue_browser_token admin-web-e2e-data "$ADMIN_WEB_DATA_JWT_FILE"
   (
     while true; do
       docker exec "$CONTAINER" php application/commands/console.php plugin cron >/dev/null 2>&1 || true
@@ -178,6 +210,7 @@ run_browser_tests() {
   fi
   stop_engine_relay
   [[ -f "$ADMIN_WEB_RESULT_FILE" ]] || fail "Playwright did not write the redacted result"
+  export_failure_artifacts
   sanitize_test_artifacts false
 }
 
@@ -223,6 +256,9 @@ export ADMIN_WEB_PUBLIC_URL="http://127.0.0.1:$ADMIN_WEB_PORT"
 export ADMIN_WEB_PLATFORM_JAR="$PLATFORM_JAR"
 export ADMIN_WEB_ENGINES_FILE="$WORK_DIR/engines.json"
 export ADMIN_WEB_JWT_FILE="$WORK_DIR/owner.jwt"
+export ADMIN_WEB_EDITOR_JWT_FILE="$WORK_DIR/editor.jwt"
+export ADMIN_WEB_REVIEWER_JWT_FILE="$WORK_DIR/reviewer.jwt"
+export ADMIN_WEB_DATA_JWT_FILE="$WORK_DIR/data.jwt"
 export ADMIN_WEB_METADATA_FILE="$WORK_DIR/metadata.json"
 export ADMIN_WEB_RESULT_FILE="$WORK_DIR/result.json"
 export ADMIN_WEB_TEST_RESULTS_DIR="$WORK_DIR/test-results"

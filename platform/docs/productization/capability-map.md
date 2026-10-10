@@ -115,7 +115,10 @@
 
 ### 工作台 (`workspace`)
 
-- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/access/ResourceTreeController.java`](../../services/business/src/main/java/cn/mjy/platform/access/ResourceTreeController.java) 定位 `public class ResourceTreeController`：资源树后端接口已存在。
-- **流程** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `#### Step 1：资源工作台`：页面核查确认工作台可操作，同时记录缺少总览和待办。
-- **前端** （实现）[`platform/apps/admin-web/src/features/workspace/WorkspacePage.tsx`](../../apps/admin-web/src/features/workspace/WorkspacePage.tsx) 定位 `export function WorkspacePage`：工作台页面已接入真实资源操作。
+- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/dashboard/DashboardController.java`](../../services/business/src/main/java/cn/mjy/platform/dashboard/DashboardController.java) 定位 `public class DashboardController`：Dashboard 在一个授权快照中汇总摘要、任务、问卷和最近工作；资源树接口继续服务完整项目与问卷管理。
+- **后端** （自动化测试）[`platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkTenantIsolationTest.java`](../../services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkTenantIsolationTest.java) 定位 `class DashboardRecentWorkTenantIsolationTest`：集成测试覆盖最近工作在跨租户、归档和失权场景下的过滤。
+- **后端** （自动化测试）[`platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardTenantIsolationTest.java`](../../services/business/src/test/java/cn/mjy/platform/dashboard/DashboardTenantIsolationTest.java) 定位 `class DashboardTenantIsolationTest`：集成测试覆盖角色可见性、租户隔离和固定查询预算。
+- **流程** （审计）[`docs/audits/2026-10-09-product-alignment/15-business-dashboard-v1-follow-up.md`](../../../docs/audits/2026-10-09-product-alignment/15-business-dashboard-v1-follow-up.md) 定位 `## 2. 已被新证据取代的结论`：跟进审计明确列出 2026-10-09 基线中已被 Dashboard v1 和发布后闭环取代的判断。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/dashboard.spec.ts`](../../apps/admin-web/e2e/dashboard.spec.ts) 定位 `pending approval is visible only to a real publish reviewer`：真实栈验证登录落 Dashboard、发布与答卷往返、重新认证后的最近工作、真实项目级角色隔离、移动导航及 819/820/1179/1180px DOM 几何。
+- **前端** （实现）[`platform/apps/admin-web/src/features/dashboard/DashboardPage.tsx`](../../apps/admin-web/src/features/dashboard/DashboardPage.tsx) 定位 `export function DashboardPage`：登录首页展示授权摘要、待办、问卷快捷操作和可恢复的最近工作；完整资源管理保留在项目与问卷页。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R01-01 |`：空白与应用类型创建需求已编号。

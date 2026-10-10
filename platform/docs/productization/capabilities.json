@@ -13,9 +13,12 @@
       "status": "partial",
       "evidence": [
         {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R01-01 |", "description": "空白与应用类型创建需求已编号。"},
-        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/access/ResourceTreeController.java", "locator": "public class ResourceTreeController", "description": "资源树后端接口已存在。"},
-        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/workspace/WorkspacePage.tsx", "locator": "export function WorkspacePage", "description": "工作台页面已接入真实资源操作。"},
-        {"layer": "flow", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "#### Step 1：资源工作台", "description": "页面核查确认工作台可操作，同时记录缺少总览和待办。"}
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/dashboard/DashboardController.java", "locator": "public class DashboardController", "description": "Dashboard 在一个授权快照中汇总摘要、任务、问卷和最近工作；资源树接口继续服务完整项目与问卷管理。"},
+        {"layer": "backend", "kind": "automated-test", "path": "platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardTenantIsolationTest.java", "locator": "class DashboardTenantIsolationTest", "description": "集成测试覆盖角色可见性、租户隔离和固定查询预算。"},
+        {"layer": "backend", "kind": "automated-test", "path": "platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkTenantIsolationTest.java", "locator": "class DashboardRecentWorkTenantIsolationTest", "description": "集成测试覆盖最近工作在跨租户、归档和失权场景下的过滤。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/dashboard/DashboardPage.tsx", "locator": "export function DashboardPage", "description": "登录首页展示授权摘要、待办、问卷快捷操作和可恢复的最近工作；完整资源管理保留在项目与问卷页。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/dashboard.spec.ts", "locator": "pending approval is visible only to a real publish reviewer", "description": "真实栈验证登录落 Dashboard、发布与答卷往返、重新认证后的最近工作、真实项目级角色隔离、移动导航及 819/820/1179/1180px DOM 几何。"},
+        {"layer": "flow", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/15-business-dashboard-v1-follow-up.md", "locator": "## 2. 已被新证据取代的结论", "description": "跟进审计明确列出 2026-10-09 基线中已被 Dashboard v1 和发布后闭环取代的判断。"}
       ],
       "nextWave": "Wave 6"
     },

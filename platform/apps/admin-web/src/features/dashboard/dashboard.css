@@ -297,12 +297,14 @@
   .dashboard-task-table td:last-child { grid-column: 2; grid-row: 1; align-self: start; }
   .dashboard-task-table td:nth-child(2),
   .dashboard-task-table td:nth-child(3) { grid-column: 1 / -1; }
-  .dashboard-primary-link { min-height: 36px; white-space: nowrap; }
+  .dashboard-refresh button { min-width: 44px; min-height: 44px; }
+  .dashboard-primary-link { min-width: 44px; min-height: 44px; white-space: nowrap; }
 
   .dashboard-survey-table td:first-child { grid-column: 1 / -1; grid-row: auto; }
   .dashboard-survey-table td:not(:first-child):not(:last-child) { grid-column: 1 / -1; }
   .dashboard-actions { gap: 4px 14px; }
+  .dashboard-actions a { min-width: 44px; min-height: 44px; }
 
   .dashboard-recent-list li { align-items: flex-start; }
-  .dashboard-recent-list a { min-height: 36px; display: inline-flex; align-items: center; text-align: right; }
+  .dashboard-recent-list a { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; text-align: right; }
 }

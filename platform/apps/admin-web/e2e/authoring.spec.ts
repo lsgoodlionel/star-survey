@@ -125,6 +125,8 @@ test('author filters stable resources, restores archive, and publishes the same 
 
   const me = await login(page, token, metadata);
 
+  await clickAction(page.getByRole('link', { name: '项目与问卷' }));
+  await expect(page).toHaveURL(/\/workspace$/);
   await expect(page.getByText(/^E2E(?:项目|文件夹|问卷).*[0-9a-z]{6,}$/i)).toHaveCount(0);
   const { rootProjectId, folderId, surveyId } = await createSurveyResourceTree(page);
 
@@ -753,7 +755,7 @@ async function createSortableSurvey(page: Page, label: string) {
     page,
     `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`,
   );
-  await expect(page.getByRole('heading', { name: '资源工作台' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '项目与问卷' })).toBeVisible();
   await createResource(page, '新建问卷', '创建问卷', `排序验收问卷 ${label}`);
   await expect(page).toHaveURL(/\/surveys\/[0-9a-f-]{36}\/edit/);
   const surveyId = surveyIdFrom(page.url());
@@ -973,7 +975,7 @@ async function login(page: Page, token: string, metadata: TestMetadata) {
     const me = parseMe(payload);
     if (metadata.actorId) expect(me.actorId).toBe(metadata.actorId);
     if (metadata.tenantId) expect(me.tenantId).toBe(metadata.tenantId);
-    await expect(page).toHaveURL(/\/workspace$/);
+    await expect(page).toHaveURL(/\/dashboard$/);
     return me;
   } finally {
     if (!page.isClosed()) {

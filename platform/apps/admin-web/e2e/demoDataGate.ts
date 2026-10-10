@@ -58,7 +58,11 @@ async function login(page: Page, access: DemoAccess) {
     await tokenInput.fill(access.platformAccessToken);
     await page.getByRole('button', { name: '登录' }).click();
     if (!(await identityResponse).ok()) throw new Error('demo browser identity check failed');
-    await page.getByRole('heading', { name: '资源工作台' }).waitFor();
+    await page.waitForURL(/\/dashboard$/);
+    await page.getByRole('heading', { name: '工作台' }).waitFor();
+    await page.getByRole('link', { name: '项目与问卷' }).click();
+    await page.waitForURL(/\/workspace$/);
+    await page.getByRole('heading', { name: '项目与问卷' }).waitFor();
   } finally {
     if (await tokenInput.isVisible().catch(() => false)) {
       await tokenInput.fill('').catch(() => undefined);

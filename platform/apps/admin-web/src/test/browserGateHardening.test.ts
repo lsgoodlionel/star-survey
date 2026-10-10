@@ -101,6 +101,24 @@ describe('browser gate security contract', () => {
     expect(spec).toContain("window.dispatchEvent(new PopStateEvent('popstate'))");
   });
 
+  test('enters the workspace explicitly after demo login reaches the dashboard', async () => {
+    const gate = await source('e2e/demoDataGate.ts');
+
+    expect(gate).toContain("waitForURL(/\\/dashboard$/)");
+    expect(gate).toContain("getByRole('heading', { name: '工作台' })");
+    expect(gate).toContain("getByRole('link', { name: '项目与问卷' })");
+    expect(gate).toContain("waitForURL(/\\/workspace$/)");
+  });
+
+  test('gives every dashboard primary action a 44px mobile target', async () => {
+    const styles = await source('src/features/dashboard/dashboard.css');
+
+    expect(styles).toMatch(/@media \(max-width: 819px\)[\s\S]*?\.dashboard-refresh button[\s\S]*?min-(?:width|inline-size): 44px/);
+    expect(styles).toMatch(/@media \(max-width: 819px\)[\s\S]*?\.dashboard-primary-link[\s\S]*?min-width: 44px; min-height: 44px/);
+    expect(styles).toMatch(/@media \(max-width: 819px\)[\s\S]*?\.dashboard-actions a[\s\S]*?min-width: 44px; min-height: 44px/);
+    expect(styles).toMatch(/@media \(max-width: 819px\)[\s\S]*?\.dashboard-recent-list a[\s\S]*?min-width: 44px; min-height: 44px/);
+  });
+
   test('checks every browser action before interacting', async () => {
     const spec = await source('e2e/authoring.spec.ts');
 
