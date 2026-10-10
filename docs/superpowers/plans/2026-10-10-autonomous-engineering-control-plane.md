@@ -430,20 +430,18 @@ Cover process termination before and after atomic replace, truncated events, cha
 
 The drill runner operates only in temporary directories, uses fake commands by default, requires `--allow-real-codex` for one disposable worktree smoke run, and refuses a repository containing production secret paths.
 
-- [x] **Step 4: Run all Harness verification**
+- [ ] **Step 4: Run all Harness verification**
 
-Run: `python3 -m unittest discover -s tools/agent-harness/tests -v`
+Run: `scripts/agent-harness --python tools/agent-harness/run_tests.py --start-directory tools/agent-harness/tests --pattern 'test_*.py'`
 
-Run: `python3 tools/agent-harness/drills/run_drills.py`
+Run: `scripts/agent-harness --python tools/agent-harness/drills/run_drills.py`
 
 Run: `scripts/agent-harness doctor --json`
 
 Expected: all tests and fake drills PASS; doctor produces a valid report. Record exact counts and environment warnings in the final run history.
 
-Evidence (2026-10-10 review fix): controlled Python 3.12 ran 379 tests: 372 passed, 7 Linux wrapper fixture tests skipped with
-`linux-fixture:docker-cli-missing`, and 0 failed; CI treats every skip as failure. 11/11 fake drills passed. Doctor returned 0 errors;
-missing Docker/Node/Codex, Java not being 21 and the expected dirty documentation worktree were typed warnings. The host's bare `python3`
-is 3.9 and therefore fails the documented Python 3.11+ floor; it was not treated as a Harness failure.
+Local evidence may include typed Linux integration skips when Docker is unavailable. This step remains open until a bound GitHub Ubuntu 24.04
+run proves both jobs use Python 3.11 and complete with zero skips. Local exact counts are recorded in the Task 8 report.
 
 - [x] **Step 5: Run the disposable real-Codex smoke drill**
 
@@ -458,28 +456,28 @@ but the smoke was not repeated because this Task permits exactly one real cycle.
 
 - [x] **Step 6: Run repository integration gates**
 
-Run: `python3 -m unittest discover -s platform/tools/productization -p 'test_render_capabilities.py'`
+Run: `scripts/agent-harness --python -m unittest discover -s platform/tools/productization -p 'test_render_capabilities.py'`
 
-Run: `python3 platform/tools/productization/render_capabilities.py --check`
+Run: `scripts/agent-harness --python platform/tools/productization/render_capabilities.py --check`
 
 Run: `git diff --check`
 
 Expected: all commands PASS.
 
-- [ ] **Step 7: Perform independent review and resolve findings**
+- [x] **Step 7: Perform independent review and resolve findings**
 
 Dispatch one reviewer for security and state recovery, one for developer ergonomics and CI, and one whole-branch reviewer. Re-run all Harness tests after accepted fixes and record rejected findings with technical reasons in the run summary.
 
-Not completed: the Task instruction prohibited every subagent. The implementer performed three explicit self-review passes and fixed all
-Important findings with RED→GREEN tests, but an author self-review is not independent review and is not marked complete.
+Evidence (2026-10-10): security, DX/CI and whole-branch rereview reports were received independently. Both review rounds' deduplicated
+findings were reproduced with failing tests and resolved; the final focused and full verification evidence is recorded in the Task 8 report.
 
 - [ ] **Step 8: Synchronize documentation and mark the plan complete**
 
 Document install/use/resume/escalation commands, final test evidence, remaining limitations and the first eligible real product Milestone. Update this plan's checkboxes only from actual evidence and add the implementation commit references.
 
-Local documentation is synchronized to the review-fix implementation commit `37a9bea0`, but this step remains open because the plan cannot
-be marked complete before independent review and external synchronization. The first candidate product Milestone is Phase C-1's
-`820–1179px` two-column and inspector shell, subject to independent review, host synchronization and a fresh approved file scope.
+Local documentation is synchronized to the round-2 implementation commit `57f91048`, but this step remains open because the plan cannot
+be marked complete before the bound GitHub run and Obsidian synchronization. The first candidate product Milestone is Phase C-1's
+`820–1179px` two-column and inspector shell, subject to host synchronization and a fresh approved file scope.
 
 - [ ] **Step 9: Commit, push, and update Obsidian**
 
@@ -492,7 +490,7 @@ git push
 Update the Survey project overview/progress note with date, branch, commit range, test evidence, completed scope, known limitations and the next product-development Milestone. Do not record credentials or raw run logs.
 
 Partially completed: Task 8 changes are committed locally. Per the controller instruction, this implementer does not push and does not update
-Obsidian; independent review and those two delivery actions remain open, so Task 8 and the plan remain in progress.
+Obsidian; those two delivery actions remain open, so Task 8 and the plan remain in progress.
 
 ## Final Acceptance
 
@@ -501,5 +499,5 @@ Obsidian; independent review and those two delivery actions remain open, so Task
 - [x] CLI supports `doctor/init/status/next/gate/record-decision/pause/resume/run-codex/finalize` with stable exit codes.
 - [x] Real Codex execution is bounded to an isolated worktree and cannot select dangerous bypass flags.
 - [x] Success, repeated failure, no progress, interrupted write, plan drift and CLI timeout drills all produce expected terminal states.
-- [x] GitHub governance runs independently and cannot merge, release or deploy.
+- [ ] GitHub governance runs independently and cannot merge, release or deploy.
 - [ ] Repository docs, GitHub branch and Obsidian project status agree on the delivered scope and remaining product work.

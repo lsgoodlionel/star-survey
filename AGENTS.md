@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: local_validated_sync_pending -->
+<!-- harness-delivery-status: locally_reviewed_sync_pending -->
 # Survey 项目协作规则
 
 ## 事实与任务入口
@@ -42,8 +42,8 @@
 - 同一失败指纹最多自动修复 3 次；每 Milestone 最多 5 个失败修复周期；连续 2 轮无进展暂停。
 - 计划摘要、分支、HEAD 或未知工作区改动漂移时暂停；HEAD 改变使相关旧 Gate 证据失效。
 - 必需 Gate 全部实际成功、证据落盘且 HEAD 一致后才能 completed，禁止 active 直接 completed。
-- 状态格式见 [STATE_SCHEMA.json](docs/agent/STATE_SCHEMA.json)；控制平面已有本地实现与测试证据，但独立审查、GitHub
-  和 Obsidian 同步完成前不得宣称完整交付。
+- 状态格式见 [STATE_SCHEMA.json](docs/agent/STATE_SCHEMA.json)；控制平面已有本地实现、测试和独立复审证据，但 GitHub
+  零 skip run 与 Obsidian 同步完成前不得宣称完整交付。
 
 ## Git 与交付
 

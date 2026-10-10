@@ -1,14 +1,14 @@
-<!-- harness-delivery-status: local_validated_sync_pending -->
+<!-- harness-delivery-status: locally_reviewed_sync_pending -->
 # Task 8 审查修复报告
 
 日期：2026-10-10
 
 ## 交付状态
 
-Task 8 的实现和审查修复已在本地完成，implementation commit 为
-`37a9bea07d409e703c067acdf580c5ee7ced5b35`。当前结构化状态为
-`local_validated_sync_pending`：独立审查、GitHub push 和 Obsidian 均为 `pending`，因此 Task 8 与总计划保持
-`in_progress`，不宣称完整交付或完整同步。
+Task 8 两轮审查修复已在本地完成，implementation commit 为
+`57f91048a48a75d22c67c7290022bb989f2cc185`。当前结构化状态为
+`locally_reviewed_sync_pending`：独立复审为 `complete`，GitHub 与 Obsidian 为 `pending`，因此 Task 8 与总计划保持
+`in_progress`，不宣称完整交付、CI 已运行或完整同步。
 
 本任务未修改产品业务代码，未 push，未更新 Obsidian，也未派生 subagent。
 
@@ -35,16 +35,30 @@ Task 8 的实现和审查修复已在本地完成，implementation commit 为
 - 端到端 success drill：使用真实 `RunService` 完成 init、fake adapter 受控改动和带 run-id 提交、Gate、review evidence、
   finalize 与 history，不再用手工 transition 代替成功链路。
 
+Round 2 继续先建立可复现 RED，再作最小修复：
+
+- `atomic_create` 从可信 root fd 逐组件使用 `dir_fd`、`O_DIRECTORY`、`O_NOFOLLOW`，相对执行 mkdir/stat/create/replace/fsync，
+  并在发布前后复验 inode；父目录 symlink swap 不会覆盖 root 外目标。
+- Codex workflow shell 先拒绝 quote、变量、命令替换、反斜杠续行和 shell 控制符，再只接受规范化的
+  `codex exec --sandbox workspace-write` argv allowlist；未知 option 与多个 prompt 均 fail closed。
+- cleanup 每个 Git 操作和路径后置检查独立捕获 `OSError`，累积 typed error 并继续执行后续清理。
+- workflow 拆成 fake-tool unit 与显式 Docker integration job；setup-python 的绝对路径会成为最终 runtime 并再次验真，
+  旧 Python 用例改为确定性注入，不依赖 Ubuntu 系统版本。
+- portable 测试复制 core、drills、wrapper、模板和 host config 到独立临时仓库，并从复制品运行 wrapper 与 fake smoke；
+  plan root 统一为 `docs/superpowers/plans`。
+- success drill patch `agent_harness.run_service.run_codex` 后真实调用 `RunService.run_autonomous`，断言 adapter、Gate HEAD、
+  review scope、finalize/history 的事件顺序。
+
 ## 验证证据
 
-- Task 8 focused：33/33 PASS。
-- 完整 Harness：379 tests，372 PASS，7 typed skip，0 failure，332.692s。7 个 skip 均为本机
+- Task 8 focused：42/42 PASS，15.549s（最终复验）。
+- 完整 Harness：388 tests，381 PASS，7 typed skip，0 failure，342.984s。7 个 skip 均为本机
   `linux-fixture:docker-cli-missing`；CI 会将任意 skip 判为失败。
 - Fake drills：11/11 PASS；success flow 为
   `init → fake-adapter → gate → review → finalize → history`，终态 `completed`。
 - 受控入口：Python 3.12.13；宿主 `/usr/bin/python3` 低于 3.11 时返回简洁诊断、exit 2、无 traceback。
 - Governance：forbidden-option policy 与结构化 plan/memory drift check 均 PASS。
-- Doctor：0 error；21 项 ok。warning 为本机缺 Docker、Node、Codex，Java 非 21，以及提交前工作区有文档改动；
+- Doctor：0 error；22 项 ok（含工作区干净）。最终 warning 仅为本机缺 Docker、Node、Codex，以及 Java 非 21；
   这些可选工具未阻止 doctor 启动。
 - Productization：37/37 PASS；capability map current。
 - `git diff --check`：PASS。
@@ -63,7 +77,7 @@ Task 8 的实现和审查修复已在本地完成，implementation commit 为
 
 ## 残余顾虑
 
-- 用户禁止 subagent，三个独立 reviewer gate 未执行；实现者完成的安全、DX/CI 和全分支复核不能替代独立审查。
+- security、DX/CI 和 whole-branch rereview 已完成且去重 findings 已关闭；尚无 GitHub run 对本提交的外部验证。
 - 本机缺 Docker CLI，7 个 Linux wrapper fixture 无本地执行证据；固定镜像与 CI 零 skip 策略需由 GitHub runner 验证。
 - GitHub push 与 Obsidian 同步明确未执行。
 - 唯一真实 smoke 的具体暂停分类不可恢复，且按“一次真实 cycle”约束不重跑。

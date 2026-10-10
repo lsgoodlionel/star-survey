@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: local_validated_sync_pending -->
+<!-- harness-delivery-status: locally_reviewed_sync_pending -->
 # P2 进度：通用问卷与本土入口
 
 更新：2026-10-08
@@ -726,16 +726,16 @@ Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Acc
 
 ## 自治工程控制平面 Task 8（2026-10-10）
 
-- **实现**：审查修复提交 `37a9bea0` 增加按操作最小工具依赖、固定 Linux fixture、完整 secret inventory、
-  symlink-safe smoke 输入、严格 terminal/cleanup 校验、宿主配置与结构化 delivery manifest；默认只运行 fake commands。
-- **验证**：受控 Python 3.12 下 Harness 共 379 tests：372 通过；7 个 Linux wrapper 测试因本机缺 Docker CLI 以
+- **实现**：两轮审查修复提交 `57f91048` 增加固定 root fd 的原子创建、Codex shell 受限 argv 策略、逐步 cleanup
+  错误累积、CI unit/integration 零 skip 分区、portable 临时仓库与真实 `run_autonomous` fake success drill。
+- **验证**：受控 Python 3.12 下 Harness 共 388 tests：381 通过；7 个 Linux wrapper 测试因本机缺 Docker CLI 以
   `linux-fixture:docker-cli-missing` skip，CI 会以 `--fail-on-skip` 判失败。11/11 fake drills、productization 37 tests、
-  capability check、forbidden-option scan、docs drift 和 `git diff --check` 通过。doctor 0 error；缺 Docker/Node/Codex、
-  Java 非 21 及提交前工作区有改动均为 typed warning，未阻止纯治理启动。
+  capability check、forbidden-option scan、docs drift 和 `git diff --check` 通过。doctor 0 error；缺 Docker/Node/Codex 及
+  Java 非 21 均为 typed warning，未阻止纯治理启动。
 - **真实 smoke**：恰好执行一次 Codex cycle；结果 `paused`，fixture 改动 0、通过 Gate 0。临时 run-history 在清理前
   已验证存在且脱敏，disposable worktree 已移除，遗留的临时分支已删除，主工作树状态未变化；未接触生产或发布。
 - **限制**：当次 smoke 使用的旧摘要格式未保留脱敏 stop reason，之后已补回归测试和摘要字段但按“一次 smoke”约束
-  未重跑；裸 `python3` 为 3.9，不满足 Harness 3.11+ 下限。用户禁止 subagent，因此实现者复核不能计作独立 reviewer。
-  Task 8 保持 `in_progress`；按要求未 push、未更新 Obsidian。
-- **下一步候选**：在独立 reviewer、GitHub/Obsidian 同步和真实 Codex 环境就绪后，另行批准管理端 Phase C-1：
+  未重跑；裸 `python3` 为 3.9，不满足 Harness 3.11+ 下限。两轮 security、DX/CI、whole-branch 独立复审 findings
+  已关闭；GitHub Ubuntu 24.04 零 skip run 尚未绑定。Task 8 保持 `in_progress`；按要求未 push、未更新 Obsidian。
+- **下一步候选**：在 GitHub/Obsidian 同步和真实 Codex 环境就绪后，另行批准管理端 Phase C-1：
   `820–1179px` 双栏与检查器壳层；不得把本 Task 的治理交付当作该产品 Milestone 已开始或已完成。

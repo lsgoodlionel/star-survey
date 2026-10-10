@@ -39,7 +39,7 @@ Task 4: complete — commits c0e70dacd61dc8a51a2b6b1af08a365c8b340f2c and d22b9e
 Task 5: complete — commits 842a6f5bec1e0aaba69ceb2b58ed07ae51140911, 33cba68a2a97815f8082f0d051093c835961ddea, e2d7941b3c9a1bf390bea0f536591e0ff2b967a0; 49 focused / 187 Harness tests pass; scoped re-review SPEC_COMPLIANCE=APPROVED and CODE_QUALITY=APPROVED
 Task 6: complete — commits 101188de4cf8510bd5e5f053f6bc0f8276e90df7, 1357b67072e2f02359f5023cf7cafe2649254d94, dcf31a4af0220540dc916f03f349dc4644895b2b; 98 focused / 264 Harness tests pass; scoped re-review SPEC_COMPLIANCE=APPROVED and CODE_QUALITY=APPROVED
 Task 7: complete — commits 0a41a247df8ef084f5a0399c94b217b5179c9a57, 917ced92c395d47534ef710b0973e10e75fa6a46, d4f7b36314a60d4ff533f4d3a50a1cf0581e9d20, 8fcd2922ad50a9be417604a910902d421bf7fb5d, 4dfc278fcf1c2eaf06480aa70f23c2a44e9dcd4f, b84c0e1e0538cc628e94e170c164db37280cbd87, 80233d79b69c81bd411a4ddc3a803047244a17ae and ce4c86cd39909b8dc4b97050059d931e19855cb7; 80 focused / 344 Harness tests pass; final scoped re-review SPEC_COMPLIANCE=APPROVED and CODE_QUALITY=APPROVED
-Task 8: in_progress — review-fix implementation commit 37a9bea07d409e703c067acdf580c5ee7ced5b35; 33 focused tests and 11 fake drills pass; full Harness 379 tests with 372 pass, 7 typed local Docker-CLI skips, 0 failures; independent review, push and Obsidian remain pending
+Task 8: in_progress — round-2 implementation commit 57f91048a48a75d22c67c7290022bb989f2cc185; 42 focused tests and 11 fake drills pass; full Harness 388 tests with 381 pass, 7 typed local Docker-CLI skips, 0 failures; independent rereview complete, GitHub zero-skip run and Obsidian remain pending
 
 ## Review findings
 
