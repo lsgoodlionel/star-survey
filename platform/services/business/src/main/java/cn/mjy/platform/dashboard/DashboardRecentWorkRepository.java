@@ -49,7 +49,7 @@ public class DashboardRecentWorkRepository {
               AND EXISTS (SELECT 1 FROM chain)
               AND EXISTS (SELECT 1 FROM authorized)
             ON CONFLICT (tenant_id, actor_id, survey_id, page, version_no) DO UPDATE
-                SET visited_at = EXCLUDED.visited_at
+                SET visited_at = GREATEST(dashboard_recent_work.visited_at, EXCLUDED.visited_at)
             RETURNING true
             """;
 

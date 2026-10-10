@@ -13,6 +13,12 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,7 +27,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.datasource.hikari.maximum-pool-size=6")
 class DashboardRecentWorkRepositoryTest {
 
     @Autowired
@@ -97,6 +103,50 @@ class DashboardRecentWorkRepositoryTest {
     }
 
     @Test
+    void anOlderVisitCannotMoveTheSameTargetTimestampBackward() {
+        Instant newer = Instant.parse("2026-10-10T09:00:00Z");
+        Instant older = Instant.parse("2026-10-10T08:00:00Z");
+        RecentWorkCommand target = new RecentWorkCommand(survey.id(), DashboardPage.EDIT, null);
+
+        recentWork.upsert(workspace.tenant(), workspace.owner().actorId(), target, newer);
+        recentWork.upsert(workspace.tenant(), workspace.owner().actorId(), target, older);
+
+        assertThat(recentWork.findVisible(workspace.tenant(), workspace.owner().actorId(), 50))
+                .singleElement().extracting(RecentWorkView::visitedAt).isEqualTo(newer);
+        assertThat(rowCount(workspace.tenant(), workspace.owner().actorId())).isOne();
+    }
+
+    @Test
+    void concurrentSameTargetUpsertsFromIndependentConnectionsKeepTheNewestTimestamp() throws Exception {
+        Instant newer = Instant.parse("2026-10-10T09:00:00Z");
+        Instant older = Instant.parse("2026-10-10T08:00:00Z");
+        RecentWorkCommand target = new RecentWorkCommand(survey.id(), DashboardPage.EDIT, null);
+
+        CountDownLatch connectionsReady = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        List<ConcurrentUpsert> stored;
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            Future<ConcurrentUpsert> newerWrite = pool.submit(
+                    () -> upsertOnCurrentConnection(target, newer, connectionsReady, start));
+            Future<ConcurrentUpsert> olderWrite = pool.submit(
+                    () -> upsertOnCurrentConnection(target, older, connectionsReady, start));
+            assertThat(connectionsReady.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            stored = List.of(
+                    newerWrite.get(20, TimeUnit.SECONDS),
+                    olderWrite.get(20, TimeUnit.SECONDS));
+        } finally {
+            start.countDown();
+        }
+
+        assertThat(stored).allMatch(ConcurrentUpsert::stored);
+        assertThat(stored).extracting(ConcurrentUpsert::backendPid).doesNotHaveDuplicates();
+        assertThat(recentWork.findVisible(workspace.tenant(), workspace.owner().actorId(), 50))
+                .singleElement().extracting(RecentWorkView::visitedAt).isEqualTo(newer);
+        assertThat(rowCount(workspace.tenant(), workspace.owner().actorId())).isOne();
+    }
+
+    @Test
     void equalTimestampsHaveADeterministicTargetOrder() {
         SurveyView secondSurvey = surveys.newSurvey(workspace);
         Instant sameTime = Instant.parse("2026-10-10T08:00:00Z");
@@ -141,6 +191,70 @@ class DashboardRecentWorkRepositoryTest {
     }
 
     @Test
+    void actorLockSerializesConcurrentFiftiethAndFiftyFirstTargetsBeforeTrimming() throws Exception {
+        Instant start = Instant.parse("2026-10-10T08:00:00Z");
+        for (int version = 1; version <= 49; version++) {
+            recentWork.upsert(workspace.tenant(), workspace.owner().actorId(),
+                    new RecentWorkCommand(survey.id(), DashboardPage.VERSION, version),
+                    start.plusSeconds(version));
+        }
+
+        CountDownLatch actorLocked = new CountDownLatch(1);
+        CountDownLatch releaseActor = new CountDownLatch(1);
+        CountDownLatch writersReady = new CountDownLatch(2);
+        CountDownLatch startWriters = new CountDownLatch(1);
+        try (ExecutorService pool = Executors.newFixedThreadPool(3)) {
+            Future<?> lockHolder = pool.submit(() -> tenantScope.run(workspace.tenant(), () -> {
+                jdbc.sql("""
+                                SELECT actor_id FROM access_member
+                                WHERE tenant_id = :tenant AND actor_id = :actor
+                                FOR UPDATE
+                                """)
+                        .param("tenant", workspace.tenant().value())
+                        .param("actor", workspace.owner().actorId())
+                        .query(String.class)
+                        .single();
+                actorLocked.countDown();
+                await(releaseActor);
+            }));
+            assertThat(actorLocked.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Future<ConcurrentUpsert> fiftieth = pool.submit(() -> upsertOnCurrentConnection(
+                    new RecentWorkCommand(survey.id(), DashboardPage.VERSION, 50), start.plusSeconds(50),
+                    writersReady, startWriters));
+            Future<ConcurrentUpsert> fiftyFirst = pool.submit(() -> upsertOnCurrentConnection(
+                    new RecentWorkCommand(survey.id(), DashboardPage.VERSION, 51), start.plusSeconds(51),
+                    writersReady, startWriters));
+            assertThat(writersReady.await(10, TimeUnit.SECONDS)).isTrue();
+            startWriters.countDown();
+
+            assertThatThrownBy(() -> fiftieth.get(500, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            assertThatThrownBy(() -> fiftyFirst.get(500, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+
+            releaseActor.countDown();
+            ConcurrentUpsert fiftiethResult = fiftieth.get(20, TimeUnit.SECONDS);
+            ConcurrentUpsert fiftyFirstResult = fiftyFirst.get(20, TimeUnit.SECONDS);
+            assertThat(fiftiethResult.stored()).isTrue();
+            assertThat(fiftyFirstResult.stored()).isTrue();
+            assertThat(fiftiethResult.backendPid()).isNotEqualTo(fiftyFirstResult.backendPid());
+            lockHolder.get(20, TimeUnit.SECONDS);
+        } finally {
+            releaseActor.countDown();
+            startWriters.countDown();
+        }
+
+        assertThat(rowCount(workspace.tenant(), workspace.owner().actorId())).isEqualTo(50);
+        assertThat(recentWork.findVisible(workspace.tenant(), workspace.owner().actorId(), 50))
+                .extracting(RecentWorkView::targetPath)
+                .containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(2, 51)
+                        .boxed().sorted(Comparator.reverseOrder())
+                        .map(version -> "/surveys/" + survey.id() + "/versions/" + version)
+                        .toList());
+    }
+
+    @Test
     void findVisibleRejectsLimitsOutsideTheRepositoryBoundary() {
         assertThatThrownBy(() -> recentWork.findVisible(workspace.tenant(), workspace.owner().actorId(), 0))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -157,5 +271,33 @@ class DashboardRecentWorkRepositoryTest {
                 .param("actor", actorId)
                 .query(Long.class)
                 .single());
+    }
+
+    private ConcurrentUpsert upsertOnCurrentConnection(
+            RecentWorkCommand command, Instant visitedAt, CountDownLatch ready, CountDownLatch start) {
+        return tenantScope.call(workspace.tenant(), () -> {
+            int backendPid = jdbc.sql("SELECT pg_backend_pid()")
+                    .query(Integer.class)
+                    .single();
+            ready.countDown();
+            await(start);
+            boolean stored = recentWork.upsert(
+                    workspace.tenant(), workspace.owner().actorId(), command, visitedAt);
+            return new ConcurrentUpsert(backendPid, stored);
+        });
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(20, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("timed out waiting for test coordination");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private record ConcurrentUpsert(int backendPid, boolean stored) {
     }
 }
