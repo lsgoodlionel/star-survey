@@ -67,3 +67,13 @@ class DoctorTests(unittest.TestCase):
             report = run_doctor(Path(directory)).to_dict()
         warnings = {item["id"] for item in report["warning"]}
         self.assertTrue({"node", "java"} <= warnings)
+
+    def test_doctor_checks_gate_interpreter_even_when_cli_python_is_supported(self):
+        real_run = subprocess.run
+        def wrong_gate_runtime(args, **kwargs):
+            if args[1:] == ["--python", "--version"]:
+                return subprocess.CompletedProcess(args, 0, "Python 3.9.6\n", "")
+            return real_run(args, **kwargs)
+        with patch("agent_harness.doctor.subprocess.run", side_effect=wrong_gate_runtime):
+            report = run_doctor(Path(__file__).resolve().parents[3])
+        self.assertTrue(any(check["id"] == "gate-python:harness-tests" for check in report.error))

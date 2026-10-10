@@ -12,7 +12,7 @@ import tempfile
 from typing import Sequence
 from uuid import UUID, uuid4
 
-from .config import load_gate_matrix, load_protected_paths
+from .config import load_gate_matrix, load_protected_paths, validate_gate_id
 from .diagnostics import redact_text, render_diagnostics
 from .doctor import run_doctor
 from .gate_runner import invalidate_stale_evidence, resolve_required_gates, run_gate
@@ -37,6 +37,15 @@ class NextAction:
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _unique_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ServiceError("证据包含重复字段", 3)
+        result[key] = value
+    return result
 
 
 class RunService:
@@ -73,7 +82,9 @@ class RunService:
             raise ServiceError("运行状态或事件链不可用") from None
         if state.run_id != run_id or state.worktree_path.resolve() != self.repo:
             raise ServiceError("运行与当前 worktree 不符", 3)
-        if state.status == RunStatus.COMPLETED and not allow_incomplete and self._trusted_history(state) is None:
+        for identifier in (*state.required_gates, *state.gates):
+            validate_gate_id(identifier)
+        if state.status == RunStatus.COMPLETED and not allow_incomplete and (self._trusted_history(state) is None or not self._terminal_event_present(state)):
             raise ServiceError("完成历史尚未发布；请重新 finalize 恢复", 5)
         return state
 
@@ -91,6 +102,7 @@ class RunService:
 
     def _save(self, state, event_type, payload=None):
         directory = self._directory(state.run_id)
+        self._assert_raw_storage(state.run_id)
         save_state_atomic(self._path(directory.relative_to(self.repo) / "state.json"), state)
         append_event(self._path(directory.relative_to(self.repo) / "events.jsonl"), event_type,
                      payload or {"status": state.status.value, "headCommit": state.head_commit})
@@ -111,6 +123,25 @@ class RunService:
     def _binding(self):
         return {name: sha256_file(self._path(Path("docs/agent") / name))
                 for name in ("GATE_MATRIX.yaml", "PROTECTED_PATHS.yaml")}
+
+    def _assert_raw_storage(self, run_id):
+        directory = self._directory(run_id)
+        relative = directory.relative_to(self.repo)
+        products = ("", "state.json", "events.jsonl", "evidence/", "evidence/probe/stdout.log",
+                    "evidence/probe/stderr.log", "evidence/probe/metadata.json",
+                    "diagnostics.md", "terminal-history.md", "terminal-state.json", "terminal-intent.json")
+        arguments = []
+        for name in products:
+            path = self._path(relative / name)
+            argument = path.relative_to(self.repo).as_posix() + ("/" if not name else "")
+            arguments.append(argument)
+        result = subprocess.run(["git", "--no-optional-locks", "check-ignore", "--no-index", "-z", "--stdin"],
+                                input="\x00".join(arguments) + "\x00", text=True,
+                                cwd=self.repo, capture_output=True, check=False)
+        if result.returncode or set(result.stdout.rstrip("\x00").split("\x00")) != set(arguments):
+            raise ServiceError("实际原始运行目录及产物必须全部被 Git 忽略", 3)
+        if self._git("ls-files", "--", relative.as_posix()).strip():
+            raise ServiceError("原始运行产物不得被 Git 跟踪", 3)
 
     def _plan(self, relative, milestone):
         path = self._path(relative)
@@ -155,17 +186,14 @@ class RunService:
             raise ServiceError("需要有效的独立 Git worktree 与任务分支", 3) from None
         if snapshot.branch in ("main", "master") or snapshot.dirty_paths:
             raise ServiceError("需要干净的独立任务分支", 3)
-        ignored = subprocess.run(["git", "--no-optional-locks", "check-ignore", "--no-index", "--quiet",
-                                  "var/agent-harness/runs/example/state.json"], cwd=self.repo,
-                                 capture_output=True, check=False)
-        if ignored.returncode:
-            raise ServiceError("原始运行目录必须先加入 Git 忽略规则", 3)
+        run_id = str(uuid4())
+        self._assert_raw_storage(run_id)
         matrix, policy = self._configs()
         if any(p.action in ("deny", "approval_required") for p in classify_paths(self.repo, (plan.as_posix(),), policy)):
             raise ServiceError("计划路径需要人工处理", 3)
         definitions = resolve_required_gates(matrix, (plan.as_posix(),))
         now = _now()
-        state = RunState(1, str(uuid4()), plan, digest, self.repo, snapshot.branch,
+        state = RunState(1, run_id, plan, digest, self.repo, snapshot.branch,
                          snapshot.head_commit, snapshot.head_commit, milestone, title,
                          RunStatus.PLANNED, AttemptState(0, {}), None,
                          tuple(g.id for g in definitions), {}, (), (), now, now)
@@ -176,20 +204,30 @@ class RunService:
 
     def next_action(self, run_id: str) -> NextAction:
         state = self._load(run_id)
+        if state.status in (RunStatus.PLANNED, RunStatus.ACTIVE, RunStatus.REPAIRING, RunStatus.VERIFYING):
+            state, _ = self._sync(state)
+            self._readonly_paths(state)
         operation = {RunStatus.PLANNED: "develop", RunStatus.ACTIVE: "develop",
                      RunStatus.REPAIRING: "repair", RunStatus.COMPLETED: "done",
                      RunStatus.PAUSED: "resume", RunStatus.BLOCKED: "human_review"}.get(state.status)
         if operation is None:
             operation = "gate"
             try:
-                synced, _ = self._sync(state)
+                synced = state
                 matrix, _ = self._configs()
+                paths = tuple(p for p in changed_paths(self.repo, state.base_commit) if p != self._trusted_history(state))
                 definitions = resolve_required_gates(matrix, (state.plan_path.as_posix(),
-                    *changed_paths(self.repo, state.base_commit)), additional_gate_ids=state.required_gates)
+                    *paths), additional_gate_ids=state.required_gates)
                 self._verify_snapshot(synced)
                 for definition in definitions:
                     self._verify_evidence(synced, definition)
+                self._verify_review(synced, self._readonly_paths(synced))
                 operation = "finalize"
+            except ServiceError as error:
+                if error.exit_code == 3:
+                    operation = "record_review"
+                elif error.exit_code != 4:
+                    raise
             except (OSError, ValueError):
                 pass
         return NextAction(operation, state.status.value, run_id)
@@ -197,9 +235,78 @@ class RunService:
     def record_decision(self, run_id: str, decision_type: str, summary: str) -> RunState:
         state = self._load(run_id)
         self._operable(state)
-        if decision_type in ("policy_binding", "history_artifact", "verification_snapshot", "transition", "evidence_invalidated", "resumed"):
+        if decision_type in ("policy_binding", "history_artifact", "verification_snapshot", "transition", "evidence_invalidated", "resumed", "review_evidence", "authorized_paths", "observed_paths"):
             raise ServiceError("此决定类型由 Harness 管理")
         return self._save(self._decision(state, decision_type, summary), "decision_recorded")
+
+    def _authorized_paths(self, state):
+        records = [d for d in state.decisions if d["type"] == "authorized_paths"]
+        paths = tuple(json.loads(records[-1]["summary"])) if records else ()
+        _, policy = self._configs()
+        # History is never ordinary code authorization, including aliases.
+        classified = classify_paths(self.repo, paths, policy)
+        return tuple(Path(p) for p, decision in zip(paths, classified)
+                     if not Path(decision.path).is_relative_to(Path("docs/agent/run-history")))
+
+    def _readonly_paths(self, state):
+        _, policy = self._configs()
+        paths = tuple(p for p in changed_paths(self.repo, state.base_commit) if p != self._trusted_history(state))
+        decisions = classify_paths(self.repo, paths, policy)
+        if any(p.action in ("deny", "approval_required", "generated") for p in decisions):
+            raise ServiceError("路径策略拒绝自动执行", 5)
+        return decisions
+
+    def _review_scope(self, decisions):
+        return hashlib.sha256(json.dumps(sorted({p.path for p in decisions}),
+                                         separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+
+    def record_review(self, run_id, reviewer, report):
+        state = self._load(run_id)
+        self._operable(state)
+        state, _ = self._sync(state)
+        decisions = self._readonly_paths(state)
+        if (not isinstance(reviewer, str) or len(reviewer) > 128
+                or re.fullmatch(r"[a-zA-Z][a-zA-Z0-9-]*", reviewer) is None
+                or redact_text(reviewer) != reviewer):
+            raise ServiceError("审查人标识无效", 3)
+        source = self._path(Path(report))
+        directory = self._directory(run_id)
+        if not source.is_relative_to(directory) or source.stat().st_size > 65536:
+            raise ServiceError("审查报告必须位于本运行的忽略目录", 3)
+        self._assert_raw_storage(run_id)
+        text = source.read_text(encoding="utf-8")
+        document = json.loads(text, object_pairs_hook=_unique_fields)
+        expected = {"version": 1, "verdict": "approved", "reviewer": reviewer,
+                    "headCommit": state.head_commit, "changedPathsSha256": self._review_scope(decisions)}
+        if document != expected or type(document.get("version")) is not int or redact_text(text) != text:
+            raise ServiceError("审查报告未批准当前 HEAD 与规范改动范围", 3)
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        target = directory / ("review-" + digest + ".json")
+        self._atomic_text(target, text)
+        binding = {**expected, "reviewerSha256": hashlib.sha256(reviewer.encode()).hexdigest(),
+                   "reportSha256": digest, "reportPath": target.relative_to(self.repo).as_posix()}
+        if self._git("rev-parse", "HEAD").strip() != state.head_commit or self._review_scope(self._readonly_paths(state)) != expected["changedPathsSha256"]:
+            raise ServiceError("审查录入期间 Git 发生漂移", 5)
+        return self._save(self._decision(state, "review_evidence", json.dumps(binding, sort_keys=True)), "review_recorded")
+
+    def _verify_review(self, state, decisions):
+        if not any(p.action == "review_required" for p in decisions):
+            return
+        records = [d for d in state.decisions if d["type"] == "review_evidence"]
+        try:
+            binding = json.loads(records[-1]["summary"], object_pairs_hook=_unique_fields)
+            path = self._path(Path(binding["reportPath"]))
+            if not path.is_relative_to(self._directory(state.run_id)) or path.stat().st_size > 65536:
+                raise ValueError()
+            report = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_fields)
+            expected = {"version": 1, "verdict": "approved", "reviewer": binding["reviewer"],
+                        "headCommit": state.head_commit, "changedPathsSha256": self._review_scope(decisions)}
+            if (report != expected or any(binding[k] != v for k, v in expected.items())
+                    or binding["reviewerSha256"] != hashlib.sha256(binding["reviewer"].encode()).hexdigest()
+                    or binding["reportSha256"] != sha256_file(path)):
+                raise ValueError()
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            raise ServiceError("缺少当前 HEAD 与范围绑定的有效独立审查证据", 3) from None
 
     def _operable(self, state):
         if state.status in (RunStatus.PAUSED, RunStatus.BLOCKED):
@@ -264,19 +371,22 @@ class RunService:
         self._git("merge-base", "--is-ancestor", state.base_commit, state.head_commit)
 
     def _resume_git_allowed(self, raw, filtered, state):
-        decision = validate_resume(raw, state)
+        scoped = replace(state, changed_paths=self._authorized_paths(state))
+        decision = validate_resume(raw, scoped)
         if decision.allowed:
             return True
-        if (decision.reason != "dirty_drift" or filtered.dirty_paths
+        if (decision.reason not in ("dirty_drift", "unexplained_head") or filtered.dirty_paths
                 or self._trusted_history(state) is None):
             return False
-        # Preserve Task 3's ancestry/trailer/scope contract when the only dirty
-        # file is our authenticated report, which its generic API cannot omit.
+        # Preserve ancestry/trailer/scope checks while admitting only this
+        # run's digest-verified history, whether dirty or checkpointed.
         self._check_ancestry(state)
         if raw.head_commit != state.head_commit:
             self._git("merge-base", "--is-ancestor", state.head_commit, raw.head_commit)
             previous = state.head_commit
-            permitted = {p.as_posix() for p in state.changed_paths}
+            history = self._trusted_history(state)
+            permitted = {p.as_posix() for p in scoped.changed_paths} | {history}
+            history_digests = {d["summary"] for d in state.decisions if d["type"] == "history_artifact"}
             for row in self._git("rev-list", "--reverse", "--parents",
                                  state.head_commit + ".." + raw.head_commit).splitlines():
                 parts = row.split()
@@ -287,8 +397,15 @@ class RunService:
                 key, separator, value = trailer.partition(":")
                 if not separator or key.lower() != "agent-run-id" or value.strip() != state.run_id:
                     return False
-                if not set(changed_paths(self.repo, previous, commit)) <= permitted:
+                touched = set(changed_paths(self.repo, previous, commit))
+                if not touched <= permitted:
                     return False
+                if history in touched:
+                    # Authenticate the bytes in each checkpoint, not just HEAD.
+                    content = subprocess.run(["git", "--no-replace-objects", "show", commit + ":" + history],
+                                             cwd=self.repo, capture_output=True, check=False)
+                    if content.returncode or hashlib.sha256(content.stdout).hexdigest() not in history_digests:
+                        return False
                 previous = commit
             if previous != raw.head_commit:
                 return False
@@ -301,6 +418,8 @@ class RunService:
 
     def _atomic_text(self, path, text):
         path = self._path(path.relative_to(self.repo))
+        if path.is_relative_to(self.repo / "var/agent-harness/runs"):
+            self._assert_raw_storage(path.relative_to(self.repo / "var/agent-harness/runs").parts[0])
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
@@ -317,6 +436,7 @@ class RunService:
 
     def _terminal(self, previous, terminal):
         directory = self._directory(terminal.run_id)
+        self._assert_raw_storage(terminal.run_id)
         preview = self._path(directory.relative_to(self.repo) / "diagnostics.md")
         render_diagnostics(terminal, terminal.gates.values(), preview)
         report = preview.read_text(encoding="utf-8")
@@ -342,6 +462,14 @@ class RunService:
         history = self._path(self._history_relative(terminal))
         pending = self._path(directory.relative_to(self.repo) / "terminal-history.md")
         self._atomic_text(pending, report)
+        state_path = self._path(directory.relative_to(self.repo) / "state.json")
+        candidate_path = self._path(directory.relative_to(self.repo) / "terminal-state.json")
+        save_state_atomic(candidate_path, terminal)
+        intent = {"previousStateSha256": sha256_file(state_path),
+                  "terminalStateSha256": sha256_file(candidate_path),
+                  "historySha256": terminal.decisions[-1]["summary"],
+                  "status": terminal.status.value}
+        self._atomic_text(directory / "terminal-intent.json", json.dumps(intent, sort_keys=True))
         # Publish completion only after its atomic state has passed validation.
         save_state_atomic(self._path(directory.relative_to(self.repo) / "state.json"), terminal)
         try:
@@ -350,13 +478,55 @@ class RunService:
             save_state_atomic(self._path(directory.relative_to(self.repo) / "state.json"), previous)
             raise
         append_event(self._path(directory.relative_to(self.repo) / "events.jsonl"), terminal.status.value,
-                     {"headCommit": terminal.head_commit, "historySha256": terminal.decisions[-1]["summary"]})
+                     {"headCommit": terminal.head_commit, "historySha256": terminal.decisions[-1]["summary"],
+                      "status": terminal.status.value})
         return history
+
+    def _terminal_event_present(self, state):
+        records = [d["summary"] for d in state.decisions if d["type"] == "history_artifact"]
+        if not records:
+            return False
+        events = read_events(self._directory(state.run_id) / "events.jsonl")
+        return any(e["type"] in (state.status.value, "reconciled")
+                   and e["payload"].get("status") == state.status.value
+                   and e["payload"].get("headCommit") == state.head_commit
+                   and e["payload"].get("historySha256") == records[-1] for e in events)
+
+    def _recover_pending_terminal(self, state, status):
+        directory = self._directory(state.run_id)
+        intent_path = self._path(directory.relative_to(self.repo) / "terminal-intent.json")
+        if not intent_path.exists() or state.status in (RunStatus.PAUSED, RunStatus.COMPLETED):
+            return state
+        try:
+            intent = json.loads(intent_path.read_text(encoding="utf-8"), object_pairs_hook=_unique_fields)
+            current = sha256_file(directory / "state.json")
+            if current != intent["previousStateSha256"]:
+                return state
+            candidate_path = self._path(directory.relative_to(self.repo) / "terminal-state.json")
+            if sha256_file(candidate_path) != intent["terminalStateSha256"]:
+                raise ValueError()
+            candidate = load_state(candidate_path)
+            if (candidate.run_id != state.run_id or candidate.worktree_path != self.repo
+                    or candidate.status != status or intent["status"] != status.value
+                    or candidate.decisions[-1]["summary"] != intent["historySha256"]):
+                raise ValueError()
+            if status == RunStatus.COMPLETED:
+                verified, _ = self._sync(state)
+                if verified.head_commit != candidate.head_commit:
+                    raise ValueError()
+                self._verify_snapshot(verified)
+                _, definitions = self._paths_and_gates(verified, ())
+                for definition in definitions:
+                    self._verify_evidence(verified, definition)
+                self._verify_review(verified, self._readonly_paths(verified))
+            self._assert_raw_storage(state.run_id)
+            save_state_atomic(directory / "state.json", candidate)
+            return candidate
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            raise ServiceError("终态恢复意图缺失、过期或不匹配", 5) from None
 
     def _recover_history(self, state):
         history = self._path(self._history_relative(state))
-        if self._trusted_history(state):
-            return history
         records = [d["summary"] for d in state.decisions if d["type"] == "history_artifact"]
         if not records:
             raise ServiceError("没有可恢复的历史证据", 5)
@@ -365,18 +535,29 @@ class RunService:
             raise ServiceError("待发布历史缺失或摘要不匹配", 5)
         if history.exists() and sha256_file(history) not in records:
             raise ServiceError("历史文件出现外来改动", 5)
-        self._atomic_text(history, pending.read_text(encoding="utf-8"))
-        append_event(self._path(self._directory(state.run_id).relative_to(self.repo) / "events.jsonl"),
-                     "reconciled", {"historySha256": records[-1], "headCommit": state.head_commit})
+        if not self._trusted_history(state):
+            self._atomic_text(history, pending.read_text(encoding="utf-8"))
+        if not self._terminal_event_present(state):
+            self._assert_raw_storage(state.run_id)
+            append_event(self._path(self._directory(state.run_id).relative_to(self.repo) / "events.jsonl"),
+                         "reconciled", {"historySha256": records[-1], "headCommit": state.head_commit,
+                                        "status": state.status.value})
         return history
 
     def pause(self, run_id: str, reason: str) -> Path:
-        state = self._load(run_id)
+        state = self._load(run_id, allow_incomplete=True)
+        state = self._recover_pending_terminal(state, RunStatus.PAUSED)
+        if state.status == RunStatus.PAUSED:
+            return self._recover_history(state)
         self._operable(state)
         try:
             synced, _ = self._sync(state, allow_dirty=True)
         except (ValueError, OSError):
             synced = state
+        paths = tuple(p for p in changed_paths(self.repo, state.base_commit) if p != self._trusted_history(state))
+        known = {p.as_posix() for p in self._authorized_paths(state)}
+        synced = self._decision(replace(synced, changed_paths=tuple(Path(p) for p in paths)), "observed_paths",
+                                json.dumps({"known": sorted(set(paths) & known), "unknown": sorted(set(paths) - known)}))
         return self._terminal(state, transition(synced, RunStatus.PAUSED, redact_text(reason)))
 
     def resume(self, run_id: str) -> RunState:
@@ -416,8 +597,10 @@ class RunService:
 
     def _workspace_stamp(self, state):
         raw, snapshot = self._snapshot(state)
+        trusted = self._trusted_history(state)
+        pathspec = ["."] + ([":(top,literal,exclude)" + trusted] if trusted else [])
         result = subprocess.run(["git", "--no-optional-locks", "--no-replace-objects",
-                                 "diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--"],
+                                 "diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--", *pathspec],
                                 cwd=self.repo, capture_output=True, check=False)
         if result.returncode:
             raise ServiceError("无法检查工作区内容", 5)
@@ -445,6 +628,7 @@ class RunService:
         paths, definitions = self._paths_and_gates(synced, extra_gate_ids)
         state = replace(synced, changed_paths=tuple(Path(p) for p in paths),
                         required_gates=tuple(g.id for g in definitions))
+        state = self._decision(state, "authorized_paths", json.dumps(list(paths)))
         if state.status == RunStatus.PLANNED:
             state = transition(state, RunStatus.ACTIVE, "gate requested")
         if state.status != RunStatus.VERIFYING:
@@ -453,6 +637,7 @@ class RunService:
         initial = capture_snapshot(self.repo)
         stamp = self._workspace_stamp(state)
         for definition in definitions:
+            self._assert_raw_storage(run_id)
             evidence = run_gate(self.repo, definition, self._directory(run_id) / "evidence", state.head_commit)
             state = self._save(replace(state, gates={**state.gates, definition.id: evidence}, updated_at=_now()), "gate_finished", {"gateId": definition.id, "status": evidence.status.value})
         if capture_snapshot(self.repo) != initial or self._workspace_stamp(state) != stamp:
@@ -486,6 +671,7 @@ class RunService:
 
     def finalize(self, run_id: str) -> Path:
         state = self._load(run_id, allow_incomplete=True)
+        state = self._recover_pending_terminal(state, RunStatus.COMPLETED)
         if state.status == RunStatus.COMPLETED:
             self._recover_history(state)
         if state.status not in (RunStatus.VERIFYING, RunStatus.COMPLETED):
@@ -500,6 +686,7 @@ class RunService:
         self._verify_snapshot(synced)
         for definition in definitions:
             self._verify_evidence(synced, definition)
+        self._verify_review(synced, self._readonly_paths(synced))
         if self._workspace_stamp(synced) != initial:
             self._stop(state, "收尾期间 Git 状态发生变化", 5)
         state = replace(synced, changed_paths=tuple(Path(p) for p in paths),

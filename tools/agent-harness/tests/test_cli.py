@@ -15,6 +15,32 @@ from agent_harness.cli import main
 
 
 class CliTests(WorktreeCase):
+    def test_record_review_cli_binds_current_scope_and_next_remains_read_only(self):
+        self.init_run()
+        self.changed_commit()
+        self.service.run_gates(self.state.run_id)
+        before = self.state_path().read_bytes()
+        code, output, _ = self.call("next", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output)["operation"], "record_review")
+        self.assertEqual(before, self.state_path().read_bytes())
+        self.assertEqual(self.call("finalize", "--json")[0], 3)
+        report = self.review_report()
+        code, output, stderr = self.call("record-review", "--reviewer", "independent-reviewer", "--report", str(report), "--json")
+        self.assertEqual(code, 0, output + stderr)
+        self.assertEqual(json.loads(self.call("next", "--json")[1])["operation"], "finalize")
+        self.assertEqual(self.call("finalize", "--json")[0], 0)
+
+    def test_next_branch_drift_returns_five_single_object_without_writes(self):
+        self.init_run()
+        self.git("checkout", "-b", "feat/foreign")
+        before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+        code, output, stderr = self.call("next", "--json")
+        self.assertEqual(code, 5)
+        self.assertIsInstance(json.loads(output), dict)
+        self.assertEqual(stderr, "")
+        self.assertEqual(before, {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()})
+
     def call(self, *args):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -116,3 +142,26 @@ class CliTests(WorktreeCase):
         self.assertEqual(code, 0)
         self.assertIn(self.state.run_id, output)
         self.assertIn("待执行", output)
+
+    def test_secret_gate_id_is_rejected_without_json_key_leak(self):
+        path = self.repo / "docs/agent/GATE_MATRIX.yaml"
+        matrix = json.loads(path.read_text())
+        matrix["gates"][0]["id"] = "TOKEN=fake-key-secret"
+        matrix["profiles"]["fixture"]["gates"] = ["TOKEN=fake-key-secret"]
+        self.write(path, json.dumps(matrix))
+        self.git("add", str(path))
+        self.git("commit", "-m", "unsafe identifier")
+        code, output, _ = self.call("init", "--plan", str(self.plan), "--milestone", "m1", "--json")
+        self.assertEqual(code, 2)
+        self.assertIsInstance(json.loads(output), dict)
+        self.assertNotIn("fake-key-secret", output)
+
+    def test_wrapper_python_mode_selects_supported_runtime_and_refuses_arbitrary_code(self):
+        wrapper = Path(__file__).resolve().parents[3] / "scripts/agent-harness"
+        result = subprocess.run([str(wrapper), "--python", "--version"], cwd=self.repo / "src", text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        major, minor = map(int, result.stdout.split()[1].split(".")[:2])
+        self.assertGreaterEqual((major, minor), (3, 11))
+        refused = subprocess.run([str(wrapper), "--python", "-c", "print('arbitrary')"], text=True, capture_output=True)
+        self.assertEqual(refused.returncode, 2)
+        self.assertNotIn("arbitrary", refused.stdout)

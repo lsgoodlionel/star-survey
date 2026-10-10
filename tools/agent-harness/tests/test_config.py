@@ -298,6 +298,43 @@ class ConfigTests(unittest.TestCase):
                     for rule in policy.rules
                 ), source)
 
+    def test_gate_ids_reject_secret_shapes_and_unsafe_characters(self):
+        identifiers = ("TOKEN=fake-secret", "sk-fakecredential", "ghp_fakecredential", "a.b.c",
+                       "unit test", "unit\nnext", "unit/next", "测试", "unit:next", "unit_1")
+        for identifier in identifiers:
+            with self.subTest(identifier=identifier):
+                matrix = copy.deepcopy(self.matrix)
+                matrix["gates"][0]["id"] = identifier
+                matrix["profiles"]["agent-harness"]["gates"] = [identifier]
+                with self.assertRaises(ConfigError):
+                    load_gate_matrix(self.write(matrix))
+
+    def test_raw_gate_definition_preserves_runner_adversarial_input_contract(self):
+        gate = GateDefinition("../outside", ("check",), ".", 10)
+        self.assertEqual(gate.id, "../outside")
+
+    def test_wrapper_changes_resolve_real_harness_gates(self):
+        from agent_harness.gate_runner import resolve_required_gates
+        matrix = load_gate_matrix(REPO / "docs/agent/GATE_MATRIX.yaml")
+        gates = resolve_required_gates(matrix, ("scripts/agent-harness",))
+        self.assertEqual({gate.id for gate in gates}, {"harness-tests", "diff-check"})
+
+    def test_python_matrix_gates_use_the_versioned_wrapper(self):
+        matrix = load_gate_matrix(REPO / "docs/agent/GATE_MATRIX.yaml")
+        python_ids = {"gateway-tests", "release-tests", "production-tests", "productization-tests",
+                      "capability-consistency", "traceability", "harness-tests"}
+        for gate in matrix.gates:
+            if gate.id in python_ids:
+                with self.subTest(gate=gate.id):
+                    self.assertEqual((REPO / gate.cwd / gate.command[0]).resolve(), REPO / "scripts/agent-harness")
+                    self.assertEqual(gate.command[1], "--python")
+
+    def test_harness_gate_has_bounded_budget_for_real_restart_boundary_suite(self):
+        matrix = load_gate_matrix(REPO / "docs/agent/GATE_MATRIX.yaml")
+        gate = next(gate for gate in matrix.gates if gate.id == "harness-tests")
+        self.assertGreaterEqual(gate.timeout_seconds, 300)
+        self.assertLessEqual(gate.timeout_seconds, 600)
+
     def test_access_and_scoring_changes_require_specialized_dual_database_gates(self):
         matrix = load_gate_matrix(REPO / "docs/agent/GATE_MATRIX.yaml")
         cases = (

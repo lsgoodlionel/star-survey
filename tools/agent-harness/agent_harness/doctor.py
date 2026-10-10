@@ -73,9 +73,25 @@ def run_doctor(repo: Path) -> DoctorReport:
         valid = path.is_file() and not any(p.is_symlink() for p in (path, *path.parents) if p != root and p.is_relative_to(root))
         add("ok" if valid else "error", "file:" + relative, "文件存在" if valid else "必需文件缺失或为符号链接")
     try:
-        load_gate_matrix(root / "docs/agent/GATE_MATRIX.yaml")
+        matrix = load_gate_matrix(root / "docs/agent/GATE_MATRIX.yaml")
         load_protected_paths(root / "docs/agent/PROTECTED_PATHS.yaml")
         add("ok", "config", "策略配置有效")
+        for gate in matrix.gates:
+            wrapper = len(gate.command) > 1 and gate.command[1] == "--python"
+            if not wrapper and not Path(gate.command[0]).name.startswith("python"):
+                continue
+            command = ([str((root / gate.cwd / gate.command[0]).resolve()), "--python", "--version"]
+                       if wrapper else [gate.command[0], "--version"])
+            try:
+                result = subprocess.run(command, cwd=root / gate.cwd, text=True,
+                                        capture_output=True, check=False, timeout=5,
+                                        stdin=subprocess.DEVNULL)
+                version = re.fullmatch(r"Python (\d+)\.(\d+)\.\d+\s*", result.stdout)
+                valid = result.returncode == 0 and version is not None and tuple(map(int, version.groups())) >= (3, 11)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                valid = False
+            add("ok" if valid else "error", "gate-python:" + gate.id,
+                "Gate Python 3.11+ 可用" if valid else "Gate Python 缺失或低于 3.11")
     except ValueError:
         add("error", "config", "策略配置无效")
     for port in (3000, 8080):

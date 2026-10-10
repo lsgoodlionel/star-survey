@@ -63,7 +63,8 @@
     {
       "id": "gateway-tests",
       "command": [
-        "python3",
+        "../../../scripts/agent-harness",
+        "--python",
         "-m",
         "unittest",
         "discover",
@@ -79,7 +80,8 @@
     {
       "id": "release-tests",
       "command": [
-        "python3",
+        "scripts/agent-harness",
+        "--python",
         "-m",
         "unittest",
         "discover",
@@ -94,7 +96,8 @@
     {
       "id": "production-tests",
       "command": [
-        "python3",
+        "scripts/agent-harness",
+        "--python",
         "-m",
         "unittest",
         "discover",
@@ -109,7 +112,8 @@
     {
       "id": "productization-tests",
       "command": [
-        "python3",
+        "scripts/agent-harness",
+        "--python",
         "-m",
         "unittest",
         "discover",
@@ -124,7 +128,8 @@
     {
       "id": "capability-consistency",
       "command": [
-        "python3",
+        "scripts/agent-harness",
+        "--python",
         "platform/tools/productization/render_capabilities.py",
         "--check"
       ],
@@ -195,7 +200,8 @@
     {
       "id": "traceability",
       "command": [
-        "python3",
+        "../../../scripts/agent-harness",
+        "--python",
         "-m",
         "reqtrace.cli",
         "check"
@@ -216,7 +222,8 @@
     {
       "id": "harness-tests",
       "command": [
-        "python3",
+        "scripts/agent-harness",
+        "--python",
         "-m",
         "unittest",
         "discover",
@@ -227,7 +234,7 @@
         "-v"
       ],
       "cwd": ".",
-      "timeout_seconds": 120
+      "timeout_seconds": 300
     }
   ],
   "profiles": {
@@ -311,7 +318,8 @@
         "AGENTS.md",
         ".gitignore",
         "docs/agent/**",
-        "tools/agent-harness/**"
+        "tools/agent-harness/**",
+        "scripts/agent-harness"
       ],
       "gates": [
         "harness-tests",

@@ -30,6 +30,8 @@ def _json_value(value):
             return first + "".join(part.title() for part in rest)
         return {camel(f.name): _json_value(getattr(value, f.name)) for f in fields(value)}
     if isinstance(value, Mapping):
+        if any(not isinstance(k, str) or redact_text(k) != k for k in value):
+            raise ServiceError("输出包含不安全标识")
         return {k: _json_value(v) for k, v in value.items()}
     if isinstance(value, (tuple, list)):
         return [_json_value(v) for v in value]
@@ -47,7 +49,7 @@ def _parser():
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--json", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=Parser)
-    for command in ("doctor", "init", "status", "next", "gate", "record-decision", "pause", "resume", "finalize"):
+    for command in ("doctor", "init", "status", "next", "gate", "record-decision", "record-review", "pause", "resume", "finalize"):
         child = sub.add_parser(command)
         child.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         child.add_argument("--repo", type=Path, default=argparse.SUPPRESS)
@@ -62,6 +64,9 @@ def _parser():
         elif command == "record-decision":
             child.add_argument("--type", required=True)
             child.add_argument("--summary", required=True)
+        elif command == "record-review":
+            child.add_argument("--reviewer", required=True)
+            child.add_argument("--report", type=Path, required=True)
         elif command == "pause":
             child.add_argument("--reason", required=True)
     return parser
@@ -110,6 +115,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     result = service.run_gates(run_id, extras)
                 elif args.command == "record-decision":
                     result = service.record_decision(run_id, args.type, args.summary)
+                elif args.command == "record-review":
+                    result = service.record_review(run_id, args.reviewer, args.report)
                 elif args.command == "pause":
                     result = {"historyPath": str(service.pause(run_id, args.reason)), "status": "paused"}
                     code = 5
@@ -127,7 +134,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(item["id"] + "：" + item["message"])
         else:
             messages = {"develop": "开发当前 Milestone", "repair": "修复质量门失败", "gate": "运行质量门",
-                        "finalize": "完成收尾", "resume": "检查并恢复运行", "human_review": "需要人工处理", "done": "运行已完成"}
+                        "finalize": "完成收尾", "resume": "检查并恢复运行", "human_review": "需要人工处理", "done": "运行已完成",
+                        "record_review": "录入当前 HEAD 的独立审查证据"}
             if args.command == "next":
                 print(messages[result.operation])
             elif isinstance(result, RunState):

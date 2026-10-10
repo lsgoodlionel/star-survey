@@ -8,6 +8,14 @@ export PYTHONDONTWRITEBYTECODE=1
 for harness_python in python3.11 python3.12 python3.13 python3.14 python3; do
     if command -v "$harness_python" >/dev/null 2>&1 &&
        "$harness_python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+        if [ "${1:-}" = --python ]; then
+            shift
+            case "$*" in
+                '--version'|'-m unittest '*|'-m reqtrace.cli check'|'platform/tools/productization/render_capabilities.py --check')
+                    exec "$harness_python" "$@" ;;
+                *) printf '%s\n' '{"error":"不允许的 Python Gate 入口","exitCode":2}'; exit 2 ;;
+            esac
+        fi
         exec "$harness_python" -m agent_harness.cli --repo "$repo_root" "$@"
     fi
 done

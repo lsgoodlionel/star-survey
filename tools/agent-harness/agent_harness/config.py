@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import json
+import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import MappingProxyType
 from typing import Mapping, Optional, Tuple
@@ -17,6 +18,14 @@ class GateDefinition:
     command: Tuple[str, ...]
     cwd: str
     timeout_seconds: int
+
+
+def validate_gate_id(value):
+    if (not isinstance(value, str) or len(value) > 64
+            or re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", value) is None
+            or value.startswith("sk-")):
+        raise ConfigError("Unsafe Gate identifier")
+    return value
 
 
 @dataclass(frozen=True)
@@ -125,7 +134,7 @@ def load_gate_matrix(path: Path) -> GateMatrix:
         if type(timeout) is not int or timeout <= 0:
             raise ConfigError("Gate timeout must be a positive integer")
         gates.append(GateDefinition(
-            _unique_identifier(item["id"], identifiers), _strings(item["command"]),
+            _unique_identifier(validate_gate_id(item["id"]), identifiers), _strings(item["command"]),
             _relative(item["cwd"]), timeout,
         ))
     raw_profiles = document["profiles"]

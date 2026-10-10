@@ -97,8 +97,268 @@ class WorktreeCase(unittest.TestCase):
             message += "\n\nAgent-Run-Id: " + self.state.run_id
         self.git("commit", "-m", message)
 
+    def review_report(self, **overrides):
+        from agent_harness.git_guard import changed_paths, classify_paths
+        state = self.reload()
+        paths = changed_paths(self.repo, state.base_commit)
+        history = "docs/agent/run-history/" + state.run_id + ".md"
+        _, policy = self.service._configs()
+        canonical = sorted({p.path for p in classify_paths(self.repo, tuple(p for p in paths if p != history), policy)})
+        report = {"version": 1, "verdict": "approved", "reviewer": "independent-reviewer",
+                  "headCommit": self.git("rev-parse", "HEAD"),
+                  "changedPathsSha256": hashlib.sha256(json.dumps(canonical, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()}
+        report.update(overrides)
+        path = self.state_path().parent / "input-review.json"
+        self.write(path, json.dumps(report))
+        return path.relative_to(self.repo)
+
 
 class RunServiceTests(WorktreeCase):
+    def test_next_uses_same_trusted_history_exclusion_as_gate_planning(self):
+        path = self.repo / "docs/agent/GATE_MATRIX.yaml"
+        matrix = json.loads(path.read_text())
+        matrix["profiles"]["history"] = {"paths": ["docs/agent/run-history/**"], "gates": ["extra"]}
+        self.write(path, json.dumps(matrix))
+        self.git("add", str(path.relative_to(self.repo)))
+        self.git("commit", "-m", "history profile")
+        self.init_run()
+        self.service.pause(self.state.run_id, "checkpoint")
+        self.service.resume(self.state.run_id)
+        self.service.run_gates(self.state.run_id)
+        before = self.state_path().read_bytes()
+        self.assertEqual(self.service.next_action(self.state.run_id).operation, "finalize")
+        self.assertEqual(self.state_path().read_bytes(), before)
+
+    def test_terminal_every_publish_boundary_recovers_once(self):
+        from agent_harness import run_service as module
+        self.init_run()
+        self.service.run_gates(self.state.run_id)
+        directory = self.state_path().parent
+        baseline = {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+        history = self.repo / "docs/agent/run-history" / (self.state.run_id + ".md")
+        for status in ("paused", "completed"):
+            for boundary in ("diagnostics", "pending", "candidate", "intent", "state", "history", "event"):
+                for after in (False, True):
+                    with self.subTest(status=status, boundary=boundary, after=after):
+                        for p in directory.rglob("*"):
+                            if p.is_file() and p not in baseline:
+                                p.unlink()
+                        for p, content in baseline.items():
+                            p.write_bytes(content)
+                        history.unlink(missing_ok=True)
+                        operation = (lambda: self.service.pause(self.state.run_id, "manual")) if status == "paused" else (lambda: self.service.finalize(self.state.run_id))
+                        real_atomic, real_save, real_append, real_render = self.service._atomic_text, module.save_state_atomic, module.append_event, module.render_diagnostics
+                        names = {"pending": "terminal-history.md", "candidate": "terminal-state.json",
+                                 "intent": "terminal-intent.json", "state": "state.json", "history": history.name}
+                        def invoke(real, hit, *args):
+                            if hit and not after:
+                                raise SystemExit("before publication")
+                            result = real(*args)
+                            if hit and after:
+                                raise SystemExit("after publication")
+                            return result
+                        def atomic(path, text):
+                            return invoke(real_atomic, boundary in ("pending", "intent", "history") and path.name == names[boundary], path, text)
+                        def save(path, state):
+                            return invoke(real_save, boundary in ("candidate", "state") and path.name == names[boundary], path, state)
+                        def append(path, kind, payload):
+                            return invoke(real_append, boundary == "event" and kind == status, path, kind, payload)
+                        def render(*args):
+                            return invoke(real_render, boundary == "diagnostics", *args)
+                        with patch.object(self.service, "_atomic_text", side_effect=atomic), patch.object(module, "save_state_atomic", side_effect=save), patch.object(module, "append_event", side_effect=append), patch.object(module, "render_diagnostics", side_effect=render), self.assertRaises(SystemExit):
+                            operation()
+                        operation()
+                        first = {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+                        content = history.read_bytes()
+                        operation()
+                        self.assertEqual(first, {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()})
+                        self.assertEqual(content, history.read_bytes())
+                        events = read_events(directory / "events.jsonl")
+                        self.assertEqual(sum(e["type"] in (status, "reconciled") and e["payload"].get("status") == status for e in events), 1)
+
+    def test_pending_completion_after_prior_pause_keeps_history_owned(self):
+        self.init_run()
+        self.service.pause(self.state.run_id, "first")
+        self.service.resume(self.state.run_id)
+        self.service.run_gates(self.state.run_id)
+        original = __import__("agent_harness.run_service", fromlist=["save_state_atomic"]).save_state_atomic
+        def interrupt(path, state):
+            if path.name == "state.json" and state.status == RunStatus.COMPLETED:
+                raise SystemExit("before completed state")
+            original(path, state)
+        with patch("agent_harness.run_service.save_state_atomic", side_effect=interrupt), self.assertRaises(SystemExit):
+            self.service.finalize(self.state.run_id)
+        self.service.finalize(self.state.run_id)
+        self.assertEqual(self.reload().status, RunStatus.COMPLETED)
+
+    def test_checkpoint_rejects_committed_tampering_even_if_history_restored(self):
+        self.init_run()
+        self.write(self.repo / "src/example.txt", "registered")
+        self.service.run_gates(self.state.run_id)
+        history = self.service.pause(self.state.run_id, "checkpoint")
+        original = history.read_bytes()
+        history.write_bytes(original + b"tampered")
+        self.git("add", "src/example.txt", str(history.relative_to(self.repo)))
+        self.git("commit", "-m", "tampered\n\nAgent-Run-Id: " + self.state.run_id)
+        history.write_bytes(original)
+        self.git("add", str(history.relative_to(self.repo)))
+        self.git("commit", "-m", "restored\n\nAgent-Run-Id: " + self.state.run_id)
+        with self.assertRaises(ServiceError):
+            self.service.resume(self.state.run_id)
+    def test_review_required_needs_structured_current_review_not_decision_text(self):
+        self.init_run()
+        self.changed_commit()
+        self.service.run_gates(self.state.run_id)
+        self.service.record_decision(self.state.run_id, "review", "approved all changes")
+        with self.assertRaises(ServiceError) as caught:
+            self.service.finalize(self.state.run_id)
+        self.assertEqual(caught.exception.exit_code, 3)
+        for kind in ("review_evidence", "authorized_paths"):
+            with self.assertRaises(ServiceError):
+                self.service.record_decision(self.state.run_id, kind, "approved")
+        for overrides in ({"headCommit": "0" * 40}, {"changedPathsSha256": "0" * 64},
+                          {"verdict": "rejected"}, {"reviewer": "TOKEN=fake-secret"}):
+            with self.subTest(overrides=overrides), self.assertRaises(ServiceError):
+                self.service.record_review(self.state.run_id, "independent-reviewer", self.review_report(**overrides))
+        self.service.record_review(self.state.run_id, "independent-reviewer", self.review_report())
+        record = [d for d in self.reload().decisions if d["type"] == "review_evidence"][-1]
+        binding = json.loads(record["summary"])
+        self.assertEqual(binding["reviewerSha256"], hashlib.sha256(b"independent-reviewer").hexdigest())
+        evidence = self.repo / binding["reportPath"]
+        original = evidence.read_bytes()
+        evidence.write_bytes(original + b" ")
+        with self.assertRaises(ServiceError):
+            self.service.finalize(self.state.run_id)
+        evidence.write_bytes(original)
+        self.service.finalize(self.state.run_id)
+        self.assertEqual(self.reload().status, RunStatus.COMPLETED)
+
+    def test_review_becomes_stale_after_owned_new_head_and_clean_gates(self):
+        self.init_run()
+        self.changed_commit()
+        self.service.run_gates(self.state.run_id)
+        self.service.record_review(self.state.run_id, "independent-reviewer", self.review_report())
+        self.write(self.repo / "src/example.txt", "second checkpoint")
+        self.service.run_gates(self.state.run_id)
+        self.git("add", "src/example.txt")
+        self.git("commit", "-m", "second\n\nAgent-Run-Id: " + self.state.run_id)
+        self.service.run_gates(self.state.run_id)
+        with self.assertRaises(ServiceError):
+            self.service.finalize(self.state.run_id)
+
+    def test_init_checks_actual_run_directory_all_outputs_and_negations_before_write(self):
+        for rules in ("/var/agent-harness/runs/example/\n",
+                      "/var/agent-harness/runs/*/state.json\n",
+                      "/var/agent-harness/runs/*/*\n!/var/agent-harness/runs/*/evidence/\n",
+                      "/var/agent-harness/runs/*/*\n!/var/agent-harness/runs/*/events.jsonl\n"):
+            with self.subTest(rules=rules):
+                self.write(self.repo / ".gitignore", rules)
+                self.git("add", ".gitignore")
+                self.git("commit", "-m", "ignore fixture")
+                with self.assertRaises(ServiceError) as caught:
+                    self.init_run()
+                self.assertEqual(caught.exception.exit_code, 3)
+                self.assertFalse((self.repo / "var/agent-harness/runs").exists())
+
+    def test_pause_observes_ungated_paths_without_authorizing_checkpoint(self):
+        self.init_run()
+        self.write(self.repo / "src/example.txt", "ungated edit")
+        history = self.service.pause(self.state.run_id, "manual")
+        self.assertEqual(self.reload().changed_paths, (Path("src/example.txt"),))
+        self.assertIn("src/example.txt", history.read_text())
+        self.git("add", "src/example.txt")
+        self.git("commit", "-m", "unregistered\n\nAgent-Run-Id: " + self.state.run_id)
+        with self.assertRaises(ServiceError):
+            self.service.resume(self.state.run_id)
+
+    def test_owned_checkpoint_can_include_digest_matching_history_and_finalize(self):
+        self.init_run()
+        self.write(self.repo / "src/example.txt", "registered")
+        self.service.run_gates(self.state.run_id)
+        history = self.service.pause(self.state.run_id, "checkpoint")
+        self.git("add", "src/example.txt", str(history.relative_to(self.repo)))
+        self.git("commit", "-m", "owned history\n\nAgent-Run-Id: " + self.state.run_id)
+        self.service.resume(self.state.run_id)
+        self.service.run_gates(self.state.run_id)
+        self.service.record_review(self.state.run_id, "independent-reviewer", self.review_report())
+        self.service.finalize(self.state.run_id)
+        self.assertEqual(self.reload().status, RunStatus.COMPLETED)
+
+    def test_checkpoint_rejects_other_run_history_or_tampered_own_history(self):
+        self.init_run()
+        self.write(self.repo / "src/example.txt", "registered")
+        self.service.run_gates(self.state.run_id)
+        history = self.service.pause(self.state.run_id, "checkpoint")
+        self.write(history.with_name("other-run.md"), history.read_text())
+        self.git("add", "src/example.txt", "docs/agent/run-history")
+        self.git("commit", "-m", "other history\n\nAgent-Run-Id: " + self.state.run_id)
+        with self.assertRaises(ServiceError):
+            self.service.resume(self.state.run_id)
+
+    def test_gate_registration_cannot_authorize_other_runs_history_checkpoint(self):
+        self.init_run()
+        foreign = self.repo / "docs/agent/run-history/11111111-1111-4111-8111-111111111111.md"
+        self.write(foreign, "other run")
+        self.service.run_gates(self.state.run_id)
+        own = self.service.pause(self.state.run_id, "checkpoint")
+        self.git("add", str(foreign.relative_to(self.repo)), str(own.relative_to(self.repo)))
+        self.git("commit", "-m", "foreign history\n\nAgent-Run-Id: " + self.state.run_id)
+        with self.assertRaises(ServiceError):
+            self.service.resume(self.state.run_id)
+
+    def test_next_validates_every_executable_status_read_only(self):
+        self.init_run()
+        for status in (RunStatus.PLANNED, RunStatus.ACTIVE, RunStatus.REPAIRING, RunStatus.VERIFYING):
+            for drift in ("branch", "plan", "policy", "head", "dirty"):
+                with self.subTest(status=status, drift=drift):
+                    save_state_atomic(self.state_path(), replace(self.state, status=status))
+                    target = self.repo / (self.plan if drift == "plan" else "docs/agent/PROTECTED_PATHS.yaml")
+                    original = target.read_bytes()
+                    if drift == "branch":
+                        self.git("checkout", "-B", "feat/other")
+                    elif drift in ("plan", "policy"):
+                        target.write_bytes(original + b"\n")
+                    elif drift == "head":
+                        self.git("commit", "--allow-empty", "-m", "foreign")
+                    else:
+                        self.write(self.repo / "unknown.txt", "foreign")
+                    before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+                    with self.assertRaises(ServiceError) as caught:
+                        self.service.next_action(self.state.run_id)
+                    self.assertEqual(caught.exception.exit_code, 5)
+                    self.assertEqual(before, {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()})
+                    if drift == "branch":
+                        self.git("checkout", "feat/test")
+                    elif drift in ("plan", "policy"):
+                        target.write_bytes(original)
+                    elif drift == "head":
+                        self.git("update-ref", "HEAD", self.state.head_commit)
+                    else:
+                        (self.repo / "unknown.txt").unlink()
+
+    def test_terminal_event_gap_recovers_pause_and_completion_idempotently(self):
+        for status in ("paused", "completed"):
+            with self.subTest(status=status):
+                self.init_run()
+                self.service.run_gates(self.state.run_id)
+                operation = (lambda: self.service.pause(self.state.run_id, "manual")) if status == "paused" else (lambda: self.service.finalize(self.state.run_id))
+                real_append = __import__("agent_harness.run_service", fromlist=["append_event"]).append_event
+                def interrupt(path, kind, payload):
+                    if kind == status:
+                        raise SystemExit("event boundary")
+                    return real_append(path, kind, payload)
+                with patch("agent_harness.run_service.append_event", side_effect=interrupt), self.assertRaises(SystemExit):
+                    operation()
+                history = self.repo / "docs/agent/run-history" / (self.state.run_id + ".md")
+                content = history.read_bytes()
+                operation()
+                events = read_events(self.state_path().parent / "events.jsonl")
+                self.assertEqual(sum(e["type"] in (status, "reconciled") and e["payload"].get("historySha256") == hashlib.sha256(content).hexdigest() for e in events), 1)
+                before = (self.state_path().read_bytes(), history.read_bytes(), (self.state_path().parent / "events.jsonl").read_bytes())
+                operation()
+                self.assertEqual(before, (self.state_path().read_bytes(), history.read_bytes(), (self.state_path().parent / "events.jsonl").read_bytes()))
+                self.git("add", str(history.relative_to(self.repo)))
+                self.git("commit", "-m", "archive fixture")
     def test_init_binds_plan_digest_milestone_and_git_identity(self):
         state = self.init_run()
         self.assertEqual(state.status, RunStatus.PLANNED)
@@ -158,6 +418,7 @@ class RunServiceTests(WorktreeCase):
         self.assertEqual(state.required_gates, ("unit", "extra"))
         self.assertEqual(state.gates["unit"].status, GateStatus.PASSED)
         self.service.record_decision(self.state.run_id, "review", "TOKEN=fake-secret")
+        self.service.record_review(self.state.run_id, "independent-reviewer", self.review_report())
         history = self.service.finalize(self.state.run_id)
         self.assertEqual(history, self.repo / "docs/agent/run-history" / (self.state.run_id + ".md"))
         self.assertEqual(self.reload().status, RunStatus.COMPLETED)
@@ -388,6 +649,7 @@ class RunServiceTests(WorktreeCase):
         self.changed_commit()
         state = self.service.run_gates(self.state.run_id, ())
         self.assertEqual(state.head_commit, self.git("rev-parse", "HEAD"))
+        self.service.record_review(self.state.run_id, "independent-reviewer", self.review_report())
         self.service.finalize(self.state.run_id)
         self.assertEqual(self.reload().status, RunStatus.COMPLETED)
 
