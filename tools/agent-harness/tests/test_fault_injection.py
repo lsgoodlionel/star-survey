@@ -884,6 +884,18 @@ class FaultInjectionTests(unittest.TestCase):
                                     "trustedHeadRefs": ["refs/remotes/upstream/main"]},
                 "activePlan": "docs/superpowers/plans/custom.md",
                 "deliveryManifest": "docs/DELIVERY.json",
+                "deliverySyncPaths": ["README.md", "AGENTS.md", "docs/AUTONOMY.md",
+                                      "docs/MEMORY.md", "docs/DELIVERY.json",
+                                      ".sdd/progress.md",
+                                      "docs/superpowers/plans/custom.md",
+                                      "reviews/security.md", "reviews/dx_ci.md",
+                                      "reviews/whole_branch.md"],
+                "expectedRepository": "example/harness",
+                "repositoryAttestation": {
+                    "provider": "github-artifact-attestation",
+                    "signerWorkflow": ".github/workflows/test.yml",
+                    "sourceRef": "refs/heads/main",
+                },
                 "ledger": ".sdd/progress.md",
                 "secretPolicy": self.secret_policy(),
                 "fixture": {"path": "fixture.txt", "planPath": "docs/superpowers/plans/smoke.md",
@@ -933,15 +945,17 @@ class FaultInjectionTests(unittest.TestCase):
                 ({"independentReview": "complete", "github": "complete", "obsidian": "complete"},
                  "fully_synchronized"),
             )
-            for external, status in stages:
-                manifest_document = json.loads(manifest.read_text(encoding="utf-8"))
-                manifest_document["externalSync"] = external
-                manifest_document["deliveryStatus"] = status
-                manifest.write_text(json.dumps(manifest_document, sort_keys=True), encoding="utf-8")
-                stage_marker = "<!-- harness-delivery-status: " + status + " -->"
-                for relative in ("README.md", "AGENTS.md", "docs/AUTONOMY.md", "docs/MEMORY.md"):
-                    (repo / relative).write_text(stage_marker + "\n", encoding="utf-8")
-                self.runner.check_docs(repo, host)
+            with patch.object(self.runner, "_validate_repository_attestation") as attestation:
+                for external, status in stages:
+                    manifest_document = json.loads(manifest.read_text(encoding="utf-8"))
+                    manifest_document["externalSync"] = external
+                    manifest_document["deliveryStatus"] = status
+                    manifest.write_text(json.dumps(manifest_document, sort_keys=True), encoding="utf-8")
+                    stage_marker = "<!-- harness-delivery-status: " + status + " -->"
+                    for relative in ("README.md", "AGENTS.md", "docs/AUTONOMY.md", "docs/MEMORY.md"):
+                        (repo / relative).write_text(stage_marker + "\n", encoding="utf-8")
+                    self.runner.check_docs(repo, host)
+                self.assertEqual(attestation.call_count, 2)
             untracked = repo / "untracked-review.md"
             untracked.write_text((repo / reports[0]["path"]).read_text(encoding="utf-8"),
                                  encoding="utf-8")
@@ -970,6 +984,15 @@ class FaultInjectionTests(unittest.TestCase):
                                     "trustedHeadRefs": ["refs/remotes/upstream/main"]},
                 "activePlan": "docs/superpowers/plans/active.md",
                 "deliveryManifest": "docs/DELIVERY.json",
+                "deliverySyncPaths": ["README.md", "docs/DELIVERY.json",
+                                      "docs/progress.md",
+                                      "docs/superpowers/plans/active.md"],
+                "expectedRepository": "example/harness",
+                "repositoryAttestation": {
+                    "provider": "github-artifact-attestation",
+                    "signerWorkflow": ".github/workflows/test.yml",
+                    "sourceRef": "refs/heads/main",
+                },
                 "ledger": "docs/progress.md",
                 "secretPolicy": self.secret_policy(),
                 "fixture": {"path": "fixture.txt", "planPath": "plans/smoke.md",
@@ -1000,6 +1023,16 @@ class FaultInjectionTests(unittest.TestCase):
                                     "trustedHeadRefs": ["refs/remotes/upstream/main"]},
                 "activePlan": "docs/superpowers/plans/portable.md",
                 "deliveryManifest": "docs/agent/PORTABLE_DELIVERY.json",
+                "deliverySyncPaths": ["README.md", "docs/agent/AUTONOMY.md",
+                                      "docs/agent/PORTABLE_DELIVERY.json",
+                                      "docs/agent/portable-progress.md",
+                                      "docs/superpowers/plans/portable.md"],
+                "expectedRepository": "example/harness",
+                "repositoryAttestation": {
+                    "provider": "github-artifact-attestation",
+                    "signerWorkflow": ".github/workflows/test.yml",
+                    "sourceRef": "refs/heads/main",
+                },
                 "ledger": "docs/agent/portable-progress.md",
                 "secretPolicy": self.secret_policy(),
                 "fixture": {"path": "fixtures/smoke.txt",

@@ -13,7 +13,7 @@ import re
 import subprocess
 from typing import Iterable, Optional, Tuple
 
-from .config import PolicyConfig
+from .config import HistoryBoundaryPolicy, PolicyConfig
 from .state import RunState
 
 
@@ -292,6 +292,58 @@ def _ancestor(repo, older, newer):
     return result.returncode == 0
 
 
+def _shallow_commits(repo):
+    status = _query(repo, "rev-parse", "--is-shallow-repository").strip()
+    if status == "false":
+        return None
+    if status != "true":
+        raise GitGuardError("Ambiguous shallow repository state")
+    raw_path = _query(repo, "rev-parse", "--git-path", "shallow").strip()
+    if not raw_path or "\x00" in raw_path:
+        raise GitGuardError("Cannot locate shallow boundary")
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = Path(repo) / path
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise GitGuardError("Unsafe shallow boundary file")
+        lines = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError, ValueError) as error:
+        raise GitGuardError("Cannot read shallow boundary") from error
+    if (not lines or len(set(lines)) != len(lines)
+            or any(re.fullmatch(r"[0-9a-f]{40}", line) is None for line in lines)):
+        raise GitGuardError("Malformed shallow boundary")
+    return frozenset(lines)
+
+
+def validate_history_ancestry(repo, base, head,
+                              history_boundary: Optional[HistoryBoundaryPolicy] = None):
+    shallow = _shallow_commits(repo)
+    trusted_heads = ()
+    current_head = None
+    if shallow is not None:
+        allowed = (frozenset(history_boundary.allowed_shallow_commits)
+                   if history_boundary is not None else frozenset())
+        if shallow != allowed:
+            raise GitGuardError("Untrusted shallow boundary")
+        current_head = _commit(repo, "HEAD")
+        trusted_heads = tuple(
+            (ref, _commit(repo, ref)) for ref in history_boundary.trusted_head_refs)
+        for boundary in shallow:
+            anchored = (_ancestor(repo, boundary, current_head)
+                        or any(_ancestor(repo, boundary, trusted) for _, trusted in trusted_heads))
+            if _commit(repo, boundary) != boundary or not anchored:
+                raise GitGuardError("Shallow boundary is not anchored to a trusted head")
+    if not _ancestor(repo, _commit(repo, base), _commit(repo, head)):
+        raise GitGuardError("Ambiguous ancestry")
+    if _shallow_commits(repo) != shallow:
+        raise GitGuardError("Shallow boundary changed during validation")
+    if any(_commit(repo, ref) != trusted for ref, trusted in trusted_heads):
+        raise GitGuardError("Trusted history ref changed during validation")
+    if current_head is not None and _commit(repo, "HEAD") != current_head:
+        raise GitGuardError("HEAD changed during history validation")
+
+
 def _owned_descendants(repo, old, new, state):
     permitted = set()
     for path in state.changed_paths:
@@ -319,7 +371,8 @@ def _owned_descendants(repo, old, new, state):
     return bool(commits) and previous == new
 
 
-def validate_resume(snapshot: GitSnapshot, state: RunState) -> ResumeDecision:
+def validate_resume(snapshot: GitSnapshot, state: RunState,
+                    history_boundary: Optional[HistoryBoundaryPolicy] = None) -> ResumeDecision:
     try:
         recorded_root = state.worktree_path.resolve(strict=True)
     except (OSError, RuntimeError, ValueError):
@@ -334,12 +387,9 @@ def validate_resume(snapshot: GitSnapshot, state: RunState) -> ResumeDecision:
     if snapshot.dirty_paths or snapshot.untracked_paths:
         return ResumeDecision(False, "dirty_drift")
     try:
-        if _query(snapshot.repo, "rev-parse", "--is-shallow-repository").strip() != "false":
-            return ResumeDecision(False, "ambiguous_ancestry")
         old = _commit(snapshot.repo, state.head_commit)
         base = _commit(snapshot.repo, state.base_commit)
-        if not _ancestor(snapshot.repo, base, old):
-            return ResumeDecision(False, "ambiguous_ancestry")
+        validate_history_ancestry(snapshot.repo, base, old, history_boundary)
         if old == snapshot.head_commit:
             decision = ResumeDecision(True, "exact_match")
         else:

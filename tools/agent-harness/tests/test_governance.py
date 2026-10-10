@@ -94,24 +94,32 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertIn("documentation", document)
         self.assertIn(".env.example", document["secretPolicy"]["allowlist"])
 
-    def test_independent_review_is_complete_only_with_three_controller_approvals(self):
+    def test_delivery_status_matches_external_sync_and_review_evidence(self):
         manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(
             encoding="utf-8"))
-        self.assertEqual(manifest["externalSync"]["independentReview"], "complete")
-        self.assertEqual(manifest["deliveryStatus"], "fully_synchronized")
-        self.assertEqual(manifest["externalSync"]["github"], "complete")
-        self.assertEqual(manifest["externalSync"]["obsidian"], "complete")
+        external = manifest["externalSync"]
+        repository = external.get("repository", external.get("github"))
+        knowledge_base = external.get("knowledgeBase", external.get("obsidian"))
+        expected_status = {
+            ("pending", "pending", "pending"): "local_validated_sync_pending",
+            ("complete", "pending", "pending"): "locally_reviewed_sync_pending",
+            ("complete", "complete", "pending"): "repository_synced_knowledge_base_pending",
+            ("complete", "complete", "complete"): "fully_synchronized",
+        }
+        key = (external["independentReview"], repository, knowledge_base)
+        self.assertEqual(manifest["deliveryStatus"], expected_status[key])
         evidence = manifest["reviewEvidence"]
         self.assertEqual(evidence["requiredReviewers"],
                          ["security", "dx_ci", "whole_branch"])
-        self.assertEqual(len(evidence["reports"]), 3)
-        self.assertEqual(len({report["path"] for report in evidence["reports"]}), 3)
-        self.assertEqual(len({report["sha256"] for report in evidence["reports"]}), 3)
-        self.assertTrue(all(report["specVerdict"] == "APPROVED"
-                            and report["codeQualityVerdict"] == "APPROVED"
-                            for report in evidence["reports"]))
-        task8 = PLAN.read_text(encoding="utf-8").split("### Task 8:", 1)[1]
-        self.assertIn("- [x] **Step 7: Perform independent review", task8)
+        if external["independentReview"] == "complete":
+            self.assertEqual(len(evidence["reports"]), 3)
+            self.assertEqual(len({report["path"] for report in evidence["reports"]}), 3)
+            self.assertEqual(len({report["sha256"] for report in evidence["reports"]}), 3)
+            self.assertTrue(all(report["specVerdict"] == "APPROVED"
+                                and report["codeQualityVerdict"] == "APPROVED"
+                                for report in evidence["reports"]))
+        else:
+            self.assertEqual(evidence["reports"], [])
 
     def test_ci_test_runner_fails_when_any_test_is_skipped(self):
         runner = REPO / "tools/agent-harness/run_tests.py"

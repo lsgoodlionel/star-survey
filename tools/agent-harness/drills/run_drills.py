@@ -33,6 +33,7 @@ HARNESS = REPO / "tools/agent-harness"
 sys.path.insert(0, str(HARNESS))
 
 from agent_harness.codex_adapter import CodexFailure, CodexResult, run_codex
+from agent_harness.config import load_history_boundary_policy
 from agent_harness.diagnostics import record_failure, redact_text, render_diagnostics
 from agent_harness.doctor import run_doctor
 from agent_harness.generated_verifier import verify_generated_outputs
@@ -502,9 +503,10 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
         document = json.loads(path.read_text(encoding="utf-8"))
         required = {"version", "activePlan", "deliveryManifest", "deliverySyncPaths",
                     "expectedRepository", "repositoryAttestation", "ledger",
-                    "secretPolicy", "fixture", "documentation"}
+                    "secretPolicy", "fixture", "documentation", "historyBoundary"}
         if set(document) != required or document["version"] != 1:
             raise ValueError()
+        load_history_boundary_policy(path)
         policy = document["secretPolicy"]
         fixture = document["fixture"]
         docs = document["documentation"]

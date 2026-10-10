@@ -90,6 +90,48 @@ class DoctorTrustTests(WorktreeCase):
         self.wrapper.chmod(0o755)
         for name in ("AGENTS.md", "docs/agent/STATE_SCHEMA.json", "docs/agent/PROJECT_MEMORY.md", "docs/agent/AUTONOMY.md"):
             self.write(self.repo / name, "{}\n")
+        host_files = {
+            "docs/superpowers/plans/active.md": "# Active\n",
+            "docs/superpowers/plans/smoke.md": "# Smoke\n",
+            "docs/agent/DELIVERY.json": "{}\n",
+            "docs/agent/progress.md": "Task 1: in_progress\n",
+            "fixtures/smoke.txt": "baseline\n",
+        }
+        for name, content in host_files.items():
+            self.write(self.repo / name, content)
+        self.write(self.repo / "docs/agent/HARNESS_HOST.json", json.dumps({
+            "version": 1,
+            "activePlan": "docs/superpowers/plans/active.md",
+            "deliveryManifest": "docs/agent/DELIVERY.json",
+            "deliverySyncPaths": [
+                "AGENTS.md", "docs/agent/AUTONOMY.md", "docs/agent/PROJECT_MEMORY.md",
+                "docs/agent/DELIVERY.json", "docs/agent/progress.md",
+                "docs/superpowers/plans/active.md",
+            ],
+            "expectedRepository": "example/harness",
+            "repositoryAttestation": {
+                "provider": "github-artifact-attestation",
+                "signerWorkflow": ".github/workflows/test.yml",
+                "sourceRef": "refs/heads/main",
+            },
+            "historyBoundary": {
+                "allowedShallowCommits": ["a" * 40],
+                "trustedHeadRefs": ["refs/remotes/upstream/main"],
+            },
+            "ledger": "docs/agent/progress.md",
+            "secretPolicy": {"patterns": [".env"], "allowlist": [".env.example"]},
+            "fixture": {
+                "path": "fixtures/smoke.txt",
+                "planPath": "docs/superpowers/plans/smoke.md",
+                "baseline": "baseline\n",
+                "expected": "baseline\nok\n",
+            },
+            "documentation": {
+                "statusMarkerPaths": [
+                    "AGENTS.md", "docs/agent/AUTONOMY.md", "docs/agent/PROJECT_MEMORY.md",
+                ],
+            },
+        }, sort_keys=True))
         self.matrix_path = self.repo / "docs/agent/GATE_MATRIX.yaml"
         self.matrix = json.loads(self.matrix_path.read_text())
         for gate in self.matrix["gates"]:

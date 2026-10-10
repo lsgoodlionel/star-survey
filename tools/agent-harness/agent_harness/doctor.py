@@ -10,7 +10,7 @@ import stat
 import subprocess
 import sys
 
-from .config import load_gate_matrix, load_protected_paths
+from .config import load_gate_matrix, load_history_boundary_policy, load_protected_paths
 from .git_guard import assert_worktree_isolated, capture_snapshot
 
 
@@ -48,7 +48,7 @@ def _host_references(root):
         document = json.loads(path.read_text(encoding="utf-8"))
         required = {"version", "activePlan", "deliveryManifest", "deliverySyncPaths",
                     "expectedRepository", "repositoryAttestation", "ledger",
-                    "secretPolicy", "fixture", "documentation"}
+                    "secretPolicy", "fixture", "documentation", "historyBoundary"}
         fixture = document["fixture"]
         documentation = document["documentation"]
         policy = document["secretPolicy"]
@@ -71,6 +71,7 @@ def _host_references(root):
                                 attestation["sourceRef"]) is None
                 or ".." in attestation["sourceRef"].split("/")):
             raise ValueError()
+        load_history_boundary_policy(path)
         values = (document["activePlan"], document["deliveryManifest"], document["ledger"],
                   fixture["path"], fixture["planPath"], *documentation["statusMarkerPaths"])
         sync_paths = document["deliverySyncPaths"]

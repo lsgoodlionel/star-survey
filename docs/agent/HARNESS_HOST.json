@@ -26,6 +26,14 @@
     "path": "tests/fixtures/real_executor_smoke.txt",
     "planPath": "docs/superpowers/plans/real-executor-smoke.md"
   },
+  "historyBoundary": {
+    "allowedShallowCommits": [
+      "4c20c68033c8e37140f26af80a65f659b40f8a45"
+    ],
+    "trustedHeadRefs": [
+      "refs/remotes/limesurvey-fork/master"
+    ]
+  },
   "ledger": ".superpowers/sdd/2026-10-10-business-dashboard-v1/progress.md",
   "repositoryAttestation": {
     "provider": "github-artifact-attestation",
