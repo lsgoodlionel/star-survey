@@ -22,9 +22,9 @@
   "expectedRepository": "lsgoodlionel/star-survey",
   "fixture": {
     "baseline": "baseline\n",
-    "expected": "baseline\nreal-codex-smoke-ok\n",
-    "path": "tools/agent-harness/tests/fixtures/real_codex_smoke.txt",
-    "planPath": "docs/superpowers/plans/real-codex-smoke.md"
+    "expected": "baseline\nsmoke-ok\n",
+    "path": "tests/fixtures/real_executor_smoke.txt",
+    "planPath": "docs/superpowers/plans/real-executor-smoke.md"
   },
   "ledger": ".superpowers/sdd/2026-10-10-business-dashboard-v1/progress.md",
   "repositoryAttestation": {
