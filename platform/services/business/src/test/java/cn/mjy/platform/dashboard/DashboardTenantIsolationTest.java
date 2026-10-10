@@ -2,14 +2,16 @@ package cn.mjy.platform.dashboard;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.doAnswer;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import cn.mjy.platform.access.AccessFixture;
 import cn.mjy.platform.access.GrantRequest;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.tenant.TenantScope;
+import cn.mjy.platform.support.TestTokens;
 import cn.mjy.platform.survey.PublishedVersionView;
 import cn.mjy.platform.survey.SurveyFixture;
 import cn.mjy.platform.survey.SurveyFixture.Workspace;
@@ -21,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -28,10 +31,13 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest
+@AutoConfigureMockMvc
 class DashboardTenantIsolationTest {
 
     @Autowired
@@ -51,6 +57,12 @@ class DashboardTenantIsolationTest {
 
     @Autowired
     private SurveyPublishService publisher;
+
+    @Autowired
+    private MockMvc mvc;
+
+    @Autowired
+    private TestTokens tokens;
 
     private Workspace tenantA;
     private Workspace tenantB;
@@ -195,21 +207,35 @@ class DashboardTenantIsolationTest {
     }
 
     @Test
-    void dashboardServiceUsesAFixedQueryCountRegardlessOfSurveyCount() {
-        clearInvocations(jdbc);
-        dashboard.getDashboard(tenantA.owner(), 50, 50);
-        verify(jdbc, times(4)).sql(anyString());
+    void dashboardHttpGetUsesAFixedQueryCountRegardlessOfSurveyCount() throws Exception {
+        Thread requestThread = Thread.currentThread();
+        AtomicInteger requestQueries = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (Thread.currentThread() == requestThread) {
+                requestQueries.incrementAndGet();
+            }
+            return invocation.callRealMethod();
+        }).when(jdbc).sql(anyString());
+
+        mvc.perform(get("/v1/dashboard?surveyLimit=50&taskLimit=50")
+                        .header("Authorization", bearer(tenantA.owner())))
+                .andExpect(status().isOk());
+        int emptyDatasetQueries = requestQueries.get();
+
         for (int index = 0; index < 12; index++) {
             fixture.newSurvey(tenantA);
         }
-        clearInvocations(jdbc);
-        dashboard.getDashboard(tenantA.owner(), 50, 50);
+        requestQueries.set(0);
+        mvc.perform(get("/v1/dashboard?surveyLimit=50&taskLimit=50")
+                        .header("Authorization", bearer(tenantA.owner())))
+                .andExpect(status().isOk());
 
-        verify(jdbc, times(4)).sql(anyString());
+        assertThat(emptyDatasetQueries).isEqualTo(4);
+        assertThat(requestQueries).hasValue(emptyDatasetQueries);
     }
 
     @Test
-    void previewExportAndResponseCountsCannotCrossTenantBoundaries() {
+    void dashboardHttpGetExcludesCrossTenantPreviewExportAndResponseCounts() throws Exception {
         SurveyView surveyA = fixture.newSurvey(tenantA);
         SurveyView surveyB = fixture.newSurvey(tenantB);
         PublishedVersionView publishedA = publisher.publish(tenantA.owner(), surveyA.id()).version();
@@ -217,13 +243,15 @@ class DashboardTenantIsolationTest {
         insertOperationalCounts(tenantA, surveyA.id(), publishedA, 1);
         insertOperationalCounts(tenantB, surveyB.id(), publishedB, 2);
 
-        DashboardView view = dashboard.getDashboard(tenantA.owner(), 50, 50);
-
-        assertThat(view.summary().activePreviews()).isOne();
-        assertThat(view.summary().activeExports()).isOne();
-        assertThat(view.surveys()).filteredOn(item -> item.surveyId().equals(surveyA.id()))
-                .singleElement().extracting(DashboardSurveyView::completedResponses).isEqualTo(1L);
-        assertThat(view.surveys()).extracting(DashboardSurveyView::surveyId).doesNotContain(surveyB.id());
+        mvc.perform(get("/v1/dashboard?surveyLimit=50&taskLimit=50")
+                        .header("Authorization", bearer(tenantA.owner())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.summary.activePreviews").value(1))
+                .andExpect(jsonPath("$.summary.activeExports").value(1))
+                .andExpect(jsonPath("$.surveys[?(@.surveyId == '%s')].completedResponses"
+                        .formatted(surveyA.id())).value(1))
+                .andExpect(jsonPath("$.surveys[?(@.surveyId == '%s')]"
+                        .formatted(surveyB.id())).isEmpty());
     }
 
     private void markPublishFailed(Workspace workspace, UUID surveyId, Instant updatedAt) {
@@ -341,5 +369,9 @@ class DashboardTenantIsolationTest {
                     .param("actor", workspace.owner().actorId())
                     .update();
         });
+    }
+
+    private String bearer(TenantContext context) {
+        return "Bearer " + tokens.issue(context.actorId(), context.tenantId().value(), List.of());
     }
 }

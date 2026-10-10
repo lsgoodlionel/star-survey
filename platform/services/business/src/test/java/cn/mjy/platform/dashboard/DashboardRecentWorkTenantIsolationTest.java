@@ -131,10 +131,19 @@ class DashboardRecentWorkTenantIsolationTest {
         for (DashboardPage page : DashboardPage.values()) {
             Integer version = page == DashboardPage.VERSION ? 2 : null;
             assertThat(recentWork.upsert(tenantA.tenant(), actor.actorId(),
-                    new RecentWorkCommand(surveyA.id(), page, version), visited)).isFalse();
+                    new RecentWorkCommand(surveyA.id(), page, version), visited))
+                    .as("page %s should follow its route permission", page)
+                    .isEqualTo(page == DashboardPage.VERSION);
         }
-        assertThat(recentWork.findVisible(tenantA.tenant(), actor.actorId(), 50)).isEmpty();
-        assertThat(rawRowCount(tenantA.tenant(), actor.actorId())).isEqualTo(DashboardPage.values().length);
+        assertThat(recentWork.findVisible(tenantA.tenant(), actor.actorId(), 50))
+                .extracting(RecentWorkView::page, RecentWorkView::targetPath)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(DashboardPage.VERSION,
+                                "/surveys/" + surveyA.id() + "/versions/2"),
+                        org.assertj.core.groups.Tuple.tuple(DashboardPage.VERSION,
+                                "/surveys/" + surveyA.id() + "/versions/1"));
+        assertThat(rawRowCount(tenantA.tenant(), actor.actorId()))
+                .isEqualTo(DashboardPage.values().length + 1L);
     }
 
     @Test
