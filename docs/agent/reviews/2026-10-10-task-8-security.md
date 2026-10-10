@@ -2,8 +2,8 @@
 
 日期：2026-10-11
 角色：security
-Reviewed range: `be92a0176bca7085831b5c85a2932cf0b3611fa6..09d95c6df583b4aabae05b5524b7a734ea0c7986`
-Reviewed commit: `09d95c6df583b4aabae05b5524b7a734ea0c7986`
+Reviewed range: `be92a0176bca7085831b5c85a2932cf0b3611fa6..b40a41099f9d5c4824ec8e34b873a32def46733b`
+Reviewed commit: `b40a41099f9d5c4824ec8e34b873a32def46733b`
 
 ## 结论
 
