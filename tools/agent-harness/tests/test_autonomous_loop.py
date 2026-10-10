@@ -347,7 +347,9 @@ class LoopCase(WorktreeCase):
 
     def test_invalid_npm_ranges_pause_before_gate(self):
         before = json.dumps({"dependencies": {"pkg": "1.2.3"}})
-        for specification in ("1.2.3 - >2.0.0", "1.2.3 ||", "|| 1.2.3", "1.2.3 || || 2.0.0"):
+        for specification in ("1.2.3 - >2.0.0", "1.2.3 ||", "|| 1.2.3", "1.2.3 || || 2.0.0",
+                              "1.2.3-alpha..1", "1.2.3-.alpha", "1.2.3-alpha.",
+                              "1.2.3+build..1", "1.2.3+.build", "1.2.3+build."):
             with self.subTest(specification=specification):
                 after = json.dumps({"dependencies": {"pkg": specification}})
                 result = self.dependency_run("package.json", before, after)

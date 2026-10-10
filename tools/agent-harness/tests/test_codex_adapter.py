@@ -1,4 +1,4 @@
-"""Controlled argv and bounded streams; subprocesses below are Python fakes."""
+"""Controlled argv, bounded streams and real Linux wrapper fixtures."""
 
 import json
 import os
@@ -52,6 +52,20 @@ class AdapterCase(WorktreeCase):
             return child
         with patch("agent_harness.codex_adapter.subprocess.Popen", side_effect=fake):
             return self.adapter.run_codex(command or self.command, timeout, log or self.directory / "codex.jsonl")
+
+    def linux_wrapper(self, script):
+        project = Path(__file__).resolve().parents[3]
+        docker = shutil.which("docker")
+        if docker is None:
+            self.skipTest("Docker is required for the Linux wrapper fixture")
+        image = "python:3.11-slim"
+        available = subprocess.run([docker, "image", "inspect", image], text=True,
+                                   capture_output=True, check=False)
+        if available.returncode:
+            self.skipTest("The python:3.11-slim fixture image is unavailable")
+        return subprocess.run([docker, "run", "--rm", "-v", f"{project}:/repo:ro", "-w", "/repo",
+                               image, "/bin/sh", "-c", script], text=True,
+                              capture_output=True, check=False)
 
     def test_fixed_command_and_safe_resume(self):
         self.assertTrue(Path(self.command[0]).is_absolute())
@@ -293,6 +307,67 @@ print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": 
         self.assertIn(module.returncode, (0, 2), module.stderr or module.stdout)
         self.assertEqual(wrapper_marker, "")
         self.assertEqual(module_marker, "")
+
+    def test_linux_wrapper_bootstraps_from_usr_local_versioned_python(self):
+        direct = self.linux_wrapper("/repo/scripts/agent-harness --python --version")
+        self.assertEqual(direct.returncode, 0, direct.stderr or direct.stdout)
+        self.assertRegex(direct.stdout, r"^Python 3\.11\.")
+
+    def test_linux_wrapper_accepts_trusted_usr_bin_python_symlink(self):
+        linked = self.linux_wrapper(
+            "ln -s /usr/local/bin/python3.11 /usr/lib/python-bootstrap && "
+            "ln -s ../lib/python-bootstrap /usr/bin/python3 && "
+            "/repo/scripts/agent-harness --python --version"
+        )
+        self.assertEqual(linked.returncode, 0, linked.stderr or linked.stdout)
+        self.assertRegex(linked.stdout, r"^Python 3\.11\.")
+
+    def test_linux_wrapper_skips_escaped_and_writable_candidates_without_executing_them(self):
+        rejected = self.linux_wrapper(r"""
+mkdir -p /tmp/poison
+printf '#!/bin/sh\nprintf escaped >> /tmp/executed\nexit 99\n' > /tmp/poison/python3.14
+chmod 0755 /tmp/poison/python3.14
+ln -s /tmp/poison/python3.14 /usr/local/bin/python3.14
+printf '#!/bin/sh\nprintf writable >> /tmp/executed\nexit 98\n' > /usr/local/bin/python3.13
+chmod 0777 /usr/local/bin/python3.13
+PATH=/tmp/poison /repo/scripts/agent-harness --python --version
+code=$?
+test ! -e /tmp/executed || exit 97
+exit "$code"
+""")
+        self.assertEqual(rejected.returncode, 0, rejected.stderr or rejected.stdout)
+        self.assertRegex(rejected.stdout, r"^Python 3\.11\.")
+
+    def test_linux_wrapper_fails_closed_when_bootstrap_identity_changes(self):
+        changed = self.linux_wrapper(r"""
+cp /usr/local/bin/python3.11 /usr/bin/python3
+printf '#!/bin/sh\nchmod 0777 "$0"\nexec /usr/local/bin/python3.11 "$@"\n' > /usr/local/bin/python3.14
+chmod 0755 /usr/local/bin/python3.14
+/repo/scripts/agent-harness --python --version
+""")
+        self.assertEqual(changed.returncode, 2, changed.stderr or changed.stdout)
+        self.assertIn("bootstrap", changed.stdout)
+
+    def test_linux_wrapper_pure_help_does_not_require_runtime_tools(self):
+        helped = self.linux_wrapper(r"""
+set -eu
+mkdir -p /tmp/poison
+printf '#!/bin/sh\nprintf codex >> /tmp/codex-executed\nexit 96\n' > /tmp/poison/codex
+chmod 0755 /tmp/poison/codex
+PATH=/tmp/poison /repo/scripts/agent-harness --help
+PATH=/tmp/poison /repo/scripts/agent-harness run-codex -h
+PATH=/tmp/poison /repo/scripts/agent-harness run-codex --help
+test ! -e /tmp/codex-executed
+""")
+        self.assertEqual(helped.returncode, 0, helped.stderr or helped.stdout)
+        self.assertGreaterEqual(helped.stdout.count("usage: agent-harness"), 3)
+
+    def test_linux_wrapper_mixed_help_arguments_do_not_bypass_runtime_policy(self):
+        mixed = self.linux_wrapper(
+            "/repo/scripts/agent-harness run-codex --max-cycles 1 --help"
+        )
+        self.assertEqual(mixed.returncode, 2, mixed.stderr or mixed.stdout)
+        self.assertNotIn("usage: agent-harness", mixed.stdout)
 
     def test_controlled_tool_errors_include_codex(self):
         with patch("agent_harness.codex_adapter._trusted_codex", side_effect=ValueError("fixture")):

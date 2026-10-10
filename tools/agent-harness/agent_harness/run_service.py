@@ -99,7 +99,9 @@ def _npm_source(value):
 
 
 def _npm_registry_range(value):
-    version = r"[vV]?(?:\d+|[xX*])(?:\.(?:\d+|[xX*])){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
+    identifier = r"[0-9A-Za-z-]+"
+    identifiers = identifier + r"(?:\." + identifier + r")*"
+    version = r"[vV]?(?:\d+|[xX*])(?:\.(?:\d+|[xX*])){0,2}(?:-" + identifiers + r")?(?:\+" + identifiers + r")?"
     comparator = r"(?:<=|>=|<|>|=|~|\^)?\s*" + version
     if re.fullmatch(r"[0-9A-Za-z*XxvV.+<>=~^|\-\s]+", value) is None:
         return False
