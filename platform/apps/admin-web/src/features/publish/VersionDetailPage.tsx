@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { LockKeyhole } from 'lucide-react';
 import { useParams } from 'react-router-dom';
-import { useSurveyShell } from '../../app/SurveyShell';
+import { useSurveyPageReady, useSurveyShell } from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import type { ApiClient } from '../../shared/api/http';
 import { getPublishedVersion, versionQueryKey } from '../../shared/api/approvals';
@@ -21,6 +21,7 @@ export function VersionDetailPage({ api, surveyId, tenantId, version }: VersionD
     queryKey: versionQueryKey(tenantId, surveyId, version),
     queryFn: ({ signal }) => getPublishedVersion(api, surveyId, version, signal),
   });
+  useSurveyPageReady('version', query.isSuccess && Boolean(query.data), version);
 
   if (query.isPending) return <p className="publish-loading">正在加载版本</p>;
   if (query.error || !query.data) return <p role="alert">该版本不存在或不可访问。</p>;
@@ -78,6 +79,7 @@ export function VersionDetailRoutePage() {
   if (!session || !surveyId || versionNumber == null) return <p role="alert">版本标识无效</p>;
   return (
     <VersionDetailPage
+      key={`${session.me.tenantId}:${session.me.actorId}:${surveyId}:${versionNumber}`}
       api={api}
       surveyId={surveyId}
       tenantId={session.me.tenantId}

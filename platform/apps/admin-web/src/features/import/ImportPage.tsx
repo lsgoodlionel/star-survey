@@ -3,7 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, FileSearch, Import } from 'lucide-react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
-import { surveyWorkflowHref, useSurveyShell } from '../../app/SurveyShell';
+import {
+  surveyWorkflowHref,
+  useSurveyPageReady,
+  useSurveyShell,
+} from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import { parseDefinition } from '../editor/model/definition';
 import { ApiError } from '../../shared/api/errors';
@@ -73,6 +77,12 @@ function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
     }
   }, [draftQuery.data]);
   const canEdit = capabilitiesQuery.data?.canEdit === true;
+  const ready = !draftQuery.isPending
+    && !capabilitiesQuery.isPending
+    && !draftQuery.isError
+    && !capabilitiesQuery.isError
+    && Boolean(draftQuery.data && capabilitiesQuery.data && definition);
+  useSurveyPageReady('import', ready);
 
   const previewMutation = useMutation({
     mutationFn: (request: PreviewRequest) => previewSurveyImport(api, surveyId, request.text),
@@ -241,6 +251,7 @@ export function ImportRoutePage() {
   if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
   return (
     <ImportPage
+      key={`${session.me.tenantId}:${session.me.actorId}:${surveyId.data}`}
       api={api}
       surveyId={surveyId.data}
       tenantId={session.me.tenantId}

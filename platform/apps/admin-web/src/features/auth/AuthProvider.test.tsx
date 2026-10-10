@@ -239,6 +239,30 @@ test('logoutClearsPriorUserQueriesBeforeCrossUserRelogin', async () => {
   expect(queryClient.getQueryData(['private-profile'])).toBeUndefined();
 });
 
+test('clearsAuthorizedQueriesWhenAuthenticationReplacesTheActorInTheSameTenant', async () => {
+  server.use(
+    http.get('/v1/me', ({ request }) =>
+      HttpResponse.json({
+        tenantId: 'tenant-a',
+        actorId: request.headers.get('Authorization') === 'Bearer new-token' ? 'new-user' : 'old-user',
+        roles: ['editor'],
+      }),
+    ),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const clear = vi.spyOn(queryClient, 'clear');
+  renderAuth(<SessionProbe />, { queryClient });
+
+  fireEvent.click(screen.getByRole('button', { name: '建立会话' }));
+  expect(await screen.findByText('old-user')).toBeInTheDocument();
+  queryClient.setQueryData(['authorized-survey', 'tenant-a'], { owner: 'old-user' });
+
+  fireEvent.click(screen.getByRole('button', { name: '建立新会话' }));
+  expect(await screen.findByText('new-user')).toBeInTheDocument();
+  expect(clear).toHaveBeenCalledTimes(1);
+  expect(queryClient.getQueryData(['authorized-survey', 'tenant-a'])).toBeUndefined();
+});
+
 test('doesNotRenderTheDevTokenEntryInAProductionBuild', async () => {
   const router = createMemoryRouter(createAppRoutes(false), { initialEntries: ['/dev/token'] });
   renderAuth(<RouterProvider router={router} />);

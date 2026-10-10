@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, ChevronLeft, ChevronRight, Download, FileDown, RefreshCw } from 'lucide-react';
 import { useParams } from 'react-router-dom';
+import { useSurveyPageReady } from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import {
@@ -114,6 +115,12 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
   const summaryForbidden = isForbidden(summary.error);
   const detailForbidden = isForbidden(responses.error);
   const loadFailed = (summary.isError && !summaryForbidden) || (responses.isError && !detailForbidden);
+  const ready = !summary.isPending
+    && !responses.isPending
+    && !loadFailed
+    && Boolean(summary.data || summaryForbidden)
+    && Boolean(responses.data || detailForbidden);
+  useSurveyPageReady('responses', ready);
   const refreshResponses = async () => {
     setRefreshState('refreshing');
     try {
@@ -341,7 +348,15 @@ export function ResponsesRoutePage() {
     onUnauthorized: () => logout(),
   }), [logout, session?.token]);
   if (!session || !surveyId) return <p role="alert">问卷标识无效</p>;
-  return <ResponsesPage api={api} exportClient={exportClient} surveyId={surveyId} tenantId={session.me.tenantId} />;
+  return (
+    <ResponsesPage
+      key={`${session.me.tenantId}:${session.me.actorId}:${surveyId}`}
+      api={api}
+      exportClient={exportClient}
+      surveyId={surveyId}
+      tenantId={session.me.tenantId}
+    />
+  );
 }
 
 function resetPagination(

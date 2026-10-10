@@ -3,7 +3,11 @@ import { type InfiniteData, useMutation, useQuery, useQueryClient } from '@tanst
 import { Download, Eye, FileInput, RefreshCw, Rocket, Save } from 'lucide-react';
 import { Link, useBlocker, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
-import { surveyWorkflowHref, useSurveyShell } from '../../app/SurveyShell';
+import {
+  surveyWorkflowHref,
+  useSurveyPageReady,
+  useSurveyShell,
+} from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
@@ -62,6 +66,12 @@ export function EditorPage({ api, surveyId, tenantId }: EditorPageProps) {
   });
 
   const loading = surveyQuery.isPending || draftQuery.isPending || capabilitiesQuery.isPending;
+  const ready = !loading
+    && !surveyQuery.error
+    && !draftQuery.error
+    && !capabilitiesQuery.error
+    && Boolean(surveyQuery.data && draftQuery.data && capabilitiesQuery.data);
+  useSurveyPageReady('edit', ready);
   if (loading) return <p className="editor-loading">正在加载问卷草稿</p>;
   if (surveyQuery.error || draftQuery.error || capabilitiesQuery.error || !draftQuery.data) {
     return <p role="alert">问卷草稿暂时不可用，请稍后重试。</p>;
@@ -410,7 +420,14 @@ export function EditorRoutePage() {
   const { api, session } = useAuth();
   const surveyId = z.string().uuid().safeParse(useParams().surveyId);
   if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
-  return <EditorPage api={api} surveyId={surveyId.data} tenantId={session.me.tenantId} />;
+  return (
+    <EditorPage
+      key={`${session.me.tenantId}:${session.me.actorId}:${surveyId.data}`}
+      api={api}
+      surveyId={surveyId.data}
+      tenantId={session.me.tenantId}
+    />
+  );
 }
 
 function hasQuestion(definition: EditableSurveyDefinition, uuid: string) {

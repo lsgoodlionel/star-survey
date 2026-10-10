@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Send, ShieldCheck, Undo2, XCircle } from 'lucide-react';
 import { Link, useInRouterContext, useLocation, useParams } from 'react-router-dom';
-import { useSurveyShell } from '../../app/SurveyShell';
+import { useSurveyPageReady, useSurveyShell } from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
@@ -95,6 +95,16 @@ export function PublishPage({ actorId, api, surveyId, tenantId, accessToken, onU
   });
 
   const latestApproval = useMemo(() => approvals.data?.at(-1) ?? null, [approvals.data]);
+  const ready = !overview.isPending
+    && !approvals.isPending
+    && !capabilities.isPending
+    && !versions.isPending
+    && !overview.error
+    && !approvals.error
+    && !capabilities.error
+    && !versions.error
+    && Boolean(overview.data && approvals.data && capabilities.data && versions.data);
+  useSurveyPageReady('publish', ready);
 
   useEffect(() => () => {
     void queryClient.cancelQueries({
@@ -248,6 +258,7 @@ export function PublishRoutePage() {
   if (!session || !surveyId) return <p role="alert">问卷标识无效</p>;
   return (
     <PublishPage
+      key={`${session.me.tenantId}:${session.me.actorId}:${surveyId}`}
       actorId={session.me.actorId}
       accessToken={session.token}
       api={api}

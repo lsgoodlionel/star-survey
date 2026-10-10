@@ -3,7 +3,11 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ExternalLink, Monitor, Play, RotateCw, Smartphone, Square } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
-import { surveyWorkflowHref, useSurveyShell } from '../../app/SurveyShell';
+import {
+  surveyWorkflowHref,
+  useSurveyPageReady,
+  useSurveyShell,
+} from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import { parseDefinition } from '../editor/model/definition';
 import type { ApiClient } from '../../shared/api/http';
@@ -60,6 +64,18 @@ function PreviewPageInstance({ api, previewClient, surveyId, tenantId }: Preview
   const displayedSession = sessionPending ? (lifecycleQuery.data ?? session) : session;
   const sessionExpired = displayedSession?.status === 'ready'
     && Date.parse(displayedSession.expiresAt) <= clock;
+  const definition = useMemo(() => {
+    if (!draftQuery.data) return null;
+    try {
+      return parseDefinition(draftQuery.data.definition);
+    } catch {
+      return null;
+    }
+  }, [draftQuery.data]);
+  useSurveyPageReady(
+    'preview',
+    !draftQuery.isPending && !draftQuery.isError && Boolean(draftQuery.data && definition),
+  );
 
   useEffect(() => {
     if (!displayedSession || displayedSession.status !== 'ready') return undefined;
@@ -97,12 +113,7 @@ function PreviewPageInstance({ api, previewClient, surveyId, tenantId }: Preview
   if (draftQuery.isPending) return <p>正在加载快速预览</p>;
   if (draftQuery.isError || !draftQuery.data) return <p role="alert">快速预览暂时不可用。</p>;
 
-  let definition;
-  try {
-    definition = parseDefinition(draftQuery.data.definition);
-  } catch {
-    return <p role="alert">草稿格式无法预览。</p>;
-  }
+  if (!definition) return <p role="alert">草稿格式无法预览。</p>;
 
   return (
     <main className="preview-page">
@@ -322,6 +333,7 @@ export function PreviewRoutePage() {
   if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
   return (
     <PreviewPage
+      key={`${session.me.tenantId}:${session.me.actorId}:${surveyId.data}`}
       api={api}
       previewClient={previewClient}
       surveyId={surveyId.data}

@@ -91,9 +91,16 @@ export function AuthProvider({ children, beforeSessionClear }: AuthProviderProps
       });
       const me = await getMe(tokenApi, signal);
       if (signal?.aborted) return;
+      const currentIdentity = sessionRef.current?.me;
+      if (
+        currentIdentity &&
+        (currentIdentity.tenantId !== me.tenantId || currentIdentity.actorId !== me.actorId)
+      ) {
+        queryClient.clear();
+      }
       updateSession({ token, me, expiresAt: Date.now() + expiresIn * 1_000 });
     },
-    [handleUnauthorized, updateSession],
+    [handleUnauthorized, queryClient, updateSession],
   );
 
   const exchangeHandoff = useCallback(

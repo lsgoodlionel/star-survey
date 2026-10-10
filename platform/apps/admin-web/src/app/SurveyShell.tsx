@@ -1,6 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { ArrowLeft, BarChart3, Eye, FileInput, Pencil, Rocket } from 'lucide-react';
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Link, Outlet, useLocation, useParams } from 'react-router-dom';
 import { z } from 'zod';
 import { useAuth } from '../features/auth/AuthProvider';
@@ -12,12 +18,35 @@ import {
 } from '../shared/api/dashboard';
 import { getResourcePath } from '../shared/api/resources';
 import { getSurvey, surveyDetailQueryKey, type SurveyView } from '../shared/api/surveys';
+import { parsePositiveIntegerParam } from '../features/publish/routeParams';
+import {
+  SurveyShellContext,
+  surveyWorkflowHref,
+  type RecentWorkReadiness,
+  type SurveyShellContextValue,
+} from './surveyShellContext';
 
-interface SurveyShellContextValue {
-  setUnsavedChanges(value: boolean): void;
+export {
+  surveyWorkflowHref,
+  useSurveyPageReady,
+  useSurveyShell,
+} from './surveyShellContext';
+
+interface RecentWorkVisit {
+  command: RecentWorkCommand;
+  id: number;
+  key: string;
+  owner: symbol;
 }
 
-const SurveyShellContext = createContext<SurveyShellContextValue | null>(null);
+interface RecentWorkCoordinator {
+  activeVisit: RecentWorkVisit | null;
+  nextId: number;
+  queue: Promise<void>;
+  scheduledVisits: Set<number>;
+}
+
+const recentWorkCoordinators = new WeakMap<QueryClient, Map<string, RecentWorkCoordinator>>();
 
 const workflowTabs = [
   { path: 'edit', label: '编辑', icon: Pencil },
@@ -33,7 +62,8 @@ export function SurveyShell() {
   if (!session || !parsedSurveyId.success) return <p role="alert">问卷标识无效</p>;
   return (
     <LoadedSurveyShell
-      key={`${session.me.tenantId}:${parsedSurveyId.data}`}
+      key={`${session.me.tenantId}:${session.me.actorId}:${parsedSurveyId.data}`}
+      actorId={session.me.actorId}
       api={api}
       surveyId={parsedSurveyId.data}
       tenantId={session.me.tenantId}
@@ -41,7 +71,8 @@ export function SurveyShell() {
   );
 }
 
-function LoadedSurveyShell({ api, surveyId, tenantId }: {
+function LoadedSurveyShell({ actorId, api, surveyId, tenantId }: {
+  actorId: string;
   api: ApiClient;
   surveyId: string;
   tenantId: string;
@@ -49,7 +80,9 @@ function LoadedSurveyShell({ api, surveyId, tenantId }: {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [unsavedChanges, setUnsavedChanges] = useState(false);
-  const registeredTarget = useRef<string | null>(null);
+  const [owner] = useState(() => Symbol('survey-shell'));
+  const activeVisit = useRef<RecentWorkVisit | null>(null);
+  const coordinator = getRecentWorkCoordinator(queryClient, `${tenantId}:${actorId}`);
   const surveyQuery = useQuery({
     queryKey: surveyDetailQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurvey(api, surveyId, signal),
@@ -59,22 +92,43 @@ function LoadedSurveyShell({ api, surveyId, tenantId }: {
     queryFn: ({ signal }) => getResourcePath(api, surveyId, signal),
     retry: false,
   });
-  const context: SurveyShellContextValue = { setUnsavedChanges };
-  const recentWorkCommand = recentWorkCommandForPath(location.pathname, surveyId);
-  const recentWorkMutation = useMutation({
-    mutationFn: (command: RecentWorkCommand) => recordRecentWork(api, command),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: dashboardQueryKey(tenantId) });
-    },
-  });
+  const recentWorkCommand = useMemo(
+    () => recentWorkCommandForPath(location.pathname, surveyId),
+    [location.pathname, surveyId],
+  );
 
-  useEffect(() => {
-    if (!surveyQuery.data || !pathQuery.data || !recentWorkCommand) return;
-    const target = `${recentWorkCommand.page}:${recentWorkCommand.version ?? ''}`;
-    if (registeredTarget.current === target) return;
-    registeredTarget.current = target;
-    recentWorkMutation.mutate(recentWorkCommand);
-  }, [pathQuery.data, recentWorkCommand, recentWorkMutation, surveyQuery.data]);
+  useLayoutEffect(() => {
+    activeVisit.current = activateRecentWorkVisit(
+      coordinator,
+      owner,
+      recentWorkCommand,
+    );
+  }, [coordinator, owner, recentWorkCommand]);
+
+  const reportPageReady = useCallback((readiness: RecentWorkReadiness) => {
+    const visit = activeVisit.current;
+    const command: RecentWorkCommand = readiness.page === 'version'
+      ? { surveyId, page: readiness.page, version: readiness.version }
+      : { surveyId, page: readiness.page, version: null };
+    if (
+      !surveyQuery.data ||
+      !pathQuery.data ||
+      !visit ||
+      coordinator.activeVisit?.id !== visit.id ||
+      recentWorkCommandKey(command) !== visit.key
+    ) return;
+    scheduleRecentWorkRegistration({
+      api,
+      coordinator,
+      queryClient,
+      tenantId,
+      visit,
+    });
+  }, [api, coordinator, pathQuery.data, queryClient, surveyId, surveyQuery.data, tenantId]);
+  const context = useMemo<SurveyShellContextValue>(
+    () => ({ reportPageReady, setUnsavedChanges }),
+    [reportPageReady],
+  );
 
   if (surveyQuery.isPending || pathQuery.isPending) {
     return <p className="survey-shell-loading">正在加载问卷上下文</p>;
@@ -138,15 +192,6 @@ function LoadedSurveyShell({ api, surveyId, tenantId }: {
   );
 }
 
-export function useSurveyShell() {
-  return useContext(SurveyShellContext);
-}
-
-export function surveyWorkflowHref(surveyId: string, path: string, question: string | null) {
-  const href = `/surveys/${surveyId}/${path}`;
-  return question ? `${href}?question=${encodeURIComponent(question)}` : href;
-}
-
 function isActiveTab(pathname: string, tab: (typeof workflowTabs)[number]['path']) {
   if (tab === 'publish') return pathname.endsWith('/publish') || pathname.includes('/versions/');
   return pathname.endsWith(`/${tab}`);
@@ -180,7 +225,74 @@ function recentWorkCommandForPath(pathname: string, surveyId: string): RecentWor
     return null;
   }
   if (parts.length !== 4 || parts[2] !== 'versions') return null;
-  const version = Number(parts[3]);
-  if (!Number.isSafeInteger(version) || version <= 0) return null;
+  const version = parsePositiveIntegerParam(parts[3]);
+  if (version === null) return null;
   return { surveyId, page: 'version', version };
+}
+
+function getRecentWorkCoordinator(queryClient: QueryClient, identity: string) {
+  let coordinators = recentWorkCoordinators.get(queryClient);
+  if (!coordinators) {
+    coordinators = new Map();
+    recentWorkCoordinators.set(queryClient, coordinators);
+  }
+  let coordinator = coordinators.get(identity);
+  if (!coordinator) {
+    coordinator = {
+      activeVisit: null,
+      nextId: 1,
+      queue: Promise.resolve(),
+      scheduledVisits: new Set(),
+    };
+    coordinators.set(identity, coordinator);
+  }
+  return coordinator;
+}
+
+function activateRecentWorkVisit(
+  coordinator: RecentWorkCoordinator,
+  owner: symbol,
+  command: RecentWorkCommand | null,
+) {
+  if (!command) {
+    coordinator.activeVisit = null;
+    return null;
+  }
+  const key = recentWorkCommandKey(command);
+  if (coordinator.activeVisit?.owner === owner && coordinator.activeVisit.key === key) {
+    return coordinator.activeVisit;
+  }
+  coordinator.scheduledVisits.clear();
+  const visit = { command, id: coordinator.nextId++, key, owner };
+  coordinator.activeVisit = visit;
+  return visit;
+}
+
+function scheduleRecentWorkRegistration({
+  api,
+  coordinator,
+  queryClient,
+  tenantId,
+  visit,
+}: {
+  api: ApiClient;
+  coordinator: RecentWorkCoordinator;
+  queryClient: QueryClient;
+  tenantId: string;
+  visit: RecentWorkVisit;
+}) {
+  if (coordinator.scheduledVisits.has(visit.id)) return;
+  coordinator.scheduledVisits.add(visit.id);
+  coordinator.queue = coordinator.queue
+    .catch(() => undefined)
+    .then(async () => {
+      if (coordinator.activeVisit?.id !== visit.id) return;
+      await recordRecentWork(api, visit.command);
+      await queryClient.invalidateQueries({ queryKey: dashboardQueryKey(tenantId) });
+    })
+    .catch(() => undefined);
+}
+
+function recentWorkCommandKey(command: RecentWorkCommand) {
+  return `${command.surveyId}:${command.page}:${command.version ?? ''}`;
 }
