@@ -291,33 +291,33 @@ git commit -m "feat: build business dashboard"
 - Consumes: Tasks 3-5.
 - Produces: `/ -> /dashboard`, `/dashboard`, `/workspace`, `/surveys/:id -> edit`, two-item global navigation, real session identity, and post-load recent-work registration for `edit|import|preview|publish|responses|version`.
 
-- [ ] **Step 1: Write failing route and navigation tests**
+- [x] **Step 1: Write failing route and navigation tests**
 
 Assert all redirects, active destinations, brand destination, “项目与问卷” label, session-derived account display, retained workspace query compatibility and no duplicate workbench/survey destination.
 
-- [ ] **Step 2: Write failing recent-work registration tests**
+- [x] **Step 2: Write failing recent-work registration tests**
 
 For each survey route, assert one controlled mutation only after the survey/resource is valid; failed page loads and arbitrary URL/query values must not register. Registration failure must not block the business page.
 
-- [ ] **Step 3: Run focused tests and confirm RED**
+- [x] **Step 3: Run focused tests and confirm RED**
 
 Run: `npm test -- --run src/app/App.test.tsx src/app/router.test.tsx src/app/SurveyShell.test.tsx src/features/workspace/WorkspacePage.test.tsx`
 
 Expected: FAIL on old redirect/navigation/hardcoded account and absent registration.
 
-- [ ] **Step 4: Integrate Dashboard route and shared navigation**
+- [x] **Step 4: Integrate Dashboard route and shared navigation**
 
 Lazy-load `DashboardPage`; make `/dashboard` the default; add survey index redirect; use authenticated `session.me.actorId` with the translated role label in the account summary instead of inventing a test identity.
 
-- [ ] **Step 5: Register recent work from stable survey routes**
+- [x] **Step 5: Register recent work from stable survey routes**
 
 Centralize page-enum derivation in `SurveyShell`; version routes submit a positive parsed version, all others submit `null`. Invalidate only the current tenant's dashboard query after successful registration.
 
-- [ ] **Step 6: Remove component-memory recent surveys from Workspace**
+- [x] **Step 6: Remove component-memory recent surveys from Workspace**
 
 Remove `recentResources` and its tests/UI so there is one durable recent-work truth. Preserve resource browsing, filters and context restoration.
 
-- [ ] **Step 7: Run complete Admin Web gates**
+- [x] **Step 7: Run complete Admin Web gates**
 
 Run: `npm run lint`
 
@@ -331,7 +331,7 @@ Run: `npm run assert:production-bundle`
 
 Expected: all PASS and no production bundle contains `/dev/token`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add platform/apps/admin-web/src/app platform/apps/admin-web/src/features/workspace
@@ -341,9 +341,10 @@ git commit -m "feat: make dashboard the product home"
 ### Task 7: Prove The Vertical Journey And Synchronize Product Evidence
 
 **Files:**
-- Modify: `platform/apps/admin-web/e2e/admin-workspace.spec.ts`
+- Modify: `platform/apps/admin-web/e2e/authoring.spec.ts`
 - Modify or create: `platform/apps/admin-web/e2e/dashboard.spec.ts`
-- Modify: `platform/tools/productization/capabilities.json`
+- Modify: `platform/apps/admin-web/playwright.config.ts`
+- Modify: `platform/docs/productization/capabilities.json`
 - Generate: `platform/docs/productization/capability-map.md`
 - Modify: `platform/docs/p2/progress.md`
 - Modify: `platform/README.md`
