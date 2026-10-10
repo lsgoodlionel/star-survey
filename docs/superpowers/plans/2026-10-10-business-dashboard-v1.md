@@ -356,21 +356,21 @@ git commit -m "feat: make dashboard the product home"
 - Consumes: complete Dashboard vertical slice.
 - Produces: real-browser acceptance, capability evidence, historical-audit addendum and synchronized repository/GitHub/Obsidian status.
 
-- [ ] **Step 1: Write failing real-browser journeys**
+- [x] **Step 1: Write failing real-browser journeys**
 
 Cover login landing on dashboard, publish-page navigation, responses/export navigation, approver-only task visibility, recent-work round trip, and mobile navigation. Add DOM assertions at 819, 820, 1179 and 1180 px for no page overflow, overlap or clipped primary actions.
 
-- [ ] **Step 2: Run the focused browser spec and confirm RED**
+- [x] **Step 2: Run the focused browser spec and confirm RED**
 
 Run: `platform/deploy/test/run-admin-web-e2e.sh --fresh`
 
 Expected: FAIL before the new browser journey is wired into the real stack.
 
-- [ ] **Step 3: Fix only integration defects exposed by the real stack**
+- [x] **Step 3: Fix only integration defects exposed by the real stack**
 
 Do not weaken selectors, skip role checks or replace real responses with static fixtures.
 
-- [ ] **Step 4: Run vertical and regression gates**
+- [x] **Step 4: Run vertical and regression gates**
 
 Run: `platform/deploy/test/run-platform-tests.sh`
 
@@ -386,11 +386,11 @@ Run: `git diff --check`
 
 Expected: all applicable gates PASS with no hidden skip; screenshots at desktop/tablet/mobile are manually inspected for overlap and clipping.
 
-- [ ] **Step 5: Update capability and audit evidence**
+- [x] **Step 5: Update capability and audit evidence**
 
 Only promote dashboard-specific evidence actually proven by Task 7. The addendum must list which 2026-10-09 audit statements are superseded and which missing waves remain unchanged.
 
-- [ ] **Step 6: Perform independent security, product UX and whole-branch reviews**
+- [x] **Step 6: Perform independent security, product UX and whole-branch reviews**
 
 Bind reports to the final implementation commit and resolve findings within the Harness repair budget. Security review must emphasize tenant/count leakage and server-generated paths; UX review must inspect real screenshots at all four breakpoints.
 
@@ -406,14 +406,14 @@ Update the existing Survey blueprint/progress note with date, branch, final comm
 
 ## Final Acceptance
 
-- [ ] `/` and successful login land on `/dashboard`; `/workspace` remains the complete resource manager.
-- [ ] Dashboard summary, tasks, surveys and recent work come from one authorized server snapshot without per-survey HTTP fan-out.
-- [ ] Recent work persists across page changes and reloads, is bounded to 50 targets, and filters cross-tenant, archived and lost-access resources.
-- [ ] Author, approver and data roles see only authorized sections, counts, objects and actions.
-- [ ] All task and survey actions target existing working pages; no placeholder or disabled future navigation is present.
-- [ ] Initial load, empty, partial visibility, 403, 503, refresh failure and stale-data states are covered in Chinese.
-- [ ] Desktop, tablet and mobile real-browser journeys pass at 819/820/1179/1180 boundaries without overlap, clipping or page overflow.
-- [ ] Platform, Admin Web, real E2E, capability, traceability and diff gates pass with no unapproved skip.
+- [x] `/` and successful login land on `/dashboard`; `/workspace` remains the complete resource manager.
+- [x] Dashboard summary, tasks, surveys and recent work come from one authorized server snapshot without per-survey HTTP fan-out.
+- [x] Recent work persists across page changes and reloads, is bounded to 50 targets, and filters cross-tenant, archived and lost-access resources.
+- [x] Author, approver and data roles see only authorized sections, counts, objects and actions.
+- [x] All task and survey actions target existing working pages; no placeholder or disabled future navigation is present.
+- [x] Initial load, empty, partial visibility, 403, 503, refresh failure and stale-data states are covered in Chinese.
+- [x] Desktop, tablet and mobile real-browser journeys pass at 819/820/1179/1180 boundaries without overlap, clipping or page overflow.
+- [x] Platform, Admin Web, real E2E, capability, traceability and diff gates pass with no unapproved skip.
 - [ ] Independent reviews approve the final commit and repository/GitHub/Obsidian evidence agrees on scope and remaining work.
 
 ## Explicitly Deferred

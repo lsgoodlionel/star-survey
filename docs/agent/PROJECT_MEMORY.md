@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: not_started -->
+<!-- harness-delivery-status: locally_reviewed_sync_pending -->
 # Survey 永久项目记忆
 
 稳定事实核对日期：2026-10-10。来源是当前源码、现有 CI 与批准设计；本文不保存运行状态。

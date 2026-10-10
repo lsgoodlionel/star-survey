@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: not_started -->
+<!-- harness-delivery-status: locally_reviewed_sync_pending -->
 # 自治工程 SOP
 
 权威设计：[已确认 spec](../superpowers/specs/2026-10-10-autonomous-engineering-control-plane-design.md)。
