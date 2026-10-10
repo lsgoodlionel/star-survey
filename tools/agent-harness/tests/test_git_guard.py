@@ -393,6 +393,8 @@ class GitGuardTests(GitRepoFixture):
     def test_host_trusted_shallow_boundary_must_be_head_ancestor(self):
         clone = self.root / "unrelated-shallow"
         self.git("clone", "--depth=1", self.main.as_uri(), str(clone), repo=self.root)
+        self.git("config", "user.email", "harness@example.invalid", repo=clone)
+        self.git("config", "user.name", "Harness Test", repo=clone)
         self.git("switch", "--orphan", "unrelated", repo=clone)
         (clone / "tracked.txt").unlink(missing_ok=True)
         (clone / "unrelated.txt").write_text("unrelated\n")
