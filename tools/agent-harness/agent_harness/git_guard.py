@@ -182,7 +182,7 @@ def _inside(path, root):
     return True
 
 
-def _canonical_path(root, value, links=()):
+def _canonical_path(root, value, links=(), remaining=()):
     if (not isinstance(value, str) or not value or "\x00" in value or "\\" in value
             or PurePosixPath(value).is_absolute() or PureWindowsPath(value).drive):
         raise ValueError("Invalid repository-relative path")
@@ -225,14 +225,14 @@ def _canonical_path(root, value, links=()):
                     target = candidate.parent / target
                 if not _inside(target, root):
                     raise ValueError("Symlink escape")
-                resolved, spelling, target_routes = _canonical_path(
-                    root, target.relative_to(root).as_posix(), links + (candidate,))
-                prefixes = (candidate.relative_to(root).as_posix(), resolved, spelling, *target_routes)
-                routes.update(prefixes)
-                # A directory alias protects the full access path, not just
-                # the directory prefix, including in recursive link chains.
-                routes.update(posixpath.normpath(PurePosixPath(
-                    prefix, *parts[index + 1:]).as_posix()) for prefix in prefixes)
+                suffix = parts[index + 1:] + remaining
+                resolved, _, target_routes = _canonical_path(
+                    root, target.relative_to(root).as_posix(), links + (candidate,), suffix)
+                # Each recursion carries its own unconsumed target components
+                # plus the caller's suffix; returned routes are already complete.
+                routes.update(target_routes)
+                routes.add(posixpath.normpath(PurePosixPath(
+                    candidate.relative_to(root).as_posix(), *suffix).as_posix()))
                 current = root / resolved
                 if not current.exists():
                     raise ValueError("Unresolved symlink target")
@@ -246,6 +246,8 @@ def _canonical_path(root, value, links=()):
     original = "/".join(lexical)
     if canonical.split("/")[0] == ".git" or original.split("/")[0] == ".git":
         raise ValueError("Git metadata is protected")
+    routes.update(posixpath.normpath(PurePosixPath(path, *remaining).as_posix())
+                  for path in (canonical, original))
     return canonical, original, tuple(sorted(routes))
 
 

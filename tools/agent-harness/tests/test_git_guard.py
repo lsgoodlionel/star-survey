@@ -412,6 +412,60 @@ class PathBoundaryTests(GitRepoFixture):
     def classify(self, *paths, policy=None):
         return classify_paths(self.repo, paths, policy or self.policy)
 
+    def nested_directory_alias(self):
+        target = self.repo / "safe/sub/file.txt"
+        target.parent.mkdir(parents=True)
+        target.write_text("fake\n")
+        (self.repo / "alias").symlink_to("safe", target_is_directory=True)
+        (self.repo / "outer").symlink_to("alias/sub", target_is_directory=True)
+        self.assertEqual((self.repo / "outer/file.txt").resolve(strict=True), target)
+        return target
+
+    def test_nested_alias_ignores_rules_for_unvisited_sibling_paths(self):
+        self.nested_directory_alias()
+        for unrelated in ("safe/file.txt", "alias/file.txt"):
+            for action in ("deny", "approval_required", "generated"):
+                generator = ("generator",) if action == "generated" else None
+                policy = PolicyConfig(1, (
+                    self.policy.rules[0],
+                    PathRule("unrelated-exact", (unrelated,), ("modify",), action, generator),
+                ))
+                with self.subTest(unrelated=unrelated, action=action):
+                    result = self.classify("outer/file.txt", policy=policy)[0]
+                    self.assertEqual(result.path, "safe/sub/file.txt")
+                    self.assertEqual(result.action, "review_required")
+                    self.assertEqual(result.rule_ids, ("review",))
+
+    def test_nested_alias_ignores_unvisited_broken_or_external_symlink(self):
+        target = self.nested_directory_alias()
+        outside = self.root / "outside.txt"
+        outside.write_text("fake\n")
+        sibling = self.repo / "safe/file.txt"
+        policy = PolicyConfig(1, (self.policy.rules[0],))
+        for link_target in ("missing.txt", outside):
+            sibling.symlink_to(link_target)
+            self.assertEqual((self.repo / "outer/file.txt").resolve(strict=True), target)
+            with self.subTest(link_target=link_target):
+                result = self.classify("outer/file.txt", policy=policy)[0]
+                self.assertEqual(result.path, "safe/sub/file.txt")
+                self.assertEqual(result.action, "review_required")
+            sibling.unlink()
+
+    def test_nested_alias_preserves_exact_protection_on_each_actual_route(self):
+        self.nested_directory_alias()
+        for accessed in ("outer/file.txt", "alias/sub/file.txt", "safe/sub/file.txt"):
+            for action in ("deny", "approval_required", "generated"):
+                generator = ("generator",) if action == "generated" else None
+                policy = PolicyConfig(1, (
+                    self.policy.rules[0],
+                    PathRule("accessed-exact", (accessed,), ("modify",), action, generator),
+                ))
+                with self.subTest(accessed=accessed, action=action):
+                    result = self.classify("outer/file.txt", policy=policy)[0]
+                    self.assertEqual(result.path, "safe/sub/file.txt")
+                    self.assertEqual(result.action, action)
+                    self.assertEqual(result.generator, generator)
+
     def test_directory_symlink_routes_include_the_remaining_file_suffix(self):
         (self.repo / "safe/nested").mkdir(parents=True)
         (self.repo / "safe/nested/secret.txt").write_text("fake\n")
