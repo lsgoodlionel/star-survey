@@ -154,29 +154,29 @@ git commit -m "feat: persist dashboard recent work"
 - Consumes: Task 2 recent-work repository plus existing resource, approval, publish attempt, preview, response-summary and export records.
 - Produces: `GET /v1/dashboard?surveyLimit=20&taskLimit=20`; `POST /v1/dashboard/recent-work` with `204`; immutable response names and enums from the spec.
 
-- [ ] **Step 1: Write failing API, authorization and query-count tests**
+- [x] **Step 1: Write failing API, authorization and query-count tests**
 
 Assert `1..50` limits, default 20, `422` invalid input, uniform `404` invisible recent target, `503` dependency failure, role-specific `visibleSections`, stable task/survey ordering, no cross-tenant leakage and a bounded fixed query count independent of survey count.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run: `PLATFORM_DB_NAME=platform_dashboard_t3_red platform/deploy/platform-dev/mvn.sh clean test -Dtest='cn.mjy.platform.dashboard.Dashboard*'`
 
 Expected: FAIL because aggregate API types do not exist.
 
-- [ ] **Step 3: Implement batch projections in `DashboardRepository`**
+- [x] **Step 3: Implement batch projections in `DashboardRepository`**
 
 Use set-based SQL for surveys, tasks, summary inputs and recent work. Do not call existing HTTP controllers or loop over survey IDs. Count only authorized rows.
 
-- [ ] **Step 4: Implement one read-only repeatable-read service transaction**
+- [x] **Step 4: Implement one read-only repeatable-read service transaction**
 
 `DashboardService.getDashboard(int surveyLimit, int taskLimit)` returns one `generatedAt` snapshot. Dependency exceptions map to a stable `dashboard_temporarily_unavailable` response and HTTP `503`.
 
-- [ ] **Step 5: Implement controller and recent-work endpoint**
+- [x] **Step 5: Implement controller and recent-work endpoint**
 
 Read tenant and actor only from trusted request context. Validate request shapes, call the Task 2 repository, and return no secrets, download URLs or internal errors.
 
-- [ ] **Step 6: Run focused and complete platform gates**
+- [x] **Step 6: Run focused and complete platform gates**
 
 Run: `PLATFORM_DB_NAME=platform_dashboard_t3_green platform/deploy/platform-dev/mvn.sh clean test -Dtest='cn.mjy.platform.dashboard.Dashboard*'`
 
@@ -184,7 +184,7 @@ Run: `platform/deploy/test/run-platform-tests.sh`
 
 Expected: focused dashboard tests and the complete platform reconciliation pass with zero failures.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add platform/services/business/src/main/java/cn/mjy/platform/dashboard platform/services/business/src/test/java/cn/mjy/platform/dashboard
