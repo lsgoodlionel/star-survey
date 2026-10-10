@@ -108,7 +108,7 @@ Cover valid page/version pairs, invalid pairs, same-target timestamp update, cro
 
 - [ ] **Step 2: Run focused tests and confirm RED**
 
-Run: `platform/deploy/test/run-platform-tests.sh -- -Dtest='cn.mjy.platform.dashboard.DashboardRecentWork*'`
+Run: `PLATFORM_DB_NAME=platform_dashboard_t2_red platform/deploy/platform-dev/mvn.sh clean test -Dtest='cn.mjy.platform.dashboard.DashboardRecentWork*'`
 
 Expected: FAIL because `V933` and dashboard repository types do not exist.
 
@@ -122,7 +122,7 @@ Validate page/version combinations before SQL; use server-side target-path mappi
 
 - [ ] **Step 5: Run focused and migration tests**
 
-Run: `platform/deploy/test/run-platform-tests.sh -- -Dtest='cn.mjy.platform.dashboard.DashboardRecentWork*'`
+Run: `PLATFORM_DB_NAME=platform_dashboard_t2_green platform/deploy/platform-dev/mvn.sh clean test -Dtest='cn.mjy.platform.dashboard.DashboardRecentWork*'`
 
 Expected: PASS with tenant isolation and 50-item retention evidence.
 
@@ -160,7 +160,7 @@ Assert `1..50` limits, default 20, `422` invalid input, uniform `404` invisible 
 
 - [ ] **Step 2: Run focused tests and confirm RED**
 
-Run: `platform/deploy/test/run-platform-tests.sh -- -Dtest='cn.mjy.platform.dashboard.Dashboard*'`
+Run: `PLATFORM_DB_NAME=platform_dashboard_t3_red platform/deploy/platform-dev/mvn.sh clean test -Dtest='cn.mjy.platform.dashboard.Dashboard*'`
 
 Expected: FAIL because aggregate API types do not exist.
 
@@ -178,7 +178,7 @@ Read tenant and actor only from trusted request context. Validate request shapes
 
 - [ ] **Step 6: Run focused and complete platform gates**
 
-Run: `platform/deploy/test/run-platform-tests.sh -- -Dtest='cn.mjy.platform.dashboard.Dashboard*'`
+Run: `PLATFORM_DB_NAME=platform_dashboard_t3_green platform/deploy/platform-dev/mvn.sh clean test -Dtest='cn.mjy.platform.dashboard.Dashboard*'`
 
 Run: `platform/deploy/test/run-platform-tests.sh`
 
