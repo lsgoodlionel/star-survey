@@ -222,7 +222,7 @@ class FaultInjectionTests(unittest.TestCase):
             with self.assertRaises(self.runner.DrillRefused):
                 self.runner.check_forbidden_options(repo)
             workflow.write_text(
-                "jobs:\n  x:\n    steps:\n      - ? \"\\\\u0072un\"\n"
+                "jobs:\n  x:\n    steps:\n" + r'      - ? "\u0072un"' + "\n"
                 "        : codex exec --sandbox danger-full-access task\n",
                 encoding="utf-8",
             )
