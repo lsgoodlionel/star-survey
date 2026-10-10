@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.mjy.platform.access.AccessFixture;
+import cn.mjy.platform.access.GrantRequest;
 import cn.mjy.platform.access.MemberService;
 import cn.mjy.platform.access.ResourceTreeService;
 import cn.mjy.platform.shared.TenantContext;
@@ -36,6 +37,9 @@ class DashboardRecentWorkTenantIsolationTest {
 
     @Autowired
     private MemberService members;
+
+    @Autowired
+    private AccessFixture access;
 
     @Autowired
     private TenantScope tenantScope;
@@ -105,6 +109,32 @@ class DashboardRecentWorkTenantIsolationTest {
 
         assertThat(recentWork.findVisible(tenantA.tenant(), editor.actorId(), 50)).isEmpty();
         assertThat(rawRowCount(tenantA.tenant(), editor.actorId())).isOne();
+    }
+
+    @Test
+    void pageSpecificAccessIsRecheckedWhenRecordingAndReadingRecentWork() {
+        TenantContext actor = access.activeMember(tenantA.owner(), "recent-work-reader");
+        UUID editorGrant = access.grants().grant(tenantA.owner(),
+                new GrantRequest(actor.actorId(), "editor", surveyA.id(), null));
+        Instant visited = now;
+        for (DashboardPage page : DashboardPage.values()) {
+            Integer version = page == DashboardPage.VERSION ? 1 : null;
+            assertThat(recentWork.upsert(tenantA.tenant(), actor.actorId(),
+                    new RecentWorkCommand(surveyA.id(), page, version), visited)).isTrue();
+            visited = visited.plusSeconds(1);
+        }
+
+        access.grants().revoke(tenantA.owner(), editorGrant);
+        access.grants().grant(tenantA.owner(),
+                new GrantRequest(actor.actorId(), "publish_reviewer", surveyA.id(), null));
+
+        for (DashboardPage page : DashboardPage.values()) {
+            Integer version = page == DashboardPage.VERSION ? 2 : null;
+            assertThat(recentWork.upsert(tenantA.tenant(), actor.actorId(),
+                    new RecentWorkCommand(surveyA.id(), page, version), visited)).isFalse();
+        }
+        assertThat(recentWork.findVisible(tenantA.tenant(), actor.actorId(), 50)).isEmpty();
+        assertThat(rawRowCount(tenantA.tenant(), actor.actorId())).isEqualTo(DashboardPage.values().length);
     }
 
     @Test

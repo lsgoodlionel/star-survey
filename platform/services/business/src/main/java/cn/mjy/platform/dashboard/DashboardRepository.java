@@ -24,6 +24,14 @@ public class DashboardRepository {
                 SELECT child.survey_id, parent.id, parent.parent_id, parent.archived_at
                 FROM access_resource parent
                 JOIN ancestors child ON parent.tenant_id = :tenant AND parent.id = child.parent_id
+            ), actor_permissions AS MATERIALIZED (
+                SELECT grant_row.resource_id, role_permission.permission_code
+                FROM access_member member
+                JOIN access_grant grant_row
+                  ON grant_row.tenant_id = member.tenant_id AND grant_row.actor_id = member.actor_id
+                 AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
+                JOIN access_role_permission role_permission ON role_permission.role_code = grant_row.role_code
+                WHERE member.tenant_id = :tenant AND member.actor_id = :actor AND member.status = 'active'
             ), active_surveys AS MATERIALIZED (
                 SELECT DISTINCT root.survey_id
                 FROM (SELECT DISTINCT survey_id FROM ancestors) root
@@ -35,21 +43,18 @@ public class DashboardRepository {
                 )
             ), permissions AS MATERIALIZED (
                 SELECT active.survey_id,
-                       bool_or(role_permission.permission_code = 'view') AS can_view,
-                       bool_or(role_permission.permission_code = 'edit') AS can_edit,
-                       bool_or(role_permission.permission_code = 'publish') AS can_publish,
-                       bool_or(role_permission.permission_code = 'approve-publish') AS can_approve,
-                       bool_or(role_permission.permission_code = 'view-statistics') AS can_statistics,
-                       bool_or(role_permission.permission_code = 'export-raw-responses') AS can_export
+                       bool_or(actor_permission.permission_code = 'view') AS can_view,
+                       bool_or(actor_permission.permission_code = 'edit') AS can_edit,
+                       bool_or(actor_permission.permission_code = 'publish') AS can_publish,
+                       bool_or(actor_permission.permission_code = 'approve-publish') AS can_approve,
+                       bool_or(actor_permission.permission_code = 'view-statistics') AS can_statistics,
+                       bool_or(actor_permission.permission_code = 'export-raw-responses') AS can_export
                 FROM active_surveys active
-                JOIN access_grant grant_row
-                  ON grant_row.tenant_id = :tenant AND grant_row.actor_id = :actor
-                 AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
-                 AND (grant_row.resource_id IS NULL OR EXISTS (
+                JOIN actor_permissions actor_permission
+                  ON actor_permission.resource_id IS NULL OR EXISTS (
                      SELECT 1 FROM ancestors scope
-                     WHERE scope.survey_id = active.survey_id AND scope.id = grant_row.resource_id
-                 ))
-                JOIN access_role_permission role_permission ON role_permission.role_code = grant_row.role_code
+                     WHERE scope.survey_id = active.survey_id AND scope.id = actor_permission.resource_id
+                 )
                 GROUP BY active.survey_id
             ), response_counts AS MATERIALIZED (
                 SELECT version.survey_id, count(*) FILTER (WHERE response.state = 'engine_completed') AS completed
@@ -78,11 +83,36 @@ public class DashboardRepository {
                 WHERE survey.tenant_id = :tenant
             ), section_flags AS (
                 SELECT ARRAY_REMOVE(ARRAY[
-                    CASE WHEN EXISTS (SELECT 1 FROM survey_facts WHERE can_approve) THEN 'approval' END,
-                    CASE WHEN EXISTS (SELECT 1 FROM survey_facts WHERE can_publish) THEN 'publish' END,
-                    CASE WHEN EXISTS (SELECT 1 FROM survey_facts WHERE can_edit) THEN 'preview' END,
-                    CASE WHEN EXISTS (SELECT 1 FROM survey_facts WHERE can_export) THEN 'export' END,
-                    CASE WHEN EXISTS (SELECT 1 FROM survey_facts) THEN 'survey' END
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM actor_permissions
+                        WHERE resource_id IS NULL AND permission_code = 'approve-publish'
+                    ) OR EXISTS (
+                        SELECT 1 FROM permissions WHERE can_view AND can_approve
+                    ) THEN 'approval' END,
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM actor_permissions
+                        WHERE resource_id IS NULL AND permission_code = 'publish'
+                    ) OR EXISTS (
+                        SELECT 1 FROM permissions WHERE can_view AND can_publish
+                    ) THEN 'publish' END,
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM actor_permissions
+                        WHERE resource_id IS NULL AND permission_code = 'edit'
+                    ) OR EXISTS (
+                        SELECT 1 FROM permissions WHERE can_view AND can_edit
+                    ) THEN 'preview' END,
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM actor_permissions
+                        WHERE resource_id IS NULL AND permission_code = 'export-raw-responses'
+                    ) OR EXISTS (
+                        SELECT 1 FROM permissions WHERE can_view AND can_export
+                    ) THEN 'export' END,
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM actor_permissions
+                        WHERE resource_id IS NULL AND permission_code = 'view'
+                    ) OR EXISTS (
+                        SELECT 1 FROM permissions WHERE can_view
+                    ) THEN 'survey' END
                 ], NULL)::text[] AS visible_sections
             ), summary AS (
                 SELECT
@@ -142,10 +172,11 @@ public class DashboardRepository {
             ), limited_surveys AS MATERIALIZED (
                 SELECT fact.*,
                        CASE
-                           WHEN fact.approval_status = 'pending' THEN 'pending_approval'
-                           WHEN fact.approval_status = 'approved' THEN 'approved'
                            WHEN fact.status = 'publish_failed' THEN 'failed'
                            WHEN fact.status = 'pending_reconciliation' THEN 'needs_reconciliation'
+                           WHEN fact.status = 'publishing' THEN 'publishing'
+                           WHEN fact.approval_status = 'pending' THEN 'pending_approval'
+                           WHEN fact.approval_status = 'approved' THEN 'approved'
                            ELSE fact.status
                        END AS publish_state,
                        (CASE WHEN fact.can_edit THEN ARRAY['edit', 'preview'] ELSE ARRAY[]::text[] END

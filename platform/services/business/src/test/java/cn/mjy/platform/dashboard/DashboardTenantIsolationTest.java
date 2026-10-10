@@ -3,14 +3,17 @@ package cn.mjy.platform.dashboard;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import cn.mjy.platform.access.AccessFixture;
+import cn.mjy.platform.access.GrantRequest;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.tenant.TenantScope;
+import cn.mjy.platform.survey.PublishedVersionView;
 import cn.mjy.platform.survey.SurveyFixture;
 import cn.mjy.platform.survey.SurveyFixture.Workspace;
+import cn.mjy.platform.survey.SurveyPublishService;
 import cn.mjy.platform.survey.SurveyView;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -20,9 +23,13 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 @SpringBootTest
 class DashboardTenantIsolationTest {
@@ -36,8 +43,14 @@ class DashboardTenantIsolationTest {
     @Autowired
     private TenantScope tenantScope;
 
-    @Autowired
+    @MockitoSpyBean
     private JdbcClient jdbc;
+
+    @Autowired
+    private AccessFixture access;
+
+    @Autowired
+    private SurveyPublishService publisher;
 
     private Workspace tenantA;
     private Workspace tenantB;
@@ -84,6 +97,66 @@ class DashboardTenantIsolationTest {
     }
 
     @Test
+    void tenantWidePermissionsRemainVisibleWithoutAnySurveyData() {
+        TenantContext reviewer = access.activeMember(tenantA.owner(), "tenant-reviewer");
+        access.grants().grant(tenantA.owner(),
+                new GrantRequest(reviewer.actorId(), "publish_reviewer", null, null));
+
+        DashboardView view = dashboard.getDashboard(reviewer, 50, 50);
+
+        assertThat(view.visibleSections()).containsExactly("approval", "survey");
+        assertThat(view.summary()).isEqualTo(new DashboardSummary(0, 0, 0, 0));
+        assertThat(view.tasks()).isEmpty();
+        assertThat(view.surveys()).isEmpty();
+    }
+
+    @Test
+    void tenantWidePermissionsRemainVisibleWhenEverySurveyIsArchived() {
+        SurveyView archived = fixture.newSurvey(tenantA);
+        TenantContext editor = access.activeMember(tenantA.owner(), "tenant-editor");
+        access.grants().grant(tenantA.owner(), new GrantRequest(editor.actorId(), "editor", null, null));
+        archive(tenantA, archived.id());
+
+        DashboardView view = dashboard.getDashboard(editor, 50, 50);
+
+        assertThat(view.visibleSections()).containsExactly("publish", "preview", "survey");
+        assertThat(view.summary()).isEqualTo(new DashboardSummary(0, 0, 0, 0));
+        assertThat(view.tasks()).isEmpty();
+        assertThat(view.surveys()).isEmpty();
+    }
+
+    @Test
+    void resourceScopedPermissionsDisappearWhenTheirOnlySurveyIsArchived() {
+        SurveyView archived = fixture.newSurvey(tenantA);
+        TenantContext reviewer = fixture.member(tenantA, "scoped-reviewer", "publish_reviewer", archived.id());
+        archive(tenantA, archived.id());
+
+        DashboardView view = dashboard.getDashboard(reviewer, 50, 50);
+
+        assertThat(view.visibleSections()).isEmpty();
+        assertThat(view.summary()).isEqualTo(new DashboardSummary(0, 0, 0, 0));
+    }
+
+    @ParameterizedTest
+    @MethodSource("runtimePublishStates")
+    void runtimePublishStateTakesPriorityOverAnApprovedRequest(String databaseState, String expectedState) {
+        SurveyView survey = fixture.newSurvey(tenantA);
+        markRuntimeStateWithApprovedRequest(tenantA, survey.id(), databaseState);
+
+        DashboardView view = dashboard.getDashboard(tenantA.owner(), 50, 50);
+
+        assertThat(view.surveys()).filteredOn(item -> item.surveyId().equals(survey.id()))
+                .singleElement().extracting(DashboardSurveyView::publishState).isEqualTo(expectedState);
+    }
+
+    static java.util.stream.Stream<Arguments> runtimePublishStates() {
+        return java.util.stream.Stream.of(
+                Arguments.of("publishing", "publishing"),
+                Arguments.of("publish_failed", "failed"),
+                Arguments.of("pending_reconciliation", "needs_reconciliation"));
+    }
+
+    @Test
     void surveysAndTasksKeepStableTieBreakOrdering() {
         List<SurveyView> surveys = List.of(
                 fixture.newSurvey(tenantA),
@@ -122,19 +195,35 @@ class DashboardTenantIsolationTest {
     }
 
     @Test
-    void aggregateUsesOneSetBasedProjectionRegardlessOfSurveyCount() {
-        JdbcClient observedJdbc = spy(jdbc);
-        DashboardRepository observed = new DashboardRepository(observedJdbc);
-
-        tenantScope.call(tenantA.tenant(), () -> observed.load(tenantA.tenant(), tenantA.owner().actorId(), 50, 50));
-        verify(observedJdbc, times(1)).sql(anyString());
+    void dashboardServiceUsesAFixedQueryCountRegardlessOfSurveyCount() {
+        clearInvocations(jdbc);
+        dashboard.getDashboard(tenantA.owner(), 50, 50);
+        verify(jdbc, times(4)).sql(anyString());
         for (int index = 0; index < 12; index++) {
             fixture.newSurvey(tenantA);
         }
-        clearInvocations(observedJdbc);
-        tenantScope.call(tenantA.tenant(), () -> observed.load(tenantA.tenant(), tenantA.owner().actorId(), 50, 50));
+        clearInvocations(jdbc);
+        dashboard.getDashboard(tenantA.owner(), 50, 50);
 
-        verify(observedJdbc, times(1)).sql(anyString());
+        verify(jdbc, times(4)).sql(anyString());
+    }
+
+    @Test
+    void previewExportAndResponseCountsCannotCrossTenantBoundaries() {
+        SurveyView surveyA = fixture.newSurvey(tenantA);
+        SurveyView surveyB = fixture.newSurvey(tenantB);
+        PublishedVersionView publishedA = publisher.publish(tenantA.owner(), surveyA.id()).version();
+        PublishedVersionView publishedB = publisher.publish(tenantB.owner(), surveyB.id()).version();
+        insertOperationalCounts(tenantA, surveyA.id(), publishedA, 1);
+        insertOperationalCounts(tenantB, surveyB.id(), publishedB, 2);
+
+        DashboardView view = dashboard.getDashboard(tenantA.owner(), 50, 50);
+
+        assertThat(view.summary().activePreviews()).isOne();
+        assertThat(view.summary().activeExports()).isOne();
+        assertThat(view.surveys()).filteredOn(item -> item.surveyId().equals(surveyA.id()))
+                .singleElement().extracting(DashboardSurveyView::completedResponses).isEqualTo(1L);
+        assertThat(view.surveys()).extracting(DashboardSurveyView::surveyId).doesNotContain(surveyB.id());
     }
 
     private void markPublishFailed(Workspace workspace, UUID surveyId, Instant updatedAt) {
@@ -161,5 +250,96 @@ class DashboardTenantIsolationTest {
                 .param("applicant", applicant)
                 .param("submitted", Timestamp.from(submittedAt))
                 .update());
+    }
+
+    private void archive(Workspace workspace, UUID surveyId) {
+        tenantScope.run(workspace.tenant(), () -> jdbc.sql("""
+                        UPDATE access_resource SET archived_at = now()
+                        WHERE tenant_id = :tenant AND id = :survey
+                        """)
+                .param("tenant", workspace.tenant().value())
+                .param("survey", surveyId)
+                .update());
+    }
+
+    private void markRuntimeStateWithApprovedRequest(Workspace workspace, UUID surveyId, String status) {
+        tenantScope.run(workspace.tenant(), () -> {
+            UUID requestId = UUID.randomUUID();
+            jdbc.sql("""
+                            UPDATE survey
+                            SET status = :status, current_request_id = :request,
+                                publishing_started_at = CASE WHEN :status = 'publishing' THEN now() ELSE NULL END
+                            WHERE id = :survey
+                            """)
+                    .param("status", status)
+                    .param("request", requestId)
+                    .param("survey", surveyId)
+                    .update();
+            jdbc.sql("""
+                            INSERT INTO survey_publish_approval
+                                (tenant_id, id, survey_id, draft_version, status, applicant,
+                                 submitted_at, decided_by, decided_at)
+                            VALUES (:tenant, :id, :survey, 1, 'approved', 'applicant',
+                                    now(), 'reviewer', now())
+                            """)
+                    .param("tenant", workspace.tenant().value())
+                    .param("id", UUID.randomUUID())
+                    .param("survey", surveyId)
+                    .update();
+        });
+    }
+
+    private void insertOperationalCounts(Workspace workspace, UUID surveyId,
+            PublishedVersionView published, int count) {
+        tenantScope.run(workspace.tenant(), () -> {
+            for (int index = 0; index < count; index++) {
+                jdbc.sql("""
+                                INSERT INTO response_projection
+                                    (tenant_id, engine_instance_id, survey_id, generation, response_id,
+                                     state, first_event_at, completed_at, last_event_id)
+                                VALUES (:tenant, :instance, :sid, :generation, :response,
+                                        'engine_completed', now(), now(), :event)
+                                """)
+                        .param("tenant", workspace.tenant().value())
+                        .param("instance", published.engineInstanceId())
+                        .param("sid", published.engineSid())
+                        .param("generation", "dashboard-" + index)
+                        .param("response", index + 1L)
+                        .param("event", UUID.randomUUID())
+                        .update();
+            }
+            jdbc.sql("""
+                            INSERT INTO survey_preview_session
+                                (tenant_id, id, request_id, survey_id, draft_version, definition,
+                                 requested_by, engine_instance_id, engine_sid, generation,
+                                 expires_at, status)
+                            VALUES (:tenant, :id, :request, :survey, 1, '{}'::jsonb,
+                                    :actor, :instance, :sid, :generation,
+                                    now() + interval '1 hour', 'ready')
+                            """)
+                    .param("tenant", workspace.tenant().value())
+                    .param("id", UUID.randomUUID())
+                    .param("request", UUID.randomUUID())
+                    .param("survey", surveyId)
+                    .param("actor", workspace.owner().actorId())
+                    .param("instance", workspace.engineInstanceId())
+                    .param("sid", 990_000 + count)
+                    .param("generation", "preview-dashboard-" + count)
+                    .update();
+            jdbc.sql("""
+                            INSERT INTO response_export_job
+                                (tenant_id, id, survey_id, requested_by, format,
+                                 filter_snapshot, plan, reveal_sensitive, batch_size,
+                                 status, expires_at)
+                            VALUES (:tenant, :id, :survey, :actor, 'csv',
+                                    '{}'::jsonb, '{}'::jsonb, false, 100,
+                                    'queued', now() + interval '1 hour')
+                            """)
+                    .param("tenant", workspace.tenant().value())
+                    .param("id", UUID.randomUUID())
+                    .param("survey", surveyId)
+                    .param("actor", workspace.owner().actorId())
+                    .update();
+        });
     }
 }

@@ -25,19 +25,25 @@ public class DashboardRecentWorkRepository {
                 SELECT parent.id, parent.parent_id, parent.archived_at
                 FROM access_resource parent
                 JOIN chain child ON parent.tenant_id = :tenant AND parent.id = child.parent_id
+            ), effective_permissions AS (
+                SELECT DISTINCT role_permission.permission_code
+                FROM access_grant grant_row
+                JOIN access_role_permission role_permission ON role_permission.role_code = grant_row.role_code
+                WHERE grant_row.tenant_id = :tenant AND grant_row.actor_id = :actor
+                  AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
+                  AND (grant_row.resource_id IS NULL OR grant_row.resource_id IN (SELECT id FROM chain))
             ), authorized AS (
                 SELECT 1
                 FROM access_member member
                 WHERE member.tenant_id = :tenant AND member.actor_id = :actor AND member.status = 'active'
+                  AND EXISTS (SELECT 1 FROM effective_permissions WHERE permission_code = 'view')
                   AND EXISTS (
-                      SELECT 1
-                      FROM access_grant grant_row
-                      JOIN access_role_permission role_permission
-                        ON role_permission.role_code = grant_row.role_code
-                       AND role_permission.permission_code = 'view'
-                      WHERE grant_row.tenant_id = :tenant AND grant_row.actor_id = :actor
-                        AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
-                        AND (grant_row.resource_id IS NULL OR grant_row.resource_id IN (SELECT id FROM chain))
+                      SELECT 1 FROM effective_permissions
+                      WHERE permission_code = CASE
+                          WHEN :page IN ('edit', 'import', 'preview') THEN 'edit'
+                          WHEN :page IN ('publish', 'version') THEN 'publish'
+                          WHEN :page = 'responses' THEN 'view-statistics'
+                      END
                   )
                   AND NOT EXISTS (SELECT 1 FROM chain WHERE archived_at IS NOT NULL)
             )
@@ -64,34 +70,45 @@ public class DashboardRecentWorkRepository {
                 SELECT child.survey_id, parent.id, parent.parent_id, parent.archived_at
                 FROM access_resource parent
                 JOIN ancestors child ON parent.tenant_id = :tenant AND parent.id = child.parent_id
-            ), visible_surveys AS (
-                SELECT DISTINCT root.survey_id
+            ), effective_permissions AS (
+                SELECT DISTINCT root.survey_id, role_permission.permission_code
                 FROM (SELECT DISTINCT survey_id FROM ancestors) root
+                JOIN access_grant grant_row
+                  ON grant_row.tenant_id = :tenant AND grant_row.actor_id = :actor
+                 AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
+                 AND (grant_row.resource_id IS NULL OR EXISTS (
+                     SELECT 1 FROM ancestors scope
+                     WHERE scope.survey_id = root.survey_id AND scope.id = grant_row.resource_id
+                 ))
+                JOIN access_role_permission role_permission ON role_permission.role_code = grant_row.role_code
+            ), visible_work AS (
+                SELECT work.*
+                FROM dashboard_recent_work work
                 JOIN access_member member
-                  ON member.tenant_id = :tenant AND member.actor_id = :actor AND member.status = 'active'
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM ancestors archived
-                    WHERE archived.survey_id = root.survey_id AND archived.archived_at IS NOT NULL
-                )
+                  ON member.tenant_id = work.tenant_id AND member.actor_id = work.actor_id
+                 AND member.status = 'active'
+                WHERE work.tenant_id = :tenant AND work.actor_id = :actor
+                  AND NOT EXISTS (
+                      SELECT 1 FROM ancestors archived
+                      WHERE archived.survey_id = work.survey_id AND archived.archived_at IS NOT NULL
+                  )
                   AND EXISTS (
-                      SELECT 1
-                      FROM access_grant grant_row
-                      JOIN access_role_permission role_permission
-                        ON role_permission.role_code = grant_row.role_code
-                       AND role_permission.permission_code = 'view'
-                      WHERE grant_row.tenant_id = :tenant AND grant_row.actor_id = :actor
-                        AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
-                        AND (grant_row.resource_id IS NULL OR EXISTS (
-                            SELECT 1 FROM ancestors scope
-                            WHERE scope.survey_id = root.survey_id AND scope.id = grant_row.resource_id
-                        ))
+                      SELECT 1 FROM effective_permissions permission
+                      WHERE permission.survey_id = work.survey_id AND permission.permission_code = 'view'
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM effective_permissions permission
+                      WHERE permission.survey_id = work.survey_id
+                        AND permission.permission_code = CASE
+                            WHEN work.page IN ('edit', 'import', 'preview') THEN 'edit'
+                            WHEN work.page IN ('publish', 'version') THEN 'publish'
+                            WHEN work.page = 'responses' THEN 'view-statistics'
+                        END
                   )
             )
             SELECT work.survey_id, survey.title AS survey_name, work.page, work.version_no, work.visited_at
-            FROM dashboard_recent_work work
-            JOIN visible_surveys visible ON visible.survey_id = work.survey_id
+            FROM visible_work work
             JOIN survey ON survey.tenant_id = work.tenant_id AND survey.id = work.survey_id
-            WHERE work.tenant_id = :tenant AND work.actor_id = :actor
             ORDER BY work.visited_at DESC, work.survey_id, work.page, work.version_no NULLS FIRST
             LIMIT :limit
             """;
