@@ -1,10 +1,10 @@
-<!-- harness-delivery-status: github_synced_obsidian_pending -->
+<!-- harness-delivery-status: fully_synchronized -->
 # 自治工程 SOP
 
 权威设计：[已确认 spec](../superpowers/specs/2026-10-10-autonomous-engineering-control-plane-design.md)。
 CLI、状态持久化、路径匹配、Gate 执行、脱敏、Codex 适配与只读 CI 已在本地实现并通过自动验证。
-当前交付状态由 [HARNESS_DELIVERY.json](HARNESS_DELIVERY.json) 唯一记录；三路独立复审与 GitHub hosted 零 skip
-run 已完成，Obsidian 同步仍待完成。只有交付控制器可依据三份结构化证据提升独立复审状态。
+当前交付状态由 [HARNESS_DELIVERY.json](HARNESS_DELIVERY.json) 唯一记录；三路独立复审、GitHub hosted 零 skip
+run 与 Obsidian 项目状态同步均已完成。只有交付控制器可依据三份结构化证据提升独立复审状态。
 
 ## 准入与实施
 

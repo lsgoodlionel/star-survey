@@ -39,7 +39,7 @@ Task 4: complete — commits c0e70dacd61dc8a51a2b6b1af08a365c8b340f2c and d22b9e
 Task 5: complete — commits 842a6f5bec1e0aaba69ceb2b58ed07ae51140911, 33cba68a2a97815f8082f0d051093c835961ddea, e2d7941b3c9a1bf390bea0f536591e0ff2b967a0; 49 focused / 187 Harness tests pass; scoped re-review SPEC_COMPLIANCE=APPROVED and CODE_QUALITY=APPROVED
 Task 6: complete — commits 101188de4cf8510bd5e5f053f6bc0f8276e90df7, 1357b67072e2f02359f5023cf7cafe2649254d94, dcf31a4af0220540dc916f03f349dc4644895b2b; 98 focused / 264 Harness tests pass; scoped re-review SPEC_COMPLIANCE=APPROVED and CODE_QUALITY=APPROVED
 Task 7: complete — commits 0a41a247df8ef084f5a0399c94b217b5179c9a57, 917ced92c395d47534ef710b0973e10e75fa6a46, d4f7b36314a60d4ff533f4d3a50a1cf0581e9d20, 8fcd2922ad50a9be417604a910902d421bf7fb5d, 4dfc278fcf1c2eaf06480aa70f23c2a44e9dcd4f, b84c0e1e0538cc628e94e170c164db37280cbd87, 80233d79b69c81bd411a4ddc3a803047244a17ae and ce4c86cd39909b8dc4b97050059d931e19855cb7; 80 focused / 344 Harness tests pass; final scoped re-review SPEC_COMPLIANCE=APPROVED and CODE_QUALITY=APPROVED
-Task 8: in_progress — final implementation commit 79e85b7208d9647781e978e2dff90158d28f2f0a passed GitHub run 38064236869 with Linux integration 8/8 and zero skips; local non-Linux suite is 402/402 and three final security, DX/CI and whole-branch reviews are double APPROVED; only Obsidian synchronization remains pending
+Task 8: complete — final implementation commit 79e85b7208d9647781e978e2dff90158d28f2f0a passed GitHub run 38064236869 with Linux integration 8/8 and zero skips; local non-Linux suite is 402/402, three final reviews are double APPROVED, and repository/GitHub/Obsidian synchronization is complete
 
 ## Review findings
 
@@ -164,5 +164,5 @@ Three final reviews bind `c7b93661..1fb39677` with double `APPROVED`; a new host
 
 Task 8 final hosted closure: commit `79e85b72` adds deterministic fake-Codex CI isolation and full-history checkout for review ancestry,
 then passes GitHub Actions run `38064236869`. The hosted Linux integration partition is 8/8 with zero skips; local non-Linux coverage is
-402/402. Three final tracked reviews bind `c7b93661..79e85b72` with double `APPROVED`. GitHub synchronization is complete and only the
-Obsidian project status update remains before Task 8 can close.
+402/402. Three final tracked reviews bind `c7b93661..79e85b72` with double `APPROVED`. Repository, GitHub and Obsidian synchronization
+is complete; Task 8 is closed and Business Dashboard v1 becomes the next governed product Milestone.

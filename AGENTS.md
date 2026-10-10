@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: github_synced_obsidian_pending -->
+<!-- harness-delivery-status: fully_synchronized -->
 # Survey 项目协作规则
 
 ## 事实与任务入口

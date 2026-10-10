@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: github_synced_obsidian_pending -->
+<!-- harness-delivery-status: fully_synchronized -->
 # P2 进度：通用问卷与本土入口
 
 更新：2026-10-08
@@ -737,6 +737,6 @@ Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Acc
   已验证存在且脱敏，disposable worktree 已移除，遗留的临时分支已删除，主工作树状态未变化；未接触生产或发布。
 - **限制**：当次 smoke 使用的旧摘要格式未保留脱敏 stop reason，之后已补回归测试和摘要字段但按“一次 smoke”约束
   未重跑。最终修复已由三路 security、DX/CI、whole-branch 独立复审双 `APPROVED`，GitHub hosted 零 skip 已绑定；
-  只剩 Obsidian 项目状态同步，Task 8 保持 `in_progress`。
-- **下一步候选**：在 Obsidian 同步完成后，按已确认设计和新实施计划启动 Business Dashboard v1，再与既有七波
+  Obsidian 项目状态已同步，Task 8 完成。
+- **下一步候选**：按已确认设计和新实施计划启动 Business Dashboard v1，再与既有七波
   产品化路线合流；后续 Phase C-1 的 `820–1179px` 双栏与检查器壳层仍按独立 Milestone 推进。

@@ -476,15 +476,14 @@ Completed: final implementation `79e85b7208d9647781e978e2dff90158d28f2f0a` 已�
 whole-branch 三路独立 `SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED`，报告已纳入
 `docs/agent/reviews/` 并由结构化 manifest 绑定 commit、range、path 与 SHA-256。
 
-- [ ] **Step 8: Synchronize documentation and mark the plan complete**
+- [x] **Step 8: Synchronize documentation and mark the plan complete**
 
 Document install/use/resume/escalation commands, final test evidence, remaining limitations and the first eligible real product Milestone. Update this plan's checkboxes only from actual evidence and add the implementation commit references.
 
-Local documentation is synchronized to the final implementation commit `79e85b72`, but this step remains open because the plan cannot
-be marked complete before the bound GitHub run and Obsidian synchronization. The first candidate product Milestone is Phase C-1's
-`820–1179px` two-column and inspector shell, subject to host synchronization and a fresh approved file scope.
+Completed: repository documentation, final review evidence and hosted run are synchronized. The first product Milestone is the confirmed
+Business Dashboard v1 plan, followed by the remaining Phase C editor work under its own approved file scope.
 
-- [ ] **Step 9: Commit, push, and update Obsidian**
+- [x] **Step 9: Commit, push, and update Obsidian**
 
 ```bash
 git add .github/workflows/agent-governance.yml tools/agent-harness docs/agent platform/README.md platform/docs/p2/progress.md docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md
@@ -496,8 +495,10 @@ Update the Survey project overview/progress note with date, branch, commit range
 
 Partially completed: earlier hosted runs exposed the setup-python entry and runtime-identity defects. Final implementation `79e85b72`
 uses the documented executable, binds runtime identity, fetches full history for review ancestry validation, and passed GitHub run
-`38064236869` with Linux integration 8/8 and zero skips. GitHub synchronization is complete; Obsidian synchronization remains open,
-so Task 8 and the plan remain in progress.
+`38064236869` with Linux integration 8/8 and zero skips. This was the state immediately before the Obsidian update recorded below.
+
+Completed (2026-10-10): repository evidence was pushed in `b6f1ff32`; the Obsidian Survey blueprint and repository-evidence progress note
+now record branch, commit, run `38064236869`, test counts, delivered scope, limitation and the Business Dashboard v1 successor Milestone.
 
 ## Final Acceptance
 
@@ -507,4 +508,4 @@ so Task 8 and the plan remain in progress.
 - [x] Real Codex execution is bounded to an isolated worktree and cannot select dangerous bypass flags.
 - [x] Success, repeated failure, no progress, interrupted write, plan drift and CLI timeout drills all produce expected terminal states.
 - [x] GitHub governance runs independently and cannot merge, release or deploy.
-- [ ] Repository docs, GitHub branch and Obsidian project status agree on the delivered scope and remaining product work.
+- [x] Repository docs, GitHub branch and Obsidian project status agree on the delivered scope and remaining product work.

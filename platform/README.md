@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: github_synced_obsidian_pending -->
+<!-- harness-delivery-status: fully_synchronized -->
 # MJY 平台（LimeSurvey 本土化）
 
 多租户 SaaS ＋ 私有化交付的问卷／考试／测评平台。引擎用 LimeSurvey 7.1.2，**引擎源码与上游逐文件一致**，本项目的全部内容都是新增文件（P0-00.2 结论，见 [docs/p0/upstream-diff.md](docs/p0/upstream-diff.md)）。
