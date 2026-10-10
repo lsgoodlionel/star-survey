@@ -35,13 +35,14 @@ class _BoundTool:
     directory: str | None
     root: str | None
     trusted_roots: tuple[str, ...] | None
-    entry_identity: tuple[int, int, int, int] | None
-    target_identity: tuple[int, int, int, int] | None
-    chain_identities: tuple[tuple[str, tuple[int, int, int, int]], ...] | None
+    entry_identity: tuple[int, int, int, int, int, int] | None
+    target_identity: tuple[int, int, int, int, int, int] | None
+    chain_identities: tuple[tuple[str, tuple[int, int, int, int, int, int]], ...] | None
 
 
 def _identity(metadata):
-    return metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_mode
+    return (metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_mode,
+            metadata.st_size, metadata.st_ctime_ns)
 
 
 def _expected_entry_name(name, path):

@@ -54,7 +54,10 @@ class LoopCase(WorktreeCase):
         return execute
 
     def run_loop(self, fake, cycles=10):
-        with patch("agent_harness.run_service.run_codex", side_effect=fake):
+        with patch("agent_harness.run_service.build_codex_command",
+                   side_effect=lambda _repo, _schema, prompt, _session=None:
+                   ("codex", "exec", prompt)), \
+                patch("agent_harness.run_service.run_codex", side_effect=fake):
             return self.service.run_autonomous(self.state.run_id, cycles)
 
     def test_changed_checkpoint_runs_current_head_gates_before_completion(self):
