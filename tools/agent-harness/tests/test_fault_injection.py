@@ -1,6 +1,7 @@
 """End-to-end fault drills against the real Harness boundaries."""
 
 import importlib.util
+import hashlib
 import io
 import json
 import os
@@ -193,6 +194,8 @@ class FaultInjectionTests(unittest.TestCase):
             'MODE=access\ncodex exec --sandbox danger-full-$MODE task',
             'codex exec --sandbox danger-full-\\\n          access task',
             'codex exec --sandbox "$(printf danger-full-access)" task',
+            'printf safe; codex exec --sandbox danger-full-access task',
+            '$(printf codex) exec --sandbox danger-full-access task',
         )
         for index, source in enumerate(sources):
             with self.subTest(source=source), tempfile.TemporaryDirectory() as directory:
@@ -204,6 +207,35 @@ class FaultInjectionTests(unittest.TestCase):
                 workflow.parent.mkdir(parents=True)
                 workflow.write_text("jobs:\n  bad:\n    steps:\n      - run: |\n          " +
                                     source.replace("\n", "\n          ") + "\n", encoding="utf-8")
+                with self.assertRaises(self.runner.DrillRefused):
+                    self.runner.check_forbidden_options(repo)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            matrix = repo / "docs/agent/GATE_MATRIX.yaml"
+            matrix.parent.mkdir(parents=True)
+            matrix.write_text('{"version":1,"gates":[],"profiles":{}}', encoding="utf-8")
+            workflow = repo / ".github/workflows/unrelated.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text('jobs:\n  ok:\n    steps:\n      - run: echo "codex"\n',
+                                encoding="utf-8")
+            self.runner.check_forbidden_options(repo)
+
+    def test_forbidden_scan_finds_quoted_run_keys_and_split_codex_executables(self):
+        workflows = (
+            '- "run" : codex exec --sandbox danger-full-access task',
+            "- 'run': co\"\"dex exec --sandbox danger-full-access task",
+            "- run : co${EMPTY}dex exec --sandbox danger-full-access task",
+        )
+        for index, step in enumerate(workflows):
+            with self.subTest(step=step), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                matrix = repo / "docs/agent/GATE_MATRIX.yaml"
+                matrix.parent.mkdir(parents=True)
+                matrix.write_text('{"version":1,"gates":[],"profiles":{}}', encoding="utf-8")
+                workflow = repo / f".github/workflows/discovery-{index}.yaml"
+                workflow.parent.mkdir(parents=True)
+                workflow.write_text("jobs:\n  bad:\n    steps:\n      " + step + "\n",
+                                    encoding="utf-8")
                 with self.assertRaises(self.runner.DrillRefused):
                     self.runner.check_forbidden_options(repo)
 
@@ -329,6 +361,39 @@ class FaultInjectionTests(unittest.TestCase):
                 self.assertTrue(any("oserror" in error for error in errors), errors)
                 self.assertNotIn("fake-secret", repr(errors))
 
+    def test_outer_cleanup_and_identity_errors_are_typed_without_short_circuit(self):
+        identity = ("a" * 40, b"")
+        cases = ((True, False), (False, True), (True, True))
+        for cleanup_fails, identity_fails in cases:
+            with self.subTest(cleanup=cleanup_fails, identity=identity_fails), \
+                    tempfile.TemporaryDirectory() as directory:
+                temporary = type("Temporary", (), {
+                    "name": directory,
+                    "cleanup": lambda self: (_ for _ in ()).throw(
+                        OSError("PASSWORD=fake-secret")) if cleanup_fails else None,
+                })()
+                identities = [identity]
+                if identity_fails:
+                    identities.append(OSError("TOKEN=fake-secret"))
+                else:
+                    identities.append(identity)
+                with patch.object(self.runner.tempfile, "TemporaryDirectory",
+                                  return_value=temporary), \
+                        patch.object(self.runner, "_primary_identity",
+                                     side_effect=identities) as checked, \
+                        patch.object(self.runner, "_git",
+                                     side_effect=OSError("setup failed")), \
+                        patch.object(self.runner, "cleanup_real_smoke", return_value=()):
+                    result = self.runner.run_real_codex_smoke(REPO)
+                self.assertEqual(checked.call_count, 2)
+                self.assertEqual(result.status, "failed")
+                if cleanup_fails:
+                    self.assertIn("temporary-cleanup-oserror", result.detail)
+                if identity_fails:
+                    self.assertIn("primary-identity-check-oserror", result.detail)
+                self.assertNotIn("fake-secret", result.detail)
+                self.assertNotIn("verified", result.detail)
+
     def test_success_drill_runs_service_adapter_gate_review_finalize_and_history(self):
         result = self.runner.run_named_drill("success")
         self.assertEqual(result.status, "passed", result.detail)
@@ -361,6 +426,13 @@ class FaultInjectionTests(unittest.TestCase):
                            check=True, capture_output=True)
             subprocess.run(["git", "config", "user.name", "Harness Test"], cwd=repo,
                            check=True, capture_output=True)
+            (repo / ".gitignore").write_text("/var/\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True,
+                           capture_output=True)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                                  text=True, capture_output=True).stdout.strip()
             plan = repo / "docs/superpowers/plans/custom.md"
             plan.parent.mkdir(parents=True)
             plan.write_text("# Plan\n\n### Task 1: Base\n- [x] done\n\n"
@@ -389,6 +461,10 @@ class FaultInjectionTests(unittest.TestCase):
                 "deliveryStatus": "local_validated_sync_pending",
                 "externalSync": {"independentReview": "pending", "github": "pending",
                                  "obsidian": "pending"},
+                "reviewEvidence": {
+                    "requiredReviewers": ["security", "dx_ci", "whole_branch"],
+                    "reports": [],
+                },
             }, sort_keys=True), encoding="utf-8")
             config = repo / "docs/HOST.json"
             config.write_text(json.dumps({
@@ -404,9 +480,41 @@ class FaultInjectionTests(unittest.TestCase):
             }, sort_keys=True), encoding="utf-8")
             host = self.runner.load_host_config(repo, config.relative_to(repo))
             self.runner.check_docs(repo, host)
+            manifest_document = json.loads(manifest.read_text(encoding="utf-8"))
+            manifest_document["externalSync"]["independentReview"] = "complete"
+            manifest_document["deliveryStatus"] = "locally_reviewed_sync_pending"
+            manifest.write_text(json.dumps(manifest_document, sort_keys=True), encoding="utf-8")
+            with self.assertRaises(self.runner.DrillRefused):
+                self.runner.check_docs(repo, host)
+            reports = []
+            for reviewer in ("security", "dx_ci", "whole_branch"):
+                report = repo / f"reviews/{reviewer}.md"
+                report.parent.mkdir(exist_ok=True)
+                report.write_text(
+                    "# Review\n\nReviewed range: `" + base + ".." + head + "`\n\n"
+                    "SPEC_COMPLIANCE=APPROVED\nCODE_QUALITY=APPROVED\n",
+                    encoding="utf-8",
+                )
+                reports.append({
+                    "reviewer": reviewer,
+                    "path": report.relative_to(repo).as_posix(),
+                    "reviewedCommit": head,
+                    "reviewedRange": base + ".." + head,
+                    "sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+                    "specVerdict": "APPROVED",
+                    "codeQualityVerdict": "APPROVED",
+                })
+            subprocess.run(["git", "add", "reviews"], cwd=repo, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-m", "independent reviews"], cwd=repo,
+                           check=True, capture_output=True)
+            manifest_document["reviewEvidence"]["reports"] = reports
+            manifest.write_text(json.dumps(manifest_document, sort_keys=True), encoding="utf-8")
+            complete_marker = "<!-- harness-delivery-status: locally_reviewed_sync_pending -->"
+            for relative in ("README.md", "AGENTS.md", "docs/AUTONOMY.md", "docs/MEMORY.md"):
+                (repo / relative).write_text(complete_marker + "\n", encoding="utf-8")
+            self.runner.check_docs(repo, host)
             stages = (
-                ({"independentReview": "complete", "github": "pending", "obsidian": "pending"},
-                 "locally_reviewed_sync_pending"),
                 ({"independentReview": "complete", "github": "complete", "obsidian": "pending"},
                  "github_synced_obsidian_pending"),
                 ({"independentReview": "complete", "github": "complete", "obsidian": "complete"},
@@ -421,6 +529,18 @@ class FaultInjectionTests(unittest.TestCase):
                 for relative in ("README.md", "AGENTS.md", "docs/AUTONOMY.md", "docs/MEMORY.md"):
                     (repo / relative).write_text(stage_marker + "\n", encoding="utf-8")
                 self.runner.check_docs(repo, host)
+            untracked = repo / "untracked-review.md"
+            untracked.write_text((repo / reports[0]["path"]).read_text(encoding="utf-8"),
+                                 encoding="utf-8")
+            manifest_document = json.loads(manifest.read_text(encoding="utf-8"))
+            manifest_document["reviewEvidence"]["reports"][0]["path"] = untracked.name
+            manifest_document["reviewEvidence"]["reports"][0]["sha256"] = hashlib.sha256(
+                untracked.read_bytes()).hexdigest()
+            manifest.write_text(json.dumps(manifest_document, sort_keys=True), encoding="utf-8")
+            with self.assertRaises(self.runner.DrillRefused):
+                self.runner.check_docs(repo, host)
+            manifest_document["reviewEvidence"]["reports"] = reports
+            manifest.write_text(json.dumps(manifest_document, sort_keys=True), encoding="utf-8")
             plan.write_text(plan.read_text(encoding="utf-8").replace("- [ ] sync", "- [x] sync"),
                             encoding="utf-8")
             with self.assertRaises(self.runner.DrillRefused):
@@ -457,12 +577,75 @@ class FaultInjectionTests(unittest.TestCase):
                            check=True, capture_output=True)
             subprocess.run(["git", "config", "user.name", "Harness Test"], cwd=repo,
                            check=True, capture_output=True)
+            config = repo / "config/portable-host.json"
+            config.parent.mkdir()
+            config.write_text(json.dumps({
+                "version": 1,
+                "activePlan": "docs/superpowers/plans/portable.md",
+                "deliveryManifest": "docs/agent/PORTABLE_DELIVERY.json",
+                "ledger": "docs/agent/portable-progress.md",
+                "secretPolicy": self.secret_policy(),
+                "fixture": {"path": "fixtures/smoke.txt",
+                            "planPath": "docs/superpowers/plans/smoke.md",
+                            "baseline": "baseline\n", "expected": "baseline\nok\n"},
+                "documentation": {"statusMarkerPaths": ["README.md", "docs/agent/AUTONOMY.md"]},
+            }, sort_keys=True), encoding="utf-8")
+            plan = repo / "docs/superpowers/plans/portable.md"
+            plan.parent.mkdir(parents=True)
+            plan.write_text("# Portable\n\n### Task 1: Core\n- [x] done\n\n"
+                            "### Task 8: Delivery\n- [ ] sync\n", encoding="utf-8")
+            (repo / "docs/superpowers/plans/smoke.md").write_text("# Fixture\n", encoding="utf-8")
+            (repo / "fixtures").mkdir()
+            (repo / "fixtures/smoke.txt").write_text("baseline\n", encoding="utf-8")
+            marker = "<!-- harness-delivery-status: local_validated_sync_pending -->\n"
+            (repo / "README.md").write_text(marker, encoding="utf-8")
+            (repo / "docs/agent/AUTONOMY.md").write_text(marker, encoding="utf-8")
+            (repo / "docs/agent/portable-progress.md").write_text(
+                "Task 1: complete\nTask 8: in_progress\n", encoding="utf-8")
+            (repo / "docs/agent/HARNESS_HOST.json").unlink()
+            subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "portable host"], cwd=repo, check=True,
+                           capture_output=True)
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                                  text=True, capture_output=True).stdout.strip()
+            manifest = repo / "docs/agent/PORTABLE_DELIVERY.json"
+            manifest.write_text(json.dumps({
+                "version": 1,
+                "planPath": "docs/superpowers/plans/portable.md",
+                "implementationCommit": head,
+                "evidence": {"headCommit": head, "status": "passed", "commands": ["portable"]},
+                "taskSteps": {"1": {"completed": [1], "pending": []},
+                              "8": {"completed": [], "pending": [1]}},
+                "deliveryStatus": "local_validated_sync_pending",
+                "externalSync": {"independentReview": "pending", "github": "pending",
+                                 "obsidian": "pending"},
+                "reviewEvidence": {"requiredReviewers": ["security", "dx_ci", "whole_branch"],
+                                   "reports": []},
+            }, sort_keys=True), encoding="utf-8")
+            subprocess.run(["git", "add", str(manifest.relative_to(repo))], cwd=repo, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-m", "portable manifest"], cwd=repo, check=True,
+                           capture_output=True)
+            checked = subprocess.run([
+                str(repo / "scripts/agent-harness"), "--python",
+                "tools/agent-harness/drills/run_drills.py", "--repo", str(repo),
+                "--host-config", config.relative_to(repo).as_posix(), "--check-docs",
+            ], cwd=repo, text=True, capture_output=True, check=False)
+            self.assertEqual(checked.returncode, 0, checked.stderr or checked.stdout)
+            self.assertIn("PASS plan-memory-drift", checked.stdout)
             result = subprocess.run([
                 str(repo / "scripts/agent-harness"), "--python",
                 "tools/agent-harness/drills/run_drills.py",
             ], cwd=repo, text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
             self.assertIn("PASSED success", result.stdout)
+            plan.rename(plan.with_suffix(".missing"))
+            missing = subprocess.run([
+                str(repo / "scripts/agent-harness"), "--python",
+                "tools/agent-harness/drills/run_drills.py", "--repo", str(repo),
+                "--host-config", config.relative_to(repo).as_posix(), "--check-docs",
+            ], cwd=repo, text=True, capture_output=True, check=False)
+            self.assertEqual(missing.returncode, 2, missing.stderr or missing.stdout)
 
     def test_real_smoke_summary_keeps_sanitized_stop_reason(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -47,7 +47,6 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       AGENT_HARNESS_CI: '1'
-      AGENT_HARNESS_LINUX_IMAGE: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -64,4 +63,6 @@ jobs:
       - name: Run Linux wrapper integration tests with zero skips
         run: >-
           scripts/agent-harness --python tools/agent-harness/run_tests.py
-          --include-substring linux_wrapper --fail-on-skip
+          --include-substring linux_wrapper --fail-on-skip --ci
+          --linux-image python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+          --docker /usr/bin/docker

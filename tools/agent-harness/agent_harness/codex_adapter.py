@@ -82,6 +82,11 @@ def _candidate_roots(name):
         }
         if name in fixed:
             candidates.append(fixed[name])
+        if name == "docker":
+            candidates.extend((
+                ("/usr/local/bin/docker", ("/usr/local", "/Applications/Docker.app")),
+                ("/opt/homebrew/bin/docker", ("/opt/homebrew", "/Applications/Docker.app")),
+            ))
     elif sys.platform.startswith("linux"):
         for prefix in ("/usr", "/usr/local", "/opt/homebrew"):
             roots = ((prefix, "/etc/alternatives")
@@ -205,6 +210,17 @@ def _bound_tool(name, candidates, *, target_directory=False, allow_link=None):
     return empty
 
 
+def _bind_requested_tool(name, requested):
+    if not isinstance(requested, str) or not Path(requested).is_absolute():
+        raise ValueError("Requested tool must be an absolute path")
+    candidates = tuple(candidate for candidate in _candidate_roots(name)
+                       if candidate[0] == requested)
+    bound = _bound_tool(name, candidates, allow_link=name == "docker")
+    if bound.entry != requested:
+        raise ValueError("Requested tool is not trusted")
+    return bound
+
+
 def _npm_candidates(node):
     try:
         if not node.entry or not node.root:
@@ -223,7 +239,7 @@ def _discover_tools():
     node = _bound_tool("node", _versioned_candidates("node") + _candidate_roots("node"))
     npm = _bound_tool("npm", _npm_candidates(node), allow_link=True)
     return (python, node, npm,
-            _bound_tool("docker", _candidate_roots("docker")),
+            _bound_tool("docker", _candidate_roots("docker"), allow_link=True),
             _bound_tool("git", _candidate_roots("git")),
             _bound_tool("java", _candidate_roots("java")))
 

@@ -51,9 +51,17 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertTrue(python_lines)
         self.assertTrue(all("scripts/agent-harness --python" in line for line in python_lines))
         self.assertNotRegex(self.text, r"(?m)^\s+run:\s*python3(?:\.11)?\s")
-        self.assertIn("AGENT_HARNESS_CI: '1'", self.text)
         self.assertRegex(self.text, r"docker\s+pull\s+python:3\.11[^\s]*@sha256:[0-9a-f]{64}")
         self.assertIn("--fail-on-skip", self.text)
+
+    def test_workflow_passes_explicit_safe_linux_fixture_parameters(self):
+        image = ("python:3.11-slim@sha256:"
+                 "e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce")
+        self.assertIn("AGENT_HARNESS_CI: '1'", self.text)
+        self.assertNotIn("AGENT_HARNESS_LINUX_IMAGE", self.text)
+        self.assertIn("--ci", self.text)
+        self.assertIn("--linux-image " + image, self.text)
+        self.assertIn("--docker /usr/bin/docker", self.text)
 
     def test_host_config_owns_portability_and_delivery_contracts(self):
         document = json.loads(HOST_CONFIG.read_text(encoding="utf-8"))
@@ -64,6 +72,18 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertIn("fixture", document)
         self.assertIn("documentation", document)
         self.assertIn(".env.example", document["secretPolicy"]["allowlist"])
+
+    def test_independent_review_remains_pending_until_controller_supplies_approvals(self):
+        manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual(manifest["externalSync"]["independentReview"], "pending")
+        self.assertEqual(manifest["deliveryStatus"], "local_validated_sync_pending")
+        self.assertEqual(manifest["reviewEvidence"], {
+            "requiredReviewers": ["security", "dx_ci", "whole_branch"],
+            "reports": [],
+        })
+        task8 = PLAN.read_text(encoding="utf-8").split("### Task 8:", 1)[1]
+        self.assertIn("- [ ] **Step 7: Perform independent review", task8)
 
     def test_ci_test_runner_fails_when_any_test_is_skipped(self):
         runner = REPO / "tools/agent-harness/run_tests.py"
@@ -106,6 +126,37 @@ class GovernanceWorkflowTests(unittest.TestCase):
             ], text=True, capture_output=True, check=False)
         self.assertEqual(unit.returncode, 0, unit.stdout + unit.stderr)
         self.assertEqual(integration.returncode, 2, integration.stdout + integration.stderr)
+
+    def test_ci_test_runner_transmits_only_validated_linux_fixture_parameters(self):
+        runner = REPO / "tools/agent-harness/run_tests.py"
+        image = ("python:3.11-slim@sha256:"
+                 "e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce")
+        with tempfile.TemporaryDirectory() as directory:
+            test_file = Path(directory) / "test_parameters.py"
+            test_file.write_text(
+                "import os,unittest\n"
+                "class Parameters(unittest.TestCase):\n"
+                " def test_values(self):\n"
+                "  self.assertEqual(os.environ['HARNESS_TEST_CI_MODE'], '1')\n"
+                "  self.assertEqual(os.environ['HARNESS_TEST_LINUX_IMAGE'], " + repr(image) + ")\n"
+                "  self.assertEqual(os.environ['HARNESS_TEST_DOCKER'], '/usr/bin/docker')\n",
+                encoding="utf-8",
+            )
+            valid = subprocess.run([
+                sys.executable, str(runner), "--start-directory", directory, "--ci",
+                "--linux-image", image, "--docker", "/usr/bin/docker",
+            ], text=True, capture_output=True, check=False)
+            bad_image = subprocess.run([
+                sys.executable, str(runner), "--start-directory", directory,
+                "--linux-image", "latest", "--docker", "/usr/bin/docker",
+            ], text=True, capture_output=True, check=False)
+            bad_docker = subprocess.run([
+                sys.executable, str(runner), "--start-directory", directory,
+                "--linux-image", image, "--docker", "docker",
+            ], text=True, capture_output=True, check=False)
+        self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+        self.assertEqual(bad_image.returncode, 2, bad_image.stdout + bad_image.stderr)
+        self.assertEqual(bad_docker.returncode, 2, bad_docker.stdout + bad_docker.stderr)
 
     def test_workflow_separates_fake_tool_units_from_real_linux_integration(self):
         self.assertIn("agent-governance-unit:", self.text)

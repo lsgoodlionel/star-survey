@@ -86,8 +86,15 @@ class AdapterCase(WorktreeCase):
 
     def linux_wrapper(self, script):
         project = Path(__file__).resolve().parents[3]
-        docker = shutil.which("docker")
-        ci = os.environ.get("AGENT_HARNESS_CI") == "1"
+        requested = os.environ.get("HARNESS_TEST_DOCKER")
+        try:
+            bound = self.adapter._bind_requested_tool("docker", requested) if requested else \
+                self.adapter._bound_tool("docker", self.adapter._candidate_roots("docker"),
+                                         allow_link=True)
+        except ValueError:
+            bound = type("MissingTool", (), {"entry": None})()
+        docker = bound.entry
+        ci = os.environ.get("HARNESS_TEST_CI_MODE") == "1"
         if docker is None:
             if ci:
                 self.fail("linux-fixture:docker-cli-missing")
@@ -100,7 +107,7 @@ class AdapterCase(WorktreeCase):
                 self.fail("linux-fixture:" + kind + ": " + daemon.stderr.strip())
             self.skipTest("linux-fixture:" + kind)
         image = os.environ.get(
-            "AGENT_HARNESS_LINUX_IMAGE",
+            "HARNESS_TEST_LINUX_IMAGE",
             "python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce",
         )
         available = subprocess.run([docker, "image", "inspect", image], text=True,
@@ -112,6 +119,33 @@ class AdapterCase(WorktreeCase):
         return subprocess.run([docker, "run", "--rm", "-v", f"{project}:/repo:ro", "-w", "/repo",
                                image, "/bin/sh", "-c", script], text=True,
                               capture_output=True, check=False)
+
+    def test_explicit_linux_fixture_classifies_cli_daemon_permission_and_image_errors(self):
+        image = ("python:3.11-slim@sha256:"
+                 "e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce")
+        environment = {"HARNESS_TEST_CI_MODE": "1", "HARNESS_TEST_DOCKER": "/usr/bin/docker",
+                       "HARNESS_TEST_LINUX_IMAGE": image}
+        success = subprocess.CompletedProcess([], 0, "ok", "")
+        failures = (
+            (ValueError("untrusted"), (), "docker-cli-missing"),
+            (type("Bound", (), {"entry": "/usr/bin/docker"})(),
+             (subprocess.CompletedProcess([], 1, "", "permission denied: fake-secret"),),
+             "permission-denied"),
+            (type("Bound", (), {"entry": "/usr/bin/docker"})(),
+             (subprocess.CompletedProcess([], 1, "", "cannot connect"),),
+             "daemon-unavailable"),
+            (type("Bound", (), {"entry": "/usr/bin/docker"})(),
+             (success, subprocess.CompletedProcess([], 1, "", "missing")), "image-missing"),
+        )
+        for bound, commands, expected in failures:
+            with self.subTest(expected=expected), patch.dict(os.environ, environment, clear=False), \
+                    patch.object(self.adapter, "_bind_requested_tool",
+                                 side_effect=bound if isinstance(bound, Exception) else None,
+                                 return_value=None if isinstance(bound, Exception) else bound), \
+                    patch.object(subprocess, "run", side_effect=commands), \
+                    self.assertRaises(AssertionError) as caught:
+                self.linux_wrapper("true")
+            self.assertIn("linux-fixture:" + expected, str(caught.exception))
 
     def test_fixed_command_and_safe_resume(self):
         self.assertTrue(Path(self.command[0]).is_absolute())
@@ -437,18 +471,33 @@ print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": 
     def test_linux_wrapper_bootstraps_setup_python_hosted_toolcache(self):
         hosted = self.linux_wrapper(r"""
 mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
-cat > /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11 <<'EOF'
-#!/bin/sh
-printf 'invoked\n' >> /tmp/hosted-python-invocations
-exec /usr/local/bin/python3.11 "$@"
-EOF
+cp -L /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11
 chmod 0755 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11
+rm /usr/local/bin/python3.11
 AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
   /repo/scripts/agent-harness --python --version
-test "$(wc -l < /tmp/hosted-python-invocations)" -eq 2
 """)
         self.assertEqual(hosted.returncode, 0, hosted.stderr or hosted.stdout)
         self.assertRegex(hosted.stdout, r"^Python 3\.11\.")
+
+    def test_requested_docker_path_is_revalidated_against_trusted_roots(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task8-docker-", dir=project.parents[2]) as directory:
+            root = Path(directory)
+            target = root / "app/docker"
+            self.write(target, "#!/bin/sh\nexit 0\n")
+            target.chmod(0o755)
+            entry = root / "usr/local/bin/docker"
+            entry.parent.mkdir(parents=True)
+            entry.symlink_to(target)
+            candidates = ((str(entry), (str(root / "usr/local"), str(root / "app"))),)
+            with patch.object(self.adapter, "_candidate_roots", return_value=candidates):
+                bound = self.adapter._bind_requested_tool("docker", str(entry))
+            self.assertEqual(bound.entry, str(entry))
+            self.assertEqual(bound.target, str(target))
+            with patch.object(self.adapter, "_candidate_roots", return_value=candidates), \
+                    self.assertRaises(ValueError):
+                self.adapter._bind_requested_tool("docker", str(root / "other/docker"))
 
     def test_linux_wrapper_accepts_trusted_usr_bin_python_symlink(self):
         linked = self.linux_wrapper(

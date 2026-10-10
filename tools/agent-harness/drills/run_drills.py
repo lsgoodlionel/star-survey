@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -603,7 +604,8 @@ def _workflow_run_blocks(text: str) -> tuple[str, ...]:
     blocks = []
     index = 0
     while index < len(lines):
-        match = re.match(r"^(\s*)-?\s*run:\s*(.*)$", lines[index])
+        match = re.match(r'''^(\s*)-?\s*(?:run|"run"|'run')\s*:\s*(.*)$''',
+                         lines[index])
         if not match:
             index += 1
             continue
@@ -624,14 +626,36 @@ def _workflow_run_blocks(text: str) -> tuple[str, ...]:
     return tuple(blocks)
 
 
-def _validate_codex_shell(source: str) -> None:
+def _could_resolve_to_codex(value: str) -> bool:
+    name = Path(value).name.lower()
+    if name == "codex":
+        return True
+    without_expansions = re.sub(r"\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`", "", name)
+    if Path(without_expansions).name == "codex":
+        return True
+    return "$" in name and name.startswith("co") and name.endswith("dex")
+
+
+def _validate_codex_shell(source: str) -> bool:
+    if re.search(r"(?:\$|`|\\).*\bexec\b.*--sandbox", source, re.DOTALL):
+        raise DrillRefused("Codex-like exec command uses dynamic shell syntax")
+    try:
+        arguments = shlex.split(source, posix=True)
+    except ValueError:
+        arguments = source.split()
+    position = 0
+    while position < len(arguments) and re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*=.*", arguments[position]):
+        position += 1
+    candidates = [index for index, value in enumerate(arguments) if _could_resolve_to_codex(value)]
+    primary = position < len(arguments) and _could_resolve_to_codex(arguments[position])
+    if not primary:
+        if candidates and re.search(r"[;&|<>]|[\r\n]", source):
+            raise DrillRefused("Codex workflow command uses unsupported shell control syntax")
+        return False
     if re.search(r"[\"'`$\\;&|<>]|[\r\n]", source):
         raise DrillRefused("Codex workflow command uses unsupported shell syntax")
-    arguments = source.split()
-    positions = [index for index, value in enumerate(arguments) if Path(value).name == "codex"]
-    if not positions:
-        return
-    arguments = arguments[positions[0]:]
+    arguments = arguments[position:]
     if len(arguments) < 2 or arguments[1] != "exec":
         raise DrillRefused("Codex workflow command is not an allowed exec invocation")
     if _DANGEROUS_CODEX_ARGUMENT.search(" ".join(arguments)):
@@ -663,6 +687,7 @@ def _validate_codex_shell(source: str) -> None:
         raise DrillRefused("Codex workflow sandbox is not workspace-write")
     if len(positionals) != 1:
         raise DrillRefused("Codex workflow command must contain one normalized prompt argument")
+    return True
 
 
 def check_forbidden_options(repo: Path) -> None:
@@ -677,8 +702,7 @@ def check_forbidden_options(repo: Path) -> None:
         for workflow in workflows.glob(pattern):
             text = workflow.read_text(encoding="utf-8")
             for source in _workflow_run_blocks(text):
-                if re.search(r"\bcodex\b", source, re.IGNORECASE):
-                    _validate_codex_shell(source)
+                if _validate_codex_shell(source):
                     contexts.append(source)
     if any(_DANGEROUS_CODEX_ARGUMENT.search(context) for context in contexts):
         raise DrillRefused("Codex command contains a forbidden permission override")
@@ -707,6 +731,52 @@ def _plan_checkboxes(text: str) -> dict:
     return result
 
 
+def _validate_review_evidence(root: Path, manifest: dict, complete: bool) -> None:
+    evidence = manifest["reviewEvidence"]
+    required = ["security", "dx_ci", "whole_branch"]
+    if (set(evidence) != {"requiredReviewers", "reports"}
+            or evidence["requiredReviewers"] != required
+            or not isinstance(evidence["reports"], list)):
+        raise ValueError()
+    reports = evidence["reports"]
+    if not complete:
+        if reports:
+            raise ValueError()
+        return
+    if len(reports) != len(required):
+        raise ValueError()
+    commit = manifest["implementationCommit"]
+    seen = set()
+    for report in reports:
+        keys = {"reviewer", "path", "reviewedCommit", "reviewedRange", "sha256",
+                "specVerdict", "codeQualityVerdict"}
+        if set(report) != keys or report["reviewer"] not in required or report["reviewer"] in seen:
+            raise ValueError()
+        seen.add(report["reviewer"])
+        if (report["reviewedCommit"] != commit
+                or report["specVerdict"] != "APPROVED"
+                or report["codeQualityVerdict"] != "APPROVED"):
+            raise ValueError()
+        match = re.fullmatch(r"([0-9a-f]{40})\.\.([0-9a-f]{40})", report["reviewedRange"])
+        if match is None or match[2] != commit:
+            raise ValueError()
+        ancestor = _run(["git", "merge-base", "--is-ancestor", match[1], commit], root,
+                        check=False)
+        if ancestor.returncode:
+            raise ValueError()
+        path = _repo_path(root, report["path"])
+        tracked = _run(["git", "ls-files", "--error-unmatch", "--", report["path"]], root,
+                       check=False)
+        content = path.read_text(encoding="utf-8")
+        if (tracked.returncode or hashlib.sha256(path.read_bytes()).hexdigest() != report["sha256"]
+                or report["reviewedRange"] not in content
+                or re.search(r"(?m)^SPEC_COMPLIANCE=APPROVED\s*$", content) is None
+                or re.search(r"(?m)^CODE_QUALITY=APPROVED\s*$", content) is None):
+            raise ValueError()
+    if seen != set(required):
+        raise ValueError()
+
+
 def check_docs(repo: Path, host: dict) -> None:
     root = Path(repo).resolve(strict=True)
     plan_path = _repo_path(root, host["activePlan"])
@@ -715,7 +785,7 @@ def check_docs(repo: Path, host: dict) -> None:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         required = {"version", "planPath", "implementationCommit", "evidence", "taskSteps",
-                    "deliveryStatus", "externalSync"}
+                    "deliveryStatus", "externalSync", "reviewEvidence"}
         if set(manifest) != required or manifest["version"] != 1:
             raise ValueError()
         if manifest["planPath"] != host["activePlan"]:
@@ -741,6 +811,7 @@ def check_docs(repo: Path, host: dict) -> None:
         key = (external.get("independentReview"), external.get("github"), external.get("obsidian"))
         if allowed_status.get(key) != manifest["deliveryStatus"]:
             raise ValueError()
+        _validate_review_evidence(root, manifest, external.get("independentReview") == "complete")
         ledger = ledger_path.read_text(encoding="utf-8")
         for task, steps in manifest["taskSteps"].items():
             if not task.isdigit():
@@ -879,6 +950,7 @@ def run_real_codex_smoke(repo: Path, host_config: Path = _DEFAULT_HOST_CONFIG) -
     changed = ()
     history_relative = None
     failure = None
+    cleanup_errors = ()
     try:
         _git(primary, "worktree", "add", "--detach", str(worktree), "HEAD")
         _git(worktree, "switch", "-c", branch)
@@ -925,11 +997,15 @@ def run_real_codex_smoke(repo: Path, host_config: Path = _DEFAULT_HOST_CONFIG) -
                 failure = "sanitized terminal evidence: " + history.relative_to(worktree).as_posix()
     finally:
         cleanup_errors = cleanup_real_smoke(primary, worktree, branch if branch_created else None)
-        temporary.cleanup()
+        try:
+            temporary.cleanup()
+        except OSError:
+            cleanup_errors += ("temporary-cleanup-oserror",)
         try:
             identity_changed = _primary_identity(primary) != before
         except Exception:
             identity_changed = True
+            cleanup_errors += ("primary-identity-check-oserror",)
     if cleanup_errors or identity_changed:
         issues = cleanup_errors + (("primary-identity-changed",) if identity_changed else ())
         detail = ",".join(issues)

@@ -322,6 +322,8 @@ pure_help = (arguments in (["-h"], ["--help"])
              and arguments[1] in ("-h", "--help"))
 if pure_help:
     os.execve(runtime, [str(runtime), *target], environment)
+if any(argument in ("-h", "--help") for argument in arguments):
+    fail("帮助参数不能与操作参数混用")
 
 launcher = r'''
 import os
