@@ -726,9 +726,9 @@ Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Acc
 
 ## 自治工程控制平面 Task 8（2026-10-10）
 
-- **实现**：最终实现提交 `9031fcd5` 正确解码受支持的 quoted YAML scalar，以保守 shell grammar 拒绝
-  interpreter/eval/wrapper/glob/brace/path Codex 执行，增加无命令回显的 workflow path/line 诊断，并将 review evidence
-  收紧为顶层 EOF sentinel、三份唯一非 symlink path 和唯一 digest。
+- **实现**：最终实现提交 `ef5e1d3b` 在既有 workflow/review 防护上，进一步将 GitHub hosted/versioned Python bootstrap
+  绑定到实际执行的 `sys.executable` 与 Python minor；setup-python 使用实际 `bin/python3`，错误命名的 versioned symlink
+  会以 typed identity error 拒绝。既有 quoted YAML scalar、保守 shell grammar、无命令回显诊断与 review evidence 约束保持不变。
 - **验证**：受控 Python 3.12 下 Harness 共 406 tests：399 通过；7 个 Linux wrapper 测试在 sandbox 内以
   `linux-fixture:permission-denied` skip；sandbox 外固定 digest integration 7/7 通过、零 skip。CI 会以 `--fail-on-skip`
   拒绝任意 skip。11/11 fake drills、productization 37 tests、
@@ -737,8 +737,8 @@ Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Acc
 - **真实 smoke**：恰好执行一次 Codex cycle；结果 `paused`，fixture 改动 0、通过 Gate 0。临时 run-history 在清理前
   已验证存在且脱敏，disposable worktree 已移除，遗留的临时分支已删除，主工作树状态未变化；未接触生产或发布。
 - **限制**：当次 smoke 使用的旧摘要格式未保留脱敏 stop reason，之后已补回归测试和摘要字段但按“一次 smoke”约束
-  未重跑；裸 `python3` 为 3.9，不满足 Harness 3.11+ 下限。三路 security、DX/CI、whole-branch 独立复审已双
-  `APPROVED`；GitHub Ubuntu 24.04 零 skip run 尚未绑定。Task 8 保持
+  未重跑；首次 GitHub run `38058476411` 因 hosted Python 入口选择不正确而失败，最终修复已由三路 security、DX/CI、
+  whole-branch 独立复审双 `APPROVED`，但新的 GitHub Ubuntu 24.04 零 skip run 尚未绑定。Task 8 保持
   `in_progress`。
 - **下一步候选**：在三路 APPROVED、GitHub/Obsidian 同步和真实 Codex 环境就绪后，另行批准管理端 Phase C-1：
   `820–1179px` 双栏与检查器壳层；不得把本 Task 的治理交付当作该产品 Milestone 已开始或已完成。

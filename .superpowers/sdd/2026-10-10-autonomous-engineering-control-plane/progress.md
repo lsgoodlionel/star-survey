@@ -39,7 +39,7 @@ Task 4: complete — commits c0e70dacd61dc8a51a2b6b1af08a365c8b340f2c and d22b9e
 Task 5: complete — commits 842a6f5bec1e0aaba69ceb2b58ed07ae51140911, 33cba68a2a97815f8082f0d051093c835961ddea, e2d7941b3c9a1bf390bea0f536591e0ff2b967a0; 49 focused / 187 Harness tests pass; scoped re-review SPEC_COMPLIANCE=APPROVED and CODE_QUALITY=APPROVED
 Task 6: complete — commits 101188de4cf8510bd5e5f053f6bc0f8276e90df7, 1357b67072e2f02359f5023cf7cafe2649254d94, dcf31a4af0220540dc916f03f349dc4644895b2b; 98 focused / 264 Harness tests pass; scoped re-review SPEC_COMPLIANCE=APPROVED and CODE_QUALITY=APPROVED
 Task 7: complete — commits 0a41a247df8ef084f5a0399c94b217b5179c9a57, 917ced92c395d47534ef710b0973e10e75fa6a46, d4f7b36314a60d4ff533f4d3a50a1cf0581e9d20, 8fcd2922ad50a9be417604a910902d421bf7fb5d, 4dfc278fcf1c2eaf06480aa70f23c2a44e9dcd4f, b84c0e1e0538cc628e94e170c164db37280cbd87, 80233d79b69c81bd411a4ddc3a803047244a17ae and ce4c86cd39909b8dc4b97050059d931e19855cb7; 80 focused / 344 Harness tests pass; final scoped re-review SPEC_COMPLIANCE=APPROVED and CODE_QUALITY=APPROVED
-Task 8: in_progress — round-5 implementation commit 53c1f3db577c3d505ce582a53f45800e84057636 closes all round-4 findings under TDD; three approved round-5 reviews, GitHub zero-skip run and Obsidian remain pending
+Task 8: in_progress — final implementation commit ef5e1d3b61f2944731ba1be6aa5996548a88cf31 binds the hosted Python runtime identity; three final security, DX/CI and whole-branch reviews are double APPROVED; GitHub zero-skip run and Obsidian remain pending
 
 ## Review findings
 
@@ -146,7 +146,12 @@ Markdown dependencies. Commits `43bda24a`, `07e414c0`, and final implementation 
 recursive wrappers and executable expansions, and non-top-level raw-HTML review sentinels while retaining current real workflows. Cost if
 wrong: richer workflow syntax must be rewritten to the documented subset rather than silently accepted.
 
-Task 8 final independent review: security, DX/CI and whole-branch reports all bind
+Task 8 initial controller closure before hosted CI: security, DX/CI and whole-branch reports all bind
 `c7b9366142ab6f8b0570d208c156fc0392c007f1..9031fcd5e0322b16d5df2ae42580af946a9d796d` and end in double
-`APPROVED`. The reports are tracked under `docs/agent/reviews/`; Step 7 and `externalSync.independentReview` are complete. Task 8 remains
-in_progress because GitHub hosted CI, documentation finalization/push, and Obsidian synchronization remain pending.
+`APPROVED`. Those report slots were later superseded by the hosted-runtime closure reviews below. Step 7 and
+`externalSync.independentReview` remain complete; Task 8 stays in_progress until GitHub hosted CI and Obsidian synchronization finish.
+
+Task 8 hosted-runtime closure: GitHub run `38058476411` correctly failed when the wrapper did not select setup-python's actual `bin/python3`.
+Commit `717c1d82` repaired candidate discovery; final commit `ef5e1d3b` additionally binds hosted/versioned target identity and basename to
+the actual Python minor, closing the follow-up symlink mismatch finding. Fixed-digest Linux integration is 7/7 PASS with zero skip, and three
+new final reviews bind `c7b93661..ef5e1d3b` with double `APPROVED`. A fresh GitHub Ubuntu 24.04 run is still required before Step 4 closes.

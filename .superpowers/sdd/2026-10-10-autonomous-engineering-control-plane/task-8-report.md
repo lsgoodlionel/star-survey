@@ -6,11 +6,12 @@
 ## 交付状态
 
 Task 8 本地实现与三路独立审查已完成，当前获批 implementation commit 为
-`9031fcd5e0322b16d5df2ae42580af946a9d796d`。当前结构化状态为
+`ef5e1d3b61f2944731ba1be6aa5996548a88cf31`。当前结构化状态为
 `locally_reviewed_sync_pending`：独立复审为 `complete`，GitHub hosted run 与 Obsidian 仍为 `pending`，因此 Task 8 与
 总计划保持 `in_progress`，不宣称 hosted CI 或完整同步已经完成。
 
-本任务未修改产品业务代码；Survey 分支已首次 push 以触发 hosted CI，但失败 run 尚在修复，Obsidian 未更新。
+本任务未修改产品业务代码；Survey 分支已首次 push 以触发 hosted CI。失败 run `38058476411` 定位到 setup-python
+入口选择错误，最终修复已获三路复核批准，但新的 hosted run 尚未触发，Obsidian 未更新。
 
 ## RED→GREEN
 
@@ -132,13 +133,26 @@ Round 5 继续严格 RED→GREEN，并关闭 round-4 的全部 finding：
 
 报告不包含秘密、原始 Codex JSONL 或未脱敏运行时证据。
 
-## Controller adjudication and final closure
+## Initial controller closure before hosted CI
 
 五轮自动修复后，控制器没有继续无界重试，而是把工作流扫描器收窄为文档化的 stdlib-only 保守语法。最终 implementation
 commit 为 `9031fcd5e0322b16d5df2ae42580af946a9d796d`；测试证据修正 commit 为 `77422233`。最终 focused suite 为
 104 tests（97 PASS、7 typed skip），whole-branch reviewer 的 full Harness 为 407 tests（400 PASS、7 typed skip），本机固定
 digest Docker integration 为 7/7 PASS、零 skip，fake drills 11/11 PASS。
 
-Security、DX/CI、whole-branch 三份 final closure report 均绑定
+该阶段 Security、DX/CI、whole-branch 三份 closure report 均绑定
 `c7b9366142ab6f8b0570d208c156fc0392c007f1..9031fcd5e0322b16d5df2ae42580af946a9d796d`，双 verdict 为
-`APPROVED`。结构化 manifest 已将 independent review 标为 complete；GitHub hosted run、push 与 Obsidian 仍保持 pending。
+`APPROVED`。这组证据随后被 hosted-runtime 修复及下节所列的新三路 final closure report 取代；GitHub hosted run 与
+Obsidian 仍保持 pending。
+
+## Hosted Python identity closure
+
+首次 GitHub run `38058476411` 在 setup-python 提供的 hosted toolcache 布局下未选择实际 `bin/python3`，因此按预期失败，
+没有被描述为成功。提交 `717c1d82` 修正候选入口后，独立复核又发现 versioned symlink 名称可能与实际解释器 minor
+不一致；最终提交 `ef5e1d3b61f2944731ba1be6aa5996548a88cf31` 将 hosted/versioned bootstrap 绑定到当前
+`sys.executable`，并验证目标 basename 与实际 Python 3.11-3.14 minor 一致。
+
+最终固定 digest Linux integration 为 7/7 PASS、零 skip；focused adapter 38/38 PASS，governance 13/13 PASS，
+三份 final closure report 均绑定
+`c7b9366142ab6f8b0570d208c156fc0392c007f1..ef5e1d3b61f2944731ba1be6aa5996548a88cf31` 并双
+`APPROVED`。新的 GitHub Ubuntu 24.04 run 尚待 push 触发，因此 manifest 仍保持 `github: pending`。

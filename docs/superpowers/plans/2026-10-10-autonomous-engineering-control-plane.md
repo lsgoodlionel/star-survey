@@ -468,7 +468,7 @@ Expected: all commands PASS.
 
 Dispatch one reviewer for security and state recovery, one for developer ergonomics and CI, and one whole-branch reviewer. Re-run all Harness tests after accepted fixes and record rejected findings with technical reasons in the run summary.
 
-Completed: controller adjudication implementation `9031fcd5e0322b16d5df2ae42580af946a9d796d` 已取得 security、DX/CI、
+Completed: controller adjudication implementation `ef5e1d3b61f2944731ba1be6aa5996548a88cf31` 已取得 security、DX/CI、
 whole-branch 三路独立 `SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED`，报告已纳入
 `docs/agent/reviews/` 并由结构化 manifest 绑定 commit、range、path 与 SHA-256。
 
@@ -476,7 +476,7 @@ whole-branch 三路独立 `SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED`
 
 Document install/use/resume/escalation commands, final test evidence, remaining limitations and the first eligible real product Milestone. Update this plan's checkboxes only from actual evidence and add the implementation commit references.
 
-Local documentation is synchronized to the final implementation commit `9031fcd5`, but this step remains open because the plan cannot
+Local documentation is synchronized to the final implementation commit `ef5e1d3b`, but this step remains open because the plan cannot
 be marked complete before the bound GitHub run and Obsidian synchronization. The first candidate product Milestone is Phase C-1's
 `820–1179px` two-column and inspector shell, subject to host synchronization and a fresh approved file scope.
 
@@ -490,8 +490,9 @@ git push
 
 Update the Survey project overview/progress note with date, branch, commit range, test evidence, completed scope, known limitations and the next product-development Milestone. Do not record credentials or raw run logs.
 
-Partially completed: Task 8 changes are committed locally. Per the controller instruction, this implementer does not push and does not update
-Obsidian; those two delivery actions remain open, so Task 8 and the plan remain in progress.
+Partially completed: Task 8 implementation and final review evidence are committed locally. The branch was pushed once, but hosted run
+`38058476411` exposed a setup-python entry mismatch; `ef5e1d3b` binds the executing hosted runtime identity and has only local zero-skip
+evidence so far. A new successful hosted run and Obsidian synchronization remain open, so Task 8 and the plan remain in progress.
 
 ## Final Acceptance
 

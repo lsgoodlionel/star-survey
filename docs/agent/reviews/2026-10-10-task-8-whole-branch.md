@@ -1,44 +1,47 @@
-# Task 8 whole-branch final closure review
+# Task 8 whole-branch hosted-runtime final closure review
 
 日期：2026-10-10
 仓库：`/Users/lionel/Develop/survey/.worktrees/admin-web`
-Implementation commit：`9031fcd5e0322b16d5df2ae42580af946a9d796d`
-Reviewed range: `c7b9366142ab6f8b0570d208c156fc0392c007f1..9031fcd5e0322b16d5df2ae42580af946a9d796d`
-Evidence-only commit：`77422233e8619b12cc8715c1147bdb2593551533`
-方式：限定复核前次两个非 implementation blocker；重跑目标 unittest、单反斜杠真实 PoC 与当前 workflow scan；沿用上一轮对 implementation range 的 full regression 证据；未修改 tracked 文件、未 push、未运行真实 Codex
+Implementation commit：`ef5e1d3b61f2944731ba1be6aa5996548a88cf31`
+Reviewed range: `c7b9366142ab6f8b0570d208c156fc0392c007f1..ef5e1d3b61f2944731ba1be6aa5996548a88cf31`
+重点补丁：`717c1d82cbe77ccd55cf19a4949583ab03c9571b..ef5e1d3b61f2944731ba1be6aa5996548a88cf31`
+方式：只读 diff/代码/状态审查、focused unit/governance tests、固定 digest Docker integration、独立 hosted-toolcache 正反 probes 与状态一致性检查；未修改 tracked 文件、未 push、未运行真实 Codex
 
 ## Findings
 
 无残余 finding。
 
-## Blocker Re-evaluation
+## Prior Finding Closure
 
-### Commit identity：已关闭
+### P1 hosted runtime identity/version binding：已关闭
 
-- `git rev-parse 9031fcd5` 返回 `9031fcd5e0322b16d5df2ae42580af946a9d796d`，与控制器更正后的 implementation commit 完全一致。
-- 本报告现精确绑定 `c7b9366142ab6f8b0570d208c156fc0392c007f1..9031fcd5e0322b16d5df2ae42580af946a9d796d`。此前另一完整 SHA 已确认是 controller metadata typo，不是仓库或 implementation 问题。
-- `77422233e8619b12cc8715c1147bdb2593551533` 是 `9031` 的后代；`9031..77422233` 仅修改 `/Users/lionel/Develop/survey/.worktrees/admin-web/tools/agent-harness/tests/test_fault_injection.py`，不改变 implementation range。
+- `/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:178-230` 仍先复验完整 symlink chain、owner、mode、trusted parents 与 shell 阶段 fingerprint；随后对 hosted root 或 versioned bootstrap 无条件要求 resolved `sys.executable` 等于 resolved target。
+- 当 resolved target basename 为 `python3.11` 至 `python3.14` 时，`/Users/lionel/Develop/survey/.worktrees/admin-web/scripts/agent-harness:220-229` 同时要求实际版本处于支持范围，且 target minor 与 `sys.version_info` 一致。上一轮可接受 `python3 -> python3.12`/实际 3.11 的双分支绕过不再存在。
+- 非 hosted 的旧 unversioned `/usr/bin/python3` 只可作为进入受控 discovery 的 bootstrap；`trusted_runtime()` 仍要求最终 unversioned runtime 与当前 resolved `sys.executable` 一致且为 Python 3.11-3.14，否则继续寻找并复验独立的 versioned trusted runtime。这保留了旧系统 Python 启动发现、但不把旧版本直接选作 Harness runtime 的既有行为。
+- 独立固定 digest 正向 probe：在 hosted `3.11.99/x64/bin` 中令 `python3 -> python3.11`，移除 fallback 后返回 exit 0、`Python 3.11.17`。
+- 独立固定 digest负向 probe：令 `python3 -> python3.12`，但 target 实际为 Python 3.11，移除 fallback 后返回 exit 2 与 `Python bootstrap 身份变化`。新增 regression 位于 `/Users/lionel/Develop/survey/.worktrees/admin-web/tools/agent-harness/tests/test_codex_adapter.py:471-492`，精确覆盖该正反边界。
 
-### Escaped explicit-key regression：已关闭
+### P2 status documentation drift：已关闭
 
-- Evidence-only commit 把 `/Users/lionel/Develop/survey/.worktrees/admin-web/tools/agent-harness/tests/test_fault_injection.py:225` 改为 raw-string fixture，实际写出的 YAML key 为单反斜杠 `"\u0072un"`；目标 unittest 1/1 PASS。
-- 独立 PoC 不复用测试字符串：通过 `chr(92)` 构造 key，回读实际第 4 行并确认反斜杠计数为 1。真实 `/Users/lionel/Develop/survey/.worktrees/admin-web/tools/agent-harness/drills/run_drills.py:638-651` 的 `check_forbidden_options()` 拒绝该文件，诊断为 `.github/workflows/poc.yml:4: workflow explicit run key is unsupported`。
-- 因此 prior whole-branch escaped explicit-key P1 已由 implementation commit `9031fcd5e0322b16d5df2ae42580af946a9d796d` 关闭；`77422233` 只纠正证据 fixture，使自动回归精确覆盖同一 PoC。
-- 当前 checked-in workflow scan 返回 `PASS forbidden-option-policy`，修正后的证据没有引入当前 workflow 误拒绝。
+- `/Users/lionel/Develop/survey/.worktrees/admin-web/docs/agent/AUTONOMY.md:5-7` 现在与 manifest 一致：三路独立复审 complete，GitHub hosted 零 skip run 与 Obsidian pending，并保留 controller-only promotion 约束。
+- `/Users/lionel/Develop/survey/.worktrees/admin-web/.superpowers/sdd/2026-10-10-autonomous-engineering-control-plane/task-8-report.md:6-13` 的顶部当前状态已更新为获批 implementation `9031fcd5`、`locally_reviewed_sync_pending`、独立复审 complete、GitHub hosted run 与 Obsidian pending；不再与后文 controller adjudication 相反。
+- `/Users/lionel/Develop/survey/.worktrees/admin-web/platform/docs/p2/progress.md:739-742` 已移除未完成的 round-3 残句，限制项现在完整陈述三路 review 已批准而 hosted run 尚未绑定。
 
-## Existing Closure Evidence
+## Verification Evidence
 
-- 上一轮在 implementation `9031` 上完成 Full Harness：407 tests，400 PASS、7 个既有 `linux-fixture:permission-denied` typed skip、0 failure。
-- Fake drills 11/11 PASS；success drill 真实经过 RunService、adapter、Gate、review、finalize/history，并绑定一致的 HEAD 与 review scope。
-- Productization 37/37 PASS；capability map current；plan/memory docs drift PASS；doctor 22 ok、4 warning、0 error。
-- Ordinary `grep`/`python` 数据参数与安全 nested shell 正向测试保持通过；既有 executable glob/brace、multiline explicit key、CommonMark/canonical review evidence closure 没有被 evidence-only test edit触及。
+- 固定 digest Docker integration：7/7 PASS、0 skip，5.541s；镜像为 `python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce`。
+- Focused adapter：45 tests，38 PASS、7 个本地 sandbox `linux-fixture:permission-denied` typed skip、0 failure，27.224s；上述 7 项已由 sandbox 外同 digest 零 skip integration 全部补齐。
+- Governance：13/13 PASS；controller review evidence、read-only workflow、固定 action、Python 3.11、unit/integration partition 与 fail-on-skip 契约均保持通过。
+- `--check-docs` 返回 `PASS plan-memory-drift`；当前 workflow scan 返回 `PASS forbidden-option-policy`。
+- `git diff --check` 对重点补丁与完整 reviewed range均通过；重点补丁只修改 wrapper、其 targeted tests 与三份状态文档。
+- 既有 whole-branch control-plane implementation、407-test full regression、11/11 fake drills、37/37 productization 与 canonical review evidence 已在前序批准中验证；本补丁未改动这些核心路径或契约。
 
 ## Status Truthfulness
 
-- `/Users/lionel/Develop/survey/.worktrees/admin-web/docs/agent/HARNESS_DELIVERY.json:2-23` 仍为 `local_validated_sync_pending`；GitHub、independentReview、Obsidian 均 pending，review reports 为空。
-- `/Users/lionel/Develop/survey/.worktrees/admin-web/docs/agent/HARNESS_DELIVERY.json:25-38` 与 `/Users/lionel/Develop/survey/.worktrees/admin-web/docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md:433-504` 继续保持 Task 8 Step 4/7/8/9 及 Final Acceptance 6/7 pending。controller 尚未填充三路 review evidence，状态没有提前提升。
-- 本轮未运行真实 Codex。唯一真实 cycle 仍诚实记录为 `paused`、changed paths 0、passed Gates 0；fake success 没有被描述为真实 completed。
-- GitHub hosted run、push 与 Obsidian 同步仍待 controller 完成；本批准只确认 reviewed implementation range 的 spec compliance 与 code quality，不替代这些外部交付步骤。
+- `/Users/lionel/Develop/survey/.worktrees/admin-web/docs/agent/HARNESS_DELIVERY.json:2-23` 仍为 `locally_reviewed_sync_pending`：先前 implementation `9031fcd5` 的三路 independent review complete，GitHub 与 Obsidian pending。hosted-runtime patch 尚未被伪装成 hosted success，也未提前写入 controller evidence。
+- `/Users/lionel/Develop/survey/.worktrees/admin-web/docs/agent/HARNESS_DELIVERY.json:25-34` 与计划 `/Users/lionel/Develop/survey/.worktrees/admin-web/docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md:433-504` 继续保持 Task 8 Step 4/8/9 与 Final Acceptance 6/7 pending；Step 7 仅代表已绑定的先前三路 review evidence。
+- 已知 GitHub run `38058476411` 仍是失败证据，不被描述为成功。当前修复尚未形成绑定的 GitHub Ubuntu 24.04 success run，因此 Step 4 和 GitHub external sync 保持 pending 是诚实状态。
+- 唯一真实 Codex cycle 仍记录为 `paused`、changed paths 0、passed Gates 0；本轮没有重跑真实 Codex。Obsidian 仍 pending，Task 8 与总计划保持 `in_progress`。
 
 SPEC_COMPLIANCE=APPROVED
 CODE_QUALITY=APPROVED
