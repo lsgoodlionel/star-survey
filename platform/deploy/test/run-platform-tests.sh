@@ -69,7 +69,7 @@ set +e
 maven_status=$?
 set -e
 if [[ $maven_status -ne 0 ]]; then
-  echo "[对账] Maven 退出码 $maven_status；下面的数字只说明跑到哪为止，不代表通过" >&2
+  echo "[对账] Maven 退出码 ${maven_status}；下面的数字只说明跑到哪为止，不代表通过" >&2
 fi
 
 set +e

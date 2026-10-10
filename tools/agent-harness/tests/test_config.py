@@ -405,11 +405,11 @@ class ConfigTests(unittest.TestCase):
         matrix = load_gate_matrix(REPO / "docs/agent/GATE_MATRIX.yaml")
         cases = (
             ("plugins/MjyRuntimePolicy/MjyAccessGate.php",
-             "platform/deploy/test/run-access-policy.sh"),
+             "platform/deploy/test/run-access-policy.sh", "harness-access"),
             ("platform/tools/publish-gateway/pubgw/logic/scoring.py",
-             "platform/deploy/test/run-publish-gateway-parity.sh"),
+             "platform/deploy/test/run-publish-gateway-parity.sh", "harness-scoring"),
         )
-        for source, script in cases:
+        for source, script, prefix in cases:
             self.assertTrue((REPO / source).is_file())
             self.assertTrue((REPO / script).is_file())
             selected = {
@@ -419,7 +419,14 @@ class ConfigTests(unittest.TestCase):
                 for gate_id in matrix.profiles[profile]
             }
             for database in ("mysql", "pgsql"):
-                expected = ("env", "TEST_DB=" + database, script, "--fresh")
+                expected = (
+                    "env",
+                    "TEST_DB=" + database,
+                    "SURVEY_TEST_PREFIX=" + prefix + "-" + database,
+                    "COMPOSE_PROJECT_NAME=" + prefix + "-" + database,
+                    script,
+                    "--fresh",
+                )
                 with self.subTest(source=source, database=database):
                     self.assertTrue(any(
                         gate.id in selected and gate.command == expected and gate.cwd == "."

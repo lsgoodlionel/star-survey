@@ -201,7 +201,7 @@ class PreviewSessionApiTest {
             assertThat(second.get(5, TimeUnit.SECONDS)).isEqualTo(202);
             gateway.closeRelease.countDown();
             assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(200);
-            assertThat(gateway.closeCalls.get()).isEqualTo(1);
+            assertThat(gateway.closeCount(UUID.fromString(id))).isEqualTo(1);
         } finally {
             pool.shutdownNow();
         }
@@ -257,7 +257,7 @@ class PreviewSessionApiTest {
             int follower = mvc.perform(delete("/v1/preview-sessions/" + id)
                     .header("Authorization", bearer(ws.owner()))).andReturn().getResponse().getStatus();
             assertThat(follower).isEqualTo(202);
-            assertThat(gateway.closeCalls.get()).isEqualTo(1);
+            assertThat(gateway.closeCount(id)).isEqualTo(1);
             gateway.closeRelease.countDown();
             assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(200);
         } finally {
@@ -309,6 +309,7 @@ class PreviewSessionApiTest {
         final List<CreateRequest> creates = new CopyOnWriteArrayList<>();
         final AtomicInteger sid = new AtomicInteger(880000);
         final AtomicInteger closeCalls = new AtomicInteger();
+        final List<CloseRequest> closes = new CopyOnWriteArrayList<>();
         final AtomicInteger activateCalls = new AtomicInteger();
         final Map<UUID, CreateRequest> sessions = new ConcurrentHashMap<>();
         final Map<UUID, Integer> sessionSids = new ConcurrentHashMap<>();
@@ -321,10 +322,14 @@ class PreviewSessionApiTest {
         volatile CountDownLatch closeEntered = new CountDownLatch(1);
         volatile CountDownLatch closeRelease = new CountDownLatch(1);
 
-        void reset() { creates.clear(); sessions.clear(); sessionSids.clear(); closeCalls.set(0); failClose = false; failCreate = false;
+        void reset() { creates.clear(); sessions.clear(); sessionSids.clear(); closes.clear(); closeCalls.set(0); failClose = false; failCreate = false;
             blockClose = false; blockPrepare = false; prepareEntered = new CountDownLatch(1);
             prepareRelease = new CountDownLatch(1); closeEntered = new CountDownLatch(1);
             closeRelease = new CountDownLatch(1); activateCalls.set(0); }
+
+        long closeCount(UUID sessionId) {
+            return closes.stream().filter(request -> request.sessionId().equals(sessionId)).count();
+        }
 
         @Override public boolean isConfigured() { return true; }
 
@@ -348,6 +353,7 @@ class PreviewSessionApiTest {
         }
 
         @Override public CloseOutcome close(CloseRequest request) {
+            closes.add(request);
             closeCalls.incrementAndGet();
             closeEntered.countDown();
             if (blockClose) try { closeRelease.await(5, TimeUnit.SECONDS); }

@@ -55,6 +55,8 @@
     {
       "id": "platform-java-tests",
       "command": [
+        "env",
+        "PLATFORM_DB_NAME=platform_dashboard_gate",
         "platform/deploy/test/run-platform-tests.sh"
       ],
       "cwd": ".",
@@ -163,6 +165,8 @@
       "command": [
         "env",
         "TEST_DB=mysql",
+        "SURVEY_TEST_PREFIX=harness-access-mysql",
+        "COMPOSE_PROJECT_NAME=harness-access-mysql",
         "platform/deploy/test/run-access-policy.sh",
         "--fresh"
       ],
@@ -174,6 +178,8 @@
       "command": [
         "env",
         "TEST_DB=pgsql",
+        "SURVEY_TEST_PREFIX=harness-access-pgsql",
+        "COMPOSE_PROJECT_NAME=harness-access-pgsql",
         "platform/deploy/test/run-access-policy.sh",
         "--fresh"
       ],
@@ -185,6 +191,8 @@
       "command": [
         "env",
         "TEST_DB=mysql",
+        "SURVEY_TEST_PREFIX=harness-scoring-mysql",
+        "COMPOSE_PROJECT_NAME=harness-scoring-mysql",
         "platform/deploy/test/run-publish-gateway-parity.sh",
         "--fresh"
       ],
@@ -196,6 +204,8 @@
       "command": [
         "env",
         "TEST_DB=pgsql",
+        "SURVEY_TEST_PREFIX=harness-scoring-pgsql",
+        "COMPOSE_PROJECT_NAME=harness-scoring-pgsql",
         "platform/deploy/test/run-publish-gateway-parity.sh",
         "--fresh"
       ],
