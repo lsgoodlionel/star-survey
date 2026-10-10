@@ -473,12 +473,24 @@ print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": 
 mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
 cp -L /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python
 chmod 0755 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python
-rm /usr/local/bin/python3.11
+rm -f /usr/local/bin/python3.11 /usr/bin/python3 /usr/bin/python3.11
 AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
   /repo/scripts/agent-harness --python --version
 """)
         self.assertEqual(hosted.returncode, 0, hosted.stderr or hosted.stdout)
         self.assertRegex(hosted.stdout, r"^Python 3\.11\.")
+
+        hosted_symlink = self.linux_wrapper(r"""
+mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
+cp -L /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11
+ln -s python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python
+rm -f /usr/local/bin/python3.11 /usr/bin/python3 /usr/bin/python3.11
+AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
+  /repo/scripts/agent-harness --python --version
+""")
+        self.assertEqual(hosted_symlink.returncode, 0,
+                         hosted_symlink.stderr or hosted_symlink.stdout)
+        self.assertRegex(hosted_symlink.stdout, r"^Python 3\.11\.")
 
         mismatched = self.linux_wrapper(r"""
 mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
@@ -490,6 +502,23 @@ AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
 """)
         self.assertEqual(mismatched.returncode, 2, mismatched.stderr or mismatched.stdout)
         self.assertIn("Python bootstrap 身份变化", mismatched.stdout)
+
+    def test_linux_wrapper_never_splits_untrusted_python_location(self):
+        rejected = self.linux_wrapper(r"""
+mkdir -p /opt/hostedtoolcache/Python/suffix/x64
+printf '#!/bin/sh\nprintf executed > /tmp/python-location-executed\nexit 97\n' \
+  > /opt/hostedtoolcache/Python/3.11.injected
+chmod 0755 /opt/hostedtoolcache/Python/3.11.injected
+for separator in ' ' "$(printf '\t')" "$(printf '\n')"; do
+  rm -f /tmp/python-location-executed
+  value=/opt/hostedtoolcache/Python/3.11.injected${separator}/opt/hostedtoolcache/Python/suffix/x64
+  AGENT_HARNESS_CI=1 pythonLocation="$value" \
+    /repo/scripts/agent-harness --python --version || exit $?
+  test ! -e /tmp/python-location-executed || exit 96
+done
+""")
+        self.assertEqual(rejected.returncode, 0, rejected.stderr or rejected.stdout)
+        self.assertEqual(rejected.stdout.count("Python 3.11."), 3)
 
     def test_requested_docker_path_is_revalidated_against_trusted_roots(self):
         project = Path(__file__).resolve().parents[3]
