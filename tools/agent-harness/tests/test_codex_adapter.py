@@ -509,7 +509,10 @@ mkdir -p /opt/hostedtoolcache/Python/suffix/x64
 printf '#!/bin/sh\nprintf executed > /tmp/python-location-executed\nexit 97\n' \
   > /opt/hostedtoolcache/Python/3.11.injected
 chmod 0755 /opt/hostedtoolcache/Python/3.11.injected
-for separator in ' ' "$(printf '\t')" "$(printf '\n')"; do
+newline='
+'
+for separator in ' ' "$(printf '\t')" "$newline"; do
+  test "${#separator}" -eq 1 || exit 95
   rm -f /tmp/python-location-executed
   value=/opt/hostedtoolcache/Python/3.11.injected${separator}/opt/hostedtoolcache/Python/suffix/x64
   AGENT_HARNESS_CI=1 pythonLocation="$value" \
