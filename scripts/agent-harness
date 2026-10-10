@@ -217,12 +217,16 @@ def trusted_bootstrap(candidate, roots, expected, allowed_owner):
             break
         if target is None or "".join(fingerprint) != expected:
             return None
-        if candidate.name != "python3":
-            actual = Path(sys.executable).resolve(strict=True)
-            if (actual != target.resolve(strict=True)
-                    or not (3, 11) <= sys.version_info[:2] <= (3, 14)
-                    or candidate.name != f"python{sys.version_info.major}.{sys.version_info.minor}"):
-                return None
+        actual = Path(sys.executable).resolve(strict=True)
+        expected_versioned_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        hosted = any(str(root).startswith("/opt/hostedtoolcache/Python") for root in roots)
+        require_version_binding = candidate.name != "python3" or hosted
+        if (require_version_binding and actual != target.resolve(strict=True)
+                or require_version_binding and target.name.startswith("python3.")
+                and (not (3, 11) <= sys.version_info[:2] <= (3, 14)
+                     or target.name != expected_versioned_name)
+                or hosted and not (3, 11) <= sys.version_info[:2] <= (3, 14)):
+            return None
         return target
     except (OSError, RuntimeError, ValueError):
         return None

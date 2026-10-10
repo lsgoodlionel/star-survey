@@ -3,8 +3,8 @@
 
 权威设计：[已确认 spec](../superpowers/specs/2026-10-10-autonomous-engineering-control-plane-design.md)。
 CLI、状态持久化、路径匹配、Gate 执行、脱敏、Codex 适配与只读 CI 已在本地实现并通过自动验证。
-当前交付状态由 [HARNESS_DELIVERY.json](HARNESS_DELIVERY.json) 唯一记录；三路独立复审、GitHub 零 skip run 与
-Obsidian 同步仍待完成。实现者不得自行把独立复审提升为 `complete`。
+当前交付状态由 [HARNESS_DELIVERY.json](HARNESS_DELIVERY.json) 唯一记录；三路独立复审已完成，GitHub hosted 零 skip
+run 与 Obsidian 同步仍待完成。只有交付控制器可依据三份结构化证据提升独立复审状态。
 
 ## 准入与实施
 

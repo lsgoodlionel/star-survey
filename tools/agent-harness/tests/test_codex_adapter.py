@@ -480,6 +480,17 @@ AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
         self.assertEqual(hosted.returncode, 0, hosted.stderr or hosted.stdout)
         self.assertRegex(hosted.stdout, r"^Python 3\.11\.")
 
+        mismatched = self.linux_wrapper(r"""
+mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
+cp -L /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.12
+ln -s python3.12 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3
+rm /usr/local/bin/python3.11
+AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
+  /repo/scripts/agent-harness --python --version
+""")
+        self.assertEqual(mismatched.returncode, 2, mismatched.stderr or mismatched.stdout)
+        self.assertIn("Python bootstrap 身份变化", mismatched.stdout)
+
     def test_requested_docker_path_is_revalidated_against_trusted_roots(self):
         project = Path(__file__).resolve().parents[3]
         with tempfile.TemporaryDirectory(prefix="task8-docker-", dir=project.parents[2]) as directory:

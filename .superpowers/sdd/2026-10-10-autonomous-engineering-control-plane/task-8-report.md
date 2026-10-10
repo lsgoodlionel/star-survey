@@ -5,12 +5,12 @@
 
 ## 交付状态
 
-Task 8 round-5 最终自动审查修复已在本地完成，implementation commit 为
-`53c1f3db577c3d505ce582a53f45800e84057636`。当前结构化状态为
-`local_validated_sync_pending`：独立复审、GitHub 与 Obsidian 均为 `pending`，因此 Task 8 与总计划保持
-`in_progress`，不宣称完整交付、CI 已运行或完整同步。
+Task 8 本地实现与三路独立审查已完成，当前获批 implementation commit 为
+`9031fcd5e0322b16d5df2ae42580af946a9d796d`。当前结构化状态为
+`locally_reviewed_sync_pending`：独立复审为 `complete`，GitHub hosted run 与 Obsidian 仍为 `pending`，因此 Task 8 与
+总计划保持 `in_progress`，不宣称 hosted CI 或完整同步已经完成。
 
-本任务未修改产品业务代码，未 push，未更新 Obsidian，也未派生 subagent。
+本任务未修改产品业务代码；Survey 分支已首次 push 以触发 hosted CI，但失败 run 尚在修复，Obsidian 未更新。
 
 ## RED→GREEN
 
