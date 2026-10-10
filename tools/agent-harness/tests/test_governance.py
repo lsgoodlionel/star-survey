@@ -73,17 +73,22 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertIn("documentation", document)
         self.assertIn(".env.example", document["secretPolicy"]["allowlist"])
 
-    def test_independent_review_remains_pending_until_controller_supplies_approvals(self):
+    def test_independent_review_is_complete_only_with_three_controller_approvals(self):
         manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(
             encoding="utf-8"))
-        self.assertEqual(manifest["externalSync"]["independentReview"], "pending")
-        self.assertEqual(manifest["deliveryStatus"], "local_validated_sync_pending")
-        self.assertEqual(manifest["reviewEvidence"], {
-            "requiredReviewers": ["security", "dx_ci", "whole_branch"],
-            "reports": [],
-        })
+        self.assertEqual(manifest["externalSync"]["independentReview"], "complete")
+        self.assertEqual(manifest["deliveryStatus"], "locally_reviewed_sync_pending")
+        evidence = manifest["reviewEvidence"]
+        self.assertEqual(evidence["requiredReviewers"],
+                         ["security", "dx_ci", "whole_branch"])
+        self.assertEqual(len(evidence["reports"]), 3)
+        self.assertEqual(len({report["path"] for report in evidence["reports"]}), 3)
+        self.assertEqual(len({report["sha256"] for report in evidence["reports"]}), 3)
+        self.assertTrue(all(report["specVerdict"] == "APPROVED"
+                            and report["codeQualityVerdict"] == "APPROVED"
+                            for report in evidence["reports"]))
         task8 = PLAN.read_text(encoding="utf-8").split("### Task 8:", 1)[1]
-        self.assertIn("- [ ] **Step 7: Perform independent review", task8)
+        self.assertIn("- [x] **Step 7: Perform independent review", task8)
 
     def test_ci_test_runner_fails_when_any_test_is_skipped(self):
         runner = REPO / "tools/agent-harness/run_tests.py"

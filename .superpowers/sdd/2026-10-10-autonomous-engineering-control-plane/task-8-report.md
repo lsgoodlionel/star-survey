@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: local_validated_sync_pending -->
+<!-- harness-delivery-status: locally_reviewed_sync_pending -->
 # Task 8 审查修复报告
 
 日期：2026-10-10
@@ -131,3 +131,14 @@ Round 5 继续严格 RED→GREEN，并关闭 round-4 的全部 finding：
 - 唯一真实 smoke 的具体暂停分类不可恢复，且按“一次真实 cycle”约束不重跑。
 
 报告不包含秘密、原始 Codex JSONL 或未脱敏运行时证据。
+
+## Controller adjudication and final closure
+
+五轮自动修复后，控制器没有继续无界重试，而是把工作流扫描器收窄为文档化的 stdlib-only 保守语法。最终 implementation
+commit 为 `9031fcd5e0322b16d5df2ae42580af946a9d796d`；测试证据修正 commit 为 `77422233`。最终 focused suite 为
+104 tests（97 PASS、7 typed skip），whole-branch reviewer 的 full Harness 为 407 tests（400 PASS、7 typed skip），本机固定
+digest Docker integration 为 7/7 PASS、零 skip，fake drills 11/11 PASS。
+
+Security、DX/CI、whole-branch 三份 final closure report 均绑定
+`c7b9366142ab6f8b0570d208c156fc0392c007f1..9031fcd5e0322b16d5df2ae42580af946a9d796d`，双 verdict 为
+`APPROVED`。结构化 manifest 已将 independent review 标为 complete；GitHub hosted run、push 与 Obsidian 仍保持 pending。

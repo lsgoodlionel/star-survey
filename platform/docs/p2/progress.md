@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: local_validated_sync_pending -->
+<!-- harness-delivery-status: locally_reviewed_sync_pending -->
 # P2 进度：通用问卷与本土入口
 
 更新：2026-10-08
@@ -726,7 +726,7 @@ Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Acc
 
 ## 自治工程控制平面 Task 8（2026-10-10）
 
-- **实现**：round-5 修复提交 `53c1f3db` 正确解码受支持的 quoted/folded YAML scalar，以保守 shell grammar 拒绝
+- **实现**：最终实现提交 `9031fcd5` 正确解码受支持的 quoted YAML scalar，以保守 shell grammar 拒绝
   interpreter/eval/wrapper/glob/brace/path Codex 执行，增加无命令回显的 workflow path/line 诊断，并将 review evidence
   收紧为顶层 EOF sentinel、三份唯一非 symlink path 和唯一 digest。
 - **验证**：受控 Python 3.12 下 Harness 共 406 tests：399 通过；7 个 Linux wrapper 测试在 sandbox 内以
@@ -738,7 +738,7 @@ Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Acc
   已验证存在且脱敏，disposable worktree 已移除，遗留的临时分支已删除，主工作树状态未变化；未接触生产或发布。
 - **限制**：当次 smoke 使用的旧摘要格式未保留脱敏 stop reason，之后已补回归测试和摘要字段但按“一次 smoke”约束
   未重跑；裸 `python3` 为 3.9，不满足 Harness 3.11+ 下限。round-3 security 与 whole-branch 仍为
-  `CHANGES_REQUIRED`，三份 round-5 独立复审保持 pending；GitHub Ubuntu 24.04 零 skip run 尚未绑定。Task 8 保持
+  三路 security、DX/CI、whole-branch 独立复审已双 `APPROVED`；GitHub Ubuntu 24.04 零 skip run 尚未绑定。Task 8 保持
   `in_progress`。
 - **下一步候选**：在三路 APPROVED、GitHub/Obsidian 同步和真实 Codex 环境就绪后，另行批准管理端 Phase C-1：
   `820–1179px` 双栏与检查器壳层；不得把本 Task 的治理交付当作该产品 Milestone 已开始或已完成。

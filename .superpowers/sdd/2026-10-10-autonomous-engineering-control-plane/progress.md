@@ -140,3 +140,13 @@ echo, top-level EOF report contexts, duplicate path/digest and symlink aliases. 
 full Harness 406 tests (399 pass, 7 typed skip), fixed-digest Docker integration 7/7 with zero skip outside the sandbox, 11/11 fake drills,
 productization 37/37, capability current, forbidden scan and diff check. The initial in-sandbox Docker attempt failed only with typed socket
 permission denial; no real Codex ran. Independent review/Step 7, GitHub and Obsidian remain pending with an empty report manifest.
+
+Ruling: after the five automatic rounds, controller adjudication narrowed the stdlib-only workflow grammar instead of adding YAML/Shell/
+Markdown dependencies. Commits `43bda24a`, `07e414c0`, and final implementation `9031fcd5` reject Codex-like folded/explicit-key forms,
+recursive wrappers and executable expansions, and non-top-level raw-HTML review sentinels while retaining current real workflows. Cost if
+wrong: richer workflow syntax must be rewritten to the documented subset rather than silently accepted.
+
+Task 8 final independent review: security, DX/CI and whole-branch reports all bind
+`c7b9366142ab6f8b0570d208c156fc0392c007f1..9031fcd5e0322b16d5df2ae42580af946a9d796d` and end in double
+`APPROVED`. The reports are tracked under `docs/agent/reviews/`; Step 7 and `externalSync.independentReview` are complete. Task 8 remains
+in_progress because GitHub hosted CI, documentation finalization/push, and Obsidian synchronization remain pending.

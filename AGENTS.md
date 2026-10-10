@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: local_validated_sync_pending -->
+<!-- harness-delivery-status: locally_reviewed_sync_pending -->
 # Survey 项目协作规则
 
 ## 事实与任务入口

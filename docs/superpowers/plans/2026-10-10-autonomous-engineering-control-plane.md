@@ -464,19 +464,19 @@ Run: `git diff --check`
 
 Expected: all commands PASS.
 
-- [ ] **Step 7: Perform independent review and resolve findings**
+- [x] **Step 7: Perform independent review and resolve findings**
 
 Dispatch one reviewer for security and state recovery, one for developer ergonomics and CI, and one whole-branch reviewer. Re-run all Harness tests after accepted fixes and record rejected findings with technical reasons in the run summary.
 
-Pending: round-4 三份复审仍为 `CHANGES_REQUIRED`；round-5 implementation commit `53c1f3db`
-已按 RED→GREEN 修复全部 finding，但尚未取得任何 round-5 approval。只有控制器在同一 implementation commit/range 取得三路
-`SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED` canonical EOF verdict 并填入结构化 manifest 后才能勾选本步。
+Completed: controller adjudication implementation `9031fcd5e0322b16d5df2ae42580af946a9d796d` 已取得 security、DX/CI、
+whole-branch 三路独立 `SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED`，报告已纳入
+`docs/agent/reviews/` 并由结构化 manifest 绑定 commit、range、path 与 SHA-256。
 
 - [ ] **Step 8: Synchronize documentation and mark the plan complete**
 
 Document install/use/resume/escalation commands, final test evidence, remaining limitations and the first eligible real product Milestone. Update this plan's checkboxes only from actual evidence and add the implementation commit references.
 
-Local documentation is synchronized to the round-5 implementation commit `53c1f3db`, but this step remains open because the plan cannot
+Local documentation is synchronized to the final implementation commit `9031fcd5`, but this step remains open because the plan cannot
 be marked complete before the bound GitHub run and Obsidian synchronization. The first candidate product Milestone is Phase C-1's
 `820–1179px` two-column and inspector shell, subject to host synchronization and a fresh approved file scope.
 
