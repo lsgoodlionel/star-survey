@@ -72,7 +72,7 @@ Confirm latest migration is `V932`, `/` still redirects to `/workspace`, no `/da
 
 Mark the design confirmed. Treat the 2026-10-09 report as a baseline only; later code evidence supersedes statements about missing real preview, delivery links, responses and exports.
 
-- [ ] **Step 3: Run documentation checks**
+- [x] **Step 3: Run documentation checks**
 
 Run: `scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --check-docs`
 
@@ -80,7 +80,7 @@ Run: `git diff --check`
 
 Expected: both PASS after the Harness active-plan transition is recorded for this Milestone.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-10-10-business-dashboard-v1-design.md docs/superpowers/plans/2026-10-10-business-dashboard-v1.md
@@ -102,31 +102,31 @@ git commit -m "docs: plan business dashboard v1"
 - Consumes: trusted tenant/actor context and existing survey resource visibility.
 - Produces: `DashboardPage { EDIT, IMPORT, PREVIEW, PUBLISH, RESPONSES, VERSION }`; `upsert(tenantId, actorId, command, now)`; `findVisible(tenantId, actorId, limit)`; `RecentWorkView` with server-generated `targetPath`.
 
-- [ ] **Step 1: Write failing repository and database-guard tests**
+- [x] **Step 1: Write failing repository and database-guard tests**
 
 Cover valid page/version pairs, invalid pairs, same-target timestamp update, cross-tenant isolation, actor isolation, invisible/archived survey filtering, deterministic ordering and 51st-target eviction to 50.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run: `PLATFORM_DB_NAME=platform_dashboard_t2_red platform/deploy/platform-dev/mvn.sh clean test -Dtest='cn.mjy.platform.dashboard.DashboardRecentWork*'`
 
 Expected: FAIL because `V933` and dashboard repository types do not exist.
 
-- [ ] **Step 3: Add `V933__dashboard_recent_work.sql`**
+- [x] **Step 3: Add `V933__dashboard_recent_work.sql`**
 
 Create a tenant/actor/survey/page/version keyed table with UTC visit time, referential constraints consistent with existing IDs, an index supporting `visited_at DESC`, and the repository's bounded-retention delete. Do not accept a stored client URL.
 
-- [ ] **Step 4: Implement recent-work types and repository**
+- [x] **Step 4: Implement recent-work types and repository**
 
 Validate page/version combinations before SQL; use server-side target-path mapping and existing visibility predicates. Upsert and retention execute atomically.
 
-- [ ] **Step 5: Run focused and migration tests**
+- [x] **Step 5: Run focused and migration tests**
 
 Run: `PLATFORM_DB_NAME=platform_dashboard_t2_green platform/deploy/platform-dev/mvn.sh clean test -Dtest='cn.mjy.platform.dashboard.DashboardRecentWork*'`
 
 Expected: PASS with tenant isolation and 50-item retention evidence.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add platform/services/business/src/main/resources/db/migration/V933__dashboard_recent_work.sql platform/services/business/src/main/java/cn/mjy/platform/dashboard platform/services/business/src/test/java/cn/mjy/platform/dashboard
@@ -202,27 +202,27 @@ git commit -m "feat: expose dashboard aggregate"
 - Consumes: Task 3 JSON contract.
 - Produces: `getDashboard(api, options?, signal?)`, `recordRecentWork(api, command, signal?)`, `dashboardQueryKey(tenantId)`, and exported `DashboardView`, `DashboardTask`, `DashboardSurvey`, `RecentWork` types.
 
-- [ ] **Step 1: Write failing schema and client tests**
+- [x] **Step 1: Write failing schema and client tests**
 
 Cover every enum, nullable response count, visible sections, limit serialization, `204` mutation, unknown/missing field rejection, invalid target path rejection and tenant-specific query keys.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run: `npm test -- --run src/shared/api/dashboard.test.ts`
 
 Expected: FAIL because dashboard client and schemas do not exist.
 
-- [ ] **Step 3: Implement Zod schemas and API functions**
+- [x] **Step 3: Implement Zod schemas and API functions**
 
 Keep raw enums internal to typed rendering; allow only server-generated relative paths matching the existing survey route set.
 
-- [ ] **Step 4: Run focused frontend tests**
+- [x] **Step 4: Run focused frontend tests**
 
 Run: `npm test -- --run src/shared/api/dashboard.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add platform/apps/admin-web/src/shared/api/dashboard.ts platform/apps/admin-web/src/shared/api/dashboard.test.ts platform/apps/admin-web/src/shared/api/schemas.ts
