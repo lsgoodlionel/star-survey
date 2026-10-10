@@ -33,6 +33,13 @@ class GovernanceWorkflowTests(unittest.TestCase):
             with self.subTest(action=action):
                 self.assertRegex(action, r"^[^@\s]+@[0-9a-f]{40}$")
 
+    def test_checkout_fetches_history_for_review_ancestry_validation(self):
+        checkout = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
+        blocks = self.text.split("- uses: " + checkout)[1:]
+        self.assertEqual(len(blocks), 2)
+        for block in blocks:
+            self.assertRegex(block, r"(?m)^\s+with:\s*\n\s+fetch-depth:\s*0\s*$")
+
     def test_workflow_runs_all_governance_checks(self):
         required = (
             "test_config.py",
