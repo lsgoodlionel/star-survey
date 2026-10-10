@@ -43,7 +43,7 @@ _ERROR = re.compile(
     r"|\berror\s+[A-Z]+\d+|\b(?:ECONNREFUSED|ENOENT|EADDRINUSE)\b", re.I
 )
 _WRAPPER = re.compile(r"^\s*(?:npm (?:ERR!|error)|error Command failed|FAILURES\b|ERRORS\b)", re.I)
-_EXCEPTION_LINE = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception|ExceptionGroup)\s*:")
+_EXCEPTION_LINE = re.compile(r"^(?:[A-Za-z_][\w.]*)?(?:Error|Exception|ExceptionGroup)\s*:")
 _PEM = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S)
 _TOKEN = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,})\b")
 _JWT = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")

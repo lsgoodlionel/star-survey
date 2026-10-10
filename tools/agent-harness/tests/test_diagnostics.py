@@ -143,6 +143,17 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(failure_fingerprint(1, "", log),
                          failure_fingerprint(1, "", log + "\nERROR: later independent error"))
 
+    def test_direct_bare_exception_traceback_retains_first_stable_file_location(self):
+        log = ('Traceback (most recent call last):\n'
+               '  File "src/auth.py", line 42, in login\n'
+               '    raise Exception("denied")\nException: denied')
+        for changed in (log.replace("auth.py", "storage.py"), log.replace("line 42", "line 93")):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(failure_fingerprint(1, "", log),
+                                    failure_fingerprint(1, "", changed))
+        self.assertEqual(failure_fingerprint(1, "", log),
+                         failure_fingerprint(1, "", log + "\nERROR: later independent error"))
+
     def test_stable_source_lines_error_codes_and_normal_paths_remain_distinct(self):
         log = "src/service.py:43210: error E123: expected 503 got 401"
         for changed in (log.replace("43210", "51022"), log.replace("E123", "E124"),
