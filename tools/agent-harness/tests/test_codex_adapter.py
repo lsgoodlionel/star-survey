@@ -308,6 +308,63 @@ print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": 
         self.assertEqual(wrapper_marker, "")
         self.assertEqual(module_marker, "")
 
+    def test_real_wrapper_isolates_pythonpath_sitecustomize_for_version_and_help(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task7-pythonpath-", dir=project.parents[2]) as directory:
+            startup = Path(directory)
+            marker = startup / "executed"
+            self.write(startup / "sitecustomize.py",
+                       "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n")
+            environment = {"HOME": str(Path.home()), "PATH": "/tmp/does-not-exist",
+                           "PYTHONPATH": str(startup)}
+            for index, arguments in enumerate((("--python", "--version"), ("run-codex", "--help"))):
+                with self.subTest(arguments=arguments):
+                    marker.unlink(missing_ok=True)
+                    result = subprocess.run([str(project / "scripts/agent-harness"), *arguments],
+                                            cwd=project, env=environment, text=True,
+                                            capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+                    self.assertFalse(marker.exists(), f"sitecustomize executed for case {index}")
+
+    def test_real_wrapper_isolates_caller_user_site_for_version_and_help(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task7-usersite-", dir=project.parents[2]) as directory:
+            user_base = Path(directory)
+            marker = user_base / "executed"
+            payload = "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n"
+            self.write(user_base / "lib/python/site-packages/sitecustomize.py", payload)
+            for minor in range(9, 15):
+                self.write(user_base / f"lib/python3.{minor}/site-packages/sitecustomize.py", payload)
+            environment = {"HOME": str(Path.home()), "PATH": "/tmp/does-not-exist",
+                           "PYTHONUSERBASE": str(user_base), "PYTHONNOUSERSITE": "0"}
+            for index, arguments in enumerate((("--python", "--version"), ("run-codex", "--help"))):
+                with self.subTest(arguments=arguments):
+                    marker.unlink(missing_ok=True)
+                    result = subprocess.run([str(project / "scripts/agent-harness"), *arguments],
+                                            cwd=project, env=environment, text=True,
+                                            capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+                    self.assertFalse(marker.exists(), f"user site executed for case {index}")
+
+    def test_real_wrapper_ignores_pythonhome_and_pythonstartup_for_version_and_help(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task7-pythonhome-", dir=project.parents[2]) as directory:
+            startup = Path(directory)
+            marker = startup / "executed"
+            self.write(startup / "startup.py",
+                       "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n")
+            environment = {"HOME": str(Path.home()), "PATH": "/tmp/does-not-exist",
+                           "PYTHONHOME": str(startup / "missing"),
+                           "PYTHONSTARTUP": str(startup / "startup.py")}
+            for index, arguments in enumerate((("--python", "--version"), ("run-codex", "--help"))):
+                with self.subTest(arguments=arguments):
+                    marker.unlink(missing_ok=True)
+                    result = subprocess.run([str(project / "scripts/agent-harness"), *arguments],
+                                            cwd=project, env=environment, text=True,
+                                            capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+                    self.assertFalse(marker.exists(), f"startup hook executed for case {index}")
+
     def test_linux_wrapper_bootstraps_from_usr_local_versioned_python(self):
         direct = self.linux_wrapper("/repo/scripts/agent-harness --python --version")
         self.assertEqual(direct.returncode, 0, direct.stderr or direct.stdout)

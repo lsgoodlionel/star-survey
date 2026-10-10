@@ -142,7 +142,7 @@ for candidate in /usr/local/bin/python3.14 /usr/local/bin/python3.13 \
 done
 [ -n "$bootstrap" ] || bootstrap_error
 
-exec "$bootstrap" - "$wrapper_path" "$bootstrap" "$bootstrap_root" "$bootstrap_extra_root" "$bootstrap_identity" "$@" <<'PY'
+exec "$bootstrap" -I - "$wrapper_path" "$bootstrap" "$bootstrap_root" "$bootstrap_extra_root" "$bootstrap_identity" "$@" <<'PY'
 import glob
 import os
 from pathlib import Path
@@ -274,6 +274,7 @@ environment = {
     "HOME": str(home),
     "PATH": "/usr/bin:/bin",
     "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONNOUSERSITE": "1",
     "PYTHONPATH": str(repo / "tools/agent-harness"),
 }
 if arguments[:1] == ["--python"]:
@@ -315,6 +316,7 @@ except (OSError, RuntimeError, TypeError, ValueError):
     print('{"error":"受控工具不可用或不受信任","exitCode":2}')
     raise SystemExit(2)
 environment["PYTHONDONTWRITEBYTECODE"] = "1"
+environment["PYTHONNOUSERSITE"] = "1"
 environment["PYTHONPATH"] = str(repo / "tools/agent-harness")
 os.execve(sys.executable, [sys.executable, *sys.argv[2:]], environment)
 '''
