@@ -130,8 +130,13 @@
       "command": [
         "scripts/agent-harness",
         "--python",
-        "platform/tools/productization/render_capabilities.py",
-        "--check"
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "platform/tools/productization",
+        "-p",
+        "test_render_capabilities.py"
       ],
       "cwd": ".",
       "timeout_seconds": 120
@@ -203,8 +208,13 @@
         "../../../scripts/agent-harness",
         "--python",
         "-m",
-        "reqtrace.cli",
-        "check"
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-t",
+        ".",
+        "-q"
       ],
       "cwd": "platform/tools/traceability",
       "timeout_seconds": 120
@@ -224,14 +234,7 @@
       "command": [
         "scripts/agent-harness",
         "--python",
-        "-m",
-        "unittest",
-        "discover",
-        "-s",
-        "tools/agent-harness/tests",
-        "-p",
-        "test_*.py",
-        "-v"
+        "tools/agent-harness/drills/run_drills.py"
       ],
       "cwd": ".",
       "timeout_seconds": 300
