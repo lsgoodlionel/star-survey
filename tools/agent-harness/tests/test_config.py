@@ -433,6 +433,16 @@ class ConfigTests(unittest.TestCase):
                         for gate in matrix.gates
                     ), expected)
 
+    def test_p1_gate_uses_an_isolated_engine_stack(self):
+        matrix = load_gate_matrix(REPO / "docs/agent/GATE_MATRIX.yaml")
+        gate = next(gate for gate in matrix.gates if gate.id == "p1-e2e")
+        self.assertEqual((
+            "env",
+            "SURVEY_TEST_PREFIX=harness-p1",
+            "COMPOSE_PROJECT_NAME=harness-p1",
+            "platform/deploy/test/run-p1-e2e.sh",
+        ), gate.command)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -155,6 +155,9 @@
     {
       "id": "p1-e2e",
       "command": [
+        "env",
+        "SURVEY_TEST_PREFIX=harness-p1",
+        "COMPOSE_PROJECT_NAME=harness-p1",
         "platform/deploy/test/run-p1-e2e.sh"
       ],
       "cwd": ".",
