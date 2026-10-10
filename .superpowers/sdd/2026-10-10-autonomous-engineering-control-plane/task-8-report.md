@@ -5,8 +5,8 @@
 
 ## 交付状态
 
-Task 8 round-4 审查修复已在本地完成，implementation commit 为
-`3bb8706d4dd85746864266fb4c2c92f7b8b560d3`。当前结构化状态为
+Task 8 round-5 最终自动审查修复已在本地完成，implementation commit 为
+`53c1f3db577c3d505ce582a53f45800e84057636`。当前结构化状态为
 `local_validated_sync_pending`：独立复审、GitHub 与 Obsidian 均为 `pending`，因此 Task 8 与总计划保持
 `in_progress`，不宣称完整交付、CI 已运行或完整同步。
 
@@ -76,26 +76,38 @@ Round 4 先以独立最小 fixture 重现 round-3 finding，再作受限实现�
   `APPROVED`。历史/引用/code block APPROVED、后续 CHANGES_REQUIRED、重复、缺失、逆序与尾随文本均拒绝。
 - `docs/agent/HARNESS_DELIVERY.json` 继续保持 `independentReview: pending` 和空 `reviewEvidence.reports`；计划 Step 7 未勾选。
 
-## Round 4 提交与文件
+Round 5 继续严格 RED→GREEN，并关闭 round-4 的全部 finding：
 
-- 实现提交：`3bb8706d4dd85746864266fb4c2c92f7b8b560d3`。
+- quoted inline `run` scalar 先按受支持的 single/double YAML 子集解码，folded `>` block 按逻辑单行处理；tag、flow、alias、
+  malformed quote 等不支持表示继续 fail closed。
+- shell 检查只判断可执行位置，递归识别 `sh`/`bash`/`zsh -c`、`eval`、`command`/`env`、绝对路径及 glob/brace/path
+  expansion；普通 metadata、`grep`/`python` 数据参数和安全 nested shell 不误报。
+- workflow 拒绝包含仓库相对路径与 1-based `run` 行号，只输出拒绝类别，不回显命令或测试 secret。
+- review verdict 必须是由空行分隔的顶层 EOF plain-text sentinel，不得位于 fence、HTML comment、indented code、blockquote/
+  lazy blockquote 或 nested container；重复、逆序和后续 verdict 继续拒绝。
+- 三个 reviewer 必须绑定三份不同的 tracked canonical path 和不同 digest；symlink alias 明确拒绝。
+
+## Round 5 提交与文件
+
+- 实现提交：`53c1f3db577c3d505ce582a53f45800e84057636`。
 - 证据/docs：本报告所在后续提交；准确 SHA 由最终交接记录，避免文档自引用 commit。
 - 实现文件：`tools/agent-harness/drills/run_drills.py`、`tools/agent-harness/tests/test_fault_injection.py`。
 - 证据与说明：`docs/agent/HARNESS_DELIVERY.json`、`tools/agent-harness/README.md`、本实施计划、平台 README/进度及本 report/ledger。
 
 ## 验证证据
 
-- Task 8 focused：96 tests，89 PASS、7 typed skip、0 failure，45.461s。
-- 完整 Harness：399 tests，392 PASS、7 typed skip、0 failure，347.911s。7 个本地 sandbox skip 均为
-  `linux-fixture:permission-denied`；本轮未重跑 Docker integration，上一轮固定 digest integration 7/7 零 skip 仍仅作历史证据，
-  CI 仍会将任意 skip 判为失败。
+- Task 8 focused：103 tests，96 PASS、7 typed skip、0 failure，44.533s。
+- 完整 Harness：406 tests，399 PASS、7 typed skip、0 failure，349.608s。7 个本地 sandbox skip 均为
+  `linux-fixture:permission-denied`。
+- 固定 digest Docker integration：首次在 sandbox 内 7 项因 socket `permission-denied` 失败；以同一镜像和受信
+  `/usr/local/bin/docker` 在 sandbox 外重跑 7/7 PASS、零 skip，5.388s。该本地结果不替代 GitHub hosted run。
 - Fake drills：11/11 PASS；success flow 为
   `init → fake-adapter → gate → review → finalize → history`，终态 `completed`。
 - 受控入口：Python 3.12.13；宿主 `/usr/bin/python3` 低于 3.11 时返回简洁诊断、exit 2、无 traceback。
 - Doctor：0 error；clean worktree 下 22 项 ok、4 项 warning。受控 PATH 内未发现 Docker、Node、Codex，Java 非 21；
   这些可选工具未阻止纯治理启动，Docker integration 另由显式受信绝对路径验证。
 - Productization：37/37 PASS；capability map current。
-- Governance：round-4 forbidden-option policy、plan/memory docs drift 与 13/13 governance tests 均 PASS。
+- Governance：round-5 forbidden-option policy、plan/memory docs drift 与 13/13 governance tests 均 PASS。
 - `git diff --check`：PASS。
 
 ## 唯一真实 smoke
@@ -112,8 +124,8 @@ Round 4 先以独立最小 fixture 重现 round-3 finding，再作受限实现�
 
 ## 残余顾虑
 
-- round-3 security 与 whole-branch 仍为 `CHANGES_REQUIRED`；round-4 修复后仍须由控制器取得同一 commit/range 的三路双
-  APPROVED，当前没有任何 round-4 approval，不能提前提升 independentReview 或 Step 7。
+- round-4 三份复审仍为 `CHANGES_REQUIRED`；round-5 修复后仍须由控制器取得同一 commit/range 的三路双 APPROVED，
+  当前没有任何 round-5 approval，不能提前提升 independentReview 或 Step 7。
 - 本机固定镜像 integration 已 7/7 零 skip；GitHub Ubuntu 24.04 的绑定 run 仍未执行，Task 8 Step 4 不能勾选。
 - GitHub push 与 Obsidian 同步明确未执行。
 - 唯一真实 smoke 的具体暂停分类不可恢复，且按“一次真实 cycle”约束不重跑。

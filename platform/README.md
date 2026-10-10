@@ -227,13 +227,13 @@ Phase A+B；Phase C/D 仍是后续工作。
 
 ### 自治工程治理
 
-2026-10-10 已完成自治工程控制平面 Task 8 的本地实现与 round-4 审查修复，实现提交 `3bb8706d`；Task 8 仍为
+2026-10-10 已完成自治工程控制平面 Task 8 的本地实现与 round-5 最终自动审查修复，实现提交 `53c1f3db`；Task 8 仍为
 `in_progress`。可复用核心位于
 `tools/agent-harness/` 与 `scripts/agent-harness`；Survey 的 Gate/保护路径、项目记忆和计划属于项目策略模板；
 `.github/workflows/agent-governance.yml` 属于当前仓库的只读宿主集成。三层边界、安装、使用、恢复和升级命令见
 [`tools/agent-harness/README.md`](../tools/agent-harness/README.md)。
 
-本轮本地证据为 Harness 共 399 tests：392 通过，7 个 Linux wrapper 用例在 sandbox 内因 Docker socket 权限以
+本轮本地证据为 Harness 共 406 tests：399 通过，7 个 Linux wrapper 用例在 sandbox 内因 Docker socket 权限以
 `linux-fixture:permission-denied` skip；sandbox 外以固定 digest 和受信 `/usr/local/bin/docker` 重跑 7/7 通过、零 skip。
 CI 会把任何 skip 判为失败。11/11 fake drills 通过，productization 37 tests 与 capability check 通过。唯一一次
 disposable real-Codex smoke
@@ -241,8 +241,8 @@ disposable real-Codex smoke
 当前本机 `java` 不是项目要求的 21，裸 `python3` 是 3.9，需继续使用版本化 Harness runtime；真实 smoke 的停止
 分类未被当次旧版 runner 摘要保留，不能据此宣称 Codex 登录/配额/CLI 已可用。
 
-Task 8 按用户要求不 push、不更新 Obsidian；round-3 security 与 whole-branch 仍为 `CHANGES_REQUIRED`；round 4 已按
-RED→GREEN 修复，但三份 round-4 独立审查仍为 `pending`。GitHub 零 skip run 与 Obsidian 同步亦未完成，
+Task 8 按用户要求不 push、不更新 Obsidian；round-4 三份复审仍为 `CHANGES_REQUIRED`；round 5 已按
+RED→GREEN 修复全部 finding，但三份 round-5 独立审查仍为 `pending`。GitHub 零 skip run 与 Obsidian 同步亦未完成，
 不能宣称完整同步。首个候选真实产品 Milestone 是管理端 Phase C-1 的 `820-1179px` 双栏与检查器壳层。
 
 ### 持续集成
