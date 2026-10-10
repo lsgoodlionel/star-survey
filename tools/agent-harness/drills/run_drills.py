@@ -647,7 +647,7 @@ def _workflow_run_blocks(text: str) -> tuple[tuple[int, str], ...]:
         match = re.match(r'''^(\s*)-?\s*(?:run|"run"|'run')\s*:\s*(.*)$''',
                          lines[index])
         if not match:
-            if re.match(r"^\s*-\s*\?\s*$", lines[index]):
+            if re.match(r"^\s*-\s*\?", lines[index]):
                 raise WorkflowRefused(index + 1, "workflow explicit run key is unsupported")
             if re.match(r'''^\s*-?\s*(?:[&!][^\s]+\s+|\?\s+)(?:run|"run"|'run')\b''',
                         lines[index]):
