@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "changedPaths", "testsRequested", "needsHuman", "sessionId"],
+  "properties": {
+    "status": {"type": "string", "enum": ["completed", "repairing", "paused", "blocked"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "changedPaths": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 1024}},
+    "testsRequested": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$"}},
+    "needsHuman": {"type": "boolean"},
+    "sessionId": {"type": "string", "format": "uuid"}
+  }
+}

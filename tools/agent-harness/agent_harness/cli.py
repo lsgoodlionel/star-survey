@@ -49,7 +49,7 @@ def _parser():
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--json", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=Parser)
-    for command in ("doctor", "init", "status", "next", "gate", "record-decision", "record-review", "pause", "resume", "finalize"):
+    for command in ("doctor", "init", "status", "next", "gate", "run-codex", "record-decision", "record-review", "pause", "resume", "finalize"):
         child = sub.add_parser(command)
         child.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         child.add_argument("--repo", type=Path, default=argparse.SUPPRESS)
@@ -61,6 +61,8 @@ def _parser():
         elif command == "gate":
             child.add_argument("--extra-gate", action="append", default=[])
             child.add_argument("--profile", action="append", default=[])
+        elif command == "run-codex":
+            child.add_argument("--max-cycles", type=int, default=5)
         elif command == "record-decision":
             child.add_argument("--type", required=True)
             child.add_argument("--summary", required=True)
@@ -115,6 +117,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     result = service.run_gates(run_id, extras)
                 elif args.command == "record-decision":
                     result = service.record_decision(run_id, args.type, args.summary)
+                elif args.command == "run-codex":
+                    result = service.run_autonomous(run_id, args.max_cycles)
+                    if result.status in (RunStatus.PAUSED, RunStatus.BLOCKED):
+                        code = 5
                 elif args.command == "record-review":
                     result = service.record_review(run_id, args.reviewer, args.report)
                 elif args.command == "pause":

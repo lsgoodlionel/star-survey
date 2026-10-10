@@ -13,7 +13,8 @@ from typing import Sequence
 from uuid import UUID, uuid4
 
 from .config import load_gate_matrix, load_protected_paths, validate_gate_id
-from .diagnostics import redact_text, render_diagnostics
+from .diagnostics import redact_text, render_diagnostics, failure_fingerprint, record_failure, _read_log, _first_error
+from .codex_adapter import build_codex_command, run_codex
 from .doctor import run_doctor
 from .gate_runner import invalidate_stale_evidence, resolve_required_gates, run_gate
 from .git_guard import assert_worktree_isolated, capture_snapshot, changed_paths, classify_paths, validate_resume
@@ -127,7 +128,7 @@ class RunService:
     def _assert_raw_storage(self, run_id):
         directory = self._directory(run_id)
         relative = directory.relative_to(self.repo)
-        products = ("", "state.json", "events.jsonl", "evidence/", "evidence/probe/stdout.log",
+        products = ("", "state.json", "events.jsonl", "codex/", "codex/probe.jsonl", "codex/probe.jsonl.stderr.log", "evidence/", "evidence/probe/stdout.log",
                     "evidence/probe/stderr.log", "evidence/probe/metadata.json",
                     "diagnostics.md", "terminal-history.md", "terminal-state.json", "terminal-intent.json")
         arguments = []
@@ -251,7 +252,7 @@ class RunService:
     def record_decision(self, run_id: str, decision_type: str, summary: str) -> RunState:
         state = self._load(run_id)
         self._operable(state)
-        if decision_type in ("policy_binding", "history_artifact", "verification_snapshot", "transition", "evidence_invalidated", "resumed", "review_evidence", "authorized_paths", "observed_paths"):
+        if decision_type in ("policy_binding", "history_artifact", "verification_snapshot", "transition", "evidence_invalidated", "resumed", "review_evidence", "authorized_paths", "observed_paths", "autonomous_snapshot", "codex_session", "failure_cycle"):
             raise ServiceError("此决定类型由 Harness 管理")
         return self._save(self._decision(state, decision_type, summary), "decision_recorded")
 
@@ -729,3 +730,150 @@ class RunService:
             self._stop(state, "计划、策略或 Git 漂移", 5)
         completed = transition(verified, RunStatus.COMPLETED, "current HEAD gates passed")
         return self._terminal(verified, completed)
+
+    def _autonomous_milestone(self, state):
+        self._check_binding(state)
+        text = self._path(state.plan_path).read_text(encoding="utf-8")
+        text = re.sub(r"(?ms)^\s*(```|~~~).*?^\s*\1[^\n]*$", "", text)
+        headings = list(re.finditer(r"(?m)^(#{1,6})\s+(?:Milestone\s+(\S+?)|Task\s+(\d+))\s*[:：]\s*(.+)$", text))
+        heading = next(h for h in headings if (h[2] or "task-" + h[3]) == state.milestone_id)
+        following = re.search(r"(?m)^#{1," + str(len(heading[1])) + r"}\s", text[heading.end():])
+        body = text[heading.end():heading.end() + following.start() if following else len(text)]
+        return body
+
+    def _autonomous_scope(self, state):
+        body = self._autonomous_milestone(state)
+        section = re.search(r"(?ms)^\*\*Files:\*\*\s*\n(.*?)(?=\n\s*\n|\Z)", body)
+        paths = re.findall(r"(?m)^- (?:Create|Modify|Delete): `([^`]+)`\s*$", section[1]) if section else []
+        if not paths or len(paths) > 128 or len(set(paths)) != len(paths):
+            raise ServiceError("批准计划缺少唯一明确文件范围", 5)
+        for path in paths:
+            if len(path) > 1024 or any(c in path for c in "*?[]") or redact_text(path) != path:
+                raise ServiceError("批准文件范围无效", 5)
+            target = self._path(Path(path))
+            if Path(path).as_posix() != path or path == "." or target.is_relative_to(self.repo / "var/agent-harness"):
+                raise ServiceError("批准文件范围无效", 5)
+        _, policy = self._configs()
+        if any(p.action in ("deny", "approval_required", "generated") for p in classify_paths(self.repo, paths, policy)):
+            raise ServiceError("批准文件清单包含须人工处理的保护路径", 5)
+        return tuple(paths)
+
+    def _autonomous_check(self, state, scope, *, before=False):
+        synced, snapshot = self._sync(state, allow_dirty=True)
+        self._readonly_paths(synced)
+        paths = tuple(p for p in changed_paths(self.repo, state.base_commit) if p != self._trusted_history(synced))
+        if not set(paths) <= set(scope):
+            raise ServiceError("改动超出批准 Milestone 文件范围", 5)
+        if before and snapshot.dirty_paths:
+            records = [d for d in synced.decisions if d["type"] == "autonomous_snapshot"]
+            if not records or json.loads(records[-1]["summary"]) != self._workspace_stamp(synced):
+                raise ServiceError("工作区内容出现未登记漂移", 5)
+        return synced
+
+    def _autonomous_failure(self, state):
+        failures = []
+        summaries = []
+        for identifier in state.required_gates:
+            gate = state.gates.get(identifier)
+            if gate is None or gate.status not in (GateStatus.FAILED, GateStatus.TIMED_OUT):
+                continue
+            stdout, stderr = "", ""
+            if gate.evidence_path is not None:
+                stdout = _read_log(self.repo, gate.evidence_path.parent / "stdout.log")
+                stderr = _read_log(self.repo, gate.evidence_path.parent / "stderr.log")
+            fingerprint = failure_fingerprint(gate.exit_code if gate.exit_code is not None else -1, stdout, stderr)
+            failures.append((identifier, fingerprint))
+            summaries.append(identifier + ": " + (_first_error(stderr) or _first_error(stdout) or "Gate failed; minimal error unavailable")[:2048])
+        if not failures:
+            raise ServiceError("Gate 失败缺少实际失败证据", 5)
+        fingerprint = hashlib.sha256(json.dumps(failures).encode()).hexdigest()
+        trusted = self._trusted_history(state)
+        pathspec = ["."] + ([":(top,literal,exclude)" + trusted] if trusted else [])
+        result = subprocess.run(["git", "--no-optional-locks", "--no-replace-objects", "diff",
+                                 "--no-ext-diff", "--no-textconv", "--binary", state.base_commit, "--", *pathspec],
+                                cwd=self.repo, capture_output=True, check=False)
+        if result.returncode:
+            raise ServiceError("无法验证修复进展", 5)
+        digest = hashlib.sha256(result.stdout)
+        for path in self._snapshot(state)[1].untracked_paths:
+            digest.update(path.encode("utf-8", errors="surrogateescape"))
+            digest.update(sha256_file(self._path(Path(path))).encode())
+        diff_digest = digest.hexdigest()
+        return record_failure(state, fingerprint, diff_digest), "\n".join(summaries)[:4096]
+
+    def run_autonomous(self, run_id: str, max_cycles: int) -> RunState:
+        """One approved Milestone; persisted budgets and real Gates own completion."""
+        if type(max_cycles) is not int or not 1 <= max_cycles <= 10:
+            raise ServiceError("循环次数须为 1 到 10 的整数")
+        failure_summary = ""
+        for _ in range(max_cycles):
+            state = self._load(run_id)
+            if state.status in (RunStatus.COMPLETED, RunStatus.PAUSED, RunStatus.BLOCKED):
+                return state
+            try:
+                if state.attempts.total >= 5 or any(n >= 3 for n in state.attempts.by_fingerprint.values()):
+                    raise ServiceError("修复预算已耗尽", 5)
+                scope = self._autonomous_scope(state)
+                state = self._autonomous_check(state, scope, before=True)
+                if state.status == RunStatus.PLANNED:
+                    state = transition(state, RunStatus.ACTIVE, "autonomous cycle started")
+                state = self._decision(state, "authorized_paths", json.dumps(list(scope)))
+                state = self._save(state, "codex_started")
+                directory = self._path(self._directory(run_id).relative_to(self.repo) / "codex")
+                self._assert_raw_storage(run_id)
+                directory.mkdir(exist_ok=True)
+                schema = directory / "response.schema.json"
+                self._atomic_text(schema, Path(__file__).with_name("codex_response.schema.json").read_text(encoding="utf-8"))
+                if state.status == RunStatus.REPAIRING and not failure_summary:
+                    _, failure_summary = self._autonomous_failure(state)
+                prompt = json.dumps({"milestone": state.milestone_id, "title": state.milestone_title,
+                                     "acceptanceAndTask": redact_text(self._autonomous_milestone(state))[:6144],
+                                     "approvedPaths": scope, "failure": failure_summary,
+                                     "remainingFailures": 5 - state.attempts.total,
+                                     "runId": run_id, "headCommit": state.head_commit,
+                                     "instruction": "Only edit approved paths. Run no external actions. Commit scoped changes with Agent-Run-Id trailer. Request human review when required. Harness runs Gates and decides completion."},
+                                    ensure_ascii=True)
+                sessions = [d["summary"] for d in state.decisions if d["type"] == "codex_session"]
+                command = build_codex_command(self.repo, schema, prompt, sessions[-1] if sessions else None)
+                state_digest = sha256_file(self._directory(run_id) / "state.json")
+                result = run_codex(command, 900, directory / (uuid4().hex + ".jsonl"))
+                if sha256_file(self._directory(run_id) / "state.json") != state_digest:
+                    self._terminal(state, transition(state, RunStatus.PAUSED, "Codex 执行期间运行状态被外部改写"))
+                    return self._load(run_id)
+                state = self._load(run_id)
+                self._autonomous_scope(state)
+                state = self._autonomous_check(state, scope)
+                state = self._save(state, "codex_finished", {"failure": result.failure.value if result.failure else None,
+                                                           "status": result.status})
+                if result.failure is not None:
+                    raise ServiceError("Codex adapter: " + result.failure.value, 5)
+                if result.needs_human or result.status in ("paused", "blocked"):
+                    raise ServiceError("Codex 请求人工处理", 5)
+                if not set(result.changed_paths) <= set(scope):
+                    raise ServiceError("Codex 返回越界文件范围", 5)
+                state = self._save(self._decision(state, "codex_session", result.session_id), "session_recorded")
+                try:
+                    self.run_gates(run_id, result.tests_requested)
+                except ServiceError as error:
+                    if error.exit_code != 4:
+                        raise
+                    state = self._load(run_id)
+                    decision, failure_summary = self._autonomous_failure(state)
+                    self._save(decision.state, "failure_recorded", {"code": decision.code, "attempts": decision.state.attempts.total})
+                    if decision.should_pause:
+                        self._terminal(state, decision.state)
+                        return self._load(run_id)
+                    state = decision.state
+                else:
+                    self.finalize(run_id)
+                    return self._load(run_id)
+                state = self._decision(state, "autonomous_snapshot", json.dumps(self._workspace_stamp(state), sort_keys=True))
+                self._save(state, "cycle_finished")
+            except (OSError, ValueError) as error:
+                state = self._load(run_id, allow_incomplete=True)
+                if state.status not in (RunStatus.COMPLETED, RunStatus.PAUSED, RunStatus.BLOCKED):
+                    reason = str(error) if isinstance(error, ServiceError) else "自治输入、策略或磁盘验证失败"
+                    self.pause(run_id, reason)
+                return self._load(run_id)
+        self.pause(run_id, "本次自治循环次数已耗尽")
+        return self._load(run_id)
