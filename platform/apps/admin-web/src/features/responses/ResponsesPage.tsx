@@ -115,11 +115,12 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
   const summaryForbidden = isForbidden(summary.error);
   const detailForbidden = isForbidden(responses.error);
   const loadFailed = (summary.isError && !summaryForbidden) || (responses.isError && !detailForbidden);
-  const ready = !summary.isPending
-    && !responses.isPending
+  const ready = !summary.isFetching
+    && !responses.isFetching
     && !loadFailed
     && Boolean(summary.data || summaryForbidden)
-    && Boolean(responses.data || detailForbidden);
+    && Boolean(responses.data || detailForbidden)
+    && Boolean(summary.data || responses.data);
   useSurveyPageReady('responses', ready);
   const refreshResponses = async () => {
     setRefreshState('refreshing');

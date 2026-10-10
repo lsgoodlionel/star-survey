@@ -38,6 +38,7 @@ export function AuthProvider({ children, beforeSessionClear }: AuthProviderProps
   const [session, setSession] = useState<AuthSession | null>(null);
   const sessionRef = useRef<AuthSession | null>(null);
   const recoveryRef = useRef<{ token: string; promise: Promise<void> } | null>(null);
+  const authenticationGeneration = useRef(0);
   const queryClient = useQueryClient();
 
   const updateSession = useCallback((nextSession: AuthSession | null) => {
@@ -55,6 +56,7 @@ export function AuthProvider({ children, beforeSessionClear }: AuthProviderProps
           await beforeSessionClear?.();
         } finally {
           if (sessionRef.current?.token === requestToken) {
+            authenticationGeneration.current += 1;
             queryClient.clear();
             updateSession(null);
           }
@@ -85,12 +87,13 @@ export function AuthProvider({ children, beforeSessionClear }: AuthProviderProps
 
   const authenticateWithToken = useCallback(
     async (token: string, expiresIn: number, signal?: AbortSignal) => {
+      const attempt = ++authenticationGeneration.current;
       const tokenApi = createApiClient({
         getToken: () => token,
         onUnauthorized: handleUnauthorized,
       });
       const me = await getMe(tokenApi, signal);
-      if (signal?.aborted) return;
+      if (signal?.aborted || attempt !== authenticationGeneration.current) return;
       const currentIdentity = sessionRef.current?.me;
       if (
         currentIdentity &&
@@ -120,6 +123,7 @@ export function AuthProvider({ children, beforeSessionClear }: AuthProviderProps
   );
 
   const logout = useCallback(async () => {
+    authenticationGeneration.current += 1;
     try {
       await api.request({ path: '/v1/auth/logout', method: 'POST', schema: z.undefined() });
     } finally {

@@ -21,7 +21,7 @@ export function VersionDetailPage({ api, surveyId, tenantId, version }: VersionD
     queryKey: versionQueryKey(tenantId, surveyId, version),
     queryFn: ({ signal }) => getPublishedVersion(api, surveyId, version, signal),
   });
-  useSurveyPageReady('version', query.isSuccess && Boolean(query.data), version);
+  useSurveyPageReady('version', query.isSuccess && !query.isFetching && Boolean(query.data), version);
 
   if (query.isPending) return <p className="publish-loading">正在加载版本</p>;
   if (query.error || !query.data) return <p role="alert">该版本不存在或不可访问。</p>;

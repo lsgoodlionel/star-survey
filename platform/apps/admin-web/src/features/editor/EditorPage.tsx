@@ -66,10 +66,12 @@ export function EditorPage({ api, surveyId, tenantId }: EditorPageProps) {
   });
 
   const loading = surveyQuery.isPending || draftQuery.isPending || capabilitiesQuery.isPending;
-  const ready = !loading
-    && !surveyQuery.error
-    && !draftQuery.error
-    && !capabilitiesQuery.error
+  const ready = surveyQuery.isSuccess
+    && draftQuery.isSuccess
+    && capabilitiesQuery.isSuccess
+    && !surveyQuery.isFetching
+    && !draftQuery.isFetching
+    && !capabilitiesQuery.isFetching
     && Boolean(surveyQuery.data && draftQuery.data && capabilitiesQuery.data);
   useSurveyPageReady('edit', ready);
   if (loading) return <p className="editor-loading">正在加载问卷草稿</p>;

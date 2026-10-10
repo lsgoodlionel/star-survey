@@ -77,10 +77,10 @@ function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
     }
   }, [draftQuery.data]);
   const canEdit = capabilitiesQuery.data?.canEdit === true;
-  const ready = !draftQuery.isPending
-    && !capabilitiesQuery.isPending
-    && !draftQuery.isError
-    && !capabilitiesQuery.isError
+  const ready = draftQuery.isSuccess
+    && capabilitiesQuery.isSuccess
+    && !draftQuery.isFetching
+    && !capabilitiesQuery.isFetching
     && Boolean(draftQuery.data && capabilitiesQuery.data && definition);
   useSurveyPageReady('import', ready);
 

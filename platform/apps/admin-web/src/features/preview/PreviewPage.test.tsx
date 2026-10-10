@@ -1,7 +1,10 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, test, vi } from 'vitest';
+import { SurveyShellContext, type RecentWorkReadiness } from '../../app/surveyShellContext';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
+import { surveyDraftQueryKey } from '../../shared/api/surveys';
 import { renderWithQuery } from '../../test/render';
 import { PreviewPage } from './PreviewPage';
 import type { PreviewClient, PreviewSessionView } from '../../shared/api/previews';
@@ -81,7 +84,66 @@ function renderPreview(api: ApiClient, client = previewClient()) {
   );
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, reject, resolve };
+}
+
+function renderPreviewWithReadiness(
+  api: ApiClient,
+  queryClient: QueryClient,
+  reportPageReady: (readiness: RecentWorkReadiness) => void,
+) {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <SurveyShellContext.Provider value={{ reportPageReady, setUnsavedChanges: vi.fn() }}>
+        <MemoryRouter>
+          <PreviewPage api={api} previewClient={previewClient()} surveyId={surveyId} tenantId={tenantId} />
+        </MemoryRouter>
+      </SurveyShellContext.Provider>
+    </QueryClientProvider>,
+  );
+}
+
 describe('PreviewPage', () => {
+  test('waitsForACachedDraftRefetchAndRejectsAFailedRefetchBeforeReportingReady', async () => {
+    const draftRequest = deferred<typeof draft>();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(surveyDraftQueryKey(tenantId, surveyId), draft);
+    const reportPageReady = vi.fn();
+    const first = renderPreviewWithReadiness(
+      { request: () => draftRequest.promise as never },
+      queryClient,
+      reportPageReady,
+    );
+
+    expect(await screen.findByText('员工体验调查')).toBeInTheDocument();
+    expect(reportPageReady).not.toHaveBeenCalled();
+    draftRequest.reject(new Error('draft refetch failed'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('快速预览暂时不可用');
+    expect(reportPageReady).not.toHaveBeenCalled();
+    first.unmount();
+  });
+
+  test('reportsReadyFromStaleCachedDraftWhenMountRefetchIsDisabled', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnMount: false, staleTime: 0 } },
+    });
+    queryClient.setQueryData(surveyDraftQueryKey(tenantId, surveyId), draft);
+    const request = vi.fn();
+    const reportPageReady = vi.fn();
+
+    renderPreviewWithReadiness({ request }, queryClient, reportPageReady);
+
+    await waitFor(() => expect(reportPageReady).toHaveBeenCalledWith({ page: 'preview', version: null }));
+    expect(request).not.toHaveBeenCalled();
+  });
+
   test('linksBackToTheEditorWithoutReloadingTheSession', async () => {
     const api: ApiClient = { request: () => Promise.resolve(draft) as never };
     renderPreview(api);

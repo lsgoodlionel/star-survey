@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, BarChart3, Eye, FileInput, Pencil, Rocket } from 'lucide-react';
 import {
   useCallback,
@@ -31,22 +31,12 @@ export {
   useSurveyPageReady,
   useSurveyShell,
 } from './surveyShellContext';
+import {
+  RecentWorkCoordinatorRegistry,
+  type RecentWorkVisit,
+} from './recentWorkCoordinator';
 
-interface RecentWorkVisit {
-  command: RecentWorkCommand;
-  id: number;
-  key: string;
-  owner: symbol;
-}
-
-interface RecentWorkCoordinator {
-  activeVisit: RecentWorkVisit | null;
-  nextId: number;
-  queue: Promise<void>;
-  scheduledVisits: Set<number>;
-}
-
-const recentWorkCoordinators = new WeakMap<QueryClient, Map<string, RecentWorkCoordinator>>();
+const recentWorkCoordinators = new RecentWorkCoordinatorRegistry<RecentWorkCommand>();
 
 const workflowTabs = [
   { path: 'edit', label: '编辑', icon: Pencil },
@@ -81,8 +71,9 @@ function LoadedSurveyShell({ actorId, api, surveyId, tenantId }: {
   const queryClient = useQueryClient();
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [owner] = useState(() => Symbol('survey-shell'));
-  const activeVisit = useRef<RecentWorkVisit | null>(null);
-  const coordinator = getRecentWorkCoordinator(queryClient, `${tenantId}:${actorId}`);
+  const activeVisit = useRef<RecentWorkVisit<RecentWorkCommand> | null>(null);
+  const identity = `${tenantId}:${actorId}`;
+  const coordinator = recentWorkCoordinators.get(queryClient, identity);
   const surveyQuery = useQuery({
     queryKey: surveyDetailQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurvey(api, surveyId, signal),
@@ -96,14 +87,25 @@ function LoadedSurveyShell({ actorId, api, surveyId, tenantId }: {
     () => recentWorkCommandForPath(location.pathname, surveyId),
     [location.pathname, surveyId],
   );
+  const shellReady = surveyQuery.isSuccess
+    && pathQuery.isSuccess
+    && !surveyQuery.isFetching
+    && !pathQuery.isFetching
+    && Boolean(surveyQuery.data && pathQuery.data);
 
   useLayoutEffect(() => {
-    activeVisit.current = activateRecentWorkVisit(
+    recentWorkCoordinators.retain(coordinator, owner);
+    activeVisit.current = recentWorkCoordinators.activate(
       coordinator,
       owner,
+      recentWorkCommand ? recentWorkCommandKey(recentWorkCommand) : null,
       recentWorkCommand,
     );
-  }, [coordinator, owner, recentWorkCommand]);
+    return () => {
+      activeVisit.current = null;
+      recentWorkCoordinators.release(queryClient, identity, coordinator, owner);
+    };
+  }, [coordinator, identity, owner, queryClient, recentWorkCommand]);
 
   const reportPageReady = useCallback((readiness: RecentWorkReadiness) => {
     const visit = activeVisit.current;
@@ -111,20 +113,16 @@ function LoadedSurveyShell({ actorId, api, surveyId, tenantId }: {
       ? { surveyId, page: readiness.page, version: readiness.version }
       : { surveyId, page: readiness.page, version: null };
     if (
-      !surveyQuery.data ||
-      !pathQuery.data ||
+      !shellReady ||
       !visit ||
       coordinator.activeVisit?.id !== visit.id ||
       recentWorkCommandKey(command) !== visit.key
     ) return;
-    scheduleRecentWorkRegistration({
-      api,
-      coordinator,
-      queryClient,
-      tenantId,
-      visit,
+    recentWorkCoordinators.schedule(queryClient, identity, coordinator, visit, async () => {
+      await recordRecentWork(api, visit.value);
+      await queryClient.invalidateQueries({ queryKey: dashboardQueryKey(tenantId) });
     });
-  }, [api, coordinator, pathQuery.data, queryClient, surveyId, surveyQuery.data, tenantId]);
+  }, [api, coordinator, identity, queryClient, shellReady, surveyId, tenantId]);
   const context = useMemo<SurveyShellContextValue>(
     () => ({ reportPageReady, setUnsavedChanges }),
     [reportPageReady],
@@ -228,69 +226,6 @@ function recentWorkCommandForPath(pathname: string, surveyId: string): RecentWor
   const version = parsePositiveIntegerParam(parts[3]);
   if (version === null) return null;
   return { surveyId, page: 'version', version };
-}
-
-function getRecentWorkCoordinator(queryClient: QueryClient, identity: string) {
-  let coordinators = recentWorkCoordinators.get(queryClient);
-  if (!coordinators) {
-    coordinators = new Map();
-    recentWorkCoordinators.set(queryClient, coordinators);
-  }
-  let coordinator = coordinators.get(identity);
-  if (!coordinator) {
-    coordinator = {
-      activeVisit: null,
-      nextId: 1,
-      queue: Promise.resolve(),
-      scheduledVisits: new Set(),
-    };
-    coordinators.set(identity, coordinator);
-  }
-  return coordinator;
-}
-
-function activateRecentWorkVisit(
-  coordinator: RecentWorkCoordinator,
-  owner: symbol,
-  command: RecentWorkCommand | null,
-) {
-  if (!command) {
-    coordinator.activeVisit = null;
-    return null;
-  }
-  const key = recentWorkCommandKey(command);
-  if (coordinator.activeVisit?.owner === owner && coordinator.activeVisit.key === key) {
-    return coordinator.activeVisit;
-  }
-  coordinator.scheduledVisits.clear();
-  const visit = { command, id: coordinator.nextId++, key, owner };
-  coordinator.activeVisit = visit;
-  return visit;
-}
-
-function scheduleRecentWorkRegistration({
-  api,
-  coordinator,
-  queryClient,
-  tenantId,
-  visit,
-}: {
-  api: ApiClient;
-  coordinator: RecentWorkCoordinator;
-  queryClient: QueryClient;
-  tenantId: string;
-  visit: RecentWorkVisit;
-}) {
-  if (coordinator.scheduledVisits.has(visit.id)) return;
-  coordinator.scheduledVisits.add(visit.id);
-  coordinator.queue = coordinator.queue
-    .catch(() => undefined)
-    .then(async () => {
-      if (coordinator.activeVisit?.id !== visit.id) return;
-      await recordRecentWork(api, visit.command);
-      await queryClient.invalidateQueries({ queryKey: dashboardQueryKey(tenantId) });
-    })
-    .catch(() => undefined);
 }
 
 function recentWorkCommandKey(command: RecentWorkCommand) {

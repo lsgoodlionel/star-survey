@@ -74,7 +74,7 @@ function PreviewPageInstance({ api, previewClient, surveyId, tenantId }: Preview
   }, [draftQuery.data]);
   useSurveyPageReady(
     'preview',
-    !draftQuery.isPending && !draftQuery.isError && Boolean(draftQuery.data && definition),
+    draftQuery.isSuccess && !draftQuery.isFetching && Boolean(draftQuery.data && definition),
   );
 
   useEffect(() => {

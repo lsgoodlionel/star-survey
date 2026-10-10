@@ -95,14 +95,14 @@ export function PublishPage({ actorId, api, surveyId, tenantId, accessToken, onU
   });
 
   const latestApproval = useMemo(() => approvals.data?.at(-1) ?? null, [approvals.data]);
-  const ready = !overview.isPending
-    && !approvals.isPending
-    && !capabilities.isPending
-    && !versions.isPending
-    && !overview.error
-    && !approvals.error
-    && !capabilities.error
-    && !versions.error
+  const ready = overview.isSuccess
+    && approvals.isSuccess
+    && capabilities.isSuccess
+    && versions.isSuccess
+    && !overview.isFetching
+    && !approvals.isFetching
+    && !capabilities.isFetching
+    && !versions.isFetching
     && Boolean(overview.data && approvals.data && capabilities.data && versions.data);
   useSurveyPageReady('publish', ready);
 

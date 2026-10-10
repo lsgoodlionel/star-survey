@@ -10,6 +10,7 @@ import { PreviewPage } from '../features/preview/PreviewPage';
 import { ResponsesPage } from '../features/responses/ResponsesPage';
 import type { PreviewClient } from '../shared/api/previews';
 import type { ExportClient } from '../shared/api/exports';
+import { surveyDetailQueryKey } from '../shared/api/surveys';
 import { createAppRoutes } from './router';
 import { SurveyShell, useSurveyPageReady } from './SurveyShell';
 
@@ -22,6 +23,7 @@ let failSurveyLoad = false;
 let failRecentWork = false;
 let failVersionLoad = false;
 let recentWorkRequest: ((apiRequest: ApiRequest<unknown>) => Promise<unknown>) | null = null;
+let requestOverride: ((apiRequest: ApiRequest<unknown>) => Promise<unknown> | null) | null = null;
 const authState = {
   actorId: 'author-7',
   listeners: new Set<() => void>(),
@@ -34,10 +36,13 @@ const authState = {
     authState.listeners.forEach((listener) => listener());
   },
 };
-const request = vi.fn((apiRequest: ApiRequest<unknown>) =>
-  apiRequest.path === '/v1/dashboard/recent-work' && recentWorkRequest
-    ? recentWorkRequest(apiRequest) as never
-    : Promise.resolve(handleRequest(apiRequest)) as never);
+const request = vi.fn((apiRequest: ApiRequest<unknown>) => {
+  if (apiRequest.path === '/v1/dashboard/recent-work' && recentWorkRequest) {
+    return recentWorkRequest(apiRequest) as never;
+  }
+  const overridden = requestOverride?.(apiRequest);
+  return (overridden ?? Promise.resolve(handleRequest(apiRequest))) as never;
+});
 const api: ApiClient = { request };
 
 function handleRequest(request: ApiRequest<unknown>) {
@@ -136,8 +141,31 @@ beforeEach(() => {
   failRecentWork = false;
   failVersionLoad = false;
   recentWorkRequest = null;
+  requestOverride = null;
   authState.actorId = 'author-7';
 });
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function seedShellContext(queryClient: QueryClient) {
+  queryClient.setQueryData(surveyDetailQueryKey('tenant-a', surveyId), {
+    id: surveyId,
+    title: '客户反馈问卷-author-7',
+    status: 'draft',
+    draftVersion: 7,
+    publishedVersion: null,
+    lastPublish: null,
+  });
+  queryClient.setQueryData(['resource-path', 'tenant-a', surveyId], [
+    { id: projectId, kind: 'project', parentId: null, name: '客户体验项目', createdAt: '2026-10-09T08:00:00Z' },
+    { id: folderId, kind: 'folder', parentId: projectId, name: '调研资料', createdAt: '2026-10-09T08:00:00Z' },
+    { id: surveyId, kind: 'survey', parentId: folderId, name: '客户反馈问卷', createdAt: '2026-10-09T08:00:00Z' },
+  ]);
+}
 
 function ReadyPage({ page }: { page: 'edit' | 'import' | 'preview' | 'publish' | 'responses' }) {
   useSurveyPageReady(page, true);
@@ -352,6 +380,43 @@ test('waits for the concrete outlet to report successful readiness', async () =>
   await waitFor(() => expect(request.mock.calls.filter(
     ([call]) => call.path === '/v1/dashboard/recent-work',
   )).toHaveLength(1));
+});
+
+test('rechecksOutletReadinessAfterCachedShellQueriesFinishRefetching', async () => {
+  const gate = deferred();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  seedShellContext(queryClient);
+  requestOverride = (apiRequest) => (
+    apiRequest.path === `/v1/surveys/${surveyId}` || apiRequest.path.startsWith('/v1/resources/')
+      ? gate.promise.then(() => handleRequest(apiRequest))
+      : null
+  );
+
+  renderSurveyShell(`/surveys/${surveyId}/edit`, { queryClient });
+  expect(await screen.findByText('edit内容')).toBeInTheDocument();
+  expect(request.mock.calls.some(([call]) => call.path === '/v1/dashboard/recent-work')).toBe(false);
+
+  gate.resolve();
+  await waitFor(() => expect(request.mock.calls.filter(
+    ([call]) => call.path === '/v1/dashboard/recent-work',
+  )).toHaveLength(1));
+});
+
+test('doesNotRegisterFromCachedShellDataWhenItsRequiredRefetchFails', async () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  seedShellContext(queryClient);
+  requestOverride = (apiRequest) => apiRequest.path === `/v1/surveys/${surveyId}`
+    ? Promise.reject(new Error('survey refetch failed'))
+    : null;
+
+  renderSurveyShell(`/surveys/${surveyId}/edit`, { queryClient });
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('问卷上下文暂时不可用');
+  expect(request.mock.calls.some(([call]) => call.path === '/v1/dashboard/recent-work')).toBe(false);
 });
 
 test('does not register an immutable version whose detail request fails', async () => {

@@ -1,9 +1,12 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { SurveyShellContext, type RecentWorkReadiness } from '../../app/surveyShellContext';
 import { ApiError } from '../../shared/api/errors';
 import type { ExportClient, ExportJobView } from '../../shared/api/exports';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
+import { responsePageQueryKey, responseSummaryQueryKey } from '../../shared/api/responses';
 import { renderWithQuery } from '../../test/render';
 import { ResponsesPage } from './ResponsesPage';
 
@@ -37,6 +40,32 @@ const page = {
 
 function apiFrom(handler: (request: ApiRequest<unknown>) => unknown): ApiClient {
   return { request: (request) => Promise.resolve(handler(request as ApiRequest<unknown>)) as never };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, reject, resolve };
+}
+
+function renderWithReadiness(
+  api: ApiClient,
+  queryClient: QueryClient,
+  reportPageReady: (readiness: RecentWorkReadiness) => void,
+) {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <SurveyShellContext.Provider value={{ reportPageReady, setUnsavedChanges: vi.fn() }}>
+        <MemoryRouter>
+          <ResponsesPage api={api} exportClient={exportClient()} surveyId={surveyId} tenantId="tenant-a" />
+        </MemoryRouter>
+      </SurveyShellContext.Provider>
+    </QueryClientProvider>,
+  );
 }
 
 function baseJob(status: ExportJobView['status']): ExportJobView {
@@ -90,6 +119,65 @@ afterEach(() => {
 });
 
 describe('ResponsesPage', () => {
+  test('waitsForCachedSummaryAndRowsToFinishTheirRequiredRefetchBeforeReportingReady', async () => {
+    const summaryRequest = deferred<typeof summary>();
+    const pageRequest = deferred<typeof page>();
+    const api = apiFrom((request) => request.path.endsWith('/responses/summary')
+      ? summaryRequest.promise
+      : pageRequest.promise);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(responseSummaryQueryKey('tenant-a', surveyId), summary);
+    queryClient.setQueryData(responsePageQueryKey('tenant-a', surveyId, { state: null, version: null, cursor: null, limit: 50 }), page);
+    const reportPageReady = vi.fn();
+
+    renderWithReadiness(api, queryClient, reportPageReady);
+    expect(await screen.findByText('m***@example.test')).toBeInTheDocument();
+    expect(reportPageReady).not.toHaveBeenCalled();
+
+    summaryRequest.resolve(summary);
+    pageRequest.resolve(page);
+    await waitFor(() => expect(reportPageReady).toHaveBeenCalledWith({ page: 'responses', version: null }));
+  });
+
+  test('doesNotReportReadyWhenACachedResponsesRefetchFails', async () => {
+    const summaryRequest = deferred<typeof summary>();
+    const pageRequest = deferred<typeof page>();
+    const api = apiFrom((request) => request.path.endsWith('/responses/summary')
+      ? summaryRequest.promise
+      : pageRequest.promise);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(responseSummaryQueryKey('tenant-a', surveyId), summary);
+    queryClient.setQueryData(responsePageQueryKey('tenant-a', surveyId, { state: null, version: null, cursor: null, limit: 50 }), page);
+    const reportPageReady = vi.fn();
+
+    renderWithReadiness(api, queryClient, reportPageReady);
+    summaryRequest.resolve(summary);
+    pageRequest.reject(new ApiError('unavailable', '服务暂时不可用'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('答卷数据加载失败');
+    expect(reportPageReady).not.toHaveBeenCalled();
+  });
+
+  test('requiresAtLeastOneAuthorizedResponsesDatasetBeforeReportingReady', async () => {
+    const forbidden = new ApiError('forbidden', '无权执行当前操作', 403);
+    const bothForbidden = apiFrom(() => Promise.reject(forbidden));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const reportPageReady = vi.fn();
+    const denied = renderWithReadiness(bothForbidden, queryClient, reportPageReady);
+
+    await screen.findByText('你没有查看答卷统计摘要的权限。');
+    await screen.findByText('你可以查看统计摘要，但没有查看答卷明细和导出的权限。');
+    expect(reportPageReady).not.toHaveBeenCalled();
+    denied.unmount();
+
+    const partialQueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const partialReady = vi.fn();
+    renderWithReadiness(apiFrom((request) => request.path.endsWith('/responses/summary')
+      ? summary
+      : Promise.reject(forbidden)), partialQueryClient, partialReady);
+    await waitFor(() => expect(partialReady).toHaveBeenCalledWith({ page: 'responses', version: null }));
+  });
+
   test('alwaysOffersAManualRefreshAndReplacesFreshCachedSummaryAndRows', async () => {
     let completed = 0;
     const api = apiFrom((request) => {
