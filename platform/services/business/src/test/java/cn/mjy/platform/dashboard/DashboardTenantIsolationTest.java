@@ -29,11 +29,12 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.context.ApplicationContext;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -60,7 +61,7 @@ class DashboardTenantIsolationTest {
     private DashboardQueryCounter queryCounter;
 
     @Autowired
-    private ApplicationContext applicationContext;
+    private ConfigurableApplicationContext applicationContext;
 
     @Autowired
     private AccessFixture access;
@@ -233,6 +234,11 @@ class DashboardTenantIsolationTest {
     void queryCounterWrapsBootAutoConfiguredJdbcClient() {
         assertThat(applicationContext.getBeanNamesForType(JdbcClient.class)).containsExactly("jdbcClient");
         assertThat(applicationContext.getBean("jdbcClient")).isSameAs(jdbc);
+        BeanDefinition jdbcClientDefinition = applicationContext.getBeanFactory()
+                .getBeanDefinition("jdbcClient");
+        assertThat(jdbcClientDefinition.getFactoryBeanName())
+                .isEqualTo("org.springframework.boot.jdbc.autoconfigure.JdbcClientAutoConfiguration");
+        assertThat(jdbcClientDefinition.getFactoryMethodName()).isEqualTo("jdbcClient");
     }
 
     @Test
