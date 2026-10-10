@@ -867,8 +867,9 @@ class RunService:
         state = self._load(run_id)
         if state.status != RunStatus.PAUSED:
             raise ServiceError("仅暂停运行可以恢复", 5)
-        if (controlled_tool_errors(self.repo)
-                or run_with_controlled_tools(self.repo, run_doctor).error):
+        if (controlled_tool_errors(self.repo, required_tools=("git",), require_codex=False)
+                or run_with_controlled_tools(self.repo, run_doctor, required_tools=("git",),
+                                             require_codex=False).error):
             raise ServiceError("doctor 检查未通过，运行保持暂停", 5)
         try:
             self._recover_history(state)

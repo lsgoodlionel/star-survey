@@ -1,0 +1,59 @@
+{
+  "activePlan": "docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md",
+  "deliveryManifest": "docs/agent/HARNESS_DELIVERY.json",
+  "documentation": {
+    "statusMarkerPaths": [
+      "AGENTS.md",
+      "docs/agent/AUTONOMY.md",
+      "docs/agent/PROJECT_MEMORY.md",
+      "tools/agent-harness/README.md",
+      "platform/README.md",
+      "platform/docs/p2/progress.md",
+      ".superpowers/sdd/2026-10-10-autonomous-engineering-control-plane/task-8-report.md"
+    ]
+  },
+  "fixture": {
+    "baseline": "baseline\n",
+    "expected": "baseline\nreal-codex-smoke-ok\n",
+    "path": "tools/agent-harness/tests/fixtures/real_codex_smoke.txt",
+    "planPath": "docs/superpowers/plans/real-codex-smoke.md"
+  },
+  "ledger": ".superpowers/sdd/2026-10-10-autonomous-engineering-control-plane/progress.md",
+  "secretPolicy": {
+    "allowlist": [
+      ".env.example",
+      "**/.env.example",
+      "editor/.env",
+      "editor/.env.*",
+      "**/tests/fixtures/**"
+    ],
+    "patterns": [
+      ".env",
+      ".env.*",
+      "**/.env",
+      "**/.env.*",
+      ".aws",
+      ".aws/**",
+      "**/.aws",
+      "**/.aws/**",
+      ".ssh",
+      ".ssh/**",
+      "**/.ssh",
+      "**/.ssh/**",
+      "secrets/**",
+      "**/secrets/**",
+      "id_rsa*",
+      "**/id_rsa*",
+      "id_ed25519*",
+      "**/id_ed25519*",
+      "*.pem",
+      "**/*.pem",
+      "*.key",
+      "**/*.key",
+      "application/config/config.php",
+      "application/config/security.php",
+      "application/config/allowed_hosts.php"
+    ]
+  },
+  "version": 1
+}

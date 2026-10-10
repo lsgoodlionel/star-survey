@@ -5,25 +5,33 @@ import argparse
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
+from fnmatch import fnmatchcase
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Optional
 from unittest.mock import patch
 from uuid import uuid4
+
+
+if sys.version_info < (3, 11):
+    print("agent-harness 需要 Python 3.11 或更高版本；请使用 scripts/agent-harness --python。",
+          file=sys.stderr)
+    raise SystemExit(2)
 
 
 REPO = Path(__file__).resolve().parents[3]
 HARNESS = REPO / "tools/agent-harness"
 sys.path.insert(0, str(HARNESS))
 
-from agent_harness.codex_adapter import CodexFailure, run_codex
-from agent_harness.diagnostics import record_failure, render_diagnostics
+from agent_harness.codex_adapter import CodexFailure, CodexResult, run_codex
+from agent_harness.diagnostics import record_failure, redact_text, render_diagnostics
 from agent_harness.doctor import run_doctor
 from agent_harness.git_guard import capture_snapshot, validate_resume
 from agent_harness.run_service import RunService
@@ -52,10 +60,13 @@ class DrillRefused(ValueError):
 
 
 _RUN_ID = "11111111-1111-4111-8111-111111111111"
-_FORBIDDEN_OPTIONS = {
-    "--dangerously-bypass-approvals-and-sandbox",
-    "--dangerously-bypass-hook-trust",
-}
+_DEFAULT_HOST_CONFIG = Path("docs/agent/HARNESS_HOST.json")
+_DANGEROUS_CODEX_ARGUMENT = re.compile(
+    r"(?:^|\s)(?:--dangerously-[^\s]*bypass[^\s]*|--add-dir(?:=|\s)|"
+    r"--config(?:=|\s)|-c(?:=|\s)|--enable(?:=|\s)|--disable(?:=|\s)|"
+    r"--profile(?:=|\s))|\bbypass\b|\bdanger-full-access\b",
+    re.IGNORECASE,
+)
 
 
 def _run(args, cwd, *, check=True):
@@ -311,17 +322,43 @@ def _drill_no_progress() -> None:
             raise AssertionError("two unchanged cycles did not pause")
 
 
-def _drill_success() -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory).resolve()
-        now = datetime.now(timezone.utc)
-        gate = GateEvidence("unit", GateStatus.PASSED, 0, now, now, Path("evidence.json"), "b" * 40)
-        state = _state(root, RunStatus.PLANNED, gates={"unit": gate}, required=("unit",))
-        state = transition(state, RunStatus.ACTIVE, "start")
-        state = transition(state, RunStatus.VERIFYING, "verify")
-        state = transition(state, RunStatus.COMPLETED, "passed")
-        if state.status != RunStatus.COMPLETED:
-            raise AssertionError("passing state did not complete")
+def _fake_adapter_commit(repo: Path, run_id: str) -> CodexResult:
+    target = repo / "src/example.txt"
+    target.write_text("initial\ncontrolled-change\n", encoding="utf-8")
+    _git(repo, "add", "src/example.txt")
+    _git(repo, "commit", "-m", "test: controlled drill change\n\nAgent-Run-Id: " + run_id)
+    return CodexResult("completed", "controlled fixture committed", ("src/example.txt",),
+                       ("unit",), False, "22222222-2222-4222-8222-222222222222")
+
+
+def _drill_success() -> str:
+    with _fixture_worktree() as (_, repo, service):
+        state = service.init(Path("docs/superpowers/plans/drill.md"), "m1")
+        scope = service._autonomous_scope(state)
+        state = service._save(
+            service._decision(state, "authorized_paths", json.dumps(list(scope))),
+            "fake_adapter_started",
+        )
+        adapter = _fake_adapter_commit(repo, state.run_id)
+        if adapter.status != "completed" or adapter.needs_human:
+            raise AssertionError("fake adapter did not produce a controlled commit")
+        state = service.run_gates(state.run_id, adapter.tests_requested)
+        decisions = service._readonly_paths(state)
+        report = service._directory(state.run_id) / "review-input.json"
+        report.write_text(json.dumps({
+            "version": 1,
+            "verdict": "approved",
+            "reviewer": "deterministic-drill",
+            "headCommit": state.head_commit,
+            "changedPathsSha256": service._review_scope(decisions),
+        }, sort_keys=True), encoding="utf-8")
+        service.record_review(state.run_id, "deterministic-drill", report.relative_to(repo))
+        history = service.finalize(state.run_id)
+        final = service.status(state.run_id)
+        if final.status != RunStatus.COMPLETED or not history.is_file():
+            raise AssertionError("RunService did not publish completed history")
+        return json.dumps({"flow": ["init", "fake-adapter", "gate", "review", "finalize", "history"],
+                           "status": final.status.value}, sort_keys=True)
 
 
 def _drill_codex_timeout() -> None:
@@ -339,7 +376,7 @@ def _drill_codex_timeout() -> None:
             raise AssertionError("Codex timeout was not bounded and typed")
 
 
-_DRILLS: dict[str, Callable[[], str | None]] = {
+_DRILLS: dict[str, Callable[[], Optional[str]]] = {
     "success": _drill_success,
     "atomic-before-replace": _drill_atomic_before,
     "atomic-after-replace": _drill_atomic_after,
@@ -371,73 +408,223 @@ def run_fake_drills() -> tuple[DrillResult, ...]:
     return tuple(run_named_drill(name) for name in _DRILLS)
 
 
-def _looks_like_secret(relative: Path) -> bool:
-    value = relative.as_posix()
-    parts = set(relative.parts)
-    name = relative.name
-    return (
-        bool(parts & {".aws", ".ssh", "secrets"})
-        or name == ".env"
-        or name.startswith(".env.")
-        or name.startswith(("id_rsa", "id_ed25519"))
-        or relative.suffix in {".pem", ".key"}
-        or value
-        in {
-            "application/config/config.php",
-            "application/config/security.php",
-            "application/config/allowed_hosts.php",
-        }
-    )
+def _repo_path(root: Path, value: str, *, must_exist=True) -> Path:
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts or "\\" in value or relative.as_posix() != value:
+        raise DrillRefused("host configuration contains an unsafe repository path")
+    path = root / relative
+    try:
+        resolved = path.resolve(strict=must_exist)
+    except (OSError, RuntimeError):
+        raise DrillRefused("host configuration path is unavailable") from None
+    if not resolved.is_relative_to(root):
+        raise DrillRefused("host configuration path escapes the repository")
+    return path
 
 
-def _known_safe_secret_fixture(relative: Path) -> bool:
-    value = "/" + relative.as_posix()
-    return (
-        "/tests/fixtures/" in value
-        or relative.parent == Path("editor")
-        and (relative.name == ".env" or relative.name.startswith(".env."))
-    )
-
-
-def ensure_no_production_secret_paths(repo: Path) -> None:
+def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
     root = Path(repo).resolve(strict=True)
-    for current, directories, files in os.walk(root):
-        directories[:] = [
-            name
-            for name in directories
-            if name not in {".git", "node_modules", "vendor", "var", ".worktrees"}
-        ]
-        for name in files:
-            path = Path(current) / name
-            relative = path.relative_to(root)
-            if _looks_like_secret(relative) and not _known_safe_secret_fixture(relative):
-                raise DrillRefused("repository contains a production secret path")
+    path = _repo_path(root, Path(relative).as_posix())
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        required = {"version", "activePlan", "deliveryManifest", "ledger", "secretPolicy",
+                    "fixture", "documentation"}
+        if set(document) != required or document["version"] != 1:
+            raise ValueError()
+        policy = document["secretPolicy"]
+        fixture = document["fixture"]
+        docs = document["documentation"]
+        if (set(policy) != {"patterns", "allowlist"}
+                or not all(isinstance(value, str) and value for value in (*policy["patterns"], *policy["allowlist"]))
+                or set(fixture) != {"path", "planPath", "baseline", "expected"}
+                or not isinstance(docs.get("statusMarkerPaths"), list)):
+            raise ValueError()
+        for value in (document["activePlan"], document["deliveryManifest"], document["ledger"],
+                      fixture["path"], fixture["planPath"], *docs["statusMarkerPaths"]):
+            _repo_path(root, value, must_exist=False)
+    except (KeyError, TypeError, ValueError, OSError, UnicodeError, json.JSONDecodeError):
+        raise DrillRefused("invalid Harness host configuration") from None
+    return document
+
+
+def _matches(path: str, patterns) -> bool:
+    return any(fnmatchcase(path, pattern) for pattern in patterns)
+
+
+def _git_inventory(root: Path) -> tuple[Path, ...]:
+    values = set()
+    commands = (
+        ("ls-files", "-z", "--cached"),
+        ("ls-files", "-z", "--others", "--exclude-standard"),
+        ("ls-files", "-z", "--others", "--ignored", "--exclude-standard"),
+    )
+    for command in commands:
+        result = _run(["git", *command], root, check=False)
+        if result.returncode:
+            raise DrillRefused("unable to build the repository path inventory")
+        values.update(value for value in result.stdout.split("\0") if value)
+    return tuple(Path(value) for value in sorted(values))
+
+
+def ensure_no_production_secret_paths(repo: Path, policy: dict) -> None:
+    root = Path(repo).resolve(strict=True)
+    patterns = tuple(policy["patterns"])
+    allowlist = tuple(policy["allowlist"])
+    for relative in _git_inventory(root):
+        value = relative.as_posix()
+        path = root / relative
+        try:
+            metadata = path.lstat()
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise DrillRefused("repository inventory contains an unreadable path") from None
+        if not resolved.is_relative_to(root):
+            raise DrillRefused("repository path resolves outside the worktree")
+        if path.is_symlink() and resolved.is_dir():
+            raise DrillRefused("repository contains a directory symlink")
+        if metadata.st_mode == 0:
+            raise DrillRefused("repository inventory path has invalid metadata")
+        if _matches(value, patterns) and not _matches(value, allowlist):
+            raise DrillRefused("repository contains a production secret path")
+
+
+def atomic_create(repo: Path, path: Path, content: str) -> None:
+    root = Path(repo).resolve(strict=True)
+    target = Path(path)
+    if not target.is_absolute():
+        target = root / target
+    try:
+        relative = target.relative_to(root)
+    except ValueError:
+        raise DrillRefused("smoke input path escapes the worktree") from None
+    current = root
+    for part in relative.parent.parts:
+        current /= part
+        if current.is_symlink():
+            raise DrillRefused("smoke input parent is a symlink")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise DrillRefused("smoke input path already exists")
+    descriptor = None
+    temporary = target.parent / ("." + target.name + "." + uuid4().hex + ".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = None
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            target.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise DrillRefused("smoke input path changed during creation")
+        os.replace(temporary, target)
+        directory = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def check_forbidden_options(repo: Path) -> None:
     matrix = json.loads((repo / "docs/agent/GATE_MATRIX.yaml").read_text(encoding="utf-8"))
-    arguments = [argument for gate in matrix["gates"] for argument in gate["command"]]
-    workflow_text = []
-    for workflow in (repo / ".github/workflows").glob("*.yml"):
-        workflow_text.append(workflow.read_text(encoding="utf-8"))
-    haystack = "\n".join((*arguments, *workflow_text))
-    if any(option in haystack for option in _FORBIDDEN_OPTIONS):
-        raise DrillRefused("governed command contains a forbidden option")
+    contexts = []
+    for gate in matrix["gates"]:
+        command = gate["command"]
+        if command and (Path(command[0]).name == "codex" or "run-codex" in command):
+            contexts.append(" ".join(command))
+    workflows = repo / ".github/workflows"
+    for pattern in ("*.yml", "*.yaml"):
+        for workflow in workflows.glob(pattern):
+            text = workflow.read_text(encoding="utf-8")
+            contexts.extend(match.group(0) for match in re.finditer(
+                r"(?im)\bcodex(?:\s+exec)?\b[^\n]*(?:\n[ \t]{8,}[^\n]*)*", text
+            ))
+    if any(_DANGEROUS_CODEX_ARGUMENT.search(context) for context in contexts):
+        raise DrillRefused("Codex command contains a forbidden permission override")
 
 
-def check_docs(repo: Path, plan: Path, memory: Path) -> None:
-    plan_path = repo / plan
-    memory_path = repo / memory
-    readme = (repo / "tools/agent-harness/README.md").read_text(encoding="utf-8")
-    plan_text = plan_path.read_text(encoding="utf-8")
-    memory_text = memory_path.read_text(encoding="utf-8")
-    required_sections = ("## 核心套件", "## 项目策略模板", "## 宿主集成")
-    if any(section not in readme for section in required_sections):
-        raise DrillRefused("Harness README does not separate reusable and host-owned layers")
-    if plan.as_posix() not in memory_text or "tools/agent-harness/README.md" not in memory_text:
-        raise DrillRefused("project memory is not linked to the active plan and Harness guide")
-    if "tools/agent-harness/drills/run_drills.py" not in plan_text:
-        raise DrillRefused("active plan does not reference the drill runner")
+def _plan_checkboxes(text: str) -> dict:
+    headings = list(re.finditer(r"(?m)^### Task\s+(\d+)\s*:", text))
+    result = {}
+    for index, heading in enumerate(headings):
+        following = re.search(r"(?m)^#{1,3}\s+", text[heading.end():])
+        end = heading.end() + following.start() if following else len(text)
+        boxes = re.findall(r"(?m)^- \[([ xX])\]", text[heading.end():end])
+        result[heading[1]] = {
+            "completed": [position for position, value in enumerate(boxes, 1) if value.lower() == "x"],
+            "pending": [position for position, value in enumerate(boxes, 1) if value == " "],
+        }
+    final = re.search(r"(?m)^## Final Acceptance\s*$", text)
+    if final:
+        following = re.search(r"(?m)^#{1,2}\s+", text[final.end():])
+        end = final.end() + following.start() if following else len(text)
+        boxes = re.findall(r"(?m)^- \[([ xX])\]", text[final.end():end])
+        result["finalAcceptance"] = {
+            "completed": [position for position, value in enumerate(boxes, 1) if value.lower() == "x"],
+            "pending": [position for position, value in enumerate(boxes, 1) if value == " "],
+        }
+    return result
+
+
+def check_docs(repo: Path, host: dict) -> None:
+    root = Path(repo).resolve(strict=True)
+    plan_path = _repo_path(root, host["activePlan"])
+    manifest_path = _repo_path(root, host["deliveryManifest"])
+    ledger_path = _repo_path(root, host["ledger"])
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        required = {"version", "planPath", "implementationCommit", "evidence", "taskSteps",
+                    "deliveryStatus", "externalSync"}
+        if set(manifest) != required or manifest["version"] != 1:
+            raise ValueError()
+        if manifest["planPath"] != host["activePlan"]:
+            raise ValueError()
+        commit = manifest["implementationCommit"]
+        evidence = manifest["evidence"]
+        if (re.fullmatch(r"[0-9a-f]{40}", commit) is None
+                or evidence.get("headCommit") != commit or evidence.get("status") != "passed"
+                or not evidence.get("commands")):
+            raise ValueError()
+        commit_check = _run(["git", "cat-file", "-e", commit + "^{commit}"], root, check=False)
+        if commit_check.returncode:
+            raise ValueError()
+        if _plan_checkboxes(plan_path.read_text(encoding="utf-8")) != manifest["taskSteps"]:
+            raise ValueError()
+        external = manifest["externalSync"]
+        allowed_status = {
+            ("pending", "pending", "pending"): "local_validated_sync_pending",
+            ("complete", "complete", "complete"): "fully_synchronized",
+        }
+        key = (external.get("independentReview"), external.get("github"), external.get("obsidian"))
+        if allowed_status.get(key) != manifest["deliveryStatus"]:
+            raise ValueError()
+        ledger = ledger_path.read_text(encoding="utf-8")
+        for task, steps in manifest["taskSteps"].items():
+            if not task.isdigit():
+                continue
+            expected = "complete" if not steps["pending"] else "in_progress"
+            if re.search(r"(?m)^Task " + re.escape(task) + r": " + expected + r"\b", ledger) is None:
+                raise ValueError()
+        marker = "<!-- harness-delivery-status: " + manifest["deliveryStatus"] + " -->"
+        for relative in host["documentation"]["statusMarkerPaths"]:
+            if marker not in _repo_path(root, relative).read_text(encoding="utf-8"):
+                raise ValueError()
+    except (KeyError, TypeError, ValueError, OSError, UnicodeError, json.JSONDecodeError):
+        raise DrillRefused("delivery manifest, plan, ledger, or host documentation drifted") from None
 
 
 def _primary_identity(repo: Path) -> tuple[str, bytes]:
@@ -450,9 +637,8 @@ def real_smoke_branch_name() -> str:
     return "drill/real-codex-smoke-" + uuid4().hex[:12]
 
 
-def real_smoke_detail(state: RunState, changed: tuple[str, ...], history: Path) -> str:
-    from agent_harness.diagnostics import redact_text
-
+def real_smoke_detail(state: RunState, changed: tuple[str, ...], history: Path,
+                      cleanup_verified=False) -> str:
     reason = next(
         (
             decision["summary"]
@@ -461,8 +647,7 @@ def real_smoke_detail(state: RunState, changed: tuple[str, ...], history: Path) 
         ),
         "terminal state recorded without a transition summary",
     )
-    return json.dumps(
-        {
+    detail = {
             "status": state.status.value,
             "stopReason": redact_text(reason),
             "changedPaths": changed,
@@ -470,13 +655,64 @@ def real_smoke_detail(state: RunState, changed: tuple[str, ...], history: Path) 
                 1 for gate in state.gates.values() if gate.status == GateStatus.PASSED
             ),
             "history": history.as_posix(),
-            "cleanup": "temporary worktree and branch removed",
-        },
-        sort_keys=True,
-    )
+        }
+    if cleanup_verified:
+        detail["cleanup"] = "verified"
+    return json.dumps(detail, sort_keys=True)
 
 
-def run_real_codex_smoke(repo: Path) -> DrillResult:
+def validate_real_smoke_terminal(repo: Path, state: RunState, changed: tuple[str, ...],
+                                 fixture: Path, history: Path, expected: str) -> None:
+    root = Path(repo).resolve(strict=True)
+    history_text = history.read_text(encoding="utf-8") if history.is_file() else ""
+    if not history_text or redact_text(history_text) != history_text:
+        raise AssertionError("terminal diagnostic history is missing or unsanitized")
+    if state.status == RunStatus.PAUSED:
+        return
+    if state.status != RunStatus.COMPLETED:
+        raise AssertionError("real Codex did not produce an accepted terminal state")
+    relative = fixture.resolve(strict=True).relative_to(root).as_posix()
+    if changed != (relative,) or fixture.read_text(encoding="utf-8") != expected:
+        raise AssertionError("completed smoke fixture does not match the exact expected semantics")
+    if not state.required_gates or _git(root, "rev-parse", "HEAD") != state.head_commit:
+        raise AssertionError("completed smoke lacks required gates or current HEAD binding")
+    for identifier in state.required_gates:
+        gate = state.gates.get(identifier)
+        if (gate is None or gate.status != GateStatus.PASSED or gate.exit_code != 0
+                or gate.head_commit != state.head_commit or gate.evidence_path is None):
+            raise AssertionError("completed smoke lacks passing HEAD-bound Gate evidence")
+        evidence = root / gate.evidence_path
+        if not evidence.is_file() or not evidence.resolve().is_relative_to(root):
+            raise AssertionError("completed smoke Gate evidence is unavailable")
+
+
+def cleanup_real_smoke(primary: Path, worktree: Path, branch: Optional[str]) -> tuple[str, ...]:
+    errors = []
+    if worktree.exists():
+        result = _run(["git", "worktree", "remove", "--force", str(worktree)], primary, check=False)
+        if result.returncode:
+            errors.append("worktree-remove-exit-" + str(result.returncode))
+    result = _run(["git", "worktree", "prune"], primary, check=False)
+    if result.returncode:
+        errors.append("worktree-prune-exit-" + str(result.returncode))
+    if branch:
+        result = _run(["git", "branch", "-D", branch], primary, check=False)
+        if result.returncode:
+            errors.append("branch-delete-exit-" + str(result.returncode))
+    listing = _run(["git", "worktree", "list", "--porcelain"], primary, check=False)
+    if listing.returncode or str(worktree) in listing.stdout:
+        errors.append("worktree-registration-present")
+    if branch:
+        reference = _run(["git", "show-ref", "--verify", "--quiet", "refs/heads/" + branch],
+                         primary, check=False)
+        if reference.returncode not in (0, 1) or reference.returncode == 0:
+            errors.append("branch-reference-present")
+    if worktree.exists():
+        errors.append("worktree-path-present")
+    return tuple(errors)
+
+
+def run_real_codex_smoke(repo: Path, host_config: Path = _DEFAULT_HOST_CONFIG) -> DrillResult:
     """Run exactly one Codex cycle in a temporary linked worktree."""
     primary = Path(repo).resolve(strict=True)
     before = _primary_identity(primary)
@@ -485,24 +721,28 @@ def run_real_codex_smoke(repo: Path) -> DrillResult:
     run_id = None
     branch = real_smoke_branch_name()
     branch_created = False
+    terminal = None
+    changed = ()
+    history_relative = None
+    failure = None
     try:
         _git(primary, "worktree", "add", "--detach", str(worktree), "HEAD")
         _git(worktree, "switch", "-c", branch)
         branch_created = True
         _git(worktree, "config", "user.email", "drill@example.invalid")
         _git(worktree, "config", "user.name", "Harness Drill")
-        ensure_no_production_secret_paths(worktree)
-        fixture = worktree / "tools/agent-harness/tests/fixtures/real_codex_smoke.txt"
-        fixture.parent.mkdir(parents=True, exist_ok=True)
-        fixture.write_text("baseline\n", encoding="utf-8")
-        plan = worktree / "docs/superpowers/plans/real-codex-smoke.md"
-        plan.write_text(
+        host = load_host_config(worktree, host_config)
+        ensure_no_production_secret_paths(worktree, host["secretPolicy"])
+        fixture_spec = host["fixture"]
+        fixture = _repo_path(worktree, fixture_spec["path"], must_exist=False)
+        plan = _repo_path(worktree, fixture_spec["planPath"], must_exist=False)
+        atomic_create(worktree, fixture, fixture_spec["baseline"])
+        atomic_create(worktree, plan,
             "# Disposable real Codex smoke\n\n**Status:** approved\n\n"
             "## Milestone smoke: Add expected fixture line\n\n"
-            "**Files:**\n- Modify: `tools/agent-harness/tests/fixtures/real_codex_smoke.txt`\n\n"
+            "**Files:**\n- Modify: `" + fixture.relative_to(worktree).as_posix() + "`\n\n"
             "Acceptance: append exactly one line containing `real-codex-smoke-ok`; commit only the fixture "
-            "with the supplied Agent-Run-Id trailer.\n",
-            encoding="utf-8",
+            "with the supplied Agent-Run-Id trailer.\n"
         )
         _git(worktree, "add", str(fixture.relative_to(worktree)), str(plan.relative_to(worktree)))
         _git(worktree, "commit", "-m", "test: seed disposable Codex smoke")
@@ -519,40 +759,41 @@ def run_real_codex_smoke(repo: Path) -> DrillResult:
         if changed and changed != permitted:
             raise AssertionError("real Codex changed paths outside the fixture")
         history = worktree / "docs/agent/run-history" / (run_id + ".md")
-        if result.status not in (RunStatus.COMPLETED, RunStatus.PAUSED) or not history.is_file():
-            raise AssertionError("real Codex did not produce a terminal history")
-        history_text = history.read_text(encoding="utf-8")
-        if any(secret in history_text for secret in ("Authorization:", "Bearer ", "fake-secret")):
-            raise AssertionError("real Codex history is not sanitized")
-        detail = real_smoke_detail(result, changed, history.relative_to(worktree))
-        return DrillResult("real-codex-smoke", result.status.value, detail)
+        validate_real_smoke_terminal(worktree, result, changed, fixture, history,
+                                     fixture_spec["expected"])
+        terminal = result
+        history_relative = history.relative_to(worktree)
     except Exception as error:
-        from agent_harness.diagnostics import redact_text
-
-        detail = redact_text(type(error).__name__ + ": " + str(error))
+        failure = redact_text(type(error).__name__ + ": " + str(error))
         if run_id:
             history = worktree / "docs/agent/run-history" / (run_id + ".md")
             if history.is_file():
-                detail = "sanitized pause evidence: " + history.relative_to(worktree).as_posix()
-        return DrillResult("real-codex-smoke", "failed", detail)
+                failure = "sanitized terminal evidence: " + history.relative_to(worktree).as_posix()
     finally:
-        if worktree.exists():
-            _run(["git", "worktree", "remove", "--force", str(worktree)], primary, check=False)
-        if branch_created:
-            _run(["git", "branch", "-D", branch], primary, check=False)
-        _run(["git", "worktree", "prune"], primary, check=False)
+        cleanup_errors = cleanup_real_smoke(primary, worktree, branch if branch_created else None)
         temporary.cleanup()
-        if _primary_identity(primary) != before:
-            raise AssertionError("primary worktree changed during real Codex smoke")
+        try:
+            identity_changed = _primary_identity(primary) != before
+        except Exception:
+            identity_changed = True
+    if cleanup_errors or identity_changed:
+        issues = cleanup_errors + (("primary-identity-changed",) if identity_changed else ())
+        detail = ",".join(issues)
+        return DrillResult("real-codex-smoke", "failed", redact_text(detail))
+    if failure is not None or terminal is None or history_relative is None:
+        return DrillResult("real-codex-smoke", "failed", failure or "smoke did not produce a terminal result")
+    return DrillResult("real-codex-smoke", terminal.status.value,
+                       real_smoke_detail(terminal, changed, history_relative, cleanup_verified=True))
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run deterministic Harness fault drills")
+    parser.add_argument("--repo", type=Path, default=REPO)
+    parser.add_argument("--host-config", type=Path, default=_DEFAULT_HOST_CONFIG)
     parser.add_argument("--allow-real-codex", action="store_true")
     parser.add_argument("--check-forbidden-options", action="store_true")
     parser.add_argument("--check-docs", action="store_true")
-    parser.add_argument("--plan", type=Path, default=Path("docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md"))
-    parser.add_argument("--memory", type=Path, default=Path("docs/agent/PROJECT_MEMORY.md"))
+    parser.add_argument("--fail-on-skip", action="store_true")
     parser.add_argument("--fault-worker", choices=("before", "after"), help=argparse.SUPPRESS)
     parser.add_argument("state_path", nargs="?", type=Path, help=argparse.SUPPRESS)
     return parser
@@ -560,21 +801,22 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = _parser().parse_args(argv)
+    repo = args.repo.resolve(strict=True)
     if args.fault_worker:
         if args.state_path is None:
             return 2
         return _fault_worker(args.fault_worker, args.state_path)
     try:
         if args.check_forbidden_options:
-            check_forbidden_options(REPO)
+            check_forbidden_options(repo)
             print("PASS forbidden-option-policy")
             return 0
         if args.check_docs:
-            check_docs(REPO, args.plan, args.memory)
+            check_docs(repo, load_host_config(repo, args.host_config))
             print("PASS plan-memory-drift")
             return 0
         if args.allow_real_codex:
-            result = run_real_codex_smoke(REPO)
+            result = run_real_codex_smoke(repo, args.host_config)
             print(result.status.upper(), result.name, result.detail)
             return 0 if result.status in {"passed", "completed", "paused"} else 1
         results = run_fake_drills()

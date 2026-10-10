@@ -9,6 +9,9 @@ wrapper_dir=${wrapper_path%/*}
 wrapper_dir=$(CDPATH='' cd -P -- "$wrapper_dir" && printf '%s\n' "$PWD") || exit 2
 wrapper_path=$wrapper_dir/${wrapper_path##*/}
 
+ci_python_location=${pythonLocation-}
+ci_mode=${AGENT_HARNESS_CI-}
+
 PATH=/usr/bin:/bin
 TMPDIR=/tmp
 export PATH TMPDIR
@@ -72,7 +75,8 @@ bootstrap_trusted_parents() {
 $metadata
 EOF
         IFS=$old_ifs
-        [ "$owner" = 0 ] && bootstrap_safe_mode "$mode" && [ -d "$canonical" ] || return 1
+        { [ "$owner" = 0 ] || [ "$owner" = "$4" ]; } && bootstrap_safe_mode "$mode" \
+            && [ -d "$canonical" ] || return 1
         [ "$canonical" = "$root" ] && return 0
         parent=${canonical%/*}
     done
@@ -87,7 +91,7 @@ bootstrap_fingerprint() {
     depth=0
     while [ "$depth" -lt 17 ]; do
         root=$(bootstrap_matching_root "$current" "$primary_root" "$secondary_root") || return 1
-        bootstrap_trusted_parents "$current" "$primary_root" "$secondary_root" || return 1
+        bootstrap_trusted_parents "$current" "$primary_root" "$secondary_root" "$4" || return 1
         metadata=$(bootstrap_metadata "$current") || return 1
         old_ifs=$IFS
         IFS='|'
@@ -95,7 +99,7 @@ bootstrap_fingerprint() {
 $metadata
 EOF
         IFS=$old_ifs
-        [ "$owner" = 0 ] || return 1
+        [ "$owner" = 0 ] || [ "$owner" = "$4" ] || return 1
         case "$seen" in
             *"|$current|"*) return 1 ;;
         esac
@@ -123,26 +127,41 @@ bootstrap=
 bootstrap_root=
 bootstrap_extra_root=
 bootstrap_identity=
-for candidate in /usr/local/bin/python3.14 /usr/local/bin/python3.13 \
+bootstrap_owner=0
+ci_candidate=
+if [ "$ci_mode" = 1 ]; then
+    case "$ci_python_location" in
+        /opt/hostedtoolcache/Python/3.11.*/x64)
+            ci_candidate=$ci_python_location/bin/python3.11
+            ;;
+    esac
+fi
+current_uid=$(/usr/bin/id -u 2>/dev/null || printf '0\n')
+for candidate in $ci_candidate /usr/local/bin/python3.14 /usr/local/bin/python3.13 \
         /usr/local/bin/python3.12 /usr/local/bin/python3.11 /usr/bin/python3; do
     case "$candidate" in
+        /opt/hostedtoolcache/Python/*)
+            primary=/opt/hostedtoolcache/Python; secondary=; allowed_owner=$current_uid ;;
         /usr/local/*) primary=/usr/local; secondary= ;;
         /usr/*)
             primary=/usr
             if [ -d /etc/alternatives ]; then secondary=/etc/alternatives; else secondary=; fi
             ;;
     esac
-    if identity=$(bootstrap_fingerprint "$candidate" "$primary" "$secondary" 2>/dev/null); then
+    allowed_owner=${allowed_owner-0}
+    if identity=$(bootstrap_fingerprint "$candidate" "$primary" "$secondary" "$allowed_owner" 2>/dev/null); then
         bootstrap=$candidate
         bootstrap_root=$primary
         bootstrap_extra_root=$secondary
         bootstrap_identity=$identity
+        bootstrap_owner=$allowed_owner
         break
     fi
+    unset allowed_owner
 done
 [ -n "$bootstrap" ] || bootstrap_error
 
-exec "$bootstrap" -I - "$wrapper_path" "$bootstrap" "$bootstrap_root" "$bootstrap_extra_root" "$bootstrap_identity" "$@" <<'PY'
+exec "$bootstrap" -I - "$wrapper_path" "$bootstrap" "$bootstrap_root" "$bootstrap_extra_root" "$bootstrap_identity" "$bootstrap_owner" "$@" <<'PY'
 import glob
 import os
 from pathlib import Path
@@ -156,7 +175,7 @@ def fail(message):
     raise SystemExit(2)
 
 
-def trusted_bootstrap(candidate, roots, expected):
+def trusted_bootstrap(candidate, roots, expected, allowed_owner):
     try:
         candidate = Path(candidate)
         roots = tuple(Path(root).resolve(strict=True) for root in roots if root)
@@ -173,7 +192,7 @@ def trusted_bootstrap(candidate, roots, expected):
             parent = current.parent.resolve(strict=True)
             while True:
                 metadata = parent.stat()
-                if metadata.st_uid != 0 or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                if metadata.st_uid not in (0, allowed_owner) or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
                     return None
                 if parent == root:
                     break
@@ -184,14 +203,14 @@ def trusted_bootstrap(candidate, roots, expected):
             mode = oct(stat.S_IMODE(metadata.st_mode))[2:]
             fingerprint.append(f"{current}|{metadata.st_dev}|{metadata.st_ino}|{metadata.st_uid}|{mode};")
             if stat.S_ISLNK(metadata.st_mode):
-                if metadata.st_uid != 0:
+                if metadata.st_uid not in (0, allowed_owner):
                     return None
                 linked = Path(os.readlink(current))
                 value = linked if linked.is_absolute() else current.parent / linked
                 current = value.parent.resolve(strict=True) / value.name
                 continue
             if (not stat.S_ISREG(metadata.st_mode) or not os.access(current, os.X_OK)
-                    or metadata.st_uid != 0
+                    or metadata.st_uid not in (0, allowed_owner)
                     or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
                 return None
             target = current
@@ -241,12 +260,12 @@ def trusted_runtime(candidate, root, owner):
 
 try:
     wrapper = Path(sys.argv[1]).resolve(strict=True)
-    bootstrap = trusted_bootstrap(sys.argv[2], sys.argv[3:5], sys.argv[5])
+    bootstrap = trusted_bootstrap(sys.argv[2], sys.argv[3:5], sys.argv[5], int(sys.argv[6]))
     if bootstrap is None:
         fail("Python bootstrap 身份变化")
     repo = wrapper.parent.parent
     expected = repo / "scripts/agent-harness"
-    version_probe = sys.argv[6:] == ["--python", "--version"]
+    version_probe = sys.argv[7:] == ["--python", "--version"]
     if (wrapper != expected or wrapper.is_symlink()
             or not version_probe and not (repo / "tools/agent-harness/agent_harness").is_dir()):
         fail("Harness 入口位置不可信")
@@ -269,7 +288,7 @@ runtime = next((value for candidate, root, owner in candidates
 if runtime is None:
     fail("需要可信的 Python 3.11-3.14 runtime")
 
-arguments = sys.argv[6:]
+arguments = sys.argv[7:]
 environment = {
     "HOME": str(home),
     "PATH": "/usr/bin:/bin",
@@ -281,13 +300,15 @@ if arguments[:1] == ["--python"]:
     command = arguments[1:]
     allowed = (command == ["--version"]
                or command[:2] == ["-m", "unittest"] and len(command) > 2
+               or command[:1] == ["tools/agent-harness/run_tests.py"]
+               or command[:1] == ["tools/agent-harness/drills/run_drills.py"]
                or command == ["-m", "reqtrace.cli", "check"]
                or command == ["platform/tools/productization/render_capabilities.py", "--check"])
     if not allowed:
         fail("不允许的 Python Gate 入口")
     if command == ["--version"]:
         os.execve(runtime, [str(runtime), "--version"], environment)
-    target = command
+    os.execve(runtime, [str(runtime), *command], environment)
 else:
     target = ["-m", "agent_harness.cli", "--repo", str(repo), *arguments]
 
@@ -311,7 +332,8 @@ from agent_harness.codex_adapter import _environment
 
 repo = Path(sys.argv[1])
 try:
-    environment = _environment(repo)
+    environment = _environment(repo, required_tools=(), require_codex=False,
+                               optional_tools=("git", "node", "npm", "docker", "java", "python"))
 except (OSError, RuntimeError, TypeError, ValueError):
     print('{"error":"受控工具不可用或不受信任","exitCode":2}')
     raise SystemExit(2)

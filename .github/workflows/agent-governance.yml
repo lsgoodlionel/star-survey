@@ -12,6 +12,9 @@ permissions:
 jobs:
   agent-governance:
     runs-on: ubuntu-24.04
+    env:
+      AGENT_HARNESS_CI: '1'
+      AGENT_HARNESS_LINUX_IMAGE: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -19,20 +22,24 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Verify controlled Python 3.11 entry
+        run: scripts/agent-harness --python --version | grep '^Python 3\.11\.'
+
       - name: Validate Harness configuration
         run: scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests -p 'test_config.py' -v
 
+      - name: Prepare pinned Linux wrapper fixture
+        run: docker pull python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+
       - name: Run Harness unit and integration tests
-        run: scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests -p 'test_*.py' -v
+        run: scripts/agent-harness --python tools/agent-harness/run_tests.py --fail-on-skip
 
       - name: Run deterministic fault drills
-        run: python3 tools/agent-harness/drills/run_drills.py
+        run: scripts/agent-harness --python tools/agent-harness/drills/run_drills.py
 
       - name: Scan governed commands for forbidden options
-        run: python3 tools/agent-harness/drills/run_drills.py --check-forbidden-options
+        run: scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --check-forbidden-options
 
       - name: Check plan and memory references
         run: >-
-          python3 tools/agent-harness/drills/run_drills.py --check-docs
-          --plan docs/superpowers/plans/2026-10-10-autonomous-engineering-control-plane.md
-          --memory docs/agent/PROJECT_MEMORY.md
+          scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --check-docs

@@ -456,8 +456,8 @@ class LoopCase(WorktreeCase):
     def test_resume_runs_doctor_only_through_controlled_tools(self):
         result = self.run_loop(self.fake([None], needs_human=True))
         calls = []
-        def controlled(repo, operation):
-            calls.append((repo, operation))
+        def controlled(repo, operation, **policy):
+            calls.append((repo, operation, policy))
             return operation(repo)
         with patch("agent_harness.run_service.controlled_tool_errors", return_value=()), \
                 patch("agent_harness.run_service.run_with_controlled_tools", side_effect=controlled):
@@ -465,6 +465,7 @@ class LoopCase(WorktreeCase):
         self.assertEqual(resumed.status, RunStatus.ACTIVE)
         self.assertEqual(len(calls), 1)
         self.assertIs(calls[0][1], self.service.__class__.resume.__globals__["run_doctor"])
+        self.assertEqual(calls[0][2], {"required_tools": ("git",), "require_codex": False})
 
     def test_cli_help_and_fake_run_have_stable_exit_and_single_json(self):
         from agent_harness.cli import main

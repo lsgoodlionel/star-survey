@@ -479,14 +479,16 @@ def _trusted_tool_directory(repo, tool):
     return directory
 
 
-def controlled_tool_errors(repo):
+def controlled_tool_errors(repo, *, required_tools=None, require_codex=True):
     errors = []
-    try:
-        _trusted_codex(repo)
-    except (OSError, RuntimeError, TypeError, ValueError):
-        errors.append({"id": "controlled-tool:codex",
-                       "message": "受控工具不可用或不受信任"})
-    for tool in _BOUND_TOOLS:
+    if require_codex:
+        try:
+            _trusted_codex(repo)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            errors.append({"id": "controlled-tool:codex",
+                           "message": "受控工具不可用或不受信任"})
+    names = {tool.name for tool in _BOUND_TOOLS} if required_tools is None else set(required_tools)
+    for tool in (item for item in _BOUND_TOOLS if item.name in names):
         try:
             _trusted_tool_directory(repo, tool)
         except (OSError, RuntimeError, TypeError, ValueError):
@@ -503,11 +505,13 @@ def controlled_tool_path(repo, name):
     return Path(tool.entry)
 
 
-def run_with_controlled_tools(repo, operation):
-    errors = controlled_tool_errors(repo)
+def run_with_controlled_tools(repo, operation, *, required_tools=None, require_codex=True):
+    errors = controlled_tool_errors(repo, required_tools=required_tools,
+                                    require_codex=require_codex)
     if errors:
         raise ValueError("Controlled tools are unavailable")
-    environment = _environment(repo)
+    environment = _environment(repo, required_tools=required_tools,
+                               require_codex=require_codex)
     previous = dict(os.environ)
     try:
         os.environ.clear()
@@ -518,12 +522,21 @@ def run_with_controlled_tools(repo, operation):
         os.environ.update(previous)
 
 
-def _environment(repo):
+def _environment(repo, *, required_tools=None, require_codex=True, optional_tools=()):
     environment = {}
     if "PATH" in os.environ and (redact_text(os.environ["PATH"]) != os.environ["PATH"] or "\x00" in os.environ["PATH"]):
         raise ValueError("Unsafe inherited PATH")
-    directories = [_trusted_codex(repo).parent]
-    directories.extend(_trusted_tool_directory(repo, tool) for tool in _BOUND_TOOLS)
+    directories = [_trusted_codex(repo).parent] if require_codex else []
+    names = {tool.name for tool in _BOUND_TOOLS} if required_tools is None else set(required_tools)
+    directories.extend(_trusted_tool_directory(repo, tool)
+                       for tool in _BOUND_TOOLS if tool.name in names)
+    for tool in _BOUND_TOOLS:
+        if tool.name not in optional_tools or tool.name in names:
+            continue
+        try:
+            directories.append(_trusted_tool_directory(repo, tool))
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
     system_bin = Path("/bin").resolve(strict=True)
     if (system_bin.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH)
             or system_bin.is_relative_to(Path(repo).resolve(strict=True))):
@@ -564,7 +577,7 @@ def run_codex(command: Sequence[str], timeout_seconds: int, event_log: Path) -> 
     """Never return arbitrary exception/log text; kill and reap owned processes."""
     try:
         root_hint = Path(command[10])
-        environment = _environment(root_hint)
+        environment = _environment(root_hint, required_tools=("git",), require_codex=True)
     except (IndexError, OSError, RuntimeError, TypeError, ValueError):
         return CodexResult(failure=CodexFailure.ENVIRONMENT_POLICY)
     try:

@@ -97,9 +97,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return int(error.code)
         root = args.repo or _root()
         if args.command == "doctor":
-            policy_errors = controlled_tool_errors(root)
-            result = (DoctorReport((), (), policy_errors) if policy_errors
-                      else run_with_controlled_tools(root, run_doctor))
+            policy_errors = controlled_tool_errors(root, required_tools=("git",),
+                                                    require_codex=False)
+            result = (DoctorReport((), (), policy_errors) if policy_errors else
+                      run_with_controlled_tools(root, run_doctor, required_tools=("git",),
+                                                require_codex=False))
             code = 2 if result.error else 0
         else:
             service = RunService(root)

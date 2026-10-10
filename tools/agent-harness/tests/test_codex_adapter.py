@@ -56,20 +56,35 @@ class AdapterCase(WorktreeCase):
     def linux_wrapper(self, script):
         project = Path(__file__).resolve().parents[3]
         docker = shutil.which("docker")
+        ci = os.environ.get("AGENT_HARNESS_CI") == "1"
         if docker is None:
-            self.skipTest("Docker is required for the Linux wrapper fixture")
-        image = "python:3.11-slim"
+            if ci:
+                self.fail("linux-fixture:docker-cli-missing")
+            self.skipTest("linux-fixture:docker-cli-missing")
+        daemon = subprocess.run([docker, "version", "--format", "{{.Server.Version}}"],
+                                text=True, capture_output=True, check=False)
+        if daemon.returncode:
+            kind = "permission-denied" if "permission denied" in daemon.stderr.lower() else "daemon-unavailable"
+            if ci:
+                self.fail("linux-fixture:" + kind + ": " + daemon.stderr.strip())
+            self.skipTest("linux-fixture:" + kind)
+        image = os.environ.get(
+            "AGENT_HARNESS_LINUX_IMAGE",
+            "python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce",
+        )
         available = subprocess.run([docker, "image", "inspect", image], text=True,
                                    capture_output=True, check=False)
         if available.returncode:
-            self.skipTest("The python:3.11-slim fixture image is unavailable")
+            if ci:
+                self.fail("linux-fixture:image-missing: " + available.stderr.strip())
+            self.skipTest("linux-fixture:image-missing")
         return subprocess.run([docker, "run", "--rm", "-v", f"{project}:/repo:ro", "-w", "/repo",
                                image, "/bin/sh", "-c", script], text=True,
                               capture_output=True, check=False)
 
     def test_fixed_command_and_safe_resume(self):
         self.assertTrue(Path(self.command[0]).is_absolute())
-        self.assertEqual(Path(self.command[0]).resolve(), Path(shutil.which("codex")).resolve())
+        self.assertEqual(Path(self.command[0]), self.adapter._trusted_codex(self.repo))
         self.assertEqual(self.command[1:], ("exec", "--sandbox", "workspace-write", "--approve-for-me",
                                        "--strict-config", "--json", "--output-schema", str(self.schema), "--cd", str(self.repo), "Repair fixture"))
         resumed = self.adapter.build_codex_command(self.repo, self.schema, "repair", self.session)
@@ -238,13 +253,25 @@ print(json.dumps({"path": environment["PATH"], "tools": tools, "codex": codex_ad
         from agent_harness.cli import main
         from agent_harness.doctor import DoctorReport
         output = io.StringIO()
-        issue = {"id": "controlled-tool:docker", "message": "受控工具不可用或不受信任"}
-        with patch("agent_harness.cli.run_doctor", return_value=DoctorReport((), (), ())), \
-                patch("agent_harness.cli.controlled_tool_errors", return_value=(issue,)), \
+        warning = {"id": "docker", "message": "未安装；仅 Docker Gate 需要"}
+        with patch("agent_harness.cli.run_doctor", return_value=DoctorReport((), (warning,), ())), \
+                patch("agent_harness.cli.controlled_tool_errors", return_value=()) as controlled, \
+                patch("agent_harness.cli.run_with_controlled_tools",
+                      return_value=DoctorReport((), (warning,), ())), \
                 redirect_stdout(output):
             code = main(["--repo", str(self.repo), "doctor", "--json"])
-        self.assertEqual(code, 2)
-        self.assertEqual(json.loads(output.getvalue())["error"], [issue])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output.getvalue())["warning"], [warning])
+        controlled.assert_called_once_with(self.repo, required_tools=("git",), require_codex=False)
+
+    def test_controlled_environment_requires_only_requested_operation_tools(self):
+        with patch("agent_harness.codex_adapter._trusted_codex",
+                   side_effect=AssertionError("Codex must not be required")), \
+                patch("agent_harness.codex_adapter._BOUND_TOOLS", ()):
+            errors = self.adapter.controlled_tool_errors(
+                self.repo, required_tools=(), require_codex=False
+            )
+        self.assertEqual(errors, ())
 
     def test_doctor_never_executes_path_candidates_before_controlled_validation(self):
         project = Path(__file__).resolve().parents[3]
@@ -369,6 +396,16 @@ print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": 
         direct = self.linux_wrapper("/repo/scripts/agent-harness --python --version")
         self.assertEqual(direct.returncode, 0, direct.stderr or direct.stdout)
         self.assertRegex(direct.stdout, r"^Python 3\.11\.")
+
+    def test_linux_wrapper_bootstraps_setup_python_hosted_toolcache(self):
+        hosted = self.linux_wrapper(r"""
+mkdir -p /opt/hostedtoolcache/Python/3.11.99/x64/bin
+cp /usr/local/bin/python3.11 /opt/hostedtoolcache/Python/3.11.99/x64/bin/python3.11
+AGENT_HARNESS_CI=1 pythonLocation=/opt/hostedtoolcache/Python/3.11.99/x64 \
+  /repo/scripts/agent-harness --python --version
+""")
+        self.assertEqual(hosted.returncode, 0, hosted.stderr or hosted.stdout)
+        self.assertRegex(hosted.stdout, r"^Python 3\.11\.")
 
     def test_linux_wrapper_accepts_trusted_usr_bin_python_symlink(self):
         linked = self.linux_wrapper(
