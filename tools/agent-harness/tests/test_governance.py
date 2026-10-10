@@ -66,7 +66,7 @@ class GovernanceWorkflowTests(unittest.TestCase):
     def test_workflow_hardens_setup_python_directory_chain_before_wrapper(self):
         harden = (
             'chmod go-w /opt/hostedtoolcache/Python "${pythonLocation%/*}" '
-            '"$pythonLocation" "$pythonLocation/bin"'
+            '"$pythonLocation" "$pythonLocation/bin" "$pythonLocation/bin/python3.11"'
         )
         self.assertIn(harden, self.text)
         self.assertEqual(self.text.count(harden), 2)
