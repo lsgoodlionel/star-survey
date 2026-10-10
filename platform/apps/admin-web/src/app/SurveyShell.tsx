@@ -1,10 +1,15 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, BarChart3, Eye, FileInput, Pencil, Rocket } from 'lucide-react';
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useParams } from 'react-router-dom';
 import { z } from 'zod';
 import { useAuth } from '../features/auth/AuthProvider';
 import type { ApiClient } from '../shared/api/http';
+import {
+  dashboardQueryKey,
+  recordRecentWork,
+  type RecentWorkCommand,
+} from '../shared/api/dashboard';
 import { getResourcePath } from '../shared/api/resources';
 import { getSurvey, surveyDetailQueryKey, type SurveyView } from '../shared/api/surveys';
 
@@ -42,7 +47,9 @@ function LoadedSurveyShell({ api, surveyId, tenantId }: {
   tenantId: string;
 }) {
   const location = useLocation();
+  const queryClient = useQueryClient();
   const [unsavedChanges, setUnsavedChanges] = useState(false);
+  const registeredTarget = useRef<string | null>(null);
   const surveyQuery = useQuery({
     queryKey: surveyDetailQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurvey(api, surveyId, signal),
@@ -53,6 +60,21 @@ function LoadedSurveyShell({ api, surveyId, tenantId }: {
     retry: false,
   });
   const context: SurveyShellContextValue = { setUnsavedChanges };
+  const recentWorkCommand = recentWorkCommandForPath(location.pathname, surveyId);
+  const recentWorkMutation = useMutation({
+    mutationFn: (command: RecentWorkCommand) => recordRecentWork(api, command),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: dashboardQueryKey(tenantId) });
+    },
+  });
+
+  useEffect(() => {
+    if (!surveyQuery.data || !pathQuery.data || !recentWorkCommand) return;
+    const target = `${recentWorkCommand.page}:${recentWorkCommand.version ?? ''}`;
+    if (registeredTarget.current === target) return;
+    registeredTarget.current = target;
+    recentWorkMutation.mutate(recentWorkCommand);
+  }, [pathQuery.data, recentWorkCommand, recentWorkMutation, surveyQuery.data]);
 
   if (surveyQuery.isPending || pathQuery.isPending) {
     return <p className="survey-shell-loading">正在加载问卷上下文</p>;
@@ -66,7 +88,7 @@ function LoadedSurveyShell({ api, surveyId, tenantId }: {
     <section className="survey-shell">
       <header className="survey-shell-header">
         <nav className="survey-breadcrumb" aria-label="面包屑">
-          <Link to="/workspace">工作台</Link>
+          <Link to="/workspace">项目与问卷</Link>
           {pathQuery.data.map((resource, index) => {
             const current = index === pathQuery.data.length - 1;
             return current ? (
@@ -139,4 +161,26 @@ function surveyStatusLabel(status: SurveyView['status']) {
     pending_reconciliation: '发布结果正在核对',
   };
   return labels[status];
+}
+
+function recentWorkCommandForPath(pathname: string, surveyId: string): RecentWorkCommand | null {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts[0] !== 'surveys' || parts[1] !== surveyId) return null;
+  if (parts.length === 3) {
+    const page = parts[2];
+    if (
+      page === 'edit' ||
+      page === 'import' ||
+      page === 'preview' ||
+      page === 'publish' ||
+      page === 'responses'
+    ) {
+      return { surveyId, page, version: null };
+    }
+    return null;
+  }
+  if (parts.length !== 4 || parts[2] !== 'versions') return null;
+  const version = Number(parts[3]);
+  if (!Number.isSafeInteger(version) || version <= 0) return null;
+  return { surveyId, page: 'version', version };
 }

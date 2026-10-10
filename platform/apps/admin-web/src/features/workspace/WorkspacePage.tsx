@@ -65,7 +65,6 @@ export function WorkspacePage() {
   const resourceId = searchParams.get('resource');
   const filters = readFilters(searchParams);
   const [projectNavOpen, setProjectNavOpen] = useState(false);
-  const [recentResources, setRecentResources] = useState<ResourceView[]>([]);
   const [localSelection, setLocalSelection] = useState<LocalSelection | null>(null);
   const [localPath, setLocalPath] = useState<ResourceView[]>([]);
   const [dialogState, setDialogState] = useState<WorkspaceDialogState | null>(null);
@@ -79,7 +78,6 @@ export function WorkspacePage() {
   useEffect(() => {
     if (previousTenantId.current === tenantId) return;
     previousTenantId.current = tenantId;
-    setRecentResources([]);
     setLocalSelection(null);
     setLocalPath([]);
     setDialogState(null);
@@ -295,9 +293,6 @@ export function WorkspacePage() {
         });
         return;
       }
-      setRecentResources((current) =>
-        current.filter((resource) => resource.id !== result.resource.id),
-      );
       setLocalSelection(null);
       const exitsCurrentContainer =
         result.resource.id === result.context.parentId &&
@@ -368,16 +363,6 @@ export function WorkspacePage() {
       });
       return;
     }
-    setRecentResources((current) => [
-      resource,
-      ...current.filter((item) => item.id !== resource.id),
-    ].slice(0, 5));
-    updateUrl({ resource: resource.id });
-  }
-
-  function selectRecentResource(resource: ResourceView) {
-    setLocalSelection({ tenantId, resource, resolvePath: true });
-    setLocalPath([]);
     updateUrl({ resource: resource.id });
   }
 
@@ -439,7 +424,7 @@ export function WorkspacePage() {
       <main className="workspace-main" inert={activeDialog ? true : undefined}>
         <header className="workspace-main-heading">
           <div>
-            <h1>资源工作台</h1>
+            <h1>项目与问卷</h1>
             <nav aria-label="当前位置" className="workspace-breadcrumb">
               <ol>
                 {navigationPath.map((item, index) => (
@@ -523,20 +508,6 @@ export function WorkspacePage() {
           onRetry={() => void currentQuery.refetch()}
           onLoadMore={() => void currentQuery.fetchNextPage()}
         />
-        {recentResources.length ? (
-          <section className="workspace-recent" aria-label="最近打开">
-            <h2>最近打开</h2>
-            <ul>
-              {recentResources.map((resource) => (
-                <li key={resource.id}>
-                  <button type="button" title={resource.name} onClick={() => selectRecentResource(resource)}>
-                    {resource.name}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
       </main>
       {activeDialog?.kind === 'create' ? (
         <CreateResourceDialog

@@ -228,28 +228,6 @@ test('restoresAResourceOnlyDeepLinkIntoProjectParentAndSelectionUrlState', async
   expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent('项目甲/调研资料');
 });
 
-test('tracksRecentlyOpenedResourcesOnlyForTheCurrentTenantSession', async () => {
-  let tenant = 'tenant-a';
-  server.use(
-    http.get('/v1/resources', ({ request }) => {
-      const kind = new URL(request.url).searchParams.get('kind');
-      const project = tenant === 'tenant-a' ? projectA : projectB;
-      const survey = tenant === 'tenant-a' ? surveyA : surveyB;
-      return HttpResponse.json({ items: kind === 'project' ? [project] : [survey], nextCursor: null });
-    }),
-  );
-  const user = userEvent.setup();
-  const rendered = renderWorkspace(`/workspace?project=${projectA.id}&parent=${projectA.id}`);
-  await user.click(await screen.findByRole('button', { name: surveyA.name }));
-  expect(screen.getByRole('region', { name: '最近打开' })).toHaveTextContent(surveyA.name);
-
-  tenant = 'tenant-b';
-  rendered.switchTenant('tenant-b');
-  expect(await screen.findByRole('button', { name: projectB.name })).toBeInTheDocument();
-  expect(screen.queryByRole('region', { name: '最近打开' })).not.toBeInTheDocument();
-  expect(screen.queryByText(surveyA.name)).not.toBeInTheDocument();
-});
-
 test('keepsFiltersAcrossErrorAndRetriesTheCurrentContainer', async () => {
   let attempts = 0;
   server.use(
@@ -424,45 +402,6 @@ test('movesASurveyIntoANestedFolderFromAPaginatedDestinationTree', async () => {
 
   await waitFor(() => expect(movedParentId).toBe(nestedFolder.id));
   expect(destinationCursors).toContain('next-projects');
-});
-
-test('resolvesTheRealPathWhenOpeningARecentResourceAcrossContainers', async () => {
-  const resources = [projectA, projectB, surveyA, surveyB];
-  server.use(
-    http.get('/v1/resources/:id', ({ params }) => {
-      const found = resources.find((item) => item.id === params.id);
-      return found ? HttpResponse.json(found) : new HttpResponse(null, { status: 404 });
-    }),
-    http.get('/v1/resources', ({ request }) => {
-      const url = new URL(request.url);
-      if (url.searchParams.get('kind') === 'project') {
-        return HttpResponse.json({ items: [projectA, projectB], nextCursor: null });
-      }
-      const parentId = url.searchParams.get('parentId');
-      return HttpResponse.json({
-        items: parentId === projectA.id ? [surveyA] : parentId === projectB.id ? [surveyB] : [],
-        nextCursor: null,
-      });
-    }),
-  );
-  const user = userEvent.setup();
-  const { router } = renderWorkspace(`/workspace?project=${projectA.id}&parent=${projectA.id}`);
-
-  await user.click(await screen.findByRole('button', { name: surveyA.name }));
-  const navigation = screen.getByRole('complementary', { name: '项目与文件夹' });
-  await user.click(within(navigation).getByRole('button', { name: projectB.name }));
-  expect(await screen.findByRole('button', { name: surveyB.name })).toBeInTheDocument();
-  await user.click(within(screen.getByRole('region', { name: '最近打开' })).getByRole('button', {
-    name: surveyA.name,
-  }));
-
-  await waitFor(() => {
-    expect(router.state.location.search).toContain(`project=${projectA.id}`);
-    expect(router.state.location.search).toContain(`parent=${projectA.id}`);
-    expect(router.state.location.search).toContain(`resource=${surveyA.id}`);
-    expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent(projectA.name);
-    expect(screen.getByRole('navigation', { name: '当前位置' })).not.toHaveTextContent(projectB.name);
-  });
 });
 
 test('renamesAndMovesTheCurrentFolderThenExitsAndRefreshesAffectedContexts', async () => {
@@ -734,7 +673,7 @@ test('providesChineseCreateMenuBreadcrumbAndProjectDrawerControls', async () => 
   const user = userEvent.setup();
   renderWorkspace(`/workspace?project=${projectA.id}&parent=${projectA.id}`);
 
-  expect(await screen.findByRole('heading', { name: '资源工作台' })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: '项目与问卷' })).toBeInTheDocument();
   const projectNav = screen.getByRole('complementary', { name: '项目与文件夹' });
   expect(
     await within(projectNav).findByRole('button', { name: projectA.name }),

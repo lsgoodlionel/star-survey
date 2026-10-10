@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { FileText, LayoutDashboard, LogOut, Menu, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
-import { Link, Outlet } from 'react-router-dom';
+import { Link, NavLink, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from '../features/auth/AuthProvider';
 import { captureEditorRecovery } from '../features/editor/recovery';
 
@@ -31,7 +31,7 @@ export function AppShell() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <Link className="app-brand" to="/workspace" onClick={() => setNavigationOpen(false)}>
+        <Link className="app-brand" to="/dashboard" onClick={() => setNavigationOpen(false)}>
           问卷管理台
         </Link>
         <button
@@ -51,19 +51,19 @@ export function AppShell() {
           aria-label="全局导航"
           data-open={navigationOpen}
         >
-          <Link to="/workspace" onClick={() => setNavigationOpen(false)}>
+          <NavLink to="/dashboard" onClick={() => setNavigationOpen(false)}>
             <LayoutDashboard aria-hidden="true" />
             工作台
-          </Link>
-          <Link to="/workspace?kind=survey" onClick={() => setNavigationOpen(false)}>
+          </NavLink>
+          <NavLink to="/workspace" onClick={() => setNavigationOpen(false)}>
             <FileText aria-hidden="true" />
-            问卷
-          </Link>
+            项目与问卷
+          </NavLink>
         </nav>
         <div className="account-actions">
           <details className="account-menu">
             <summary>
-              <span>测试管理员</span>
+              <span>{session?.me.actorId}</span>
               <small>{role}</small>
             </summary>
             <div className="account-menu-panel">

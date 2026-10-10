@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { beforeEach, expect, test, vi } from 'vitest';
@@ -13,11 +13,17 @@ const projectId = '10000000-0000-4000-8000-000000000001';
 const folderId = '20000000-0000-4000-8000-000000000001';
 const questionId = '40000000-0000-4000-8000-000000000001';
 
-const api: ApiClient = {
-  request: (request) => Promise.resolve(handleRequest(request as ApiRequest<unknown>)) as never,
-};
+let failSurveyLoad = false;
+let failRecentWork = false;
+const request = vi.fn((apiRequest: ApiRequest<unknown>) =>
+  Promise.resolve(handleRequest(apiRequest)) as never);
+const api: ApiClient = { request };
 
 function handleRequest(request: ApiRequest<unknown>) {
+  if (request.path === '/v1/dashboard/recent-work') {
+    if (failRecentWork) throw new Error('recent work unavailable');
+    return undefined;
+  }
   if (request.path === `/v1/surveys/${surveyId}/versions/3`) {
     return {
       surveyId,
@@ -48,6 +54,7 @@ function handleRequest(request: ApiRequest<unknown>) {
     };
   }
   if (request.path === `/v1/surveys/${surveyId}`) {
+    if (failSurveyLoad) throw new Error('survey unavailable');
     return {
       id: surveyId,
       title: '客户反馈问卷',
@@ -98,7 +105,11 @@ vi.mock('../features/auth/AuthProvider', () => ({
   }),
 }));
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  failSurveyLoad = false;
+  failRecentWork = false;
+});
 
 function renderSurveyShell(initialEntry: string) {
   const queryClient = new QueryClient({
@@ -114,6 +125,7 @@ function renderSurveyShell(initialEntry: string) {
         { path: 'preview', element: <p>预览内容</p> },
         { path: 'publish', element: <p>发布内容</p> },
         { path: 'responses', element: <p>答卷内容</p> },
+        { path: '*', element: <p>未知页面</p> },
         {
           path: 'versions/:version',
           element: (
@@ -142,7 +154,7 @@ test('loadsSurveyContextAndPreservesTheSelectedQuestionAcrossWorkflowLinks', asy
   expect(screen.getByText('正在加载问卷上下文')).toBeInTheDocument();
   expect(await screen.findByRole('heading', { name: '客户反馈问卷' })).toBeInTheDocument();
   const breadcrumb = screen.getByRole('navigation', { name: '面包屑' });
-  expect(within(breadcrumb).getByRole('link', { name: '工作台' })).toHaveAttribute(
+  expect(within(breadcrumb).getByRole('link', { name: '项目与问卷' })).toHaveAttribute(
     'href',
     '/workspace',
   );
@@ -224,4 +236,54 @@ test('registersSurveyPagesAsChildrenOfTheProtectedSurveyShell', () => {
     'versions/:version',
   ]);
   expect(appShell?.children?.some((route) => route.path === 'surveys/:surveyId/edit')).toBe(false);
+});
+
+test.each([
+  ['edit', null],
+  ['import', null],
+  ['preview', null],
+  ['publish', null],
+  ['responses', null],
+  ['versions/3', 3],
+] as const)('registers valid %s recent work once after the survey context loads', async (path, version) => {
+  renderSurveyShell(`/surveys/${surveyId}/${path}?question=${questionId}&next=https://invalid.example`);
+
+  await screen.findByRole('heading', { name: '客户反馈问卷' });
+  const page = path.startsWith('versions/') ? 'version' : path;
+  await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({
+    path: '/v1/dashboard/recent-work',
+    method: 'POST',
+    body: { surveyId, page, version },
+  })));
+  expect(request.mock.calls.filter(([call]) => call.path === '/v1/dashboard/recent-work')).toHaveLength(1);
+});
+
+test('does not register recent work when the survey context fails to load', async () => {
+  failSurveyLoad = true;
+  renderSurveyShell(`/surveys/${surveyId}/edit`);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('问卷上下文暂时不可用');
+  expect(request.mock.calls.some(([call]) => call.path === '/v1/dashboard/recent-work')).toBe(false);
+});
+
+test.each(['versions/0', 'versions/not-a-version', 'unknown']) (
+  'does not register arbitrary survey route %s',
+  async (path) => {
+    renderSurveyShell(`/surveys/${surveyId}/${path}?page=publish&version=7`);
+
+    await screen.findByRole('heading', { name: '客户反馈问卷' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(request.mock.calls.some(([call]) => call.path === '/v1/dashboard/recent-work')).toBe(false);
+  },
+);
+
+test('keeps the business page available when recent-work registration fails', async () => {
+  failRecentWork = true;
+  renderSurveyShell(`/surveys/${surveyId}/edit`);
+
+  expect(await screen.findByText('编辑内容')).toBeInTheDocument();
+  await waitFor(() => expect(request.mock.calls.some(
+    ([call]) => call.path === '/v1/dashboard/recent-work',
+  )).toBe(true));
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });

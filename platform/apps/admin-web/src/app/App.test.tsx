@@ -35,17 +35,35 @@ test('rendersOnlyAvailableProductNavigationAndKeepsTechnicalIdentityDetailsSepar
   renderAppShell();
 
   const navigation = screen.getByRole('navigation', { name: '全局导航' });
-  expect(within(navigation).getByRole('link', { name: '工作台' })).toBeInTheDocument();
-  expect(within(navigation).getByRole('link', { name: '问卷' })).toBeInTheDocument();
+  expect(within(navigation).getByRole('link', { name: '工作台' })).toHaveAttribute(
+    'href',
+    '/dashboard',
+  );
+  expect(within(navigation).getByRole('link', { name: '项目与问卷' })).toHaveAttribute(
+    'href',
+    '/workspace',
+  );
+  expect(within(navigation).getByRole('link', { name: '项目与问卷' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  expect(within(navigation).getByRole('link', { name: '工作台' })).not.toHaveAttribute(
+    'aria-current',
+  );
+  expect(new Set(within(navigation).getAllByRole('link').map((link) => link.getAttribute('href'))).size)
+    .toBe(2);
   expect(within(navigation).queryByText('模板')).not.toBeInTheDocument();
   expect(within(navigation).queryByText('待审批')).not.toBeInTheDocument();
   expect(within(navigation).queryByRole('link', { name: /admin/i })).not.toBeInTheDocument();
 
-  expect(screen.getByText('测试管理员')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: '问卷管理台' })).toHaveAttribute('href', '/dashboard');
+  const accountSummary = screen.getByText('租户管理员').closest('summary');
+  expect(accountSummary).not.toBeNull();
+  expect(within(accountSummary!).getByText('author-7')).toBeInTheDocument();
   expect(screen.getByText('租户管理员')).toBeInTheDocument();
   const technicalDetails = screen.getByText('技术信息').closest('details');
   expect(technicalDetails).not.toBeNull();
-  expect(within(technicalDetails!).getByText('author-7')).toBeInTheDocument();
+  expect(within(technicalDetails!).getAllByText('author-7')).toHaveLength(2);
   expect(within(technicalDetails!).getByText('tenant-a')).toBeInTheDocument();
 });
 

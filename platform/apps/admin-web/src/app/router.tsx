@@ -7,6 +7,10 @@ import { useAuth } from '../features/auth/AuthProvider';
 import { WorkspacePage } from '../features/workspace/WorkspacePage';
 import { EditorRoutePage } from '../features/editor/EditorPage';
 
+const DashboardPage = lazy(() =>
+  import('../features/dashboard/DashboardPage').then((module) => ({ default: module.DashboardPage })),
+);
+
 const PublishRoutePage = lazy(() =>
   import('../features/publish/PublishPage').then((module) => ({ default: module.PublishRoutePage })),
 );
@@ -78,12 +82,21 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
         {
           element: <AppShell />,
           children: [
-            { index: true, element: <Navigate to="/workspace" replace /> },
+            { index: true, element: <Navigate to="/dashboard" replace /> },
+            {
+              path: 'dashboard',
+              element: (
+                <Suspense fallback={<p>正在加载工作台</p>}>
+                  <DashboardPage />
+                </Suspense>
+              ),
+            },
             { path: 'workspace', element: <WorkspacePage /> },
             {
               path: 'surveys/:surveyId',
               element: <SurveyShell />,
               children: [
+                { index: true, element: <Navigate to="edit" replace /> },
                 { path: 'edit', element: <EditorRoutePage /> },
                 {
                   path: 'import',
