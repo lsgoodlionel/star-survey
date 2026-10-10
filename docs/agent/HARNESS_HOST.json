@@ -3,9 +3,9 @@
   "deliveryManifest": "docs/agent/HARNESS_DELIVERY.json",
   "deliverySyncPaths": [
     "AGENTS.md",
-    ".superpowers/sdd/2026-10-10-business-dashboard-v1/progress.md",
     "docs/agent/AUTONOMY.md",
     "docs/agent/HARNESS_DELIVERY.json",
+    "docs/agent/PROGRESS.md",
     "docs/agent/PROJECT_MEMORY.md",
     "docs/agent/reviews/2026-10-10-task-8-dx-ci.md",
     "docs/agent/reviews/2026-10-10-task-8-security.md",
@@ -34,7 +34,7 @@
       "refs/remotes/limesurvey-fork/master"
     ]
   },
-  "ledger": ".superpowers/sdd/2026-10-10-business-dashboard-v1/progress.md",
+  "ledger": "docs/agent/PROGRESS.md",
   "repositoryAttestation": {
     "provider": "github-artifact-attestation",
     "signerWorkflow": ".github/workflows/agent-governance.yml",

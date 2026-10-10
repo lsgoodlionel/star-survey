@@ -94,6 +94,20 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertIn("documentation", document)
         self.assertIn(".env.example", document["secretPolicy"]["allowlist"])
 
+    def test_delivery_ledger_is_available_in_a_fresh_checkout(self):
+        document = json.loads(HOST_CONFIG.read_text(encoding="utf-8"))
+        ledger = REPO / document["ledger"]
+        self.assertTrue(ledger.is_file())
+        self.assertTrue(ledger.resolve().is_relative_to(REPO.resolve()))
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", document["ledger"]],
+            cwd=REPO,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(tracked.returncode, 0, tracked.stdout + tracked.stderr)
+
     def test_delivery_status_matches_external_sync_and_review_evidence(self):
         manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(
             encoding="utf-8"))
