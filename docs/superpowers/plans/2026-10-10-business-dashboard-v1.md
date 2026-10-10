@@ -240,25 +240,25 @@ git commit -m "feat: add dashboard api client"
 - Consumes: Task 4 client/types and current auth session tenant ID.
 - Produces: `DashboardPage` with summary, task list, survey list, recent work, loading/empty/403/503/stale states and refresh action.
 
-- [ ] **Step 1: Write failing component tests**
+- [x] **Step 1: Write failing component tests**
 
 Cover loading skeleton, all-empty success, hidden unauthorized sections, every task/action route, Chinese status labels, 403, initial 503, refresh failure retaining stale data, no hardcoded identity, accessible icon refresh and empty recent work.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run: `npm test -- --run src/features/dashboard/DashboardPage.test.tsx`
 
 Expected: FAIL because the feature does not exist.
 
-- [ ] **Step 3: Implement the page and stable layout**
+- [x] **Step 3: Implement the page and stable layout**
 
 Use unframed full-width sections, fixed summary dimensions, Lucide refresh icon, semantic headings/table/list, `aria-live` for async status, and no placeholder links.
 
-- [ ] **Step 4: Implement responsive CSS at exact boundaries**
+- [x] **Step 4: Implement responsive CSS at exact boundaries**
 
 `>=1180px` uses four summary columns and full tables; `820..1179px` uses two columns and compact lists; `<820px` keeps primary actions adjacent to titles without page-level horizontal scrolling.
 
-- [ ] **Step 5: Run focused tests, lint and typecheck**
+- [x] **Step 5: Run focused tests, lint and typecheck**
 
 Run: `npm test -- --run src/features/dashboard/DashboardPage.test.tsx`
 
@@ -268,7 +268,7 @@ Run: `npm run typecheck`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add platform/apps/admin-web/src/features/dashboard
