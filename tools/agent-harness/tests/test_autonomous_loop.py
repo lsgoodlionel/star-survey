@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import sys
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -155,6 +156,100 @@ class LoopCase(WorktreeCase):
         result = self.run_loop(self.fake([None], needs_human=True))
         self.assertEqual(result.status, RunStatus.PAUSED)
         self.assertFalse(result.gates)
+
+    def dependency_run(self, path, before, after):
+        self.write(self.repo / path, before)
+        self.write(self.repo / self.plan, "# Plan\n\n**Status:** approved\n\n## Milestone m1: Dependency check\n\n"
+                   "**Files:**\n- Modify: `" + path + "`\n\nAcceptance: dependency policy applies.\n")
+        matrix_path = self.repo / "docs/agent/GATE_MATRIX.yaml"
+        matrix = json.loads(matrix_path.read_text())
+        matrix["profiles"]["fixture"]["paths"].append(path)
+        self.write(matrix_path, json.dumps(matrix))
+        self.git("add", ".")
+        self.git("commit", "-m", "dependency fixture")
+        self.init_run()
+        from agent_harness.codex_adapter import CodexResult
+        def execute(command, timeout, event_log):
+            self.prompts.append(command[-1])
+            self.write(self.repo / path, after)
+            return CodexResult("completed", "changed", (path,), ("unit",), False, self.session)
+        return self.run_loop(execute, cycles=1)
+
+    def test_npm_new_dependency_and_lock_entry_pause_before_gate(self):
+        before = json.dumps({"dependencies": {"react": "19.0.0"}})
+        after = json.dumps({"dependencies": {"react": "19.0.0", "new-package": "1.0.0"}})
+        result = self.dependency_run("package.json", before, after)
+        self.assertEqual(result.status, RunStatus.PAUSED)
+        self.assertFalse(result.gates)
+
+        before = json.dumps({"lockfileVersion": 3, "packages": {"": {}, "node_modules/react": {"version": "19.0.0"}}})
+        after = json.dumps({"lockfileVersion": 3, "packages": {"": {}, "node_modules/react": {"version": "19.0.0"},
+                                                                   "node_modules/new-package": {"version": "1.0.0"}}})
+        result = self.dependency_run("package-lock.json", before, after)
+        self.assertFalse(result.gates)
+
+    def test_maven_new_dependency_or_repository_pauses_before_gate(self):
+        before = "<project><dependencies><dependency><groupId>a</groupId><artifactId>b</artifactId><version>1</version></dependency></dependencies></project>"
+        after = before.replace("</dependencies>", "<dependency><groupId>x</groupId><artifactId>y</artifactId><version>1</version></dependency></dependencies>")
+        result = self.dependency_run("pom.xml", before, after)
+        self.assertFalse(result.gates)
+
+        after = before.replace("</project>", "<repositories><repository><id>new</id><url>https://repo.example.invalid/maven</url></repository></repositories></project>")
+        result = self.dependency_run("pom.xml", before, after)
+        self.assertFalse(result.gates)
+
+    def test_python_new_requirement_source_and_lock_entry_pause_before_gate(self):
+        result = self.dependency_run("requirements.txt", "requests==2.0\n", "requests==2.0\nhttpx==1.0\n")
+        self.assertFalse(result.gates)
+        result = self.dependency_run("requirements.txt", "requests==2.0\n",
+                                     "--extra-index-url https://packages.example.invalid/simple\nrequests==2.0\n")
+        self.assertFalse(result.gates)
+        before = textwrap.dedent("""
+            [project]
+            dependencies = ["requests==2.0"]
+            [tool.poetry.dependencies]
+            python = "^3.11"
+        """)
+        after = before.replace('dependencies = ["requests==2.0"]', 'dependencies = ["requests==2.0", "httpx==1.0"]')
+        result = self.dependency_run("pyproject.toml", before, after)
+        self.assertFalse(result.gates)
+        before = '[[package]]\nname = "requests"\nversion = "2.0"\n'
+        after = before + '\n[[package]]\nname = "httpx"\nversion = "1.0"\n'
+        result = self.dependency_run("poetry.lock", before, after)
+        self.assertFalse(result.gates)
+
+    def test_python_uv_manifest_and_lock_sources_pause_before_gate(self):
+        before = '[project]\ndependencies = ["requests==2.0"]\n'
+        after = before + ('\n[tool.uv.sources]\nrequests = { index = "internal" }\n'
+                          '[[tool.uv.index]]\nname = "internal"\nurl = "https://packages.example.invalid/simple"\n')
+        result = self.dependency_run("pyproject.toml", before, after)
+        self.assertFalse(result.gates)
+        before = '[[package]]\nname = "requests"\nversion = "2.0"\nsource = { registry = "https://pypi.org/simple" }\n'
+        after = before.replace("https://pypi.org/simple", "https://packages.example.invalid/simple")
+        result = self.dependency_run("uv.lock", before, after)
+        self.assertFalse(result.gates)
+
+    def test_dependency_source_changes_pause_but_version_only_changes_reach_gate(self):
+        before = json.dumps({"dependencies": {"pkg": "1.0.0"}})
+        result = self.dependency_run("package.json", before,
+                                     json.dumps({"dependencies": {"pkg": "git+https://example.invalid/pkg.git"}}))
+        self.assertFalse(result.gates)
+        result = self.dependency_run("package.json", before, json.dumps({"dependencies": {"pkg": "2.0.0"}}))
+        self.assertIn("unit", result.gates)
+
+        before = "<project><dependencies><dependency><groupId>a</groupId><artifactId>b</artifactId><version>1</version></dependency></dependencies></project>"
+        after = before.replace("<version>1</version>", "<version>2</version>")
+        result = self.dependency_run("pom.xml", before, after)
+        self.assertIn("unit", result.gates)
+
+        result = self.dependency_run("requirements.txt", "requests==2.0\n", "requests==3.0\n")
+        self.assertIn("unit", result.gates)
+
+    def test_plain_manifest_text_change_is_not_a_dependency_addition(self):
+        before = json.dumps({"name": "fixture", "dependencies": {"pkg": "1.0.0"}})
+        after = json.dumps({"name": "renamed", "dependencies": {"pkg": "1.0.0"}})
+        result = self.dependency_run("package.json", before, after)
+        self.assertIn("unit", result.gates)
 
     def test_typed_adapter_failure_is_persisted_without_gate_or_raw_logs(self):
         from agent_harness.codex_adapter import CodexResult, CodexFailure

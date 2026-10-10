@@ -1,9 +1,12 @@
 """Controlled argv and bounded streams; subprocesses below are Python fakes."""
 
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -40,7 +43,7 @@ class AdapterCase(WorktreeCase):
         def fake(argv, **kwargs):
             if argv[0] == "git":
                 return spawn(argv, **kwargs)
-            self.assertEqual(argv[0:2], ("codex", "exec"))
+            self.assertEqual(argv[0:2], (self.command[0], "exec"))
             self.assertFalse(kwargs.get("shell", False))
             child = spawn([sys.executable, "-c", script], **kwargs)
             self.children.append(child)
@@ -49,10 +52,12 @@ class AdapterCase(WorktreeCase):
             return self.adapter.run_codex(command or self.command, timeout, log or self.directory / "codex.jsonl")
 
     def test_fixed_command_and_safe_resume(self):
-        self.assertEqual(self.command, ("codex", "exec", "--sandbox", "workspace-write", "--approve-for-me",
+        self.assertTrue(Path(self.command[0]).is_absolute())
+        self.assertEqual(Path(self.command[0]).resolve(), Path(shutil.which("codex")).resolve())
+        self.assertEqual(self.command[1:], ("exec", "--sandbox", "workspace-write", "--approve-for-me",
                                        "--strict-config", "--json", "--output-schema", str(self.schema), "--cd", str(self.repo), "Repair fixture"))
         resumed = self.adapter.build_codex_command(self.repo, self.schema, "repair", self.session)
-        self.assertEqual(resumed[0:2], ("codex", "exec"))
+        self.assertEqual(resumed[0:2], (self.command[0], "exec"))
         self.assertIn("resume", resumed)
         self.assertIn(self.session, resumed)
         for required in ("--sandbox", "workspace-write", "--approve-for-me", "--strict-config", "--json", "--output-schema", "--cd"):
@@ -101,6 +106,51 @@ class AdapterCase(WorktreeCase):
                 result = self.adapter.run_codex((*self.command[:-1], extra, self.command[-1]), 2, self.directory / "bad.jsonl")
                 self.assertEqual(result.failure.value, "command_policy")
                 spawn.assert_not_called()
+
+    def test_path_poisoning_and_writable_executable_candidates_are_rejected(self):
+        poisoned = self.repo / "bin/codex"
+        self.write(poisoned, "#!/bin/sh\nexit 0\n")
+        poisoned.chmod(0o755)
+        with patch("agent_harness.codex_adapter.shutil.which", return_value=str(poisoned)):
+            protected = self.adapter.build_codex_command(self.repo, self.schema, "repair")
+        self.assertEqual(protected[0], self.command[0])
+        command = list(self.command)
+        command[0] = "codex"
+        self.assertEqual(self.adapter.run_codex(command, 2, self.directory / "relative.jsonl").failure.value,
+                         "command_policy")
+        command[0] = str(poisoned)
+        self.assertEqual(self.adapter.run_codex(command, 2, self.directory / "writable.jsonl").failure.value,
+                         "command_policy")
+
+    def test_executor_revalidates_bound_executable_identity(self):
+        with patch("agent_harness.codex_adapter.os.stat", side_effect=OSError("changed")), \
+                patch("agent_harness.codex_adapter._environment", return_value={"PATH": "/usr/bin:/bin"}), \
+                patch("agent_harness.codex_adapter.subprocess.Popen") as spawn:
+            result = self.adapter.run_codex(self.command, 2, self.directory / "identity.jsonl")
+        self.assertEqual(result.failure.value, "command_policy")
+        spawn.assert_not_called()
+
+    def test_environment_rejects_sensitive_values_for_every_allowed_key(self):
+        allowed = ("PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ", "SYSTEMROOT", "WINDIR")
+        for index, name in enumerate(allowed):
+            with self.subTest(name=name), patch.dict("os.environ", {name: "TOKEN=fake-secret"}, clear=True):
+                result = self.adapter.run_codex(self.command, 2, self.directory / ("env-" + str(index) + ".jsonl"))
+                self.assertEqual(result.failure.value, "environment_policy")
+
+    def test_environment_normalizes_paths_and_rejects_relative_or_missing_entries(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            with patch.dict("os.environ", {"PATH": first + os.pathsep + second, "HOME": first,
+                                            "TMPDIR": second, "LANG": "C.UTF-8", "TZ": "UTC"}, clear=True):
+                environment = self.adapter._environment()
+            self.assertEqual(environment["PATH"], self.adapter._environment_path(os.defpath, multiple=True))
+            self.assertEqual(environment["HOME"], str(Path(first).resolve()))
+        for index, values in enumerate(({"PATH": "relative"}, {"PATH": "/does/not/exist"},
+                                        {"HOME": "relative"}, {"TMPDIR": "/does/not/exist"},
+                                        {"LANG": "bad value"}, {"LC_ALL": "bad value"},
+                                        {"TZ": "../escape"}, {"SYSTEMROOT": "relative"}, {"WINDIR": "relative"})):
+            with self.subTest(values=values), patch.dict("os.environ", values, clear=True):
+                result = self.adapter.run_codex(self.command, 2, self.directory / ("bad-env-" + str(index) + ".jsonl"))
+                self.assertEqual(result.failure.value, "environment_policy")
 
     def test_valid_stream_returns_only_sanitized_typed_metadata(self):
         response = dict(self.response, summary="TOKEN=fake-secret")
@@ -154,6 +204,21 @@ class AdapterCase(WorktreeCase):
         with patch("agent_harness.codex_adapter.os.killpg", side_effect=PermissionError("fixture")):
             result = self.execute(self.stream())
         self.assertEqual(getattr(result.failure, "value", None), "cleanup_error")
+
+    def test_generic_cleanup_oserrors_never_escape(self):
+        cases = (("killpg", patch("agent_harness.codex_adapter.os.killpg", side_effect=OSError("killpg"))),
+                 ("wait", patch("agent_harness.codex_adapter._wait_process", side_effect=OSError("wait"))),
+                 ("close", patch("agent_harness.codex_adapter._close_resource", side_effect=OSError("close"))))
+        for index, (name, failure) in enumerate(cases):
+            with self.subTest(name=name), failure:
+                result = self.execute(self.stream(), log=self.directory / ("cleanup-" + str(index) + ".jsonl"))
+                self.assertEqual(result.failure.value, "cleanup_error")
+
+    def test_fallback_kill_oserror_is_typed_and_direct_child_is_reaped_when_possible(self):
+        with patch("agent_harness.codex_adapter.os.killpg", side_effect=OSError("group")), \
+                patch("agent_harness.codex_adapter._kill_process", side_effect=OSError("child")):
+            result = self.execute(self.stream(), delay=2, timeout=1)
+        self.assertEqual(result.failure.value, "cleanup_error")
 
     def test_raw_log_rejects_outside_unignored_tracked_and_symlink_paths(self):
         for log in (self.repo / "raw.jsonl", self.repo / "var/agent-harness/runs/../escape.jsonl"):

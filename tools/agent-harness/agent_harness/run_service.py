@@ -10,7 +10,9 @@ import re
 import subprocess
 import tempfile
 from typing import Sequence
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
+import xml.etree.ElementTree as ET
 
 from .config import load_gate_matrix, load_protected_paths, validate_gate_id
 from .diagnostics import redact_text, render_diagnostics, failure_fingerprint, record_failure, _read_log, _first_error
@@ -34,6 +36,223 @@ class NextAction:
     operation: str
     status: str
     run_id: str
+
+
+@dataclass(frozen=True)
+class _DependencySnapshot:
+    dependencies: frozenset[str] = frozenset()
+    sources: frozenset[str] = frozenset()
+    lock_entries: frozenset[str] = frozenset()
+
+
+def _source(value, *, origin_only=False):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    candidate = value[4:] if value.startswith("git+") else value
+    parsed = urlsplit(candidate)
+    if parsed.scheme and parsed.netloc:
+        path = "" if origin_only else parsed.path.rstrip("/")
+        return parsed.scheme.lower() + "://" + parsed.netloc.lower() + path
+    if value.startswith(("file:", "path:", "link:")):
+        return value.split("#", 1)[0]
+    return None
+
+
+def _python_requirement(value):
+    value = value.strip()
+    if not value or value.startswith("#"):
+        return None, None
+    direct = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^]]+\])?\s*@\s*(\S+)", value)
+    if direct:
+        return re.sub(r"[-_.]+", "-", direct[1]).lower(), _source(direct[2])
+    if _source(value):
+        egg = re.search(r"[#&]egg=([A-Za-z0-9_.-]+)", value)
+        return (re.sub(r"[-_.]+", "-", egg[1]).lower() if egg else value), _source(value)
+    name = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^]]+\])?", value)
+    return (re.sub(r"[-_.]+", "-", name[1]).lower(), None) if name else (None, None)
+
+
+def _toml_sections(text):
+    headers = list(re.finditer(r"(?m)^\s*\[\[?([^\]\n]+)\]\]?\s*(?:#.*)?$", text))
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        yield header[1].strip(), text[header.end():end]
+
+
+def _toml_assignments(body):
+    pending = ""
+    depth = 0
+    quote = None
+    for raw in body.splitlines():
+        line = ""
+        escaped = False
+        for char in raw:
+            if escaped:
+                line += char
+                escaped = False
+            elif char == "\\" and quote == '"':
+                line += char
+                escaped = True
+            elif quote:
+                line += char
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+                line += char
+            elif char == "#":
+                break
+            else:
+                line += char
+        pending = (pending + "\n" + line.strip()).strip()
+        for char in line:
+            if char in "[{":
+                depth += 1
+            elif char in "]}":
+                depth -= 1
+        if pending and depth == 0:
+            match = re.match(r"^([A-Za-z0-9_.-]+|\"[^\"]+\"|'[^']+')\s*=\s*(.+)$", pending, re.S)
+            if not match:
+                raise ValueError("Invalid TOML assignment")
+            yield match[1].strip("\"'"), match[2].strip()
+            pending = ""
+    if pending or depth != 0 or quote:
+        raise ValueError("Incomplete TOML assignment")
+
+
+def _toml_strings(value):
+    strings = []
+    for match in re.finditer(r'"((?:\\.|[^"\\])*)"|\'([^\']*)\'', value):
+        strings.append(json.loads('"' + match[1] + '"') if match[1] is not None else match[2])
+    return strings
+
+
+def _dependency_snapshot(path, data):
+    name = Path(path).name
+    dependencies, sources, lock_entries = set(), set(), set()
+    text = data.decode("utf-8")
+    if name == "package.json":
+        document = json.loads(text, object_pairs_hook=_unique_fields)
+        for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+            values = document.get(section, {})
+            if not isinstance(values, dict):
+                raise ValueError("Invalid npm dependency section")
+            for package, specification in values.items():
+                dependencies.add(section + ":" + package)
+                source = _source(specification)
+                if source:
+                    sources.add(source)
+        registry = document.get("publishConfig", {})
+        if isinstance(registry, dict) and _source(registry.get("registry")):
+            sources.add(_source(registry["registry"]))
+    elif name in ("package-lock.json", "npm-shrinkwrap.json"):
+        document = json.loads(text, object_pairs_hook=_unique_fields)
+        packages = document.get("packages", {})
+        if not isinstance(packages, dict):
+            raise ValueError("Invalid npm lock packages")
+        lock_entries.update(key for key in packages if key)
+        for value in packages.values():
+            if isinstance(value, dict) and _source(value.get("resolved"), origin_only=True):
+                sources.add(_source(value["resolved"], origin_only=True))
+        legacy = document.get("dependencies", {})
+        if isinstance(legacy, dict):
+            lock_entries.update("dependency:" + key for key in legacy)
+    elif name == "pom.xml":
+        root = ET.fromstring(text)
+        local = lambda element: element.tag.rsplit("}", 1)[-1]
+        child = lambda element, tag: next((item.text.strip() for item in element if local(item) == tag and item.text), "")
+        for element in root.iter():
+            kind = local(element)
+            if kind in ("dependency", "plugin", "extension", "parent"):
+                group, artifact = child(element, "groupId"), child(element, "artifactId")
+                if group and artifact:
+                    dependencies.add(kind + ":" + group + ":" + artifact)
+            if kind in ("repository", "pluginRepository"):
+                value = child(element, "url")
+                if _source(value):
+                    sources.add(_source(value))
+    elif re.fullmatch(r"requirements(?:[-_.][A-Za-z0-9_.-]+)?\.txt", name, re.I):
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            option = re.match(r"^(?:--index-url|--extra-index-url|--find-links|--trusted-host|-i|-f)(?:=|\s+)(\S+)", line)
+            include = re.match(r"^(?:--requirement|-r|--constraint|-c)(?:=|\s+)(\S+)", line)
+            if option:
+                sources.add(_source(option[1]) or option[1])
+            elif include:
+                sources.add("include:" + include[1])
+            elif not line.startswith("-"):
+                dependency, source = _python_requirement(line.split(" ;", 1)[0])
+                if dependency:
+                    dependencies.add(dependency)
+                if source:
+                    sources.add(source)
+    elif name == "pyproject.toml":
+        for section, body in _toml_sections(text):
+            values = dict(_toml_assignments(body))
+            arrays = ((section == "project" and "dependencies" in values)
+                      or section == "project.optional-dependencies"
+                      or (section == "build-system" and "requires" in values))
+            if arrays:
+                selected = values.values() if section == "project.optional-dependencies" else (
+                    values["dependencies"] if section == "project" else values["requires"],)
+                for value in selected:
+                    for requirement in _toml_strings(value):
+                        dependency, source = _python_requirement(requirement)
+                        if dependency:
+                            dependencies.add(dependency)
+                        if source:
+                            sources.add(source)
+            if section == "tool.poetry.dependencies" or re.fullmatch(r"tool\.poetry\.group\.[^.]+\.dependencies", section):
+                for key, value in values.items():
+                    if key.lower() != "python":
+                        dependencies.add(re.sub(r"[-_.]+", "-", key).lower())
+                    for source_key in ("git", "url", "path"):
+                        match = re.search(r"\b" + source_key + r"\s*=\s*(['\"])(.*?)\1", value)
+                        if match:
+                            sources.add(_source(match[2]) or source_key + ":" + match[2])
+            if section == "tool.poetry.source" and "url" in values:
+                source_values = _toml_strings(values["url"])
+                if source_values and _source(source_values[0]):
+                    sources.add(_source(source_values[0]))
+            if section == "tool.uv.sources":
+                for value in values.values():
+                    for source_key in ("git", "url", "path", "index"):
+                        match = re.search(r"\b" + source_key + r"\s*=\s*(['\"])(.*?)\1", value)
+                        if match:
+                            sources.add(_source(match[2]) or "uv-" + source_key + ":" + match[2])
+            if section == "tool.uv.index" and "url" in values:
+                source_values = _toml_strings(values["url"])
+                if source_values and _source(source_values[0]):
+                    sources.add(_source(source_values[0]))
+    elif name in ("poetry.lock", "uv.lock"):
+        for section, body in _toml_sections(text):
+            values = dict(_toml_assignments(body))
+            if section == "package" and "name" in values:
+                package_names = _toml_strings(values["name"])
+                if package_names:
+                    lock_entries.add(re.sub(r"[-_.]+", "-", package_names[0]).lower())
+                for key in ("url", "git", "registry"):
+                    match = re.search(r"\b" + key + r"\s*=\s*(['\"])(.*?)\1", values.get("source", ""))
+                    if match:
+                        sources.add(_source(match[2], origin_only=key in ("url", "registry")) or key + ":" + match[2])
+            if section in ("package.source", "source"):
+                for key in ("url", "git", "registry"):
+                    source_values = _toml_strings(values.get(key, ""))
+                    if source_values:
+                        sources.add(_source(source_values[0], origin_only=key == "url") or key + ":" + source_values[0])
+    elif name == "Pipfile.lock":
+        document = json.loads(text, object_pairs_hook=_unique_fields)
+        for section in ("default", "develop"):
+            values = document.get(section, {})
+            if isinstance(values, dict):
+                lock_entries.update(re.sub(r"[-_.]+", "-", key).lower() for key in values)
+        for value in document.get("_meta", {}).get("sources", []):
+            if isinstance(value, dict) and _source(value.get("url")):
+                sources.add(_source(value["url"]))
+    return _DependencySnapshot(frozenset(dependencies), frozenset(sources), frozenset(lock_entries))
 
 
 def _now():
@@ -770,6 +989,32 @@ class RunService:
                 raise ServiceError("工作区内容出现未登记漂移", 5)
         return synced
 
+    def _dependency_additions(self, state):
+        names = {"package.json", "package-lock.json", "npm-shrinkwrap.json", "pom.xml",
+                 "pyproject.toml", "poetry.lock", "uv.lock", "Pipfile.lock"}
+        candidates = []
+        for value in changed_paths(self.repo, state.base_commit):
+            name = Path(value).name
+            if name in names or re.fullmatch(r"requirements(?:[-_.][A-Za-z0-9_.-]+)?\.txt", name, re.I):
+                candidates.append(value)
+        for value in candidates:
+            result = subprocess.run(["git", "--no-optional-locks", "--no-replace-objects", "show",
+                                     state.base_commit + ":" + value], cwd=self.repo,
+                                    capture_output=True, check=False)
+            if result.returncode not in (0, 128) or len(result.stdout) > 16 * 1024 * 1024:
+                raise ServiceError("无法读取依赖基线", 5)
+            before = _dependency_snapshot(value, result.stdout) if result.returncode == 0 else _DependencySnapshot()
+            target = self._path(Path(value))
+            if target.exists():
+                if not target.is_file() or target.stat().st_size > 16 * 1024 * 1024:
+                    raise ServiceError("依赖清单不可安全解析", 5)
+                after = _dependency_snapshot(value, target.read_bytes())
+            else:
+                after = _DependencySnapshot()
+            if (after.dependencies - before.dependencies or after.sources - before.sources
+                    or after.lock_entries - before.lock_entries):
+                raise ServiceError("检测到新增依赖、依赖来源或锁文件条目", 5)
+
     def _autonomous_failure(self, state):
         failures = []
         summaries = []
@@ -843,6 +1088,7 @@ class RunService:
                 state = self._load(run_id)
                 self._autonomous_scope(state)
                 state = self._autonomous_check(state, scope)
+                self._dependency_additions(state)
                 state = self._save(state, "codex_finished", {"failure": result.failure.value if result.failure else None,
                                                            "status": result.status})
                 if result.failure is not None:

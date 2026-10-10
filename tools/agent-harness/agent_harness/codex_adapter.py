@@ -7,7 +7,10 @@ from pathlib import Path, PureWindowsPath
 import re
 import selectors
 import signal
+import shutil
+import stat
 import subprocess
+import tempfile
 import time
 from typing import Sequence
 from uuid import UUID
@@ -22,10 +25,13 @@ _TOTAL_LIMIT = 4 * 1024 * 1024
 _EVENT_LIMIT = 4096
 _PROMPT_LIMIT = 16384
 _FORBIDDEN = re.compile(r"bypass|danger-full|--add-dir|--config|(?:^|\s)-c(?:\s|=|$)|--enable|--disable|--profile", re.I)
+_DISCOVERED_CODEX = shutil.which("codex")
+_BOUND_CODEX = str(Path(_DISCOVERED_CODEX).resolve(strict=True)) if _DISCOVERED_CODEX else None
 
 
 class CodexFailure(str, Enum):
     COMMAND_POLICY = "command_policy"
+    ENVIRONMENT_POLICY = "environment_policy"
     STORAGE_POLICY = "storage_policy"
     SPAWN_ERROR = "spawn_error"
     CLEANUP_ERROR = "cleanup_error"
@@ -77,6 +83,31 @@ def _path(value):
     return path
 
 
+def _trusted_codex(repo, candidate=None):
+    value = candidate if candidate is not None else _BOUND_CODEX
+    if not value or not Path(value).is_absolute() or ".." in Path(value).parts:
+        raise ValueError("Codex executable is not an absolute trusted path")
+    path = Path(value).resolve(strict=True)
+    if _BOUND_CODEX is None or path != Path(_BOUND_CODEX):
+        raise ValueError("Codex executable does not match the bound identity")
+    root = Path(repo).resolve(strict=True)
+    temporary = Path(tempfile.gettempdir()).resolve(strict=True)
+    if path.is_relative_to(root) or path.is_relative_to(temporary):
+        raise ValueError("Codex executable is inside an autonomous writable root")
+    metadata = os.stat(path, follow_symlinks=False)
+    application_bundle = Path("/Applications/ChatGPT.app")
+    bundled = application_bundle.exists() and path.is_relative_to(application_bundle.resolve(strict=True))
+    if not stat.S_ISREG(metadata.st_mode) or not os.access(path, os.X_OK) or (os.access(path, os.W_OK) and not bundled):
+        raise ValueError("Codex executable is not a regular executable")
+    if not bundled:
+        current = path.parent
+        while current != current.parent:
+            if os.access(current, os.W_OK):
+                raise ValueError("Codex executable parent is writable by autonomous execution")
+            current = current.parent
+    return path
+
+
 def build_codex_command(repo: Path, schema: Path, prompt: str,
                         resume_session: str | None = None) -> tuple[str, ...]:
     root, schema = _path(repo), _path(schema)
@@ -86,7 +117,8 @@ def build_codex_command(repo: Path, schema: Path, prompt: str,
     prompt = _safe(prompt, _PROMPT_LIMIT)
     if prompt.lstrip().startswith("-"):
         raise ValueError("Prompt must not be parsed as an option")
-    fixed = ("codex", "exec", "--sandbox", "workspace-write", "--approve-for-me",
+    executable = _trusted_codex(root)
+    fixed = (str(executable), "exec", "--sandbox", "workspace-write", "--approve-for-me",
              "--strict-config", "--json", "--output-schema", str(schema), "--cd", str(root))
     # Parent exec options precede resume: resume does not expose sandbox/cd.
     return fixed + (("resume", _session(resume_session)) if resume_session is not None else ()) + (prompt,)
@@ -97,7 +129,20 @@ def _command(command):
         raise ValueError("Command rejected")
     command = tuple(command)
     session = command[12] if len(command) == 14 else None
-    expected = build_codex_command(Path(command[10]), Path(command[8]), command[-1], session)
+    root = Path(command[10])
+    executable = _trusted_codex(root, command[0])
+    if Path(command[0]) != executable:
+        raise ValueError("Executable identity changed")
+    root, schema = _path(root), _path(command[8])
+    assert_worktree_isolated(root)
+    if not schema.is_relative_to(root) or schema.stat().st_size > _LINE_LIMIT or _read_json(schema.read_bytes()) != _SCHEMA:
+        raise ValueError("Expected the controlled response schema")
+    prompt = _safe(command[-1], _PROMPT_LIMIT)
+    if prompt.lstrip().startswith("-"):
+        raise ValueError("Prompt must not be parsed as an option")
+    expected = (str(executable), "exec", "--sandbox", "workspace-write", "--approve-for-me",
+                "--strict-config", "--json", "--output-schema", str(schema), "--cd", str(root))
+    expected += (("resume", _session(session)) if session is not None else ()) + (prompt,)
     if command != expected:
         raise ValueError("Command rejected")
     return command, Path(command[10])
@@ -173,13 +218,68 @@ def _response(document, session):
                        document["needsHuman"], session, exit_code=0)
 
 
+def _environment_path(value, *, multiple=False):
+    if not isinstance(value, str) or not value or redact_text(value) != value or "\x00" in value:
+        raise ValueError("Unsafe environment path")
+    values = value.split(os.pathsep) if multiple else (value,)
+    if any(not item or not Path(item).is_absolute() or ".." in Path(item).parts for item in values):
+        raise ValueError("Environment paths must be absolute")
+    resolved = []
+    for item in values:
+        try:
+            resolved.append(Path(item).resolve(strict=True))
+        except OSError:
+            if not multiple:
+                raise
+    resolved = tuple(resolved)
+    if not resolved:
+        raise ValueError("Environment path has no usable entries")
+    if any(not item.is_dir() for item in resolved):
+        raise ValueError("Environment path is not a directory")
+    return os.pathsep.join(str(item) for item in resolved)
+
+
 def _environment():
-    names = ("PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ", "SYSTEMROOT", "WINDIR")
-    return {name: os.environ[name] for name in names if name in os.environ}
+    environment = {}
+    path_value = os.environ.get("PATH", os.defpath)
+    _environment_path(path_value, multiple=True)
+    environment["PATH"] = _environment_path(os.defpath, multiple=True)
+    for name in ("HOME", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "WINDIR"):
+        if name in os.environ:
+            environment[name] = _environment_path(os.environ[name])
+    for name in ("LANG", "LC_ALL"):
+        if name in os.environ:
+            value = os.environ[name]
+            if redact_text(value) != value or re.fullmatch(r"[A-Za-z0-9_.@-]+", value) is None:
+                raise ValueError("Unsafe locale environment")
+            environment[name] = value
+    if "TZ" in os.environ:
+        value = os.environ["TZ"]
+        if (redact_text(value) != value or re.fullmatch(r"[A-Za-z0-9_+./-]+", value) is None
+                or ".." in Path(value).parts):
+            raise ValueError("Unsafe timezone environment")
+        environment["TZ"] = value
+    return environment
+
+
+def _wait_process(process, timeout=None):
+    return process.wait(timeout=timeout)
+
+
+def _kill_process(process):
+    process.kill()
+
+
+def _close_resource(resource):
+    resource.close()
 
 
 def run_codex(command: Sequence[str], timeout_seconds: int, event_log: Path) -> CodexResult:
     """Never return arbitrary exception/log text; kill and reap owned processes."""
+    try:
+        environment = _environment()
+    except (OSError, ValueError, TypeError):
+        return CodexResult(failure=CodexFailure.ENVIRONMENT_POLICY)
     try:
         command, root = _command(command)
         if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 3600:
@@ -200,7 +300,7 @@ def run_codex(command: Sequence[str], timeout_seconds: int, event_log: Path) -> 
                                0o600, dir_fd=parent), "wb") as stdout, \
                 os.fdopen(os.open(path.name + ".stderr.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                   0o600, dir_fd=parent), "wb") as stderr, selectors.DefaultSelector() as selector:
-            process = subprocess.Popen(command, cwd=root, env=_environment(), shell=False,
+            process = subprocess.Popen(command, cwd=root, env=environment, shell=False,
                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        start_new_session=(os.name == "posix"))
             for stream, target in ((process.stdout, stdout), (process.stderr, stderr)):
@@ -258,7 +358,7 @@ def run_codex(command: Sequence[str], timeout_seconds: int, event_log: Path) -> 
                         failure = CodexFailure.OUTPUT_LIMIT
             if failure is None:
                 try:
-                    exit_code = process.wait(timeout=max(0.001, deadline - time.monotonic()))
+                    exit_code = _wait_process(process, timeout=max(0.001, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     failure = CodexFailure.TIMEOUT
             if failure is None and exit_code != 0:
@@ -266,26 +366,57 @@ def run_codex(command: Sequence[str], timeout_seconds: int, event_log: Path) -> 
             if failure is None and buffer:
                 failure = CodexFailure.MALFORMED_JSONL
     except OSError:
-        failure = CodexFailure.SPAWN_ERROR
+        failure = CodexFailure.CLEANUP_ERROR if process is not None else CodexFailure.SPAWN_ERROR
     finally:
         if process is not None:
             try:
                 if os.name == "posix":
                     os.killpg(process.pid, signal.SIGKILL)
                 elif process.poll() is None:
-                    process.kill()
+                    _kill_process(process)
             except ProcessLookupError:
                 pass
             except PermissionError:
-                # Some host sandboxes deny group signalling; reap our child.
                 failure = failure or CodexFailure.CLEANUP_ERROR
-                if process.poll() is None:
-                    process.kill()
-            process.wait()
+                try:
+                    if process.poll() is None:
+                        _kill_process(process)
+                except (OSError, ValueError):
+                    failure = CodexFailure.CLEANUP_ERROR
+            except OSError:
+                failure = CodexFailure.CLEANUP_ERROR
+                try:
+                    if process.poll() is None:
+                        _kill_process(process)
+                except (OSError, ValueError):
+                    failure = CodexFailure.CLEANUP_ERROR
+                    try:
+                        if process.poll() is None:
+                            process.kill()
+                    except (OSError, ValueError):
+                        failure = CodexFailure.CLEANUP_ERROR
+            try:
+                _wait_process(process)
+            except (OSError, ValueError):
+                failure = CodexFailure.CLEANUP_ERROR
+                try:
+                    process.wait()
+                except (OSError, ValueError):
+                    failure = CodexFailure.CLEANUP_ERROR
             for stream in (process.stdout, process.stderr):
                 if stream is not None:
-                    stream.close()
-        os.close(parent)
+                    try:
+                        _close_resource(stream)
+                    except (OSError, ValueError):
+                        failure = CodexFailure.CLEANUP_ERROR
+                        try:
+                            stream.close()
+                        except (OSError, ValueError):
+                            failure = CodexFailure.CLEANUP_ERROR
+        try:
+            os.close(parent)
+        except OSError:
+            failure = CodexFailure.CLEANUP_ERROR
     if failure is None:
         failure = (CodexFailure.MISSING_SESSION if session is None else
                    CodexFailure.MISSING_RESPONSE if response is None else
