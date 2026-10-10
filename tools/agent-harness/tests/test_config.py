@@ -284,6 +284,45 @@ class ConfigTests(unittest.TestCase):
                     for rule in policy.rules
                 ), source)
 
+    def test_engine_event_authentication_requires_approval(self):
+        policy = load_protected_paths(REPO / "docs/agent/PROTECTED_PATHS.yaml")
+        for name in ("EventSignatureVerifier.java", "EngineEventsSecurityConfig.java",
+                     "EngineEventSignatureFilter.java", "EngineEventKeys.java"):
+            source = "platform/services/business/src/main/java/cn/mjy/platform/engine/" + name
+            with self.subTest(source=source):
+                self.assertTrue((REPO / source).is_file())
+                self.assertTrue(any(
+                    rule.action == "approval_required"
+                    and set(rule.operations) == {"add", "modify", "delete"}
+                    and any(fnmatchcase(source, pattern) for pattern in rule.patterns)
+                    for rule in policy.rules
+                ), source)
+
+    def test_access_and_scoring_changes_require_specialized_dual_database_gates(self):
+        matrix = load_gate_matrix(REPO / "docs/agent/GATE_MATRIX.yaml")
+        cases = (
+            ("plugins/MjyRuntimePolicy/MjyAccessGate.php",
+             "platform/deploy/test/run-access-policy.sh"),
+            ("platform/tools/publish-gateway/pubgw/logic/scoring.py",
+             "platform/deploy/test/run-publish-gateway-parity.sh"),
+        )
+        for source, script in cases:
+            self.assertTrue((REPO / source).is_file())
+            self.assertTrue((REPO / script).is_file())
+            selected = {
+                gate_id
+                for profile, patterns in matrix.paths.items()
+                if any(fnmatchcase(source, pattern) for pattern in patterns)
+                for gate_id in matrix.profiles[profile]
+            }
+            for database in ("mysql", "pgsql"):
+                expected = ("env", "TEST_DB=" + database, script, "--fresh")
+                with self.subTest(source=source, database=database):
+                    self.assertTrue(any(
+                        gate.id in selected and gate.command == expected and gate.cwd == "."
+                        for gate in matrix.gates
+                    ), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

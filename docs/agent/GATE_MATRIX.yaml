@@ -149,6 +149,50 @@
       "timeout_seconds": 1800
     },
     {
+      "id": "access-policy-mysql",
+      "command": [
+        "env",
+        "TEST_DB=mysql",
+        "platform/deploy/test/run-access-policy.sh",
+        "--fresh"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "access-policy-pgsql",
+      "command": [
+        "env",
+        "TEST_DB=pgsql",
+        "platform/deploy/test/run-access-policy.sh",
+        "--fresh"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "scoring-parity-mysql",
+      "command": [
+        "env",
+        "TEST_DB=mysql",
+        "platform/deploy/test/run-publish-gateway-parity.sh",
+        "--fresh"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "scoring-parity-pgsql",
+      "command": [
+        "env",
+        "TEST_DB=pgsql",
+        "platform/deploy/test/run-publish-gateway-parity.sh",
+        "--fresh"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
       "id": "traceability",
       "command": [
         "python3",
@@ -240,7 +284,11 @@
       ],
       "gates": [
         "admin-e2e",
-        "p1-e2e"
+        "p1-e2e",
+        "access-policy-mysql",
+        "access-policy-pgsql",
+        "scoring-parity-mysql",
+        "scoring-parity-pgsql"
       ]
     },
     "documentation": {
