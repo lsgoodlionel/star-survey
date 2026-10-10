@@ -647,6 +647,9 @@ def _workflow_run_blocks(text: str) -> tuple[tuple[int, str], ...]:
         match = re.match(r'''^(\s*)-?\s*(?:run|"run"|'run')\s*:\s*(.*)$''',
                          lines[index])
         if not match:
+            if re.match(r'''^\s*-?\s*(?:[&!][^\s]+\s+|\?\s+)(?:run|"run"|'run')\b''',
+                        lines[index]):
+                raise WorkflowRefused(index + 1, "workflow run key uses unsupported YAML syntax")
             if _contains_decoded_run_key(lines[index]):
                 raise WorkflowRefused(index + 1, "workflow run key uses unsupported YAML syntax")
             if re.search(r'''(?:^|\s)![^\s]+\s+(?:run|"run"|'run')\s*:''',
@@ -660,7 +663,7 @@ def _workflow_run_blocks(text: str) -> tuple[tuple[int, str], ...]:
             continue
         indent, value = len(match[1]), match[2]
         start_line = index + 1
-        if value in ("|", ">", "|-", ">-"):
+        if value in ("|", "|-", ">", ">-"):
             values = []
             index += 1
             while index < len(lines):
@@ -669,8 +672,11 @@ def _workflow_run_blocks(text: str) -> tuple[tuple[int, str], ...]:
                     break
                 values.append(following.strip())
                 index += 1
-            separator = " " if value.startswith(">") else "\n"
-            blocks.append((start_line, separator.join(values).strip()))
+            block = "\n".join(values).strip()
+            if value.startswith(">") and _looks_codex_like(block):
+                raise WorkflowRefused(start_line,
+                                      "Codex-like folded run scalar is unsupported")
+            blocks.append((start_line, block))
             continue
         if value.startswith(("|", ">", "!", "&", "*")):
             raise WorkflowRefused(start_line, "workflow run value uses unsupported YAML syntax")
@@ -698,7 +704,7 @@ def _could_resolve_to_codex(value: str) -> bool:
 
 
 def _looks_codex_like(source: str) -> bool:
-    lowered = source.lower()
+    lowered = re.sub(r'["\']', "", source.lower())
     return "codex" in lowered or re.search(
         r"co(?:(?:[\"']{2}|\$\{[^}]*\})+dex|(?:\[[^]]+\]|\{[^}]+\}|[?*])ex)",
         lowered,
@@ -796,17 +802,27 @@ def _validate_command_segment(arguments: tuple[str, ...], source: str) -> bool:
                 remaining[nested].startswith("-")
                 or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", remaining[nested])):
             nested += 1
-        if nested < len(remaining) and _could_resolve_to_codex(remaining[nested]):
-            raise DrillRefused("Codex workflow command uses an unsupported executable wrapper")
+        if nested < len(remaining):
+            return _validate_command_segment(tuple(remaining[nested:]),
+                                             " ".join(remaining[nested:]))
         return False
     if name == "command":
         nested = 0
         while nested < len(remaining) and remaining[nested].startswith("-"):
             nested += 1
-        if nested < len(remaining) and _could_resolve_to_codex(remaining[nested]):
+        if nested < len(remaining):
+            return _validate_command_segment(tuple(remaining[nested:]),
+                                             " ".join(remaining[nested:]))
+        return False
+    if name in {"exec", "time", "timeout", "xargs", "nice", "nohup"}:
+        if _looks_codex_like(" ".join(remaining)):
             raise DrillRefused("Codex workflow command uses an unsupported executable wrapper")
         return False
     if not _could_resolve_to_codex(executable):
+        inert = {"echo", "printf", "grep", "egrep", "fgrep", "python", "python3",
+                 "node", "rg", "sed", "awk", "cat"}
+        if name not in inert and _looks_codex_like(" ".join(arguments)):
+            raise DrillRefused("Codex-like command appears in an unsupported executable position")
         return False
     _validate_direct_codex(tuple(arguments[position:]), source)
     return True
@@ -887,6 +903,10 @@ def _canonical_review_verdicts(content: str) -> tuple[str, str]:
     if start and not content[:start].endswith("\n\n"):
         raise ValueError()
     prefix = content[:start]
+    if (re.search(r"(?is)<(?:script|pre|style|textarea|xmp|iframe|noframes|plaintext|title)\b",
+                  prefix)
+            or "<?" in prefix or "<![CDATA[" in prefix):
+        raise ValueError()
     fence = None
     in_comment = False
     for line in prefix.splitlines():
