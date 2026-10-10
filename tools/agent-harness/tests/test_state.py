@@ -132,6 +132,80 @@ class StateTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     transition(state, RunStatus.COMPLETED, "Must not complete")
 
+    def invalid_completion_documents(self):
+        cases = []
+        for name in ("missing_gate", "failed_gate", "stale_head", "mismatched_gate_id"):
+            document = copy.deepcopy(self.document)
+            document["status"] = "completed"
+            if name == "missing_gate":
+                document["gates"] = {}
+            elif name == "failed_gate":
+                document["gates"]["unit"].update(status="failed", exitCode=1)
+            elif name == "stale_head":
+                document["gates"]["unit"]["headCommit"] = "b" * 40
+            else:
+                document["gates"]["unit"]["gateId"] = "other"
+            cases.append((name, document))
+        return cases
+
+    def test_load_rejects_completed_with_invalid_required_gate_evidence(self):
+        for name, document in self.invalid_completion_documents():
+            with self.subTest(case=name):
+                with self.assertRaises(ValueError):
+                    load_state(self.write_state(document))
+
+    def test_construct_rejects_completed_with_invalid_required_gate_evidence(self):
+        for name, document in self.invalid_completion_documents():
+            document["status"] = "verifying"
+            state = load_state(self.write_state(document))
+            with self.subTest(case=name):
+                with self.assertRaises(ValueError):
+                    RunState(**{**vars(state), "status": RunStatus.COMPLETED})
+
+    def test_save_rejects_completed_with_invalid_required_gate_evidence(self):
+        for name, document in self.invalid_completion_documents():
+            document["status"] = "verifying"
+            state = load_state(self.write_state(document))
+            previous = self.path.read_bytes()
+            # Bypass the constructor only to exercise save's independent boundary.
+            object.__setattr__(state, "status", RunStatus.COMPLETED)
+            for target in (self.path, self.root / "new-state.json"):
+                with self.subTest(case=name, existing=target == self.path):
+                    with self.assertRaises(ValueError):
+                        save_state_atomic(target, state)
+                    self.assertEqual(self.path.read_bytes(), previous)
+                    self.assertEqual(set(self.root.iterdir()), {self.path})
+
+    def test_replace_head_after_normal_completion_is_rejected(self):
+        verifying = replace(self.state(), status=RunStatus.VERIFYING)
+        completed = transition(verifying, RunStatus.COMPLETED, "All gates passed")
+        save_state_atomic(self.path, completed)
+        previous = self.path.read_bytes()
+        with self.assertRaises(ValueError):
+            replace(completed, head_commit="e" * 40)
+        self.assertEqual(completed.head_commit, "c" * 40)
+        self.assertEqual(load_state(self.path), completed)
+        self.assertEqual(self.path.read_bytes(), previous)
+
+    def test_valid_completed_construct_load_and_save_round_trip(self):
+        self.document["status"] = "completed"
+        state = self.state()
+        self.assertEqual(state.status, RunStatus.COMPLETED)
+        self.assertEqual(RunState(**vars(state)), state)
+        save_state_atomic(self.path, state)
+        self.assertEqual(json.loads(self.path.read_text()), self.document)
+        self.assertEqual(load_state(self.path), state)
+
+    def test_unfinished_states_accept_failed_or_stale_gate_evidence(self):
+        for status in ("verifying", "repairing"):
+            for name, document in self.invalid_completion_documents():
+                document["status"] = status
+                with self.subTest(status=status, case=name):
+                    state = load_state(self.write_state(document))
+                    save_state_atomic(self.path, state)
+                    self.assertEqual(json.loads(self.path.read_text()), document)
+                    self.assertEqual(load_state(self.path), state)
+
     def test_missing_required_fields_are_rejected_at_every_level(self):
         for section in (None, "attempts", "gate", "decision"):
             original = (self.document if section is None else

@@ -239,7 +239,7 @@ class RunState:
             _validate(copied, _PROPERTIES["decisions"]["items"])
             decisions.append(MappingProxyType(copied))
         object.__setattr__(self, "decisions", tuple(decisions))
-        _validate(_state_document(self), _SCHEMA)
+        _validate_state_document(_state_document(self))
 
 
 def _state_document(state):
@@ -261,6 +261,18 @@ def _state_document(state):
     }
 
 
+def _validate_state_document(document):
+    _validate(document, _SCHEMA)
+    if document["status"] != RunStatus.COMPLETED.value:
+        return
+    for gate_id in document["requiredGates"]:
+        gate = document["gates"].get(gate_id)
+        if (gate is None or gate["gateId"] != gate_id
+                or gate["status"] != GateStatus.PASSED.value
+                or gate["headCommit"] != document["headCommit"]):
+            raise ValueError("Required gate has no passing evidence at current HEAD")
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -271,7 +283,7 @@ def sha256_file(path: Path) -> str:
 
 def load_state(path: Path) -> RunState:
     document = _read_json(path.read_bytes())
-    _validate(document, _SCHEMA)
+    _validate_state_document(document)
     gates = {}
     for key, item in document["gates"].items():
         gates[key] = GateEvidence(
@@ -295,7 +307,7 @@ def load_state(path: Path) -> RunState:
 
 def save_state_atomic(path: Path, state: RunState) -> None:
     document = _state_document(state)
-    _validate(document, _SCHEMA)
+    _validate_state_document(document)
     content = _canonical(document) + b"\n"
     temporary_path = None
     try:
@@ -327,12 +339,6 @@ def transition(state: RunState, target: RunStatus, reason: str) -> RunState:
         raise ValueError("Illegal run status transition")
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("Transition requires a reason")
-    if target == RunStatus.COMPLETED:
-        for gate_id in state.required_gates:
-            gate = state.gates.get(gate_id)
-            if (gate is None or gate.gate_id != gate_id or gate.status != GateStatus.PASSED
-                    or gate.head_commit != state.head_commit):
-                raise ValueError("Required gate has no passing evidence at current HEAD")
     now = datetime.now(timezone.utc)
     decision = {"type": "transition", "summary": reason, "createdAt": _timestamp(now)}
     return replace(state, status=target, updated_at=now,
