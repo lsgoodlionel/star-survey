@@ -23,19 +23,19 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
-import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -58,6 +58,9 @@ class DashboardTenantIsolationTest {
 
     @Autowired
     private DashboardQueryCounter queryCounter;
+
+    @Autowired
+    private ApplicationContext applicationContext;
 
     @Autowired
     private AccessFixture access;
@@ -227,6 +230,12 @@ class DashboardTenantIsolationTest {
     }
 
     @Test
+    void queryCounterWrapsBootAutoConfiguredJdbcClient() {
+        assertThat(applicationContext.getBeanNamesForType(JdbcClient.class)).containsExactly("jdbcClient");
+        assertThat(applicationContext.getBean("jdbcClient")).isSameAs(jdbc);
+    }
+
+    @Test
     void dashboardQueryCounterIgnoresConcurrentSqlFromAnotherThread() throws Exception {
         queryCounter.start();
         Thread background = Thread.ofPlatform().start(
@@ -391,7 +400,7 @@ class DashboardTenantIsolationTest {
         return queries;
     }
 
-    static final class DashboardQueryCounter {
+    static final class DashboardQueryCounter implements BeanPostProcessor {
         private final ThreadLocal<Integer> requestThreadCount = new ThreadLocal<>();
 
         void start() {
@@ -413,25 +422,19 @@ class DashboardTenantIsolationTest {
             }
             return count;
         }
-    }
 
-    @TestConfiguration(proxyBeanMethods = false)
-    static class QueryCountingConfiguration {
-        @Bean
-        DashboardQueryCounter dashboardQueryCounter() {
-            return new DashboardQueryCounter();
-        }
-
-        @Bean
-        @Primary
-        JdbcClient countingJdbcClient(DataSource dataSource, DashboardQueryCounter counter) {
-            JdbcClient delegate = JdbcClient.create(dataSource);
-            return (JdbcClient) Proxy.newProxyInstance(
+        @Override
+        public Object postProcessAfterInitialization(Object bean, String beanName) {
+            if (!beanName.equals("jdbcClient")) {
+                return bean;
+            }
+            JdbcClient delegate = (JdbcClient) bean;
+            return Proxy.newProxyInstance(
                     JdbcClient.class.getClassLoader(),
                     new Class<?>[] { JdbcClient.class },
                     (proxy, method, arguments) -> {
                         if (method.getName().equals("sql")) {
-                            counter.record();
+                            record();
                         }
                         try {
                             return method.invoke(delegate, arguments);
@@ -439,6 +442,14 @@ class DashboardTenantIsolationTest {
                             throw exception.getCause();
                         }
                     });
+        }
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class QueryCountingConfiguration {
+        @Bean
+        static DashboardQueryCounter dashboardQueryCounter() {
+            return new DashboardQueryCounter();
         }
     }
 }
