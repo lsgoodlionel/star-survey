@@ -1,0 +1,274 @@
+{
+  "version": 1,
+  "gates": [
+    {
+      "id": "admin-lint",
+      "command": [
+        "npm",
+        "run",
+        "lint"
+      ],
+      "cwd": "platform/apps/admin-web",
+      "timeout_seconds": 300
+    },
+    {
+      "id": "admin-typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "cwd": "platform/apps/admin-web",
+      "timeout_seconds": 300
+    },
+    {
+      "id": "admin-test",
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--run"
+      ],
+      "cwd": "platform/apps/admin-web",
+      "timeout_seconds": 600
+    },
+    {
+      "id": "admin-build",
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "cwd": "platform/apps/admin-web",
+      "timeout_seconds": 600
+    },
+    {
+      "id": "admin-production-bundle",
+      "command": [
+        "npm",
+        "run",
+        "assert:production-bundle"
+      ],
+      "cwd": "platform/apps/admin-web",
+      "timeout_seconds": 120
+    },
+    {
+      "id": "platform-java-tests",
+      "command": [
+        "platform/deploy/test/run-platform-tests.sh"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "gateway-tests",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-t",
+        ".",
+        "-q"
+      ],
+      "cwd": "platform/tools/publish-gateway",
+      "timeout_seconds": 600
+    },
+    {
+      "id": "release-tests",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "platform/deploy/production/release/tests",
+        "-p",
+        "test_*.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600
+    },
+    {
+      "id": "production-tests",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "platform/deploy/production/tests",
+        "-p",
+        "test_*.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600
+    },
+    {
+      "id": "productization-tests",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "platform/tools/productization",
+        "-p",
+        "test_render_capabilities.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120
+    },
+    {
+      "id": "capability-consistency",
+      "command": [
+        "python3",
+        "platform/tools/productization/render_capabilities.py",
+        "--check"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120
+    },
+    {
+      "id": "admin-e2e",
+      "command": [
+        "platform/deploy/test/run-admin-web-e2e.sh",
+        "--fresh"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "p1-e2e",
+      "command": [
+        "platform/deploy/test/run-p1-e2e.sh"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "traceability",
+      "command": [
+        "python3",
+        "-m",
+        "reqtrace.cli",
+        "check"
+      ],
+      "cwd": "platform/tools/traceability",
+      "timeout_seconds": 120
+    },
+    {
+      "id": "diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120
+    },
+    {
+      "id": "harness-tests",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/agent-harness/tests",
+        "-p",
+        "test_*.py",
+        "-v"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120
+    }
+  ],
+  "profiles": {
+    "admin-web": {
+      "paths": [
+        "platform/apps/admin-web/**"
+      ],
+      "gates": [
+        "admin-lint",
+        "admin-typecheck",
+        "admin-test",
+        "admin-build",
+        "admin-production-bundle"
+      ]
+    },
+    "platform-java": {
+      "paths": [
+        "platform/services/business/**",
+        "platform/deploy/platform-dev/**"
+      ],
+      "gates": [
+        "platform-java-tests"
+      ]
+    },
+    "publish-gateway": {
+      "paths": [
+        "platform/tools/publish-gateway/**",
+        "plugins/Mjy*/**"
+      ],
+      "gates": [
+        "gateway-tests"
+      ]
+    },
+    "production-release": {
+      "paths": [
+        "platform/deploy/production/**",
+        ".github/workflows/**",
+        "docker-compose*.yml"
+      ],
+      "gates": [
+        "release-tests",
+        "production-tests",
+        "productization-tests",
+        "capability-consistency"
+      ]
+    },
+    "cross-stack-e2e": {
+      "paths": [
+        "platform/apps/admin-web/src/**",
+        "platform/services/business/src/**",
+        "platform/tools/publish-gateway/pubgw/**",
+        "plugins/Mjy*/**",
+        "platform/deploy/test/**"
+      ],
+      "gates": [
+        "admin-e2e",
+        "p1-e2e"
+      ]
+    },
+    "documentation": {
+      "paths": [
+        "AGENTS.md",
+        "docs/**",
+        "platform/docs/**",
+        "platform/README.md",
+        "tools/agent-harness/README.md"
+      ],
+      "gates": [
+        "diff-check",
+        "traceability",
+        "capability-consistency",
+        "harness-tests"
+      ]
+    },
+    "agent-harness": {
+      "paths": [
+        "AGENTS.md",
+        ".gitignore",
+        "docs/agent/**",
+        "tools/agent-harness/**"
+      ],
+      "gates": [
+        "harness-tests",
+        "diff-check"
+      ]
+    }
+  }
+}
