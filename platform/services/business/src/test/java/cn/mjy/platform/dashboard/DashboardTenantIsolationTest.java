@@ -1,8 +1,6 @@
 package cn.mjy.platform.dashboard;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -17,13 +15,15 @@ import cn.mjy.platform.survey.SurveyFixture;
 import cn.mjy.platform.survey.SurveyFixture.Workspace;
 import cn.mjy.platform.survey.SurveyPublishService;
 import cn.mjy.platform.survey.SurveyView;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -31,13 +31,17 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@Import(DashboardTenantIsolationTest.QueryCountingConfiguration.class)
 class DashboardTenantIsolationTest {
 
     @Autowired
@@ -49,8 +53,11 @@ class DashboardTenantIsolationTest {
     @Autowired
     private TenantScope tenantScope;
 
-    @MockitoSpyBean
+    @Autowired
     private JdbcClient jdbc;
+
+    @Autowired
+    private DashboardQueryCounter queryCounter;
 
     @Autowired
     private AccessFixture access;
@@ -208,30 +215,26 @@ class DashboardTenantIsolationTest {
 
     @Test
     void dashboardHttpGetUsesAFixedQueryCountRegardlessOfSurveyCount() throws Exception {
-        Thread requestThread = Thread.currentThread();
-        AtomicInteger requestQueries = new AtomicInteger();
-        doAnswer(invocation -> {
-            if (Thread.currentThread() == requestThread) {
-                requestQueries.incrementAndGet();
-            }
-            return invocation.callRealMethod();
-        }).when(jdbc).sql(anyString());
-
-        mvc.perform(get("/v1/dashboard?surveyLimit=50&taskLimit=50")
-                        .header("Authorization", bearer(tenantA.owner())))
-                .andExpect(status().isOk());
-        int emptyDatasetQueries = requestQueries.get();
+        int emptyDatasetQueries = dashboardHttpQueryCount();
 
         for (int index = 0; index < 12; index++) {
             fixture.newSurvey(tenantA);
         }
-        requestQueries.set(0);
-        mvc.perform(get("/v1/dashboard?surveyLimit=50&taskLimit=50")
-                        .header("Authorization", bearer(tenantA.owner())))
-                .andExpect(status().isOk());
+        int populatedDatasetQueries = dashboardHttpQueryCount();
 
         assertThat(emptyDatasetQueries).isEqualTo(4);
-        assertThat(requestQueries).hasValue(emptyDatasetQueries);
+        assertThat(populatedDatasetQueries).isEqualTo(emptyDatasetQueries);
+    }
+
+    @Test
+    void dashboardQueryCounterIgnoresConcurrentSqlFromAnotherThread() throws Exception {
+        queryCounter.start();
+        Thread background = Thread.ofPlatform().start(
+                () -> jdbc.sql("SELECT 1").query(Integer.class).single());
+        background.join();
+        jdbc.sql("SELECT 1").query(Integer.class).single();
+
+        assertThat(queryCounter.stop()).isOne();
     }
 
     @Test
@@ -373,5 +376,69 @@ class DashboardTenantIsolationTest {
 
     private String bearer(TenantContext context) {
         return "Bearer " + tokens.issue(context.actorId(), context.tenantId().value(), List.of());
+    }
+
+    private int dashboardHttpQueryCount() throws Exception {
+        queryCounter.start();
+        int queries;
+        try {
+            mvc.perform(get("/v1/dashboard?surveyLimit=50&taskLimit=50")
+                            .header("Authorization", bearer(tenantA.owner())))
+                    .andExpect(status().isOk());
+        } finally {
+            queries = queryCounter.stop();
+        }
+        return queries;
+    }
+
+    static final class DashboardQueryCounter {
+        private final ThreadLocal<Integer> requestThreadCount = new ThreadLocal<>();
+
+        void start() {
+            requestThreadCount.set(0);
+        }
+
+        void record() {
+            Integer count = requestThreadCount.get();
+            if (count != null) {
+                requestThreadCount.set(count + 1);
+            }
+        }
+
+        int stop() {
+            Integer count = requestThreadCount.get();
+            requestThreadCount.remove();
+            if (count == null) {
+                throw new IllegalStateException("query counter is not active on this thread");
+            }
+            return count;
+        }
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class QueryCountingConfiguration {
+        @Bean
+        DashboardQueryCounter dashboardQueryCounter() {
+            return new DashboardQueryCounter();
+        }
+
+        @Bean
+        @Primary
+        JdbcClient countingJdbcClient(DataSource dataSource, DashboardQueryCounter counter) {
+            JdbcClient delegate = JdbcClient.create(dataSource);
+            return (JdbcClient) Proxy.newProxyInstance(
+                    JdbcClient.class.getClassLoader(),
+                    new Class<?>[] { JdbcClient.class },
+                    (proxy, method, arguments) -> {
+                        if (method.getName().equals("sql")) {
+                            counter.record();
+                        }
+                        try {
+                            return method.invoke(delegate, arguments);
+                        } catch (InvocationTargetException exception) {
+                            throw exception.getCause();
+                        }
+                    });
+        }
     }
 }
