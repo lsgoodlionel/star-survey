@@ -264,6 +264,36 @@ print(json.dumps({"code": code, "marker": Path(sys.argv[2]).exists(), "output": 
         self.assertFalse(result["marker"], result)
         self.assertIn(result["code"], (0, 2))
 
+    def test_real_wrapper_and_module_cli_never_execute_caller_path_programs(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task7-entrypoint-", dir=project.parents[2]) as directory:
+            poisoned = Path(directory)
+            marker = poisoned / "executed"
+            script_body = "#!/bin/sh\nprintf '%s\\n' \"$0\" >> '" + str(marker) + "'\nexit 99\n"
+            for name in ("dirname", "pwd", "git", "command", "python3.11", "python3.12",
+                         "python3.13", "python3.14", "python3"):
+                executable = poisoned / name
+                self.write(executable, script_body)
+                executable.chmod(0o755)
+            environment = {
+                "HOME": str(Path.home()),
+                "PATH": str(poisoned),
+                "PYTHONPATH": str(project / "tools/agent-harness"),
+            }
+            wrapper = subprocess.run([str(project / "scripts/agent-harness"), "doctor", "--json"],
+                                     cwd=project / "tools/agent-harness", env=environment,
+                                     text=True, capture_output=True, check=False)
+            wrapper_marker = marker.read_text() if marker.exists() else ""
+            marker.unlink(missing_ok=True)
+            module = subprocess.run([sys.executable, "-m", "agent_harness.cli", "doctor", "--json"],
+                                    cwd=project / "tools/agent-harness", env=environment,
+                                    text=True, capture_output=True, check=False)
+            module_marker = marker.read_text() if marker.exists() else ""
+        self.assertIn(wrapper.returncode, (0, 2), wrapper.stderr or wrapper.stdout)
+        self.assertIn(module.returncode, (0, 2), module.stderr or module.stdout)
+        self.assertEqual(wrapper_marker, "")
+        self.assertEqual(module_marker, "")
+
     def test_controlled_tool_errors_include_codex(self):
         with patch("agent_harness.codex_adapter._trusted_codex", side_effect=ValueError("fixture")):
             errors = self.adapter.controlled_tool_errors(self.repo)

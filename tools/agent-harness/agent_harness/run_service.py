@@ -83,7 +83,7 @@ def _npm_source(value):
         return "npm-hosted:" + value.split("#", 1)[0].lower()
     if re.fullmatch(r"(?:@[^/\s]+/)?[^/#\s]+/[^#\s]+(?:#.*)?", value):
         return "npm-hosted:" + value.split("#", 1)[0].lower()
-    if value.startswith(("./", "../", "/", "~")):
+    if value.startswith(("./", "../", "/", "~/")):
         return "npm-folder:" + os.path.normpath(value)
     if lowered.startswith(("file:", "path:", "link:")):
         prefix, location = value.split(":", 1)
@@ -100,17 +100,18 @@ def _npm_source(value):
 
 def _npm_registry_range(value):
     version = r"[vV]?(?:\d+|[xX*])(?:\.(?:\d+|[xX*])){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
-    comparator = re.compile(r"^(?:<=|>=|<|>|=|~|\^)?" + version + r"$")
+    comparator = r"(?:<=|>=|<|>|=|~|\^)?\s*" + version
     if re.fullmatch(r"[0-9A-Za-z*XxvV.+<>=~^|\-\s]+", value) is None:
         return False
     groups = value.split("||")
     if any(not group.strip() for group in groups):
         return False
     for group in groups:
-        tokens = group.split()
-        if not tokens or any(token != "-" and comparator.fullmatch(token) is None for token in tokens):
-            return False
-        if "-" in tokens and (tokens.count("-") != 1 or tokens.index("-") in (0, len(tokens) - 1)):
+        group = group.strip()
+        if re.search(r"\s-\s", group):
+            if re.fullmatch(version + r"\s+-\s+" + version, group) is None:
+                return False
+        elif re.fullmatch(comparator + r"(?:\s+" + comparator + r")*", group) is None:
             return False
     return True
 

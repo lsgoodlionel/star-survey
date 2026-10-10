@@ -12,7 +12,7 @@ from typing import Sequence
 
 from .diagnostics import redact_text
 from .doctor import DoctorReport, run_doctor
-from .codex_adapter import controlled_tool_errors, run_with_controlled_tools
+from .codex_adapter import controlled_tool_errors, controlled_tool_path, run_with_controlled_tools
 from .run_service import RunService, ServiceError
 from .state import RunState, RunStatus
 
@@ -76,8 +76,11 @@ def _parser():
 
 
 def _root():
-    result = subprocess.run(["git", "--no-optional-locks", "rev-parse", "--show-toplevel"],
-                            text=True, capture_output=True, check=False)
+    current = Path.cwd().resolve(strict=True)
+    git = controlled_tool_path(current, "git")
+    environment = {"PATH": str(git.parent), "LC_ALL": "C"}
+    result = subprocess.run([str(git), "--no-optional-locks", "rev-parse", "--show-toplevel"],
+                            text=True, capture_output=True, check=False, env=environment)
     if result.returncode:
         raise ServiceError("当前目录不在 Git 仓库内")
     return Path(result.stdout.strip())

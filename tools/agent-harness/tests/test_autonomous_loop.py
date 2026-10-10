@@ -252,6 +252,7 @@ class LoopCase(WorktreeCase):
     def test_npm_non_registry_specs_pause_before_gate(self):
         specifications = (
             "../local-package",
+            "~/local-package",
             "file:../local-package",
             "github:owner/package#v1",
             "owner/package#v1",
@@ -326,6 +327,11 @@ class LoopCase(WorktreeCase):
 
     def test_complex_npm_registry_ranges_and_tags_reach_gate(self):
         changes = (
+            ("~1.2.3", "~1.3.0"),
+            ("~ 1.2.3", "~ 1.3.0"),
+            ("^1.2.3", "^1.3.0"),
+            ("^ 1.2.3", "^ 1.3.0"),
+            (">= 1.2.3", ">= 1.3.0"),
             ("1.2.3-beta.1+build.5", "1.2.4-beta.2+build.6"),
             ("1.2.3-beta.1 || >=2.0.0", "1.2.4-beta.1 || >=2.0.0"),
             ("1.2.3 - 2.3.4", "1.2.4 - 2.4.0"),
@@ -338,6 +344,15 @@ class LoopCase(WorktreeCase):
                 after = json.dumps({"dependencies": {"pkg": after_spec}})
                 result = self.dependency_run("package.json", before, after)
                 self.assertIn("unit", result.gates)
+
+    def test_invalid_npm_ranges_pause_before_gate(self):
+        before = json.dumps({"dependencies": {"pkg": "1.2.3"}})
+        for specification in ("1.2.3 - >2.0.0", "1.2.3 ||", "|| 1.2.3", "1.2.3 || || 2.0.0"):
+            with self.subTest(specification=specification):
+                after = json.dumps({"dependencies": {"pkg": specification}})
+                result = self.dependency_run("package.json", before, after)
+                self.assertEqual(result.status, RunStatus.PAUSED)
+                self.assertFalse(result.gates)
 
     def test_plain_manifest_text_change_is_not_a_dependency_addition(self):
         before = json.dumps({"name": "fixture", "dependencies": {"pkg": "1.0.0"}})

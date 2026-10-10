@@ -495,6 +495,14 @@ def controlled_tool_errors(repo):
     return tuple(errors)
 
 
+def controlled_tool_path(repo, name):
+    tool = next((item for item in _BOUND_TOOLS if item.name == name), None)
+    if tool is None or not tool.entry:
+        raise ValueError("Required project tool is unavailable")
+    _trusted_tool_directory(repo, tool)
+    return Path(tool.entry)
+
+
 def run_with_controlled_tools(repo, operation):
     errors = controlled_tool_errors(repo)
     if errors:
