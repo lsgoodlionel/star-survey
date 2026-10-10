@@ -1,9 +1,13 @@
 """Failure identity, bounded repair decisions and safe diagnostic summaries."""
 
 from dataclasses import replace
+import base64
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
+import shlex
+import json
+import subprocess
 from unittest.mock import patch
 import tempfile
 import unittest
@@ -54,6 +58,57 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("tests/test_api.py:42", normalized[0])
         self.assertIn("ECONNREFUSED", normalized[0])
 
+    def test_repeated_uri_prefixes_finish_within_bounded_cpu_budget(self):
+        script = (
+            "import sys, time, json\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from agent_harness.diagnostics import redact_text, normalize_failure\n"
+            "results = []\n"
+            "for size in (32768, 65536):\n"
+            "    text = 'a-a-' * (size // 4)\n"
+            "    start = time.monotonic()\n"
+            "    assert redact_text(text) == text\n"
+            "    assert normalize_failure(text) == text\n"
+            "    results.append(time.monotonic() - start)\n"
+            "print(json.dumps(results))\n"
+        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-B", "-c", script, str(Path(__file__).resolve().parents[1])],
+                capture_output=True, text=True, timeout=3, check=True,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("URI prefix scanning exceeded the 3-second subprocess deadline")
+        self.assertLess(max(json.loads(result.stdout)), 1.0)
+
+    def test_uri_scanner_retains_host_path_and_normalizes_ports(self):
+        raw = "ERROR: https://fake-user:fake-pass@api.test:43210/path?status=failed"
+        self.assertEqual(redact_text(raw), "ERROR: https://[REDACTED]@api.test:43210/path?status=failed")
+        self.assertEqual(normalize_failure(raw),
+                         "ERROR: https://[REDACTED]@api.test:<PORT>/path?status=failed")
+
+    def test_uri_scanner_handles_adjacent_delimiters_and_ipv6_authorities(self):
+        for raw in ("outer://https://fake-user:fake-pass@api.test:43210/path",
+                    "https://fake-user:fake-pass@[fd00::1]:43210/path"):
+            with self.subTest(raw=raw):
+                normalized = normalize_failure(raw)
+                self.assertNotIn("fake-pass", normalized)
+                self.assertNotIn("fake-user", normalized)
+                self.assertIn("<PORT>/path", normalized)
+
+    def test_nested_pytest_temporary_paths_keep_stable_source_suffix(self):
+        paths = (
+            "/tmp/pytest-of-review/pytest-12/test_login0/src/auth.py:42",
+            "/tmp/pytest-of-review/pytest-13/test_login1/src/auth.py:42",
+            "/private/tmp/pytest-of-another/pytest-current/test_logincurrent/src/auth.py:42",
+            "/private/var/folders/ab/random/T/pytest-of-review/pytest-14/test_login0/src/auth.py:42",
+        )
+        fingerprints = [failure_fingerprint(1, "ERROR: denied " + path, "") for path in paths]
+        self.assertEqual(len(set(fingerprints)), 1)
+        self.assertIn("src/auth.py:42", normalize_failure("ERROR: denied " + paths[0]))
+        self.assertNotEqual(fingerprints[0], failure_fingerprint(
+            1, "ERROR: denied " + paths[1].replace("auth.py", "storage.py"), ""))
+
     def test_fingerprint_retains_first_stable_error_not_wrapper_or_later_noise(self):
         first = "FAIL: test_login (tests.auth.AuthTests)\nAssertionError: denied"
         left = failure_fingerprint(1, "Server ready on port 43210\n" + first,
@@ -77,6 +132,17 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(failure_fingerprint(1, log, ""),
                          failure_fingerprint(1, log.replace("1.32s", "8.94s"), ""))
 
+    def test_direct_python_traceback_retains_first_stable_file_location(self):
+        log = ('Traceback (most recent call last):\n'
+               '  File "src/auth.py", line 42, in login\n'
+               '    raise ValueError("denied")\nValueError: denied')
+        for changed in (log.replace("auth.py", "storage.py"), log.replace("line 42", "line 93")):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(failure_fingerprint(1, "", log),
+                                    failure_fingerprint(1, "", changed))
+        self.assertEqual(failure_fingerprint(1, "", log),
+                         failure_fingerprint(1, "", log + "\nERROR: later independent error"))
+
     def test_stable_source_lines_error_codes_and_normal_paths_remain_distinct(self):
         log = "src/service.py:43210: error E123: expected 503 got 401"
         for changed in (log.replace("43210", "51022"), log.replace("E123", "E124"),
@@ -91,6 +157,36 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(failure_fingerprint(1, log, ""),
                          failure_fingerprint(1, "ERROR: stable first failure", ""))
         self.assertLessEqual(len(normalize_failure("port=1\n" * 9000)), 65536)
+
+    def test_oversized_single_line_retains_first_error_and_distinct_fingerprint(self):
+        logs = ("ERROR: login denied " + "x" * 66000,
+                "ERROR: database corrupt " + "x" * 66000,
+                '{"error":"login_denied","data":"' + "x" * 66000)
+        for log, cause in zip(logs, ("login denied", "database corrupt", "login_denied")):
+            with self.subTest(cause=cause):
+                result = normalize_failure(log)
+                self.assertIn(cause, result)
+                self.assertLessEqual(len(result), 65536)
+                self.write_logs(stderr=log)
+                output = self.root / "report.md"
+                render_diagnostics(self.state, [self.gate], output)
+                self.assertIn(cause, output.read_text())
+        self.assertNotEqual(failure_fingerprint(1, logs[0], ""),
+                            failure_fingerprint(1, logs[1], ""))
+
+    def test_cut_single_line_credentials_never_release_partial_token(self):
+        header = base64.urlsafe_b64encode(b'{ "alg": "HS256" }').decode().rstrip("=")
+        token = header + "." + "c2VjcmV0" * 10000 + ".fake-signature"
+        values = ("PASSWORD=fake-prefix" + "x" * 66000,
+                  'TOKEN="fake-prefix' + "x" * 66000,
+                  "https://fake-user:fake-prefix" + "x" * 66000 + "@example.test",
+                  token)
+        for value in values:
+            with self.subTest(kind=value[:20]):
+                result = redact_text("ERROR: denied " + value)
+                self.assertIn("ERROR: denied", result)
+                for fragment in ("fake-prefix", "fake-user", header, "c2VjcmV0"):
+                    self.assertNotIn(fragment, result)
 
     def test_same_fingerprint_pauses_exactly_on_third_failure(self):
         state = self.state
@@ -239,6 +335,30 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("ERROR: denied", result)
         self.assertIn("status=failed", result)
 
+    def test_comma_suffixes_of_unquoted_secrets_are_hidden_in_text_and_report(self):
+        for name in ("PASSWORD", "TOKEN", "CUSTOM_CREDENTIAL"):
+            raw = name + "=fake-left,fake-right, fake-last"
+            with self.subTest(name=name):
+                result = redact_text(raw, ("CUSTOM_CREDENTIAL",))
+                for fragment in ("fake-left", "fake-right", "fake-last"):
+                    self.assertNotIn(fragment, result)
+                self.write_logs(stderr="ERROR: denied " + raw)
+                output = self.root / "report.md"
+                render_diagnostics(self.state, [self.gate], output,
+                                   secret_names=("CUSTOM_CREDENTIAL",))
+                self.assertNotIn("fake-right", output.read_text())
+
+    def test_comma_secret_redaction_preserves_explicit_query_and_next_labels(self):
+        for raw in ("TOKEN=fake-left,fake-right&status=visible",
+                    "TOKEN=fake-left,fake-right,status=visible",
+                    "TOKEN=fake-left,fake-right, status=visible",
+                    'TOKEN=fake-left,fake-right, "status":"visible"'):
+            with self.subTest(raw=raw):
+                result = redact_text(raw)
+                self.assertNotIn("fake-right", result)
+                self.assertIn("visible", result)
+                self.assertIn("status", result)
+
     def test_redacts_unterminated_quoted_values_with_dangling_escape(self):
         for raw in ('PASSWORD="fake-dangling\\', 'CUSTOM_CREDENTIAL="fake-dangling\\',
                     'Authorization: "fake-dangling\\'):
@@ -252,6 +372,34 @@ class DiagnosticsTests(unittest.TestCase):
     def test_redacts_jwt_with_pretty_printed_json_header(self):
         token = "ewogICJhbGciOiAiSFMyNTYiCn0.eyJzdWIiOiJmYWtlIn0.ZmFrZXNpZ25hdHVyZQ"
         self.assertNotIn(token, redact_text("jwt " + token))
+
+    def test_generic_jwt_headers_are_redacted_in_text_and_report(self):
+        for header in (b'{ "alg": "HS256" }', b'{\t"alg": "HS256"}',
+                       b'\n {"alg":"none"}', b'{"kid":"fake-key","alg":"HS256"}'):
+            encoded = base64.urlsafe_b64encode(header).decode().rstrip("=")
+            token = encoded + ".eyJzdWIiOiJmYWtlIn0.ZmFrZXNpZ25hdHVyZQ"
+            with self.subTest(header=header):
+                self.assertEqual(redact_text("jwt " + token), "jwt [REDACTED]")
+                self.write_logs(stderr="ERROR: denied jwt " + token)
+                output = self.root / "report.md"
+                render_diagnostics(self.state, [self.gate], output)
+                self.assertNotIn(token, output.read_text())
+
+    def test_jwt_header_validation_is_bounded_and_preserves_non_json_dotted_text(self):
+        self.assertEqual(redact_text("module.tests.test_auth"), "module.tests.test_auth")
+        oversized_header = base64.urlsafe_b64encode(
+            b'{ "alg":"HS256","kid":"' + b"x" * 9000 + b'"}'
+        ).decode().rstrip("=")
+        token = oversized_header + ".eyJzdWIiOiJmYWtlIn0.ZmFrZXNpZ25hdHVyZQ"
+        self.assertNotIn(token, redact_text(token))
+
+    def test_jwt_parser_resource_limits_fail_closed(self):
+        headers = (b'{ "alg":"HS256","n":' + b"1" * 5000 + b"}",
+                   b'{ "alg":"HS256","n":' + b"[" * 1200 + b"0" + b"]" * 1200 + b"}")
+        for header in headers:
+            token = base64.urlsafe_b64encode(header).decode().rstrip("=")
+            token += ".eyJzdWIiOiJmYWtlIn0.ZmFrZXNpZ25hdHVyZQ"
+            self.assertFalse(token in redact_text(token), "Resource-limited JWT header leaked")
 
     def test_secret_name_validation_is_bounded_for_all_consumers(self):
         for names in (["x"] * 65, ["x" * 129], [""], [None], ["bad\nname"]):
@@ -347,6 +495,38 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("timed_out", report)
         self.assertIn("unavailable", report)
 
+    def test_report_budgets_long_paths_without_losing_required_sections(self):
+        paths = tuple(Path("/".join(["p" * 104] * 8) + "/file-" + str(index))
+                      for index in range(100))
+        state = replace(self.state, status=RunStatus.PAUSED, changed_paths=paths,
+                        decisions=({"type": "transition", "summary": "no_progress",
+                                    "createdAt": "2026-10-10T00:00:00Z"},))
+        self.write_logs(stderr="ERROR: stable first failure")
+        output = self.root / "report.md"
+        render_diagnostics(state, [self.gate], output)
+        report = output.read_text()
+        for value in ("Failed gates:", "unit: failed", "Stop reason: no_progress",
+                      "stable first failure", "Recent decisions:", "OMITTED",
+                      "cd " + shlex.quote(str(state.worktree_path)) + " && scripts/agent-harness resume"):
+            self.assertIn(value, report)
+        self.assertLessEqual(len(report), 65536)
+
+    def test_report_budgets_long_metadata_and_gate_lists_with_exact_resume(self):
+        state = replace(self.state, status=RunStatus.PAUSED,
+                        branch="feat/" + "x" * 90000,
+                        milestone_title="Failure escalation " + "x" * 90000,
+                        decisions=({"type": "transition", "summary": "no_progress " + "x" * 90000,
+                                    "createdAt": "2026-10-10T00:00:00Z"},) * 20)
+        gates = [replace(self.gate, gate_id="gate-" + str(number) + "-" + "x" * 1024)
+                 for number in range(40)]
+        output = self.root / "report.md"
+        render_diagnostics(state, gates, output)
+        report = output.read_text()
+        for value in ("Failed gates:", "gate-0", "Stop reason: no_progress", "OMITTED",
+                      "cd " + shlex.quote(str(state.worktree_path)) + " && scripts/agent-harness resume"):
+            self.assertIn(value, report)
+        self.assertLessEqual(len(report), 65536)
+
     def test_report_never_follows_evidence_file_or_parent_symlinks(self):
         directory = self.write_logs()
         outside = self.root / "private.log"
@@ -396,6 +576,49 @@ class DiagnosticsTests(unittest.TestCase):
                 render_diagnostics(self.state, [], output)
         self.assertEqual(output.read_text(), "previous report")
         self.assertEqual(list(self.root.glob(".diagnostics.*")), [])
+
+    def test_output_publication_stays_in_open_parent_when_directory_is_replaced(self):
+        reports = self.root / "reports"
+        saved = self.root / "saved-reports"
+        outside = self.root / "outside"
+        reports.mkdir()
+        outside.mkdir()
+        (outside / "report.md").write_text("outside original")
+
+        def evidence():
+            reports.rename(saved)
+            reports.symlink_to(outside, target_is_directory=True)
+            yield self.gate
+
+        render_diagnostics(self.state, evidence(), reports / "report.md")
+        self.assertEqual((outside / "report.md").read_text(), "outside original")
+        self.assertIn("Failed gates:", (saved / "report.md").read_text())
+        self.assertEqual(list(saved.glob(".diagnostics.*")), [])
+
+    def test_output_cleanup_uses_same_directory_fd_after_parent_swap(self):
+        reports = self.root / "reports"
+        saved = self.root / "saved-reports"
+        outside = self.root / "outside"
+        reports.mkdir()
+        outside.mkdir()
+        (reports / "report.md").write_text("previous report")
+
+        def evidence():
+            reports.rename(saved)
+            reports.symlink_to(outside, target_is_directory=True)
+            yield self.gate
+
+        def fail_publish(*args, **kwargs):
+            self.assertEqual(len(list(saved.glob(".diagnostics.*"))), 1)
+            self.assertEqual(list(outside.iterdir()), [])
+            raise OSError("replace failed")
+
+        with patch("agent_harness.diagnostics.os.replace", side_effect=fail_publish):
+            with self.assertRaises(OSError):
+                render_diagnostics(self.state, evidence(), reports / "report.md")
+        self.assertEqual((saved / "report.md").read_text(), "previous report")
+        self.assertEqual(list(saved.glob(".diagnostics.*")), [])
+        self.assertEqual(list(outside.iterdir()), [])
 
 
 if __name__ == "__main__":
