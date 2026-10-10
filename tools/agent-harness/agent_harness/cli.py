@@ -12,6 +12,7 @@ from typing import Sequence
 
 from .diagnostics import redact_text
 from .doctor import run_doctor
+from .codex_adapter import controlled_tool_errors
 from .run_service import RunService, ServiceError
 from .state import RunState, RunStatus
 
@@ -94,6 +95,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         root = args.repo or _root()
         if args.command == "doctor":
             result = run_doctor(root)
+            policy_errors = controlled_tool_errors(root)
+            if policy_errors:
+                result = type(result)(result.ok, result.warning, result.error + policy_errors)
             code = 2 if result.error else 0
         else:
             service = RunService(root)

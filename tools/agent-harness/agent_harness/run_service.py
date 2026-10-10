@@ -65,6 +65,39 @@ def _source(value, *, origin_only=False):
     return None
 
 
+def _npm_source(value):
+    if not isinstance(value, str) or not value.strip():
+        return "npm-unknown:empty"
+    value = value.strip()
+    lowered = value.lower()
+    if lowered.startswith("workspace:"):
+        return "npm-workspace"
+    if lowered.startswith("npm:"):
+        target = value[4:]
+        if target.startswith("@"):
+            match = re.match(r"^(@[^/]+/[^@]+)", target)
+        else:
+            match = re.match(r"^([^@]+)", target)
+        return "npm-alias:" + (match[1].lower() if match else target.lower())
+    if lowered.startswith(("github:", "gitlab:", "bitbucket:", "gist:")):
+        return "npm-hosted:" + value.split("#", 1)[0].lower()
+    if re.fullmatch(r"(?:@[^/\s]+/)?[^/#\s]+/[^#\s]+(?:#.*)?", value):
+        return "npm-hosted:" + value.split("#", 1)[0].lower()
+    if value.startswith(("./", "../", "/", "~")):
+        return "npm-folder:" + os.path.normpath(value)
+    if lowered.startswith(("file:", "path:", "link:")):
+        prefix, location = value.split(":", 1)
+        return "npm-" + prefix.lower() + ":" + os.path.normpath(location.split("#", 1)[0])
+    source = _source(value)
+    if source:
+        return "npm-source:" + source
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]*", value):
+        return None
+    if re.fullmatch(r"[vV<>=~^*0-9xX|.,\-+\s]+(?:[A-Za-z][A-Za-z0-9.-]*)?", value):
+        return None
+    return "npm-unknown:" + value
+
+
 def _python_requirement(value):
     value = value.strip()
     if not value or value.startswith("#"):
@@ -91,7 +124,7 @@ def _dependency_snapshot(path, data):
                 raise ValueError("Invalid npm dependency section")
             for package, specification in values.items():
                 dependencies.add(section + ":" + package)
-                source = _source(specification)
+                source = _npm_source(specification)
                 if source:
                     sources.add(source)
         registry = document.get("publishConfig", {})
@@ -129,8 +162,8 @@ def _dependency_snapshot(path, data):
             if not line or line.startswith("#"):
                 continue
             option = re.match(r"^(?:--index-url|--extra-index-url|--find-links|--trusted-host|-i|-f)(?:=|\s+)(\S+)", line)
-            include = re.match(r"^(?:--requirement|-r|--constraint|-c)(?:=|\s+)(\S+)", line)
-            editable = re.match(r"^(?:-e|--editable)(?:=|\s+)(\S.+|\S+)$", line)
+            include = re.match(r"^(?:--(?:requirement|constraint)(?:=|\s+)|-[rc](?:=|\s*)?)(\S+)$", line)
+            editable = re.match(r"^(?:--editable(?:=|\s+)|-e(?:=|\s*)?)(\S.+|\S+)$", line)
             if option:
                 sources.add(_source(option[1]) or option[1])
             elif include:
@@ -143,7 +176,9 @@ def _dependency_snapshot(path, data):
                 if dependency:
                     dependencies.add(dependency)
                 sources.add(source)
-            elif not line.startswith("-"):
+            elif line.startswith("-"):
+                sources.add("unknown-option:" + line)
+            else:
                 target = line.split(" ;", 1)[0]
                 dependency, source = _python_requirement(target)
                 if dependency:

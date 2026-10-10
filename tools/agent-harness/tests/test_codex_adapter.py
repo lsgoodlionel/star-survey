@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+import io
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -111,8 +113,7 @@ class AdapterCase(WorktreeCase):
         poisoned = self.repo / "bin/codex"
         self.write(poisoned, "#!/bin/sh\nexit 0\n")
         poisoned.chmod(0o755)
-        with patch("agent_harness.codex_adapter.shutil.which", return_value=str(poisoned)):
-            protected = self.adapter.build_codex_command(self.repo, self.schema, "repair")
+        protected = self.adapter.build_codex_command(self.repo, self.schema, "repair")
         self.assertEqual(protected[0], self.command[0])
         command = list(self.command)
         command[0] = "codex"
@@ -171,6 +172,58 @@ class AdapterCase(WorktreeCase):
                                cwd=project, env=environment, text=True, capture_output=True, check=False)
         self.assertEqual(probe.returncode, 0)
         self.assertRegex(probe.stdout, r"^Python 3\.1[1-9]\.")
+
+    def test_tool_discovery_never_anchors_to_path_before_module_import(self):
+        project = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="task7-path-", dir=project.parents[2]) as directory:
+            poisoned = Path(directory)
+            for name in ("codex", "git", "node", "npm", "docker", "python3.11", "java"):
+                executable = poisoned / name
+                self.write(executable, "#!/bin/sh\nexit 97\n")
+                executable.chmod(0o755)
+            (poisoned / "git").unlink()
+            (poisoned / "git").symlink_to("/usr/bin/git")
+            script = """
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+from agent_harness import codex_adapter
+
+project = Path(sys.argv[1])
+environment = codex_adapter._environment(project)
+tools = {name: shutil.which(name, path=environment["PATH"])
+         for name in ("git", "node", "npm", "docker", "python3.11", "java")}
+wrapper = subprocess.run([str(project / "scripts/agent-harness"), "--python", "--version"],
+                         cwd=project, env=environment, text=True, capture_output=True, check=False)
+print(json.dumps({"path": environment["PATH"], "tools": tools, "codex": codex_adapter._BOUND_CODEX,
+                  "wrapperCode": wrapper.returncode, "wrapperOutput": wrapper.stdout}))
+"""
+            environment = {"PATH": str(poisoned), "PYTHONPATH": str(project / "tools/agent-harness")}
+            probe = subprocess.run([sys.executable, "-c", script, str(project)], env=environment,
+                                   text=True, capture_output=True, check=False)
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        result = json.loads(probe.stdout)
+        self.assertNotIn(str(poisoned), result["path"].split(os.pathsep))
+        self.assertFalse(Path(result["codex"]).is_relative_to(poisoned), result)
+        self.assertTrue(all(result["tools"].values()), result)
+        self.assertTrue(all(not Path(value).is_relative_to(poisoned)
+                            for value in result["tools"].values()), result)
+        self.assertEqual(result["wrapperCode"], 0, result)
+        self.assertRegex(result["wrapperOutput"], r"^Python 3\.1[1-9]\.")
+
+    def test_doctor_reports_controlled_tool_policy_failures(self):
+        from agent_harness.cli import main
+        from agent_harness.doctor import DoctorReport
+        output = io.StringIO()
+        issue = {"id": "controlled-tool:docker", "message": "受控工具不可用或不受信任"}
+        with patch("agent_harness.cli.run_doctor", return_value=DoctorReport((), (), ())), \
+                patch("agent_harness.cli.controlled_tool_errors", return_value=(issue,)), \
+                redirect_stdout(output):
+            code = main(["--repo", str(self.repo), "doctor", "--json"])
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(output.getvalue())["error"], [issue])
 
     def test_environment_path_resolution_runtime_errors_are_typed(self):
         loop = self.root / "environment-loop"

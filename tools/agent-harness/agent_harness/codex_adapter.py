@@ -7,9 +7,9 @@ from pathlib import Path, PureWindowsPath
 import re
 import selectors
 import signal
-import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Sequence
@@ -25,8 +25,6 @@ _TOTAL_LIMIT = 4 * 1024 * 1024
 _EVENT_LIMIT = 4096
 _PROMPT_LIMIT = 16384
 _FORBIDDEN = re.compile(r"bypass|danger-full|--add-dir|--config|(?:^|\s)-c(?:\s|=|$)|--enable|--disable|--profile", re.I)
-_DISCOVERED_CODEX = shutil.which("codex")
-_BOUND_CODEX = str(Path(_DISCOVERED_CODEX).resolve(strict=True)) if _DISCOVERED_CODEX else None
 
 
 @dataclass(frozen=True)
@@ -35,33 +33,131 @@ class _BoundTool:
     entry: str | None
     target: str | None
     directory: str | None
+    root: str | None
+    entry_identity: tuple[int, int, int, int] | None
+    target_identity: tuple[int, int, int, int] | None
 
 
-def _bound_tool(name, entry=None, *, target_directory=False):
-    value = entry or shutil.which(name)
+def _identity(metadata):
+    return metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_mode
+
+
+def _expected_target_name(name, target):
+    return target.name == name or (name == "npm" and target.name == "npm-cli.js")
+
+
+def _discover_codex():
+    candidates = ()
+    if sys.platform == "darwin":
+        candidates = (Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/"
+                           "CodexCLI.app/Contents/MacOS/codex"),)
+    elif sys.platform.startswith("linux"):
+        candidates = (Path("/usr/bin/codex"), Path("/usr/local/bin/codex"))
+    for path in candidates:
+        try:
+            metadata = path.lstat()
+            if (path.name != "codex" or stat.S_ISLNK(metadata.st_mode)
+                    or path.resolve(strict=True) != path or not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid not in (0, os.getuid()) or not os.access(path, os.X_OK)):
+                continue
+            return str(path), _identity(metadata)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return None, None
+
+
+_BOUND_CODEX, _BOUND_CODEX_IDENTITY = _discover_codex()
+
+
+def _account_home():
+    if os.name != "posix":
+        raise ValueError("No fixed account home policy for this platform")
+    import pwd
+    return Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True)
+
+
+def _candidate_roots(name):
+    candidates = []
+    if sys.platform == "darwin":
+        fixed = {
+            "git": ("/usr/bin/git", "/usr"),
+            "java": ("/usr/bin/java", "/usr"),
+            "docker": ("/Applications/Docker.app/Contents/Resources/bin/docker", "/Applications/Docker.app"),
+        }
+        if name in fixed:
+            candidates.append(fixed[name])
+    elif sys.platform.startswith("linux"):
+        for prefix in ("/usr", "/usr/local", "/opt/homebrew"):
+            candidates.append((prefix + "/bin/" + name, prefix))
+    else:
+        return ()
+    if name not in ("git", "java", "docker") or sys.platform != "darwin":
+        for prefix in ("/opt/homebrew", "/usr/local"):
+            candidates.append((prefix + "/bin/" + name, prefix))
+    return tuple(candidates)
+
+
+def _versioned_candidates(name):
     try:
-        path = Path(value)
-        if not path.is_absolute() or redact_text(str(path)) != str(path):
-            raise ValueError()
-        target = path.resolve(strict=True)
-        directory = target.parent if target_directory else path.parent.resolve(strict=True)
-        return _BoundTool(name, str(path), str(target), str(directory))
-    except (OSError, RuntimeError, TypeError, ValueError):
-        return _BoundTool(name, None, None, None)
+        home = _account_home()
+        if name == "python3.11":
+            root = home / ".local/share/uv/python"
+            values = sorted(root.glob("cpython-3.11.*-*/bin/python3.11"), reverse=True)
+            return tuple((str(value), str(root)) for value in values)
+        if name == "node":
+            root = home / ".nvm/versions/node"
+            values = sorted(root.glob("v22.*/bin/node"), reverse=True)
+            return tuple((str(value), str(value.parents[1])) for value in values)
+    except (KeyError, OSError, RuntimeError):
+        return ()
+    return ()
+
+
+def _bound_tool(name, candidates, *, target_directory=False, allow_link=False):
+    empty = _BoundTool(name, None, None, None, None, None, None)
+    for value, allowed in candidates:
+        try:
+            path, root = Path(value), Path(allowed).resolve(strict=True)
+            if (not path.is_absolute() or path.name != name or redact_text(str(path)) != str(path)
+                    or not path.is_relative_to(root)):
+                continue
+            entry_metadata = path.lstat()
+            if stat.S_ISLNK(entry_metadata.st_mode) and not allow_link:
+                continue
+            target = path.resolve(strict=True)
+            if not target.is_relative_to(root) or not _expected_target_name(name, target):
+                continue
+            target_metadata = target.stat()
+            if (not stat.S_ISREG(target_metadata.st_mode) or not os.access(path, os.X_OK)
+                    or entry_metadata.st_uid not in (0, os.getuid())
+                    or target_metadata.st_uid not in (0, os.getuid())):
+                continue
+            directory = target.parent if target_directory else path.parent.resolve(strict=True)
+            return _BoundTool(name, str(path), str(target), str(directory), str(root),
+                              _identity(entry_metadata), _identity(target_metadata))
+        except (OSError, RuntimeError, TypeError, ValueError):
+            continue
+    return empty
+
+
+def _npm_candidates(node):
+    try:
+        if not node.entry or not node.root:
+            return ()
+        return ((str(Path(node.entry).with_name("npm")), node.root),)
+    except (OSError, RuntimeError, TypeError):
+        return ()
 
 
 def _discover_tools():
-    node = shutil.which("node")
-    try:
-        candidates = sorted((Path.home() / ".nvm/versions/node").glob("v22*/bin/node"))
-        if candidates:
-            node = str(candidates[-1])
-    except (OSError, RuntimeError):
-        pass
-    npm = str(Path(node).with_name("npm")) if node else None
-    return (_bound_tool("python3.11", target_directory=True),
-            _bound_tool("node", node), _bound_tool("npm", npm),
-            _bound_tool("docker"), _bound_tool("git"), _bound_tool("java"))
+    python = _bound_tool("python3.11", _versioned_candidates("python3.11") + _candidate_roots("python3.11"),
+                         target_directory=True)
+    node = _bound_tool("node", _versioned_candidates("node") + _candidate_roots("node"))
+    npm = _bound_tool("npm", _npm_candidates(node), allow_link=True)
+    return (python, node, npm,
+            _bound_tool("docker", _candidate_roots("docker")),
+            _bound_tool("git", _candidate_roots("git")),
+            _bound_tool("java", _candidate_roots("java")))
 
 
 _BOUND_TOOLS = _discover_tools()
@@ -133,6 +229,8 @@ def _trusted_codex(repo, candidate=None):
     if path.is_relative_to(root) or path.is_relative_to(temporary):
         raise ValueError("Codex executable is inside an autonomous writable root")
     metadata = os.stat(path, follow_symlinks=False)
+    if _identity(metadata) != _BOUND_CODEX_IDENTITY:
+        raise ValueError("Codex executable identity changed")
     application_bundle = Path("/Applications/ChatGPT.app")
     bundled = application_bundle.exists() and path.is_relative_to(application_bundle.resolve(strict=True))
     if not stat.S_ISREG(metadata.st_mode) or not os.access(path, os.X_OK) or (os.access(path, os.W_OK) and not bundled):
@@ -278,9 +376,12 @@ def _environment_path(value, *, multiple=False):
 
 
 def _trusted_tool_directory(repo, tool):
-    if not all((tool.entry, tool.target, tool.directory)):
+    if not all((tool.entry, tool.target, tool.directory, tool.root,
+                tool.entry_identity, tool.target_identity)):
         raise ValueError("Required project tool is unavailable")
     entry = Path(tool.entry)
+    root_policy = Path(tool.root)
+    entry_metadata = entry.lstat()
     target = entry.resolve(strict=True)
     directory = entry.parent.resolve(strict=True)
     expected_directory = Path(tool.directory)
@@ -288,18 +389,41 @@ def _trusted_tool_directory(repo, tool):
         directory = target.parent
     root = Path(repo).resolve(strict=True)
     temporary = Path(tempfile.gettempdir()).resolve(strict=True)
-    values = (entry, target, directory)
+    values = (entry, target, directory, root_policy)
     if (target != Path(tool.target) or directory != expected_directory
+            or not _expected_target_name(tool.name, target)
+            or _identity(entry_metadata) != tool.entry_identity
+            or _identity(target.stat()) != tool.target_identity
+            or not entry.is_relative_to(root_policy) or not target.is_relative_to(root_policy)
             or any(redact_text(str(value)) != str(value) for value in values)
             or any(value.is_relative_to(root) or value.is_relative_to(temporary) for value in values)):
         raise ValueError("Project tool identity is not trusted")
     metadata = target.stat()
-    if not stat.S_ISREG(metadata.st_mode) or not os.access(entry, os.X_OK):
+    if (entry.name != tool.name or not stat.S_ISREG(metadata.st_mode) or not os.access(entry, os.X_OK)
+            or entry_metadata.st_uid not in (0, os.getuid()) or metadata.st_uid not in (0, os.getuid())):
         raise ValueError("Project tool is not executable")
-    for parent in (directory, *directory.parents):
-        if parent.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+    current = directory
+    while True:
+        parent = current.stat()
+        if parent.st_uid not in (0, os.getuid()) or parent.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise ValueError("Project tool parent is broadly writable")
+        if current == root_policy:
+            break
+        if current == current.parent or not current.is_relative_to(root_policy):
+            raise ValueError("Project tool escaped its fixed root")
+        current = current.parent
     return directory
+
+
+def controlled_tool_errors(repo):
+    errors = []
+    for tool in _BOUND_TOOLS:
+        try:
+            _trusted_tool_directory(repo, tool)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            errors.append({"id": "controlled-tool:" + tool.name,
+                           "message": "受控工具不可用或不受信任"})
+    return tuple(errors)
 
 
 def _environment(repo):

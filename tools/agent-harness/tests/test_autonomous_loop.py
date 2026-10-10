@@ -222,18 +222,64 @@ class LoopCase(WorktreeCase):
         additions = (
             "-e git+https://example.invalid/repo.git#egg=demo",
             "-e=git+https://example.invalid/repo.git#egg=demo",
+            "-egit+https://example.invalid/repo.git#egg=demo",
             "--editable git+https://example.invalid/repo.git#egg=demo",
             "--editable=git+https://example.invalid/repo.git#egg=demo",
             "demo @ https://packages.example.invalid/demo.whl",
             "-e ../local-demo",
+            "-e../local-demo",
             "--requirement=extra-requirements.txt",
+            "-rextra-requirements.txt",
             "-c constraints.txt",
+            "-cconstraints.txt",
         )
         for addition in additions:
             with self.subTest(addition=addition):
                 result = self.dependency_run("requirements.txt", "requests==2.0\n",
                                              "requests==2.0\n" + addition + "\n")
                 self.assertFalse(result.gates)
+
+    def test_unknown_python_requirement_option_pauses_before_gate(self):
+        result = self.dependency_run("requirements.txt", "requests==2.0\n",
+                                     "requests==2.0\n--unknown-source packages.invalid\n")
+        self.assertEqual(result.status, RunStatus.PAUSED)
+        self.assertFalse(result.gates)
+
+    def test_npm_non_registry_specs_pause_before_gate(self):
+        specifications = (
+            "../local-package",
+            "file:../local-package",
+            "github:owner/package#v1",
+            "owner/package#v1",
+            "git+https://example.invalid/package.git#v1",
+            "https://example.invalid/package.tgz",
+            "npm:other-package@^1.0.0",
+            "workspace:^1.0.0",
+            "catalog:frontend",
+        )
+        before = json.dumps({"dependencies": {"pkg": "1.0.0"}})
+        for specification in specifications:
+            with self.subTest(specification=specification):
+                after = json.dumps({"dependencies": {"pkg": specification}})
+                result = self.dependency_run("package.json", before, after)
+                self.assertEqual(result.status, RunStatus.PAUSED)
+                self.assertFalse(result.gates)
+
+    def test_existing_npm_and_python_vcs_revision_changes_reach_gate(self):
+        for before_spec, after_spec in (
+                ("github:owner/package#v1", "github:owner/package#v2"),
+                ("git+https://example.invalid/package.git#v1",
+                 "git+https://example.invalid/package.git#v2")):
+            with self.subTest(before_spec=before_spec):
+                before = json.dumps({"dependencies": {"pkg": before_spec}})
+                after = json.dumps({"dependencies": {"pkg": after_spec}})
+                result = self.dependency_run("package.json", before, after)
+                self.assertIn("unit", result.gates)
+
+        before = "-egit+https://example.invalid/repo.git@v1#egg=demo\n"
+        after = "-egit+https://example.invalid/repo.git@v2#egg=demo\n"
+        result = self.dependency_run("requirements.txt", before, after)
+        self.assertIn("unit", result.gates)
 
     def test_python_editable_vcs_revision_change_is_not_a_new_source(self):
         before = "-e git+https://example.invalid/repo.git@v1#egg=demo\n"
