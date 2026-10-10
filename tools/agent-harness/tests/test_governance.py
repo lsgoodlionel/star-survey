@@ -63,6 +63,16 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertIn("--linux-image " + image, self.text)
         self.assertIn("--docker /usr/bin/docker", self.text)
 
+    def test_workflow_hardens_setup_python_directory_chain_before_wrapper(self):
+        harden = (
+            'chmod go-w /opt/hostedtoolcache/Python "${pythonLocation%/*}" '
+            '"$pythonLocation" "$pythonLocation/bin"'
+        )
+        self.assertIn(harden, self.text)
+        self.assertEqual(self.text.count(harden), 2)
+        self.assertLess(self.text.index(harden),
+                        self.text.index("scripts/agent-harness --python --version"))
+
     def test_host_config_owns_portability_and_delivery_contracts(self):
         document = json.loads(HOST_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(document["version"], 1)
