@@ -464,18 +464,18 @@ Run: `git diff --check`
 
 Expected: all commands PASS.
 
-- [x] **Step 7: Perform independent review and resolve findings**
+- [ ] **Step 7: Perform independent review and resolve findings**
 
 Dispatch one reviewer for security and state recovery, one for developer ergonomics and CI, and one whole-branch reviewer. Re-run all Harness tests after accepted fixes and record rejected findings with technical reasons in the run summary.
 
-Evidence (2026-10-10): security, DX/CI and whole-branch rereview reports were received independently. Both review rounds' deduplicated
-findings were reproduced with failing tests and resolved; the final focused and full verification evidence is recorded in the Task 8 report.
+Pending: security、DX/CI 和 whole-branch rereview-2 均为 `CHANGES_REQUIRED`。只有控制器在同一 implementation commit/range
+取得三路 `SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED` 报告并填入结构化 manifest 后才能勾选本步。
 
 - [ ] **Step 8: Synchronize documentation and mark the plan complete**
 
 Document install/use/resume/escalation commands, final test evidence, remaining limitations and the first eligible real product Milestone. Update this plan's checkboxes only from actual evidence and add the implementation commit references.
 
-Local documentation is synchronized to the round-2 implementation commit `57f91048`, but this step remains open because the plan cannot
+Local documentation is synchronized to the round-3 implementation commit `09e84c0a`, but this step remains open because the plan cannot
 be marked complete before the bound GitHub run and Obsidian synchronization. The first candidate product Milestone is Phase C-1's
 `820–1179px` two-column and inspector shell, subject to host synchronization and a fresh approved file scope.
 

@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: locally_reviewed_sync_pending -->
+<!-- harness-delivery-status: local_validated_sync_pending -->
 # 自治工程 Harness
 
 这是一个 Python 3.11+、仅依赖标准库的确定性控制套件。它把批准计划、Git 身份、路径策略、质量门、
@@ -61,6 +61,12 @@ HEAD、工作区和工具环境。审批路径、真实秘密、依赖新增、�
 
 `.github/workflows/agent-governance.yml` 是当前宿主的只读 CI 接线：固定 action commit，运行配置测试、完整
 Harness 套件、fake drills、危险参数扫描和计划/记忆漂移检查。它不持有写权限，也不执行合并、制品发布或部署。
+unit job 使用确定性 fake tools；Linux integration job 通过 `run_tests.py --ci` 显式传入固定镜像 digest 与受信 Docker
+绝对路径，并以 `--fail-on-skip` 强制零 skip。环境变量不能替代这些受控参数。
+
+manifest 在独立复审 pending 时必须保留空 `reviewEvidence.reports`。只有交付控制器取得 security、DX/CI、whole-branch
+三份已跟踪报告后才能标记 complete；每份报告都必须绑定 implementation commit/range、内容 SHA-256，并同时包含
+`SPEC_COMPLIANCE=APPROVED` 与 `CODE_QUALITY=APPROVED`。本地实现者不能自行填充这些证据。
 
 宿主可把自己的 Node、Java、Docker、双数据库、浏览器或产品化检查登记进 Gate 矩阵；核心套件不会猜测这些
 命令。GitHub 分支同步、PR、Obsidian 和生产审批同样属于宿主交付流程，不由 Harness 自动完成。

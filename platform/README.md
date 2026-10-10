@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: locally_reviewed_sync_pending -->
+<!-- harness-delivery-status: local_validated_sync_pending -->
 # MJY 平台（LimeSurvey 本土化）
 
 多租户 SaaS ＋ 私有化交付的问卷／考试／测评平台。引擎用 LimeSurvey 7.1.2，**引擎源码与上游逐文件一致**，本项目的全部内容都是新增文件（P0-00.2 结论，见 [docs/p0/upstream-diff.md](docs/p0/upstream-diff.md)）。
@@ -44,7 +44,7 @@
 | 管理端 Vitest | **20 个文件 / 174 通过** | lint、typecheck 与 build 同步通过 |
 | 管理端生产构建 | **2089 modules** | 构建通过；大 chunk 提示为非阻断维护项 |
 | 管理端真实 E2E | **10 通过（30.2s，fresh stack）** | 768/819/820/1024/1440/Pixel 7、44px、无溢出、键盘/对话框、最终全链路核对成功后归档 |
-| 自治工程 Harness | **共 388：381 通过 / 7 typed skip** | Python 3.12 受控 runtime；本机缺 Docker CLI；CI 要求 0 skip；11/11 fake drills |
+| 自治工程 Harness | **共 395：388 通过 / 7 typed skip** | Python 3.12 受控 runtime；sandbox 内 Docker 权限受限；独立 Docker integration 7/7 零 skip；11/11 fake drills |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
@@ -227,22 +227,23 @@ Phase A+B；Phase C/D 仍是后续工作。
 
 ### 自治工程治理
 
-2026-10-10 已完成自治工程控制平面 Task 8 的本地实现与两轮审查修复，实现提交 `57f91048`；Task 8 仍为
+2026-10-10 已完成自治工程控制平面 Task 8 的本地实现与三轮审查修复，实现提交 `09e84c0a`；Task 8 仍为
 `in_progress`。可复用核心位于
 `tools/agent-harness/` 与 `scripts/agent-harness`；Survey 的 Gate/保护路径、项目记忆和计划属于项目策略模板；
 `.github/workflows/agent-governance.yml` 属于当前仓库的只读宿主集成。三层边界、安装、使用、恢复和升级命令见
 [`tools/agent-harness/README.md`](../tools/agent-harness/README.md)。
 
-本轮本地证据为 Harness 共 388 tests：381 通过，7 个 Linux wrapper 用例因本机缺 Docker CLI 以统一 typed reason skip；
+本轮本地证据为 Harness 共 395 tests：388 通过，7 个 Linux wrapper 用例在 sandbox 内因 Docker socket 权限以
+`linux-fixture:permission-denied` skip；sandbox 外以固定 digest 和受信 `/usr/local/bin/docker` 重跑 7/7 通过、零 skip。
 CI 会把任何 skip 判为失败。11/11 fake drills 通过，productization 37 tests 与 capability check 通过。唯一一次
 disposable real-Codex smoke
 安全暂停：没有文件改动、没有 Gate 运行，脱敏运行历史在 worktree 清理前完成验证；主 worktree 与生产/发布均未接触。
 当前本机 `java` 不是项目要求的 21，裸 `python3` 是 3.9，需继续使用版本化 Harness runtime；真实 smoke 的停止
 分类未被当次旧版 runner 摘要保留，不能据此宣称 Codex 登录/配额/CLI 已可用。
 
-Task 8 按用户要求不 push、不更新 Obsidian；security、DX/CI 和 whole-branch 两轮独立审查的去重 findings 已按
-RED→GREEN 修复。GitHub 零 skip run 与 Obsidian 同步仍未完成，不能宣称完整同步。首个候选真实产品 Milestone 是管理端
-Phase C-1 的 `820-1179px` 双栏与检查器壳层，须在外部同步和 Codex 环境就绪后另行批准精确文件范围。
+Task 8 按用户要求不 push、不更新 Obsidian；security、DX/CI 和 whole-branch 的 rereview-2 均为
+`CHANGES_REQUIRED`；round 3 已按 RED→GREEN 修复，但独立审查仍为 `pending`。GitHub 零 skip run 与 Obsidian 同步亦未完成，
+不能宣称完整同步。首个候选真实产品 Milestone 是管理端 Phase C-1 的 `820-1179px` 双栏与检查器壳层。
 
 ### 持续集成
 
