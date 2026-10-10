@@ -48,6 +48,10 @@ class GitRepoFixture(unittest.TestCase):
         return subprocess.run(["git", *args], cwd=repo or self.repo, text=True,
                               capture_output=True, check=check).stdout.rstrip("\n")
 
+    def git_bytes(self, *args):
+        return subprocess.run(["git", *args], cwd=self.repo, capture_output=True,
+                              check=True).stdout
+
     def head(self):
         return self.git("rev-parse", "HEAD")
 
@@ -67,6 +71,104 @@ class GitRepoFixture(unittest.TestCase):
 
 
 class GitGuardTests(GitRepoFixture):
+    def test_cr_crlf_and_lf_names_remain_distinct_in_status_and_diff(self):
+        names = ("carriage\rreturn.txt", "carriage\r\nreturn.txt", "carriage\nreturn.txt")
+        for name in names:
+            (self.repo / name).write_text("fake\n")
+        snapshot = capture_snapshot(self.repo)
+        with self.subTest(query="status"):
+            self.assertEqual(snapshot.dirty_paths, tuple(sorted(names)))
+            self.assertEqual(snapshot.untracked_paths, tuple(sorted(names)))
+        self.git("add", "--", *names)
+        self.git("commit", "-m", "filenames")
+        with self.subTest(query="diff"):
+            self.assertEqual(changed_paths(self.repo, self.state.head_commit, "HEAD"),
+                             tuple(sorted(names)))
+
+    def test_cr_and_crlf_renames_preserve_both_endpoints_and_scope(self):
+        source, target = "old\rname.txt", "new\r\nname.txt"
+        old = self.commit(source)
+        state = replace(self.state, base_commit=old, head_commit=old)
+        self.git("mv", source, target)
+        expected = (target, source)
+        with self.subTest(query="porcelain rename"):
+            self.assertEqual(capture_snapshot(self.repo).dirty_paths, expected)
+        self.git("commit", "-m", "rename\n\nAgent-Run-Id: " + state.run_id)
+        with self.subTest(query="committed rename"):
+            self.assertEqual(changed_paths(self.repo, old, "HEAD"), expected)
+        wrong_scope = replace(state, changed_paths=(Path("old\nname.txt"), Path("new\nname.txt")))
+        with self.subTest(query="wrong scope"):
+            self.assertFalse(self.decision(wrong_scope).allowed)
+        correct_scope = replace(state, changed_paths=(Path(source), Path(target)))
+        with self.subTest(query="correct scope"):
+            self.assertTrue(self.decision(correct_scope).allowed)
+
+    def test_cr_descendant_cannot_borrow_an_lf_scope(self):
+        self.commit("carriage\rreturn.txt")
+        wrong = replace(self.state, changed_paths=(Path("carriage\nreturn.txt"),))
+        with self.subTest(scope="LF"):
+            self.assertFalse(self.decision(wrong).allowed)
+        correct = replace(self.state, changed_paths=(Path("carriage\rreturn.txt"),))
+        with self.subTest(scope="CR"):
+            self.assertTrue(self.decision(correct).allowed)
+
+    def test_assume_unchanged_and_skip_worktree_are_refused_without_index_mutation(self):
+        state = replace(self.state, gates={
+            "unit": replace(self.state.gates["unit"], head_commit=self.state.head_commit),
+        })
+        index = Path(self.git("rev-parse", "--git-path", "index"))
+        if not index.is_absolute():
+            index = self.repo / index
+        for flag in ("--assume-unchanged", "--skip-worktree"):
+            self.git("update-index", flag, "--", "tracked.txt")
+            for dirty in (False, True):
+                (self.repo / "tracked.txt").write_text("unknown\n" if dirty else "initial\n")
+                before = index.read_bytes()
+                tags = self.git_bytes("ls-files", "-v", "-z")
+                self.assertIn(b"tracked.txt\x00", tags)
+                with self.subTest(flag=flag, dirty=dirty), self.assertRaisesRegex(
+                        GitGuardError, "index"):
+                    self.decision(state)
+                self.assertEqual(index.read_bytes(), before)
+                self.assertEqual(self.git_bytes("ls-files", "-v", "-z"), tags)
+                self.assertEqual(state.gates["unit"].head_commit, state.head_commit)
+            self.git("update-index", "--no-assume-unchanged", "--", "tracked.txt")
+            self.git("update-index", "--no-skip-worktree", "--", "tracked.txt")
+            (self.repo / "tracked.txt").write_text("initial\n")
+        self.assertTrue(self.decision().allowed)
+
+    def test_ignore_submodules_configuration_cannot_hide_committed_gitlink_scope(self):
+        first = self.state.head_commit
+        second = self.commit()
+        self.git("update-index", "--add", "--cacheinfo", "160000," + first + ",vendor")
+        (self.repo / "vendor").mkdir()
+        self.git("commit", "-m", "gitlink baseline")
+        base = self.head()
+        state = replace(self.state, base_commit=base, head_commit=base)
+        self.git("update-index", "--cacheinfo", "160000," + second + ",vendor")
+        self.git("commit", "-m", "gitlink child\n\nAgent-Run-Id: " + state.run_id)
+        self.assertEqual(capture_snapshot(self.repo).dirty_paths, ())
+        for configured in (False, True):
+            if configured:
+                self.git("config", "diff.ignoreSubmodules", "all")
+            with self.subTest(configured=configured, query="diff"):
+                self.assertEqual(changed_paths(self.repo, base, "HEAD"), ("vendor",))
+            with self.subTest(configured=configured, query="outside scope"):
+                self.assertFalse(self.decision(state).allowed)
+            with self.subTest(configured=configured, query="inside scope"):
+                self.assertTrue(self.decision(replace(state, changed_paths=(Path("vendor"),))).allowed)
+
+    def test_duplicate_empty_run_trailers_are_not_discarded(self):
+        identifier = "Agent-Run-Id: " + self.state.run_id
+        blocks = (identifier + "\nAgent-Run-Id:",
+                  "Agent-Run-Id:\n" + identifier,
+                  identifier + "\nAgent-Run-Id: \t")
+        for block in blocks:
+            self.git("commit", "--allow-empty", "-m", "child\n\n" + block)
+            with self.subTest(block=block):
+                self.assertFalse(self.decision().allowed)
+            self.git("reset", "--hard", self.state.head_commit)
+
     def test_clean_snapshot_and_exact_resume(self):
         snapshot = capture_snapshot(self.repo)
         self.assertEqual(snapshot.repo, self.repo)
@@ -309,6 +411,32 @@ class PathBoundaryTests(GitRepoFixture):
 
     def classify(self, *paths, policy=None):
         return classify_paths(self.repo, paths, policy or self.policy)
+
+    def test_directory_symlink_routes_include_the_remaining_file_suffix(self):
+        (self.repo / "safe/nested").mkdir(parents=True)
+        (self.repo / "safe/nested/secret.txt").write_text("fake\n")
+        (self.repo / "protected").mkdir()
+        (self.repo / "protected/dir-link").symlink_to("../safe", target_is_directory=True)
+        (self.repo / "alias").symlink_to("protected/dir-link", target_is_directory=True)
+        (self.repo / "outer").symlink_to("alias", target_is_directory=True)
+        access = ("protected/dir-link/nested/secret.txt", "alias/nested/secret.txt",
+                  "outer/nested/secret.txt", "./outer//nested/secret.txt",
+                  "outer/nested/../nested/secret.txt")
+        if (self.repo / "outer/NESTED/SECRET.txt").exists():
+            access += ("outer/NESTED/SECRET.txt",)
+        for action in ("deny", "approval_required", "generated"):
+            generator = ("generator",) if action == "generated" else None
+            policy = PolicyConfig(1, (
+                self.policy.rules[0],
+                PathRule("exact", ("protected/dir-link/nested/secret.txt",),
+                         ("modify",), action, generator),
+            ))
+            for path in access:
+                self.assertTrue((self.repo / path).samefile(self.repo / "safe/nested/secret.txt"))
+                with self.subTest(action=action, path=path):
+                    result = self.classify(path, policy=policy)[0]
+                    self.assertEqual(result.path, "safe/nested/secret.txt")
+                    self.assertEqual(result.action, action)
 
     def test_priority_is_independent_of_rule_order_and_operations_are_conservative(self):
         cases = (("protected/secret.txt", "deny"),

@@ -8,6 +8,7 @@ cannot be authenticated by the current state schema and always pauses resume.
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath, PureWindowsPath
+import posixpath
 import re
 import subprocess
 from typing import Iterable, Optional, Tuple
@@ -50,8 +51,7 @@ def _git(repo, *args):
         result = subprocess.run(
             ["git", "--no-optional-locks", "--no-replace-objects",
              "-c", "core.fsmonitor=false", *args],
-            cwd=repo, text=True, encoding="utf-8", errors="surrogateescape",
-            capture_output=True, check=False,
+            cwd=repo, capture_output=True, check=False,
         )
     except (OSError, ValueError) as error:
         raise GitGuardError("Cannot execute Git query") from error
@@ -63,7 +63,7 @@ def _query(repo, *args):
     if result.returncode != 0:
         # Git stderr may contain credentials or attacker-controlled paths.
         raise GitGuardError("Git query failed: " + args[0])
-    return result.stdout
+    return result.stdout.decode("utf-8", errors="surrogateescape")
 
 
 def _repo_root(repo):
@@ -89,6 +89,11 @@ def _commit(repo, revision):
 
 def capture_snapshot(repo: Path) -> GitSnapshot:
     root = _repo_root(repo)
+    entries = _query(root, "ls-files", "-v", "-z").split("\x00")
+    # Lowercase tags mean assume-unchanged; S (or s) means skip-worktree.
+    # Refuse unverifiable clean state without changing the user's index bits.
+    if any(entry and (entry[0].islower() or entry[0] == "S") for entry in entries):
+        raise GitGuardError("Unsafe index flags suppress worktree checks")
     output = _query(root, "status", "--porcelain=v2", "--branch", "-z",
                     "--untracked-files=all", "--ignore-submodules=none")
     records = iter(output.split("\x00"))
@@ -154,7 +159,7 @@ def assert_worktree_isolated(repo: Path) -> None:
 
 def _diff_paths(repo, base, head):
     output = _query(repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames",
-                    "--name-only", "-z", base, head, "--")
+                    "--ignore-submodules=none", "--name-only", "-z", base, head, "--")
     return tuple(path for path in output.split("\x00") if path)
 
 
@@ -185,7 +190,8 @@ def _canonical_path(root, value, links=()):
     lexical = []
     routes = set()
     # Keep dot components until after the directory check: file/. is invalid.
-    for part in (part for part in value.split("/") if part):
+    parts = tuple(part for part in value.split("/") if part)
+    for index, part in enumerate(parts):
         if current.exists() and not current.is_dir():
             raise ValueError("Non-directory path ancestor")
         if part == ".":
@@ -221,8 +227,12 @@ def _canonical_path(root, value, links=()):
                     raise ValueError("Symlink escape")
                 resolved, spelling, target_routes = _canonical_path(
                     root, target.relative_to(root).as_posix(), links + (candidate,))
-                routes.update((candidate.relative_to(root).as_posix(), resolved, spelling))
-                routes.update(target_routes)
+                prefixes = (candidate.relative_to(root).as_posix(), resolved, spelling, *target_routes)
+                routes.update(prefixes)
+                # A directory alias protects the full access path, not just
+                # the directory prefix, including in recursive link chains.
+                routes.update(posixpath.normpath(PurePosixPath(
+                    prefix, *parts[index + 1:]).as_posix()) for prefix in prefixes)
                 current = root / resolved
                 if not current.exists():
                     raise ValueError("Unresolved symlink target")
@@ -246,6 +256,9 @@ def classify_paths(repo: Path, paths: Iterable[str], policy: PolicyConfig) -> Tu
     for value in paths:
         try:
             canonical, lexical, routes = _canonical_path(root, value)
+            # Restore the suffix spelling on each complete alias route too.
+            # Normalizing only the final target misses case-insensitive aliases.
+            route_spellings = tuple(_canonical_path(root, route)[1] for route in routes)
         except (OSError, RuntimeError, ValueError):
             decisions.append(PathDecision(value, "deny", (), "path_boundary"))
             continue
@@ -253,7 +266,7 @@ def classify_paths(repo: Path, paths: Iterable[str], policy: PolicyConfig) -> Tu
         # that covers any operation. Never infer deletion from file existence.
         matches = [rule for rule in policy.rules if any(
             fnmatchcase(path, PurePosixPath(pattern).as_posix())
-            for path in (canonical, lexical, *routes) for pattern in rule.patterns
+            for path in (canonical, lexical, *routes, *route_spellings) for pattern in rule.patterns
         )]
         if not matches:
             decisions.append(PathDecision(canonical, "review_required", (), "no_matching_rule"))
@@ -289,9 +302,13 @@ def _owned_descendants(repo, old, new, state):
         if len(fields) != 2 or fields[1] != previous:
             return False
         commit = fields[0]
-        trailers = _query(repo, "show", "-s", "--format=%(trailers:key=Agent-Run-Id,valueonly,unfold)",
-                          commit, "--").splitlines()
-        if [value for value in trailers if value] != [state.run_id]:
+        trailers = _query(repo, "show", "-s",
+                          "--format=%(trailers:key=Agent-Run-Id,only,unfold,separator=%x00)",
+                          commit, "--").removesuffix("\n").split("\x00")
+        if len(trailers) != 1:
+            return False
+        key, separator, value = trailers[0].partition(":")
+        if (not separator or key.lower() != "agent-run-id" or value.strip() != state.run_id):
             return False
         touched = _diff_paths(repo, previous, commit)
         if not set(touched) <= permitted:
