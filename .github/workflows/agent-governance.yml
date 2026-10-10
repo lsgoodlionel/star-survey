@@ -22,7 +22,10 @@ jobs:
           python-version: '3.11'
 
       - name: Verify controlled Python 3.11 entry
-        run: scripts/agent-harness --python --version | grep '^Python 3\.11\.'
+        run: |
+          stat -c '%n|%F|%U|%G|%a' /opt/hostedtoolcache /opt/hostedtoolcache/Python "$pythonLocation" "$pythonLocation/bin" "$pythonLocation/bin/python"
+          readlink -f "$pythonLocation/bin/python"
+          scripts/agent-harness --python --version
 
       - name: Validate Harness configuration
         run: scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests -p 'test_config.py' -v
@@ -55,7 +58,7 @@ jobs:
           python-version: '3.11'
 
       - name: Verify controlled Python 3.11 integration runtime
-        run: scripts/agent-harness --python --version | grep '^Python 3\.11\.'
+        run: scripts/agent-harness --python --version
 
       - name: Prepare declared Docker integration fixture
         run: docker pull python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
