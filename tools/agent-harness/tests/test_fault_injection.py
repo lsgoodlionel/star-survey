@@ -931,8 +931,6 @@ class FaultInjectionTests(unittest.TestCase):
                 })
             subprocess.run(["git", "add", "reviews"], cwd=repo, check=True,
                            capture_output=True)
-            subprocess.run(["git", "commit", "-m", "independent reviews"], cwd=repo,
-                           check=True, capture_output=True)
             manifest_document["reviewEvidence"]["reports"] = reports
             manifest.write_text(json.dumps(manifest_document, sort_keys=True), encoding="utf-8")
             complete_marker = "<!-- harness-delivery-status: locally_reviewed_sync_pending -->"

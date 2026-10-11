@@ -33,7 +33,7 @@ HARNESS = REPO / "tools/agent-harness"
 sys.path.insert(0, str(HARNESS))
 
 from agent_harness.codex_adapter import CodexFailure, CodexResult, run_codex
-from agent_harness.config import load_history_boundary_policy
+from agent_harness.config import load_governance_transition, load_history_boundary_policy
 from agent_harness.diagnostics import record_failure, redact_text, render_diagnostics
 from agent_harness.doctor import run_doctor
 from agent_harness.generated_verifier import verify_generated_outputs
@@ -513,16 +513,18 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
         document = json.loads(path.read_text(encoding="utf-8"))
         required = {"version", "activePlan", "deliveryManifest", "deliverySyncPaths",
                     "expectedRepository", "repositoryAttestation", "ledger",
-                    "secretPolicy", "fixture", "documentation", "historyBoundary",
-                    "governanceTransition"}
-        if set(document) != required or document["version"] != 1:
+                    "secretPolicy", "fixture", "documentation", "historyBoundary"}
+        optional = {"governanceTransition"}
+        if (not required.issubset(document) or set(document) - required - optional
+                or document["version"] != 1):
             raise ValueError()
         load_history_boundary_policy(path)
         policy = document["secretPolicy"]
         fixture = document["fixture"]
         docs = document["documentation"]
         attestation = document["repositoryAttestation"]
-        transition = document["governanceTransition"]
+        transition = (load_governance_transition(path)
+                      if "governanceTransition" in document else None)
         sync_paths = document["deliverySyncPaths"]
         if (set(policy) != {"patterns", "allowlist"}
                 or not all(isinstance(value, str) and value for value in (*policy["patterns"], *policy["allowlist"]))
@@ -534,13 +536,6 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
                 or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
                                 document["expectedRepository"]) is None
                 or set(attestation) != {"provider", "signerWorkflow", "sourceRef"}
-                or set(transition) != {"version", "id", "sourcePlan", "targetPlan"}
-                or type(transition["version"]) is not int or transition["version"] != 1
-                or transition["id"] != "dashboard-head-binding-to-wave2"
-                or transition["sourcePlan"]
-                != "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md"
-                or transition["targetPlan"]
-                != "docs/superpowers/plans/2026-10-11-template-branding-wave2.md"
                 or attestation["provider"] != "github-artifact-attestation"
                 or re.fullmatch(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml",
                                 attestation["signerWorkflow"]) is None
@@ -548,9 +543,11 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
                                 attestation["sourceRef"]) is None
                 or ".." in attestation["sourceRef"].split("/")):
             raise ValueError()
+        transition_paths = ((transition.source_plan, transition.target_plan)
+                            if transition else ())
         for value in (document["activePlan"], document["deliveryManifest"], document["ledger"],
-                      fixture["path"], fixture["planPath"], transition["sourcePlan"],
-                      transition["targetPlan"], *docs["statusMarkerPaths"]):
+                      fixture["path"], fixture["planPath"], *transition_paths,
+                      *docs["statusMarkerPaths"]):
             _repo_path(root, value, must_exist=False)
         contract_docs = {
             document["activePlan"], document["deliveryManifest"], document["ledger"],
@@ -569,7 +566,11 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
             raise ValueError()
         plan_root = Path("docs/superpowers/plans")
         if (not Path(document["activePlan"]).is_relative_to(plan_root)
-                or not Path(fixture["planPath"]).is_relative_to(plan_root)):
+                or not Path(fixture["planPath"]).is_relative_to(plan_root)
+                or (transition is not None and (
+                    transition.source_plan == transition.target_plan
+                    or not Path(transition.source_plan).is_relative_to(plan_root)
+                    or not Path(transition.target_plan).is_relative_to(plan_root)))):
             raise ValueError()
     except (KeyError, TypeError, ValueError, OSError, UnicodeError, json.JSONDecodeError):
         raise DrillRefused("invalid Harness host configuration") from None

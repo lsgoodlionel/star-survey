@@ -168,6 +168,27 @@ class DoctorTrustTests(WorktreeCase):
         self.assertEqual(probes, [(str(self.wrapper), "--python", "--version")])
         self.assertTrue({"gate-python:unit", "gate-python:extra"} <= {c["id"] for c in report.ok})
 
+    def test_generic_host_without_governance_transition_passes_doctor(self):
+        host_path = self.repo / "docs/agent/HARNESS_HOST.json"
+        host = json.loads(host_path.read_text(encoding="utf-8"))
+        host.pop("governanceTransition")
+        self.write(host_path, json.dumps(host, sort_keys=True))
+        self.git("add", "docs/agent/HARNESS_HOST.json")
+        self.git("commit", "-m", "generic host without migration authorization")
+        report, _ = self.doctor_calls()
+        self.assertFalse(any(item["id"] == "host-config" for item in report.error),
+                         report.to_dict())
+
+    def test_generic_host_rejects_malformed_optional_governance_transition(self):
+        host_path = self.repo / "docs/agent/HARNESS_HOST.json"
+        host = json.loads(host_path.read_text(encoding="utf-8"))
+        host["governanceTransition"]["targetPlan"] = host["governanceTransition"]["sourcePlan"]
+        self.write(host_path, json.dumps(host, sort_keys=True))
+        self.git("add", "docs/agent/HARNESS_HOST.json")
+        self.git("commit", "-m", "malformed optional migration authorization")
+        report, _ = self.doctor_calls()
+        self.assertIn("host-config", {item["id"] for item in report.error}, report.to_dict())
+
     def test_matrix_cannot_select_unknown_or_malicious_python_entry(self):
         fake = self.repo / "fake-runtime"
         self.write(fake, "#!/bin/sh\nprintf changed > doctor-mutated.txt\nprintf 'Python 3.11.15\\n'\n")

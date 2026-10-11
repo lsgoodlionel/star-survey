@@ -49,7 +49,7 @@ HEAD、工作区和工具环境。审批路径、真实秘密、依赖新增、�
 - `docs/agent/PROTECTED_PATHS.yaml`：`deny/approval_required/review_required/generated` 路径策略。
 - `docs/agent/STATE_SCHEMA.json`：持久化 wire contract。
 - `docs/agent/PROJECT_MEMORY.md`：宿主项目稳定事实，不保存临时运行状态。
-- `docs/agent/HARNESS_HOST.json`：active plan、secret policy、fixture scope、受信 shallow history boundary、宿主文档与交付 manifest 路径；`governanceTransition` 是版本化、精确授权的治理迁移身份和 source/target plan。
+- `docs/agent/HARNESS_HOST.json`：active plan、secret policy、fixture scope、受信 shallow history boundary、宿主文档与交付 manifest 路径。通用 Harness host 可省略 `governanceTransition`；若提供，加载器会严格验证其版本、迁移 ID 和安全 source/target plan 字段。Survey 的 `transition_pending` / `plan_activated` 仍必须提供精确匹配的项目授权及当前 source/target plan。
 - `docs/agent/HARNESS_DELIVERY.json`：计划 checkbox、ledger、implementation commit、验证证据和外部同步状态的唯一清单。治理迁移仅可从授权的 source plan 以 `transition_pending` 交接，再以 `plan_activated` 激活授权的 target plan；activation commit 必须带唯一 trailer `Governance-Transition-Activation: dashboard-head-binding-to-wave2`，其一旦出现在当前 HEAD ancestry 中，source `transition_pending` 即拒绝重放。两个迁移状态都要求 implementation commit 为空、evidence 和外部同步 pending、review reports 为空、checkbox 映射与当前计划完全一致且所有状态标记匹配。正式交付状态必须将 implementation commit 与 evidence head 精确绑定到当前 checkout HEAD。
 - `docs/superpowers/plans/`：已经人工确认、包含唯一 Milestone 与明确文件范围的计划。
 

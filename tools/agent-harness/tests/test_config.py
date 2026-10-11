@@ -169,6 +169,26 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(document=invalid), self.assertRaises(ConfigError):
                 harness_config.load_governance_transition(self.write(invalid))
 
+    def test_governance_transition_is_optional_in_generic_host_config(self):
+        document = {
+            "version": 1,
+            "historyBoundary": {
+                "allowedShallowCommits": ["4c20c68033c8e37140f26af80a65f659b40f8a45"],
+                "trustedHeadRefs": ["refs/remotes/upstream/main"],
+            },
+        }
+        self.assertEqual(harness_config.load_history_boundary_policy(self.write(document))
+                         .allowed_shallow_commits,
+                         ("4c20c68033c8e37140f26af80a65f659b40f8a45",))
+        malformed = dict(document, governanceTransition={
+            "version": 1,
+            "id": "test-transition",
+            "sourcePlan": "docs/superpowers/plans/source.md",
+            "targetPlan": "docs/superpowers/plans/source.md",
+        })
+        with self.assertRaises(ConfigError):
+            harness_config.load_history_boundary_policy(self.write(malformed))
+
     def test_rejects_unknown_top_level_keys(self):
         for loader, value in ((load_gate_matrix, self.matrix),
                               (load_protected_paths, self.policy)):

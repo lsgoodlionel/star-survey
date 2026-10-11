@@ -130,6 +130,37 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertRegex(function, r"evidence\.get\(\"headCommit\"\)\s*!=\s*checked_out_head")
         self.assertNotRegex(function, r"os\.environ|getenv\(")
 
+    def test_generic_host_loader_accepts_optional_structural_transition(self):
+        runner_path = REPO / "tools/agent-harness/drills/run_drills.py"
+        spec = importlib.util.spec_from_file_location("generic_host_runner", runner_path)
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        host = json.loads(HOST_CONFIG.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "host.json"
+            host_without_transition = dict(host)
+            host_without_transition.pop("governanceTransition")
+            config.write_text(json.dumps(host_without_transition), encoding="utf-8")
+            runner.load_host_config(root, Path("host.json"))
+
+            custom_transition = dict(host_without_transition, governanceTransition={
+                "version": 1,
+                "id": "fixture-migration-v1",
+                "sourcePlan": "docs/superpowers/plans/fixture-source.md",
+                "targetPlan": "docs/superpowers/plans/fixture-target.md",
+            })
+            config.write_text(json.dumps(custom_transition), encoding="utf-8")
+            runner.load_host_config(root, Path("host.json"))
+
+            malformed = dict(custom_transition, governanceTransition={
+                **custom_transition["governanceTransition"],
+                "targetPlan": custom_transition["governanceTransition"]["sourcePlan"],
+            })
+            config.write_text(json.dumps(malformed), encoding="utf-8")
+            with self.assertRaises(runner.DrillRefused):
+                runner.load_host_config(root, Path("host.json"))
+
     def test_docs_gate_transition_and_checked_out_head_behavior(self):
         runner_path = REPO / "tools/agent-harness/drills/run_drills.py"
         spec = importlib.util.spec_from_file_location("governance_behavior_runner", runner_path)
@@ -299,6 +330,20 @@ class GovernanceWorkflowTests(unittest.TestCase):
                 ):
                     with self.subTest(activation_case=case):
                         publish(invalid)
+                        with self.assertRaises(runner.DrillRefused):
+                            runner.check_docs(repo, invalid_host)
+
+                missing_activation_auth = dict(activated_host)
+                missing_activation_auth.pop("governanceTransition")
+                malformed_activation_auth = dict(activated_host, governanceTransition={
+                    **host["governanceTransition"], "id": "arbitrary-activation",
+                })
+                for invalid_host, case in (
+                    (missing_activation_auth, "activation-missing-authorization"),
+                    (malformed_activation_auth, "activation-altered-authorization"),
+                ):
+                    with self.subTest(activation_authorization=case):
+                        publish(activated)
                         with self.assertRaises(runner.DrillRefused):
                             runner.check_docs(repo, invalid_host)
                 for relative in marker_paths:

@@ -50,12 +50,13 @@ def _host_references(root):
         required = {"version", "activePlan", "deliveryManifest", "deliverySyncPaths",
                     "expectedRepository", "repositoryAttestation", "ledger",
                     "secretPolicy", "fixture", "documentation", "historyBoundary"}
-        required.add("governanceTransition")
+        optional = {"governanceTransition"}
         fixture = document["fixture"]
         documentation = document["documentation"]
         policy = document["secretPolicy"]
         attestation = document["repositoryAttestation"]
-        if (set(document) != required or document["version"] != 1
+        if (not required.issubset(document) or set(document) - required - optional
+                or document["version"] != 1
                 or set(fixture) != {"path", "planPath", "baseline", "expected"}
                 or set(documentation) != {"statusMarkerPaths"}
                 or set(policy) != {"patterns", "allowlist"}
@@ -74,13 +75,12 @@ def _host_references(root):
                 or ".." in attestation["sourceRef"].split("/")):
             raise ValueError()
         load_history_boundary_policy(path)
-        transition = load_governance_transition(path)
-        if set(document["governanceTransition"]) != {
-                "version", "id", "sourcePlan", "targetPlan"}:
-            raise ValueError()
+        transition = (load_governance_transition(path)
+                      if "governanceTransition" in document else None)
         values = (document["activePlan"], document["deliveryManifest"], document["ledger"],
-                  fixture["path"], fixture["planPath"], transition.source_plan,
-                  transition.target_plan, *documentation["statusMarkerPaths"])
+                  fixture["path"], fixture["planPath"],
+                  *((transition.source_plan, transition.target_plan) if transition else ()),
+                  *documentation["statusMarkerPaths"])
         sync_paths = document["deliverySyncPaths"]
         contract_docs = set(values[:3]) | set(documentation["statusMarkerPaths"])
         for value in (*values, *sync_paths):
@@ -98,9 +98,10 @@ def _host_references(root):
         plan_root = PurePosixPath("docs/superpowers/plans")
         if (not PurePosixPath(document["activePlan"]).is_relative_to(plan_root)
                 or not PurePosixPath(fixture["planPath"]).is_relative_to(plan_root)
-                or transition.source_plan == transition.target_plan
-                or not PurePosixPath(transition.source_plan).is_relative_to(plan_root)
-                or not PurePosixPath(transition.target_plan).is_relative_to(plan_root)):
+                or (transition is not None and (
+                    transition.source_plan == transition.target_plan
+                    or not PurePosixPath(transition.source_plan).is_relative_to(plan_root)
+                    or not PurePosixPath(transition.target_plan).is_relative_to(plan_root)))):
             raise ValueError()
         return tuple(dict.fromkeys(values))
     except (KeyError, OSError, RuntimeError, TypeError, UnicodeError,
