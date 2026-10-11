@@ -361,7 +361,9 @@ class SurveyAssetPublishTest {
         assertThat(reference.get("assetVersion").intValue()).isEqualTo(version);
         assertThat(reference.get("mimeType").asString()).isEqualTo(mimeType);
         assertThat(reference.get("sizeBytes").longValue()).isEqualTo(sizeBytes);
-        assertThat(reference.get("fileName").asString()).isEqualTo(fileName);
+        assertThat(reference.get("fileName").asString())
+                .isEqualTo(fileName)
+                .doesNotContain(id.toString());
         assertThat(reference.get("url").asString())
                 .startsWith("https://survey.example/a/" + owner.tenantId().value() + "/" + id + "/" + version + "?")
                 .contains("exp=").contains("sig=");

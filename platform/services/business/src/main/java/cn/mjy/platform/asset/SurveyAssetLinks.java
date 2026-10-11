@@ -142,11 +142,14 @@ class SurveyAssetLinks implements SurveyAssetSource {
                     ? FAVICON_EXTENSIONS : LOGO_EXTENSIONS;
             reference.put("mimeType", contentType);
             reference.put("sizeBytes", sizeBytes);
-            reference.put("fileName", "mjy-brand-" + (brandSlot.equals("logoAsset") ? "logo" : "favicon")
-                    + extensions.get(contentType));
+            reference.put("fileName", brandFileName(brandSlot, extensions.get(contentType)));
         }
         assets.insertReference(assetId, versionNo, surveyId, draftVersion);
         audit.record(ctx, AssetAudit.REFERENCE, assetId, "v" + versionNo + " survey/" + surveyId);
+    }
+
+    private static String brandFileName(String brandSlot, String extension) {
+        return (brandSlot.equals("logoAsset") ? "mjy-brand-logo" : "mjy-brand-favicon") + extension;
     }
 
     private static UUID assetId(ObjectNode reference, List<String> problems) {
