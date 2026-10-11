@@ -1,7 +1,6 @@
 package cn.mjy.platform.asset;
 
 import cn.mjy.platform.asset.AssetRepository.AssetRow;
-import cn.mjy.platform.asset.AssetVersionView;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.tenant.TenantScope;
 import cn.mjy.platform.survey.InvalidDefinitionException;
@@ -26,11 +25,20 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 class SurveyAssetLinks implements SurveyAssetSource {
 
-    private static final Map<String, String> BRAND_EXTENSIONS = Map.of(
+    private static final long MAX_BRAND_BYTES = 5L * 1024 * 1024;
+
+    private static final Map<String, String> LOGO_EXTENSIONS = Map.of(
             "image/png", ".png",
             "image/jpeg", ".jpg",
             "image/gif", ".gif",
             "image/webp", ".webp");
+    private static final Map<String, String> FAVICON_EXTENSIONS = Map.ofEntries(
+            Map.entry("image/png", ".png"),
+            Map.entry("image/jpeg", ".jpg"),
+            Map.entry("image/gif", ".gif"),
+            Map.entry("image/webp", ".webp"),
+            Map.entry("image/x-icon", ".ico"),
+            Map.entry("image/vnd.microsoft.icon", ".ico"));
 
     private final TenantScope tenantScope;
     private final AssetRepository assets;
@@ -111,13 +119,18 @@ class SurveyAssetLinks implements SurveyAssetSource {
         }
         int versionNo = row.currentVersion();
         String contentType = null;
+        long sizeBytes = 0;
         if (brandAsset) {
             AssetVersionView version = assets.findVersion(assetId, versionNo).orElse(null);
-            if (version == null || row.kind() != AssetKind.IMAGE || !BRAND_EXTENSIONS.containsKey(version.contentType())) {
+            Map<String, String> extensions = brandSlot.equals("faviconAsset")
+                    ? FAVICON_EXTENSIONS : LOGO_EXTENSIONS;
+            if (version == null || row.kind() != AssetKind.IMAGE || !extensions.containsKey(version.contentType())
+                    || version.byteSize() > MAX_BRAND_BYTES) {
                 problems.add("branding." + brandSlot + " must reference an image asset");
                 return;
             }
             contentType = version.contentType();
+            sizeBytes = version.byteSize();
         }
         String url = tickets.mint(ctx.tenantId(), assetId, versionNo, clock.instant().plus(properties.ticketTtl()))
                 .url(properties.publicBaseUrl());
@@ -125,9 +138,12 @@ class SurveyAssetLinks implements SurveyAssetSource {
         reference.put(SurveyAssetSource.ASSET_URL, url);
         reference.put(SurveyAssetSource.ASSET_VERSION, versionNo);
         if (brandAsset) {
-            reference.put("contentType", contentType);
+            Map<String, String> extensions = brandSlot.equals("faviconAsset")
+                    ? FAVICON_EXTENSIONS : LOGO_EXTENSIONS;
+            reference.put("mimeType", contentType);
+            reference.put("sizeBytes", sizeBytes);
             reference.put("fileName", "mjy-brand-" + (brandSlot.equals("logoAsset") ? "logo" : "favicon")
-                    + "-" + assetId + BRAND_EXTENSIONS.get(contentType));
+                    + extensions.get(contentType));
         }
         assets.insertReference(assetId, versionNo, surveyId, draftVersion);
         audit.record(ctx, AssetAudit.REFERENCE, assetId, "v" + versionNo + " survey/" + surveyId);

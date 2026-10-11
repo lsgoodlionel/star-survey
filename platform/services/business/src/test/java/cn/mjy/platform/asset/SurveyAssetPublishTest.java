@@ -195,8 +195,9 @@ class SurveyAssetPublishTest {
         publisher.publish(owner, survey.id());
 
         JsonNode branding = lastPublishedDefinition(survey.id()).get("branding");
-        assertBrandAsset(branding.get("logoAsset"), logo.id(), "image/png");
-        assertBrandAsset(branding.get("faviconAsset"), favicon.id(), "image/png");
+        assertBrandAsset(branding.get("logoAsset"), logo.id(), 1, "image/png", "mjy-brand-logo.png", logo.byteSize());
+        assertBrandAsset(branding.get("faviconAsset"), favicon.id(), 1, "image/png", "mjy-brand-favicon.png",
+                favicon.byteSize());
     }
 
     @Test
@@ -205,12 +206,12 @@ class SurveyAssetPublishTest {
         SurveyView survey = surveyWithBrandAssets(logo.id(), null);
         publisher.publish(owner, survey.id());
 
-        assets.addVersion(owner, logo.id(), new AssetUpload("image/jpeg", "new.jpg", AssetFixture.jpeg()));
+        AssetView newer = assets.addVersion(owner, logo.id(), new AssetUpload("image/jpeg", "new.jpg", AssetFixture.jpeg()));
         surveys.saveDraft(owner, survey.id(), survey.draftVersion(), brandAssetDefinition(logo.id(), null));
         publisher.publish(owner, survey.id());
 
         JsonNode reference = lastPublishedDefinition(survey.id()).get("branding").get("logoAsset");
-        assertBrandAsset(reference, logo.id(), "image/jpeg");
+        assertBrandAsset(reference, logo.id(), 2, "image/jpeg", "mjy-brand-logo.jpg", newer.byteSize());
         assertThat(reference.get("assetVersion").intValue()).isEqualTo(2);
     }
 
@@ -354,12 +355,15 @@ class SurveyAssetPublishTest {
         return definition;
     }
 
-    private void assertBrandAsset(JsonNode reference, UUID id, String contentType) {
+    private void assertBrandAsset(JsonNode reference, UUID id, int version, String mimeType, String fileName,
+            long sizeBytes) {
         assertThat(reference.has("assetId")).as("author asset id must be removed").isFalse();
-        assertThat(reference.get("assetVersion").intValue()).isEqualTo(1);
-        assertThat(reference.get("contentType").asString()).isEqualTo(contentType);
+        assertThat(reference.get("assetVersion").intValue()).isEqualTo(version);
+        assertThat(reference.get("mimeType").asString()).isEqualTo(mimeType);
+        assertThat(reference.get("sizeBytes").longValue()).isEqualTo(sizeBytes);
+        assertThat(reference.get("fileName").asString()).isEqualTo(fileName);
         assertThat(reference.get("url").asString())
-                .startsWith("https://survey.example/a/" + owner.tenantId().value() + "/" + id + "/1?")
+                .startsWith("https://survey.example/a/" + owner.tenantId().value() + "/" + id + "/" + version + "?")
                 .contains("exp=").contains("sig=");
     }
 
