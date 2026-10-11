@@ -1,12 +1,15 @@
 """Governance workflow policy and delivery-drift contracts."""
 
 from pathlib import Path
+import importlib.util
 import json
 import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+
 
 
 REPO = Path(__file__).resolve().parents[3]
@@ -127,9 +130,153 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertRegex(function, r"evidence\.get\(\"headCommit\"\)\s*!=\s*checked_out_head")
         self.assertNotRegex(function, r"os\.environ|getenv\(")
 
+    def test_docs_gate_transition_and_checked_out_head_behavior(self):
+        runner_path = REPO / "tools/agent-harness/drills/run_drills.py"
+        spec = importlib.util.spec_from_file_location("governance_behavior_runner", runner_path)
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo,
+                           check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Harness Test"], cwd=repo,
+                           check=True, capture_output=True)
+            plan_rel = "docs/superpowers/plans/custom.md"
+            manifest_rel = "docs/DELIVERY.json"
+            ledger_rel = ".sdd/progress.md"
+            marker_paths = ["README.md", "AGENTS.md", "docs/AUTONOMY.md", "docs/MEMORY.md"]
+            plan = repo / plan_rel
+            plan.parent.mkdir(parents=True)
+            plan.write_text("# Plan\n\n### Task 1: Governance\n- [x] local\n- [ ] hosted\n",
+                            encoding="utf-8")
+            ledger = repo / ledger_rel
+            ledger.parent.mkdir()
+            ledger.write_text("Task 1: in_progress\n", encoding="utf-8")
+            for relative in marker_paths:
+                target = repo / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("<!-- harness-delivery-status: transition_pending -->\n",
+                                  encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "fixture"], cwd=repo, check=True,
+                           capture_output=True)
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                                  text=True, capture_output=True).stdout.strip()
+            host = {
+                "activePlan": plan_rel,
+                "deliveryManifest": manifest_rel,
+                "ledger": ledger_rel,
+                "deliverySyncPaths": [*marker_paths, manifest_rel, ledger_rel, plan_rel],
+                "documentation": {"statusMarkerPaths": marker_paths},
+            }
+            task_steps = {"1": {"completed": [1], "pending": [2]}}
+            manifest = {
+                "version": 1,
+                "planPath": plan_rel,
+                "implementationCommit": None,
+                "evidence": {"commands": [], "headCommit": None, "status": "pending"},
+                "taskSteps": task_steps,
+                "deliveryStatus": "transition_pending",
+                "externalSync": {"independentReview": "pending", "github": "pending",
+                                 "obsidian": "pending"},
+                "reviewEvidence": {"requiredReviewers": ["security", "dx_ci", "whole_branch"],
+                                   "reports": []},
+            }
+            manifest_path = repo / manifest_rel
+
+            def publish(document):
+                manifest_path.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+
+            with patch.object(runner, "_validate_review_evidence"), \
+                    patch.object(runner, "_validate_repository_attestation"):
+                publish(manifest)
+                runner.check_docs(repo, host)
+
+                for key, value in (
+                    ("implementationCommit", head),
+                    ("evidence", {"commands": ["unit"], "headCommit": head,
+                                  "status": "passed"}),
+                    ("externalSync", {"independentReview": "complete", "github": "pending",
+                                       "obsidian": "pending"}),
+                    ("reviewEvidence", {"requiredReviewers": ["security", "dx_ci", "whole_branch"],
+                                        "reports": [{"invalid": True}]}),
+                    ("taskSteps", {"1": {"completed": [1], "pending": []}}),
+                ):
+                    invalid = dict(manifest)
+                    invalid[key] = value
+                    with self.subTest(transition_field=key):
+                        publish(invalid)
+                        with self.assertRaises(runner.DrillRefused):
+                            runner.check_docs(repo, host)
+
+                for relative in marker_paths:
+                    target = repo / relative
+                    target.write_text("transition marker missing\n", encoding="utf-8")
+                    with self.subTest(marker=relative):
+                        publish(manifest)
+                        with self.assertRaises(runner.DrillRefused):
+                            runner.check_docs(repo, host)
+                    target.write_text("<!-- harness-delivery-status: transition_pending -->\n",
+                                      encoding="utf-8")
+
+                formal = dict(manifest)
+                formal["implementationCommit"] = head
+                formal["evidence"] = {"commands": ["unit"], "headCommit": head,
+                                      "status": "passed"}
+                formal["deliveryStatus"] = "local_validated_sync_pending"
+                marker = "<!-- harness-delivery-status: local_validated_sync_pending -->\n"
+                for relative in marker_paths:
+                    (repo / relative).write_text(marker, encoding="utf-8")
+                (repo / ledger_rel).write_text("Task 1: in_progress\n", encoding="utf-8")
+                publish(formal)
+                runner.check_docs(repo, host)
+
+                stale = dict(formal)
+                stale["implementationCommit"] = "0" * 40
+                stale["evidence"] = dict(formal["evidence"], headCommit="0" * 40)
+                publish(stale)
+                with self.assertRaises(runner.DrillRefused):
+                    runner.check_docs(repo, host)
+
+                merge = subprocess.run(
+                    ["git", "commit-tree", head + "^{tree}", "-p", head,
+                     "-m", "temporary merge head"], cwd=repo, check=True, text=True,
+                    capture_output=True,
+                ).stdout.strip()
+                subprocess.run(["git", "update-ref", "HEAD", merge], cwd=repo, check=True,
+                               capture_output=True)
+                source_evidence = dict(formal)
+                source_evidence["implementationCommit"] = head
+                source_evidence["evidence"] = dict(formal["evidence"], headCommit=head)
+                publish(source_evidence)
+                with self.assertRaises(runner.DrillRefused):
+                    runner.check_docs(repo, host)
+
+                with patch.dict("os.environ", {"GITHUB_SHA": head,
+                                                "GITHUB_EVENT_PULL_REQUEST_HEAD_SHA": head}):
+                    with self.assertRaises(runner.DrillRefused):
+                        runner.check_docs(repo, host)
+
     def test_delivery_status_matches_external_sync_and_review_evidence(self):
         manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(
             encoding="utf-8"))
+        if manifest["deliveryStatus"] == "transition_pending":
+            from unittest.mock import patch
+            runner_path = REPO / "tools/agent-harness/drills/run_drills.py"
+            spec = importlib.util.spec_from_file_location("delivery_state_runner", runner_path)
+            runner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(runner)
+            host = runner.load_host_config(REPO)
+            self.assertEqual(manifest["taskSteps"], runner._plan_checkboxes(
+                (REPO / host["activePlan"]).read_text(encoding="utf-8")))
+            for relative in host["documentation"]["statusMarkerPaths"]:
+                with self.subTest(status_marker=relative):
+                    self.assertIn("harness-delivery-status: transition_pending",
+                                  (REPO / relative).read_text(encoding="utf-8"))
+            with patch.object(runner, "_validate_review_evidence"):
+                runner.check_docs(REPO, host)
         external = manifest["externalSync"]
         repository = external.get("repository", external.get("github"))
         knowledge_base = external.get("knowledgeBase", external.get("obsidian"))
@@ -140,7 +287,8 @@ class GovernanceWorkflowTests(unittest.TestCase):
             ("complete", "complete", "complete"): "fully_synchronized",
         }
         key = (external["independentReview"], repository, knowledge_base)
-        self.assertEqual(manifest["deliveryStatus"], expected_status[key])
+        if manifest["deliveryStatus"] != "transition_pending":
+            self.assertEqual(manifest["deliveryStatus"], expected_status[key])
         evidence = manifest["reviewEvidence"]
         self.assertEqual(evidence["requiredReviewers"],
                          ["security", "dx_ci", "whole_branch"])

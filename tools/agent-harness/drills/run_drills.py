@@ -1179,8 +1179,17 @@ def check_docs(repo: Path, host: dict) -> None:
             expected_status = legacy_status.get(key)
         else:
             raise ValueError()
+        transition_pending = manifest["deliveryStatus"] == "transition_pending"
         bootstrap = manifest["deliveryStatus"] == "not_started"
-        if bootstrap:
+        if transition_pending:
+            if (commit is not None
+                    or evidence != {"commands": [], "headCommit": None, "status": "pending"}
+                    or key != ("pending", "pending", "pending")
+                    or manifest["taskSteps"] != _plan_checkboxes(
+                        plan_path.read_text(encoding="utf-8"))
+                    or manifest["reviewEvidence"].get("reports") != []):
+                raise ValueError()
+        elif bootstrap:
             if (commit is not None or evidence != {"commands": [], "headCommit": None, "status": "pending"}
                     or key != ("pending", "pending", "pending") or manifest["taskSteps"]):
                 raise ValueError()
@@ -1204,7 +1213,11 @@ def check_docs(repo: Path, host: dict) -> None:
             repository_status = external.get("repository", external.get("github"))
             if repository_status == "complete":
                 _validate_repository_attestation(root, host, commit)
-        _validate_review_evidence(root, manifest, not bootstrap and external.get("independentReview") == "complete")
+        _validate_review_evidence(
+            root, manifest,
+            not (bootstrap or transition_pending)
+            and external.get("independentReview") == "complete",
+        )
         ledger = ledger_path.read_text(encoding="utf-8")
         for task, steps in manifest["taskSteps"].items():
             if not task.isdigit():
