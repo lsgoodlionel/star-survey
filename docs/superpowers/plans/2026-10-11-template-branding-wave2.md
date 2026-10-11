@@ -29,6 +29,14 @@
 - 平台模板与租户模板的权限、详情和复制接口必须保持隔离，普通租户不能触发 `/v1/platform/**`。
 - 附加语言只允许引用真实题组、题目、子题和选项；缺失译文必须回退基础语言而不是渲染空白。
 
+## 2026-10-11 Validation Note
+
+- 已增加本地开发 Compose 的可选 `ai` profile；默认 dev、`test` 和生产 Compose 不依赖 Ollama。
+- 已增加 `platform/deploy/test/ai-health-check.sh` 及无端口 stub 测试：健康检查、远程端点跳过/失败降级和可选生成 smoke 均已验证。
+- 本机 Ollama API 可达但没有已安装模型，生成 smoke 当前跳过；远程 `openclaw.lsgood.cn` 根 HTTPS 可达，但公开 `/health` 不通过，未配置为产品硬依赖。
+- 已增加 `platform/tools/publish-gateway/tools/local_brand_asset_bundle_smoke.py` 和对应测试，覆盖临时 PNG/JPEG 的 base64、大小、SHA-256、固定文件及 LSS 相对路径一致性。
+- 上述图片 smoke 明确是 local-test-only；生产 `GatewayRequest` 尚未传输真实品牌图片字节，Task 2 Step 5 仍未完成，不能据此宣称品牌发布闭环完成。
+
 ---
 
 ### Task 1: Close Dashboard Governance And Activate The Wave 2 Plan
