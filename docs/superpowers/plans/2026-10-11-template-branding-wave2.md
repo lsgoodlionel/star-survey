@@ -127,6 +127,8 @@ Assert fixed filename derivation, allowed image MIME types, byte-size bounds, no
 
 Materialize brand bytes through the controlled asset channel into the generated survey theme files, derive filenames from trusted MIME type and immutable identity, and remove author-state fields from the engine-facing definition.
 
+**Required boundary clarification:** the existing publish request carries only `definition`, so this step is not complete when the LSS contains only `./files/<name>`. Add a versioned, bounded `brandAssets` bundle to the platform publish and preview boundary. The platform must resolve each author `assetId` under tenant/origin/status/version checks, attach trusted `contentType`, `sizeBytes`, `sha256` and bytes, and sign the bundle identity. The gateway must verify the bundle against the materialized branding references, reject missing/mismatched/oversized bytes, write the fixed files into the generated theme artifact, and keep URL/version/MIME/size/asset IDs out of engine-facing output. Reuse the same materialization path for preview; do not claim preview support from publish-only tests.
+
 - [ ] **Step 6: Run focused and complete backend gates**
 
 Run: `platform/deploy/platform-dev/mvn.sh test -Dtest='cn.mjy.platform.asset.SurveyAssetPublishTest,cn.mjy.platform.survey.template.SurveyTemplateLifecycleTest'`
