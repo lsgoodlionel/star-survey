@@ -49,6 +49,21 @@ class AcceptedBrandingTest(unittest.TestCase):
         )
         self.assertEqual([], codes(definition))
 
+    def test_materialized_asset_references_are_accepted(self):
+        definition = branded_definition(
+            {
+                "brandingVersion": 1,
+                "logoAsset": {
+                    "url": "https://survey.example/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+                    "assetVersion": 1,
+                    "contentType": "image/png",
+                    "sizeBytes": 128,
+                    "fileName": "mjy-brand-logo-11111111-1111-4111-8111-111111111111.png",
+                },
+            }
+        )
+        self.assertEqual([], codes(definition))
+
 
 class RejectedBrandingTest(unittest.TestCase):
     def test_branding_must_be_an_object(self):
@@ -120,6 +135,40 @@ class RejectedBrandingTest(unittest.TestCase):
         ):
             with self.subTest(reference=reference):
                 self.assertIn("E_BRAND_ASSET", codes(brand(logoAsset=reference)))
+
+    def test_materialized_asset_rejects_external_url_path_or_wrong_filename(self):
+        valid = {
+            "url": "https://survey.example/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "assetVersion": 1,
+            "contentType": "image/png",
+            "sizeBytes": 128,
+            "fileName": "mjy-brand-logo-11111111-1111-4111-8111-111111111111.png",
+        }
+        for key, value in (
+            ("url", "https://evil.example/logo.png"),
+            ("url", "https://survey.example/../evil"),
+            ("fileName", "../../logo.png"),
+            ("fileName", "mjy-brand-favicon-11111111-1111-4111-8111-111111111111.png"),
+            ("contentType", "image/svg+xml"),
+            ("sizeBytes", 5_242_881),
+            ("assetVersion", 0),
+        ):
+            with self.subTest(key=key, value=value):
+                reference = dict(valid)
+                reference[key] = value
+                self.assertIn("E_BRAND_ASSET", codes(branded_definition({"brandingVersion": 1, "logoAsset": reference})))
+
+    def test_materialized_asset_rejects_author_id_and_unknown_fields(self):
+        reference = {
+            "assetId": "11111111-1111-4111-8111-111111111111",
+            "url": "https://survey.example/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "assetVersion": 1,
+            "contentType": "image/png",
+            "sizeBytes": 128,
+            "fileName": "mjy-brand-logo-11111111-1111-4111-8111-111111111111.png",
+            "unexpected": True,
+        }
+        self.assertIn("E_BRAND_ASSET", codes(branded_definition({"brandingVersion": 1, "logoAsset": reference})))
 
     def test_author_asset_filename_is_fixed_and_slot_specific(self):
         logo_definition = branded_definition(

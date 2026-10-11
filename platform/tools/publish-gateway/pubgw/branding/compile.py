@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from ..model import SurveyDefinition
-from .schema import BrandText, Branding, parse_branding
+from .schema import BrandText, Branding, BrandingError, parse_branding
 
 #: 主题选项名的前缀，和引擎自带选项（brandlogo 等）区分开。
 PREFIX = "mjybrand"
@@ -52,7 +52,7 @@ def _options(branding: Branding) -> Dict[str, str]:
     if (branding.logo_asset and not branding.logo_asset.filename) or (
         branding.favicon_asset and not branding.favicon_asset.filename
     ):
-        raise ValueError("brand asset reference requires trusted platform MIME and size metadata")
+        raise BrandingError("brand asset reference requires trusted platform materialization")
     if logo_file:
         options[PREFIX + "logo"] = "on"
         options[PREFIX + "logofile"] = ASSET_DIRECTORY + logo_file
