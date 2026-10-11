@@ -143,7 +143,8 @@ class GovernanceWorkflowTests(unittest.TestCase):
                            check=True, capture_output=True)
             subprocess.run(["git", "config", "user.name", "Harness Test"], cwd=repo,
                            check=True, capture_output=True)
-            plan_rel = "docs/superpowers/plans/custom.md"
+            plan_rel = "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md"
+            target_plan_rel = "docs/superpowers/plans/2026-10-11-template-branding-wave2.md"
             manifest_rel = "docs/DELIVERY.json"
             ledger_rel = ".sdd/progress.md"
             marker_paths = ["README.md", "AGENTS.md", "docs/AUTONOMY.md", "docs/MEMORY.md"]
@@ -170,7 +171,16 @@ class GovernanceWorkflowTests(unittest.TestCase):
                 "ledger": ledger_rel,
                 "deliverySyncPaths": [*marker_paths, manifest_rel, ledger_rel, plan_rel],
                 "documentation": {"statusMarkerPaths": marker_paths},
+                "governanceTransition": {
+                    "version": 1,
+                    "id": "dashboard-head-binding-to-wave2",
+                    "sourcePlan": plan_rel,
+                    "targetPlan": target_plan_rel,
+                },
             }
+            target_plan = repo / host["governanceTransition"]["targetPlan"]
+            target_plan.parent.mkdir(parents=True, exist_ok=True)
+            target_plan.write_text("# Target\n", encoding="utf-8")
             task_steps = {"1": {"completed": [1], "pending": [2]}}
             manifest = {
                 "version": 1,
@@ -203,13 +213,44 @@ class GovernanceWorkflowTests(unittest.TestCase):
                     ("reviewEvidence", {"requiredReviewers": ["security", "dx_ci", "whole_branch"],
                                         "reports": [{"invalid": True}]}),
                     ("taskSteps", {"1": {"completed": [1], "pending": []}}),
+                    ("transitionId", "custom-transition"),
                 ):
                     invalid = dict(manifest)
-                    invalid[key] = value
+                    test_host = dict(host)
+                    if key == "transitionId":
+                        test_host["governanceTransition"] = dict(
+                            host["governanceTransition"], id=value)
+                    else:
+                        invalid[key] = value
                     with self.subTest(transition_field=key):
                         publish(invalid)
                         with self.assertRaises(runner.DrillRefused):
-                            runner.check_docs(repo, host)
+                            runner.check_docs(repo, test_host)
+
+                authorization_cases = (
+                    ("missing", None, host["activePlan"], plan_rel),
+                    ("custom-source", dict(host["governanceTransition"],
+                                            sourcePlan="docs/superpowers/plans/custom.md"),
+                     host["activePlan"], "docs/superpowers/plans/custom.md"),
+                    ("swapped", dict(host["governanceTransition"],
+                                     sourcePlan=host["governanceTransition"]["targetPlan"],
+                                     targetPlan=host["governanceTransition"]["sourcePlan"]),
+                     host["activePlan"], host["governanceTransition"]["targetPlan"]),
+                    ("target-active", host["governanceTransition"],
+                     host["governanceTransition"]["targetPlan"],
+                     host["governanceTransition"]["targetPlan"]),
+                )
+                for name, authorization, active_plan, manifest_plan in authorization_cases:
+                    altered = dict(manifest, planPath=manifest_plan)
+                    test_host = dict(host, activePlan=active_plan)
+                    if authorization is None:
+                        test_host.pop("governanceTransition")
+                    else:
+                        test_host["governanceTransition"] = authorization
+                    with self.subTest(governance_transition=name):
+                        publish(altered)
+                        with self.assertRaises(runner.DrillRefused):
+                            runner.check_docs(repo, test_host)
 
                 for relative in marker_paths:
                     target = repo / relative
@@ -221,6 +262,8 @@ class GovernanceWorkflowTests(unittest.TestCase):
                     target.write_text("<!-- harness-delivery-status: transition_pending -->\n",
                                       encoding="utf-8")
 
+                manifest_path = repo / manifest_rel
+                publish(manifest)
                 formal = dict(manifest)
                 formal["implementationCommit"] = head
                 formal["evidence"] = {"commands": ["unit"], "headCommit": head,

@@ -10,7 +10,8 @@ import stat
 import subprocess
 import sys
 
-from .config import load_gate_matrix, load_history_boundary_policy, load_protected_paths
+from .config import (load_gate_matrix, load_governance_transition,
+                     load_history_boundary_policy, load_protected_paths)
 from .git_guard import assert_worktree_isolated, capture_snapshot
 
 
@@ -49,6 +50,7 @@ def _host_references(root):
         required = {"version", "activePlan", "deliveryManifest", "deliverySyncPaths",
                     "expectedRepository", "repositoryAttestation", "ledger",
                     "secretPolicy", "fixture", "documentation", "historyBoundary"}
+        required.add("governanceTransition")
         fixture = document["fixture"]
         documentation = document["documentation"]
         policy = document["secretPolicy"]
@@ -72,8 +74,13 @@ def _host_references(root):
                 or ".." in attestation["sourceRef"].split("/")):
             raise ValueError()
         load_history_boundary_policy(path)
+        transition = load_governance_transition(path)
+        if set(document["governanceTransition"]) != {
+                "version", "id", "sourcePlan", "targetPlan"}:
+            raise ValueError()
         values = (document["activePlan"], document["deliveryManifest"], document["ledger"],
-                  fixture["path"], fixture["planPath"], *documentation["statusMarkerPaths"])
+                  fixture["path"], fixture["planPath"], transition.source_plan,
+                  transition.target_plan, *documentation["statusMarkerPaths"])
         sync_paths = document["deliverySyncPaths"]
         contract_docs = set(values[:3]) | set(documentation["statusMarkerPaths"])
         for value in (*values, *sync_paths):
@@ -90,7 +97,10 @@ def _host_references(root):
             raise ValueError()
         plan_root = PurePosixPath("docs/superpowers/plans")
         if (not PurePosixPath(document["activePlan"]).is_relative_to(plan_root)
-                or not PurePosixPath(fixture["planPath"]).is_relative_to(plan_root)):
+                or not PurePosixPath(fixture["planPath"]).is_relative_to(plan_root)
+                or transition.source_plan == transition.target_plan
+                or not PurePosixPath(transition.source_plan).is_relative_to(plan_root)
+                or not PurePosixPath(transition.target_plan).is_relative_to(plan_root)):
             raise ValueError()
         return tuple(dict.fromkeys(values))
     except (KeyError, OSError, RuntimeError, TypeError, UnicodeError,

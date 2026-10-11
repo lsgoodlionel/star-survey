@@ -131,6 +131,44 @@ class ConfigTests(unittest.TestCase):
                     },
                 }))
 
+    def test_governance_transition_is_versioned_and_exact(self):
+        document = {
+            "version": 1,
+            "historyBoundary": {
+                "allowedShallowCommits": ["4c20c68033c8e37140f26af80a65f659b40f8a45"],
+                "trustedHeadRefs": ["refs/remotes/limesurvey-fork/master"],
+            },
+            "governanceTransition": {
+                "version": 1,
+                "id": "dashboard-head-binding-to-wave2",
+                "sourcePlan": "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md",
+                "targetPlan": "docs/superpowers/plans/2026-10-11-template-branding-wave2.md",
+            },
+        }
+        transition = harness_config.load_governance_transition(self.write(document))
+        self.assertEqual(transition.id, "dashboard-head-binding-to-wave2")
+        self.assertEqual(transition.source_plan,
+                         "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md")
+        self.assertEqual(transition.target_plan,
+                         "docs/superpowers/plans/2026-10-11-template-branding-wave2.md")
+        invalid_documents = []
+        missing = dict(document)
+        missing.pop("governanceTransition")
+        invalid_documents.append(missing)
+        for key, value in (("id", "bad id"), ("version", 2),
+                           ("sourcePlan", "docs/superpowers/plans/../custom.md"),
+                           ("targetPlan", document["governanceTransition"]["sourcePlan"])):
+            changed = dict(document)
+            changed["governanceTransition"] = dict(document["governanceTransition"],
+                                                   **{key: value})
+            invalid_documents.append(changed)
+        extra = dict(document)
+        extra["governanceTransition"] = dict(document["governanceTransition"], allowAny=True)
+        invalid_documents.append(extra)
+        for invalid in invalid_documents:
+            with self.subTest(document=invalid), self.assertRaises(ConfigError):
+                harness_config.load_governance_transition(self.write(invalid))
+
     def test_rejects_unknown_top_level_keys(self):
         for loader, value in ((load_gate_matrix, self.matrix),
                               (load_protected_paths, self.policy)):

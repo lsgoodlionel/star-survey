@@ -26,6 +26,12 @@
     "path": "tests/fixtures/real_executor_smoke.txt",
     "planPath": "docs/superpowers/plans/real-executor-smoke.md"
   },
+  "governanceTransition": {
+    "version": 1,
+    "id": "dashboard-head-binding-to-wave2",
+    "sourcePlan": "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md",
+    "targetPlan": "docs/superpowers/plans/2026-10-11-template-branding-wave2.md"
+  },
   "historyBoundary": {
     "allowedShallowCommits": [
       "4c20c68033c8e37140f26af80a65f659b40f8a45"

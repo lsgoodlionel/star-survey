@@ -57,6 +57,36 @@ class HistoryBoundaryPolicy:
     trusted_head_refs: Tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class GovernanceTransition:
+    version: int
+    id: str
+    source_plan: str
+    target_plan: str
+
+
+def load_governance_transition(path: Path) -> GovernanceTransition:
+    document = _read(path)
+    _object(document, ("version", "governanceTransition"), (
+        "activePlan", "deliveryManifest", "deliverySyncPaths", "documentation",
+        "expectedRepository", "fixture", "ledger", "repositoryAttestation",
+        "secretPolicy", "historyBoundary",
+    ))
+    _version(document)
+    transition = _object(document["governanceTransition"],
+                         ("version", "id", "sourcePlan", "targetPlan"))
+    if (type(transition["version"]) is not int or transition["version"] != 1
+            or re.fullmatch(r"[a-z][a-z0-9-]{2,63}", transition["id"]) is None):
+        raise ConfigError("Unsupported governance transition")
+    source = _relative(transition["sourcePlan"])
+    target = _relative(transition["targetPlan"])
+    if (not PurePosixPath(source).is_relative_to("docs/superpowers/plans")
+            or not PurePosixPath(target).is_relative_to("docs/superpowers/plans")
+            or source == target):
+        raise ConfigError("Unsafe governance transition plans")
+    return GovernanceTransition(1, transition["id"], source, target)
+
+
 def _unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -185,11 +215,14 @@ def load_protected_paths(path: Path) -> PolicyConfig:
 def load_history_boundary_policy(path: Path) -> HistoryBoundaryPolicy:
     optional = (
         "activePlan", "deliveryManifest", "deliverySyncPaths", "documentation",
+        "governanceTransition",
         "expectedRepository", "fixture", "ledger", "repositoryAttestation",
         "secretPolicy",
     )
     document = _object(_read(path), ("version", "historyBoundary"), optional)
     _version(document)
+    if "governanceTransition" in document:
+        load_governance_transition(path)
     boundary = _object(document["historyBoundary"],
                        ("allowedShallowCommits", "trustedHeadRefs"))
     commits = _array(boundary["allowedShallowCommits"])

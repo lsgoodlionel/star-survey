@@ -503,7 +503,8 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
         document = json.loads(path.read_text(encoding="utf-8"))
         required = {"version", "activePlan", "deliveryManifest", "deliverySyncPaths",
                     "expectedRepository", "repositoryAttestation", "ledger",
-                    "secretPolicy", "fixture", "documentation", "historyBoundary"}
+                    "secretPolicy", "fixture", "documentation", "historyBoundary",
+                    "governanceTransition"}
         if set(document) != required or document["version"] != 1:
             raise ValueError()
         load_history_boundary_policy(path)
@@ -511,6 +512,7 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
         fixture = document["fixture"]
         docs = document["documentation"]
         attestation = document["repositoryAttestation"]
+        transition = document["governanceTransition"]
         sync_paths = document["deliverySyncPaths"]
         if (set(policy) != {"patterns", "allowlist"}
                 or not all(isinstance(value, str) and value for value in (*policy["patterns"], *policy["allowlist"]))
@@ -522,6 +524,13 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
                 or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
                                 document["expectedRepository"]) is None
                 or set(attestation) != {"provider", "signerWorkflow", "sourceRef"}
+                or set(transition) != {"version", "id", "sourcePlan", "targetPlan"}
+                or type(transition["version"]) is not int or transition["version"] != 1
+                or transition["id"] != "dashboard-head-binding-to-wave2"
+                or transition["sourcePlan"]
+                != "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md"
+                or transition["targetPlan"]
+                != "docs/superpowers/plans/2026-10-11-template-branding-wave2.md"
                 or attestation["provider"] != "github-artifact-attestation"
                 or re.fullmatch(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml",
                                 attestation["signerWorkflow"]) is None
@@ -530,7 +539,8 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
                 or ".." in attestation["sourceRef"].split("/")):
             raise ValueError()
         for value in (document["activePlan"], document["deliveryManifest"], document["ledger"],
-                      fixture["path"], fixture["planPath"], *docs["statusMarkerPaths"]):
+                      fixture["path"], fixture["planPath"], transition["sourcePlan"],
+                      transition["targetPlan"], *docs["statusMarkerPaths"]):
             _repo_path(root, value, must_exist=False)
         contract_docs = {
             document["activePlan"], document["deliveryManifest"], document["ledger"],
@@ -1182,7 +1192,18 @@ def check_docs(repo: Path, host: dict) -> None:
         transition_pending = manifest["deliveryStatus"] == "transition_pending"
         bootstrap = manifest["deliveryStatus"] == "not_started"
         if transition_pending:
-            if (commit is not None
+            authorization = host["governanceTransition"]
+            if (host["activePlan"] != authorization["sourcePlan"]
+                    or manifest["planPath"] != authorization["sourcePlan"]
+                    or authorization["targetPlan"] == host["activePlan"]
+                    or not _repo_path(root, authorization["targetPlan"]).is_file()
+                    or authorization != {
+                        "version": 1,
+                        "id": "dashboard-head-binding-to-wave2",
+                        "sourcePlan": "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md",
+                        "targetPlan": "docs/superpowers/plans/2026-10-11-template-branding-wave2.md",
+                    }
+                    or commit is not None
                     or evidence != {"commands": [], "headCommit": None, "status": "pending"}
                     or key != ("pending", "pending", "pending")
                     or manifest["taskSteps"] != _plan_checkboxes(

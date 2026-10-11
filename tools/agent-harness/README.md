@@ -49,7 +49,7 @@ HEAD、工作区和工具环境。审批路径、真实秘密、依赖新增、�
 - `docs/agent/PROTECTED_PATHS.yaml`：`deny/approval_required/review_required/generated` 路径策略。
 - `docs/agent/STATE_SCHEMA.json`：持久化 wire contract。
 - `docs/agent/PROJECT_MEMORY.md`：宿主项目稳定事实，不保存临时运行状态。
-- `docs/agent/HARNESS_HOST.json`：active plan、secret policy、fixture scope、受信 shallow history boundary、宿主文档与交付 manifest 路径。
+- `docs/agent/HARNESS_HOST.json`：active plan、secret policy、fixture scope、受信 shallow history boundary、宿主文档与交付 manifest 路径；`governanceTransition` 是版本化、精确授权的治理迁移身份和 source/target plan。
 - `docs/agent/HARNESS_DELIVERY.json`：计划 checkbox、ledger、implementation commit、验证证据和外部同步状态的唯一清单。治理迁移期间可使用 `transition_pending`：implementation commit 必须为空，验证与外部同步必须保持 pending，review reports 为空，并要求计划 checkbox 映射和所有状态标记一致。正式交付状态必须将 implementation commit 与 evidence head 精确绑定到当前 checkout HEAD。
 - `docs/superpowers/plans/`：已经人工确认、包含唯一 Milestone 与明确文件范围的计划。
 

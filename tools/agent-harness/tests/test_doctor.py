@@ -93,6 +93,8 @@ class DoctorTrustTests(WorktreeCase):
         host_files = {
             "docs/superpowers/plans/active.md": "# Active\n",
             "docs/superpowers/plans/smoke.md": "# Smoke\n",
+            "docs/superpowers/plans/source.md": "# Source\n",
+            "docs/superpowers/plans/target.md": "# Target\n",
             "docs/agent/DELIVERY.json": "{}\n",
             "docs/agent/progress.md": "Task 1: in_progress\n",
             "fixtures/smoke.txt": "baseline\n",
@@ -117,6 +119,12 @@ class DoctorTrustTests(WorktreeCase):
             "historyBoundary": {
                 "allowedShallowCommits": ["a" * 40],
                 "trustedHeadRefs": ["refs/remotes/upstream/main"],
+            },
+            "governanceTransition": {
+                "version": 1,
+                "id": "test-host-transition",
+                "sourcePlan": "docs/superpowers/plans/source.md",
+                "targetPlan": "docs/superpowers/plans/target.md",
             },
             "ledger": "docs/agent/progress.md",
             "secretPolicy": {"patterns": [".env"], "allowlist": [".env.example"]},
