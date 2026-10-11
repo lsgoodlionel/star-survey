@@ -1,4 +1,4 @@
-<!-- harness-delivery-status: transition_pending -->
+<!-- harness-delivery-status: plan_activated -->
 # Survey 永久项目记忆
 
 稳定事实核对日期：2026-10-10。来源是当前源码、现有 CI 与批准设计；本文不保存运行状态。
@@ -13,7 +13,7 @@
   [产品蓝图](../../platform/docs/productization/product-blueprint.md)、[发布路线图](../../platform/docs/productization/release-roadmap.md)。
 - 能力状态由 [capabilities.json](../../platform/docs/productization/capabilities.json) 与生成器决定，人工文档不能提升状态。
 - 设计与计划的唯一权威目录为 docs/superpowers/specs/、docs/superpowers/plans/；任务报告 .superpowers/sdd/ 是证据索引。
-- 当前产品实施计划：`docs/superpowers/plans/2026-10-10-business-dashboard-v1.md`
+- 当前产品实施计划：`docs/superpowers/plans/2026-10-11-template-branding-wave2.md`
   （[文档链接](../superpowers/plans/2026-10-10-business-dashboard-v1.md)）；
   安装、使用、恢复与分层边界见 [Harness 指南](../../tools/agent-harness/README.md)。
 - Obsidian 同步入口为对应 Survey 项目的“项目总览”或“进度与路线图”；定位实际笔记后再写，不能猜测路径。

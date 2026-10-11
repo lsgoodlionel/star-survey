@@ -1,18 +1,23 @@
 # 自治执行进度
 
-计划：`docs/superpowers/plans/2026-10-10-business-dashboard-v1.md`
+计划：`docs/superpowers/plans/2026-10-11-template-branding-wave2.md`
 
 分支：`feat/admin-product-alignment`
 
 ## 当前状态
 
-Task 1: complete - Dashboard v1 设计与实施计划已确认。
-Task 2: complete - 最近工作持久化模型与迁移已交付。
-Task 3: complete - 租户隔离、角色感知的 Dashboard 聚合接口已交付。
-Task 4: complete - Dashboard 前端 API、schema 与缓存隔离已交付。
-Task 5: complete - Dashboard 页面、状态与响应式布局已交付。
-Task 6: complete - 默认路由、全局导航与工作区回跳已交付。
-Task 7: in_progress - 实现与本地全量门禁已通过并推送；等待 GitHub 治理门和外部同步闭环。
+Task 1: in_progress - Wave 2 模板与品牌闭环已激活，Task 1 治理工作已完成。
+Task 2: in_progress - Wave 2 模板资产契约待实施。
+Task 3: in_progress - Wave 2 模板、资产与品牌 client 待实施。
+Task 4: in_progress - Wave 2 模板浏览与复制待实施。
+Task 5: in_progress - Wave 2 模板生命周期待实施。
+Task 6: in_progress - Wave 2 品牌与语言编辑器待实施。
+Task 7: in_progress - Wave 2 模板到品牌化作答旅程待实施。
+Task 8: in_progress - Wave 2 生产门禁与交付同步待实施。
+
+Dashboard Task 1: complete - 治理 HEAD 绑定、hosted agent-governance run 19 与控制平面迁移已完成。
+
+Wave 2: active - Dashboard Task 1 治理闭环已完成，Wave 2 计划已激活。
 
 ## 当前证据
 
@@ -26,7 +31,7 @@ Task 7: in_progress - 实现与本地全量门禁已通过并推送；等待 Git
 
 ## 遗留边界
 
-- GitHub Actions 仍需验证 fresh checkout 的可追踪账本契约。
+- GitHub Actions run 19 已验证 fresh checkout 的可追踪账本契约；Wave 2 业务实现与后续六层交付证据仍待完成。
 - 仓库证明要求来自 `main` 的 GitHub artifact attestation；功能分支不得伪造完成状态。
 - Wave 2、4、5、6、生产 Release、公开 TLS 与服务器部署仍按父计划后续推进。
 

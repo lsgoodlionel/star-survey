@@ -1,5 +1,5 @@
 {
-  "activePlan": "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md",
+  "activePlan": "docs/superpowers/plans/2026-10-11-template-branding-wave2.md",
   "deliveryManifest": "docs/agent/HARNESS_DELIVERY.json",
   "deliverySyncPaths": [
     "AGENTS.md",
@@ -10,7 +10,7 @@
     "docs/agent/reviews/2026-10-10-task-8-dx-ci.md",
     "docs/agent/reviews/2026-10-10-task-8-security.md",
     "docs/agent/reviews/2026-10-10-task-8-whole-branch.md",
-    "docs/superpowers/plans/2026-10-10-business-dashboard-v1.md"
+    "docs/superpowers/plans/2026-10-11-template-branding-wave2.md"
   ],
   "documentation": {
     "statusMarkerPaths": [
