@@ -424,7 +424,6 @@ class GovernanceWorkflowTests(unittest.TestCase):
         manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(
             encoding="utf-8"))
         if manifest["deliveryStatus"] in {"transition_pending", "plan_activated"}:
-            from unittest.mock import patch
             runner_path = REPO / "tools/agent-harness/drills/run_drills.py"
             spec = importlib.util.spec_from_file_location("delivery_state_runner", runner_path)
             runner = importlib.util.module_from_spec(spec)
@@ -436,11 +435,11 @@ class GovernanceWorkflowTests(unittest.TestCase):
                 with self.subTest(status_marker=relative):
                     self.assertIn("harness-delivery-status: " + manifest["deliveryStatus"],
                                   (REPO / relative).read_text(encoding="utf-8"))
-            with patch.object(runner, "_validate_review_evidence"):
-                runner.check_docs(REPO, host)
+            runner.check_docs(REPO, host)
         external = manifest["externalSync"]
         repository = external.get("repository", external.get("github"))
         knowledge_base = external.get("knowledgeBase", external.get("obsidian"))
+        migration_statuses = {"transition_pending", "plan_activated"}
         expected_status = {
             ("pending", "pending", "pending"): "local_validated_sync_pending",
             ("complete", "pending", "pending"): "locally_reviewed_sync_pending",
@@ -448,7 +447,9 @@ class GovernanceWorkflowTests(unittest.TestCase):
             ("complete", "complete", "complete"): "fully_synchronized",
         }
         key = (external["independentReview"], repository, knowledge_base)
-        if manifest["deliveryStatus"] != "transition_pending":
+        if manifest["deliveryStatus"] in migration_statuses:
+            self.assertEqual(key, ("pending", "pending", "pending"))
+        else:
             self.assertEqual(manifest["deliveryStatus"], expected_status[key])
         evidence = manifest["reviewEvidence"]
         self.assertEqual(evidence["requiredReviewers"],
