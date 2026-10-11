@@ -87,6 +87,28 @@ class BrandingCompileTest(unittest.TestCase):
         self.assertEqual("Acme", options["mjybrandlogoalt"])
         self.assertEqual("./files/favicon.ico", options["mjybrandfavicon"])
 
+    def test_author_assets_materialize_to_fixed_names_and_author_fields_are_absent(self):
+        definition = branded_definition(
+            {
+                "brandingVersion": 1,
+                "logoFile": "mjy-brand-logo.png",
+                "faviconFile": "mjy-brand-favicon.ico",
+            }
+        )
+        compiled = compile_branding(definition)
+        self.assertEqual("./files/mjy-brand-logo.png", compiled.options["mjybrandlogofile"])
+        self.assertEqual("./files/mjy-brand-favicon.ico", compiled.options["mjybrandfavicon"])
+        self.assertNotIn("logoAsset", compiled.engine_branding)
+        self.assertNotIn("faviconAsset", compiled.engine_branding)
+
+    def test_legacy_logo_file_remains_supported(self):
+        compiled = compile_branding(branded_definition({"brandingVersion": 1, "logoFile": "legacy.webp"}))
+        self.assertEqual("./files/legacy.webp", compiled.options["mjybrandlogofile"])
+
+    def test_no_external_url_can_enter_compiled_theme_options(self):
+        definition = branded_definition({"brandingVersion": 1, "logoFile": "mjy-brand-logo.png"})
+        self.assertFalse(any("https://" in value or "http://" in value for value in compile_branding(definition).options.values()))
+
     def test_text_maps_become_one_flat_option_per_language(self):
         options = self.themes[0]["options"]
         self.assertEqual("Acme feedback", options["mjybrandtitle"])

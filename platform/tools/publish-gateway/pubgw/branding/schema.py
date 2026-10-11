@@ -27,8 +27,10 @@ _TOP_KEYS = frozenset(
         "pageTitle",
         "footerText",
         "logoFile",
+        "logoAsset",
         "logoAlt",
         "faviconFile",
+        "faviconAsset",
     }
 )
 #: 单独报错的键：作者写了它说明误以为能塞 CSS，要给出明确的理由而不是"未知键"。
@@ -42,6 +44,7 @@ _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 #: svg 不在其中：它是可以带脚本的文档，不是图片。
 _FAVICON_SUFFIXES = _IMAGE_SUFFIXES + (".ico",)
 _MAX_TEXT_LENGTH = 500
+_ASSET_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,14 @@ class Branding:
     logo_file: str = ""
     logo_alt: str = ""
     favicon_file: str = ""
+    logo_asset: Optional["BrandAsset"] = None
+    favicon_asset: Optional["BrandAsset"] = None
+
+
+@dataclass(frozen=True)
+class BrandAsset:
+    asset_id: str
+    filename: str
 
 
 class BrandingError(ValueError):
@@ -104,6 +115,10 @@ class _Reader:
         self._check_version(raw)
         self._check_theme()
         self._check_unknown_keys(raw)
+        logo_asset = self._asset_reference(raw.get("logoAsset"), "logoAsset")
+        favicon_asset = self._asset_reference(raw.get("faviconAsset"), "faviconAsset")
+        self._check_exclusive(raw, "logoFile", "logoAsset")
+        self._check_exclusive(raw, "faviconFile", "faviconAsset")
         branding = Branding(
             primary_color=self._color(raw.get("primaryColor")),
             page_title=self._text(raw.get("pageTitle"), "pageTitle"),
@@ -111,6 +126,8 @@ class _Reader:
             logo_file=self._asset(raw.get("logoFile"), "logoFile", _IMAGE_SUFFIXES),
             logo_alt=self._plain(raw.get("logoAlt"), "logoAlt"),
             favicon_file=self._asset(raw.get("faviconFile"), "faviconFile", _FAVICON_SUFFIXES),
+            logo_asset=logo_asset,
+            favicon_asset=favicon_asset,
         )
         if self._issues:
             return None, self._issues
@@ -226,3 +243,25 @@ class _Reader:
             )
             return ""
         return value
+
+    def _asset_reference(self, value: Any, key: str) -> Optional[BrandAsset]:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping) or not isinstance(value.get("assetId"), str):
+            self._fail("E_BRAND_ASSET", key, "{} 必须是仅含有效 assetId 的对象".format(key))
+            return None
+        asset_id = value["assetId"]
+        if not _ASSET_ID.fullmatch(asset_id):
+            self._fail("E_BRAND_ASSET", key, "{} 的 assetId 格式无效".format(key))
+            return None
+        # MIME 与大小仅能由平台物化时注入；作者态对象只允许 assetId。
+        extra = set(value) - {"assetId"}
+        if extra:
+            self._fail("E_BRAND_ASSET", key, "{} 不接受作者提供的 URL、版本或其他字段".format(key))
+            return None
+        # Author definitions contain only assetId. Trusted materialization is a separate boundary.
+        return BrandAsset(asset_id=asset_id, filename="")
+
+    def _check_exclusive(self, raw: Mapping[str, Any], legacy: str, reference: str) -> None:
+        if raw.get(legacy) is not None and raw.get(reference) is not None:
+            self._fail("E_BRAND_ASSET", reference, "{} 与 {} 不能同时指定".format(legacy, reference))

@@ -17,8 +17,10 @@ WP-19 切片 19.3，覆盖需求 R19-06（主题／页眉页脚）、R19-07（�
   "pageTitle":  {"en": "Acme feedback", "zh-Hans": "Acme 意见征集"},
   "footerText": {"en": "© Acme Ltd.", "zh-Hans": "© 艾克姆有限公司"},
   "logoFile": "logo.png",
+  "logoAsset": {"assetId": "作者资产 UUID"},
   "logoAlt": "Acme",
-  "faviconFile": "favicon.ico"
+  "faviconFile": "favicon.ico",
+  "faviconAsset": {"assetId": "作者资产 UUID"}
 },
 "translations": {
   "zh-Hans": {
@@ -41,8 +43,14 @@ WP-19 切片 19.3，覆盖需求 R19-06（主题／页眉页脚）、R19-07（�
 | `pageTitle` | 字符串，或 语言→字符串 的对象 | `mjybrandtitle` ＋ `mjybrandtitle__<语言>` | 浏览器标题；缺省用问卷标题 |
 | `footerText` | 字符串，或 语言→字符串 的对象 | `mjybrandfooter` ＋ `mjybrandfooter__<语言>` | 页脚文本，**按纯文本转义**后渲染 |
 | `logoFile` | `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`，且带图片扩展名 | `mjybrandlogo`＝`on`、`mjybrandlogofile`＝`./files/<名>` | 主题 `files/` 目录下的文件名 |
+| `logoAsset` | 作者态 `{ "assetId": "<UUID>" }`；物化态另含可信 `mimeType`、`sizeBytes` | 固定名 `mjy-brand-logo.<ext>`，写入 `mjybrandlogo`、`mjybrandlogofile` | MIME 限定 PNG/JPEG/GIF/WebP，最大 5 MiB；作者不得提供 MIME、大小、文件名、URL 或版本 |
 | `logoAlt` | 字符串 | `mjybrandlogoalt` | 图片替代文本 |
 | `faviconFile` | 同 `logoFile`，另允许 `.ico` | `mjybrandfavicon`＝`./files/<名>` | |
+| `faviconAsset` | 作者态 `{ "assetId": "<UUID>" }`；物化态另含可信 `mimeType`、`sizeBytes` | 固定名 `mjy-brand-favicon.<ext>`，写入 `mjybrandfavicon` | PNG/JPEG/GIF/WebP/ICO，最大 5 MiB |
+
+`logoAsset` / `faviconAsset` 是管理端作者草稿的稳定引用。作者态对象只能含 `assetId`；平台在预览或发布时按当前租户、资产状态和签名取件结果解析实际版本，并向受控网关通道传递 `mimeType`、`sizeBytes` 与资产字节。网关只从该受控通道物化文件，不根据 `assetId` 构造网络地址。文件名由槽位和可信 MIME 派生，不能使用上传原名或作者路径。路径分隔符、`..`、URL、未知字段、超出 5 MiB 或不匹配槽位的 MIME 均拒绝。SVG 不允许。
+
+同一个槽位不得同时设置旧 `logoFile` / `faviconFile` 与新 `logoAsset` / `faviconAsset`。兼容已有引擎态定义中的合法 `logoFile` / `faviconFile`；新管理端写入作者态资产引用。发送给引擎的品牌块只保留编译后的文件名与品牌文本，移除 `logoAsset` / `faviconAsset` 及任何作者态/物化元数据；不得包含 URL 或 `assetVersion`。
 
 `branding` 出现时定义的 `theme` 必须是 `zh-business`（当前唯一带品牌位的主题），否则 422。
 
@@ -55,7 +63,7 @@ WP-19 切片 19.3，覆盖需求 R19-06（主题／页眉页脚）、R19-07（�
 |---|---|
 | `customCss` | 422 `E_BRAND_CUSTOM_CSS_UNSUPPORTED` |
 | `customJs`、`headHtml`、`footerHtml` 等任何 HTML／脚本片段 | 422 `E_BRAND_UNKNOWN_KEY` |
-| `logoFile` / `faviconFile` 里带 `/`、`\`、`..`、`:` 或任何 URL | 422 `E_BRAND_ASSET` |
+| `logoFile` / `faviconFile` 里带 `/`、`\`、`..`、`:` 或任何 URL；作者资产对象带路径、URL、版本或未知字段 | 422 `E_BRAND_ASSET` |
 
 **租户不能提供 CSS 或 JS，一行都不行**，这是本切片的安全默认值，理由：
 
