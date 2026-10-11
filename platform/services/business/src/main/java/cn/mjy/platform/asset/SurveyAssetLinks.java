@@ -140,7 +140,7 @@ class SurveyAssetLinks implements SurveyAssetSource {
         if (brandAsset) {
             Map<String, String> extensions = brandSlot.equals("faviconAsset")
                     ? FAVICON_EXTENSIONS : LOGO_EXTENSIONS;
-            reference.put("mimeType", contentType);
+            reference.put("contentType", contentType);
             reference.put("sizeBytes", sizeBytes);
             reference.put("fileName", brandFileName(brandSlot, extensions.get(contentType)));
         }

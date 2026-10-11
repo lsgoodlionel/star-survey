@@ -359,7 +359,7 @@ class SurveyAssetPublishTest {
             long sizeBytes) {
         assertThat(reference.has("assetId")).as("author asset id must be removed").isFalse();
         assertThat(reference.get("assetVersion").intValue()).isEqualTo(version);
-        assertThat(reference.get("mimeType").asString()).isEqualTo(mimeType);
+        assertThat(reference.get("contentType").asString()).isEqualTo(mimeType);
         assertThat(reference.get("sizeBytes").longValue()).isEqualTo(sizeBytes);
         assertThat(reference.get("fileName").asString())
                 .isEqualTo(fileName)
