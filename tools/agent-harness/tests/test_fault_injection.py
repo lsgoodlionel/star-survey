@@ -1070,10 +1070,6 @@ class FaultInjectionTests(unittest.TestCase):
                 "reviewEvidence": {"requiredReviewers": ["security", "dx_ci", "whole_branch"],
                                    "reports": []},
             }, sort_keys=True), encoding="utf-8")
-            subprocess.run(["git", "add", str(manifest.relative_to(repo))], cwd=repo, check=True,
-                           capture_output=True)
-            subprocess.run(["git", "commit", "-m", "portable manifest"], cwd=repo, check=True,
-                           capture_output=True)
             checked = subprocess.run([
                 str(repo / "scripts/agent-harness"), "--python",
                 "tools/agent-harness/drills/run_drills.py", "--repo", str(repo),
