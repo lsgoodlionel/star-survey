@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .branding.compile import CompiledBranding, compile_branding
+from .branding.schema import BrandingError
 from .branding.translations import LanguageTexts, parse_translations, texts_for
 from .fieldmap import definition_signature, fingerprint
 from .logic.lower import lower_definition
@@ -158,7 +159,12 @@ class LssCompiler:
         definition = expand_scoring(definition)
         signature = definition_signature(definition)
         policy = compile_policy(definition)
-        branding = compile_branding(definition)
+        try:
+            branding = compile_branding(definition)
+        except BrandingError as error:
+            raise CompileError(
+                "branding compilation failed: E_BRAND_ASSET_NOT_MATERIALIZED {}".format(error)
+            ) from error
         exam = compile_exam(definition)
         return CompiledSurvey(
             # v2 的逻辑先降到引擎层（relevance／属性／转义文本）；v1 原样通过。
