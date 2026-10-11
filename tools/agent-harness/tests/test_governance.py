@@ -150,11 +150,17 @@ class GovernanceWorkflowTests(unittest.TestCase):
             marker_paths = ["README.md", "AGENTS.md", "docs/AUTONOMY.md", "docs/MEMORY.md"]
             plan = repo / plan_rel
             plan.parent.mkdir(parents=True)
-            plan.write_text("# Plan\n\n### Task 1: Governance\n- [x] local\n- [ ] hosted\n",
-                            encoding="utf-8")
+            plan.write_text((REPO / plan_rel).read_text(encoding="utf-8"), encoding="utf-8")
+            target_plan = repo / target_plan_rel
+            target_plan.parent.mkdir(parents=True, exist_ok=True)
+            target_plan.write_text((REPO / target_plan_rel).read_text(encoding="utf-8"),
+                                   encoding="utf-8")
             ledger = repo / ledger_rel
             ledger.parent.mkdir()
-            ledger.write_text("Task 1: in_progress\n", encoding="utf-8")
+            source_steps = runner._plan_checkboxes(plan.read_text(encoding="utf-8"))
+            ledger.write_text("".join(
+                f"Task {task}: {'in_progress' if steps['pending'] else 'complete'}\n"
+                for task, steps in source_steps.items() if task.isdigit()), encoding="utf-8")
             for relative in marker_paths:
                 target = repo / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -178,10 +184,7 @@ class GovernanceWorkflowTests(unittest.TestCase):
                     "targetPlan": target_plan_rel,
                 },
             }
-            target_plan = repo / host["governanceTransition"]["targetPlan"]
-            target_plan.parent.mkdir(parents=True, exist_ok=True)
-            target_plan.write_text("# Target\n", encoding="utf-8")
-            task_steps = {"1": {"completed": [1], "pending": [2]}}
+            task_steps = source_steps
             manifest = {
                 "version": 1,
                 "planPath": plan_rel,
@@ -262,6 +265,48 @@ class GovernanceWorkflowTests(unittest.TestCase):
                     target.write_text("<!-- harness-delivery-status: transition_pending -->\n",
                                       encoding="utf-8")
 
+                activated = dict(manifest)
+                activated["deliveryStatus"] = "plan_activated"
+                activated["planPath"] = target_plan_rel
+                activated["taskSteps"] = runner._plan_checkboxes(
+                    target_plan.read_text(encoding="utf-8"))
+                (repo / ledger_rel).write_text("".join(
+                    f"Task {task}: {'in_progress' if steps['pending'] else 'complete'}\n"
+                    for task, steps in activated["taskSteps"].items() if task.isdigit()),
+                    encoding="utf-8")
+                activated_host = dict(host, activePlan=target_plan_rel)
+                activated_marker = "<!-- harness-delivery-status: plan_activated -->\n"
+                for relative in marker_paths:
+                    (repo / relative).write_text(activated_marker, encoding="utf-8")
+                publish(activated)
+                runner.check_docs(repo, activated_host)
+
+                marker_path = repo / marker_paths[0]
+                marker_path.write_text(
+                    "<!-- harness-delivery-status: transition_pending -->\n",
+                    encoding="utf-8")
+                with self.assertRaises(runner.DrillRefused):
+                    runner.check_docs(repo, activated_host)
+                marker_path.write_text(activated_marker, encoding="utf-8")
+
+                for invalid, invalid_host, case in (
+                    (dict(activated, deliveryStatus="transition_pending"), activated_host,
+                     "transition-after-activation"),
+                    (dict(activated, taskSteps=task_steps), activated_host,
+                     "target-task-steps-mismatch"),
+                    (activated, dict(activated_host, activePlan=plan_rel),
+                     "target-marker-with-source-active"),
+                ):
+                    with self.subTest(activation_case=case):
+                        publish(invalid)
+                        with self.assertRaises(runner.DrillRefused):
+                            runner.check_docs(repo, invalid_host)
+                for relative in marker_paths:
+                    (repo / relative).write_text(
+                        "<!-- harness-delivery-status: transition_pending -->\n",
+                        encoding="utf-8")
+                publish(manifest)
+
                 manifest_path = repo / manifest_rel
                 publish(manifest)
                 formal = dict(manifest)
@@ -272,7 +317,9 @@ class GovernanceWorkflowTests(unittest.TestCase):
                 marker = "<!-- harness-delivery-status: local_validated_sync_pending -->\n"
                 for relative in marker_paths:
                     (repo / relative).write_text(marker, encoding="utf-8")
-                (repo / ledger_rel).write_text("Task 1: in_progress\n", encoding="utf-8")
+                (repo / ledger_rel).write_text("".join(
+                    f"Task {task}: {'in_progress' if steps['pending'] else 'complete'}\n"
+                    for task, steps in task_steps.items() if task.isdigit()), encoding="utf-8")
                 publish(formal)
                 runner.check_docs(repo, host)
 
@@ -305,7 +352,7 @@ class GovernanceWorkflowTests(unittest.TestCase):
     def test_delivery_status_matches_external_sync_and_review_evidence(self):
         manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(
             encoding="utf-8"))
-        if manifest["deliveryStatus"] == "transition_pending":
+        if manifest["deliveryStatus"] in {"transition_pending", "plan_activated"}:
             from unittest.mock import patch
             runner_path = REPO / "tools/agent-harness/drills/run_drills.py"
             spec = importlib.util.spec_from_file_location("delivery_state_runner", runner_path)
@@ -316,7 +363,7 @@ class GovernanceWorkflowTests(unittest.TestCase):
                 (REPO / host["activePlan"]).read_text(encoding="utf-8")))
             for relative in host["documentation"]["statusMarkerPaths"]:
                 with self.subTest(status_marker=relative):
-                    self.assertIn("harness-delivery-status: transition_pending",
+                    self.assertIn("harness-delivery-status: " + manifest["deliveryStatus"],
                                   (REPO / relative).read_text(encoding="utf-8"))
             with patch.object(runner, "_validate_review_evidence"):
                 runner.check_docs(REPO, host)

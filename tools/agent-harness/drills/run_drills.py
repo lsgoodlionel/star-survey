@@ -1190,12 +1190,13 @@ def check_docs(repo: Path, host: dict) -> None:
         else:
             raise ValueError()
         transition_pending = manifest["deliveryStatus"] == "transition_pending"
+        plan_activated = manifest["deliveryStatus"] == "plan_activated"
         bootstrap = manifest["deliveryStatus"] == "not_started"
-        if transition_pending:
+        if transition_pending or plan_activated:
             authorization = host["governanceTransition"]
-            if (host["activePlan"] != authorization["sourcePlan"]
-                    or manifest["planPath"] != authorization["sourcePlan"]
-                    or authorization["targetPlan"] == host["activePlan"]
+            active_plan = authorization["targetPlan"] if plan_activated else authorization["sourcePlan"]
+            if (host["activePlan"] != active_plan
+                    or manifest["planPath"] != active_plan
                     or not _repo_path(root, authorization["targetPlan"]).is_file()
                     or authorization != {
                         "version": 1,
@@ -1236,7 +1237,7 @@ def check_docs(repo: Path, host: dict) -> None:
                 _validate_repository_attestation(root, host, commit)
         _validate_review_evidence(
             root, manifest,
-            not (bootstrap or transition_pending)
+            not (bootstrap or transition_pending or plan_activated)
             and external.get("independentReview") == "complete",
         )
         ledger = ledger_path.read_text(encoding="utf-8")
