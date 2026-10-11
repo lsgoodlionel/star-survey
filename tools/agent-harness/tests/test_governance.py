@@ -38,7 +38,16 @@ class GovernanceWorkflowTests(unittest.TestCase):
         blocks = self.text.split("- uses: " + checkout)[1:]
         self.assertEqual(len(blocks), 2)
         for block in blocks:
-            self.assertRegex(block, r"(?m)^\s+with:\s*\n\s+fetch-depth:\s*0\s*$")
+            self.assertIn("fetch-depth: 0", block)
+
+    def test_pull_request_checks_out_head_sha(self):
+        checkout = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
+        blocks = self.text.split("- uses: " + checkout)[1:]
+        self.assertEqual(len(blocks), 2)
+        for block in blocks:
+            self.assertIn("${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}", block)
+            self.assertIn("github.sha", block)
+            self.assertIn("fetch-depth: 0", block)
 
     def test_workflow_runs_all_governance_checks(self):
         required = (
@@ -107,6 +116,16 @@ class GovernanceWorkflowTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(tracked.returncode, 0, tracked.stdout + tracked.stderr)
+
+    def test_docs_gate_compares_delivery_to_checked_out_head(self):
+        source = (REPO / "tools/agent-harness/drills/run_drills.py").read_text(
+            encoding="utf-8")
+        function = source.split("def check_docs(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('"implementationCommit"', function)
+        self.assertIn('"headCommit"', function)
+        self.assertRegex(function, r"commit\s*!=\s*checked_out_head")
+        self.assertRegex(function, r"evidence\.get\(\"headCommit\"\)\s*!=\s*checked_out_head")
+        self.assertNotRegex(function, r"os\.environ|getenv\(")
 
     def test_delivery_status_matches_external_sync_and_review_evidence(self):
         manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(

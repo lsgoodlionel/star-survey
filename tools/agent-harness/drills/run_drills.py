@@ -1154,6 +1154,7 @@ def check_docs(repo: Path, host: dict) -> None:
             raise ValueError()
         commit = manifest["implementationCommit"]
         evidence = manifest["evidence"]
+        checked_out_head = _git(root, "rev-parse", "HEAD")
         if _plan_checkboxes(plan_path.read_text(encoding="utf-8")) != manifest["taskSteps"]:
             raise ValueError()
         external = manifest["externalSync"]
@@ -1185,7 +1186,9 @@ def check_docs(repo: Path, host: dict) -> None:
                 raise ValueError()
         else:
             if (re.fullmatch(r"[0-9a-f]{40}", commit) is None
-                    or evidence.get("headCommit") != commit or evidence.get("status") != "passed"
+                    or commit != checked_out_head
+                    or evidence.get("headCommit") != checked_out_head
+                    or evidence.get("status") != "passed"
                     or not evidence.get("commands") or expected_status != manifest["deliveryStatus"]):
                 raise ValueError()
             commit_check = _run(["git", "cat-file", "-e", commit + "^{commit}"], root, check=False)
