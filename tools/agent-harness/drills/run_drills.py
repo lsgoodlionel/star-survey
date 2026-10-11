@@ -88,6 +88,16 @@ def _git(repo, *args):
     return _run(["git", *args], repo).stdout.strip()
 
 
+def _has_governance_transition_activation(repo: Path, transition_id: str) -> bool:
+    messages = _run(["git", "log", "HEAD", "--format=%B%x00"], repo).stdout
+    expected = f"Governance-Transition-Activation: {transition_id}"
+    for message in messages.split("\x00"):
+        paragraphs = message.rstrip().split("\n\n")
+        if paragraphs and expected in paragraphs[-1].splitlines():
+            return True
+    return False
+
+
 def _state(root: Path, status=RunStatus.PLANNED, *, gates=None, required=()):
     now = datetime.now(timezone.utc)
     return RunState(
@@ -1210,6 +1220,9 @@ def check_docs(repo: Path, host: dict) -> None:
                     or manifest["taskSteps"] != _plan_checkboxes(
                         plan_path.read_text(encoding="utf-8"))
                     or manifest["reviewEvidence"].get("reports") != []):
+                raise ValueError()
+            if (transition_pending
+                    and _has_governance_transition_activation(root, authorization["id"])):
                 raise ValueError()
         elif bootstrap:
             if (commit is not None or evidence != {"commands": [], "headCommit": None, "status": "pending"}

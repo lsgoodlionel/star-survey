@@ -349,6 +349,32 @@ class GovernanceWorkflowTests(unittest.TestCase):
                     with self.assertRaises(runner.DrillRefused):
                         runner.check_docs(repo, host)
 
+                publish(activated)
+                for relative in marker_paths:
+                    (repo / relative).write_text(activated_marker, encoding="utf-8")
+                (repo / ledger_rel).write_text("".join(
+                    f"Task {task}: {'in_progress' if steps['pending'] else 'complete'}\n"
+                    for task, steps in activated["taskSteps"].items() if task.isdigit()),
+                    encoding="utf-8")
+                subprocess.run(["git", "add", manifest_rel, ledger_rel, *marker_paths],
+                               cwd=repo, check=True, capture_output=True)
+                subprocess.run(
+                    ["git", "commit", "-m", "Activate Wave 2 plan", "-m",
+                     "Governance-Transition-Activation: dashboard-head-binding-to-wave2"],
+                    cwd=repo, check=True, capture_output=True)
+
+                publish(manifest)
+                for relative in marker_paths:
+                    (repo / relative).write_text(
+                        "<!-- harness-delivery-status: transition_pending -->\n",
+                        encoding="utf-8")
+                (repo / ledger_rel).write_text("".join(
+                    f"Task {task}: {'in_progress' if steps['pending'] else 'complete'}\n"
+                    for task, steps in source_steps.items() if task.isdigit()),
+                    encoding="utf-8")
+                with self.assertRaises(runner.DrillRefused):
+                    runner.check_docs(repo, host)
+
     def test_delivery_status_matches_external_sync_and_review_evidence(self):
         manifest = json.loads((REPO / "docs/agent/HARNESS_DELIVERY.json").read_text(
             encoding="utf-8"))
