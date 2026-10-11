@@ -58,7 +58,7 @@ class AcceptedBrandingTest(unittest.TestCase):
                     "assetVersion": 1,
                     "contentType": "image/png",
                     "sizeBytes": 128,
-                    "fileName": "mjy-brand-logo-11111111-1111-4111-8111-111111111111.png",
+                    "fileName": "mjy-brand-logo.png",
                 },
             }
         )
@@ -142,13 +142,13 @@ class RejectedBrandingTest(unittest.TestCase):
             "assetVersion": 1,
             "contentType": "image/png",
             "sizeBytes": 128,
-            "fileName": "mjy-brand-logo-11111111-1111-4111-8111-111111111111.png",
+            "fileName": "mjy-brand-logo.png",
         }
         for key, value in (
             ("url", "https://evil.example/logo.png"),
             ("url", "https://survey.example/../evil"),
             ("fileName", "../../logo.png"),
-            ("fileName", "mjy-brand-favicon-11111111-1111-4111-8111-111111111111.png"),
+            ("fileName", "mjy-brand-logo-11111111-1111-4111-8111-111111111111.png"),
             ("contentType", "image/svg+xml"),
             ("sizeBytes", 5_242_881),
             ("assetVersion", 0),
@@ -165,7 +165,7 @@ class RejectedBrandingTest(unittest.TestCase):
             "assetVersion": 1,
             "contentType": "image/png",
             "sizeBytes": 128,
-            "fileName": "mjy-brand-logo-11111111-1111-4111-8111-111111111111.png",
+            "fileName": "mjy-brand-logo.png",
             "unexpected": True,
         }
         self.assertIn("E_BRAND_ASSET", codes(branded_definition({"brandingVersion": 1, "logoAsset": reference})))

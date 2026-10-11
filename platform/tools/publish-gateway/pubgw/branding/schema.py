@@ -313,9 +313,9 @@ class _Reader:
             self._fail("E_BRAND_ASSET", key, "sizeBytes 必须在 1 至 {} 字节之间".format(_MAX_ASSET_BYTES))
             return None
         slot = "logo" if key == "logoAsset" else "favicon"
-        filename = "mjy-brand-{}-{}{}".format(slot, asset_id, extension)
+        filename = "mjy-brand-{}{}".format(slot, extension)
         if value["fileName"] != filename:
-            self._fail("E_BRAND_ASSET", key, "fileName 必须是该槽位、资产 ID 和 MIME 派生的固定文件名")
+            self._fail("E_BRAND_ASSET", key, "fileName 必须是该槽位和 MIME 派生的不含资产 ID 的固定文件名")
             return None
         return BrandAsset(
             asset_id=asset_id,
