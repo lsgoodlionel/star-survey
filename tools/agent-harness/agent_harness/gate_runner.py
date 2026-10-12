@@ -13,6 +13,10 @@ import tempfile
 from typing import Iterable, Tuple
 
 from .config import GateDefinition, GateMatrix, validate_gate_id
+from .evidence_cache import (
+    RuntimeIdentity, compute_evidence_key, lookup_cached_evidence,
+    publish_cached_evidence,
+)
 from .gate_summary import build_gate_summary, write_gate_summary_atomic
 from .state import GateEvidence, GateStatus, RunState, RunStatus
 
@@ -74,7 +78,8 @@ def _validate_head(value: str) -> None:
 
 
 def run_gate(repo: Path, gate: GateDefinition, evidence_dir: Path,
-             head_commit: str) -> GateEvidence:
+             head_commit: str, *,
+             runtime_identity: RuntimeIdentity | None = None) -> GateEvidence:
     """Execute a configured argv; metadata is the final record of an attempt."""
     validate_gate_id(gate.id)
     if (not isinstance(gate.command, (tuple, list)) or not gate.command
@@ -96,6 +101,15 @@ def run_gate(repo: Path, gate: GateDefinition, evidence_dir: Path,
         raise ValueError("Evidence must be stored in the raw run directory")
     directory = _directory(root, relative.as_posix())
     directory.mkdir(parents=True, exist_ok=True)
+    evidence_key = None
+    if runtime_identity is not None:
+        try:
+            evidence_key = compute_evidence_key(root, gate, runtime_identity)
+            cached = lookup_cached_evidence(root, evidence_key, gate, head_commit)
+            if cached is not None:
+                return cached
+        except (OSError, ValueError):
+            evidence_key = None
     attempt = Path(tempfile.mkdtemp(prefix="gate-", dir=directory))
     metadata_path = attempt / "metadata.json"
     started_at = datetime.now(timezone.utc)
@@ -138,7 +152,8 @@ def run_gate(repo: Path, gate: GateDefinition, evidence_dir: Path,
                         process.wait()
     ended_at = datetime.now(timezone.utc)
     evidence = GateEvidence(gate.id, status, exit_code, started_at, ended_at,
-                            metadata_path.relative_to(root), head_commit)
+                            metadata_path.relative_to(root), head_commit,
+                            evidence_key=evidence_key)
     metadata = {
         "gateId": gate.id, "status": status.value, "exitCode": exit_code,
         "headCommit": head_commit, "startedAt": _timestamp(started_at),
@@ -165,9 +180,15 @@ def run_gate(repo: Path, gate: GateDefinition, evidence_dir: Path,
     evidence = replace(evidence, summary_path=summary_path.relative_to(root))
     summary = build_gate_summary(root, gate, evidence)
     write_gate_summary_atomic(summary_path, summary)
-    return replace(evidence, diagnostic_bytes=(
+    evidence = replace(evidence, diagnostic_bytes=(
         len(summary.diagnostic.encode("utf-8")) if summary.diagnostic is not None else 0
     ))
+    if evidence.status == GateStatus.PASSED and evidence_key is not None:
+        try:
+            publish_cached_evidence(root, evidence_key, evidence)
+        except (OSError, ValueError):
+            pass
+    return evidence
 
 
 def invalidate_stale_evidence(state: RunState, current_head: str) -> RunState:

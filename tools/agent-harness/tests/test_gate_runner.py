@@ -16,6 +16,7 @@ HARNESS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS))
 
 from agent_harness.config import GateDefinition, GateMatrix, load_gate_matrix  # noqa: E402
+from agent_harness.evidence_cache import RuntimeIdentity  # noqa: E402
 from agent_harness.gate_runner import (  # noqa: E402
     invalidate_stale_evidence, resolve_required_gates, run_gate,
 )
@@ -407,6 +408,26 @@ class GateExecutionTests(unittest.TestCase):
         _, second_dir = self.artifacts(second)
         self.assertEqual((first_dir / "stdout.log").read_text(), "first\n")
         self.assertEqual((second_dir / "stdout.log").read_text(), "second\n")
+
+    def test_explicit_runtime_identity_reuses_safe_content_gate_once(self):
+        (self.repo / "src").mkdir()
+        (self.repo / "src/input.txt").write_text("stable\n", encoding="utf-8")
+        counter = self.repo / "count.txt"
+        script = ("from pathlib import Path; p=Path('count.txt'); "
+                  "p.write_text(str(int(p.read_text())+1) if p.exists() else '1')")
+        gate = GateDefinition(
+            "unit", (sys.executable, "-c", script), ".", 5,
+            "local_fast", "content", ("src/**",), "generic",
+        )
+        runtime = RuntimeIdentity("test-os", "test-arch", None, {"python": "test"})
+        first = run_gate(self.repo, gate, self.evidence_dir, self.head,
+                         runtime_identity=runtime)
+        second = run_gate(self.repo, gate, self.evidence_dir, "b" * 40,
+                          runtime_identity=runtime)
+        self.assertEqual(counter.read_text(), "1")
+        self.assertFalse(first.reused)
+        self.assertTrue(second.reused)
+        self.assertEqual(second.head_commit, "b" * 40)
 
     def test_invalid_gate_inputs_are_rejected_before_execution(self):
         gate = self.gate("from pathlib import Path; Path('executed').touch()")
