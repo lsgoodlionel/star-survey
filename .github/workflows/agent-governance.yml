@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: agent-governance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   agent-governance-unit:
     runs-on: ubuntu-24.04
@@ -47,6 +51,26 @@ jobs:
       - name: Check plan and memory references
         run: >-
           scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --check-docs
+
+      - name: Emit sanitized Gate summary
+        if: always()
+        run: >-
+          scripts/agent-harness --python -m agent_harness.github_evidence
+          --repository "${{ github.repository }}"
+          --workflow .github/workflows/agent-governance.yml
+          --commit-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          --job agent-governance-unit --gate-id harness-unit
+          --conclusion "${{ job.status == 'success' && 'success' || 'failure' }}"
+          --output .agent-harness-ci/gate-summaries/harness-unit.json
+
+      - name: Upload sanitized Gate summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-unit-gate-summary
+          path: .agent-harness-ci/gate-summaries/harness-unit.json
+          if-no-files-found: error
+          retention-days: 7
 
   agent-governance-integration:
     needs: agent-governance-unit

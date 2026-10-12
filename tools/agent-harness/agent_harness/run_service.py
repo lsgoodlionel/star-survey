@@ -22,12 +22,13 @@ from .codex_adapter import build_codex_command, controlled_tool_errors, run_code
 from .context_capsule import build_context_capsule, write_context_capsule_atomic
 from .doctor import run_doctor
 from .gate_runner import invalidate_stale_evidence, resolve_required_gates, run_gate
-from .gate_summary import GateSummary
+from .gate_summary import GateSummary, write_gate_summary_atomic
+from .github_evidence import GitHubEvidenceError, import_github_evidence
 from .generated_verifier import generated_binding_is_current, verify_generated_outputs
 from .git_guard import (GitGuardError, assert_worktree_isolated, capture_snapshot,
                         changed_paths, classify_paths, validate_history_ancestry,
                         validate_resume)
-from .state import (AttemptState, GateStatus, RunState, RunStatus,
+from .state import (AttemptState, GateEvidence, GateStatus, RunState, RunStatus,
                     append_event, load_state, read_events, save_state_atomic,
                     sha256_file, transition)
 
@@ -1039,6 +1040,58 @@ class RunService:
             raise ServiceError("质量门未通过", 4)
         return state
 
+    def import_github_gate(self, run_id: str, artifact_path: Path, *,
+                           artifact_sha256: str, workflow: str, job: str,
+                           gate_id: str) -> RunState:
+        state = self._load(run_id)
+        self._operable(state)
+        matrix, _ = self._configs()
+        definitions = {definition.id: definition for definition in matrix.gates}
+        if gate_id not in definitions:
+            raise ServiceError("GitHub Gate 未在质量矩阵登记", 3)
+        try:
+            host = json.loads(self._path(Path("docs/agent/HARNESS_HOST.json"))
+                              .read_text(encoding="utf-8"))
+            repository = host["expectedRepository"]
+            if not isinstance(repository, str):
+                raise ValueError()
+            summary = import_github_evidence(
+                artifact_path, expected_artifact_sha256=artifact_sha256,
+                repository=repository, workflow=workflow,
+                commit_sha=state.head_commit, job=job, gate_id=gate_id)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError,
+                GitHubEvidenceError):
+            raise ServiceError("GitHub Gate 证据不可信或不匹配", 4) from None
+        directory = self._directory(run_id) / "evidence" / gate_id / "github"
+        directory.mkdir(parents=True, exist_ok=True)
+        summary_path = directory / "summary.json"
+        write_gate_summary_atomic(summary_path, summary)
+        relative = summary_path.relative_to(self.repo)
+        persisted_digest = sha256_file(summary_path)
+        now = _now()
+        evidence = GateEvidence(
+            gate_id, GateStatus(summary.status), summary.exit_code, now, now,
+            relative, state.head_commit, relative, persisted_digest,
+            "github", False,
+            len(summary.diagnostic.encode("utf-8")) if summary.diagnostic else 0,
+        )
+        if state.status == RunStatus.PLANNED:
+            state = transition(state, RunStatus.ACTIVE, "GitHub gate evidence imported")
+        if state.status != RunStatus.VERIFYING:
+            state = transition(state, RunStatus.VERIFYING, "verification started")
+        state = self._decision(state, "github_artifact", json.dumps({
+            "repository": repository, "workflow": workflow, "job": job,
+            "artifactSha256": artifact_sha256,
+        }, sort_keys=True))
+        state = self._save(replace(state, gates={**state.gates, gate_id: evidence},
+                                   updated_at=now), "github_gate_imported",
+                           {"gateId": gate_id, "status": summary.status})
+        if evidence.status != GateStatus.PASSED:
+            self._save(transition(state, RunStatus.REPAIRING,
+                                  "GitHub gate failure"), "gate_failed")
+            raise ServiceError("质量门未通过", 4)
+        return state
+
     def _verify_evidence(self, state, definition):
         gate = state.gates.get(definition.id)
         if (gate is None or gate.status != GateStatus.PASSED or gate.exit_code != 0
@@ -1071,6 +1124,16 @@ class RunService:
                         or summary_document["source"] != "reused"
                         or summary_document["reused"] is not True
                         or summary_document["evidenceKey"] != gate.evidence_key):
+                    raise ValueError()
+                return
+            if gate.source == "github":
+                if (gate.reused or not path.is_relative_to(
+                        self._directory(state.run_id) / "evidence")
+                        or summary_path != path
+                        or gate.evidence_key is None
+                        or sha256_file(summary_path) != gate.evidence_key
+                        or summary_document["source"] != "github"
+                        or summary_document["reused"] is not False):
                     raise ValueError()
                 return
             if (gate.source != "local" or not path.is_relative_to(

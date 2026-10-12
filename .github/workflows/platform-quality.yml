@@ -21,6 +21,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: platform-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   parity-tables:
     name: 跨端一致性与对账（单测）
@@ -79,6 +83,26 @@ jobs:
 
       - name: Production 部署与生命周期测试
         run: python3 -m unittest discover -s platform/deploy/production/tests -p 'test_*.py'
+
+      - name: 生成脱敏 Gate 摘要
+        if: always()
+        run: >-
+          scripts/agent-harness --python -m agent_harness.github_evidence
+          --repository "${{ github.repository }}"
+          --workflow .github/workflows/platform-quality.yml
+          --commit-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          --job productization-production --gate-id productization-production
+          --conclusion "${{ job.status == 'success' && 'success' || 'failure' }}"
+          --output .agent-harness-ci/gate-summaries/productization-production.json
+
+      - name: 上传脱敏 Gate 摘要
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: productization-production-gate-summary
+          path: .agent-harness-ci/gate-summaries/productization-production.json
+          if-no-files-found: error
+          retention-days: 7
 
   admin-web:
     name: 管理端前端质量闸门

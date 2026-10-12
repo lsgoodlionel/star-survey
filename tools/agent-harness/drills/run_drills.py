@@ -553,11 +553,12 @@ def load_host_config(repo: Path, relative: Path = _DEFAULT_HOST_CONFIG) -> dict:
             document["activePlan"], document["deliveryManifest"], document["ledger"],
             *docs["statusMarkerPaths"],
         }
+        machine_contracts = {"docs/agent/MEMORY_PROJECTIONS.json"}
         for value in sync_paths:
             _repo_path(root, value, must_exist=False)
             if any(character in value for character in "*?[]"):
                 raise ValueError()
-            if value not in contract_docs:
+            if value not in contract_docs and value not in machine_contracts:
                 review_path = Path(value)
                 if (review_path.suffix.lower() != ".md"
                         or review_path.parts[0] not in {"docs", "reviews"}):

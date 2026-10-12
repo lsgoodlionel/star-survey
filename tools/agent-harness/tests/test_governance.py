@@ -29,6 +29,25 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertRegex(self.text, r"(?m)^\s*python-version:\s*['\"]3\.11['\"]\s*$")
         self.assertNotRegex(self.text, r"(?mi)^\s*[a-z-]+:\s*write\s*$")
 
+    def test_workflows_cancel_only_obsolete_pull_request_runs(self):
+        platform = (REPO / ".github/workflows/platform-quality.yml").read_text(
+            encoding="utf-8")
+        for workflow in (self.text, platform):
+            self.assertIn("concurrency:", workflow)
+            self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+                          workflow)
+
+    def test_workflows_emit_and_upload_sanitized_gate_summary(self):
+        platform = (REPO / ".github/workflows/platform-quality.yml").read_text(
+            encoding="utf-8")
+        for workflow in (self.text, platform):
+            self.assertIn("agent_harness.github_evidence", workflow)
+            self.assertIn("gate-summaries/", workflow)
+            self.assertIn("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", workflow)
+            self.assertNotIn("stdout.log", workflow)
+        wrapper = (REPO / "scripts/agent-harness").read_text(encoding="utf-8")
+        self.assertIn('["-m", "agent_harness.github_evidence"]', wrapper)
+
     def test_every_action_is_pinned_to_a_full_commit(self):
         uses = re.findall(r"(?m)^\s*-?\s*uses:\s*([^\s#]+)", self.text)
         self.assertGreaterEqual(len(uses), 2)
@@ -104,6 +123,8 @@ class GovernanceWorkflowTests(unittest.TestCase):
                          ["refs/remotes/limesurvey-fork/master"])
         self.assertIn("fixture", document)
         self.assertIn("documentation", document)
+        self.assertIn("docs/agent/MEMORY_PROJECTIONS.json",
+                      document["deliverySyncPaths"])
         self.assertIn(".env.example", document["secretPolicy"]["allowlist"])
 
     def test_delivery_ledger_is_available_in_a_fresh_checkout(self):
