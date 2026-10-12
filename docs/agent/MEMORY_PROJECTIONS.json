@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "machineBlockVersion": 1,
   "projections": [
     {
       "id": "survey-blueprint",

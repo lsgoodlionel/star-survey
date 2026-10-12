@@ -15,7 +15,10 @@ from .doctor import DoctorReport, run_doctor
 from .codex_adapter import controlled_tool_errors, controlled_tool_path, run_with_controlled_tools
 from .run_service import RunService, ServiceError
 from .state import RunState, RunStatus
-from .token_report import collect_token_usage, TokenReport
+from .token_report import collect_token_usage, TokenReport, TokenUsage
+from .memory_projection import (apply_memory_sync, configure_memory,
+                                load_projection_config, memory_status,
+                                plan_memory_sync, render_projection)
 
 
 class Parser(argparse.ArgumentParser):
@@ -51,11 +54,11 @@ def _parser():
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--json", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=Parser)
-    for command in ("doctor", "init", "status", "next", "gate", "run-codex", "record-decision", "record-review", "pause", "resume", "finalize", "token-report"):
+    for command in ("doctor", "init", "status", "next", "gate", "run-codex", "record-decision", "record-review", "pause", "resume", "finalize", "token-report", "configure-memory", "memory-status", "sync-memory"):
         child = sub.add_parser(command)
         child.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         child.add_argument("--repo", type=Path, default=argparse.SUPPRESS)
-        if command not in ("doctor", "init", "token-report"):
+        if command not in ("doctor", "init", "token-report", "configure-memory", "memory-status"):
             child.add_argument("--run-id", "--run", dest="run_id")
         if command == "init":
             child.add_argument("--plan", type=Path, required=True)
@@ -78,6 +81,8 @@ def _parser():
             child.add_argument("--until", required=True)
             child.add_argument("--format", choices=("json", "text"), default="text")
             child.add_argument("--session-root", type=Path, action="append", default=[])
+        elif command == "configure-memory":
+            child.add_argument("--vault", type=Path, required=True)
     return parser
 
 
@@ -114,7 +119,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "token-report" and args.format == "json":
             json_output = True
         root = args.repo or _root()
-        if args.command == "token-report":
+        if args.command == "configure-memory":
+            host_path = configure_memory(root, args.vault)
+            config = load_projection_config(root)
+            result = {"configured": host_path.is_file(),
+                      "vaultAvailable": config.vault_root.is_dir()}
+            code = 0
+        elif args.command == "memory-status":
+            result = memory_status(load_projection_config(root))
+            code = 0
+        elif args.command == "token-report":
             roots = tuple(args.session_root) or tuple(
                 path for path in (Path.home() / ".codex/sessions",
                                   Path.home() / ".codex/archived_sessions")
@@ -142,7 +156,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 run_id = args.run_id or service.select_run()
                 code = 0
-                if args.command == "status":
+                if args.command == "sync-memory":
+                    state = service.status(run_id)
+                    host = json.loads((root / "docs/agent/HARNESS_HOST.json")
+                                      .read_text(encoding="utf-8"))
+                    manifest = host.get("deliveryManifest")
+                    relative = Path(manifest) if isinstance(manifest, str) else Path()
+                    if (not manifest or relative.is_absolute() or ".." in relative.parts
+                            or "\\" in manifest):
+                        raise ServiceError("交付清单路径无效")
+                    delivery = json.loads((root / relative).read_text(encoding="utf-8"))
+                    roots = tuple(path for path in (
+                        Path.home() / ".codex/sessions",
+                        Path.home() / ".codex/archived_sessions",
+                    ) if path.is_dir())
+                    if roots:
+                        tokens = collect_token_usage(
+                            roots, since=state.created_at,
+                            until=datetime.now(timezone.utc), project_root=root)
+                    else:
+                        tokens = TokenReport(
+                            state.created_at, datetime.now(timezone.utc),
+                            state.plan_path.as_posix(), 0, 0, 0,
+                            TokenUsage(), TokenUsage())
+                    projection = render_projection(state, delivery, tokens)
+                    result = apply_memory_sync(plan_memory_sync(
+                        load_projection_config(root), projection))
+                elif args.command == "status":
                     result = service.status(run_id)
                 elif args.command == "next":
                     result = service.next_action(run_id)
@@ -183,6 +223,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 result.usage.active_tokens, result.main_sessions,
                 result.subagent_sessions, result.reviewer_sessions,
             ))
+        elif args.command in ("configure-memory", "memory-status"):
+            print("记忆投影：" + ("可用" if result["vaultAvailable"] else "等待 vault"))
+        elif args.command == "sync-memory":
+            print(f"记忆同步：更新 {len(result.updated)}，待重放 {len(result.pending)}")
         else:
             messages = {"develop": "开发当前 Milestone", "repair": "修复质量门失败", "gate": "运行质量门",
                         "finalize": "完成收尾", "resume": "检查并恢复运行", "human_review": "需要人工处理", "done": "运行已完成",

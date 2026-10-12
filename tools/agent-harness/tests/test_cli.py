@@ -15,6 +15,43 @@ from agent_harness.cli import main
 
 
 class CliTests(WorktreeCase):
+    def memory_fixture(self):
+        self.write(self.repo / "docs/agent/MEMORY_PROJECTIONS.json", json.dumps({
+            "version": 1,
+            "projections": [{
+                "id": "progress", "notePath": "Project/Progress.md",
+                "startMarker": "<!-- codex:progress:start -->",
+                "endMarker": "<!-- codex:progress:end -->",
+            }],
+        }))
+        self.write(self.repo / "docs/agent/HARNESS_HOST.json", json.dumps({
+            "deliveryManifest": "docs/agent/HARNESS_DELIVERY.json"
+        }))
+        self.write(self.repo / "docs/agent/HARNESS_DELIVERY.json", json.dumps({
+            "deliveryStatus": "pending", "externalSync": {"repository": "pending"}
+        }))
+        self.git("add", "docs/agent/MEMORY_PROJECTIONS.json",
+                 "docs/agent/HARNESS_HOST.json", "docs/agent/HARNESS_DELIVERY.json")
+        self.git("commit", "-m", "memory fixture")
+        return self.root / "vault"
+
+    def test_memory_cli_configures_reports_and_syncs_without_exposing_host_path(self):
+        vault = self.memory_fixture()
+        vault.mkdir()
+        code, output, stderr = self.call(
+            "configure-memory", "--vault", str(vault), "--json")
+        self.assertEqual(code, 0, output + stderr)
+        self.assertNotIn(str(vault), output)
+        self.assertEqual(json.loads(output)["vaultAvailable"], True)
+        self.init_run()
+        code, output, stderr = self.call("sync-memory", "--run-id", self.state.run_id,
+                                         "--json")
+        self.assertEqual(code, 0, output + stderr)
+        self.assertEqual(json.loads(output)["updated"], ["progress"])
+        self.assertIn("Harness run", (vault / "Project/Progress.md").read_text())
+        status = json.loads(self.call("memory-status", "--json")[1])
+        self.assertEqual(status["synced"], ["progress"])
+
     def test_token_report_cli_emits_aggregate_only_json(self):
         sessions = self.root / "sessions"
         sessions.mkdir()
