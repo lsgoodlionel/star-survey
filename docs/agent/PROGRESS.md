@@ -26,10 +26,13 @@ Wave 2: active - Dashboard Task 1 治理闭环已完成，Wave 2 计划已激活
 
 ## Token 控制平面（2026-10-12）
 
-Task 1-10: local_verified - Context Capsule、Gate Summary/证据复用、并发租约、Token Telemetry、
+Task 1-10: delivered - Context Capsule、Gate Summary/证据复用、并发租约、Token Telemetry、
 GitHub 受信摘要、全局规则安装与 Obsidian 单向投影均已实现，并通过独立复审。完整 Harness 套件 490 项通过，8 项仅因
 当前 macOS 无法执行 Linux 权限夹具而跳过；12 个故障演练全部通过。真实 Survey Capsule 为 7,538 bytes，
 相对 204,800-byte 基线减少 96.32%，启动 active-token 估算减少 96.23%。
+
+实现与验收提交 `d586196354` 已推送到 `origin/feat/admin-product-alignment`；Obsidian 的项目总览与进度路线图
+两个既有 marker 块已同步且无 pending。两个预先暂存的 Wave 2 测试脚本执行位及全部业务改动均未纳入该提交。
 
 本次优化不提升 Wave 2 业务能力状态。后续仍从 Task 2 验收断点继续：先运行 PHPUnit，再完成品牌图片
 发布/预览的 MySQL 与 PostgreSQL 真实双库验证；只有这两项通过后才进入 Task 3。35%-45% active Token

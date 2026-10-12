@@ -21,7 +21,7 @@
 | 故障演练 | PASS | 12/12：原子写前后中断、事件截断、计划漂移、历史改写、runtime 缺失、秘密脱敏、重复失败、无进展、超时与生成物越界 |
 | Governance | PASS | 25/25；Wave 2 Task 1 checkbox、交付 manifest 与 native release-blocking 契约一致 |
 | 独立复审 | APPROVED | 首轮 7 项 Important 与 1 项 Minor、后续 native acceptance 契约漂移均已关闭 |
-| Doctor | 提交后复核 | 未提交的 Harness wrapper 按安全设计使 Gate runtime 信任检查失败；提交后以 clean HEAD 重新验证 |
+| Doctor | PASS with warnings | 提交后 7 个 Gate runtime 均通过 HEAD 信任校验、零 error；Docker、Node、Java 21、Codex 在当前受控 shell 中不可用，工作区因 Wave 2 开发而非 clean |
 | 全局规则安装 | PASS | 首次仅更新三个 marker 管理文件；再次 dry-run 无变化 |
 
 ## 定量验收
@@ -68,3 +68,10 @@ Capsule bytes / 4 估算，只用于同口径比较，不等同于供应商计�
 - 当前受控 Python 缺少 `PyYAML`，未运行完整 Release native Python suite；release-blocking 入口与环境契约已有精确测试，真实生命周期继续由 GitHub Release 的 Ubuntu 22.04/24.04、amd64/arm64 阻断矩阵执行。
 - Wave 2 工作区仍有大量未提交品牌资产实现，保持原样且不纳入本控制平面交付提交。
 - 下一恢复点固定为 Wave 2 Task 2：PHPUnit 先行，然后品牌图片发布/预览在 MySQL 和 PostgreSQL 上完成真实双库验证；通过后才进入 Task 3。
+
+## 交付同步
+
+- 实现与验收提交：`d586196354974657e39f94ba449143ad772347e6`。
+- GitHub：`origin/feat/admin-product-alignment` 已包含该提交。
+- Obsidian：既有 `survey-blueprint` 与 `survey-progress` marker 块已更新，`pending=[]`。
+- Wave 2 既有未提交代码和两个预先暂存的脚本执行位均保持原样，不属于本次交付。
