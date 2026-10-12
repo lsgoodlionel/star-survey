@@ -16,6 +16,7 @@ from typing import Sequence
 from uuid import UUID
 
 from .diagnostics import redact_text, _open_directory
+from .context_capsule import ContextCapsule, render_context_capsule, validate_context_capsule_text
 from .git_guard import assert_worktree_isolated
 from .state import _read_json
 
@@ -275,6 +276,7 @@ class CodexResult:
     tests_requested: tuple[str, ...] = ()
     needs_human: bool = True
     session_id: str | None = None
+    capsule_digest: str | None = None
     failure: CodexFailure | None = None
     exit_code: int | None = None
 
@@ -321,13 +323,16 @@ def _trusted_codex(repo, candidate=None):
     return entry
 
 
-def build_codex_command(repo: Path, schema: Path, prompt: str,
+def build_codex_command(repo: Path, schema: Path, capsule: ContextCapsule,
                         resume_session: str | None = None) -> tuple[str, ...]:
     root, schema = _path(repo), _path(schema)
     assert_worktree_isolated(root)
     if not schema.is_relative_to(root) or schema.stat().st_size > _LINE_LIMIT or _read_json(schema.read_bytes()) != _SCHEMA:
         raise ValueError("Expected the controlled response schema")
-    prompt = _safe(prompt, _PROMPT_LIMIT)
+    if not isinstance(capsule, ContextCapsule):
+        raise ValueError("A validated Context Capsule is required")
+    prompt = _safe(render_context_capsule(capsule), _PROMPT_LIMIT)
+    validate_context_capsule_text(prompt)
     if prompt.lstrip().startswith("-"):
         raise ValueError("Prompt must not be parsed as an option")
     executable = _trusted_codex(root)
@@ -358,7 +363,7 @@ def _command(command):
     expected += (("resume", _session(session)) if session is not None else ()) + (prompt,)
     if command != expected:
         raise ValueError("Command rejected")
-    return command, Path(command[10])
+    return command, Path(command[10]), validate_context_capsule_text(prompt)
 
 
 def _storage(root, event_log):
@@ -414,7 +419,7 @@ def _validate_response(value, schema):
             _session(value)
 
 
-def _response(document, session):
+def _response(document, session, capsule_digest):
     _validate_response(document, _SCHEMA)
     for key in ("changedPaths", "testsRequested"):
         if any(redact_text(v) != v for v in document[key]):
@@ -426,9 +431,11 @@ def _response(document, session):
             raise ValueError("Invalid changed path")
     if _session(document["sessionId"]) != session:
         raise ValueError("Session mismatch")
+    if document["capsuleDigest"] != capsule_digest:
+        raise ValueError("Context Capsule mismatch")
     return CodexResult(document["status"], redact_text(document["summary"]),
                        tuple(document["changedPaths"]), tuple(document["testsRequested"]),
-                       document["needsHuman"], session, exit_code=0)
+                       document["needsHuman"], session, capsule_digest, exit_code=0)
 
 
 def _environment_path(value, *, multiple=False):
@@ -598,7 +605,7 @@ def run_codex(command: Sequence[str], timeout_seconds: int, event_log: Path) -> 
     except (IndexError, OSError, RuntimeError, TypeError, ValueError):
         return CodexResult(failure=CodexFailure.ENVIRONMENT_POLICY)
     try:
-        command, root = _command(command)
+        command, root, capsule_digest = _command(command)
         if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 3600:
             raise ValueError()
     except (OSError, ValueError, TypeError, IndexError):
@@ -742,7 +749,7 @@ def run_codex(command: Sequence[str], timeout_seconds: int, event_log: Path) -> 
         try:
             if len(command) == 14 and session != command[12]:
                 raise ValueError("Resumed session mismatch")
-            return _response(_read_json(response), session)
+            return _response(_read_json(response), session, capsule_digest)
         except (ValueError, TypeError, KeyError, RecursionError):
             failure = CodexFailure.SCHEMA_VIOLATION
     return CodexResult(failure=failure, exit_code=exit_code)

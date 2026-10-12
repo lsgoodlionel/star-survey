@@ -52,16 +52,24 @@ class AdapterCase(WorktreeCase):
     def setUp(self):
         super().setUp()
         from agent_harness import codex_adapter
+        from agent_harness.context_capsule import build_context_capsule
         self.adapter = codex_adapter
+        self.write(self.repo / "AGENTS.md", "# Rules\n\n## 实现与验证\nverify\n\n## 安全与权限\nsecure\n\n## 自治执行与停止条件\nstop\n")
+        self.write(self.repo / "docs/agent/PROJECT_MEMORY.md", "# Memory\n\n## 身份与权威入口\ntruth\n\n## 已确认边界与维护\nbounds\n")
+        self.write(self.repo / "docs/agent/AUTONOMY.md", "# SOP\n\n## 修复预算与人工升级\nlimits\n")
+        self.git("add", "AGENTS.md", "docs/agent/PROJECT_MEMORY.md", "docs/agent/AUTONOMY.md")
+        self.git("commit", "-m", "context fixtures")
         self.init_run()
+        self.capsule = build_context_capsule(self.repo, self.state, "Repair fixture")
         self.directory = self.state_path().parent
         self.schema = self.directory / "response.schema.json"
         self.write(self.schema, (Path(codex_adapter.__file__).with_name("codex_response.schema.json")).read_text())
-        self.command = codex_adapter.build_codex_command(self.repo, self.schema, "Repair fixture")
+        self.command = codex_adapter.build_codex_command(self.repo, self.schema, self.capsule)
         self.children = []
         self.session = "11111111-1111-4111-8111-111111111111"
         self.response = {"status": "completed", "summary": "ok", "changedPaths": ["src/example.txt"],
-                         "testsRequested": ["unit"], "needsHuman": False, "sessionId": self.session}
+                         "testsRequested": ["unit"], "needsHuman": False, "sessionId": self.session,
+                         "capsuleDigest": self.capsule.capsule_digest}
 
     def stream(self, response=None):
         return [json.dumps({"type": "thread.started", "thread_id": self.session}),
@@ -151,8 +159,10 @@ class AdapterCase(WorktreeCase):
         self.assertTrue(Path(self.command[0]).is_absolute())
         self.assertEqual(Path(self.command[0]), self.adapter._trusted_codex(self.repo))
         self.assertEqual(self.command[1:], ("exec", "--sandbox", "workspace-write", "--approve-for-me",
-                                       "--strict-config", "--json", "--output-schema", str(self.schema), "--cd", str(self.repo), "Repair fixture"))
-        resumed = self.adapter.build_codex_command(self.repo, self.schema, "repair", self.session)
+                                       "--strict-config", "--json", "--output-schema", str(self.schema), "--cd", str(self.repo), self.command[-1]))
+        self.assertEqual(json.loads(self.command[-1])["capsuleDigest"],
+                         self.capsule.capsule_digest)
+        resumed = self.adapter.build_codex_command(self.repo, self.schema, self.capsule, self.session)
         self.assertEqual(resumed[0:2], (self.command[0], "exec"))
         self.assertIn("resume", resumed)
         self.assertIn(self.session, resumed)
@@ -192,7 +202,7 @@ class AdapterCase(WorktreeCase):
         self.assertNotIn("fake-secret", repr(result))
 
     def test_resume_cannot_silently_switch_session(self):
-        command = self.adapter.build_codex_command(self.repo, self.schema, "repair", "22222222-2222-4222-8222-222222222222")
+        command = self.adapter.build_codex_command(self.repo, self.schema, self.capsule, "22222222-2222-4222-8222-222222222222")
         result = self.execute(self.stream(), command=command)
         self.assertEqual(result.failure.value, "schema_violation")
 
@@ -207,7 +217,7 @@ class AdapterCase(WorktreeCase):
         poisoned = self.repo / "bin/codex"
         self.write(poisoned, "#!/bin/sh\nexit 0\n")
         poisoned.chmod(0o755)
-        protected = self.adapter.build_codex_command(self.repo, self.schema, "repair")
+        protected = self.adapter.build_codex_command(self.repo, self.schema, self.capsule)
         self.assertEqual(protected[0], self.command[0])
         command = list(self.command)
         command[0] = "codex"
@@ -740,6 +750,7 @@ test ! -e /tmp/codex-executed
                    (self.stream(dict(self.response, extra="TOKEN=fake-secret")), 0, "schema_violation"),
                    (self.stream(dict(self.response, changedPaths=["../escape"])), 0, "schema_violation"),
                    (self.stream(dict(self.response, sessionId="22222222-2222-4222-8222-222222222222")), 0, "schema_violation"),
+                   (self.stream(dict(self.response, capsuleDigest="f" * 64)), 0, "schema_violation"),
                    (self.stream()[:-1], 0, "missing_completion"),
                    (self.stream(), 7, "nonzero_exit")]
         for index, (lines, code, expected) in enumerate(invalid):

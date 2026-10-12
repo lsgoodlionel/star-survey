@@ -19,6 +19,7 @@ from .config import (ConfigError, load_gate_matrix, load_history_boundary_policy
                      load_protected_paths, validate_gate_id)
 from .diagnostics import redact_text, render_diagnostics, failure_fingerprint, record_failure, _read_log, _first_error
 from .codex_adapter import build_codex_command, controlled_tool_errors, run_codex, run_with_controlled_tools
+from .context_capsule import build_context_capsule, write_context_capsule_atomic
 from .doctor import run_doctor
 from .gate_runner import invalidate_stale_evidence, resolve_required_gates, run_gate
 from .gate_summary import GateSummary
@@ -1253,15 +1254,20 @@ class RunService:
                 self._atomic_text(schema, Path(__file__).with_name("codex_response.schema.json").read_text(encoding="utf-8"))
                 if state.status == RunStatus.REPAIRING and not failure_summary:
                     _, failure_summary = self._autonomous_failure(state)
-                prompt = json.dumps({"milestone": state.milestone_id, "title": state.milestone_title,
-                                     "acceptanceAndTask": redact_text(self._autonomous_milestone(state))[:6144],
-                                     "approvedPaths": scope, "failure": failure_summary,
-                                     "remainingFailures": 5 - state.attempts.total,
-                                     "runId": run_id, "headCommit": state.head_commit,
-                                     "instruction": "Only edit approved paths. Run no external actions. Commit scoped changes with Agent-Run-Id trailer. Request human review when required. Harness runs Gates and decides completion."},
-                                    ensure_ascii=True)
+                task = json.dumps({
+                    "acceptanceAndTask": redact_text(self._autonomous_milestone(state)),
+                    "approvedPaths": scope,
+                    "instruction": "Only edit approved paths. Run no external actions. Commit scoped changes with Agent-Run-Id trailer. Request human review when required. Harness runs Gates and decides completion.",
+                }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                capsule = build_context_capsule(
+                    self.repo, state, task, failure_summary or None
+                )
+                write_context_capsule_atomic(
+                    directory / ("capsule-" + capsule.capsule_digest + ".json"), capsule
+                )
                 sessions = [d["summary"] for d in state.decisions if d["type"] == "codex_session"]
-                command = build_codex_command(self.repo, schema, prompt, sessions[-1] if sessions else None)
+                command = build_codex_command(self.repo, schema, capsule,
+                                              sessions[-1] if sessions else None)
                 state_digest = sha256_file(self._directory(run_id) / "state.json")
                 result = run_codex(command, 900, directory / (uuid4().hex + ".jsonl"))
                 if sha256_file(self._directory(run_id) / "state.json") != state_digest:
