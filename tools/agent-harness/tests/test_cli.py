@@ -15,6 +15,34 @@ from agent_harness.cli import main
 
 
 class CliTests(WorktreeCase):
+    def test_token_report_cli_emits_aggregate_only_json(self):
+        sessions = self.root / "sessions"
+        sessions.mkdir()
+        events = [
+            {"timestamp": "2026-10-12T01:00:00Z", "type": "session_meta",
+             "payload": {"id": "main", "cwd": str(self.repo), "source": "cli"}},
+            {"timestamp": "2026-10-12T02:00:00Z", "type": "event_msg",
+             "payload": {"type": "token_count", "info": {"total_token_usage": {
+                 "input_tokens": 10, "cached_input_tokens": 6, "output_tokens": 2,
+                 "reasoning_output_tokens": 1, "total_tokens": 13}}}},
+            {"timestamp": "2026-10-12T02:01:00Z", "type": "response_item",
+             "payload": {"message": "TOKEN=fake-secret prompt"}},
+        ]
+        (sessions / "main.jsonl").write_text(
+            "\n".join(json.dumps(item) for item in events) + "\n", encoding="utf-8"
+        )
+        code, output, stderr = self.call(
+            "token-report", "--since", "2026-10-12T00:00:00Z",
+            "--until", "2026-10-13T00:00:00Z", "--format", "json",
+            "--session-root", str(sessions),
+        )
+        self.assertEqual(code, 0, output + stderr)
+        document = json.loads(output)
+        self.assertEqual(document["usage"]["rawTokens"], 13)
+        self.assertEqual(document["usage"]["activeTokens"], 7)
+        self.assertNotIn("fake-secret", output)
+        self.assertNotIn("message", output)
+
     def test_next_reports_registered_dirty_gate_failure_as_repair_read_only(self):
         path = self.repo / "docs/agent/GATE_MATRIX.yaml"
         matrix = json.loads(path.read_text())

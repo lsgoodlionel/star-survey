@@ -31,6 +31,18 @@
         "reasoningTokens": {"type": "integer", "minimum": 0}
       }
     },
+    "reviewUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rawTokens", "cachedInputTokens", "activeTokens", "outputTokens", "reasoningTokens"],
+      "properties": {
+        "rawTokens": {"type": "integer", "minimum": 0},
+        "cachedInputTokens": {"type": "integer", "minimum": 0},
+        "activeTokens": {"type": "integer", "minimum": 0},
+        "outputTokens": {"type": "integer", "minimum": 0},
+        "reasoningTokens": {"type": "integer", "minimum": 0}
+      }
+    },
     "metrics": {
       "type": "object",
       "additionalProperties": false,

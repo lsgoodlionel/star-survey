@@ -2,7 +2,7 @@
 
 import argparse
 from dataclasses import fields, is_dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import json
 from pathlib import Path
@@ -15,6 +15,7 @@ from .doctor import DoctorReport, run_doctor
 from .codex_adapter import controlled_tool_errors, controlled_tool_path, run_with_controlled_tools
 from .run_service import RunService, ServiceError
 from .state import RunState, RunStatus
+from .token_report import collect_token_usage, TokenReport
 
 
 class Parser(argparse.ArgumentParser):
@@ -50,11 +51,11 @@ def _parser():
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--json", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=Parser)
-    for command in ("doctor", "init", "status", "next", "gate", "run-codex", "record-decision", "record-review", "pause", "resume", "finalize"):
+    for command in ("doctor", "init", "status", "next", "gate", "run-codex", "record-decision", "record-review", "pause", "resume", "finalize", "token-report"):
         child = sub.add_parser(command)
         child.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         child.add_argument("--repo", type=Path, default=argparse.SUPPRESS)
-        if command not in ("doctor", "init"):
+        if command not in ("doctor", "init", "token-report"):
             child.add_argument("--run-id", "--run", dest="run_id")
         if command == "init":
             child.add_argument("--plan", type=Path, required=True)
@@ -72,6 +73,11 @@ def _parser():
             child.add_argument("--report", type=Path, required=True)
         elif command == "pause":
             child.add_argument("--reason", required=True)
+        elif command == "token-report":
+            child.add_argument("--since", required=True)
+            child.add_argument("--until", required=True)
+            child.add_argument("--format", choices=("json", "text"), default="text")
+            child.add_argument("--session-root", type=Path, action="append", default=[])
     return parser
 
 
@@ -86,6 +92,16 @@ def _root():
     return Path(result.stdout.strip())
 
 
+def _rfc3339(value: str) -> datetime:
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        raise ServiceError("时间必须是带时区的 RFC3339") from None
+    if result.utcoffset() is None:
+        raise ServiceError("时间必须是带时区的 RFC3339")
+    return result.astimezone(timezone.utc)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     import sys
     arguments = list(sys.argv[1:] if argv is None else argv)
@@ -95,8 +111,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             args = _parser().parse_args(arguments)
         except SystemExit as error:
             return int(error.code)
+        if args.command == "token-report" and args.format == "json":
+            json_output = True
         root = args.repo or _root()
-        if args.command == "doctor":
+        if args.command == "token-report":
+            roots = tuple(args.session_root) or tuple(
+                path for path in (Path.home() / ".codex/sessions",
+                                  Path.home() / ".codex/archived_sessions")
+                if path.is_dir()
+            )
+            if not roots:
+                raise ServiceError("未找到 Codex 会话目录")
+            result = collect_token_usage(
+                roots, since=_rfc3339(args.since), until=_rfc3339(args.until),
+                project_root=root,
+            )
+            code = 0
+        elif args.command == "doctor":
             policy_errors = controlled_tool_errors(root, required_tools=("git",),
                                                     require_codex=False)
             result = (DoctorReport((), (), policy_errors) if policy_errors else
@@ -146,6 +177,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"环境检查：通过 {len(result.ok)}，提醒 {len(result.warning)}，错误 {len(result.error)}")
             for item in (*result.warning, *result.error):
                 print(item["id"] + "：" + item["message"])
+        elif args.command == "token-report" and isinstance(result, TokenReport):
+            print("Token 使用：raw {0}，cached {1}，active {2}；会话 main {3} / subagent {4} / review {5}".format(
+                result.usage.raw_tokens, result.usage.cached_input_tokens,
+                result.usage.active_tokens, result.main_sessions,
+                result.subagent_sessions, result.reviewer_sessions,
+            ))
         else:
             messages = {"develop": "开发当前 Milestone", "repair": "修复质量门失败", "gate": "运行质量门",
                         "finalize": "完成收尾", "resume": "检查并恢复运行", "human_review": "需要人工处理", "done": "运行已完成",
