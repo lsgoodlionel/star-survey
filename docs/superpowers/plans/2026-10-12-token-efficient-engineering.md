@@ -93,7 +93,7 @@ Forecast assumptions:
 - Token report contains no prompt/message/source/log body fields.
 - Benchmark fixture demonstrates at least 80% raw context reduction and at least 70% Agent startup active-token reduction against the checked-in baseline fixture.
 
-## 3. Task 1: Version Contracts and Backward-Compatible State
+## Task 1: Version Contracts and Backward-Compatible State
 
 **Files:**
 
@@ -151,7 +151,7 @@ git add tools/agent-harness/agent_harness/config.py tools/agent-harness/agent_ha
 git commit -m "feat(harness): version token efficiency contracts"
 ```
 
-## 4. Task 2: Deterministic Gate Summaries
+## Task 2: Deterministic Gate Summaries
 
 **Files:**
 
@@ -211,7 +211,7 @@ git add tools/agent-harness/agent_harness/gate_summary.py tools/agent-harness/ag
 git commit -m "feat(harness): emit bounded gate summaries"
 ```
 
-## 5. Task 3: Evidence Keys and Selective Reuse
+## Task 3: Evidence Keys and Selective Reuse
 
 **Files:**
 
@@ -265,7 +265,7 @@ git add tools/agent-harness/agent_harness/evidence_cache.py tools/agent-harness/
 git commit -m "feat(harness): reuse trusted gate evidence"
 ```
 
-## 6. Task 4: Gate Leases and Concurrent Deduplication
+## Task 4: Gate Leases and Concurrent Deduplication
 
 **Files:**
 
@@ -310,7 +310,7 @@ git add tools/agent-harness/agent_harness/gate_lease.py tools/agent-harness/agen
 git commit -m "feat(harness): deduplicate concurrent gates"
 ```
 
-## 7. Task 5: Context Manifest and Context Capsule
+## Task 5: Context Manifest and Context Capsule
 
 **Files:**
 
@@ -372,7 +372,7 @@ git add tools/agent-harness/agent_harness/context_capsule.py tools/agent-harness
 git commit -m "feat(harness): build bounded context capsules"
 ```
 
-## 8. Task 6: Privacy-Safe Token Telemetry
+## Task 6: Privacy-Safe Token Telemetry
 
 **Files:**
 
@@ -422,7 +422,7 @@ git add tools/agent-harness/agent_harness/token_report.py tools/agent-harness/ag
 git commit -m "feat(harness): report privacy-safe token usage"
 ```
 
-## 9. Task 7: Obsidian and Local-Memory Projection
+## Task 7: Obsidian and Local-Memory Projection
 
 **Files:**
 
@@ -480,7 +480,7 @@ git add tools/agent-harness/agent_harness/memory_projection.py tools/agent-harne
 git commit -m "feat(harness): project verified state to obsidian"
 ```
 
-## 10. Task 8: GitHub Summaries and Trusted Evidence Import
+## Task 8: GitHub Summaries and Trusted Evidence Import
 
 **Files:**
 
@@ -518,7 +518,7 @@ git add tools/agent-harness/agent_harness/github_evidence.py tools/agent-harness
 git commit -m "feat(ci): exchange trusted gate summaries"
 ```
 
-## 11. Task 9: Global and Project Policy Installation
+## Task 9: Global and Project Policy Installation
 
 **Files:**
 
@@ -564,7 +564,7 @@ git add tools/agent-harness/agent_harness/global_policy.py tools/agent-harness/a
 git commit -m "feat(harness): install reusable token policy"
 ```
 
-## 12. Task 10: Integration, Fault Drills, Benchmark, and Delivery Sync
+## Task 10: Integration, Fault Drills, Benchmark, and Delivery Sync
 
 **Files:**
 
