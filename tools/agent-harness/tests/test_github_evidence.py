@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HARNESS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS))
@@ -13,6 +14,7 @@ sys.path.insert(0, str(HARNESS))
 from agent_harness.github_evidence import (  # noqa: E402
     GitHubEvidenceError,
     import_github_evidence,
+    verify_github_attestation,
 )
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_run_service import WorktreeCase  # noqa: E402
@@ -55,12 +57,17 @@ class GitHubEvidenceTests(unittest.TestCase):
 
     def load(self, document=None, digest=None):
         actual = self.write(document)
+        attestation = verify_github_attestation(
+            self.path, repository="owner/repo",
+            signer_workflow=".github/workflows/agent-governance.yml",
+            runner=lambda *args, **kwargs: type("Result", (), {"returncode": 0})(),
+        )
         return import_github_evidence(
             self.path, expected_artifact_sha256=digest or actual,
             repository="owner/repo",
             workflow=".github/workflows/agent-governance.yml",
             commit_sha="a" * 40, job="agent-governance-unit",
-            gate_id="harness-unit",
+            gate_id="harness-unit", attestation=attestation,
         )
 
     def test_accepts_exact_success_summary_without_raw_logs(self):
@@ -97,6 +104,24 @@ class GitHubEvidenceTests(unittest.TestCase):
         document["summarySha256"] = self.digest(document["summary"])
         with self.assertRaises(GitHubEvidenceError):
             self.load(document)
+
+    def test_rejects_missing_attestation_and_success_with_skips(self):
+        digest = self.write()
+        with self.assertRaises(GitHubEvidenceError):
+            import_github_evidence(
+                self.path, expected_artifact_sha256=digest,
+                repository="owner/repo",
+                workflow=".github/workflows/agent-governance.yml",
+                commit_sha="a" * 40, job="agent-governance-unit",
+                gate_id="harness-unit",
+            )
+        document = json.loads(json.dumps(self.document))
+        document["summary"]["counts"] = {
+            "total": 8, "passed": 7, "failed": 0, "skipped": 1, "errors": 0,
+        }
+        document["summarySha256"] = self.digest(document["summary"])
+        with self.assertRaises(GitHubEvidenceError):
+            self.load(document)
         document = json.loads(json.dumps(self.document))
         document["rawLog"] = "private output"
         with self.assertRaises(GitHubEvidenceError):
@@ -106,7 +131,14 @@ class GitHubEvidenceTests(unittest.TestCase):
 class GitHubRunServiceTests(WorktreeCase):
     def test_imports_digest_bound_success_as_current_head_gate_evidence(self):
         host = self.repo / "docs/agent/HARNESS_HOST.json"
-        self.write(host, json.dumps({"expectedRepository": "owner/repo"}))
+        self.write(host, json.dumps({
+            "expectedRepository": "owner/repo",
+            "repositoryAttestation": {
+                "provider": "github-artifact-attestation",
+                "signerWorkflow": ".github/workflows/agent-governance.yml",
+                "sourceRef": "refs/heads/main",
+            },
+        }))
         self.git("add", "docs/agent/HARNESS_HOST.json")
         self.git("commit", "-m", "github identity")
         self.init_run()
@@ -131,10 +163,14 @@ class GitHubRunServiceTests(WorktreeCase):
         artifact.write_text(json.dumps(document, sort_keys=True,
                                        separators=(",", ":")), encoding="utf-8")
         digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-        state = self.service.import_github_gate(
-            self.state.run_id, artifact, artifact_sha256=digest,
-            workflow=".github/workflows/agent-governance.yml",
-            job="agent-governance-unit", gate_id="unit")
+        with patch("agent_harness.run_service.verify_github_attestation") as verify:
+            from agent_harness.github_evidence import VerifiedGitHubArtifact
+            verify.return_value = VerifiedGitHubArtifact(
+                digest, "owner/repo", ".github/workflows/agent-governance.yml")
+            state = self.service.import_github_gate(
+                self.state.run_id, artifact, artifact_sha256=digest,
+                workflow=".github/workflows/agent-governance.yml",
+                job="agent-governance-unit", gate_id="unit")
         self.assertEqual(state.gates["unit"].source, "github")
         matrix, _ = self.service._configs()
         self.service._verify_evidence(state, matrix.gates[0])

@@ -134,12 +134,30 @@ class MemoryProjectionTests(unittest.TestCase):
         with self.assertRaises(MemoryProjectionError):
             plan_memory_sync(load_projection_config(self.repo), self.projection())
 
+    def test_rejects_duplicate_note_targets_and_marker_collisions(self):
+        document = json.loads(self.config_path.read_text(encoding="utf-8"))
+        duplicate = dict(document["projections"][0])
+        duplicate["id"] = "progress"
+        document["projections"].append(duplicate)
+        self.config_path.write_text(json.dumps(document), encoding="utf-8")
+        configure_memory(self.repo, self.vault)
+        with self.assertRaises(MemoryProjectionError):
+            load_projection_config(self.repo)
+
     def test_repository_projection_config_contains_no_host_absolute_path(self):
         configure_memory(self.repo, self.vault)
         committed = self.config_path.read_text(encoding="utf-8")
         self.assertNotIn(str(self.vault), committed)
         self.assertIn(str(self.vault),
                       (self.repo / "var/agent-harness/host-memory.json").read_text())
+
+    def test_survey_projection_targets_current_obsidian_project_notes(self):
+        committed = (HARNESS.parents[1] / "docs/agent/MEMORY_PROJECTIONS.json").read_text(
+            encoding="utf-8")
+        self.assertIn("claude/10-项目/问卷调查与本地化平台", committed)
+        self.assertIn("项目总览 - 问卷调查与本地化平台", committed)
+        self.assertIn("进度与路线图 - 问卷调查与本地化平台", committed)
+        self.assertNotIn("LimeSurvey本土化方案/", committed)
 
 
 if __name__ == "__main__":

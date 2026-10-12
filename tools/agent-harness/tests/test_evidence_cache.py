@@ -27,6 +27,11 @@ class EvidenceCacheTests(unittest.TestCase):
         (self.repo / "src").mkdir()
         self.source = self.repo / "src/app.py"
         self.source.write_text("print('one')\n", encoding="utf-8")
+        contracts = self.repo / "docs/agent"
+        contracts.mkdir(parents=True)
+        for name in ("GATE_MATRIX.yaml", "PROTECTED_PATHS.yaml",
+                     "GATE_SUMMARY_SCHEMA.json", "STATE_SCHEMA.json"):
+            (contracts / name).write_text("{}\n", encoding="utf-8")
         self.runtime = RuntimeIdentity(
             "linux", "x86_64", None,
             {"python": "3.12.13", "harness": "2"},
@@ -78,18 +83,25 @@ class EvidenceCacheTests(unittest.TestCase):
         )
         self.assertNotEqual(original, self.key(gate=changed_command))
 
-    def test_key_includes_executable_bits_and_symlink_metadata_without_following(self):
+    def test_key_includes_executable_bits_and_rejects_symlink_inputs(self):
         original = self.key()
         self.source.chmod(self.source.stat().st_mode | 0o100)
         executable = self.key()
         self.assertNotEqual(original, executable)
         link = self.repo / "src/link.py"
         link.symlink_to("app.py")
-        linked = self.key()
-        self.assertNotEqual(executable, linked)
+        with self.assertRaises(ValueError):
+            self.key()
         link.unlink()
         link.symlink_to("missing.py")
-        self.assertNotEqual(linked, self.key())
+        with self.assertRaises(ValueError):
+            self.key()
+
+    def test_key_changes_with_policy_schema_and_harness_contract(self):
+        original = self.key()
+        policy = self.repo / "docs/agent/PROTECTED_PATHS.yaml"
+        policy.write_text('{"version":2}\n', encoding="utf-8")
+        self.assertNotEqual(original, self.key())
 
     def test_missing_inputs_and_unsafe_runtime_identity_fail_closed(self):
         missing = GateDefinition(

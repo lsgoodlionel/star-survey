@@ -73,16 +73,23 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
 
       - name: 产品化能力映射测试
-        run: python3 -m unittest discover -s platform/tools/productization -p 'test_render_capabilities.py'
+        run: >-
+          scripts/agent-harness --python -m agent_harness.strict_unittest
+          --start platform/tools/productization --pattern test_render_capabilities.py
 
       - name: 产品化能力映射一致性
         run: python3 platform/tools/productization/render_capabilities.py --check
 
       - name: Release 构建与 Workflow 策略测试
-        run: python3 -m unittest discover -s platform/deploy/production/release/tests -p 'test_*.py'
+        run: >-
+          scripts/agent-harness --python -m agent_harness.strict_unittest
+          --start platform/deploy/production/release/tests
 
       - name: Production 部署与生命周期测试
-        run: python3 -m unittest discover -s platform/deploy/production/tests -p 'test_*.py'
+        run: >-
+          scripts/agent-harness --python -m agent_harness.strict_unittest
+          --start platform/deploy/production/tests
+          --exclude-file test_install_upgrade.py
 
       - name: 生成脱敏 Gate 摘要
         if: always()

@@ -40,11 +40,12 @@ class GateLeaseTests(unittest.TestCase):
         third = acquire_gate_lease(self.cache, self.key, "owner-three", 30)
         self.assertTrue(third.acquired)
 
-    def test_expired_lease_requires_missing_completed_evidence_before_reclaim(self):
+    def test_expired_lease_reclaims_incomplete_completed_evidence(self):
         first = acquire_gate_lease(self.cache, self.key, "owner-one", 1)
         metadata = first.path / "owner.json"
         document = json.loads(metadata.read_text())
         document["expiresAt"] = "2000-01-01T00:00:00Z"
+        document["host"] = "other-host"
         metadata.write_text(json.dumps(document), encoding="utf-8")
         record_dir = self.cache / self.key
         record_dir.mkdir(parents=True)
@@ -54,11 +55,18 @@ class GateLeaseTests(unittest.TestCase):
             "endedAt": "2026-10-12T00:00:01Z", "originalHead": "b" * 40,
             "summarySha256": "c" * 64,
         }), encoding="utf-8")
-        blocked = acquire_gate_lease(self.cache, self.key, "owner-two", 30)
-        self.assertFalse(blocked.acquired)
-        (record_dir / "record.json").unlink()
         reclaimed = acquire_gate_lease(self.cache, self.key, "owner-two", 30)
         self.assertTrue(reclaimed.acquired)
+
+    def test_expired_lease_is_not_reclaimed_while_local_owner_process_is_alive(self):
+        first = acquire_gate_lease(self.cache, self.key, "owner-one", 1)
+        metadata = first.path / "owner.json"
+        document = json.loads(metadata.read_text())
+        document["expiresAt"] = "2000-01-01T00:00:00Z"
+        metadata.write_text(json.dumps(document), encoding="utf-8")
+        blocked = acquire_gate_lease(self.cache, self.key, "owner-two", 30)
+        self.assertFalse(blocked.acquired)
+        self.assertEqual(blocked.owner, "owner-one")
 
     def test_interrupted_owner_metadata_write_does_not_leave_live_lease(self):
         with patch("agent_harness.gate_lease.os.replace", side_effect=OSError("replace")):

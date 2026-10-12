@@ -1,11 +1,13 @@
 """Sanitized GitHub Gate summaries and strict local evidence import."""
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 import tempfile
 
 from .diagnostics import redact_text
@@ -14,6 +16,34 @@ from .gate_summary import GateSummary
 
 class GitHubEvidenceError(ValueError):
     """GitHub evidence is malformed, untrusted, or bound to another run."""
+
+
+@dataclass(frozen=True)
+class VerifiedGitHubArtifact:
+    artifact_sha256: str
+    repository: str
+    signer_workflow: str
+
+
+def verify_github_attestation(path: Path, *, repository: str,
+                              signer_workflow: str,
+                              runner=subprocess.run) -> VerifiedGitHubArtifact:
+    artifact = Path(path)
+    if artifact.is_symlink() or not artifact.is_file():
+        raise GitHubEvidenceError("GitHub evidence artifact is unavailable")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    signer_identity = repository + "/" + signer_workflow
+    command = ["gh", "attestation", "verify", str(artifact),
+               "--repo", repository, "--signer-workflow", signer_identity]
+    try:
+        result = runner(command, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise GitHubEvidenceError("GitHub artifact attestation is unavailable") from error
+    if result.returncode != 0:
+        raise GitHubEvidenceError("GitHub artifact attestation is invalid")
+    return VerifiedGitHubArtifact(digest, repository, signer_workflow)
 
 
 _FIELDS = {"version", "repository", "workflow", "commitSha", "job",
@@ -58,7 +88,8 @@ def _summary(document) -> GateSummary:
 
 def import_github_evidence(path: Path, *, expected_artifact_sha256: str,
                            repository: str, workflow: str, commit_sha: str,
-                           job: str, gate_id: str) -> GateSummary:
+                           job: str, gate_id: str,
+                           attestation: VerifiedGitHubArtifact | None = None) -> GateSummary:
     artifact = Path(path)
     if artifact.is_symlink() or not artifact.is_file():
         raise GitHubEvidenceError("GitHub evidence artifact is unavailable")
@@ -70,6 +101,11 @@ def import_github_evidence(path: Path, *, expected_artifact_sha256: str,
         raise GitHubEvidenceError("GitHub evidence artifact size or digest is invalid")
     if hashlib.sha256(raw).hexdigest() != expected_artifact_sha256:
         raise GitHubEvidenceError("GitHub evidence artifact digest mismatch")
+    if (not isinstance(attestation, VerifiedGitHubArtifact)
+            or attestation.artifact_sha256 != expected_artifact_sha256
+            or attestation.repository != repository
+            or attestation.signer_workflow != workflow):
+        raise GitHubEvidenceError("GitHub artifact attestation does not match")
     try:
         document = json.loads(raw, object_pairs_hook=_unique_object)
     except (UnicodeError, json.JSONDecodeError) as error:
@@ -106,7 +142,12 @@ def import_github_evidence(path: Path, *, expected_artifact_sha256: str,
     conclusion = document["conclusion"]
     if conclusion == "success":
         valid = (summary.status == "passed" and summary.exit_code == 0
-                 and summary.diagnostic is None)
+                 and summary.diagnostic is None
+                 and summary.counts["total"] > 0
+                 and summary.counts["passed"] == summary.counts["total"]
+                 and summary.counts["failed"] == 0
+                 and summary.counts["skipped"] == 0
+                 and summary.counts["errors"] == 0)
     elif conclusion == "failure":
         valid = (summary.status in {"failed", "timed_out"}
                  and summary.exit_code not in (None, 0)
@@ -130,7 +171,8 @@ def write_github_evidence(path: Path, *, repository: str, workflow: str,
     summary = {
         "schemaVersion": 1, "gateId": gate_id, "status": status,
         "exitCode": 0 if status == "passed" else 1, "durationMs": 0,
-        "counts": {"total": 0, "passed": 0, "failed": 0,
+        "counts": {"total": 1, "passed": 1 if status == "passed" else 0,
+                   "failed": 0 if status == "passed" else 1,
                    "skipped": 0, "errors": 0},
         "evidenceKey": None, "headCommit": commit_sha, "source": "github",
         "reused": False,

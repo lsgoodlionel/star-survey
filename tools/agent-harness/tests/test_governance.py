@@ -27,7 +27,8 @@ class GovernanceWorkflowTests(unittest.TestCase):
         self.assertRegex(self.text, r"(?m)^permissions:\s*\n\s+contents:\s*read\s*$")
         self.assertRegex(self.text, r"(?m)^\s*runs-on:\s*ubuntu-(?:22\.04|24\.04|latest)\s*$")
         self.assertRegex(self.text, r"(?m)^\s*python-version:\s*['\"]3\.11['\"]\s*$")
-        self.assertNotRegex(self.text, r"(?mi)^\s*[a-z-]+:\s*write\s*$")
+        writes = re.findall(r"(?mi)^\s*([a-z-]+):\s*write\s*$", self.text)
+        self.assertEqual(sorted(writes), ["attestations", "id-token"])
 
     def test_workflows_cancel_only_obsolete_pull_request_runs(self):
         platform = (REPO / ".github/workflows/platform-quality.yml").read_text(
@@ -47,6 +48,34 @@ class GovernanceWorkflowTests(unittest.TestCase):
             self.assertNotIn("stdout.log", workflow)
         wrapper = (REPO / "scripts/agent-harness").read_text(encoding="utf-8")
         self.assertIn('["-m", "agent_harness.github_evidence"]', wrapper)
+
+    def test_github_gate_summary_is_attested_before_upload(self):
+        self.assertIn("id-token: write", self.text)
+        self.assertIn("attestations: write", self.text)
+        attest = self.text.index("actions/attest-build-provenance@")
+        upload = self.text.index("actions/upload-artifact@")
+        self.assertLess(attest, upload)
+        self.assertIn("subject-path: .agent-harness-ci/gate-summaries/harness-unit.json",
+                      self.text)
+
+    def test_release_blocking_native_contract_matches_the_workflow_entrypoint(self):
+        requirement = json.loads((
+            REPO / "platform/deploy/production/native-acceptance.requirement.json"
+        ).read_text(encoding="utf-8"))
+        execution = requirement["releaseBlockingExecution"]
+        self.assertTrue(requirement["releaseBlocking"])
+        self.assertEqual(
+            "platform/deploy/production/release/native_acceptance.sh",
+            execution["entrypoint"],
+        )
+        self.assertEqual(
+            {"NATIVE_ACCEPTANCE_REAL": "1", "SURVEY_NATIVE_ACCEPTANCE": "1"},
+            execution["environment"],
+        )
+        release = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn("bash orchestrator/release/native_acceptance.sh", release)
+        for name, value in execution["environment"].items():
+            self.assertIn(f"{name}: '{value}'", release)
 
     def test_every_action_is_pinned_to_a_full_commit(self):
         uses = re.findall(r"(?m)^\s*-?\s*uses:\s*([^\s#]+)", self.text)
@@ -484,6 +513,12 @@ class GovernanceWorkflowTests(unittest.TestCase):
                                 for report in evidence["reports"]))
         else:
             self.assertEqual(evidence["reports"], [])
+
+    def test_pending_plan_steps_accept_pending_or_in_progress_but_not_complete(self):
+        source = (REPO / "tools/agent-harness/drills/run_drills.py").read_text(
+            encoding="utf-8")
+        check_docs = source.split("def check_docs(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('r"(?:in_progress|pending)"', check_docs)
 
     def test_ci_test_runner_fails_when_any_test_is_skipped(self):
         runner = REPO / "tools/agent-harness/run_tests.py"

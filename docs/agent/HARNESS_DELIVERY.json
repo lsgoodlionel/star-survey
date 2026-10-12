@@ -17,7 +17,7 @@
     "requiredReviewers": ["security", "dx_ci", "whole_branch"]
   },
   "taskSteps": {
-    "1": {"completed": [], "pending": [1, 2, 3, 4, 5, 6, 7]},
+    "1": {"completed": [1, 2, 3, 4, 5, 6, 7], "pending": []},
     "2": {"completed": [], "pending": [1, 2, 3, 4, 5, 6, 7]},
     "3": {"completed": [], "pending": [1, 2, 3, 4, 5, 6]},
     "4": {"completed": [], "pending": [1, 2, 3, 4, 5, 6]},

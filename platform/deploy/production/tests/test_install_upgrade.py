@@ -25,7 +25,16 @@ class NativeAcceptancePolicyTest(unittest.TestCase):
         self.assertTrue(policy["releaseBlocking"])
         self.assertEqual(["22.04", "24.04"], policy["matrix"]["ubuntu"])
         self.assertEqual(["amd64", "arm64"], policy["matrix"]["architecture"])
-        self.assertEqual("SURVEY_PRODUCTION_E2E=1", policy["enableEnvironment"])
+        execution = policy["releaseBlockingExecution"]
+        self.assertEqual(
+            "platform/deploy/production/release/native_acceptance.sh",
+            execution["entrypoint"],
+        )
+        self.assertEqual(
+            {"NATIVE_ACCEPTANCE_REAL": "1", "SURVEY_NATIVE_ACCEPTANCE": "1"},
+            execution["environment"],
+        )
+        self.assertFalse(policy["legacyOptInTest"]["releaseBlocking"])
         self.assertIn("doctor-restored", policy["requiredJourney"])
 
 

@@ -97,6 +97,7 @@ class DoctorTrustTests(WorktreeCase):
             "docs/superpowers/plans/target.md": "# Target\n",
             "docs/agent/DELIVERY.json": "{}\n",
             "docs/agent/progress.md": "Task 1: in_progress\n",
+            "docs/agent/MEMORY_PROJECTIONS.json": '{"version":1,"projections":[]}\n',
             "fixtures/smoke.txt": "baseline\n",
         }
         for name, content in host_files.items():
@@ -108,6 +109,7 @@ class DoctorTrustTests(WorktreeCase):
             "deliverySyncPaths": [
                 "AGENTS.md", "docs/agent/AUTONOMY.md", "docs/agent/PROJECT_MEMORY.md",
                 "docs/agent/DELIVERY.json", "docs/agent/progress.md",
+                "docs/agent/MEMORY_PROJECTIONS.json",
                 "docs/superpowers/plans/active.md",
             ],
             "expectedRepository": "example/harness",

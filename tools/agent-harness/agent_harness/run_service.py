@@ -21,9 +21,11 @@ from .diagnostics import redact_text, render_diagnostics, failure_fingerprint, r
 from .codex_adapter import build_codex_command, controlled_tool_errors, run_codex, run_with_controlled_tools
 from .context_capsule import build_context_capsule, write_context_capsule_atomic
 from .doctor import run_doctor
+from .evidence_cache import detect_runtime_identity
 from .gate_runner import invalidate_stale_evidence, resolve_required_gates, run_gate
 from .gate_summary import GateSummary, write_gate_summary_atomic
-from .github_evidence import GitHubEvidenceError, import_github_evidence
+from .github_evidence import (GitHubEvidenceError, import_github_evidence,
+                              verify_github_attestation)
 from .generated_verifier import generated_binding_is_current, verify_generated_outputs
 from .git_guard import (GitGuardError, assert_worktree_isolated, capture_snapshot,
                         changed_paths, classify_paths, validate_history_ancestry,
@@ -1030,7 +1032,13 @@ class RunService:
         stamp = self._workspace_stamp(state)
         for definition in definitions:
             self._assert_raw_storage(run_id)
-            evidence = run_gate(self.repo, definition, self._directory(run_id) / "evidence", state.head_commit)
+            try:
+                runtime_identity = detect_runtime_identity(self.repo, definition)
+            except (OSError, ValueError):
+                runtime_identity = None
+            evidence = run_gate(
+                self.repo, definition, self._directory(run_id) / "evidence",
+                state.head_commit, runtime_identity=runtime_identity)
             state = self._save(replace(state, gates={**state.gates, definition.id: evidence}, updated_at=_now()), "gate_finished", {"gateId": definition.id, "status": evidence.status.value})
         if capture_snapshot(self.repo) != initial or self._workspace_stamp(state) != stamp:
             self._stop(state, "Gate 执行期间 Git 状态发生变化", 5)
@@ -1053,12 +1061,18 @@ class RunService:
             host = json.loads(self._path(Path("docs/agent/HARNESS_HOST.json"))
                               .read_text(encoding="utf-8"))
             repository = host["expectedRepository"]
-            if not isinstance(repository, str):
+            signer_workflow = host["repositoryAttestation"]["signerWorkflow"]
+            if (not isinstance(repository, str) or not isinstance(signer_workflow, str)
+                    or workflow != signer_workflow):
                 raise ValueError()
+            attestation = verify_github_attestation(
+                artifact_path, repository=repository,
+                signer_workflow=signer_workflow)
             summary = import_github_evidence(
                 artifact_path, expected_artifact_sha256=artifact_sha256,
                 repository=repository, workflow=workflow,
-                commit_sha=state.head_commit, job=job, gate_id=gate_id)
+                commit_sha=state.head_commit, job=job, gate_id=gate_id,
+                attestation=attestation)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError,
                 GitHubEvidenceError):
             raise ServiceError("GitHub Gate 证据不可信或不匹配", 4) from None

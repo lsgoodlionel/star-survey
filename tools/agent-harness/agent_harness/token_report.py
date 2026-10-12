@@ -114,6 +114,23 @@ def _usage(value) -> Optional[TokenUsage]:
 
 def _category(source) -> str:
     if isinstance(source, dict):
+        if "subagent" in source:
+            nested = source["subagent"]
+            labels = []
+            pending = [nested]
+            while pending:
+                value = pending.pop()
+                if isinstance(value, str):
+                    labels.append(value.lower())
+                elif isinstance(value, dict):
+                    pending.extend(value.keys())
+                    pending.extend(value.values())
+                elif isinstance(value, (list, tuple)):
+                    pending.extend(value)
+            joined = " ".join(labels)
+            if "guardian" in joined or "review" in joined:
+                return "reviewer"
+            return "subagent"
         values = [value for key, value in source.items()
                   if key in {"subagent", "role", "type", "name"}
                   and isinstance(value, str)]

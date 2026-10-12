@@ -129,6 +129,18 @@ scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests
 当前限制：没有常驻队列或 Web 控制台；不自动批准 protected path、依赖、review、push、merge 或生产动作；
 真实工具可用性仍取决于宿主登录、配额和安装状态；临时工作区删除后只保留调用方主动记录的脱敏摘要。
 
+## Token 控制平面验收
+
+2026-10-12 的集成验收覆盖十个并发 Agent 共享稳定前缀、相同证据键只执行一个 Gate、成功日志零暴露、
+失败诊断脱敏并限制在 4 KiB、陈旧租约接管、非受信 GitHub artifact 拒绝，以及 Obsidian 离线事务恢复。
+真实 Survey Context Capsule 为 7,538 bytes，其中稳定前缀 7,151 bytes、任务增量 387 bytes；相对
+204,800-byte 基线，原始上下文减少 96.32%，启动 active-token 估算减少 96.23%。完整证据、统计边界和
+剩余风险见 [验证报告](../../docs/agent/run-history/2026-10-12-token-efficiency-verification.md)。
+
+GitHub Gate 摘要只有在 artifact digest 与 GitHub provenance attestation 同时绑定预期 repository、workflow、
+commit 和 job 时才可导入；缺失或不匹配均按未受信处理。CI 的 strict unittest 入口把任何 skip 视为失败；
+原生安装升级验收从普通 production suite 显式分区，继续由 Release 的双 Ubuntu、双架构阻断矩阵真实执行。
+
 Task 8 final hosted closure (2026-10-10): commit `79e85b72` hardens the documented setup-python executable,
 deterministic fake-Codex CI isolation and full-history checkout required for ancestry validation. GitHub Actions run
 `38064236869` completed successfully; Linux integration is 8/8 with zero skips, the local non-Linux suite is 402/402,

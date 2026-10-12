@@ -94,6 +94,21 @@ class TokenReportTests(unittest.TestCase):
         for forbidden in ("fake-secret", "source code", "prompt", "message"):
             self.assertNotIn(forbidden, serialized)
 
+    def test_real_nested_desktop_subagent_sources_are_classified(self):
+        self.write_session("worker", {"subagent": {"thread_spawn": {
+            "parent_thread_id": "parent", "agent_nickname": "worker"}}}, [
+            self.token("2026-10-12T12:00:00Z", self.usage(12)),
+        ])
+        self.write_session("guardian", {"subagent": {"other": "guardian"}}, [
+            self.token("2026-10-12T12:00:00Z", self.usage(7)),
+        ])
+        report = collect_token_usage((self.sessions,), since=self.since,
+                                     until=self.until, project_root=self.project)
+        self.assertEqual((report.main_sessions, report.subagent_sessions,
+                          report.reviewer_sessions), (0, 1, 1))
+        self.assertEqual(report.usage.raw_tokens, 12)
+        self.assertEqual(report.review_usage.raw_tokens, 7)
+
     def test_rejects_invalid_windows_roots_and_does_not_follow_session_symlinks(self):
         outside = self.root / "outside.jsonl"
         outside.write_text("TOKEN=fake-outside", encoding="utf-8")

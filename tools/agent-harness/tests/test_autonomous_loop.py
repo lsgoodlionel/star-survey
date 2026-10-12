@@ -79,11 +79,10 @@ class LoopCase(WorktreeCase):
         result = self.run_loop(self.fake(["broken", "fixed"], commit=False), cycles=2)
         self.assertEqual(result.status, RunStatus.PAUSED)
         self.assertEqual(result.attempts.total, 1)
-        self.assertIn("Error: broken", self.prompts[1])
-        self.assertIn("src/example.txt", self.prompts[1])
-        self.assertIn("4", self.prompts[1])
-        self.assertLessEqual(len(self.prompts[1]), 16384)
-        self.assertIn("Acceptance: unit passes.", self.prompts[0])
+        self.assertIn("Error: broken", self.prompts[1].diagnostic)
+        self.assertIn("src/example.txt", self.prompts[1].task_delta)
+        self.assertLessEqual(self.prompts[1].total_bytes, 24576)
+        self.assertIn("Acceptance: unit passes.", self.prompts[0].task_delta)
 
     def test_same_failure_stops_on_three(self):
         # Whitespace changes advance the diff while preserving the failure identity.

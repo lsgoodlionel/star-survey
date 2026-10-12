@@ -5,8 +5,10 @@ from datetime import datetime
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -118,8 +120,7 @@ def _entry_document(root: Path, path: Path) -> dict:
     info = path.lstat()
     mode = stat.S_IMODE(info.st_mode)
     if stat.S_ISLNK(info.st_mode):
-        return {"path": relative, "kind": "symlink", "mode": mode,
-                "target": os.readlink(path)}
+        raise ValueError("Symlinks cannot be content-reuse inputs")
     if stat.S_ISDIR(info.st_mode):
         return {"path": relative, "kind": "directory", "mode": mode}
     if not stat.S_ISREG(info.st_mode):
@@ -132,6 +133,48 @@ def _entry_document(root: Path, path: Path) -> dict:
             "size": info.st_size, "sha256": digest.hexdigest()}
 
 
+def _control_plane_digest(root: Path) -> str:
+    paths = [root / "docs/agent" / name for name in (
+        "GATE_MATRIX.yaml", "PROTECTED_PATHS.yaml",
+        "GATE_SUMMARY_SCHEMA.json", "STATE_SCHEMA.json",
+    )]
+    paths = [path for path in paths if path.is_file()]
+    paths.extend(sorted(Path(__file__).resolve().parent.glob("*.py")))
+    digest = hashlib.sha256()
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Control-plane policy or implementation is unavailable")
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def detect_runtime_identity(repo: Path, gate: GateDefinition) -> RuntimeIdentity:
+    root = Path(repo).resolve(strict=True)
+    executable = gate.command[0]
+    if "/" in executable:
+        candidate = (root / gate.cwd / executable).resolve(strict=True)
+    else:
+        found = shutil.which(executable)
+        if found is None:
+            raise ValueError("Gate executable is unavailable")
+        candidate = Path(found).resolve(strict=True)
+    if not candidate.is_file():
+        raise ValueError("Gate executable is unavailable")
+    info = candidate.stat()
+    executable_identity = hashlib.sha256(
+        f"{info.st_dev}:{info.st_ino}:{info.st_size}:{info.st_mtime_ns}".encode("ascii")
+    ).hexdigest()
+    return RuntimeIdentity(
+        platform.system() + "-" + platform.release(), platform.machine(), None,
+        {"executable": executable_identity,
+         "harness": _control_plane_digest(root),
+         "python": platform.python_version()},
+    )
+
+
 def compute_evidence_key(repo: Path, gate: GateDefinition,
                          runtime: RuntimeIdentity) -> str:
     root = Path(repo).resolve(strict=True)
@@ -139,8 +182,9 @@ def compute_evidence_key(repo: Path, gate: GateDefinition,
     if not isinstance(runtime, RuntimeIdentity):
         raise ValueError("A validated RuntimeIdentity is required")
     payload = {
-        "version": 1,
+        "version": 2,
         "repository": str(root),
+        "controlPlaneDigest": _control_plane_digest(root),
         "gate": {
             "id": gate.id, "command": list(gate.command), "cwd": _relative(gate.cwd),
             "timeoutSeconds": gate.timeout_seconds,

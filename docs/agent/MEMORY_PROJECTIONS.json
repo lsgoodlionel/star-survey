@@ -4,13 +4,13 @@
   "projections": [
     {
       "id": "survey-blueprint",
-      "notePath": "LimeSurvey本土化方案/04-开发方案总蓝图（仓库校准版）.md",
+      "notePath": "claude/10-项目/问卷调查与本地化平台（Survey · LimeSurvey）/项目总览 - 问卷调查与本地化平台（Survey · LimeSurvey）.md",
       "startMarker": "<!-- codex:survey-blueprint:start -->",
       "endMarker": "<!-- codex:survey-blueprint:end -->"
     },
     {
       "id": "survey-progress",
-      "notePath": "LimeSurvey本土化方案/08-需求进度与方案修订（仓库实证）.md",
+      "notePath": "claude/10-项目/问卷调查与本地化平台（Survey · LimeSurvey）/进度与路线图 - 问卷调查与本地化平台（Survey · LimeSurvey）.md",
       "startMarker": "<!-- codex:survey-progress:start -->",
       "endMarker": "<!-- codex:survey-progress:end -->"
     }

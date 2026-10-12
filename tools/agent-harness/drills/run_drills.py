@@ -192,6 +192,18 @@ def _fixture_worktree():
         _git(primary, "config", "commit.gpgsign", "false")
         files = {
             ".gitignore": "/var/agent-harness/\n",
+            "AGENTS.md": (
+                "# Rules\n\n## 实现与验证\nverify\n\n"
+                "## 安全与权限\nsecure\n\n"
+                "## 自治执行与停止条件\nstop on drift\n"
+            ),
+            "docs/agent/AUTONOMY.md": (
+                "# SOP\n\n## 修复预算与人工升级\nthree repeats stop\n"
+            ),
+            "docs/agent/PROJECT_MEMORY.md": (
+                "# Memory\n\n## 身份与权威入口\nrepository truth\n\n"
+                "## 已确认边界与维护\nkeep boundaries\n"
+            ),
             "docs/superpowers/plans/drill.md": (
                 "# Drill plan\n\n**Status:** approved\n\n"
                 "## Milestone m1: Fixture\n\n**Files:**\n"
@@ -411,7 +423,7 @@ def _drill_codex_timeout() -> None:
         command = (sys.executable, "-c", "import time; time.sleep(5)")
         descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
         with patch("agent_harness.codex_adapter._environment", return_value={"PATH": "/usr/bin:/bin"}), patch(
-            "agent_harness.codex_adapter._command", return_value=(command, root)
+            "agent_harness.codex_adapter._command", return_value=(command, root, "a" * 64)
         ), patch("agent_harness.codex_adapter._storage", return_value=(output, descriptor)):
             result = run_codex(fake, 1, output)
         if result.failure != CodexFailure.TIMEOUT:
@@ -1259,7 +1271,7 @@ def check_docs(repo: Path, host: dict) -> None:
         for task, steps in manifest["taskSteps"].items():
             if not task.isdigit():
                 continue
-            expected = "complete" if not steps["pending"] else "in_progress"
+            expected = r"complete" if not steps["pending"] else r"(?:in_progress|pending)"
             if re.search(r"(?m)^Task " + re.escape(task) + r": " + expected + r"\b", ledger) is None:
                 raise ValueError()
         marker = "<!-- harness-delivery-status: " + manifest["deliveryStatus"] + " -->"

@@ -83,6 +83,7 @@ def _host_references(root):
                   *documentation["statusMarkerPaths"])
         sync_paths = document["deliverySyncPaths"]
         contract_docs = set(values[:3]) | set(documentation["statusMarkerPaths"])
+        machine_contracts = {"docs/agent/MEMORY_PROJECTIONS.json"}
         for value in (*values, *sync_paths):
             if (not isinstance(value, str) or not value or "\\" in value
                     or PurePosixPath(value).is_absolute() or ".." in PurePosixPath(value).parts
@@ -90,7 +91,7 @@ def _host_references(root):
                 raise ValueError()
         if (not contract_docs.issubset(sync_paths)
                 or any(any(character in value for character in "*?[]")
-                       or (value not in contract_docs
+                       or (value not in contract_docs and value not in machine_contracts
                            and (PurePosixPath(value).suffix.lower() != ".md"
                                 or PurePosixPath(value).parts[0] not in {"docs", "reviews"}))
                        for value in sync_paths)):

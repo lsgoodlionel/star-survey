@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11 standard library, JSON Schema subset, Git, GitHub Actions, Docker Compose, unittest, Markdown marker blocks
 
-**Status:** 设计已于 2026-10-12 确认；本计划待执行方式确认后激活。
+**Status:** 2026-10-12 已实施并通过独立复审；等待最终全量验收、仓库推送与 Obsidian 投影同步。
 
 ---
 
@@ -571,7 +571,15 @@ git commit -m "feat(harness): install reusable token policy"
 - Create: `tools/agent-harness/tests/test_token_efficiency_integration.py`
 - Create: `tools/agent-harness/tests/fixtures/token-baseline.json`
 - Create: `docs/agent/run-history/2026-10-12-token-efficiency-verification.md`
-- Modify: `tools/agent-harness/tests/test_fault_drills.py`
+- Modify: `tools/agent-harness/drills/run_drills.py`
+- Modify: `tools/agent-harness/agent_harness/evidence_cache.py`
+- Modify: `tools/agent-harness/agent_harness/gate_lease.py`
+- Modify: `tools/agent-harness/agent_harness/run_service.py`
+- Modify: `tools/agent-harness/agent_harness/github_evidence.py`
+- Modify: `tools/agent-harness/agent_harness/memory_projection.py`
+- Create: `tools/agent-harness/agent_harness/strict_unittest.py`
+- Modify: `.github/workflows/agent-governance.yml`
+- Modify: `.github/workflows/platform-quality.yml`
 - Modify: `tools/agent-harness/README.md`
 - Modify: `docs/agent/PROGRESS.md`
 - Modify: `docs/superpowers/plans/2026-10-12-token-efficient-engineering.md`
@@ -615,11 +623,10 @@ Update `docs/agent/PROGRESS.md`, the plan status, and the existing Obsidian proj
 
 Before pushing, read `~/.codex/memories/claude-code-migration/github-repositories.md`, verify the remote and branch again, and ensure unrelated Wave 2 changes are not staged.
 
-```bash
-git add tools/agent-harness/tests/test_token_efficiency_integration.py tools/agent-harness/tests/fixtures/token-baseline.json tools/agent-harness/tests/test_fault_drills.py tools/agent-harness/README.md docs/agent/run-history/2026-10-12-token-efficiency-verification.md docs/agent/PROGRESS.md docs/superpowers/plans/2026-10-12-token-efficient-engineering.md
-git commit -m "test(harness): verify token efficiency control plane"
-git push origin feat/admin-product-alignment
-```
+Commit through an isolated index: stage only the approved Task 10 and validated review-fix files, apply only the seven
+Wave 2 Task 1 checkbox hunks, and compare the exact staged path list before committing. Preserve and restore every
+pre-existing staged entry after the scoped commit. Then push `feat/admin-product-alignment` to `origin`; never use a
+broad `git add -A`, `git commit -a`, or an unscoped commit in this dirty worktree.
 
 If the push is rejected, the branch is protected, tests fail, or unrelated changes cannot be safely separated, stop and report the exact condition. Do not merge, rebase, force-push, or clean the worktree automatically.
 

@@ -54,21 +54,21 @@
 - Consumes: Dashboard implementation commit and review evidence already bound in `HARNESS_DELIVERY.json`.
 - Produces: PR jobs checkout the source branch HEAD instead of GitHub's temporary merge commit; Dashboard Task 7 is closed; `activePlan` becomes this plan only after repository and knowledge-base sync succeed.
 
-- [ ] **Step 1: Write failing governance tests**
+- [x] **Step 1: Write failing governance tests**
 
 Add tests named `test_pull_request_checks_out_head_sha` and `test_docs_gate_compares_delivery_to_checked_out_head`; assert that PR validation uses `github.event.pull_request.head.sha`, push validation uses `github.sha`, and no temporary merge SHA is accepted as delivery evidence.
 
-- [ ] **Step 2: Run the focused test and confirm RED**
+- [x] **Step 2: Run the focused test and confirm RED**
 
 Run: `scripts/agent-harness --python -m unittest discover -s tools/agent-harness/tests -p 'test_governance.py' -v`
 
 Expected: FAIL because the workflow currently relies on the default PR merge checkout.
 
-- [ ] **Step 3: Implement event-aware checkout and fail-closed docs validation**
+- [x] **Step 3: Implement event-aware checkout and fail-closed docs validation**
 
 Set the checkout ref explicitly for `pull_request` while preserving `fetch-depth: 0`; make the docs drill compare the checked-out commit with `implementationCommit` and `evidence.headCommit`, without accepting arbitrary environment overrides.
 
-- [ ] **Step 4: Run local Harness gates**
+- [x] **Step 4: Run local Harness gates**
 
 Run: `scripts/agent-harness --python tools/agent-harness/run_tests.py --exclude-substring linux_wrapper --fail-on-skip`
 
@@ -76,7 +76,7 @@ Run: `scripts/agent-harness --python tools/agent-harness/drills/run_drills.py --
 
 Expected: all tests pass with zero skips and the docs check binds to branch HEAD.
 
-- [ ] **Step 5: Commit, push, and verify the hosted workflow**
+- [x] **Step 5: Commit, push, and verify the hosted workflow**
 
 ```bash
 git add .github/workflows/agent-governance.yml tools/agent-harness/tests/test_governance.py tools/agent-harness/drills/run_drills.py
@@ -86,11 +86,11 @@ git push
 
 Expected: the GitHub Actions `agent-governance` run succeeds on the PR head SHA.
 
-- [ ] **Step 6: Close Dashboard delivery and switch the active plan**
+- [x] **Step 6: Close Dashboard delivery and switch the active plan**
 
 Only after hosted success, update Dashboard Task 7/final acceptance, GitHub sync and Obsidian evidence; then set `HARNESS_HOST.json.activePlan` and `HARNESS_DELIVERY.json.planPath` to this plan and initialize Wave 2 with pending evidence fields.
 
-- [ ] **Step 7: Commit the control-plane transition**
+- [x] **Step 7: Commit the control-plane transition**
 
 ```bash
 git add docs/agent/HARNESS_DELIVERY.json docs/agent/PROGRESS.md docs/agent/HARNESS_HOST.json docs/agent/PROJECT_MEMORY.md docs/superpowers/specs/2026-10-11-template-branding-wave2-design.md docs/superpowers/plans/2026-10-11-template-branding-wave2.md

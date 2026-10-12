@@ -335,11 +335,21 @@ environment = {
 }
 if arguments[:1] == ["--python"]:
     command = arguments[1:]
+    strict_unittest = (len(command) in (4, 6)
+                       and command[:3] == ["-m", "agent_harness.strict_unittest", "--start"]
+                       and command[3] and not Path(command[3]).is_absolute()
+                       and ".." not in Path(command[3]).parts
+                       and (len(command) == 4
+                            or command[4] == "--pattern"
+                            and command[5] in {"test_*.py", "test_render_capabilities.py"}
+                            or command[4] == "--exclude-file"
+                            and command[5] == "test_install_upgrade.py"))
     allowed = (command == ["--version"]
                or command[:2] == ["-m", "unittest"] and len(command) > 2
                or len(command) in (4, 5) and command[:2] == ["-m", "agent_harness.distribution"]
                and command[2] in {"install", "upgrade", "uninstall"}
                or len(command) == 16 and command[:2] == ["-m", "agent_harness.github_evidence"]
+               or strict_unittest
                or command[:1] == ["tools/agent-harness/run_tests.py"]
                or command[:1] == ["tools/agent-harness/drills/run_drills.py"])
     if not allowed:

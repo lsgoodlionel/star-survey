@@ -156,6 +156,8 @@ def load_projection_config(repo_root: Path) -> ProjectionConfig:
         raise MemoryProjectionError("At least one projection is required")
     targets = []
     identifiers = set()
+    note_paths = set()
+    markers_seen = set()
     for row in rows:
         if not isinstance(row, dict) or set(row) != {
                 "id", "notePath", "startMarker", "endMarker"}:
@@ -169,7 +171,12 @@ def load_projection_config(repo_root: Path) -> ProjectionConfig:
                 or markers[0] == markers[1]):
             raise MemoryProjectionError("Projection identifier or markers are invalid")
         identifiers.add(identifier)
-        targets.append(ProjectionTarget(identifier, _relative_note(row["notePath"]),
+        note_path = _relative_note(row["notePath"])
+        if note_path in note_paths or any(marker in markers_seen for marker in markers):
+            raise MemoryProjectionError("Projection notes and markers must be unique")
+        note_paths.add(note_path)
+        markers_seen.update(markers)
+        targets.append(ProjectionTarget(identifier, note_path,
                                         markers[0], markers[1]))
     host_path = repo / _HOST_RELATIVE
     host = _read_object(host_path)

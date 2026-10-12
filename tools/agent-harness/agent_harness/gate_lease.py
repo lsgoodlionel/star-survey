@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -76,26 +77,46 @@ def _atomic_json(path: Path, document: dict) -> None:
 
 def _valid_completed_record(root: Path, key: str) -> bool:
     try:
-        record = json.loads((root / key / "record.json").read_text(encoding="utf-8"))
+        directory = root / key
+        record = json.loads((directory / "record.json").read_text(encoding="utf-8"))
+        summary_bytes = (directory / "summary.json").read_bytes()
+        summary = json.loads(summary_bytes)
+        validate_document(summary, _SCHEMA)
         return (record.get("version") == 1 and record.get("key") == key
                 and record.get("status") == "passed" and record.get("exitCode") == 0
                 and re.fullmatch(r"[0-9a-f]{40}", record.get("originalHead", "")) is not None
-                and _DIGEST.fullmatch(record.get("summarySha256", "")) is not None)
+                and _DIGEST.fullmatch(record.get("summarySha256", "")) is not None
+                and hashlib.sha256(summary_bytes).hexdigest() == record["summarySha256"]
+                and summary["status"] == "passed" and summary["exitCode"] == 0
+                and summary["evidenceKey"] == key and summary["diagnostic"] is None)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return False
 
 
-def _existing_lease(path: Path, fallback_ttl: int) -> tuple[str, datetime]:
+def _existing_lease(path: Path, fallback_ttl: int) -> tuple[str, datetime, str, int]:
     try:
         document = json.loads((path / "owner.json").read_text(encoding="utf-8"))
         if set(document) != {"version", "key", "owner", "host", "pid", "createdAt", "expiresAt"}:
             raise ValueError()
-        return document["owner"], _parse_timestamp(document["expiresAt"])
+        return (document["owner"], _parse_timestamp(document["expiresAt"]),
+                document["host"], document["pid"])
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         expiry = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) + timedelta(
             seconds=fallback_ttl
         )
-        return "unknown-owner", expiry
+        return "unknown-owner", expiry, "unknown-host", -1
+
+
+def _local_owner_alive(host: str, pid: int) -> bool:
+    if host != socket.gethostname()[:128] or type(pid) is not int or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
 
 
 def acquire_gate_lease(cache_root: Path, key: str, owner: str,
@@ -111,8 +132,9 @@ def acquire_gate_lease(cache_root: Path, key: str, owner: str,
         try:
             path.mkdir()
         except FileExistsError:
-            current_owner, current_expiry = _existing_lease(path, ttl_seconds)
-            if current_expiry > now or _valid_completed_record(root, key):
+            current_owner, current_expiry, host, pid = _existing_lease(path, ttl_seconds)
+            if (current_expiry > now or _local_owner_alive(host, pid)
+                    or _valid_completed_record(root, key)):
                 return GateLease(key, current_owner, path, False, current_expiry)
             stale = path.with_name(".stale-" + key + "-" + uuid4().hex)
             try:

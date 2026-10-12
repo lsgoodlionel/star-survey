@@ -30,6 +30,15 @@ class WorktreeCase(unittest.TestCase):
         self.git("config", "user.name", "Harness Test", repo=self.primary)
         self.git("config", "commit.gpgsign", "false", repo=self.primary)
         self.write(self.primary / ".gitignore", "/var/agent-harness/\n")
+        self.write(self.primary / "AGENTS.md",
+                   "# Rules\n\n## 实现与验证\nverify\n\n"
+                   "## 安全与权限\nsecure\n\n"
+                   "## 自治执行与停止条件\nstop on drift\n")
+        self.write(self.primary / "docs/agent/AUTONOMY.md",
+                   "# SOP\n\n## 修复预算与人工升级\nthree repeats stop\n")
+        self.write(self.primary / "docs/agent/PROJECT_MEMORY.md",
+                   "# Memory\n\n## 身份与权威入口\nrepository truth\n\n"
+                   "## 已确认边界与维护\nkeep boundaries\n")
         self.plan = Path("docs/superpowers/plans/approved.md")
         self.write(self.primary / self.plan,
                    "# Plan\n\n**Status:** approved\n\n"
@@ -114,6 +123,13 @@ class WorktreeCase(unittest.TestCase):
 
 
 class RunServiceTests(WorktreeCase):
+    def test_gate_run_uses_a_trusted_runtime_identity(self):
+        from agent_harness import run_service as module
+        self.init_run()
+        with patch.object(module, "run_gate", wraps=module.run_gate) as execute:
+            self.service.run_gates(self.state.run_id)
+        self.assertTrue(execute.call_args.kwargs["runtime_identity"].tool_versions)
+
     def test_gate_run_records_local_summary_without_log_payload(self):
         self.init_run()
         state = self.service.run_gates(self.state.run_id)
