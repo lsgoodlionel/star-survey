@@ -3,6 +3,7 @@ package cn.mjy.platform.survey;
 import cn.mjy.platform.shared.TenantId;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.text.Normalizer;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
@@ -43,6 +44,7 @@ class SurveyRepository {
     }
 
     void insert(TenantId tenant, UUID id, String title, String definition, String createdBy) {
+        String resourceName = Normalizer.normalize(title, Normalizer.Form.NFC);
         jdbc.sql("""
                         INSERT INTO survey (tenant_id, id, title, status, draft_definition, draft_version, created_by)
                         VALUES (:tenant, :id, :title, 'draft', CAST(:definition AS jsonb), 1, :createdBy)
@@ -52,6 +54,10 @@ class SurveyRepository {
                 .param("title", title)
                 .param("definition", definition)
                 .param("createdBy", createdBy)
+                .update();
+        jdbc.sql("UPDATE access_resource SET name = :title, updated_at = now() WHERE id = :id")
+                .param("title", resourceName)
+                .param("id", id)
                 .update();
     }
 
@@ -77,15 +83,24 @@ class SurveyRepository {
 
     /** 乐观锁保存草稿：只有当前版本等于 expectedVersion 时才写入；返回新版本，版本不符返回空。 */
     Optional<Integer> updateDraft(UUID id, int expectedVersion, String title, String definition) {
+        String resourceName = Normalizer.normalize(title, Normalizer.Form.NFC);
         return jdbc.sql("""
-                        UPDATE survey
-                           SET draft_definition = CAST(:definition AS jsonb), title = :title,
-                               draft_version = draft_version + 1, updated_at = now()
-                         WHERE id = :id AND draft_version = :expected
-                        RETURNING draft_version
+                        WITH saved AS (
+                            UPDATE survey
+                               SET draft_definition = CAST(:definition AS jsonb), title = :title,
+                                   draft_version = draft_version + 1, updated_at = now()
+                             WHERE id = :id AND draft_version = :expected
+                            RETURNING draft_version
+                        ), synced AS (
+                            UPDATE access_resource SET name = :resourceName, updated_at = now()
+                             WHERE id = :id AND EXISTS (SELECT 1 FROM saved)
+                            RETURNING id
+                        )
+                        SELECT saved.draft_version FROM saved LEFT JOIN synced ON true
                         """)
                 .param("definition", definition)
                 .param("title", title)
+                .param("resourceName", resourceName)
                 .param("id", id)
                 .param("expected", expectedVersion)
                 .query(Integer.class)

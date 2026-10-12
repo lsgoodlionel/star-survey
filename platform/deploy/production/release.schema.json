@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lsgoodlionel/star-survey/schemas/release.schema.json",
+  "title": "Survey production release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "version", "channel", "commit", "supportedHosts", "minimumSourceVersion", "database", "images", "assets"],
+  "properties": {
+    "schemaVersion": {"type": "integer", "const": 1},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-rc\\.[0-9]+)?$"},
+    "channel": {"enum": ["stable", "candidate"]},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "supportedHosts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ubuntu", "architectures"],
+      "properties": {
+        "ubuntu": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["22.04", "24.04"]}},
+        "architectures": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["amd64", "arm64"]}}
+      }
+    },
+    "minimumSourceVersion": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "nativeAcceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "minimumFreeBytes", "tlsMode", "diskEvidence"],
+      "properties": {
+        "profile": {"const": "github-actions-native-v1"},
+        "minimumFreeBytes": {"type": "integer", "const": 8589934592},
+        "tlsMode": {"const": "local-ca"},
+        "diskEvidence": {"const": "separately-tested"}
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "backupSchema", "rollback", "compatibleSourceSchemas"],
+      "properties": {
+        "schema": {"type": "string", "minLength": 1},
+        "backupSchema": {"type": "integer", "const": 2},
+        "rollback": {"enum": ["compatible", "restore-only", "none"]},
+        "compatibleSourceSchemas": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"}}
+      }
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["CADDY_IMAGE", "ADMIN_IMAGE", "PLATFORM_IMAGE", "PUBLISH_GATEWAY_IMAGE", "ENGINE_IMAGE", "POSTGRES_IMAGE", "MARIADB_IMAGE"],
+      "properties": {
+        "CADDY_IMAGE": {"$ref": "#/$defs/image"},
+        "ADMIN_IMAGE": {"$ref": "#/$defs/image"},
+        "PLATFORM_IMAGE": {"$ref": "#/$defs/image"},
+        "PUBLISH_GATEWAY_IMAGE": {"$ref": "#/$defs/image"},
+        "ENGINE_IMAGE": {"$ref": "#/$defs/image"},
+        "POSTGRES_IMAGE": {"$ref": "#/$defs/image"},
+        "MARIADB_IMAGE": {"$ref": "#/$defs/image"}
+      }
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bundles"],
+      "properties": {
+        "bundles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "amd64": {"$ref": "#/$defs/bundle"},
+            "arm64": {"$ref": "#/$defs/bundle"}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "image": {"type": "string", "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"},
+    "bundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "sha256"],
+          "properties": {
+            "name": {"type": "string", "pattern": "^survey-[0-9]+\\.[0-9]+\\.[0-9]+(?:-rc\\.[0-9]+)?-linux-(?:amd64|arm64)\\.tar\\.gz$"},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+    }
+  }
+}

@@ -303,7 +303,11 @@ class ResultStore:
     def _connect(self) -> sqlite3.Connection:
         # 每次操作一个连接：sqlite3 连接不能跨线程共用，ThreadingHTTPServer 每请求一线程。
         # 连接作为上下文管理器只管事务提交，不会关闭连接，所以另包一层 closing。
-        return _ClosingConnection(sqlite3.connect(self._path, timeout=_BUSY_TIMEOUT_SECONDS))
+        connection = sqlite3.connect(self._path, timeout=_BUSY_TIMEOUT_SECONDS)
+        # SQLite 的编译期默认值并不一致。显式覆写删除/更新过的页，确保邀请码在正文
+        # 留存窗口结束后不会继续残留在数据库文件的空闲区域，同时避免自动 VACUUM 的独占锁。
+        connection.execute("PRAGMA secure_delete=ON")
+        return _ClosingConnection(connection)
 
 
 def _migrate(connection: sqlite3.Connection) -> None:

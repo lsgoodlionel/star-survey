@@ -128,6 +128,20 @@ class ValidationStopsBeforeTheEngineTest(unittest.TestCase):
 
         self.assertIn("E_MISSING_ANSWERS", " ".join(result.failures))
 
+    def test_unmaterialized_brand_asset_is_a_structured_compile_failure(self):
+        payload = sample_payload()
+        payload["theme"] = "zh-business"
+        payload["branding"] = {"brandingVersion": 1, "logoAsset": {"assetId": "logo-id"}}
+        definition = SurveyDefinition.from_dict(payload)
+        engine = FakeEngine(definition)
+
+        result = publisher_for(engine).publish(definition)
+
+        self.assertFalse(result.ok)
+        self.assertEqual("compile", result.failed_stage)
+        self.assertIn("E_BRAND_ASSET_NOT_MATERIALIZED", " ".join(result.failures))
+        self.assertNotIn("import_survey", engine.methods())
+
 
 class RollbackTest(unittest.TestCase):
     def test_an_engine_rename_fails_verification_and_deletes_the_survey(self):

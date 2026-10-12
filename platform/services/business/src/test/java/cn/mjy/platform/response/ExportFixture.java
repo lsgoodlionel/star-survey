@@ -114,6 +114,17 @@ public class ExportFixture {
                 .param("id", jobId).update());
     }
 
+    /** 已物化快照实际包含的发布版本，按版本号升序。 */
+    public List<Integer> snapshotVersions(TenantId tenant, UUID jobId) {
+        return tenantScope.call(tenant, () -> jdbc.sql("""
+                        SELECT DISTINCT version_no
+                          FROM response_export_item
+                         WHERE job_id = :job
+                         ORDER BY version_no
+                        """)
+                .param("job", jobId).query(Integer.class).list());
+    }
+
     /** CSV 包：文件名 → 行（每行已按 CSV 规则拆成单元格）。 */
     public static Map<String, List<List<String>>> unzipCsv(byte[] zip) {
         Map<String, List<List<String>>> files = new LinkedHashMap<>();

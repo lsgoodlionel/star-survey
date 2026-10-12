@@ -40,7 +40,7 @@ ALLOWED_METHODS = frozenset({
     # 发布链路（publish.py）
     "import_survey", "activate_survey", "activate_tokens", "add_participants", "delete_survey",
     # 回读与收口（verify.py、drift_check.py、close.py）
-    "get_fieldmap", "list_questions", "get_survey_properties", "set_survey_properties",
+    "get_fieldmap", "list_questions", "list_surveys", "get_survey_properties", "set_survey_properties",
     # 答卷读取（responses.py）
     "export_responses",
     # 邀请码撤销（ADR 0016 / contracts publish-gateway-v1.4）
@@ -210,6 +210,13 @@ class RemoteControlClient:
         result = self.checked("list_questions", [self._session(), survey_id])
         if not isinstance(result, list):
             raise RpcError("list_questions", result)
+        return result
+
+    def list_surveys(self) -> List[Dict[str, Any]]:
+        """Read-only recovery lookup for a pre-registered preview import marker."""
+        result = self.checked("list_surveys", [self._session()])
+        if not isinstance(result, list):
+            raise RpcError("list_surveys", result)
         return result
 
     def get_survey_properties(self, survey_id: int) -> Dict[str, Any]:

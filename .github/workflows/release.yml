@@ -1,0 +1,1102 @@
+name: Survey production images
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/release/**'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/platform-quality.yml'
+      - 'platform/apps/admin-web/**'
+      - 'platform/services/business/**'
+      - 'platform/tools/publish-gateway/**'
+      - 'platform/deploy/production/**'
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Existing tagged workflow run containing the release-candidate artifact
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  policy:
+    name: Validate release event
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      release: ${{ steps.event.outputs.release }}
+      version: ${{ steps.event.outputs.version }}
+      channel: ${{ steps.event.outputs.channel }}
+    steps:
+      - name: Accept only canonical release versions
+        id: event
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+
+          event = os.environ['GITHUB_EVENT_NAME']
+          ref = os.environ['GITHUB_REF']
+          ref_name = os.environ['GITHUB_REF_NAME']
+          release = False
+          version = f"build-{os.environ['GITHUB_SHA'][:12]}"
+          channel = 'build'
+
+          if event == 'push':
+              canonical = re.fullmatch(
+                  r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+                  r'(?:-rc\.(0|[1-9][0-9]*))?',
+                  ref_name,
+              )
+              if not ref.startswith('refs/tags/') or canonical is None:
+                  raise SystemExit('only canonical vX.Y.Z and vX.Y.Z-rc.N tags may publish')
+              release = True
+              version = ref_name[1:]
+              channel = 'candidate' if '-rc.' in version else 'stable'
+
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
+              output.write(f"release={str(release).lower()}\n")
+              output.write(f"version={version}\n")
+              output.write(f"channel={channel}\n")
+          PY
+
+  quality:
+    name: Complete platform quality gates
+    needs: [policy]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/platform-quality.yml
+
+  build-local:
+    name: Build ${{ matrix.id }} without registry access
+    if: needs.policy.outputs.release != 'true'
+    runs-on: ubuntu-24.04
+    needs: [policy, quality]
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: admin
+            context: platform/apps/admin-web
+            image: star-survey-admin
+          - id: platform
+            context: platform/services/business
+            image: star-survey-platform
+          - id: publish-gateway
+            context: platform/tools/publish-gateway
+            image: star-survey-publish-gateway
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Read deterministic source timestamp
+        id: source
+        shell: bash
+        run: echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+
+      - name: Build local multi-architecture OCI archive
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          outputs: type=oci,dest=/tmp/${{ matrix.id }}.tar
+          tags: local/star-survey/${{ matrix.image }}:${{ needs.policy.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.policy.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.policy.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.source.outputs.created }}
+          pull: true
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=${{ matrix.id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.id }}
+
+      - name: Validate local archive and digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -s "/tmp/${{ matrix.id }}.tar"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+  publish-images:
+    name: Publish ${{ matrix.id }} multi-architecture image
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
+    runs-on: ubuntu-24.04
+    needs: [policy, quality]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: admin
+            context: platform/apps/admin-web
+            image: star-survey-admin
+          - id: platform
+            context: platform/services/business
+            image: star-survey-platform
+          - id: publish-gateway
+            context: platform/tools/publish-gateway
+            image: star-survey-publish-gateway
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Read deterministic source timestamp
+        id: source
+        shell: bash
+        run: echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push immutable manifest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/lsgoodlionel/${{ matrix.image }}:${{ needs.policy.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.policy.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.policy.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.source.outputs.created }}
+          pull: true
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=${{ matrix.id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.id }}
+
+      - name: Record immutable manifest digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/lsgoodlionel/${{ matrix.image }}
+          VERSION: ${{ needs.policy.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p image-metadata
+          jq -n --arg image "$IMAGE" --arg digest "$DIGEST" --arg version "$VERSION" \
+            '{image: $image, digest: $digest, version: $version}' \
+            > "image-metadata/${{ matrix.id }}.json"
+
+      - name: Upload manifest digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-${{ matrix.id }}-metadata
+          path: image-metadata/${{ matrix.id }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  secure-images:
+    name: Scan, sign and attest ${{ matrix.image }}
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
+    runs-on: ubuntu-24.04
+    needs: [policy, quality, publish-images]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [admin, platform, publish-gateway]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download immutable image metadata
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: image-${{ matrix.image }}-metadata
+          path: image-metadata
+
+      - name: Load and validate image metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="image-metadata/${{ matrix.image }}.json"
+          image="$(jq -er '.image' "$metadata")"
+          digest="$(jq -er '.digest' "$metadata")"
+          [[ "$image" == ghcr.io/lsgoodlionel/star-survey-* ]]
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'image=%s\ndigest=%s\n' "$image" "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate versioned vulnerability policy
+        id: vulnerability-policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from datetime import date, timedelta
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          policy = json.loads(Path('.github/release/vulnerability-policy.json').read_text())
+          if policy.get('schemaVersion') != 1:
+              raise SystemExit('unsupported vulnerability policy schema')
+          version = policy.get('trivyVersion', '')
+          if not re.fullmatch(r'v\d+\.\d+\.\d+', version):
+              raise SystemExit('Trivy must be pinned to an exact version')
+          severities = policy.get('blockSeverities')
+          if severities != ['HIGH', 'CRITICAL']:
+              raise SystemExit('release policy must block HIGH and CRITICAL findings')
+          ignore_unfixed = policy.get('ignoreUnfixed')
+          if not isinstance(ignore_unfixed, bool):
+              raise SystemExit('ignoreUnfixed must be boolean')
+          requirements = policy.get('exceptionRequirements', {})
+          required_fields = {'id', 'rootCause', 'owner', 'expiresAt'}
+          if set(requirements.get('requiredFields', [])) != required_fields:
+              raise SystemExit('vulnerability exception fields are not fail closed')
+          maximum_lifetime = requirements.get('maximumLifetimeDays')
+          if isinstance(maximum_lifetime, bool) or not isinstance(maximum_lifetime, int):
+              raise SystemExit('maximumLifetimeDays must be an integer')
+          if not 1 <= maximum_lifetime <= 90:
+              raise SystemExit('maximumLifetimeDays must be between 1 and 90')
+
+          exceptions = policy.get('exceptions')
+          if not isinstance(exceptions, list):
+              raise SystemExit('vulnerability exceptions must be a list')
+          lines = ['vulnerabilities: []'] if not exceptions else ['vulnerabilities:']
+          seen = set()
+          for exception in exceptions:
+              identifier = exception.get('id', '')
+              root_cause = exception.get('rootCause', '').strip()
+              owner = exception.get('owner', '').strip()
+              expires = date.fromisoformat(exception.get('expiresAt', ''))
+              if not re.fullmatch(r'CVE-\d{4}-\d{4,}', identifier):
+                  raise SystemExit(f'invalid vulnerability id: {identifier}')
+              if identifier in seen or not root_cause or not owner:
+                  raise SystemExit(f'incomplete or duplicate exception: {identifier}')
+              if expires <= date.today():
+                  raise SystemExit(f'expired vulnerability exception: {identifier}')
+              if expires > date.today() + timedelta(days=maximum_lifetime):
+                  raise SystemExit(f'vulnerability exception is too long-lived: {identifier}')
+              seen.add(identifier)
+              statement = f'{root_cause} Owner: {owner}'
+              lines.extend([
+                  f'  - id: {json.dumps(identifier)}',
+                  f'    statement: {json.dumps(statement)}',
+                  f'    expired_at: {expires.isoformat()}',
+              ])
+
+          Path('.trivyignore.release.yaml').write_text('\n'.join(lines) + '\n')
+          output = Path(os.environ['GITHUB_OUTPUT'])
+          with output.open('a') as stream:
+              stream.write(f'trivy-version={version}\n')
+              stream.write(f'severities={",".join(severities)}\n')
+              stream.write(f'ignore-unfixed={str(ignore_unfixed).lower()}\n')
+          PY
+
+      - name: Scan immutable image digest with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.metadata.outputs.image }}@${{ steps.metadata.outputs.digest }}
+          format: json
+          output: trivy-${{ matrix.image }}.json
+          exit-code: '1'
+          severity: ${{ steps.vulnerability-policy.outputs.severities }}
+          ignore-unfixed: ${{ steps.vulnerability-policy.outputs.ignore-unfixed }}
+          trivyignores: .trivyignore.release.yaml
+          version: ${{ steps.vulnerability-policy.outputs.trivy-version }}
+          scanners: vuln
+          timeout: 15m
+
+      - name: Generate SPDX SBOM from immutable digest
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.metadata.outputs.image }}@${{ steps.metadata.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.image }}.spdx.json
+          upload-artifact: false
+          dependency-snapshot: false
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.2
+
+      - name: Sign manifest digest with GitHub OIDC
+        shell: bash
+        env:
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          DIGEST: ${{ steps.metadata.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes \
+            --bundle "cosign-${{ matrix.image }}.sigstore.json" \
+            "${IMAGE}@${DIGEST}"
+
+      - name: Generate GitHub provenance attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.metadata.outputs.image }}
+          subject-digest: ${{ steps.metadata.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate GitHub SBOM attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.metadata.outputs.image }}
+          subject-digest: ${{ steps.metadata.outputs.digest }}
+          sbom-path: sbom-${{ matrix.image }}.spdx.json
+          push-to-registry: true
+
+      - name: Preserve scan, SBOM, digest and signing bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-${{ matrix.image }}-supply-chain
+          path: |
+            image-metadata/${{ matrix.image }}.json
+            trivy-${{ matrix.image }}.json
+            sbom-${{ matrix.image }}.spdx.json
+            cosign-${{ matrix.image }}.sigstore.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  candidate-assets:
+    name: Assemble one immutable release candidate
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
+    runs-on: ubuntu-24.04
+    needs: [policy, quality, publish-images, secure-images]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Docker Buildx for manifest resolution
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR for immutable manifest reads
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all three application image identities
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: image-*-metadata
+          path: image-metadata
+          merge-multiple: true
+
+      - name: Resolve the explicit predecessor policy
+        id: baseline
+        shell: bash
+        env:
+          VERSION: ${{ needs.policy.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - "$VERSION" .github/release/baseline-policy.json > baseline.env <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          version, policy_path = sys.argv[1], Path(sys.argv[2])
+          policy = json.loads(policy_path.read_text(encoding='utf-8'))
+          if policy.get('schemaVersion') != 1 or set(policy) != {'schemaVersion', 'releases'}:
+              raise SystemExit('baseline policy shape is invalid')
+          rule = policy.get('releases', {}).get(version)
+          if not isinstance(rule, dict) or rule.get('mode') not in {'predecessor', 'bootstrap'}:
+              raise SystemExit('release has no explicit baseline policy')
+          if rule['mode'] == 'bootstrap':
+              if set(rule) != {'mode'}:
+                  raise SystemExit('bootstrap policy cannot name a synthetic predecessor')
+              if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+-rc\.1', version) is None:
+                  raise SystemExit('bootstrap is only valid for the first prerelease RC')
+              print('BASELINE_MODE=bootstrap')
+              print('MINIMUM_SOURCE_VERSION=0.0.0')
+          else:
+              if set(rule) != {'mode', 'version', 'manifestSha256'}:
+                  raise SystemExit('predecessor policy shape is invalid')
+              if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?', rule['version']):
+                  raise SystemExit('predecessor version is invalid')
+              if not re.fullmatch(r'[0-9a-f]{64}', rule['manifestSha256']):
+                  raise SystemExit('predecessor manifest checksum is invalid')
+              minimum = rule['version'].split('-rc.', 1)[0]
+              print('BASELINE_MODE=predecessor')
+              print(f'BASELINE_VERSION={rule["version"]}')
+              print(f'BASELINE_MANIFEST_SHA256={rule["manifestSha256"]}')
+              print(f'MINIMUM_SOURCE_VERSION={minimum}')
+          PY
+          source baseline.env
+          cat baseline.env >> "$GITHUB_ENV"
+          printf 'mode=%s\n' "$BASELINE_MODE" >> "$GITHUB_OUTPUT"
+          if [[ "$BASELINE_MODE" == bootstrap ]]; then
+            [[ "$(gh release list --limit 1 --json tagName --jq 'length')" == 0 ]]
+          fi
+
+      - name: Download and verify the real predecessor Release
+        if: steps.baseline.outputs.mode == 'predecessor'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source baseline.env
+          mkdir -p release-artifact/baseline
+          gh release download "v$BASELINE_VERSION" \
+            --pattern "survey-$BASELINE_VERSION-release.json" \
+            --pattern "survey-$BASELINE_VERSION-linux-amd64.tar.gz" \
+            --pattern "survey-$BASELINE_VERSION-linux-arm64.tar.gz" \
+            --dir release-artifact/baseline
+          mv "release-artifact/baseline/survey-$BASELINE_VERSION-release.json" release-artifact/baseline/release.json
+          [[ "$(sha256sum release-artifact/baseline/release.json | awk '{print $1}')" == "$BASELINE_MANIFEST_SHA256" ]]
+          python3 - release-artifact/baseline "$BASELINE_VERSION" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          root, expected_version = Path(sys.argv[1]), sys.argv[2]
+          manifest = json.loads((root / 'release.json').read_text(encoding='utf-8'))
+          if manifest.get('version') != expected_version:
+              raise SystemExit('predecessor manifest version mismatch')
+          expected_profile = {
+              'profile': 'github-actions-native-v1',
+              'minimumFreeBytes': 8 * 1024**3,
+              'tlsMode': 'local-ca',
+              'diskEvidence': 'separately-tested',
+          }
+          if manifest.get('nativeAcceptance') != expected_profile:
+              raise SystemExit('predecessor was not released with the native acceptance profile')
+          bundles = manifest.get('assets', {}).get('bundles', {})
+          if set(bundles) != {'amd64', 'arm64'}:
+              raise SystemExit('predecessor must contain both native bundles')
+          for architecture, asset in bundles.items():
+              path = root / asset.get('name', '')
+              if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != asset.get('sha256'):
+                  raise SystemExit(f'predecessor bundle checksum mismatch: {architecture}')
+          images = manifest.get('images', {})
+          if not images or any(re.fullmatch(r'[^@\s]+@sha256:[0-9a-f]{64}', value) is None for value in images.values()):
+              raise SystemExit('predecessor image manifest digests are invalid')
+          PY
+
+      - name: Build the candidate bundle once
+        shell: bash
+        env:
+          VERSION: ${{ needs.policy.outputs.version }}
+          CADDY_SOURCE_IMAGE: caddy:2.11.6-alpine
+          ENGINE_SOURCE_IMAGE: ghcr.io/lsgoodlionel/survey-engine:0.1.0
+          POSTGRES_SOURCE_IMAGE: postgres:16.10-alpine
+          MARIADB_SOURCE_IMAGE: mariadb:10.11.14
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifact image-inputs
+          source baseline.env
+          CANDIDATE_VERSION="$VERSION"
+          printf '%s\n' "$CANDIDATE_VERSION" > image-inputs/candidate-version
+
+          resolve_image() {
+            local reference="$1"
+            local digest
+            digest="$(docker buildx imagetools inspect "$reference" | awk '/^Digest:/ {print $2; exit}')"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf '%s@%s' "${reference%%:*}" "$digest"
+          }
+
+          caddy_image="$(resolve_image "$CADDY_SOURCE_IMAGE")"
+          engine_image="$(resolve_image "$ENGINE_SOURCE_IMAGE")"
+          postgres_image="$(resolve_image "$POSTGRES_SOURCE_IMAGE")"
+          mariadb_image="$(resolve_image "$MARIADB_SOURCE_IMAGE")"
+          admin_image="$(jq -er '.image + "@" + .digest' image-metadata/admin.json)"
+          platform_image="$(jq -er '.image + "@" + .digest' image-metadata/platform.json)"
+          gateway_image="$(jq -er '.image + "@" + .digest' image-metadata/publish-gateway.json)"
+          source_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          database_schema="$(git ls-tree -r --name-only "$GITHUB_SHA" platform/services/business/src/main/resources/db/migration \
+            | sed -n 's#.*V\([0-9][0-9]*\)__.*#\1#p' | sort -n | tail -1)"
+          [[ "$database_schema" =~ ^[0-9]+$ ]]
+
+          common=(
+            --source platform/deploy/production
+            --trusted-root "$GITHUB_WORKSPACE"
+            --commit "$GITHUB_SHA"
+            --database-schema "$database_schema"
+            --backup-schema 2
+            --rollback restore-only
+            --compatible-source-schema "$database_schema"
+            --source-date-epoch "$source_epoch"
+            --image "CADDY_IMAGE=$caddy_image"
+            --image "ADMIN_IMAGE=$admin_image"
+            --image "PLATFORM_IMAGE=$platform_image"
+            --image "PUBLISH_GATEWAY_IMAGE=$gateway_image"
+            --image "ENGINE_IMAGE=$engine_image"
+            --image "POSTGRES_IMAGE=$postgres_image"
+            --image "MARIADB_IMAGE=$mariadb_image"
+            --native-acceptance-profile github-actions-native-v1
+          )
+          channel=stable
+          [[ "$CANDIDATE_VERSION" == *-rc.* ]] && channel=candidate
+          python3 platform/deploy/production/release/build_release.py \
+            "${common[@]}" \
+            --output release-artifact/candidate \
+            --version-file image-inputs/candidate-version \
+            --channel "$channel" \
+            --minimum-source-version "$MINIMUM_SOURCE_VERSION"
+
+          manifest_sha="$(sha256sum release-artifact/candidate/release.json | awk '{print $1}')"
+          jq -n \
+            --arg version "$CANDIDATE_VERSION" \
+            --arg commit "$GITHUB_SHA" \
+            --arg manifestSha256 "$manifest_sha" \
+            --arg adminReference "$admin_image" \
+            --arg adminDigest "$(jq -er '.digest' image-metadata/admin.json)" \
+            --arg platformReference "$platform_image" \
+            --arg platformDigest "$(jq -er '.digest' image-metadata/platform.json)" \
+            --arg gatewayReference "$gateway_image" \
+            --arg gatewayDigest "$(jq -er '.digest' image-metadata/publish-gateway.json)" \
+            --arg baselineMode "$BASELINE_MODE" \
+            --argjson bundles "$(jq '.assets.bundles' release-artifact/candidate/release.json)" \
+            --argjson baseline "$(if [[ "$BASELINE_MODE" == predecessor ]]; then jq --arg manifestSha256 "$BASELINE_MANIFEST_SHA256" '{mode: "predecessor", manifestSha256: $manifestSha256, version, commit, images, bundles: .assets.bundles}' release-artifact/baseline/release.json; else printf '{"mode":"bootstrap"}'; fi)" \
+            '{schemaVersion: 1, version: $version, commit: $commit, manifestSha256: $manifestSha256,
+              bundles: $bundles,
+              baseline: $baseline,
+              images: {
+                admin: {reference: $adminReference, digest: $adminDigest},
+                platform: {reference: $platformReference, digest: $platformDigest},
+                "publish-gateway": {reference: $gatewayReference, digest: $gatewayDigest}
+              }}' > release-artifact/identity.json
+
+      - name: Upload the single candidate consumed by every native runner
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate
+          path: release-artifact
+          if-no-files-found: error
+          retention-days: 14
+
+  native-acceptance:
+    name: Native acceptance Ubuntu ${{ matrix.ubuntu }} ${{ matrix.architecture }}
+    if: >-
+      always() && !cancelled() && needs.quality.result == 'success' &&
+      (needs.policy.outputs.channel == 'candidate' || inputs.candidate_run_id != '') &&
+      (needs.candidate-assets.result == 'success' || inputs.candidate_run_id != '')
+    runs-on: ${{ matrix.runner }}
+    needs: [policy, quality, candidate-assets]
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            ubuntu: '22.04'
+            architecture: amd64
+            id: ubuntu-22-04-amd64
+          - runner: ubuntu-24.04
+            ubuntu: '24.04'
+            architecture: amd64
+            id: ubuntu-24-04-amd64
+          - runner: ubuntu-22.04-arm
+            ubuntu: '22.04'
+            architecture: arm64
+            id: ubuntu-22-04-arm64
+          - runner: ubuntu-24.04-arm
+            ubuntu: '24.04'
+            architecture: arm64
+            id: ubuntu-24-04-arm64
+    steps:
+      - name: Download the shared immutable candidate
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-candidate
+          path: candidate-assets
+          run-id: ${{ inputs.candidate_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+
+      - name: Log in to GHCR for native image pulls
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Load the shared candidate identity
+        id: identity
+        shell: bash
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          identity=candidate-assets/identity.json
+          test -f "$identity"
+          printf 'manifest-sha=%s\n' "$(jq -er '.manifestSha256' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'bundle-sha=%s\n' "$(jq -er --arg architecture "$ARCHITECTURE" '.bundles[$architecture].sha256' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'admin-digest=%s\n' "$(jq -er '.images.admin.digest' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'platform-digest=%s\n' "$(jq -er '.images.platform.digest' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'gateway-digest=%s\n' "$(jq -er '.images["publish-gateway"].digest' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'baseline-mode=%s\n' "$(jq -er '.baseline.mode' "$identity")" >> "$GITHUB_OUTPUT"
+
+      - name: Extract the checksum-bound acceptance orchestrator
+        shell: bash
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          BUNDLE_SHA256: ${{ steps.identity.outputs.bundle-sha }}
+        run: |
+          set -euo pipefail
+          bundle="$(jq -er --arg architecture "$ARCHITECTURE" '.bundles[$architecture].name' candidate-assets/identity.json)"
+          [[ "$(sha256sum "candidate-assets/candidate/$bundle" | awk '{print $1}')" == "$BUNDLE_SHA256" ]]
+          mkdir -p orchestrator
+          tar -xzf "candidate-assets/candidate/$bundle" -C orchestrator \
+            release/native_acceptance.sh release/native_acceptance_evidence.py
+          chmod 0755 orchestrator/release/native_acceptance.sh orchestrator/release/native_acceptance_evidence.py
+
+      - name: Execute real clean-host install upgrade restore and uninstall
+        timeout-minutes: 90
+        shell: bash
+        env:
+          NATIVE_ACCEPTANCE_REAL: '1'
+          GITHUB_ACTIONS: 'true'
+          SURVEY_NATIVE_ACCEPTANCE: '1'
+          CANDIDATE_DIR: ${{ github.workspace }}/candidate-assets
+          CANDIDATE_IDENTITY: ${{ github.workspace }}/candidate-assets/identity.json
+          CANDIDATE_MANIFEST_SHA256: ${{ steps.identity.outputs.manifest-sha }}
+          CANDIDATE_BUNDLE_SHA256: ${{ steps.identity.outputs.bundle-sha }}
+          ADMIN_IMAGE_DIGEST: ${{ steps.identity.outputs.admin-digest }}
+          PLATFORM_IMAGE_DIGEST: ${{ steps.identity.outputs.platform-digest }}
+          PUBLISH_GATEWAY_IMAGE_DIGEST: ${{ steps.identity.outputs.gateway-digest }}
+          EXPECTED_UBUNTU: ${{ matrix.ubuntu }}
+          EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
+          BASELINE_MODE: ${{ steps.identity.outputs.baseline-mode }}
+          SURVEY_ACCEPTANCE_PUBLIC_HOST: survey-native.test
+          SURVEY_ACCEPTANCE_EXPECTED_PUBLIC_ADDRESS: 127.0.0.1
+          SURVEY_ACCEPTANCE_ADMIN_EMAIL: native-acceptance@example.com
+          EVIDENCE_DIR: ${{ github.workspace }}/native-evidence
+        run: sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh
+
+      - name: Preserve redacted native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-acceptance-${{ matrix.ubuntu }}-${{ matrix.architecture }}
+          path: native-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  release-ready:
+    name: Release candidate passed every native host
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
+    runs-on: ubuntu-24.04
+    needs: [policy, candidate-assets, native-acceptance]
+    outputs:
+      promotable: ${{ steps.readiness.outputs.promotable }}
+      readiness-artifact: native-release-readiness
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Confirm the blocking native matrix completed
+        shell: bash
+        run: test '${{ needs.native-acceptance.result }}' = success
+
+      - name: Download the checksum-bound candidate
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-candidate
+          path: release-candidate
+
+      - name: Download all native evidence summaries
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: native-acceptance-*
+          path: native-evidence
+
+      - name: Generate fail-closed release readiness evidence
+        id: readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          identity=release-candidate/identity.json
+          bundle="$(jq -er '.bundles.amd64.name' "$identity")"
+          bundle_sha="$(jq -er '.bundles.amd64.sha256' "$identity")"
+          [[ "$(sha256sum "release-candidate/candidate/$bundle" | awk '{print $1}')" == "$bundle_sha" ]]
+          mkdir -p readiness-runtime
+          tar -xzf "release-candidate/candidate/$bundle" -C readiness-runtime release/native_acceptance_evidence.py
+          python3 readiness-runtime/release/native_acceptance_evidence.py readiness \
+            --identity "$identity" \
+            --candidate-directory release-candidate/candidate \
+            --evidence-directory native-evidence \
+            --output release-readiness.json
+          python3 readiness-runtime/release/native_acceptance_evidence.py verify-readiness \
+            --readiness release-readiness.json \
+            --identity "$identity" \
+            --candidate-directory release-candidate/candidate \
+            --evidence-directory native-evidence
+          printf 'promotable=%s\n' "$(jq -er '.promotable' release-readiness.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve the Task 4 promotion gate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-release-readiness
+          path: release-readiness.json
+          if-no-files-found: error
+          retention-days: 30
+
+  attest-release-assets:
+    name: Sign and attest the verified RC assets
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'candidate'
+    runs-on: ubuntu-24.04
+    needs: [policy, candidate-assets, secure-images, release-ready]
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out the checksum-bound verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download candidate runtime assets
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-candidate
+          path: candidate
+
+      - name: Download image SBOMs and Cosign bundles
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: image-*-supply-chain
+          path: supply-chain
+
+      - name: Download native readiness identity
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: native-release-readiness
+          path: readiness
+
+      - name: Assemble the exact publication asset inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir publication-assets
+          cp candidate/candidate/release.json publication-assets/
+          cp candidate/candidate/release-notes.md publication-assets/
+          cp candidate/candidate/SHA256SUMS publication-assets/
+          cp candidate/candidate/survey-*-linux-amd64.tar.gz publication-assets/
+          cp candidate/candidate/survey-*-linux-arm64.tar.gz publication-assets/
+          cp readiness/release-readiness.json publication-assets/
+          for name in admin platform publish-gateway; do
+            mapfile -t sboms < <(find supply-chain -type f -name "sbom-$name.spdx.json" -print)
+            mapfile -t bundles < <(find supply-chain -type f -name "cosign-$name.sigstore.json" -print)
+            [[ "${#sboms[@]}" -eq 1 && "${#bundles[@]}" -eq 1 ]]
+            cp "${sboms[0]}" publication-assets/
+            cp "${bundles[0]}" publication-assets/
+          done
+          (
+            cd publication-assets
+            sha256sum \
+              SHA256SUMS release-readiness.json release-notes.md release.json \
+              sbom-*.spdx.json cosign-admin.sigstore.json cosign-platform.sigstore.json \
+              cosign-publish-gateway.sigstore.json survey-*-linux-*.tar.gz \
+              | LC_ALL=C sort -k2 > RELEASE_SHA256SUMS
+          )
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.2
+
+      - name: Log in to GHCR for final attestation verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign the complete release checksum inventory
+        shell: bash
+        run: >-
+          cosign sign-blob --yes
+          --bundle publication-assets/cosign-release.sigstore.json
+          publication-assets/RELEASE_SHA256SUMS
+
+      - name: Generate GitHub artifact attestations
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            publication-assets/survey-*-linux-amd64.tar.gz
+            publication-assets/survey-*-linux-arm64.tar.gz
+            publication-assets/release.json
+            publication-assets/SHA256SUMS
+            publication-assets/RELEASE_SHA256SUMS
+            publication-assets/release-readiness.json
+            publication-assets/sbom-admin.spdx.json
+            publication-assets/sbom-platform.spdx.json
+            publication-assets/sbom-publish-gateway.spdx.json
+
+      - name: Independently verify the complete RC before publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          platform/deploy/production/release/verify_release.sh
+          --assets publication-assets
+          --repository "$GITHUB_REPOSITORY"
+          --target-tag "$GITHUB_REF_NAME"
+          --source-tag "$GITHUB_REF_NAME"
+          --target-commit "$GITHUB_SHA"
+
+      - name: Preserve the verified RC publication assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-release-assets
+          path: publication-assets
+          if-no-files-found: error
+          retention-days: 30
+
+  stable-promotion:
+    name: Reuse a byte-identical verified RC for stable
+    if: needs.policy.outputs.release == 'true' && needs.policy.outputs.channel == 'stable'
+    runs-on: ubuntu-24.04
+    needs: [policy, quality]
+    outputs:
+      source-tag: ${{ steps.source.outputs.tag }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out the promotion verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Resolve the latest published RC for this stable version
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STABLE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release list --limit 100 --json tagName,isDraft,isPrerelease > releases.json
+          source_tag="$(python3 - "$STABLE_TAG" releases.json <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          stable = sys.argv[1]
+          match = re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', stable)
+          if match is None:
+              raise SystemExit('stable promotion tag is not canonical semver')
+          prefix = stable + '-rc.'
+          candidates = []
+          for release in json.loads(Path(sys.argv[2]).read_text(encoding='utf-8')):
+              tag = release.get('tagName', '')
+              suffix = tag.removeprefix(prefix)
+              if tag.startswith(prefix) and re.fullmatch(r'0|[1-9][0-9]*', suffix) and release.get('isPrerelease') is True and release.get('isDraft') is False:
+                  candidates.append((int(suffix), tag))
+          if not candidates:
+              raise SystemExit('no published verified RC is available for stable promotion')
+          print(max(candidates)[1])
+          PY
+          )"
+          printf 'tag=%s\n' "$source_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Redownload every source RC Release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir stable-promotion-assets
+          gh release download "$SOURCE_TAG" --dir stable-promotion-assets
+
+      - name: Log in to GHCR for promotion verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify RC bytes signatures attestations SBOM and native identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ steps.source.outputs.tag }}
+        run: >-
+          platform/deploy/production/release/verify_release.sh
+          --assets stable-promotion-assets
+          --repository "$GITHUB_REPOSITORY"
+          --target-tag "$GITHUB_REF_NAME"
+          --source-tag "$SOURCE_TAG"
+          --target-commit "$GITHUB_SHA"
+
+      - name: Preserve only the byte-identical RC assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stable-promotion-assets
+          path: stable-promotion-assets
+          if-no-files-found: error
+          retention-days: 30
+
+  publication:
+    name: Publish the independently verified GitHub Release
+    if: >-
+      always() && !cancelled() && needs.policy.outputs.release == 'true' &&
+      needs.quality.result == 'success' &&
+      ((needs.policy.outputs.channel == 'candidate' && needs.publish-images.result == 'success' &&
+        needs.secure-images.result == 'success' && needs.candidate-assets.result == 'success' &&
+        needs.native-acceptance.result == 'success' && needs.release-ready.result == 'success' &&
+        needs.attest-release-assets.result == 'success' && needs.stable-promotion.result == 'skipped') ||
+       (needs.policy.outputs.channel == 'stable' && needs.publish-images.result == 'skipped' &&
+        needs.secure-images.result == 'skipped' && needs.candidate-assets.result == 'skipped' &&
+        needs.native-acceptance.result == 'skipped' && needs.release-ready.result == 'skipped' &&
+        needs.attest-release-assets.result == 'skipped' && needs.stable-promotion.result == 'success'))
+    runs-on: ubuntu-24.04
+    needs:
+      - policy
+      - quality
+      - publish-images
+      - secure-images
+      - candidate-assets
+      - native-acceptance
+      - release-ready
+      - attest-release-assets
+      - stable-promotion
+    permissions:
+      actions: read
+      contents: write
+      packages: read
+    steps:
+      - name: Check out the final verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Redownload verified RC assets
+        if: needs.policy.outputs.channel == 'candidate'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: verified-release-assets
+          path: publication-assets
+
+      - name: Redownload byte-identical stable promotion assets
+        if: needs.policy.outputs.channel == 'stable'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: stable-promotion-assets
+          path: publication-assets
+
+      - name: Log in to GHCR for publication verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate publication tag commit identity
+        shell: bash
+        run: test "$(git rev-parse "$GITHUB_REF_NAME^{commit}")" = "$GITHUB_SHA"
+
+      - name: Render reviewed channel-specific Release metadata
+        shell: bash
+        env:
+          SOURCE_TAG: ${{ needs.stable-promotion.outputs.source-tag || github.ref_name }}
+        run: >-
+          python3 platform/deploy/production/release/render_publication.py
+          --assets publication-assets
+          --repository "$GITHUB_REPOSITORY"
+          --target-tag "$GITHUB_REF_NAME"
+          --source-tag "$SOURCE_TAG"
+          --target-commit "$GITHUB_SHA"
+          --output-body publication-metadata/body.md
+          --output-metadata publication-metadata/expected.json
+
+      - name: Reverify every asset immediately before publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ needs.stable-promotion.outputs.source-tag || github.ref_name }}
+        run: >-
+          platform/deploy/production/release/verify_release.sh
+          --assets publication-assets
+          --repository "$GITHUB_REPOSITORY"
+          --target-tag "$GITHUB_REF_NAME"
+          --source-tag "$SOURCE_TAG"
+          --target-commit "$GITHUB_SHA"
+
+      - name: Create or reconcile the immutable Release without clobbering
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          platform/deploy/production/release/publish_release.sh
+          --assets publication-assets
+          --metadata publication-metadata/expected.json
+          --body publication-metadata/body.md
+          --repository "$GITHUB_REPOSITORY"

@@ -16,9 +16,9 @@ WP-19 切片 19.3，覆盖需求 R19-06（主题／页眉页脚）、R19-07（�
   "primaryColor": "#1F6FEB",
   "pageTitle":  {"en": "Acme feedback", "zh-Hans": "Acme 意见征集"},
   "footerText": {"en": "© Acme Ltd.", "zh-Hans": "© 艾克姆有限公司"},
-  "logoFile": "logo.png",
+  "logoAsset": {"assetId": "作者资产 UUID"},
   "logoAlt": "Acme",
-  "faviconFile": "favicon.ico"
+  "faviconAsset": {"assetId": "作者资产 UUID"}
 },
 "translations": {
   "zh-Hans": {
@@ -41,8 +41,14 @@ WP-19 切片 19.3，覆盖需求 R19-06（主题／页眉页脚）、R19-07（�
 | `pageTitle` | 字符串，或 语言→字符串 的对象 | `mjybrandtitle` ＋ `mjybrandtitle__<语言>` | 浏览器标题；缺省用问卷标题 |
 | `footerText` | 字符串，或 语言→字符串 的对象 | `mjybrandfooter` ＋ `mjybrandfooter__<语言>` | 页脚文本，**按纯文本转义**后渲染 |
 | `logoFile` | `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`，且带图片扩展名 | `mjybrandlogo`＝`on`、`mjybrandlogofile`＝`./files/<名>` | 主题 `files/` 目录下的文件名 |
+| `logoAsset` | 作者态 `{ "assetId": "<UUID>" }`；受信物化态 `{ "url", "assetVersion", "contentType", "sizeBytes", "fileName": "mjy-brand-logo.<ext>" }` | 物化态只输出固定名 `./files/mjy-brand-logo.<ext>` 到 `mjybrandlogofile` | MIME 限定 PNG/JPEG/GIF/WebP，最大 5 MiB；作者不得提供物化字段 |
 | `logoAlt` | 字符串 | `mjybrandlogoalt` | 图片替代文本 |
 | `faviconFile` | 同 `logoFile`，另允许 `.ico` | `mjybrandfavicon`＝`./files/<名>` | |
+| `faviconAsset` | 作者态 `{ "assetId": "<UUID>" }`；受信物化态 `{ "url", "assetVersion", "contentType", "sizeBytes", "fileName": "mjy-brand-favicon.<ext>" }` | 物化态只输出固定名 `./files/mjy-brand-favicon.<ext>` 到 `mjybrandfavicon` | PNG/JPEG/GIF/WebP，最大 5 MiB |
+
+`logoAsset` / `faviconAsset` 是管理端作者草稿的稳定引用。作者态对象只能含 `assetId`，不能直接进入网关编译。平台在预览或发布时按当前租户、资产状态和签名取件结果解析实际版本，生成受信物化态对象。网关只接受完整的物化态字段：URL 必须是平台固定的 HTTPS 取件形状并带 `exp`、`sig`，URL 路径中的资产 UUID 必须合法，`assetVersion` 必须为正整数，`contentType` 必须与槽位匹配，`sizeBytes` 为 1 至 5 MiB，`fileName` 必须由槽位和 MIME 派生为固定名 `mjy-brand-logo.<ext>` 或 `mjy-brand-favicon.<ext>`，不含资产 UUID。网关只把固定相对路径写入 LSS，不把 URL、版本、MIME 或大小写入引擎输出。路径分隔符、`..`、外部 URL、未知字段、超限或不匹配的文件名均拒绝。SVG 不允许。
+
+同一个槽位不得同时设置旧 `logoFile` / `faviconFile` 与新 `logoAsset` / `faviconAsset`。兼容已有引擎态定义中的合法 `logoFile` / `faviconFile`；新管理端写入作者态资产引用。发送给引擎的品牌块只保留编译后的文件名与品牌文本，移除 `logoAsset` / `faviconAsset` 及任何作者态/物化元数据；不得包含 URL 或 `assetVersion`。
 
 `branding` 出现时定义的 `theme` 必须是 `zh-business`（当前唯一带品牌位的主题），否则 422。
 
@@ -55,7 +61,7 @@ WP-19 切片 19.3，覆盖需求 R19-06（主题／页眉页脚）、R19-07（�
 |---|---|
 | `customCss` | 422 `E_BRAND_CUSTOM_CSS_UNSUPPORTED` |
 | `customJs`、`headHtml`、`footerHtml` 等任何 HTML／脚本片段 | 422 `E_BRAND_UNKNOWN_KEY` |
-| `logoFile` / `faviconFile` 里带 `/`、`\`、`..`、`:` 或任何 URL | 422 `E_BRAND_ASSET` |
+| `logoFile` / `faviconFile` 里带 `/`、`\`、`..`、`:` 或任何 URL；作者资产对象带路径、URL、版本或未知字段 | 422 `E_BRAND_ASSET` |
 
 **租户不能提供 CSS 或 JS，一行都不行**，这是本切片的安全默认值，理由：
 

@@ -1,0 +1,87 @@
+{
+  "formatVersion": 3,
+  "ownedFiles": [
+    {
+      "mode": "0755",
+      "path": "scripts/agent-harness",
+      "sha256": "30b3d3d066763f03c4c5e29fd9358e75a74845a399b2982c788995cc5e7b1773"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/__init__.py",
+      "sha256": "3f4ce49ac24b7bea685abb974abcbc7884ed4b36305d10ad79d8a11be313bc3a"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/cli.py",
+      "sha256": "23a4984c49d3458acc67f94020a98e947c53c48b14fb665a531655a42249614e"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/codex_adapter.py",
+      "sha256": "e34fa147a161ffcac113f62ded256502a9690d321c905a597300523356c8580a"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/codex_response.schema.json",
+      "sha256": "3bfa713c51433c6ac896923af21aa1be84412565e0fb0fbf06847f04e41a8313"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/config.py",
+      "sha256": "e3770f41a10b8d691de629e0345e809039e4d5220e75c00f63f1b9278993d221"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/diagnostics.py",
+      "sha256": "a76dd6b8c3ff431b8571b7d0f78b44760c05c4bfb4be71b9d67de609f3e311be"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/distribution.py",
+      "sha256": "36ca449cf2615aa62f314c7887ab182b543e3f0ae4a8327fdc0120fc240aba28"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/doctor.py",
+      "sha256": "77de02f548faf4a575a9335f19622eb28d99dd403afd459e2644956328361d6d"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/gate_runner.py",
+      "sha256": "a40fd94a37a5c019ebb4c5d343d61ef81d29134f59bcc220e5338962e95756d5"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/generated_verifier.py",
+      "sha256": "fb7ecfea292f6d21394c9456685bbc5402c3f9ed3434921b4d0c4f972c2a0c41"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/git_guard.py",
+      "sha256": "a284484e6c3e2812fb0823605f980d5aae75547451cdbded0f415bb3a4dc57a5"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/run_service.py",
+      "sha256": "c4dbd03a4ea115502ee7d2f41755c49cef5028a3d232b7e6c52639cece5df287"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/agent_harness/state.py",
+      "sha256": "6a9acc1663e2db2212fe01844d6a3b4594ea8703ad78a5db8752fcb4d9483f16"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/drills/run_drills.py",
+      "sha256": "03412141571e1f20a9368b81c67bd1378aa5cfae73f098b9f4d0fa4e5f32c0e7"
+    },
+    {
+      "mode": "0644",
+      "path": "tools/agent-harness/run_tests.py",
+      "sha256": "97736bec9c2962ba3c0b6f03b99fe9fde3cfe32d0b32fd2ee9c51370311018eb"
+    }
+  ],
+  "seededFiles": [],
+  "suiteVersion": "0.1.0"
+}

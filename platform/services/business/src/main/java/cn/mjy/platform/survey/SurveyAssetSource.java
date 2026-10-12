@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
@@ -39,6 +40,9 @@ public interface SurveyAssetSource {
      */
     String ASSET_VERSION = "assetVersion";
 
+    /** 只允许由平台固定的品牌文件元数据；作者态品牌对象仅能包含 assetId。 */
+    List<String> BRAND_SLOTS = List.of("logoAsset", "faviconAsset");
+
     /**
      * 把定义里每一处 {@code assetId} 换成签名地址与版本号，并登记这一版的引用。
      *
@@ -53,6 +57,65 @@ public interface SurveyAssetSource {
     /** 定义里全部带 {@code assetId} 的对象节点，按出现顺序。 */
     static List<ObjectNode> references(JsonNode definition) {
         return objectsWith(definition, ASSET_ID);
+    }
+
+    /** 仅供普通引用使用；两个品牌资产槽位由品牌解析器单独解释。 */
+    static List<ObjectNode> referencesOutsideBranding(ObjectNode definition) {
+        List<ObjectNode> found = new ArrayList<>();
+        collectOutsideBranding(definition, ASSET_ID, found, definition, false);
+        return found;
+    }
+
+    /** 定位两个有明确定义的品牌引用，不把 branding 下的任意对象解释成资产引用。 */
+    static List<BrandReference> brandReferences(ObjectNode definition, List<String> problems) {
+        JsonNode brandingNode = definition.get("branding");
+        if (!(brandingNode instanceof ObjectNode branding)) {
+            return List.of();
+        }
+        List<BrandReference> references = new ArrayList<>();
+        for (String slot : BRAND_SLOTS) {
+            JsonNode node = branding.get(slot);
+            if (node == null) {
+                continue;
+            }
+            String legacyKey = slot.equals("logoAsset") ? "logoFile" : "faviconFile";
+            if (branding.has(legacyKey)) {
+                problems.add("branding may not contain both " + legacyKey + " and " + slot);
+            }
+            if (!(node instanceof ObjectNode reference)) {
+                problems.add("branding." + slot + " must be an object containing only " + ASSET_ID);
+                continue;
+            }
+            if (reference.size() != 1 || !reference.has(ASSET_ID)) {
+                problems.add("branding." + slot + " must contain only " + ASSET_ID);
+                continue;
+            }
+            references.add(new BrandReference(slot, reference));
+        }
+        return references;
+    }
+
+    /** 品牌槽位及其对象节点。 */
+    record BrandReference(String slot, ObjectNode value) {
+    }
+
+    /** 品牌对象中的 assetId 不参与通用递归，由 {@link #brandReferences} 严格验证后单独物化。 */
+    private static void collectOutsideBranding(JsonNode node, String key, List<ObjectNode> found,
+            ObjectNode definition, boolean insideBrandAsset) {
+        if (node instanceof ObjectNode object) {
+            if (!insideBrandAsset && object.has(key)) {
+                found.add(object);
+            }
+            for (String name : object.propertyNames()) {
+                boolean brandSlot = name.equals("logoAsset") || name.equals("faviconAsset");
+                collectOutsideBranding(object.get(name), key, found, definition,
+                        insideBrandAsset || (object == definition.get("branding") && brandSlot));
+            }
+        } else if (node instanceof ArrayNode array) {
+            for (JsonNode child : array) {
+                collectOutsideBranding(child, key, found, definition, insideBrandAsset);
+            }
+        }
     }
 
     /**

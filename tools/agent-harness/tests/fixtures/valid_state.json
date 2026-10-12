@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "runId": "12345678-1234-4234-8234-123456789abc",
+  "planPath": "docs/superpowers/plans/approved.md",
+  "planSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "worktreePath": "/tmp/survey-worktree",
+  "branch": "feat/task-2",
+  "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "headCommit": "cccccccccccccccccccccccccccccccccccccccc",
+  "milestoneId": "task-2",
+  "milestoneTitle": "Atomic run state",
+  "status": "planned",
+  "attempts": {
+    "total": 1,
+    "byFingerprint": {
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd": 1
+    }
+  },
+  "lastFailureFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "requiredGates": ["unit"],
+  "gates": {
+    "unit": {
+      "gateId": "unit",
+      "status": "passed",
+      "exitCode": 0,
+      "startedAt": "2026-10-10T00:00:00Z",
+      "endedAt": "2026-10-10T00:00:01Z",
+      "evidencePath": "var/agent-harness/runs/example/evidence/unit.log",
+      "headCommit": "cccccccccccccccccccccccccccccccccccccccc"
+    }
+  },
+  "changedPaths": ["tools/agent-harness/agent_harness/state.py"],
+  "decisions": [
+    {"type": "approved", "summary": "Task 2 approved", "createdAt": "2026-10-10T00:00:00Z"}
+  ],
+  "createdAt": "2026-10-10T00:00:00Z",
+  "updatedAt": "2026-10-10T00:00:01Z"
+}

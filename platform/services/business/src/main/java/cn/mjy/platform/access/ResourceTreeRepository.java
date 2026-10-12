@@ -1,8 +1,10 @@
 package cn.mjy.platform.access;
 
+import cn.mjy.platform.access.ResourceCursor.Position;
 import cn.mjy.platform.shared.TenantId;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -17,13 +19,13 @@ import org.springframework.stereotype.Repository;
 @Repository
 class ResourceTreeRepository {
 
-    private static final String COLUMNS = "id, kind, parent_id, name, created_at";
+    private static final String COLUMNS = "id, kind, parent_id, name, created_at, updated_at, archived_at";
 
     /**
      * 调用者能看到的节点：从其生效的 view 授权所在节点向下展开（整租户授权即全部节点），
-     * 再按父节点与游标过滤，按 id 排序分页。成员不在职时授权不生效。
+     * 再在授权集内按父节点、查询条件和稳定业务顺序分页。成员不在职时授权不生效。
      */
-    private static final String VISIBLE = """
+    private static final String VISIBLE_PREFIX = """
             WITH RECURSIVE live AS (
                 SELECT g.resource_id
                 FROM access_grant g
@@ -39,12 +41,51 @@ class ResourceTreeRepository {
                        OR EXISTS (SELECT 1 FROM live WHERE resource_id IS NULL))
                 UNION
                 SELECT c.id FROM access_resource c JOIN visible v ON c.tenant_id = :tenant AND c.parent_id = v.id
+            ),
+            archived_tree (id) AS (
+                SELECT id FROM access_resource WHERE tenant_id = :tenant AND archived_at IS NOT NULL
+                UNION
+                SELECT c.id FROM access_resource c
+                JOIN archived_tree a ON c.tenant_id = :tenant AND c.parent_id = a.id
+            ),
+            authorized AS MATERIALIZED (
+                SELECT r.*, CASE r.kind WHEN 'project' THEN 0 WHEN 'folder' THEN 1 ELSE 2 END AS kind_rank
+                FROM access_resource r
+                WHERE r.tenant_id = :tenant AND r.id IN (SELECT id FROM visible)
+                  AND (CAST(:parent AS uuid) IS NULL OR r.parent_id = CAST(:parent AS uuid))
+            ),
+            candidates AS (
+                SELECT * FROM authorized
+                WHERE (CAST(:kind AS text) IS NULL OR kind = CAST(:kind AS text))
+                  AND (CAST(:query AS text) IS NULL OR name ILIKE '%' || CAST(:query AS text) || '%')
+                  AND ((:archived = 'archived' AND archived_at IS NOT NULL)
+                       OR (:archived = 'active' AND id NOT IN (SELECT id FROM archived_tree)))
             )
-            SELECT id, kind, parent_id, name, created_at FROM access_resource
-            WHERE tenant_id = :tenant AND id IN (SELECT id FROM visible)
-              AND (CAST(:parent AS uuid) IS NULL OR parent_id = CAST(:parent AS uuid))
-              AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
-            ORDER BY id
+            """;
+
+    private static final String UPDATED_DESC = VISIBLE_PREFIX + """
+            SELECT id, kind, parent_id, name, created_at, updated_at, archived_at FROM candidates
+            WHERE CAST(:afterId AS uuid) IS NULL
+               OR kind_rank > :afterRank
+               OR (kind_rank = :afterRank AND (
+                    updated_at < CAST(:afterUpdated AS timestamptz)
+                    OR (updated_at = CAST(:afterUpdated AS timestamptz) AND (
+                        name COLLATE "C" > CAST(:afterName AS text) COLLATE "C"
+                        OR (name COLLATE "C" = CAST(:afterName AS text) COLLATE "C"
+                            AND id > CAST(:afterId AS uuid))))))
+            ORDER BY kind_rank, updated_at DESC, name COLLATE "C", id
+            LIMIT :limit
+            """;
+
+    private static final String NAME_ASC = VISIBLE_PREFIX + """
+            SELECT id, kind, parent_id, name, created_at, updated_at, archived_at FROM candidates
+            WHERE CAST(:afterId AS uuid) IS NULL
+               OR kind_rank > :afterRank
+               OR (kind_rank = :afterRank AND (
+                    name COLLATE "C" > CAST(:afterName AS text) COLLATE "C"
+                    OR (name COLLATE "C" = CAST(:afterName AS text) COLLATE "C"
+                        AND id > CAST(:afterId AS uuid))))
+            ORDER BY kind_rank, name COLLATE "C", id
             LIMIT :limit
             """;
 
@@ -73,13 +114,21 @@ class ResourceTreeRepository {
                 .optional();
     }
 
-    List<ResourceView> visible(TenantId tenant, String actorId, UUID parentId, UUID afterId, int limit) {
-        return jdbc.sql(VISIBLE)
+    List<ResourceView> visible(TenantId tenant, String actorId, UUID parentId, ResourceListQuery query,
+            Position after, int limit) {
+        String sql = query.sort() == ResourceListQuery.Sort.UPDATED_DESC ? UPDATED_DESC : NAME_ASC;
+        return jdbc.sql(sql)
                 .param("view", Permission.VIEW.code())
                 .param("tenant", tenant.value())
                 .param("actor", actorId)
                 .param("parent", parentId)
-                .param("after", afterId)
+                .param("kind", query.kind() == null ? null : query.kind().code())
+                .param("query", query.query())
+                .param("archived", query.archived().code())
+                .param("afterId", after == null ? null : after.id())
+                .param("afterRank", after == null ? -1 : after.kindRank())
+                .param("afterUpdated", after == null ? null : Timestamp.from(after.updatedAt()))
+                .param("afterName", after == null ? null : after.name())
                 .param("limit", limit)
                 .query(ResourceTreeRepository::toView)
                 .list();
@@ -110,7 +159,8 @@ class ResourceTreeRepository {
     }
 
     void rename(TenantId tenant, UUID id, String name) {
-        jdbc.sql("UPDATE access_resource SET name = :name WHERE tenant_id = :tenant AND id = :id")
+        jdbc.sql("UPDATE access_resource SET name = :name, updated_at = now() "
+                        + "WHERE tenant_id = :tenant AND id = :id")
                 .param("tenant", tenant.value())
                 .param("id", id)
                 .param("name", name)
@@ -118,16 +168,54 @@ class ResourceTreeRepository {
     }
 
     void reparent(TenantId tenant, UUID id, UUID parentId) {
-        jdbc.sql("UPDATE access_resource SET parent_id = :parent WHERE tenant_id = :tenant AND id = :id")
+        jdbc.sql("UPDATE access_resource SET parent_id = :parent, updated_at = now() "
+                        + "WHERE tenant_id = :tenant AND id = :id")
                 .param("tenant", tenant.value())
                 .param("id", id)
                 .param("parent", parentId)
                 .update();
     }
 
+    /** 只改变选中节点；后代的生效归档状态由查询时沿祖先链计算。 */
+    boolean archive(TenantId tenant, UUID id) {
+        return jdbc.sql("UPDATE access_resource SET archived_at = now(), updated_at = now() "
+                        + "WHERE tenant_id = :tenant AND id = :id AND archived_at IS NULL")
+                .param("tenant", tenant.value())
+                .param("id", id)
+                .update() == 1;
+    }
+
+    /** 只恢复选中节点，绝不清除独立归档的后代。 */
+    boolean restore(TenantId tenant, UUID id) {
+        return jdbc.sql("UPDATE access_resource SET archived_at = NULL, updated_at = now() "
+                        + "WHERE tenant_id = :tenant AND id = :id AND archived_at IS NOT NULL")
+                .param("tenant", tenant.value())
+                .param("id", id)
+                .update() == 1;
+    }
+
+    boolean isEffectivelyActive(TenantId tenant, UUID id) {
+        return jdbc.sql("""
+                WITH RECURSIVE chain (id, parent_id, archived_at) AS (
+                    SELECT id, parent_id, archived_at
+                    FROM access_resource WHERE tenant_id = :tenant AND id = :id
+                    UNION ALL
+                    SELECT r.id, r.parent_id, r.archived_at
+                    FROM access_resource r
+                    JOIN chain c ON r.tenant_id = :tenant AND r.id = c.parent_id
+                )
+                SELECT COUNT(*) = 0 FROM chain WHERE archived_at IS NOT NULL
+                """)
+                .param("tenant", tenant.value())
+                .param("id", id)
+                .query(Boolean.class)
+                .single();
+    }
+
     private static ResourceView toView(ResultSet rs, int row) throws SQLException {
         return new ResourceView(rs.getObject("id", UUID.class), rs.getString("kind"),
                 rs.getObject("parent_id", UUID.class), rs.getString("name"),
-                rs.getTimestamp("created_at").toInstant());
+                rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
+                rs.getTimestamp("archived_at") == null ? null : rs.getTimestamp("archived_at").toInstant());
     }
 }

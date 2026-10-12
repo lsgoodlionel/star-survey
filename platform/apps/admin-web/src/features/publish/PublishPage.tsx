@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Send, ShieldCheck, Undo2, XCircle } from 'lucide-react';
-import { Link, useInRouterContext, useParams } from 'react-router-dom';
+import { Link, useInRouterContext, useLocation, useParams } from 'react-router-dom';
+import { useSurveyPageReady, useSurveyShell } from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
@@ -27,6 +28,7 @@ import {
   type ResourceCapabilities,
 } from '../../shared/api/resources';
 import { ApprovalTimeline } from './ApprovalTimeline';
+import { PublishedAccessPanel } from './PublishedAccessPanel';
 import { PublishStatus } from './PublishStatus';
 import { parseSurveyIdParam } from './routeParams';
 import './publish.css';
@@ -36,6 +38,8 @@ interface PublishPageProps {
   api: ApiClient;
   surveyId: string;
   tenantId: string;
+  accessToken?: string;
+  onUnauthorized?: () => void | Promise<void>;
 }
 
 type ApprovalState = ApprovalStatus | 'none';
@@ -63,8 +67,9 @@ type ApprovalAction =
   | { kind: 'approve' | 'withdraw'; approvalId: string }
   | { kind: 'reject'; approvalId: string; reason: string };
 
-export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPageProps) {
+export function PublishPage({ actorId, api, surveyId, tenantId, accessToken, onUnauthorized }: PublishPageProps) {
   const queryClient = useQueryClient();
+  const surveyShell = useSurveyShell();
   const visible = useDocumentVisibility();
   const [actionError, setActionError] = useState<ApiError | null>(null);
   const [awaitingPublishResult, setAwaitingPublishResult] = useState(false);
@@ -90,6 +95,16 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
   });
 
   const latestApproval = useMemo(() => approvals.data?.at(-1) ?? null, [approvals.data]);
+  const ready = overview.isSuccess
+    && approvals.isSuccess
+    && capabilities.isSuccess
+    && versions.isSuccess
+    && !overview.isFetching
+    && !approvals.isFetching
+    && !capabilities.isFetching
+    && !versions.isFetching
+    && Boolean(overview.data && approvals.data && capabilities.data && versions.data);
+  useSurveyPageReady('publish', ready);
 
   useEffect(() => () => {
     void queryClient.cancelQueries({
@@ -136,10 +151,12 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
 
   return (
     <main className="publish-page">
-      <header className="publish-page__header">
-        <div><p className="publish-eyebrow">问卷发布</p><h1>{overview.data.title}</h1></div>
-        <span className="publish-version-count">已发布 {versions.data?.length ?? 0} 个版本</span>
-      </header>
+      {!surveyShell ? (
+        <header className="publish-page__header">
+          <div><p className="publish-eyebrow">问卷发布</p><h1>{overview.data.title}</h1></div>
+          <span className="publish-version-count">已发布 {versions.data?.length ?? 0} 个版本</span>
+        </header>
+      ) : <div className="embedded-page-toolbar">已发布 {versions.data?.length ?? 0} 个版本</div>}
 
       <PublishStatus survey={overview.data} awaitingPublishResult={awaitingPublishResult} />
 
@@ -208,6 +225,15 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
           </ol>
         ) : <p className="publish-empty">尚无已发布版本</p>}
       </section>
+
+      <PublishedAccessPanel
+        accessToken={accessToken}
+        api={api}
+        onUnauthorized={onUnauthorized}
+        published={(versions.data?.length ?? 0) > 0}
+        surveyId={surveyId}
+        tenantId={tenantId}
+      />
     </main>
   );
 }
@@ -215,19 +241,28 @@ export function PublishPage({ actorId, api, surveyId, tenantId }: PublishPagePro
 function VersionLink({ surveyId, version }: { surveyId: string; version: number }) {
   const inRouter = useInRouterContext();
   const href = `/surveys/${surveyId}/versions/${version}`;
-  if (inRouter) return <Link to={href}>查看版本 {version}</Link>;
+  if (inRouter) return <QuestionAwareVersionLink href={href} version={version} />;
   return <a href={href}>查看版本 {version}</a>;
 }
 
+function QuestionAwareVersionLink({ href, version }: { href: string; version: number }) {
+  const question = new URLSearchParams(useLocation().search).get('question');
+  const target = question ? `${href}?question=${encodeURIComponent(question)}` : href;
+  return <Link to={target}>查看版本 {version}</Link>;
+}
+
 export function PublishRoutePage() {
-  const { api, session } = useAuth();
+  const { api, logout, session } = useAuth();
   const params = useParams();
   const surveyId = parseSurveyIdParam(params.surveyId);
   if (!session || !surveyId) return <p role="alert">问卷标识无效</p>;
   return (
     <PublishPage
+      key={`${session.me.tenantId}:${session.me.actorId}:${surveyId}`}
       actorId={session.me.actorId}
+      accessToken={session.token}
       api={api}
+      onUnauthorized={() => logout()}
       surveyId={surveyId}
       tenantId={session.me.tenantId}
     />

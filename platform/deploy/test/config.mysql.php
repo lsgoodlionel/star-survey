@@ -31,7 +31,7 @@ return array(
             'connectionString' => 'mysql:host=test-db;port=3306;dbname=limesurvey;',
             'emulatePrepare' => true,
             'username' => 'root',
-            'password' => 'root',
+            'password' => (string) getenv('ENGINE_DB_ROOT_PASSWORD'),
             'charset' => 'utf8mb4',
             'tablePrefix' => 'lime_',
         ),
@@ -62,6 +62,8 @@ return array(
         // on your webspace.
         // LimeSurvey developers: Set this to 2 to additionally display STRICT PHP error messages and put MySQL in STRICT mode and get full access to standard themes
         'editorEnabled' => false,
+        'force_ssl' => 'off',
+        'ssl_disable_alert' => 1,
         'debug' => 0,
         'debugsql' => 0, // Set this to 1 to enanble sql logging, only active when debug = 2
         // 'force_xmlsettings_for_survey_rendering' => true, // Uncomment if you want to force the use of the XML file rather than DB (for easy theme development)

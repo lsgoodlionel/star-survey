@@ -7,7 +7,7 @@ import uuid
 
 from pubgw.auth import sign
 from pubgw.engines import EngineConfig
-from pubgw.service import PublishService
+from pubgw.service import PreviewOperationStore, PublishService
 from pubgw.store import ResultStore
 
 from .fakes import FakeEngine
@@ -70,7 +70,7 @@ def make_store(state_dir, clock=None, retention=None):
     )
 
 
-def make_service(engine, state_dir, clock=None, store=None):
+def make_service(engine, state_dir, clock=None, store=None, preview_operations=None):
     """store 单独传入：推进留存期的测试不能连带推进 HMAC 时间戳（±300 秒）。"""
     return PublishService(
         engines={INSTANCE: engine_config()},
@@ -78,6 +78,10 @@ def make_service(engine, state_dir, clock=None, store=None):
         secret=SECRET,
         transport_factory=lambda config: engine.transport,
         now=clock or (lambda: NOW),
+        preview_operations=preview_operations or PreviewOperationStore(
+            os.path.join(state_dir, "preview-operations.sqlite3")
+        ),
+        preview_public_url="http://gateway.invalid",
     )
 
 

@@ -76,10 +76,12 @@ describe('browser gate security contract', () => {
     expect(spec).not.toContain('getByText(metadata.actorId');
   });
 
-  test('reuses the desktop survey for mobile and bounds failure artifact work', async () => {
+  test('reuses one recorded run root and bounds failure artifact work', async () => {
+    const config = await source('playwright.config.ts');
     const spec = await source('e2e/authoring.spec.ts');
     expect(spec).toContain('const result = await readResult()');
-    expect(spec.match(/await createResource\(page/g)).toHaveLength(3);
+    expect(spec).toContain('`/workspace?project=${result.rootProjectId}&parent=${result.folderId}`');
+    expect(config).toContain("['./e2e/runRootReporter.ts']");
     expect(spec).toContain('if (page.isClosed()) return');
     expect(spec).toContain('testInfo.setTimeout(testInfo.timeout + 7_000)');
     expect(spec).toContain('withTimeout(redactSensitiveInputs(page), 1_500)');
@@ -91,12 +93,30 @@ describe('browser gate security contract', () => {
 
     expect(spec).not.toMatch(/page\.goto\(`\/surveys\//);
     expect(spec).toContain("getByRole('link', { name: '批量导入' })");
-    expect(spec).toContain("getByRole('link', { name: '草稿预览' })");
-    expect(spec).toContain("getByRole('link', { name: '返回编辑' })");
-    expect(spec).toContain("getByRole('link', { name: '发布管理' })");
+    expect(spec).toContain("getByRole('link', { name: '快速预览' })");
+    expect(spec).toContain("getByRole('link', { name: '编辑' })");
+    expect(spec).toContain("getByRole('link', { name: '发布与版本' })");
     expect(spec).toContain('await navigateWithinApp(page, `/surveys/${result.surveyId}/edit`)');
     expect(spec).toContain("window.history.pushState({}, '', path)");
     expect(spec).toContain("window.dispatchEvent(new PopStateEvent('popstate'))");
+  });
+
+  test('enters the workspace explicitly after demo login reaches the dashboard', async () => {
+    const gate = await source('e2e/demoDataGate.ts');
+
+    expect(gate).toContain("waitForURL(/\\/dashboard$/)");
+    expect(gate).toContain("getByRole('heading', { name: '工作台' })");
+    expect(gate).toContain("getByRole('link', { name: '项目与问卷' })");
+    expect(gate).toContain("waitForURL(/\\/workspace$/)");
+  });
+
+  test('gives every dashboard primary action a 44px mobile target', async () => {
+    const styles = await source('src/features/dashboard/dashboard.css');
+
+    expect(styles).toMatch(/@media \(max-width: 819px\)[\s\S]*?\.dashboard-refresh button[\s\S]*?min-(?:width|inline-size): 44px/);
+    expect(styles).toMatch(/@media \(max-width: 819px\)[\s\S]*?\.dashboard-primary-link[\s\S]*?min-width: 44px; min-height: 44px/);
+    expect(styles).toMatch(/@media \(max-width: 819px\)[\s\S]*?\.dashboard-actions a[\s\S]*?min-width: 44px; min-height: 44px/);
+    expect(styles).toMatch(/@media \(max-width: 819px\)[\s\S]*?\.dashboard-recent-list a[\s\S]*?min-width: 44px; min-height: 44px/);
   });
 
   test('checks every browser action before interacting', async () => {
@@ -107,6 +127,17 @@ describe('browser gate security contract', () => {
     expect(spec).toContain('toBeEnabled({ timeout: ACTION_TIMEOUT_MS })');
     expect(spec).toContain('const ACTION_TIMEOUT_MS = 15_000');
     expect(spec).not.toMatch(/await page\.getBy[^;]+\.(?:click|fill)\(/);
+  });
+
+  test('keeps programmatically focused dialog actions visibly outlined', async () => {
+    const workspaceStyles = await source('src/features/workspace/workspace.css');
+    const editorStyles = await source('src/features/editor/editor.css');
+
+    expect(workspaceStyles).toContain('.workspace-dialog button:focus');
+    expect(workspaceStyles).toContain('outline: 3px solid #0b6bcb');
+    expect(editorStyles).toMatch(/\.survey-editor-save button[\s\S]*?min-height: 44px/);
+    expect(editorStyles).toContain('@media (max-width: 819px)');
+    expect(editorStyles).toContain('.editor-reorder-actions button:focus');
   });
 
   test('scopes the imported question assertion to the preview results', async () => {

@@ -59,8 +59,10 @@ public class ResourceTreeController {
 
     @GetMapping("/resources")
     public ResourcePage list(@RequestParam(required = false) UUID parentId,
-            @RequestParam(required = false) String cursor, @RequestParam(required = false) Integer limit) {
-        return tree.list(currentTenant.require(), parentId, cursor, limit);
+            @RequestParam(required = false) String cursor, @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String query, @RequestParam(required = false) String kind,
+            @RequestParam(required = false) String archived, @RequestParam(required = false) String sort) {
+        return tree.list(currentTenant.require(), parentId, cursor, limit, query, kind, archived, sort);
     }
 
     @GetMapping("/resources/{id}")
@@ -81,5 +83,15 @@ public class ResourceTreeController {
     @PostMapping("/resources/{id}/move")
     public ResourceView move(@PathVariable UUID id, @Valid @RequestBody Move request) {
         return tree.move(currentTenant.require(), id, request.parentId());
+    }
+
+    @PostMapping("/resources/{id}/archive")
+    public ResourceView archive(@PathVariable UUID id) {
+        return tree.archive(currentTenant.require(), id);
+    }
+
+    @PostMapping("/resources/{id}/restore")
+    public ResourceView restore(@PathVariable UUID id) {
+        return tree.restore(currentTenant.require(), id);
     }
 }
