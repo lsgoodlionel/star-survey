@@ -213,6 +213,43 @@ def _first_error(text: str) -> str:
     return ""
 
 
+def _utf8_prefix(text: str, max_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def bounded_diagnostic(stdout: str, stderr: str, *, max_bytes: int = 4096) -> str:
+    """Return one redacted root cause and at most three distinct related errors."""
+    if type(max_bytes) is not int or not 1 <= max_bytes <= 49152:
+        raise ValueError("Diagnostic byte budget must be between 1 and 49152")
+    normalized = normalize_failure("\n".join(value for value in (stderr, stdout) if value))
+    lines = normalized.splitlines()
+    error_indexes = [
+        index for index, line in enumerate(lines)
+        if _ERROR.search(line) and not _WRAPPER.search(line)
+    ]
+    if error_indexes:
+        first = error_indexes[0]
+        root = (_first_error("\n".join(lines[first:]))
+                if lines[first].startswith("Traceback (most recent call last):")
+                else lines[first][:_LINE_LIMIT])
+    else:
+        root = (lines[0][:_LINE_LIMIT] if lines else "")
+    root_lines = set(root.splitlines())
+    related = []
+    for index in error_indexes[1:]:
+        candidate = lines[index][:_LINE_LIMIT]
+        if candidate not in root_lines and candidate not in related:
+            related.append(candidate)
+        if len(related) == 3:
+            break
+    parts = [root] if root else []
+    parts.extend("Related: " + item for item in related)
+    return _utf8_prefix("\n".join(parts), max_bytes)
+
+
 def failure_fingerprint(exit_code: int, stdout: str, stderr: str) -> str:
     """Hash the first actionable error and exit code, not build chatter."""
     if type(exit_code) is not int:

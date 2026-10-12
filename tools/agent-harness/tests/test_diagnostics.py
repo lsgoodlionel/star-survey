@@ -15,7 +15,8 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent_harness.diagnostics import (
-    failure_fingerprint, normalize_failure, record_failure, redact_text, render_diagnostics,
+    bounded_diagnostic, failure_fingerprint, normalize_failure, record_failure,
+    redact_text, render_diagnostics,
 )
 from agent_harness.state import (
     AttemptState, GateEvidence, GateStatus, RunStatus, load_state,
@@ -57,6 +58,22 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(normalized[0], normalized[2])
         self.assertIn("tests/test_api.py:42", normalized[0])
         self.assertIn("ECONNREFUSED", normalized[0])
+
+    def test_bounded_diagnostic_keeps_one_root_and_three_related_errors(self):
+        output = "\n".join((
+            "build chatter",
+            "ERROR: primary TOKEN=fake-secret-value",
+            "ERROR: related one",
+            "ERROR: related two",
+            "ERROR: related three",
+            "ERROR: related four",
+        ))
+        result = bounded_diagnostic("", output, max_bytes=256)
+        self.assertIn("ERROR: primary", result)
+        self.assertNotIn("fake-secret-value", result)
+        self.assertEqual(result.count("Related:"), 3)
+        self.assertNotIn("related four", result)
+        self.assertLessEqual(len(result.encode("utf-8")), 256)
 
     def test_repeated_uri_prefixes_finish_within_bounded_cpu_budget(self):
         script = (

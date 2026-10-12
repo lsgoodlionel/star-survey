@@ -12,7 +12,8 @@ import subprocess
 import tempfile
 from typing import Iterable, Tuple
 
-from .config import GateDefinition, GateMatrix
+from .config import GateDefinition, GateMatrix, validate_gate_id
+from .gate_summary import build_gate_summary, write_gate_summary_atomic
 from .state import GateEvidence, GateStatus, RunState, RunStatus
 
 
@@ -75,6 +76,7 @@ def _validate_head(value: str) -> None:
 def run_gate(repo: Path, gate: GateDefinition, evidence_dir: Path,
              head_commit: str) -> GateEvidence:
     """Execute a configured argv; metadata is the final record of an attempt."""
+    validate_gate_id(gate.id)
     if (not isinstance(gate.command, (tuple, list)) or not gate.command
             or any(not isinstance(arg, str) or not arg.strip() or "\x00" in arg
                    for arg in gate.command)
@@ -159,7 +161,13 @@ def run_gate(repo: Path, gate: GateDefinition, evidence_dir: Path,
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
-    return evidence
+    summary_path = attempt / "summary.json"
+    evidence = replace(evidence, summary_path=summary_path.relative_to(root))
+    summary = build_gate_summary(root, gate, evidence)
+    write_gate_summary_atomic(summary_path, summary)
+    return replace(evidence, diagnostic_bytes=(
+        len(summary.diagnostic.encode("utf-8")) if summary.diagnostic is not None else 0
+    ))
 
 
 def invalidate_stale_evidence(state: RunState, current_head: str) -> RunState:

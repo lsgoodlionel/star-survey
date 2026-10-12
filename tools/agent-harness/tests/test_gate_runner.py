@@ -138,6 +138,12 @@ class GateExecutionTests(unittest.TestCase):
                                                   if key != "command"}))
         self.assertEqual(metadata["stdoutPath"], "stdout.log")
         self.assertEqual(metadata["stderrPath"], "stderr.log")
+        self.assertIsNotNone(evidence.summary_path)
+        summary = json.loads((self.repo / evidence.summary_path).read_text(encoding="utf-8"))
+        self.assertEqual(summary["status"], "passed")
+        self.assertIsNone(summary["diagnostic"])
+        self.assertNotIn("OUT_MARKER", json.dumps(summary))
+        self.assertNotIn("ERR_MARKER", json.dumps(summary))
 
     def test_nonzero_exit_is_failed_even_if_output_claims_success(self):
         evidence = self.execute(self.gate("import sys; print('all tests passed'); sys.exit(7)"))
@@ -342,10 +348,11 @@ class GateExecutionTests(unittest.TestCase):
                 patch("agent_harness.gate_runner.os.fsync", side_effect=fsync), \
                 patch("agent_harness.gate_runner.os.replace", side_effect=publish):
             evidence = self.execute(self.gate("print('complete')"))
-        self.assertEqual(publications, [self.repo / evidence.evidence_path])
+        self.assertEqual(publications, [self.repo / evidence.evidence_path,
+                                        self.repo / evidence.summary_path])
         _, directory = self.artifacts(evidence)
         self.assertEqual({path.name for path in directory.iterdir()},
-                         {"stdout.log", "stderr.log", "metadata.json"})
+                         {"stdout.log", "stderr.log", "metadata.json", "summary.json"})
 
     def test_missing_executable_creates_failed_evidence(self):
         evidence = self.execute(GateDefinition("unit", ("absent-gate-tool-96b36b",), ".", 5))
@@ -434,10 +441,14 @@ class GateExecutionTests(unittest.TestCase):
             self.execute(self.gate("print('must not run')"))
         self.assertEqual(list(Path(temporary.name).iterdir()), [])
 
-    def test_gate_id_cannot_escape_evidence_directory(self):
-        evidence = self.execute(replace(self.gate("print('safe')"), id="../outside"))
-        self.assertTrue(evidence.evidence_path.is_relative_to(Path("var/agent-harness/runs")))
-        self.assertEqual(self.artifacts(evidence)[0]["gateId"], "../outside")
+    def test_unsafe_gate_id_is_rejected_before_execution(self):
+        gate = replace(
+            self.gate("from pathlib import Path; Path('executed').touch()"),
+            id="../outside",
+        )
+        with self.assertRaises(ValueError):
+            self.execute(gate)
+        self.assertFalse((self.repo / "executed").exists())
 
     def test_invalid_head_is_rejected_before_execution(self):
         for head in ("not-a-commit", "a" * 40 + "\n", "a" * 39, "A" * 40):
