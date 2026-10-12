@@ -114,6 +114,17 @@ class WorktreeCase(unittest.TestCase):
 
 
 class RunServiceTests(WorktreeCase):
+    def test_gate_run_records_local_summary_without_log_payload(self):
+        self.init_run()
+        state = self.service.run_gates(self.state.run_id)
+        evidence = state.gates["unit"]
+        self.assertIsNotNone(evidence.summary_path)
+        summary = json.loads((self.repo / evidence.summary_path).read_text(encoding="utf-8"))
+        self.assertEqual(summary["source"], "local")
+        self.assertFalse(summary["reused"])
+        self.assertIsNone(summary["diagnostic"])
+        self.assertNotIn("ok", json.dumps(summary))
+
     def test_next_accepts_only_exact_host_trusted_shallow_boundary(self):
         boundary = self.git("rev-parse", "HEAD")
         host = self.repo / "docs/agent/HARNESS_HOST.json"

@@ -21,6 +21,7 @@ from .diagnostics import redact_text, render_diagnostics, failure_fingerprint, r
 from .codex_adapter import build_codex_command, controlled_tool_errors, run_codex, run_with_controlled_tools
 from .doctor import run_doctor
 from .gate_runner import invalidate_stale_evidence, resolve_required_gates, run_gate
+from .gate_summary import GateSummary
 from .generated_verifier import generated_binding_is_current, verify_generated_outputs
 from .git_guard import (GitGuardError, assert_worktree_isolated, capture_snapshot,
                         changed_paths, classify_paths, validate_history_ancestry,
@@ -428,6 +429,7 @@ class RunService:
         relative = directory.relative_to(self.repo)
         products = ("", "state.json", "events.jsonl", "codex/", "codex/probe.jsonl", "codex/probe.jsonl.stderr.log", "evidence/", "evidence/probe/stdout.log",
                     "evidence/probe/stderr.log", "evidence/probe/metadata.json",
+                    "evidence/probe/summary.json",
                     "diagnostics.md", "terminal-history.md", "terminal-state.json", "terminal-intent.json")
         arguments = []
         for name in products:
@@ -1039,12 +1041,43 @@ class RunService:
     def _verify_evidence(self, state, definition):
         gate = state.gates.get(definition.id)
         if (gate is None or gate.status != GateStatus.PASSED or gate.exit_code != 0
-                or gate.head_commit != state.head_commit or gate.evidence_path is None):
+                or gate.head_commit != state.head_commit or gate.evidence_path is None
+                or gate.summary_path is None):
             raise ServiceError("必需 Gate 缺少当前 HEAD 的成功证据", 4)
         path = self._path(gate.evidence_path)
-        if not path.is_relative_to(self._directory(state.run_id) / "evidence"):
-            raise ServiceError("Gate 证据不属于当前运行", 4)
+        summary_path = self._path(gate.summary_path)
         try:
+            summary_document = json.loads(summary_path.read_text(encoding="utf-8"))
+            GateSummary(
+                summary_document["schemaVersion"], summary_document["gateId"],
+                summary_document["status"], summary_document["exitCode"],
+                summary_document["durationMs"], summary_document["counts"],
+                summary_document["evidenceKey"], summary_document["headCommit"],
+                summary_document["diagnostic"], summary_document["source"],
+                summary_document["reused"],
+            )
+            if (summary_document["gateId"] != definition.id
+                    or summary_document["status"] != "passed"
+                    or summary_document["exitCode"] != 0
+                    or summary_document["headCommit"] != state.head_commit
+                    or summary_document["diagnostic"] is not None):
+                raise ValueError()
+            if gate.reused:
+                cache_root = self.repo / "var/agent-harness/cache/evidence"
+                if (gate.source != "reused" or gate.evidence_key is None
+                        or not path.is_relative_to(cache_root)
+                        or not summary_path.is_relative_to(cache_root)
+                        or summary_document["source"] != "reused"
+                        or summary_document["reused"] is not True
+                        or summary_document["evidenceKey"] != gate.evidence_key):
+                    raise ValueError()
+                return
+            if (gate.source != "local" or not path.is_relative_to(
+                    self._directory(state.run_id) / "evidence")
+                    or summary_path.parent != path.parent
+                    or summary_document["source"] != "local"
+                    or summary_document["reused"] is not False):
+                raise ValueError()
             metadata = json.loads(path.read_text(encoding="utf-8"))
             for name in ("stdout.log", "stderr.log"):
                 if not self._path(path.parent.relative_to(self.repo) / name).is_file():
