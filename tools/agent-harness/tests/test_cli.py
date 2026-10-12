@@ -15,6 +15,31 @@ from agent_harness.cli import main
 
 
 class CliTests(WorktreeCase):
+    def test_install_global_policy_cli_dry_run_then_idempotent_apply(self):
+        templates = self.repo / "tools/agent-harness/templates"
+        self.write(templates / "global-token-rules.md", "- bounded summaries\n")
+        self.write(templates / "engineering-token-efficiency.md", "# Method\n")
+        self.write(self.repo / "docs/agent/MEMORY_PROJECTIONS.json", json.dumps({
+            "version": 1, "projections": [{
+                "id": "progress", "notePath": "Project/Progress.md",
+                "startMarker": "s", "endMarker": "e",
+            }],
+        }))
+        self.write(self.repo / "docs/agent/HARNESS_HOST.json",
+                   json.dumps({"expectedRepository": "owner/repo"}))
+        home = self.root / "codex-home"
+        (home / "memories").mkdir(parents=True)
+        self.write(home / "AGENTS.md", "human\n")
+        code, output, stderr = self.call(
+            "install-global-policy", "--codex-home", str(home), "--dry-run", "--json")
+        self.assertEqual(code, 0, output + stderr)
+        self.assertEqual(len(json.loads(output)["changed"]), 3)
+        self.assertEqual((home / "AGENTS.md").read_text(), "human\n")
+        self.assertEqual(self.call("install-global-policy", "--codex-home", str(home))[0], 0)
+        result = json.loads(self.call("install-global-policy", "--codex-home", str(home),
+                                      "--dry-run", "--json")[1])
+        self.assertEqual(result["changed"], [])
+
     def memory_fixture(self):
         self.write(self.repo / "docs/agent/MEMORY_PROJECTIONS.json", json.dumps({
             "version": 1,

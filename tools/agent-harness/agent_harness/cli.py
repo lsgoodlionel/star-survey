@@ -19,6 +19,7 @@ from .token_report import collect_token_usage, TokenReport, TokenUsage
 from .memory_projection import (apply_memory_sync, configure_memory,
                                 load_projection_config, memory_status,
                                 plan_memory_sync, render_projection)
+from .global_policy import install_global_policy
 
 
 class Parser(argparse.ArgumentParser):
@@ -54,11 +55,11 @@ def _parser():
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--json", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=Parser)
-    for command in ("doctor", "init", "status", "next", "gate", "run-codex", "record-decision", "record-review", "pause", "resume", "finalize", "token-report", "configure-memory", "memory-status", "sync-memory"):
+    for command in ("doctor", "init", "status", "next", "gate", "run-codex", "record-decision", "record-review", "pause", "resume", "finalize", "token-report", "configure-memory", "memory-status", "sync-memory", "install-global-policy"):
         child = sub.add_parser(command)
         child.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         child.add_argument("--repo", type=Path, default=argparse.SUPPRESS)
-        if command not in ("doctor", "init", "token-report", "configure-memory", "memory-status"):
+        if command not in ("doctor", "init", "token-report", "configure-memory", "memory-status", "install-global-policy"):
             child.add_argument("--run-id", "--run", dest="run_id")
         if command == "init":
             child.add_argument("--plan", type=Path, required=True)
@@ -83,6 +84,9 @@ def _parser():
             child.add_argument("--session-root", type=Path, action="append", default=[])
         elif command == "configure-memory":
             child.add_argument("--vault", type=Path, required=True)
+        elif command == "install-global-policy":
+            child.add_argument("--codex-home", type=Path, required=True)
+            child.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -119,7 +123,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "token-report" and args.format == "json":
             json_output = True
         root = args.repo or _root()
-        if args.command == "configure-memory":
+        if args.command == "install-global-policy":
+            result = install_global_policy(root, args.codex_home,
+                                           dry_run=args.dry_run)
+            code = 0
+        elif args.command == "configure-memory":
             host_path = configure_memory(root, args.vault)
             config = load_projection_config(root)
             result = {"configured": host_path.is_file(),
@@ -227,6 +235,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("记忆投影：" + ("可用" if result["vaultAvailable"] else "等待 vault"))
         elif args.command == "sync-memory":
             print(f"记忆同步：更新 {len(result.updated)}，待重放 {len(result.pending)}")
+        elif args.command == "install-global-policy":
+            print(f"全局策略：{len(result.changed)} 个文件待更新" if result.dry_run
+                  else f"全局策略：已更新 {len(result.changed)} 个文件")
         else:
             messages = {"develop": "开发当前 Milestone", "repair": "修复质量门失败", "gate": "运行质量门",
                         "finalize": "完成收尾", "resume": "检查并恢复运行", "human_review": "需要人工处理", "done": "运行已完成",

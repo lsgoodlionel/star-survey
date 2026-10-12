@@ -10,7 +10,7 @@
 可独立提取复用的代码位于 `tools/agent-harness/agent_harness/`、`tools/agent-harness/drills/` 和
 `scripts/agent-harness`：
 
-- CLI：`doctor/init/status/next/gate/record-decision/record-review/pause/resume/run-codex/finalize`，使用稳定退出码。
+- CLI：`doctor/init/status/next/gate/record-decision/record-review/pause/resume/run-codex/finalize`，以及 Token 报告、记忆投影和全局策略安装命令，使用稳定退出码。
 - 状态与恢复：原子 `state.json`、摘要链接的 `events.jsonl`、Git 分支/HEAD/工作区漂移检测。
 - 策略与 Gate：按实际改动取 Gate 并集，禁止计划删减自动 Gate；路径逃逸、符号链接和未知路径均失败关闭。
 - 终止条件：同一失败指纹第 3 次、总失败周期第 5 次、连续第 2 轮无进展时暂停。
@@ -33,7 +33,15 @@ scripts/agent-harness pause --run-id <run-id> --reason <sanitized-reason>
 scripts/agent-harness resume --run-id <run-id>
 scripts/agent-harness run-codex --run-id <run-id> --max-cycles 1
 scripts/agent-harness finalize --run-id <run-id>
+scripts/agent-harness token-report --since <RFC3339> --until <RFC3339> --format json
+scripts/agent-harness configure-memory --vault <absolute-local-path>
+scripts/agent-harness sync-memory --run-id <run-id> --json
+scripts/agent-harness install-global-policy --codex-home "$HOME/.codex" --dry-run
 ```
+
+全局策略安装器只替换 marker 包围的机器区块，首次安装、升级和重复执行均保留区块外的人类内容。先检查 dry-run diff，
+确认只含预期三个文件后再应用；第二次 dry-run 应为空。项目级上下文与排障口径见
+[TOKEN_EFFICIENCY.md](../../docs/agent/TOKEN_EFFICIENCY.md)。
 
 恢复前先运行 `doctor`，再运行 `status` 与 `next`；`resume` 会重新核对计划摘要、策略绑定、worktree、分支、
 HEAD、工作区和工具环境。审批路径、真实秘密、依赖新增、生产/发布、认证或迁移等情况必须暂停，由宿主人工

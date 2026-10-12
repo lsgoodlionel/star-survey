@@ -45,6 +45,15 @@
 - 状态格式见 [STATE_SCHEMA.json](docs/agent/STATE_SCHEMA.json)；控制平面已有本地实现与测试证据，但三路独立复审、
   GitHub 零 skip run 与 Obsidian 同步完成前不得宣称完整交付。
 
+## Token 与上下文硬约束
+
+- 新 Agent 默认只读取 Harness 生成的 Context Capsule 与任务增量；缺少事实时按胶囊来源定点读取，不扫描完整计划、报告或 Obsidian vault。
+- 成功 Gate 不注入控制台日志；失败只使用脱敏、去重且不超过 4 KiB 的诊断摘要，原始输出保留在 ignored runtime。
+- 相同 Gate 与失败指纹先查证据缓存和租约；严格 HEAD、发布与生产证据不得为节省 Token 放宽。
+- 测试、Lint、类型检查、构建和 Docker 验证在本地或 CI 实际执行；不得让模型模拟测试，也不得降低现有质量标准。
+- 同一失败超过预算、上下文来源漂移或摘要不足以安全修复时停止，记录准确恢复点并请求人工判断。
+- 详细口径、命令与恢复方式见 [TOKEN_EFFICIENCY.md](docs/agent/TOKEN_EFFICIENCY.md)。
+
 ## Git 与交付
 
 - 提交按职责边界拆分，只暂存本任务文件；提交前核对 staged 范围、秘密与质量门。

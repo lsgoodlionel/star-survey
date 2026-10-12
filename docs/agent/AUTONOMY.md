@@ -85,3 +85,10 @@ CLI 缺失、未认证、能力不足、非零退出、超时或结构化响应�
 仓库文档、GitHub 和 Obsidian 同步由任务授权与集成职责决定；受限任务将待同步内容明确交接。
 脱敏器须覆盖 URL 凭据、Authorization、Cookie、JWT/常见 Token、密码、私钥块和敏感环境变量；测试只用伪秘密。
 完成或暂停摘要遵守 [run-history 约定](run-history/README.md)，不复制原始模型事件与日志。
+
+## 上下文与诊断预算
+
+每轮执行从生成的 Context Capsule 开始，稳定策略在前、任务状态在后；胶囊摘要不匹配时拒绝模型结果。
+默认不向 Agent 注入完整 Plan、历史报告、Obsidian 笔记或成功日志。Gate 由本地/CI 执行，成功只传结构化计数，失败只传
+脱敏、去重且有字节上限的诊断。证据复用必须同时绑定仓库、HEAD、命令、环境、输入和策略；租约只去重同一证据键。
+任何 Token 优化都不能降低 Gate、Review、双库验证、发布或生产验收标准，详细流程见 [TOKEN_EFFICIENCY.md](TOKEN_EFFICIENCY.md)。

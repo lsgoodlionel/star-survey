@@ -17,6 +17,7 @@
   （[文档链接](../superpowers/plans/2026-10-10-business-dashboard-v1.md)）；
   安装、使用、恢复与分层边界见 [Harness 指南](../../tools/agent-harness/README.md)。
 - Obsidian 同步入口为对应 Survey 项目的“项目总览”或“进度与路线图”；定位实际笔记后再写，不能猜测路径。
+- 新 Agent 的连续开发入口是 Harness 生成的 Context Capsule；Obsidian 仅接收受控机器块投影，不作为任务状态权威，也不默认全文进入上下文。
 
 ## 源码与技术栈
 
@@ -62,4 +63,5 @@
 - 正常工作使用任务分支与独立 worktree，长期分支 main 经 PR 合并；本任务授权可明确禁止 push。
 - 交付记录包含日期、分支、提交/PR、测试证据、完成项、遗留与下一步；并行实现不改共享进度板，由集成方更新。
 - 不将历史测试数量、当前分支、HEAD、端口、容器、部署、远端可达性或临时错误存为永久事实。
+- Token 优化方法、统计口径和故障恢复见 [TOKEN_EFFICIENCY.md](TOKEN_EFFICIENCY.md)；不得以节省 Token 为由减少真实验证。
 - 所有可变事实必须在新会话重验；技术栈升级后按源码更新本文并注明日期，不凭迁移记忆判断服务已运行。
