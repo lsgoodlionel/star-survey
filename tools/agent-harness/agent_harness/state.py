@@ -67,7 +67,7 @@ def _validate(value, schema):
     valid_type = {
         "object": isinstance(value, dict), "array": isinstance(value, list),
         "string": isinstance(value, str), "integer": type(value) is int,
-        "null": value is None,
+        "boolean": type(value) is bool, "null": value is None,
     }
     if kind is not None and not valid_type.get(kind, False):
         raise ValueError("Invalid JSON value type")
@@ -98,6 +98,8 @@ def _validate(value, schema):
     elif isinstance(value, str):
         if len(value) < schema.get("minLength", 0):
             raise ValueError("Empty string")
+        if len(value) > schema.get("maxLength", len(value)):
+            raise ValueError("String exceeds maximum length")
         if "pattern" in schema and re.search(schema["pattern"], value) is None:
             raise ValueError("String does not match contract")
         if schema.get("format") == "date-time":
@@ -106,6 +108,8 @@ def _validate(value, schema):
             raise ValueError("Invalid UUID format")
     elif type(value) is int and value < schema.get("minimum", value):
         raise ValueError("Integer below minimum")
+    if type(value) is int and value > schema.get("maximum", value):
+        raise ValueError("Integer above maximum")
     for item in schema.get("allOf", ()):
         _validate(value, item)
     if "if" in schema and _matches(value, schema["if"]):
@@ -185,11 +189,18 @@ class GateEvidence:
     ended_at: Optional[datetime]
     evidence_path: Optional[Path]
     head_commit: str
+    summary_path: Optional[Path] = None
+    evidence_key: Optional[str] = None
+    source: str = "local"
+    reused: bool = False
+    diagnostic_bytes: int = 0
 
     def __post_init__(self):
         object.__setattr__(self, "status", GateStatus(self.status))
         if self.evidence_path is not None:
             object.__setattr__(self, "evidence_path", Path(self.evidence_path))
+        if self.summary_path is not None:
+            object.__setattr__(self, "summary_path", Path(self.summary_path))
         _validate(_gate_document(self), _GATE_SCHEMA)
 
 
@@ -201,6 +212,11 @@ def _gate_document(gate):
         "endedAt": _timestamp(gate.ended_at) if gate.ended_at is not None else None,
         "evidencePath": gate.evidence_path.as_posix() if gate.evidence_path is not None else None,
         "headCommit": gate.head_commit,
+        "summaryPath": gate.summary_path.as_posix() if gate.summary_path is not None else None,
+        "evidenceKey": gate.evidence_key,
+        "source": gate.source,
+        "reused": gate.reused,
+        "diagnosticBytes": gate.diagnostic_bytes,
     }
 
 
@@ -227,6 +243,9 @@ class RunState:
     updated_at: datetime
 
     def __post_init__(self):
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
+            raise ValueError("Unsupported state schema version")
+        object.__setattr__(self, "schema_version", 2)
         object.__setattr__(self, "status", RunStatus(self.status))
         object.__setattr__(self, "plan_path", Path(self.plan_path))
         object.__setattr__(self, "worktree_path", Path(self.worktree_path))
@@ -263,6 +282,13 @@ def _state_document(state):
 
 def _validate_state_document(document):
     _validate(document, _SCHEMA)
+    metadata = {"summaryPath", "evidenceKey", "source", "reused", "diagnosticBytes"}
+    for gate in document["gates"].values():
+        present = metadata & gate.keys()
+        if document["schemaVersion"] == 1 and present:
+            raise ValueError("Version 1 gate evidence cannot contain version 2 metadata")
+        if document["schemaVersion"] == 2 and present != metadata:
+            raise ValueError("Version 2 gate evidence metadata is incomplete")
     if document["status"] != RunStatus.COMPLETED.value:
         return
     for gate_id in document["requiredGates"]:
@@ -292,6 +318,9 @@ def load_state(path: Path) -> RunState:
             _parse_timestamp(item["endedAt"]) if item["endedAt"] is not None else None,
             Path(item["evidencePath"]) if item["evidencePath"] is not None else None,
             item["headCommit"],
+            Path(item["summaryPath"]) if item.get("summaryPath") is not None else None,
+            item.get("evidenceKey"), item.get("source", "local"),
+            item.get("reused", False), item.get("diagnosticBytes", 0),
         )
     return RunState(
         document["schemaVersion"], document["runId"], Path(document["planPath"]),
@@ -303,6 +332,11 @@ def load_state(path: Path) -> RunState:
         tuple(Path(item) for item in document["changedPaths"]), tuple(document["decisions"]),
         _parse_timestamp(document["createdAt"]), _parse_timestamp(document["updatedAt"]),
     )
+
+
+def validate_document(document, schema) -> None:
+    """Validate an in-memory document against the supported strict schema subset."""
+    _validate(document, schema)
 
 
 def save_state_atomic(path: Path, state: RunState) -> None:

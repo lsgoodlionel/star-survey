@@ -10,7 +10,9 @@
     "docs/agent/reviews/2026-10-10-task-8-dx-ci.md",
     "docs/agent/reviews/2026-10-10-task-8-security.md",
     "docs/agent/reviews/2026-10-10-task-8-whole-branch.md",
-    "docs/superpowers/plans/2026-10-11-template-branding-wave2.md"
+    "docs/superpowers/plans/2026-10-11-template-branding-wave2.md",
+    "docs/superpowers/plans/2026-10-12-token-efficient-engineering.md",
+    "docs/superpowers/specs/2026-10-12-token-efficient-engineering-design.md"
   ],
   "documentation": {
     "statusMarkerPaths": [

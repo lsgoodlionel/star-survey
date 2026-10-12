@@ -66,6 +66,61 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_version_two_gate_metadata_is_strict_and_immutable(self):
+        self.matrix["version"] = 2
+        self.matrix["gates"][0].update({
+            "execution_tier": "local_fast",
+            "reuse_policy": "content",
+            "input_patterns": ["tools/agent-harness/**", "docs/agent/**"],
+            "summary_format": "unittest",
+        })
+        matrix = load_gate_matrix(self.write(self.matrix))
+        gate = matrix.gates[0]
+        self.assertEqual(matrix.version, 2)
+        self.assertEqual(gate.execution_tier, "local_fast")
+        self.assertEqual(gate.reuse_policy, "content")
+        self.assertEqual(gate.input_patterns,
+                         ("tools/agent-harness/**", "docs/agent/**"))
+        self.assertEqual(gate.summary_format, "unittest")
+        with self.assertRaises(FrozenInstanceError):
+            gate.execution_tier = "github_full"
+
+    def test_version_two_gate_metadata_rejects_unknown_values_and_missing_fields(self):
+        valid = {
+            "execution_tier": "local_fast",
+            "reuse_policy": "content",
+            "input_patterns": ["tools/agent-harness/**"],
+            "summary_format": "unittest",
+        }
+        cases = (
+            ("execution_tier", "remote"),
+            ("reuse_policy", "forever"),
+            ("input_patterns", []),
+            ("input_patterns", ["../outside"]),
+            ("summary_format", "pytest"),
+        )
+        for field, value in cases:
+            matrix = copy.deepcopy(self.matrix)
+            matrix["version"] = 2
+            matrix["gates"][0].update(valid)
+            matrix["gates"][0][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(ConfigError):
+                load_gate_matrix(self.write(matrix))
+        for missing in valid:
+            matrix = copy.deepcopy(self.matrix)
+            matrix["version"] = 2
+            matrix["gates"][0].update(valid)
+            del matrix["gates"][0][missing]
+            with self.subTest(missing=missing), self.assertRaises(ConfigError):
+                load_gate_matrix(self.write(matrix))
+
+    def test_version_one_gate_metadata_gets_safe_defaults(self):
+        gate = load_gate_matrix(self.write(self.matrix)).gates[0]
+        self.assertEqual(gate.execution_tier, "local_integration")
+        self.assertEqual(gate.reuse_policy, "head")
+        self.assertEqual(gate.input_patterns, (".",))
+        self.assertEqual(gate.summary_format, "generic")
+
     def test_history_boundary_requires_unique_full_commit_ids(self):
         self.assertTrue(hasattr(harness_config, "load_history_boundary_policy"),
                         "history-boundary loader is missing")

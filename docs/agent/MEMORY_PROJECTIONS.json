@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "projections": [
+    {
+      "id": "survey-blueprint",
+      "notePath": "LimeSurvey本土化方案/04-开发方案总蓝图（仓库校准版）.md",
+      "startMarker": "<!-- codex:survey-blueprint:start -->",
+      "endMarker": "<!-- codex:survey-blueprint:end -->"
+    },
+    {
+      "id": "survey-progress",
+      "notePath": "LimeSurvey本土化方案/08-需求进度与方案修订（仓库实证）.md",
+      "startMarker": "<!-- codex:survey-progress:start -->",
+      "endMarker": "<!-- codex:survey-progress:end -->"
+    }
+  ]
+}

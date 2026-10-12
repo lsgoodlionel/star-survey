@@ -18,6 +18,10 @@ class GateDefinition:
     command: Tuple[str, ...]
     cwd: str
     timeout_seconds: int
+    execution_tier: str = "local_integration"
+    reuse_policy: str = "head"
+    input_patterns: Tuple[str, ...] = (".",)
+    summary_format: str = "generic"
 
 
 def validate_gate_id(value):
@@ -162,16 +166,31 @@ def _unique_identifier(value, seen):
 
 def load_gate_matrix(path: Path) -> GateMatrix:
     document = _object(_read(path), ("version", "gates", "profiles"))
-    _version(document)
+    version = document["version"]
+    if type(version) is not int or version not in {1, 2}:
+        raise ConfigError("Unsupported Gate Matrix version")
     gates, identifiers = [], set()
     for item in _array(document["gates"]):
-        item = _object(item, ("id", "command", "cwd", "timeout_seconds"))
+        metadata = ("execution_tier", "reuse_policy", "input_patterns", "summary_format")
+        required = ("id", "command", "cwd", "timeout_seconds")
+        item = _object(item, required + metadata if version == 2 else required)
         timeout = item["timeout_seconds"]
         if type(timeout) is not int or timeout <= 0:
             raise ConfigError("Gate timeout must be a positive integer")
+        execution_tier = item.get("execution_tier", "local_integration")
+        reuse_policy = item.get("reuse_policy", "head")
+        summary_format = item.get("summary_format", "generic")
+        if execution_tier not in {"local_fast", "local_integration", "github_full"}:
+            raise ConfigError("Unsupported Gate execution tier")
+        if reuse_policy not in {"head", "content"}:
+            raise ConfigError("Unsupported Gate reuse policy")
+        if summary_format not in {"generic", "unittest", "surefire", "vitest", "playwright"}:
+            raise ConfigError("Unsupported Gate summary format")
+        input_patterns = _paths(item["input_patterns"]) if version == 2 else (".",)
         gates.append(GateDefinition(
             _unique_identifier(validate_gate_id(item["id"]), identifiers), _strings(item["command"]),
-            _relative(item["cwd"]), timeout,
+            _relative(item["cwd"]), timeout, execution_tier, reuse_policy,
+            input_patterns, summary_format,
         ))
     raw_profiles = document["profiles"]
     if not isinstance(raw_profiles, dict) or not raw_profiles:
@@ -184,7 +203,7 @@ def load_gate_matrix(path: Path) -> GateMatrix:
         if len(set(references)) != len(references) or set(references) - identifiers:
             raise ConfigError("Duplicate or unknown gate reference")
         profiles[name], paths[name] = references, _paths(profile["paths"])
-    return GateMatrix(1, tuple(gates), MappingProxyType(profiles),
+    return GateMatrix(version, tuple(gates), MappingProxyType(profiles),
                       MappingProxyType(paths))
 
 

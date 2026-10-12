@@ -13,8 +13,10 @@ import unittest
 from unittest.mock import patch
 
 HARNESS = Path(__file__).resolve().parents[1]
+REPO = HARNESS.parents[1]
 sys.path.insert(0, str(HARNESS))
 
+from agent_harness import state as harness_state  # noqa: E402
 from agent_harness.state import (  # noqa: E402
     AttemptState, GateEvidence, GateStatus, RunState, RunStatus,
     append_event, load_state, read_events, save_state_atomic, sha256_file,
@@ -29,9 +31,18 @@ class StateTests(unittest.TestCase):
         self.root = Path(directory.name)
         self.path = self.root / "state.json"
         self.events = self.root / "events.jsonl"
-        self.document = json.loads(
+        self.legacy_document = json.loads(
             (HARNESS / "tests/fixtures/valid_state.json").read_text(encoding="utf-8")
         )
+        self.document = copy.deepcopy(self.legacy_document)
+        self.document["schemaVersion"] = 2
+        self.document["gates"]["unit"].update({
+            "summaryPath": "var/agent-harness/runs/example/evidence/unit/summary.json",
+            "evidenceKey": "e" * 64,
+            "source": "local",
+            "reused": False,
+            "diagnosticBytes": 0,
+        })
 
     def write_state(self, document=None):
         self.path.write_text(json.dumps(
@@ -55,6 +66,27 @@ class StateTests(unittest.TestCase):
         save_state_atomic(self.path, state)
         self.assertEqual(json.loads(self.path.read_text()), self.document)
         self.assertEqual(load_state(self.path), state)
+
+    def test_legacy_version_one_normalizes_in_memory_and_writes_version_two(self):
+        state = load_state(self.write_state(self.legacy_document))
+        gate = state.gates["unit"]
+        self.assertEqual(state.schema_version, 2)
+        self.assertIsNone(gate.summary_path)
+        self.assertIsNone(gate.evidence_key)
+        self.assertEqual(gate.source, "local")
+        self.assertFalse(gate.reused)
+        self.assertEqual(gate.diagnostic_bytes, 0)
+        save_state_atomic(self.path, state)
+        written = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(written["schemaVersion"], 2)
+        self.assertEqual(written["gates"]["unit"], {
+            **self.legacy_document["gates"]["unit"],
+            "summaryPath": None,
+            "evidenceKey": None,
+            "source": "local",
+            "reused": False,
+            "diagnosticBytes": 0,
+        })
 
     def test_models_are_deeply_immutable(self):
         state = self.state()
@@ -225,7 +257,7 @@ class StateTests(unittest.TestCase):
 
     def test_unknown_fields_versions_and_invalid_values_fail_closed(self):
         mutations = [
-            (("schemaVersion",), 2), (("schemaVersion",), True),
+            (("schemaVersion",), 3), (("schemaVersion",), True),
             (("runtime",), {}), (("attempts", "extra"), 0),
             (("gates", "unit", "extra"), 0), (("decisions", 0, "extra"), 0),
             (("status",), "done"), (("attempts", "total"), -1),
@@ -243,6 +275,11 @@ class StateTests(unittest.TestCase):
             (("gates", "unit", "startedAt"), None),
             (("gates", "unit", "endedAt"), None),
             (("gates", "unit", "evidencePath"), None),
+            (("gates", "unit", "summaryPath"), "/absolute"),
+            (("gates", "unit", "evidenceKey"), "bad"),
+            (("gates", "unit", "source"), "remote"),
+            (("gates", "unit", "reused"), 1),
+            (("gates", "unit", "diagnosticBytes"), -1),
         ]
         for path, value in mutations:
             document = copy.deepcopy(self.document)
@@ -256,9 +293,9 @@ class StateTests(unittest.TestCase):
 
     def test_repository_relative_paths_reject_absolute_and_traversal(self):
         for value in ("/absolute", "../escape", "nested/../escape", "C:/escape", "a\\b", "a\x00b", ""):
-            for field in ("planPath", "changedPaths", "evidencePath"):
+            for field in ("planPath", "changedPaths", "evidencePath", "summaryPath"):
                 document = copy.deepcopy(self.document)
-                if field == "evidencePath":
+                if field in {"evidencePath", "summaryPath"}:
                     document["gates"]["unit"][field] = value
                 else:
                     document[field] = [value] if field == "changedPaths" else value
@@ -268,13 +305,89 @@ class StateTests(unittest.TestCase):
 
     def test_nullable_gate_fields_and_dynamic_fingerprints_round_trip(self):
         self.document["gates"]["unit"].update(
-            status="pending", exitCode=None, startedAt=None, endedAt=None, evidencePath=None
+            status="pending", exitCode=None, startedAt=None, endedAt=None,
+            evidencePath=None, summaryPath=None, evidenceKey=None
         )
         self.document["attempts"]["byFingerprint"]["e" * 64] = 2
         self.document["lastFailureFingerprint"] = None
         state = self.state()
         save_state_atomic(self.path, state)
         self.assertEqual(json.loads(self.path.read_text()), self.document)
+
+    def test_new_contract_schemas_reject_unsafe_paths_unbounded_text_and_sources(self):
+        self.assertTrue(hasattr(harness_state, "validate_document"))
+        validate_document = harness_state.validate_document
+        schemas = {
+            name: json.loads((REPO / "docs/agent" / name).read_text(encoding="utf-8"))
+            for name in (
+                "GATE_SUMMARY_SCHEMA.json",
+                "CONTEXT_CAPSULE_SCHEMA.json",
+                "TOKEN_REPORT_SCHEMA.json",
+            )
+        }
+        capsule = {
+            "schemaVersion": 1,
+            "capsuleDigest": "a" * 64,
+            "stablePrefix": "policy",
+            "taskDelta": "task",
+            "diagnostic": None,
+            "totalBytes": 10,
+            "sources": [{
+                "sourceType": "repository",
+                "path": "docs/agent/PROJECT_MEMORY.md",
+                "startLine": 1,
+                "endLine": 2,
+                "digest": "b" * 64,
+                "byteCount": 10,
+                "reason": "stable project facts",
+            }],
+        }
+        validate_document(capsule, schemas["CONTEXT_CAPSULE_SCHEMA.json"])
+        for path in ("/absolute", "../escape", "nested/../escape", "C:/escape"):
+            invalid = copy.deepcopy(capsule)
+            invalid["sources"][0]["path"] = path
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                validate_document(invalid, schemas["CONTEXT_CAPSULE_SCHEMA.json"])
+        invalid = copy.deepcopy(capsule)
+        invalid["sources"][0]["sourceType"] = "conversation"
+        with self.assertRaises(ValueError):
+            validate_document(invalid, schemas["CONTEXT_CAPSULE_SCHEMA.json"])
+        invalid = copy.deepcopy(capsule)
+        invalid["sources"][0]["reason"] = "x" * 257
+        with self.assertRaises(ValueError):
+            validate_document(invalid, schemas["CONTEXT_CAPSULE_SCHEMA.json"])
+
+        token_report = {
+            "schemaVersion": 1,
+            "since": "2026-10-09T06:22:00Z",
+            "until": "2026-10-12T15:59:59Z",
+            "planPath": "docs/superpowers/plans/approved.md",
+            "sessions": {"main": 1, "subagents": 2, "reviewers": 1},
+            "usage": {"rawTokens": 10, "cachedInputTokens": 4,
+                      "activeTokens": 6, "outputTokens": 2,
+                      "reasoningTokens": 1},
+            "metrics": {"gateExecutionCount": 3, "gateReuseCount": 1,
+                        "duplicateGateAvoidedCount": 1,
+                        "failureFingerprintCount": 0,
+                        "diagnosticBytesExposed": 0},
+        }
+        validate_document(token_report, schemas["TOKEN_REPORT_SCHEMA.json"])
+        token_report["planPath"] = "../escape"
+        with self.assertRaises(ValueError):
+            validate_document(token_report, schemas["TOKEN_REPORT_SCHEMA.json"])
+
+        gate_summary = {
+            "schemaVersion": 1, "gateId": "unit", "status": "passed",
+            "exitCode": 0, "durationMs": 1,
+            "counts": {"total": 1, "passed": 1, "failed": 0,
+                       "skipped": 0, "errors": 0},
+            "evidenceKey": "c" * 64, "headCommit": "d" * 40,
+            "source": "local", "reused": False, "diagnostic": None,
+        }
+        validate_document(gate_summary, schemas["GATE_SUMMARY_SCHEMA.json"])
+        gate_summary["source"] = "untrusted"
+        with self.assertRaises(ValueError):
+            validate_document(gate_summary, schemas["GATE_SUMMARY_SCHEMA.json"])
 
     def test_malformed_state_json_is_rejected(self):
         for content in (b"{", b"[]", b"\xff", b'{"schemaVersion":1,"schemaVersion":1}',

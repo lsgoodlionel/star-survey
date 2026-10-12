@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "gates": [
     {
       "id": "admin-lint",
@@ -9,7 +9,11 @@
         "lint"
       ],
       "cwd": "platform/apps/admin-web",
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "execution_tier": "local_fast",
+      "reuse_policy": "content",
+      "input_patterns": ["platform/apps/admin-web/**"],
+      "summary_format": "generic"
     },
     {
       "id": "admin-typecheck",
@@ -19,7 +23,11 @@
         "typecheck"
       ],
       "cwd": "platform/apps/admin-web",
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "execution_tier": "local_fast",
+      "reuse_policy": "content",
+      "input_patterns": ["platform/apps/admin-web/**"],
+      "summary_format": "generic"
     },
     {
       "id": "admin-test",
@@ -30,7 +38,11 @@
         "--run"
       ],
       "cwd": "platform/apps/admin-web",
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "execution_tier": "local_fast",
+      "reuse_policy": "content",
+      "input_patterns": ["platform/apps/admin-web/**"],
+      "summary_format": "vitest"
     },
     {
       "id": "admin-build",
@@ -40,7 +52,11 @@
         "build"
       ],
       "cwd": "platform/apps/admin-web",
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "execution_tier": "local_integration",
+      "reuse_policy": "content",
+      "input_patterns": ["platform/apps/admin-web/**"],
+      "summary_format": "generic"
     },
     {
       "id": "admin-production-bundle",
@@ -50,7 +66,11 @@
         "assert:production-bundle"
       ],
       "cwd": "platform/apps/admin-web",
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "execution_tier": "local_fast",
+      "reuse_policy": "head",
+      "input_patterns": ["platform/apps/admin-web/**", "platform/deploy/production/**"],
+      "summary_format": "generic"
     },
     {
       "id": "platform-java-tests",
@@ -60,7 +80,11 @@
         "platform/deploy/test/run-platform-tests.sh"
       ],
       "cwd": ".",
-      "timeout_seconds": 1800
+      "timeout_seconds": 1800,
+      "execution_tier": "local_integration",
+      "reuse_policy": "head",
+      "input_patterns": ["platform/services/business/**", "platform/deploy/test/run-platform-tests.sh"],
+      "summary_format": "surefire"
     },
     {
       "id": "gateway-tests",
@@ -77,7 +101,11 @@
         "-q"
       ],
       "cwd": "platform/tools/publish-gateway",
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "execution_tier": "local_fast",
+      "reuse_policy": "content",
+      "input_patterns": ["platform/tools/publish-gateway/**", "platform/contracts/**"],
+      "summary_format": "unittest"
     },
     {
       "id": "release-tests",
@@ -93,7 +121,11 @@
         "test_*.py"
       ],
       "cwd": ".",
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "execution_tier": "github_full",
+      "reuse_policy": "head",
+      "input_patterns": ["platform/deploy/production/release/**", ".github/workflows/**"],
+      "summary_format": "unittest"
     },
     {
       "id": "production-tests",
@@ -109,7 +141,11 @@
         "test_*.py"
       ],
       "cwd": ".",
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "execution_tier": "github_full",
+      "reuse_policy": "head",
+      "input_patterns": ["platform/deploy/production/**", ".github/workflows/**"],
+      "summary_format": "unittest"
     },
     {
       "id": "productization-tests",
@@ -125,7 +161,11 @@
         "test_render_capabilities.py"
       ],
       "cwd": ".",
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "execution_tier": "local_fast",
+      "reuse_policy": "content",
+      "input_patterns": ["platform/tools/productization/**", "docs/product/**"],
+      "summary_format": "unittest"
     },
     {
       "id": "capability-consistency",
@@ -141,7 +181,11 @@
         "test_render_capabilities.py"
       ],
       "cwd": ".",
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "execution_tier": "local_fast",
+      "reuse_policy": "content",
+      "input_patterns": ["platform/tools/productization/**", "docs/product/**"],
+      "summary_format": "unittest"
     },
     {
       "id": "admin-e2e",
@@ -150,7 +194,11 @@
         "--fresh"
       ],
       "cwd": ".",
-      "timeout_seconds": 1800
+      "timeout_seconds": 1800,
+      "execution_tier": "github_full",
+      "reuse_policy": "head",
+      "input_patterns": ["platform/apps/admin-web/**", "platform/tests/e2e/**", "platform/deploy/test/run-admin-web-e2e.sh"],
+      "summary_format": "playwright"
     },
     {
       "id": "p1-e2e",
@@ -161,7 +209,11 @@
         "platform/deploy/test/run-p1-e2e.sh"
       ],
       "cwd": ".",
-      "timeout_seconds": 1800
+      "timeout_seconds": 1800,
+      "execution_tier": "github_full",
+      "reuse_policy": "head",
+      "input_patterns": ["platform/**", "plugins/**", "application/**"],
+      "summary_format": "generic"
     },
     {
       "id": "access-policy-mysql",
@@ -174,7 +226,11 @@
         "--fresh"
       ],
       "cwd": ".",
-      "timeout_seconds": 1800
+      "timeout_seconds": 1800,
+      "execution_tier": "github_full",
+      "reuse_policy": "head",
+      "input_patterns": ["plugins/MjyRuntimePolicy/**", "platform/deploy/test/run-access-policy.sh"],
+      "summary_format": "generic"
     },
     {
       "id": "access-policy-pgsql",
@@ -187,7 +243,11 @@
         "--fresh"
       ],
       "cwd": ".",
-      "timeout_seconds": 1800
+      "timeout_seconds": 1800,
+      "execution_tier": "github_full",
+      "reuse_policy": "head",
+      "input_patterns": ["plugins/MjyRuntimePolicy/**", "platform/deploy/test/run-access-policy.sh"],
+      "summary_format": "generic"
     },
     {
       "id": "scoring-parity-mysql",
@@ -200,7 +260,11 @@
         "--fresh"
       ],
       "cwd": ".",
-      "timeout_seconds": 1800
+      "timeout_seconds": 1800,
+      "execution_tier": "github_full",
+      "reuse_policy": "head",
+      "input_patterns": ["platform/tools/publish-gateway/**", "platform/deploy/test/run-publish-gateway-parity.sh"],
+      "summary_format": "generic"
     },
     {
       "id": "scoring-parity-pgsql",
@@ -213,7 +277,11 @@
         "--fresh"
       ],
       "cwd": ".",
-      "timeout_seconds": 1800
+      "timeout_seconds": 1800,
+      "execution_tier": "github_full",
+      "reuse_policy": "head",
+      "input_patterns": ["platform/tools/publish-gateway/**", "platform/deploy/test/run-publish-gateway-parity.sh"],
+      "summary_format": "generic"
     },
     {
       "id": "traceability",
@@ -230,7 +298,11 @@
         "-q"
       ],
       "cwd": "platform/tools/traceability",
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "execution_tier": "local_fast",
+      "reuse_policy": "content",
+      "input_patterns": ["platform/tools/traceability/**", "docs/**"],
+      "summary_format": "unittest"
     },
     {
       "id": "diff-check",
@@ -240,7 +312,11 @@
         "--check"
       ],
       "cwd": ".",
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "execution_tier": "local_fast",
+      "reuse_policy": "head",
+      "input_patterns": ["."],
+      "summary_format": "generic"
     },
     {
       "id": "harness-tests",
@@ -250,7 +326,11 @@
         "tools/agent-harness/drills/run_drills.py"
       ],
       "cwd": ".",
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "execution_tier": "local_fast",
+      "reuse_policy": "head",
+      "input_patterns": ["tools/agent-harness/**", "scripts/agent-harness", "docs/agent/**", ".github/workflows/agent-governance.yml"],
+      "summary_format": "unittest"
     }
   ],
   "profiles": {
