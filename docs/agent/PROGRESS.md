@@ -38,6 +38,11 @@ GitHub 受信摘要、全局规则安装与 Obsidian 单向投影均已实现，
 发布/预览的 MySQL 与 PostgreSQL 真实双库验证；只有这两项通过后才进入 Task 3。35%-45% active Token
 降幅仍是预测，需在后续两个产品 Milestone 结束后用项目归属明确的遥测复核。
 
+最新后期进度、Wave 0-6 成熟度、剩余工作量和 Token 速度见
+[2026-10-12 Survey 后期开发与整体进度分析](../audits/2026-10-12-survey-late-stage-progress-token-analysis.md)。
+该报告维持产品口径 `accepted=0/12`，不把当前未提交的 Wave 2 Task 2 代码计为交付；短窗口 Token
+下降仅作为趋势证据，不替代两个代表性产品 Milestone 后的复测。
+
 ## Dashboard 历史证据（非本批 Wave 2 验收）
 
 - Dashboard 实现提交：`3ec78f09706c20b1a2ead20e19ee3f42993ab87e`。
