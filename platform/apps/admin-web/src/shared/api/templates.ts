@@ -40,6 +40,16 @@ export const templatePendingQueryKey = (tenantId: string) =>
   ['templates', tenantId, 'pending'] as const;
 export const platformTemplateListQueryKey = (tenantId: string) =>
   ['templates', tenantId, 'platform-list'] as const;
+export const templateManagedQueryKey = (tenantId: string) =>
+  ['templates', tenantId, 'managed'] as const;
+export const templateCapabilitiesQueryKey = (tenantId: string, id: string) =>
+  ['templates', tenantId, 'capabilities', id] as const;
+export const platformTemplateDetailQueryKey = (tenantId: string, id: string) =>
+  ['templates', tenantId, 'platform-detail', id] as const;
+export const templateCapabilitiesSchema = z.object({
+  canAddVersion: z.boolean(), canSubmit: z.boolean(), canReview: z.boolean(), canUnpublish: z.boolean(),
+});
+export type TemplateCapabilities = z.infer<typeof templateCapabilitiesSchema>;
 
 const tenantPath = (id: string) => `/v1/survey-templates/${encodeURIComponent(id)}`;
 const platformPath = (id: string) => `/v1/platform/survey-templates/${encodeURIComponent(id)}`;
@@ -49,6 +59,12 @@ export function listTemplates(api: ApiClient, scope: TemplateScopeFilter = 'all'
 }
 export function listPendingTemplates(api: ApiClient, signal?: AbortSignal) {
   return api.request({ path: '/v1/survey-templates/pending', schema: templateListSchema, signal });
+}
+export function listManagedTemplates(api: ApiClient, signal?: AbortSignal) {
+  return api.request({ path: '/v1/survey-templates/managed', schema: templateListSchema, signal });
+}
+export function getTemplateCapabilities(api: ApiClient, id: string, signal?: AbortSignal) {
+  return api.request({ path: `${tenantPath(id)}/capabilities`, schema: templateCapabilitiesSchema, signal });
 }
 export function getTemplate(api: ApiClient, id: string, signal?: AbortSignal) {
   return api.request({ path: tenantPath(id), schema: templateDetailSchema, signal });

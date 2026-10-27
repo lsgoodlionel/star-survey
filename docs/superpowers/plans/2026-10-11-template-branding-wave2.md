@@ -255,6 +255,8 @@ git commit -m "feat: add template browsing and copy flow"
 
 ### Task 5: Productize Tenant And Platform Template Lifecycles
 
+**2026-10-27 用户确认的最小接口补充：**现有库列表只返回已发布项，审核队列只返回待审项，无法找回草稿、驳回或下架模板；资源能力接口不表达租户级模板审核权。本任务同步增加只读 `GET /v1/survey-templates/managed` 与 `GET /v1/survey-templates/{templateId}/capabilities`，复用现有成员校验、租户 RLS 和权限判定，不增加数据库迁移或新的写端点。对应变更在 `SurveyTemplateController`、`SurveyTemplateService`、`SurveyTemplateRepository`、`TemplateAccess`、`TemplateCapabilities`、`SurveyTemplateApiTest` 以及前端 `shared/api/templates.ts` 和测试中。
+
 **Files:**
 - Create: `platform/apps/admin-web/src/features/templates/TemplateActions.tsx`
 - Create: `platform/apps/admin-web/src/features/templates/TemplateActions.test.tsx`
@@ -268,31 +270,31 @@ git commit -m "feat: add template browsing and copy flow"
 - Consumes: Task 3 lifecycle APIs, current auth roles, survey ID/draft version and Task 4 views.
 - Produces: “保存为模板”、添加版本、送审、批准、驳回、下架，以及 `platform_operator` 可见的 platform definition file import/publish controls.
 
-- [ ] **Step 1: Write failing lifecycle tests**
+- [x] **Step 1: Write failing lifecycle tests**
 
 Create a state/action matrix test for draft, pending, rejected, published and unpublished templates. Cover required rejection reason, 200/1000 character bounds, permission-denied controls, 409 refresh, mutation cache invalidation and repeated action blocking.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run: `npm --prefix platform/apps/admin-web test -- --run src/features/templates/TemplateActions.test.tsx src/app/SurveyShell.test.tsx`
 
 Expected: FAIL because lifecycle components and SurveyShell action do not exist.
 
-- [ ] **Step 3: Implement tenant lifecycle actions**
+- [x] **Step 3: Implement tenant lifecycle actions**
 
 Derive allowed buttons from server state and capability responses, not role labels alone. Add “保存为模板” to SurveyShell commands and keep each mutation's pending/error/success status visible without losing page context.
 
-- [ ] **Step 4: Implement platform operator controls**
+- [x] **Step 4: Implement platform operator controls**
 
 Only render for an exact `platform_operator` role. Accept a local `.json` file, parse and validate it before calling `/v1/platform/survey-templates`; never expose a raw HTML/JS editor. Publishing requires an explicit version selection and confirmation.
 
-- [ ] **Step 5: Run focused and complete frontend tests**
+- [x] **Step 5: Run focused and complete frontend tests**
 
 Run: `npm --prefix platform/apps/admin-web test -- --run src/features/templates/TemplateActions.test.tsx src/features/templates/TemplatesPage.test.tsx src/app/SurveyShell.test.tsx`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add platform/apps/admin-web/src/features/templates platform/apps/admin-web/src/app/SurveyShell.tsx platform/apps/admin-web/src/app/SurveyShell.test.tsx

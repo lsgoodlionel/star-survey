@@ -4,16 +4,19 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { ReactNode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
-import { expect, test, vi } from 'vitest';
+import { beforeEach, expect, test, vi } from 'vitest';
 import { createAppRoutes } from '../../app/router';
 import { server } from '../../test/server';
+
+const authRoles = vi.hoisted(() => ({ roles: ['editor'] as string[] }));
+beforeEach(() => { authRoles.roles = ['editor']; });
 
 vi.mock('../auth/AuthProvider', async () => {
   const { createApiClient } = await import('../../shared/api/http');
   return { AuthProvider: ({ children }: { children: ReactNode }) => children,
     useAuth: () => ({ api: createApiClient(), logout: vi.fn(), session: {
       token: 'test', expiresAt: Date.now() + 60_000,
-      me: { tenantId: 'tenant-a', actorId: 'author', roles: ['editor'] },
+      me: { tenantId: 'tenant-a', actorId: 'author', roles: authRoles.roles },
     } }) };
 });
 
@@ -106,4 +109,76 @@ test('does not offer copy for an unpublished template', async () => {
   renderPage(`/templates/${id}`);
   expect(await screen.findByText('当前状态不可复制；请使用已发布的模板。')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '从模板创建问卷' })).not.toBeInTheDocument();
+});
+
+test('managed view discovers unpublished tenant templates', async () => {
+  server.use(http.get('/v1/survey-templates/managed', () => HttpResponse.json([
+    { ...template, status: 'draft', publishedVersion: null, name: '草稿模板' },
+  ])));
+  renderPage('/templates?mode=managed');
+  expect(await screen.findByRole('link', { name: /草稿模板/ })).toHaveAttribute('href', `/templates/${id}?mode=managed`);
+  expect(screen.getByRole('link', { name: '我的管理模板' })).toHaveAttribute('aria-current', 'page');
+});
+
+test('review queue reads the authoritative pending endpoint', async () => {
+  server.use(http.get('/v1/survey-templates/pending', () => HttpResponse.json([
+    { ...template, status: 'pending', publishedVersion: null, name: '待审模板' },
+  ])));
+  renderPage('/templates?mode=pending');
+  expect(await screen.findByRole('link', { name: /待审模板/ })).toBeInTheDocument();
+});
+
+test('platform import is visible only to an exact platform_operator role', async () => {
+  server.use(http.get('/v1/platform/survey-templates', () => HttpResponse.json([])));
+  authRoles.roles = ['platform_operator_extra'];
+  renderPage('/templates?mode=platform');
+  expect(screen.queryByRole('textbox', { name: '平台模板名称' })).not.toBeInTheDocument();
+});
+
+test('shows tenant lifecycle actions only when capabilities authorize them', async () => {
+  let submitted = 0;
+  server.use(
+    http.get('/v1/survey-templates/:id', () => HttpResponse.json({
+      template: { ...template, status: 'draft', publishedVersion: null },
+      versions: [{ versionNo: 1, sourceSurveyId: surveyId, sourceDraftVersion: 1,
+        createdBy: 'author', createdAt: '2026-10-27T08:00:00Z' }], history: [],
+    })),
+    http.get('/v1/survey-templates/:id/capabilities', () => HttpResponse.json({
+      canAddVersion: true, canSubmit: true, canReview: false, canUnpublish: false,
+    })),
+    http.post('/v1/survey-templates/:id/submit', () => {
+      submitted++;
+      return HttpResponse.json({ ...template, status: 'pending', publishedVersion: null });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage(`/templates/${id}?mode=managed`);
+  await user.click(await screen.findByRole('button', { name: '提交审核' }));
+  expect(await screen.findByText('操作已完成')).toBeInTheDocument();
+  expect(submitted).toBe(1);
+});
+
+test('operator explicitly selects and confirms a platform version for publication', async () => {
+  authRoles.roles = ['platform_operator'];
+  let publishes = 0;
+  server.use(
+    http.get('/v1/platform/survey-templates/:id', () => HttpResponse.json({
+      template: { ...template, scope: 'platform', status: 'draft', publishedVersion: null },
+      versions: [{ versionNo: 1, sourceSurveyId: null, sourceDraftVersion: null,
+        createdBy: 'operator', createdAt: '2026-10-27T08:00:00Z' }], history: [],
+    })),
+    http.post('/v1/platform/survey-templates/:id/publish', async ({ request }) => {
+      publishes++;
+      expect(await request.json()).toEqual({ versionNo: 1 });
+      return HttpResponse.json({ ...template, scope: 'platform', status: 'published', publishedVersion: 1 });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage(`/templates/${id}?mode=platform`);
+  await user.selectOptions(await screen.findByRole('combobox', { name: '上架版本' }), '1');
+  await user.click(screen.getByRole('button', { name: '上架所选版本' }));
+  expect(publishes).toBe(0);
+  await user.click(screen.getByRole('button', { name: '确认上架版本 1' }));
+  expect(await screen.findByText('平台模板已上架')).toBeInTheDocument();
+  expect(publishes).toBe(1);
 });

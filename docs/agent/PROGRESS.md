@@ -10,7 +10,7 @@ Task 1: complete - Wave 2 已激活；治理完成记录见 SDD 账本。
 Task 2: complete - 品牌资产跨 Java/Python/PHP 边界已实现并通过 2026-10-27 双库真实 E2E、PHPUnit、Gateway、Java 定向和 production 配置门禁；发布与预览的错误 channel key 回滚均验证问卷删除、上传目录清除及无作者品牌残留。能力矩阵仍按 Wave 2 完整六层证据维持原状态。
 Task 3: complete - 模板、资产与品牌 typed client 已接入现有端点；FormData 上传、Zod 响应校验、租户缓存键及品牌草稿安全合并已实现。2026-10-27 定向 18 项与管理端全套 317 项通过，lint、typecheck、build、production bundle 检查通过；页面流程仍由 Task 4-7 承接。
 Task 4: complete - 模板中心列表、范围与状态 URL 筛选、版本/历史详情、有效项目或文件夹目标选择及独立问卷复制已接入；工作区与全局导航可进入。2026-10-27 定向 29 项、管理端全套 325 项通过，lint、typecheck、build、production bundle 检查通过；真实浏览器与双库纵向验收留待 Task 7。
-Task 5: blocked on contract decision - 当前 `GET /v1/survey-templates` 仅返回已发布模板，`/pending` 仅返回待审模板；草稿、驳回、下架模板无可发现列表。`GET /v1/resource-capabilities` 在无 resourceId 时 `canApprovePublish=false`，不能表达租户级模板审核权。按原计划的完整生命周期 UI 需要明确批准最小只读列表与审核能力契约后再实施；不得用本地缓存代替服务端事实。
+Task 5: complete - 用户确认后补入最小只读管理列表与模板动作能力接口，沿用同租户 RLS 和真实权限判定；前端已接入创建/添加版本、送审、批准、驳回、下架、运营 JSON 导入与选版上架。2026-10-27 Java 全量 1492 项/183 类（失败、错误、跳过均为 0），前端全套 345 项、lint、typecheck、build、production bundle 检查通过。Task 6–7 的品牌编辑器及真实浏览器纵向验收尚未完成，Wave 2 能力状态不提升。
 Task 6: pending - 品牌与语言编辑器待实施。
 Task 7: pending - 模板到品牌化作答旅程待实施。
 Task 8: pending - 生产门禁与交付同步待实施。

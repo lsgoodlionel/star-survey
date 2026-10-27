@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, BarChart3, Eye, FileInput, Pencil, Rocket } from 'lucide-react';
 import {
   useCallback,
@@ -16,8 +16,11 @@ import {
   recordRecentWork,
   type RecentWorkCommand,
 } from '../shared/api/dashboard';
-import { getResourcePath } from '../shared/api/resources';
+import { getResourceCapabilities, getResourcePath } from '../shared/api/resources';
 import { getSurvey, surveyDetailQueryKey, type SurveyView } from '../shared/api/surveys';
+import {
+  addTenantTemplateVersion, createTenantTemplate, listManagedTemplates, templateManagedQueryKey,
+} from '../shared/api/templates';
 import { parsePositiveIntegerParam } from '../features/publish/routeParams';
 import {
   SurveyShellContext,
@@ -70,6 +73,12 @@ function LoadedSurveyShell({ actorId, api, surveyId, tenantId }: {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [unsavedChanges, setUnsavedChanges] = useState(false);
+  const [templateFormOpen, setTemplateFormOpen] = useState(false);
+  const [templateTarget, setTemplateTarget] = useState('new');
+  const [templateName, setTemplateName] = useState('');
+  const [templateDescription, setTemplateDescription] = useState('');
+  const [templateValidation, setTemplateValidation] = useState<string | null>(null);
+  const templateLock = useRef(false);
   const [owner] = useState(() => Symbol('survey-shell'));
   const activeVisit = useRef<RecentWorkVisit<RecentWorkCommand> | null>(null);
   const identity = `${tenantId}:${actorId}`;
@@ -83,6 +92,44 @@ function LoadedSurveyShell({ actorId, api, surveyId, tenantId }: {
     queryFn: ({ signal }) => getResourcePath(api, surveyId, signal),
     retry: false,
   });
+  const templateCapabilities = useQuery({
+    queryKey: ['resource-capabilities', tenantId, surveyId],
+    queryFn: ({ signal }) => getResourceCapabilities(api, surveyId, signal),
+    retry: false,
+  });
+  const managedTemplates = useQuery({
+    queryKey: templateManagedQueryKey(tenantId),
+    queryFn: ({ signal }) => listManagedTemplates(api, signal),
+    enabled: templateFormOpen && templateCapabilities.data?.canEdit === true,
+    retry: false,
+  });
+  const createTemplate = useMutation({
+    mutationFn: (target: string) => target === 'new'
+      ? createTenantTemplate(api, surveyId, templateName.trim(), templateDescription.trim() || null)
+      : addTenantTemplateVersion(api, target, surveyId),
+    onSuccess: async () => {
+      setTemplateValidation(null);
+      await queryClient.invalidateQueries({ queryKey: ['templates', tenantId] });
+    },
+    onSettled: () => { templateLock.current = false; },
+  });
+
+  function submitTemplateForm() {
+    if (templateLock.current) return;
+    const name = templateName.trim();
+    if (templateTarget === 'new' && !name) { setTemplateValidation('请填写模板名称'); return; }
+    if (templateTarget === 'new' && name.length > 200) { setTemplateValidation('模板名称不能超过 200 字'); return; }
+    if (templateTarget === 'new' && templateDescription.trim().length > 1000) {
+      setTemplateValidation('模板说明不能超过 1000 字'); return;
+    }
+    if (templateTarget !== 'new' && !managedTemplates.data?.some((item) =>
+      item.id === templateTarget && item.status !== 'pending')) {
+      setTemplateValidation('所选模板当前不可添加版本'); return;
+    }
+    setTemplateValidation(null);
+    templateLock.current = true;
+    createTemplate.mutate(templateTarget);
+  }
   const recentWorkCommand = useMemo(
     () => recentWorkCommandForPath(location.pathname, surveyId),
     [location.pathname, surveyId],
@@ -161,11 +208,38 @@ function LoadedSurveyShell({ actorId, api, surveyId, tenantId }: {
               {unsavedChanges ? <span className="survey-unsaved">有未保存修改</span> : null}
             </div>
           </div>
-          <Link className="survey-workspace-return" to={`/workspace?resource=${surveyId}`}>
-            <ArrowLeft aria-hidden="true" />
-            返回工作区
-          </Link>
+          <div className="survey-shell-commands">
+            {templateCapabilities.data?.canEdit ? <button type="button"
+              onClick={() => { setTemplateFormOpen((open) => !open); createTemplate.reset(); }}>
+              保存为模板
+            </button> : null}
+            <Link className="survey-workspace-return" to={`/workspace?resource=${surveyId}`}>
+              <ArrowLeft aria-hidden="true" />返回工作区
+            </Link>
+          </div>
         </div>
+        {templateFormOpen && templateCapabilities.data?.canEdit ? <div className="survey-template-form">
+          <label>保存方式 <select aria-label="保存方式" value={templateTarget}
+            onChange={(event) => { setTemplateTarget(event.target.value); createTemplate.reset(); }}>
+            <option value="new">新建模板</option>
+            {managedTemplates.data?.filter((item) => item.status !== 'pending').map((item) =>
+              <option key={item.id} value={item.id}>添加版本：{item.name}</option>)}
+          </select></label>
+          {managedTemplates.isError ? <p role="alert">管理模板加载失败，请重试</p> : null}
+          {templateTarget === 'new' ? <>
+          <label>模板名称 <input aria-label="模板名称" value={templateName}
+            onChange={(event) => setTemplateName(event.target.value)} /></label>
+          <label>模板说明 <textarea aria-label="模板说明" value={templateDescription}
+            onChange={(event) => setTemplateDescription(event.target.value)} /></label>
+          </> : null}
+          <button type="button" disabled={createTemplate.isPending} onClick={submitTemplateForm}>
+            {templateTarget === 'new' ? '创建模板' : '添加到模板版本'}
+          </button>
+          {createTemplate.isPending ? <p role="status">正在创建模板</p> : null}
+          {templateValidation ? <p role="alert">{templateValidation}</p> : null}
+          {createTemplate.isError ? <p role="alert">创建失败，请检查问卷权限或稍后重试</p> : null}
+          {createTemplate.data ? <p role="status">{createTemplate.variables === 'new' ? '模板已创建。' : '模板版本已添加。'}<Link to={`/templates/${createTemplate.data.id}?mode=managed`}>{createTemplate.variables === 'new' ? '查看新模板' : '查看模板'}</Link></p> : null}
+        </div> : null}
         <nav className="survey-workflow-tabs" aria-label="问卷工作流">
           {workflowTabs.map((tab) => {
             const Icon = tab.icon;

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode, useSyncExternalStore, type ReactNode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { beforeEach, expect, test, vi } from 'vitest';
@@ -91,6 +91,12 @@ function handleRequest(request: ApiRequest<unknown>) {
       lastPublish: null,
     };
   }
+  if (request.path === `/v1/resource-capabilities?resourceId=${surveyId}`) {
+    return { canCreateProject: false, canCreateChildren: false, canEdit: true,
+      canSubmitApproval: false, canPublishDirectly: false, canApprovePublish: false,
+      canArchive: false, canRestore: false };
+  }
+  if (request.path === '/v1/survey-templates/managed') return [];
   const resources = {
     [surveyId]: {
       id: surveyId,
@@ -306,6 +312,76 @@ test('registersSurveyPagesAsChildrenOfTheProtectedSurveyShell', () => {
     'versions/:version',
   ]);
   expect(appShell?.children?.some((route) => route.path === 'surveys/:surveyId/edit')).toBe(false);
+});
+
+test('creates a tenant template from the current survey without leaving the editor', async () => {
+  requestOverride = (call) => call.path === '/v1/survey-templates' && call.method === 'POST'
+    ? Promise.resolve({ id: '50000000-0000-4000-8000-000000000001', status: 'draft' }) : null;
+  renderSurveyShell(`/surveys/${surveyId}/edit`);
+  fireEvent.click(await screen.findByRole('button', { name: '保存为模板' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '模板名称' }), { target: { value: '新模板' } });
+  fireEvent.click(screen.getByRole('button', { name: '创建模板' }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({
+    path: '/v1/survey-templates', method: 'POST',
+    body: { sourceSurveyId: surveyId, name: '新模板', description: null },
+  })));
+  expect(await screen.findByRole('link', { name: '查看新模板' })).toHaveAttribute(
+    'href', '/templates/50000000-0000-4000-8000-000000000001?mode=managed');
+  expect(screen.getByText('edit内容')).toBeInTheDocument();
+});
+
+test('hides save-as-template when server denies survey edit capability', async () => {
+  requestOverride = (call) => call.path === `/v1/resource-capabilities?resourceId=${surveyId}`
+    ? Promise.resolve({ canEdit: false }) : null;
+  renderSurveyShell(`/surveys/${surveyId}/edit`);
+  await screen.findByRole('heading', { name: '客户反馈问卷-author-7' });
+  await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({
+    path: `/v1/resource-capabilities?resourceId=${surveyId}`,
+  })));
+  expect(screen.queryByRole('button', { name: '保存为模板' })).not.toBeInTheDocument();
+});
+
+test('validates template name and description length before sending', async () => {
+  renderSurveyShell(`/surveys/${surveyId}/edit`);
+  fireEvent.click(await screen.findByRole('button', { name: '保存为模板' }));
+  fireEvent.click(screen.getByRole('button', { name: '创建模板' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('请填写模板名称');
+  fireEvent.change(screen.getByRole('textbox', { name: '模板名称' }),
+    { target: { value: '名'.repeat(201) } });
+  fireEvent.click(screen.getByRole('button', { name: '创建模板' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('不能超过 200 字');
+  fireEvent.change(screen.getByRole('textbox', { name: '模板名称' }), { target: { value: '合格名称' } });
+  fireEvent.change(screen.getByRole('textbox', { name: '模板说明' }),
+    { target: { value: '说'.repeat(1001) } });
+  fireEvent.click(screen.getByRole('button', { name: '创建模板' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('不能超过 1000 字');
+  expect(request.mock.calls.some(([call]) => call.path === '/v1/survey-templates' && call.method === 'POST')).toBe(false);
+});
+
+test('adds the current editable survey as a new version of an existing template', async () => {
+  const templateId = '50000000-0000-4000-8000-000000000001';
+  requestOverride = (call) => {
+    if (call.path === '/v1/survey-templates/managed') return Promise.resolve([{
+      id: templateId, scope: 'tenant', name: '现有模板', description: null, status: 'published',
+      currentVersion: 1, publishedVersion: 1, createdBy: 'author', reviewedBy: null,
+      reviewedAt: null, reviewReason: null, updatedAt: '2026-10-27T08:00:00Z',
+    }]);
+    if (call.path === `/v1/survey-templates/${templateId}/versions` && call.method === 'POST') {
+      return Promise.resolve({ id: templateId, status: 'published', currentVersion: 2 });
+    }
+    return null;
+  };
+  renderSurveyShell(`/surveys/${surveyId}/edit`);
+  fireEvent.click(await screen.findByRole('button', { name: '保存为模板' }));
+  await screen.findByRole('option', { name: '添加版本：现有模板' });
+  fireEvent.change(await screen.findByRole('combobox', { name: '保存方式' }),
+    { target: { value: templateId } });
+  fireEvent.click(screen.getByRole('button', { name: '添加到模板版本' }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith(expect.objectContaining({
+    path: `/v1/survey-templates/${templateId}/versions`, method: 'POST',
+    body: { sourceSurveyId: surveyId },
+  })));
+  expect(await screen.findByText('模板版本已添加。')).toBeInTheDocument();
 });
 
 test.each([

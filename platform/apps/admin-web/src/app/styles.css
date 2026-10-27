@@ -219,6 +219,12 @@ summary:focus-visible {
   padding: 8px 20px 12px;
 }
 
+.survey-shell-commands { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.survey-shell-commands button, .survey-template-form button { min-height: 42px; padding: 8px 12px; border: 1px solid #8ba8b1; border-radius: 4px; background: #e6f2f5; color: #174756; }
+.survey-template-form { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; padding: 12px 0; }
+.survey-template-form label { display: grid; gap: 4px; }
+.survey-template-form input, .survey-template-form textarea, .survey-template-form select { min-width: 200px; padding: 8px; border: 1px solid #8ba8b1; border-radius: 4px; }
+
 .survey-shell-heading h1 {
   margin: 0;
   color: #182b31;

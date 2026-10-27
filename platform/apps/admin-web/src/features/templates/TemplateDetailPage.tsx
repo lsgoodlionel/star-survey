@@ -1,12 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import { dashboardQueryKey } from '../../shared/api/dashboard';
 import { getResourceCapabilities, listResources } from '../../shared/api/resources';
 import type { ResourceView } from '../../shared/api/resources';
-import { copyTemplate, getTemplate, templateDetailQueryKey } from '../../shared/api/templates';
+import {
+  copyTemplate, getPlatformTemplate, getTemplate, getTemplateCapabilities,
+  platformTemplateDetailQueryKey, publishPlatformTemplate, templateCapabilitiesQueryKey, templateDetailQueryKey,
+  unpublishPlatformTemplate,
+} from '../../shared/api/templates';
 import { templateStatusLabel } from './TemplatesPage';
+import { TemplateActions } from './TemplateActions';
+import { PlatformTemplateImport } from './PlatformTemplateImport';
 import './templates.css';
 
 const eventLabel: Record<string, string> = {
@@ -18,14 +24,40 @@ export function TemplateDetailPage() {
   const { api, session } = useAuth();
   const tenantId = session?.me.tenantId ?? '';
   const { templateId = '' } = useParams();
+  const [params] = useSearchParams();
+  const modeParam = params.get('mode');
+  const mode = modeParam === 'managed' || modeParam === 'pending' || modeParam === 'platform'
+    ? modeParam : null;
+  const isOperator = session?.me.roles.includes('platform_operator') === true;
+  const platformMode = mode === 'platform' && isOperator;
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const submitLock = useRef(false);
   const [parentId, setParentId] = useState('');
   const [folderTrail, setFolderTrail] = useState<ResourceView[]>([]);
   const [title, setTitle] = useState('');
-  const detail = useQuery({ queryKey: templateDetailQueryKey(tenantId, templateId),
-    queryFn: ({ signal }) => getTemplate(api, templateId, signal), enabled: Boolean(tenantId && templateId), retry: false });
+  const [publishVersion, setPublishVersion] = useState('');
+  const [confirmPublish, setConfirmPublish] = useState(false);
+  const [platformSuccess, setPlatformSuccess] = useState<string | null>(null);
+  const detail = useQuery({ queryKey: platformMode
+    ? platformTemplateDetailQueryKey(tenantId, templateId)
+    : templateDetailQueryKey(tenantId, templateId),
+    queryFn: ({ signal }) => platformMode ? getPlatformTemplate(api, templateId, signal)
+      : getTemplate(api, templateId, signal),
+    enabled: Boolean(tenantId && templateId && (mode !== 'platform' || isOperator)), retry: false });
+  const templateCapabilities = useQuery({ queryKey: templateCapabilitiesQueryKey(tenantId, templateId),
+    queryFn: ({ signal }) => getTemplateCapabilities(api, templateId, signal),
+    enabled: Boolean(tenantId && detail.data?.template.scope === 'tenant'
+      && (mode === 'managed' || mode === 'pending')), retry: false });
+  const platformAction = useMutation({ mutationFn: async (action: 'publish' | 'unpublish') => action === 'publish'
+    ? publishPlatformTemplate(api, templateId, Number(publishVersion))
+    : unpublishPlatformTemplate(api, templateId),
+    onSuccess: async (_result, action) => {
+      setConfirmPublish(false);
+      setPlatformSuccess(action === 'publish' ? '平台模板已上架' : '平台模板已下架');
+      await queryClient.invalidateQueries({ queryKey: ['templates', tenantId] });
+    },
+  });
   const projects = useQuery({ queryKey: ['template-destinations', tenantId, 'projects'],
     queryFn: ({ signal }) => listResources(api, { kind: 'project', archived: 'active', signal }),
     enabled: Boolean(tenantId && detail.data?.template.status === 'published'), retry: false });
@@ -50,8 +82,9 @@ export function TemplateDetailPage() {
   const canCopy = template?.status === 'published' && template.publishedVersion !== null;
 
   return <main className="templates-page">
-    <Link to="/templates">返回模板中心</Link>
-    {detail.isPending ? <p role="status">正在加载模板详情</p> : null}
+    <Link to={mode ? `/templates?mode=${mode}` : '/templates'}>返回模板中心</Link>
+    {mode === 'platform' && !isOperator ? <p role="alert">无权查看平台模板管理</p> : null}
+    {detail.isPending && (mode !== 'platform' || isOperator) ? <p role="status">正在加载模板详情</p> : null}
     {detail.isError ? <div role="alert"><p>{'status' in detail.error && detail.error.status === 403 ? '无权查看模板' : '模板详情加载失败'}</p><button type="button" onClick={() => void detail.refetch()}>重试</button></div> : null}
     {template ? <>
       <header><h1>{template.name}</h1><p>{template.description}</p></header>
@@ -62,6 +95,32 @@ export function TemplateDetailPage() {
         <li key={version.versionNo}>版本 {version.versionNo} · {version.createdBy} · <time dateTime={version.createdAt}>{new Date(version.createdAt).toLocaleString('zh-CN')}</time>{version.sourceSurveyId ? ` · 来源问卷 ${version.sourceSurveyId}` : ''}</li>)}</ul> : <p>暂无版本</p>}</section>
       <section><h2>操作历史</h2>{detail.data?.history.length ? <ul>{detail.data.history.map((event, index) =>
         <li key={`${event.occurredAt}-${index}`}>{eventLabel[event.event] ?? '模板操作'} · {event.actor} · <time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleString('zh-CN')}</time>{event.reason ? ` · ${event.reason}` : ''}</li>)}</ul> : <p>暂无历史</p>}</section>
+      {template.scope === 'tenant' && templateCapabilities.data ? <TemplateActions
+        api={api} tenantId={tenantId} template={template}
+        sourceSurveyId={detail.data?.versions.at(-1)?.sourceSurveyId ?? null}
+        capabilities={templateCapabilities.data}
+        onRefresh={() => { void detail.refetch(); void templateCapabilities.refetch(); }} /> : null}
+      {platformMode && template.scope === 'platform' ? <>
+        <PlatformTemplateImport api={api} tenantId={tenantId} templateId={templateId} />
+        <section><h2>平台模板上架</h2>
+          {template.status !== 'published' ? <>
+            <label>上架版本 <select aria-label="上架版本" value={publishVersion}
+              onChange={(event) => { setPublishVersion(event.target.value); setConfirmPublish(false); }}>
+              <option value="">请选择版本</option>
+              {detail.data?.versions.map((version) => <option key={version.versionNo}
+                value={version.versionNo}>版本 {version.versionNo}</option>)}
+            </select></label>
+            <button type="button" disabled={!publishVersion || platformAction.isPending}
+              onClick={() => setConfirmPublish(true)}>上架所选版本</button>
+            {confirmPublish ? <button type="button" disabled={platformAction.isPending}
+              onClick={() => platformAction.mutate('publish')}>确认上架版本 {publishVersion}</button> : null}
+          </> : <button type="button" disabled={platformAction.isPending}
+            onClick={() => platformAction.mutate('unpublish')}>下架平台模板</button>}
+          {platformAction.isPending ? <p role="status">正在处理平台模板</p> : null}
+          {platformAction.isError ? <p role="alert">平台模板操作失败，请刷新后重试</p> : null}
+          {platformSuccess ? <p role="status">{platformSuccess}</p> : null}
+        </section>
+      </> : null}
       {canCopy ? <section><h2>从模板创建问卷</h2><p>复制后问卷与模板各自独立。</p>
         <label>目标项目或文件夹 <select aria-label="目标项目或文件夹" value={parentId} onChange={(event) => {
           const nextId = event.target.value;

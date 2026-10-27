@@ -8,6 +8,8 @@ import {
   listPlatformTemplates, createPlatformTemplate, addPlatformTemplateVersion,
   publishPlatformTemplate, unpublishPlatformTemplate, templateListQueryKey,
   templateDetailQueryKey,
+  listManagedTemplates, getTemplateCapabilities, templateCapabilitiesSchema,
+  templateManagedQueryKey, templateCapabilitiesQueryKey,
 } from './templates';
 
 const id = '10000000-0000-4000-8000-000000000001';
@@ -85,4 +87,20 @@ test('isolates tenant query keys and normalizes default scope', () => {
   expect(templateListQueryKey('tenant-a')).toEqual(templateListQueryKey('tenant-a', 'all'));
   expect(templateListQueryKey('tenant-a')).not.toEqual(templateListQueryKey('tenant-b'));
   expect(templateDetailQueryKey('tenant-a', id)).not.toEqual(templateDetailQueryKey('tenant-b', id));
+});
+
+test('reads managed lifecycle states and server-issued action capabilities', async () => {
+  const request = vi.fn().mockResolvedValue([]);
+  const api = { request };
+  await listManagedTemplates(api);
+  await getTemplateCapabilities(api, 'id /?');
+  expect(request.mock.calls.map(([arg]) => arg.path)).toEqual([
+    '/v1/survey-templates/managed', '/v1/survey-templates/id%20%2F%3F/capabilities',
+  ]);
+  expect(templateCapabilitiesSchema.parse({ canAddVersion: true, canSubmit: false,
+    canReview: false, canUnpublish: false }).canAddVersion).toBe(true);
+  expect(() => templateCapabilitiesSchema.parse({ canAddVersion: true, canSubmit: false,
+    canReview: 'yes', canUnpublish: false })).toThrow();
+  expect(templateManagedQueryKey('a')).not.toEqual(templateManagedQueryKey('b'));
+  expect(templateCapabilitiesQueryKey('a', id)).not.toEqual(templateCapabilitiesQueryKey('b', id));
 });
