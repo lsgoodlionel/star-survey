@@ -169,31 +169,31 @@ git commit -m "feat: pin brand assets in survey versions"
 - Consumes: existing template/asset endpoints, `getSurveyDraft`, `saveDraft`, and Task 2 brand asset shape.
 - Produces: `listTemplates`, `getTemplate`, `copyTemplate`, lifecycle mutations, `listAssets`, `uploadAsset`, `parseBrandingDraft`, `mergeBrandingDraft`, and tenant-scoped query-key factories.
 
-- [ ] **Step 1: Write failing client and schema tests**
+- [x] **Step 1: Write failing client and schema tests**
 
 Cover every template scope/status, version/history item, optional review fields, platform versus tenant endpoints, multipart asset upload, image filtering, unknown/missing field rejection, query-key tenant isolation, and URL encoding.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run: `npm --prefix platform/apps/admin-web test -- --run src/shared/api/templates.test.ts src/shared/api/assets.test.ts src/shared/api/branding.test.ts`
 
 Expected: FAIL because the clients do not exist.
 
-- [ ] **Step 3: Implement template and asset clients**
+- [x] **Step 3: Implement template and asset clients**
 
 Use existing `ApiClient`; schemas expose Java enum codes as lowercase typed values and reject malformed IDs, timestamps, version numbers and platform responses. `uploadAsset` accepts `name`, `File` and optional `AbortSignal` and sends `FormData` without setting a manual content type.
 
-- [ ] **Step 4: Implement brand draft parsing and merge**
+- [x] **Step 4: Implement brand draft parsing and merge**
 
 `parseBrandingDraft(definition: unknown): BrandingFormState` must supply safe defaults without discarding unknown definition fields. `mergeBrandingDraft(definition, state): unknown` replaces only `theme`, `branding`, `additionalLanguages` and `translations`, fixes theme to `zh-business` when branding exists, and never writes `url` or `assetVersion`.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `npm --prefix platform/apps/admin-web test -- --run src/shared/api/templates.test.ts src/shared/api/assets.test.ts src/shared/api/branding.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add platform/apps/admin-web/src/shared/api/templates.ts platform/apps/admin-web/src/shared/api/templates.test.ts platform/apps/admin-web/src/shared/api/assets.ts platform/apps/admin-web/src/shared/api/assets.test.ts platform/apps/admin-web/src/shared/api/branding.ts platform/apps/admin-web/src/shared/api/branding.test.ts

@@ -8,7 +8,7 @@
 
 Task 1: complete - Wave 2 已激活；治理完成记录见 SDD 账本。
 Task 2: complete - 品牌资产跨 Java/Python/PHP 边界已实现并通过 2026-10-27 双库真实 E2E、PHPUnit、Gateway、Java 定向和 production 配置门禁；发布与预览的错误 channel key 回滚均验证问卷删除、上传目录清除及无作者品牌残留。能力矩阵仍按 Wave 2 完整六层证据维持原状态。
-Task 3: pending - 模板、资产与品牌 client 待实施。
+Task 3: complete - 模板、资产与品牌 typed client 已接入现有端点；FormData 上传、Zod 响应校验、租户缓存键及品牌草稿安全合并已实现。2026-10-27 定向 18 项与管理端全套 317 项通过，lint、typecheck、build、production bundle 检查通过；页面流程仍由 Task 4-7 承接。
 Task 4: pending - 模板浏览与复制待实施。
 Task 5: pending - 模板生命周期待实施。
 Task 6: pending - 品牌与语言编辑器待实施。

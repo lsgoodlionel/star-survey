@@ -59,13 +59,16 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
           async (signal) => {
             const token = options.getToken?.();
             const headers = new Headers({ Accept: 'application/json' });
-            if (request.body !== undefined) headers.set('Content-Type', 'application/json');
+            if (request.body !== undefined && !(request.body instanceof FormData)) {
+              headers.set('Content-Type', 'application/json');
+            }
             if (token) headers.set('Authorization', `Bearer ${token}`);
 
             const response = await fetchImpl(requestPath, {
               method: request.method ?? 'GET',
               headers,
-              body: request.body === undefined ? undefined : JSON.stringify(request.body),
+              body: request.body === undefined ? undefined : request.body instanceof FormData
+                ? request.body : JSON.stringify(request.body),
               credentials: 'same-origin',
               signal,
             });
