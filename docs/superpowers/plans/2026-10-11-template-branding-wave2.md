@@ -381,27 +381,29 @@ git commit -m "feat: add brand and language editor"
 - Consumes: Tasks 2-6 and the existing real preview/publish/respondent stack.
 - Produces: deterministic browser evidence for template creation/review/copy, brand persistence, preview, publish, response, asset-version pinning, tenant isolation and responsive/accessibility states.
 
-- [ ] **Step 1: Write failing E2E evidence assertions**
+- [x] **Step 1: Write failing E2E evidence assertions**
 
 Require named scenarios for tenant template lifecycle, platform template copy, brand save/refresh, preview branding, respondent language switch, no third-party absolute URL, old published asset version, 409 conflict, forbidden tenant/platform action, keyboard flow and 819/820/1179/1180 widths.
 
-- [ ] **Step 2: Run the browser gate test and confirm RED**
+- [x] **Step 2: Run the browser gate test and confirm RED**
 
 Run: `python3 platform/tests/e2e/test_admin_web_gate.py`
 
 Expected: FAIL because the Wave 2 scenarios are not declared.
 
-- [ ] **Step 3: Implement the Playwright journey and deterministic fixtures**
+- [x] **Step 3: Implement the Playwright journey and deterministic fixtures**
 
 Use real platform and LimeSurvey services. Fixture credentials stay in ignored mode-0600 runtime files; tests must not log tokens, passwords or signed asset URLs.
 
-- [ ] **Step 4: Run the complete real E2E gate**
+- [x] **Step 4: Run the complete real E2E gate**
 
 Run: `platform/deploy/test/run-admin-web-e2e.sh`
 
 Expected: all Wave 1 and Wave 2 scenarios pass, screenshots show non-overlapping desktop/mobile layouts, and external URL scan is empty.
 
-- [ ] **Step 5: Commit**
+2026-10-27 用户授权接续后，保留网关现场确认最终 502 为 apply 阶段主题回退：冷引擎未注册 zh-business。复用既有安装器后预览成功；语言验收改为实际题干译文，避免把预览恢复标记或未展示的说明当作可见标题。补齐正式答卷、第二版发布、旧版图片 SHA-256 固定、网站图标上传和实际第三方请求断言，并修复品牌保存后的发布概览缓存及第二次发布等待时序。MySQL/PostgreSQL 均 19/19，四层交叉核验通过；门禁单元 48、前端 353、网关 1235、隔离 Java 1494/184 类及管理端静态/构建门通过。实现提交 1ed42c34a2、9b059a7523、c80e9b406b；Task 8 仍未完成，整体能力状态不提升。
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add platform/apps/admin-web/e2e/template-branding.spec.ts platform/deploy/test/run-admin-web-e2e.sh platform/tests/e2e/admin_web_gate.py platform/tests/e2e/test_admin_web_gate.py platform/deploy/test/admin-web-e2e.compose.yml
