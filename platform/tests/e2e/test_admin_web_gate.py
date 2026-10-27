@@ -111,6 +111,31 @@ class AdminWebGateTest(unittest.TestCase):
 
         self.assertIn("ENGINE_DB_ROOT_PASSWORD: root", test_web)
 
+    def test_test_stack_prepares_file_mount_target_without_overwriting_config(self):
+        library = Path(__file__).parents[2] / "deploy/test/lib.sh"
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "platform/deploy/test").mkdir(parents=True)
+                (root / "platform/deploy/test/config.mysql.php").write_text("test config")
+                target = root / "application/config/config.php"
+                target.parent.mkdir(parents=True)
+                if existing:
+                    target.write_text("existing config")
+                result = run_bash('''
+                    set -e
+                    REPO_ROOT="$TEST_ROOT" TEST_DB=mysql is_fresh=false
+                    source "$TEST_LIBRARY"
+                    docker() { return 0; }
+                    check_mount() { [[ -f "$REPO_ROOT/application/config/config.php" ]] || exit 73; exit 0; }
+                    COMPOSE=(check_mount)
+                    prepare_test_stack
+                ''', {"TEST_ROOT": str(root), "TEST_LIBRARY": str(library)})
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertTrue(target.is_file())
+                if existing:
+                    self.assertEqual("existing config", target.read_text())
+
     def test_runner_clears_settings_cache_after_preparing_the_engine(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
         text = runner.read_text(encoding="utf-8")
