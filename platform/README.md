@@ -11,7 +11,7 @@
 
 `main` @ `4206f24a`（[PR #8](https://github.com/lsgoodlionel/star-survey/pull/8) 已合并）· 更新 2026-10-09
 
-**2026-10-27 分支验收**：`feat/admin-product-alignment` @ `c80e9b406b` 已关闭 Wave 2 Task 7 带图真实预览 502 阻塞。隔离 MySQL/PostgreSQL 管理端真实浏览器均 19/19，覆盖品牌化正式答卷、两版发布和旧版图片字节固定；Java 1494 项/184 类、网关 1235 项、管理端 353 项、门禁单元 48 项与管理端静态/生产构建检查通过。Wave 2 Task 8 的生产 Caddy/doctor/备份恢复、Harness 最终门禁与独立复审仍待完成，能力状态不提升。详见 [当前进度](../docs/agent/PROGRESS.md)。
+**2026-10-27 分支验收**：`feat/admin-product-alignment` @ `c80e9b406b` 已关闭 Wave 2 Task 7 带图真实预览 502 阻塞。隔离 MySQL/PostgreSQL 管理端真实浏览器均 19/19，覆盖品牌化正式答卷、两版发布和旧版图片字节固定；Java 1494 项/184 类、网关 1235 项、管理端 353 项、门禁单元 48 项与管理端静态/生产构建检查通过。Wave 2 Task 8 的生产 Caddy/doctor/备份恢复、Harness 最终门禁与独立复审仍待完成，能力状态不提升。后续执行位与治理映射提交 `db267ede9d` 的[GitHub 平台质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40461852500)已全部通过（10/10 jobs）；独立控制平面核心仍有两项治理测试错误待处理。详见 [当前进度](../docs/agent/PROGRESS.md)。
 
 | 阶段 | 状态 |
 |---|---|
