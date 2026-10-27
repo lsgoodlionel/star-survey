@@ -19,6 +19,7 @@
 - 草稿保存必须携带 `expectedVersion`；冲突不自动覆盖、不绕过乐观锁。
 - 模板必须在入库前剥离参与者、访问策略、管理员联系人和平台生成字段；复制后与来源模板相互独立。
 - 预览与发布都必须固定品牌资产版本；资产后续更新不得改变已经发布的版本。
+- LimeSurvey 的 RemoteControl `import_survey` 不能从 LSS/LSA 携带主题图片。品牌资产必须在导入取得 `sid` 后，经既有 `MjyQuestionExtensions` 签名通道落到 `upload/surveys/<sid>/images/`，并由受限端点写入每问卷主题选项；不得把作者 URL、任意路径或未校验字节交给引擎。
 - 一项能力只有在需求、后端、前端、真实流程、生产和追溯六层证据齐全时才能标记完成。
 
 ## Review Focus
@@ -35,7 +36,7 @@
 - 已增加 `platform/deploy/test/ai-health-check.sh` 及无端口 stub 测试：健康检查、远程端点跳过/失败降级和可选生成 smoke 均已验证。
 - 本机 Ollama API 可达但没有已安装模型，生成 smoke 当前跳过；远程 `openclaw.lsgood.cn` 根 HTTPS 可达，但公开 `/health` 不通过，未配置为产品硬依赖。
 - 已增加 `platform/tools/publish-gateway/tools/local_brand_asset_bundle_smoke.py` 和对应测试，覆盖临时 PNG/JPEG 的 base64、大小、SHA-256、固定文件及 LSS 相对路径一致性。
-- 上述图片 smoke 明确是 local-test-only；生产 `GatewayRequest` 尚未传输真实品牌图片字节，Task 2 Step 5 仍未完成，不能据此宣称品牌发布闭环完成。
+- 上述图片 smoke 在 2026-10-11 仅是 local-test-only；2026-10-27 已补全 Task 2 的真实字节边界和双库 E2E，当前证据见 `docs/agent/run-history/2026-10-12-wave2-model-handoff.md` §14。Task 3–8 与 Wave 2 整体闭环仍待后续实施。
 
 ---
 
@@ -113,31 +114,33 @@ git commit -m "docs: activate template and branding wave"
 - Consumes: existing `{assetId}` author reference, immutable `assetVersion`, signed asset fetch and `branding.logoFile`/`faviconFile` compiler contract.
 - Produces: `branding.logoAsset` and `branding.faviconAsset` author-state objects; preview/publish materialization emits pinned, gateway-consumable assets and final safe filenames without accepting author-written URL/version.
 
-- [ ] **Step 1: Write failing Java asset-materialization tests**
+- [x] **Step 1: Write failing Java asset-materialization tests**
 
 Cover an active author image, archived image, foreign-tenant UUID, non-image asset, author-written `url`/`assetVersion`, Logo and favicon using distinct assets, and a second publish after adding an asset version. Assert each published definition records the version resolved for that publish.
 
-- [ ] **Step 2: Run the focused Java tests and confirm RED**
+- [x] **Step 2: Run the focused Java tests and confirm RED**
 
 Run: `platform/deploy/platform-dev/mvn.sh test -Dtest='cn.mjy.platform.asset.SurveyAssetPublishTest'`
 
 Expected: FAIL because branding-specific references are not compiled to local theme files.
 
-- [ ] **Step 3: Implement brand asset materialization**
+- [x] **Step 3: Implement brand asset materialization**
 
 Add a dedicated `SurveyAssetSource` brand-reference parser that only accepts `branding.logoAsset.assetId` and `branding.faviconAsset.assetId`; reuse tenant, origin, status and MIME checks from `SurveyAssetLinks`. Preserve generic question/theme asset behavior and reject definitions containing both legacy `logoFile` and new `logoAsset` for the same slot.
 
-- [ ] **Step 4: Write failing gateway schema/compiler tests**
+- [x] **Step 4: Write failing gateway schema/compiler tests**
 
 Assert fixed filename derivation, allowed image MIME types, byte-size bounds, no path separators, no external URL, correct `mjybrandlogofile`/favicon output, and backward compatibility for existing valid `logoFile` definitions.
 
-- [ ] **Step 5: Implement gateway packaging and contract documentation**
+- [x] **Step 5: Implement gateway packaging and contract documentation**
 
 Materialize brand bytes through the controlled asset channel into the generated survey theme files, derive filenames from trusted MIME type and immutable identity, and remove author-state fields from the engine-facing definition.
 
-**Required boundary clarification:** the existing publish request carries only `definition`, so this step is not complete when the LSS contains only `./files/<name>`. Add a versioned, bounded `brandAssets` bundle to the platform publish and preview boundary. The platform must resolve each author `assetId` under tenant/origin/status/version checks, attach trusted `contentType`, `sizeBytes`, `sha256` and bytes, and sign the bundle identity. The gateway must verify the bundle against the materialized branding references, reject missing/mismatched/oversized bytes, write the fixed files into the generated theme artifact, and keep URL/version/MIME/size/asset IDs out of engine-facing output. Reuse the same materialization path for preview; do not claim preview support from publish-only tests.
+**Required boundary clarification:** the existing publish request carries only `definition`, so this step is not complete when the LSS contains only `./files/<name>`. Add a versioned, bounded `brandAssets` bundle to the platform publish and preview boundary. The platform must resolve each author `assetId` under tenant/origin/status/version checks, attach trusted `contentType`, `sizeBytes`, `sha256` and bytes, and sign the bundle identity. The gateway must verify the bundle against the materialized branding references, reject missing/mismatched/oversized bytes, and keep URL/version/MIME/size/asset IDs out of engine-facing output.
 
-- [ ] **Step 6: Run focused and complete backend gates**
+**Engine materialization ruling:** RemoteControl imports do not carry arbitrary theme archives, and `TemplateConfiguration` sanitizes image paths while importing. Therefore the gateway imports a definition without asset-file theme options, obtains the new `sid`, then calls a new fail-closed `MjyQuestionExtensions` signed direct endpoint. The endpoint accepts only a bounded, digest-verified bundle plus the gateway-compiled safe branding fields; it atomically writes fixed files under `upload/surveys/<sid>/images/` and updates only the `zh-business` per-survey options to `image::survey::<fixed-name>`. A channel or write failure must fail the publish/preview operation and use the existing survey rollback; no global theme mutation, arbitrary filesystem path, external URL, or unverified metadata is permitted. Reuse this same materialization path for preview; do not claim preview support from publish-only tests.
+
+- [x] **Step 6: Run focused and complete backend gates**
 
 Run: `platform/deploy/platform-dev/mvn.sh test -Dtest='cn.mjy.platform.asset.SurveyAssetPublishTest,cn.mjy.platform.survey.template.SurveyTemplateLifecycleTest'`
 
@@ -145,7 +148,7 @@ Run: `python3 -m unittest discover -s platform/tools/publish-gateway/tests -p 't
 
 Expected: all focused tests pass and old filename-only fixtures remain compatible.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add platform/contracts/survey-branding-v1.md platform/services/business/src/main/java/cn/mjy/platform/survey/SurveyAssetSource.java platform/services/business/src/main/java/cn/mjy/platform/asset/SurveyAssetLinks.java platform/services/business/src/test/java/cn/mjy/platform/asset/SurveyAssetPublishTest.java platform/tools/publish-gateway/pubgw/branding platform/tools/publish-gateway/tests/test_branding_schema.py platform/tools/publish-gateway/tests/test_branding_compile.py

@@ -7,7 +7,7 @@
 ## 当前状态
 
 Task 1: complete - Wave 2 已激活；治理完成记录见 SDD 账本。
-Task 2: in_progress - 品牌资产跨端实现已在工作区；真实新资源发布/预览与 PHPUnit 验收未闭环。
+Task 2: complete - 品牌资产跨 Java/Python/PHP 边界已实现并通过 2026-10-27 双库真实 E2E、PHPUnit、Gateway、Java 定向和 production 配置门禁；发布与预览的错误 channel key 回滚均验证问卷删除、上传目录清除及无作者品牌残留。能力矩阵仍按 Wave 2 完整六层证据维持原状态。
 Task 3: pending - 模板、资产与品牌 client 待实施。
 Task 4: pending - 模板浏览与复制待实施。
 Task 5: pending - 模板生命周期待实施。
@@ -18,7 +18,7 @@ Task 8: pending - 生产门禁与交付同步待实施。
 2026-10-12：用户要求生成报告准备切换模型，暂停新增实现。接续入口为
 [模型切换交接报告](run-history/2026-10-12-wave2-model-handoff.md)。
 本轮网关 1,232 项和既有品牌双语 MySQL E2E 通过；不代表新增 brandAssets 真实链路通过。
-当前未提交代码没有绑定完整交付证据，不提升 capability 或 Harness completed 状态。
+这段 2026-10-12 历史记录当时没有完整交付证据；Task 2 的后续验收见下方当前状态和[接续记录](run-history/2026-10-12-wave2-model-handoff.md)。Task 2 完成不提升 Wave 2 整体 capability 或 Harness completed 状态。
 
 Dashboard Task 1: complete - 治理 HEAD 绑定、hosted agent-governance run 19 与控制平面迁移已完成。
 
