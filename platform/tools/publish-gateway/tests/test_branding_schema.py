@@ -7,6 +7,9 @@ from pubgw.validate import validate_definition
 from .branding_fixtures import branded_definition, full_branding
 
 
+MATERIALIZED_SHA256 = "a" * 64
+
+
 def codes(definition):
     return sorted({issue.code for issue in validate_definition(definition).issues})
 
@@ -54,11 +57,12 @@ class AcceptedBrandingTest(unittest.TestCase):
             {
                 "brandingVersion": 1,
                 "logoAsset": {
-                    "url": "https://survey.example/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+                    "url": "https://survey.lsgood.cn/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
                     "assetVersion": 1,
                     "contentType": "image/png",
                     "sizeBytes": 128,
                     "fileName": "mjy-brand-logo.png",
+                    "sha256": MATERIALIZED_SHA256,
                 },
             }
         )
@@ -143,6 +147,7 @@ class RejectedBrandingTest(unittest.TestCase):
             "contentType": "image/png",
             "sizeBytes": 128,
             "fileName": "mjy-brand-logo.png",
+            "sha256": MATERIALIZED_SHA256,
         }
         for key, value in (
             ("url", "https://evil.example/logo.png"),
@@ -157,6 +162,45 @@ class RejectedBrandingTest(unittest.TestCase):
                 reference = dict(valid)
                 reference[key] = value
                 self.assertIn("E_BRAND_ASSET", codes(branded_definition({"brandingVersion": 1, "logoAsset": reference})))
+
+    def test_materialized_asset_requires_a_digest_and_url_version_must_match_metadata(self):
+        valid = {
+            "url": "https://survey.lsgood.cn/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "assetVersion": 1,
+            "contentType": "image/png",
+            "sizeBytes": 128,
+            "fileName": "mjy-brand-logo.png",
+            "sha256": MATERIALIZED_SHA256,
+        }
+        missing_digest = dict(valid)
+        missing_digest.pop("sha256")
+        mismatched_version = dict(valid, url=valid["url"].replace("/1?", "/2?"))
+
+        self.assertIn("E_BRAND_ASSET", codes(branded_definition({
+            "brandingVersion": 1, "logoAsset": missing_digest,
+        })))
+        self.assertIn("E_BRAND_ASSET", codes(branded_definition({
+            "brandingVersion": 1, "logoAsset": mismatched_version,
+        })))
+
+    def test_materialized_asset_rejects_noncanonical_or_credentialed_hosts(self):
+        valid = {
+            "url": "https://survey.lsgood.cn/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "assetVersion": 1,
+            "contentType": "image/png",
+            "sizeBytes": 128,
+            "fileName": "mjy-brand-logo.png",
+            "sha256": MATERIALIZED_SHA256,
+        }
+        for url in (
+            "https://survey.lsgood.cn@evil.example/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "https://survey.lsgood.cn:443/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "https://Survey.lsgood.cn/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+        ):
+            with self.subTest(url=url):
+                self.assertIn("E_BRAND_ASSET", codes(branded_definition({
+                    "brandingVersion": 1, "logoAsset": dict(valid, url=url),
+                })))
 
     def test_materialized_asset_rejects_author_id_and_unknown_fields(self):
         reference = {

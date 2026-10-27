@@ -98,6 +98,7 @@ class BrandingCompileTest(unittest.TestCase):
                     "contentType": "image/png",
                     "sizeBytes": 120,
                     "fileName": "mjy-brand-logo.png",
+                    "sha256": "a" * 64,
                 },
                 "faviconAsset": {
                     "url": "https://survey.example/a/tenant/22222222-2222-4222-8222-222222222222/2?exp=123&sig=abc",
@@ -105,19 +106,19 @@ class BrandingCompileTest(unittest.TestCase):
                     "contentType": "image/jpeg",
                     "sizeBytes": 48,
                     "fileName": "mjy-brand-favicon.jpg",
+                    "sha256": "b" * 64,
                 },
             }
         )
         compiled = compile_lss(definition)
         branding = compile_branding(definition)
-        options = theme_rows(compiled.lss)[0]["options"]
-        self.assertEqual("./files/mjy-brand-logo.png", options["mjybrandlogofile"])
-        self.assertEqual("./files/mjy-brand-favicon.jpg", options["mjybrandfavicon"])
+        self.assertEqual([], theme_rows(compiled.lss))
         self.assertNotIn("https://", compiled.lss)
         self.assertNotIn("assetVersion", compiled.lss)
         self.assertNotIn("contentType", compiled.lss)
         self.assertNotIn("sizeBytes", compiled.lss)
         self.assertNotIn("fileName", compiled.lss)
+        self.assertNotIn("sha256", compiled.lss)
         self.assertNotIn("logoAsset", branding.engine_branding)
         self.assertNotIn("faviconAsset", branding.engine_branding)
 

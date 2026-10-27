@@ -82,6 +82,7 @@ def run_smoke(bundle_dir: Path, theme_dir: Path) -> Dict[str, object]:
                 "contentType": "image/png",
                 "sizeBytes": len(_png_fixture()),
                 "fileName": "mjy-brand-logo.png",
+                "sha256": assets[0]["sha256"],
             },
             "faviconAsset": {
                 "url": "https://survey.example/a/local/22222222-2222-4222-8222-222222222222/1?exp=1&sig=local-test-only",
@@ -89,6 +90,7 @@ def run_smoke(bundle_dir: Path, theme_dir: Path) -> Dict[str, object]:
                 "contentType": "image/jpeg",
                 "sizeBytes": len(_jpeg_fixture()),
                 "fileName": "mjy-brand-favicon.jpg",
+                "sha256": assets[1]["sha256"],
             },
         },
     }

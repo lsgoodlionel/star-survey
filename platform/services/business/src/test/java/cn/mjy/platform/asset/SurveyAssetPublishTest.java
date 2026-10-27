@@ -12,6 +12,8 @@ import cn.mjy.platform.survey.SurveyPublishService;
 import cn.mjy.platform.survey.SurveyService;
 import cn.mjy.platform.survey.SurveyView;
 import cn.mjy.platform.survey.gateway.GatewayRequest;
+import java.security.MessageDigest;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -201,6 +203,46 @@ class SurveyAssetPublishTest {
     }
 
     @Test
+    void publishingBrandAssetsSendsVerifiedPinnedBytesToTheGateway() throws Exception {
+        AssetView logo = image("品牌标志");
+        SurveyView survey = surveyWithBrandAssets(logo.id(), null);
+
+        publisher.publish(owner, survey.id());
+
+        List<GatewayRequest.BrandAsset> sentAssets = gateway.callsFor(survey.id()).getLast().brandAssets();
+        assertThat(sentAssets).hasSize(1);
+        GatewayRequest.BrandAsset sent = sentAssets.get(0);
+        byte[] expected = AssetFixture.png();
+        assertThat(sent.slot()).isEqualTo("logoAsset");
+        assertThat(sent.fileName()).isEqualTo("mjy-brand-logo.png");
+        assertThat(sent.contentType()).isEqualTo("image/png");
+        assertThat(sent.sizeBytes()).isEqualTo(expected.length);
+        assertThat(sent.sha256()).isEqualTo(hex(MessageDigest.getInstance("SHA-256").digest(expected)));
+        assertThat(Base64.getDecoder().decode(sent.contentBase64())).isEqualTo(expected);
+    }
+
+    @Test
+    void publishReconciliationRebuildsBrandBytesFromThePinnedVersion() {
+        AssetView logo = image("品牌标志");
+        SurveyView survey = surveyWithBrandAssets(logo.id(), null);
+        gateway.script(survey.id(), request -> new cn.mjy.platform.survey.gateway.GatewayOutcome.Unknown("timeout"));
+
+        publisher.publish(owner, survey.id());
+        assets.addVersion(owner, logo.id(), new AssetUpload("image/jpeg", "new.jpg", AssetFixture.jpeg()));
+        publisher.publish(owner, survey.id());
+
+        List<GatewayRequest> calls = gateway.callsFor(survey.id());
+        assertThat(calls).hasSize(2);
+        assertThat(calls.get(0).brandAssets()).hasSize(1);
+        assertThat(calls.get(1).brandAssets()).hasSize(1);
+        GatewayRequest.BrandAsset first = calls.get(0).brandAssets().get(0);
+        GatewayRequest.BrandAsset retried = calls.get(1).brandAssets().get(0);
+        assertThat(retried).isEqualTo(first);
+        assertThat(retried.fileName()).isEqualTo("mjy-brand-logo.png");
+        assertThat(Base64.getDecoder().decode(retried.contentBase64())).isEqualTo(AssetFixture.png());
+    }
+
+    @Test
     void aNewBrandAssetVersionIsPinnedOnTheNextPublishOnly() {
         AssetView logo = image("品牌标志");
         SurveyView survey = surveyWithBrandAssets(logo.id(), null);
@@ -361,6 +403,7 @@ class SurveyAssetPublishTest {
         assertThat(reference.get("assetVersion").intValue()).isEqualTo(version);
         assertThat(reference.get("contentType").asString()).isEqualTo(mimeType);
         assertThat(reference.get("sizeBytes").longValue()).isEqualTo(sizeBytes);
+        assertThat(reference.get("sha256").asString()).matches("[0-9a-f]{64}");
         assertThat(reference.get("fileName").asString())
                 .isEqualTo(fileName)
                 .doesNotContain(id.toString());
@@ -372,5 +415,9 @@ class SurveyAssetPublishTest {
     private JsonNode lastPublishedDefinition(UUID surveyId) {
         List<GatewayRequest> calls = gateway.callsFor(surveyId);
         return json.readTree(calls.get(calls.size() - 1).definitionJson());
+    }
+
+    private static String hex(byte[] bytes) {
+        return java.util.HexFormat.of().formatHex(bytes);
     }
 }

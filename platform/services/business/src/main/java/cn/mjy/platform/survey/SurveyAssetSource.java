@@ -1,6 +1,8 @@
 package cn.mjy.platform.survey;
 
 import cn.mjy.platform.shared.TenantContext;
+import cn.mjy.platform.shared.TenantId;
+import cn.mjy.platform.survey.gateway.GatewayRequest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -53,6 +55,21 @@ public interface SurveyAssetSource {
      * @throws InvalidDefinitionException 资产不存在、属于别的租户、已停用，或作者自带了 {@code url}
      */
     ObjectNode materialize(TenantContext ctx, UUID surveyId, int draftVersion, ObjectNode definition);
+
+    /**
+     * 从已物化、已钉住版本的品牌引用重建网关资源包。
+     *
+     * <p>发布重试只持久化定义快照，不能也不应重新查询资产的当前版本；实现必须只读取
+     * {@code branding.*Asset} 中的平台物化信息。没有品牌资源时返回空包，保留旧网关兼容性。
+     */
+    default List<GatewayRequest.BrandAsset> brandAssets(TenantId tenant, ObjectNode materializedDefinition) {
+        if (materializedDefinition.path("branding").has("logoAsset")
+                || materializedDefinition.path("branding").has("faviconAsset")) {
+            throw new InvalidDefinitionException(List.of(
+                    "the definition references platform brand assets but the asset service is not available"));
+        }
+        return List.of();
+    }
 
     /** 定义里全部带 {@code assetId} 的对象节点，按出现顺序。 */
     static List<ObjectNode> references(JsonNode definition) {

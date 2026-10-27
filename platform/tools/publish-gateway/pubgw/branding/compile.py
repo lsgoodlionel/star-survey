@@ -47,8 +47,10 @@ def _options(branding: Branding) -> Dict[str, str]:
     options: Dict[str, str] = {}
     if branding.primary_color:
         options[PREFIX + "primary"] = branding.primary_color
-    logo_file = branding.logo_file or _materialized_filename(branding.logo_asset)
-    favicon_file = branding.favicon_file or _materialized_filename(branding.favicon_asset)
+    # Asset bytes are written only after import has assigned a survey id.  Putting their
+    # paths in LSS would make TemplateConfiguration reject them during import.
+    logo_file = branding.logo_file
+    favicon_file = branding.favicon_file
     if (branding.logo_asset and not branding.logo_asset.filename) or (
         branding.favicon_asset and not branding.favicon_asset.filename
     ):

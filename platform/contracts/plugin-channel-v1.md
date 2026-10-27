@@ -46,14 +46,58 @@ PHP 用 `rawurlencode`，Python 用 `urllib.parse.quote(s, safe="")`——两者
 
 **不做一次性随机数。** 本端点只读且幂等，重放拿到的是重放者本就拿到过的同一页；
 改投由「签名覆盖整个查询串」挡住，长期有效由 ±300 秒挡住。传输层强制 HTTPS。
-**本通道不得承载任何有副作用的操作**——要加写操作，先补随机数存储并重开 ADR 0018 决定 4。
+**本通道不得承载任何有副作用的操作**，唯一例外是下文明确规定的幂等
+`brandAssetsV1`：它只能把已认证、摘要覆盖的固定品牌资源覆盖写到同一份问卷的
+固定路径，并写入同一组受控主题选项；重放只得到相同的最终状态。新增任何其他写操作前，
+仍须补随机数存储并重开 ADR 0018 决定 4。
 
 ### 为什么是 GET
 
-`plugins/direct` 的 POST **到不了插件**：`application/config/internal.php:153` 的
-`noCsrfValidationRoutes` 只豁免 `rest`、`admin/remotecontrol`、`plugins/unsecure`，
-POST 会先被 Yii 的 CSRF 校验挡下，事件根本不派发。代价：`sid`、代次、答卷号进 access log。
-**答案值只在响应体里，永不进 URL。**
+一般的 `plugins/direct` POST 会先被 Yii 的 CSRF 校验挡下，事件根本不派发。部署只通过
+`noCsrfValidationExactRoutes` 为下述 `brandAssetsV1` 路径开一个精确豁免，子路由及其他插件函数
+仍执行 CSRF 校验；端点自己的 HMAC、查询白名单和 body 摘要继续作为机器通道鉴权。其余只读函数
+使用 GET，代价是 `sid`、代次、答卷号进入 access log；**答案值只在响应体里，永不进 URL。**
+
+## `POST` `function=brandAssetsV1`（按问卷品牌资源）
+
+这是上述幂等例外。发布网关只能在 RemoteControl `import_survey` 返回 `sid` 后调用：
+
+```
+POST /index.php/plugins/direct/plugin/MjyQuestionExtensions/function/brandAssetsV1
+    ?plugin=MjyQuestionExtensions&function=brandAssetsV1
+    &sid=42&bodySha256=<64 lowercase hex>&bodySize=<decimal>&ts=…&sig=…
+Content-Type: application/json
+```
+
+查询参数是封闭白名单：`plugin`、`function`、`sid`、`bodySha256`、`bodySize`、`ts`、`sig`。
+`bodySha256` 与 `bodySize` 必须先受既有 canonical-query HMAC 覆盖；插件在验签成功前不得读取
+request body，读取后必须在 JSON 解析前逐字节核对二者。验签前的所有失败仍统一为 401
+`{"error":"unauthorized"}`；验签后 body 或载荷不合法为 400 `{"error":"bad_request"}`；
+写入或主题配置失败为 500 `{"error":"unavailable"}`。
+
+JSON body 必须恰为：
+
+```json
+{
+  "version": 1,
+  "theme": "zh-business",
+  "branding": {"brandingVersion": 1},
+  "assets": []
+}
+```
+
+`assets` 最多两项，且每项只能含 `slot`、`fileName`、`contentType`、`sizeBytes`、`sha256`、
+`contentBase64`。槽位只能是 `logoAsset` / `faviconAsset`；MIME 只能是 PNG、JPEG、GIF、WebP；
+文件名必须由槽位与 MIME 固定派生为 `mjy-brand-logo.<ext>` / `mjy-brand-favicon.<ext>`；单项最多
+5 MiB。端点严格校验 Base64、长度和 SHA-256，禁止重复槽位或文件名，禁止调用方提供路径、URL、
+资产 ID、版本、签名 URL 或任意主题选项。
+
+全部资源先原子落到 `upload/surveys/<sid>/images/`，之后才更新该问卷 `zh-business` 的
+`mjybrand*` 受控选项。含资源时路径固定为 `image::survey::<fixed-name>`；文本、颜色和 logo alt
+只从安全的 compiled branding 字段取得。任何一步失败都清理临时文件并恢复此前的品牌文件。
+
+`plugins/direct` 的 POST 路由还必须在 LimeSurvey 的 CSRF 配置中为此**单一已验签端点**开通受控
+豁免；在该部署配置就绪前，请求会在插件事件派发前被框架拒绝。豁免不得扩展为整个插件或通配路由。
 
 ## GET `<engine>/index.php/plugins/direct`
 

@@ -11,7 +11,9 @@ import cn.mjy.platform.survey.InvalidSurveyRequestException;
 import cn.mjy.platform.survey.PublishUnavailableException;
 import cn.mjy.platform.survey.SurveyAccessDeniedException;
 import cn.mjy.platform.survey.SurveyConflictException;
+import cn.mjy.platform.survey.SurveyAssetSource;
 import cn.mjy.platform.survey.SurveyNotFoundException;
+import cn.mjy.platform.survey.gateway.GatewayRequest;
 import cn.mjy.platform.tenant.engine.EngineInstance;
 import cn.mjy.platform.tenant.engine.EngineInstanceService;
 import cn.mjy.platform.tenant.engine.EngineInstanceStatus;
@@ -27,6 +29,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,24 +57,29 @@ public class PreviewSessionService {
     private final EngineInstanceService engines;
     private final PreviewGatewayClient gateway;
     private final JdbcClient jdbc;
+    private final JsonMapper json;
+    private final Optional<SurveyAssetSource> assets;
     private final Clock clock = Clock.systemUTC();
 
     PreviewSessionService(TenantScope tenantScope, AccessDecisionService access,
             PreviewSessionRepository sessions, EngineInstanceService engines, PreviewGatewayClient gateway,
-            JdbcClient jdbc) {
+            JdbcClient jdbc, JsonMapper json, Optional<SurveyAssetSource> assets) {
         this.tenantScope = tenantScope;
         this.access = access;
         this.sessions = sessions;
         this.engines = engines;
         this.gateway = gateway;
         this.jdbc = jdbc;
+        this.json = json;
+        this.assets = assets;
     }
 
     public record Created(PreviewSessionView session, boolean fresh) {
     }
 
     private record Ticket(TenantId tenant, UUID id, UUID requestId, UUID surveyId, int draftVersion, String actor,
-            String instance, String generation, OffsetDateTime expiresAt, String definition, boolean fresh) {
+            String instance, String generation, OffsetDateTime expiresAt, String definition,
+            List<GatewayRequest.BrandAsset> brandAssets, boolean fresh) {
     }
 
     public Created create(TenantContext ctx, UUID surveyId, UUID requestId, int ttlSeconds) {
@@ -151,11 +159,16 @@ public class PreviewSessionService {
         }
         PreviewSessionRepository.DraftSnapshot draft = sessions.draft(surveyId)
                 .orElseThrow(() -> new SurveyNotFoundException("survey not found: " + surveyId));
+        ObjectNode materialized = materializeAssets(ctx, surveyId, draft.version(),
+                (ObjectNode) json.readTree(draft.definition()));
+        String definition = json.writeValueAsString(materialized);
+        List<GatewayRequest.BrandAsset> brandAssets = brandAssets(ctx.tenantId(), materialized);
         String instance = activeEngine(ctx.tenantId());
         UUID id = UUID.randomUUID();
         String generation = "preview-" + id.toString().replace("-", "");
         OffsetDateTime expires = OffsetDateTime.ofInstant(clock.instant().plusSeconds(ttlSeconds), ZoneOffset.UTC);
-        boolean inserted = sessions.insert(ctx.tenantId(), id, requestId, surveyId, draft, ctx.actorId(),
+        boolean inserted = sessions.insert(ctx.tenantId(), id, requestId, surveyId,
+                new PreviewSessionRepository.DraftSnapshot(draft.version(), definition), ctx.actorId(),
                 instance, generation, expires);
         if (!inserted) {
             PreviewSessionView concurrent = sessions.findByRequest(requestId).orElseThrow();
@@ -163,7 +176,7 @@ public class PreviewSessionService {
                     ? ticket(ctx.tenantId(), concurrent, false) : concurrent;
         }
         return new Ticket(ctx.tenantId(), id, requestId, surveyId, draft.version(), ctx.actorId(), instance,
-                generation, expires, draft.definition(), true);
+                generation, expires, definition, brandAssets, true);
     }
 
     private PreviewSessionView resume(Ticket ticket) {
@@ -227,12 +240,13 @@ public class PreviewSessionService {
     private Ticket ticket(TenantId tenant, PreviewSessionView view, boolean fresh) {
         return new Ticket(tenant, view.id(), view.requestId(), view.surveyId(), view.draftVersion(),
                 view.requestedBy(), view.engineInstanceId(), view.generation(), view.expiresAt(),
-                sessions.definition(view.id()), fresh);
+                sessions.definition(view.id()), brandAssets(tenant,
+                        (ObjectNode) json.readTree(sessions.definition(view.id()))), fresh);
     }
 
     private PreviewGatewayClient.CreateRequest request(Ticket ticket) {
         return new PreviewGatewayClient.CreateRequest(ticket.tenant(), ticket.id(), ticket.requestId(),
-                ticket.instance(), ticket.definition(), ticket.generation(), ticket.expiresAt());
+                ticket.instance(), ticket.definition(), ticket.generation(), ticket.expiresAt(), ticket.brandAssets());
     }
 
     private PreviewGatewayClient.Identity identity(Ticket ticket) {
@@ -259,11 +273,20 @@ public class PreviewSessionService {
                 .orElseThrow(() -> new SurveyConflictException("no_active_engine_instance",
                         "tenant has no active engine instance"));
     }
+
+    private ObjectNode materializeAssets(TenantContext ctx, UUID surveyId, int draftVersion, ObjectNode definition) {
+        return assets.map(source -> source.materialize(ctx, surveyId, draftVersion, definition))
+                .orElseGet(() -> SurveyAssetSource.requireNoAssetReferences(definition));
+    }
+
+    private List<GatewayRequest.BrandAsset> brandAssets(TenantId tenant, ObjectNode definition) {
+        return assets.map(source -> source.brandAssets(tenant, definition)).orElseGet(List::of);
+    }
 }
 
 interface PreviewGatewayClient {
     record CreateRequest(TenantId tenantId, UUID sessionId, UUID requestId, String engineInstanceId, String definitionJson,
-            String generation, OffsetDateTime expiresAt) {
+            String generation, OffsetDateTime expiresAt, List<GatewayRequest.BrandAsset> brandAssets) {
     }
     record Identity(TenantId tenantId, UUID sessionId, UUID requestId) {}
     sealed interface CreateOutcome {
@@ -320,6 +343,9 @@ class HttpPreviewGatewayClient implements PreviewGatewayClient {
         body.set("definition", json.readTree(request.definitionJson()));
         body.put("generation", request.generation());
         body.put("expiresAt", request.expiresAt().withOffsetSameInstant(ZoneOffset.UTC).toString().replace("+00:00", "Z"));
+        if (!request.brandAssets().isEmpty()) {
+            body.set("brandAssets", json.valueToTree(request.brandAssets()));
+        }
         Exchange exchange = post("v1/preview", json.writeValueAsBytes(body));
         if (exchange.failure != null) return new CreateOutcome.Unknown(exchange.failure);
         try {

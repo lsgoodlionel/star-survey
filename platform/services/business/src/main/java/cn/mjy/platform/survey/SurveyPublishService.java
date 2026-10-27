@@ -77,10 +77,11 @@ public class SurveyPublishService {
     }
 
     /** 已固化、即将发给网关的一次尝试。 */
-    record Ticket(UUID surveyId, UUID requestId, String engineInstanceId, int draftVersion, String definition) {
+    record Ticket(UUID surveyId, UUID requestId, String engineInstanceId, int draftVersion, String definition,
+            List<GatewayRequest.BrandAsset> brandAssets) {
 
         GatewayRequest request() {
-            return new GatewayRequest(requestId, engineInstanceId, definition);
+            return new GatewayRequest(requestId, engineInstanceId, definition, brandAssets);
         }
     }
 
@@ -104,9 +105,9 @@ public class SurveyPublishService {
                         throw new SurveyConflictException(SurveyConflictException.PUBLISH_IN_PROGRESS,
                                 "a publish of this survey is already in progress");
                     }
-                    yield reconcile(row);
+                    yield reconcile(ctx.tenantId(), row);
                 }
-                case PENDING_RECONCILIATION -> reconcile(row);
+                case PENDING_RECONCILIATION -> reconcile(ctx.tenantId(), row);
                 case DRAFT, PUBLISH_FAILED, PUBLISHED -> freshAttempt(ctx, clearance, row);
             };
         });
@@ -128,10 +129,12 @@ public class SurveyPublishService {
         ObjectNode normalized = definitions.normalize(definitions.parse(row.draftDefinition()), row.id());
         ObjectNode pinned = pinDictionaries(normalized);
         ObjectNode withAssets = materializeAssets(ctx, row.id(), row.draftVersion(), pinned);
-        String definition = definitions.serialize(materializeParticipants(ctx, row.id(), withAssets));
+        ObjectNode finalDefinition = materializeParticipants(ctx, row.id(), withAssets);
+        String definition = definitions.serialize(finalDefinition);
+        List<GatewayRequest.BrandAsset> brandAssets = brandAssets(ctx.tenantId(), finalDefinition);
         attempts.insert(ctx.tenantId(), requestId, row.id(), row.draftVersion(), instance, definition, ctx.actorId());
         surveys.markPublishing(row.id(), requestId);
-        return new Ticket(row.id(), requestId, instance, row.draftVersion(), definition);
+        return new Ticket(row.id(), requestId, instance, row.draftVersion(), definition, brandAssets);
     }
 
     /**
@@ -180,15 +183,20 @@ public class SurveyPublishService {
     }
 
     /** 核对：结果未知时只能原样重发（同一 requestId、同一实例、同一份定义），由网关幂等给出确定结局。 */
-    private Ticket reconcile(SurveyRow row) {
+    private Ticket reconcile(TenantId tenant, SurveyRow row) {
         AttemptRow attempt = attempts.find(row.currentRequestId())
                 .orElseThrow(() -> new IllegalStateException("publish attempt missing: " + row.currentRequestId()));
         log.info("reconciling publish of survey {} with request {} (try {})",
                 row.id(), attempt.requestId(), attempt.tries() + 1);
         attempts.markRetry(attempt.requestId());
         surveys.markPublishing(row.id(), attempt.requestId());
+        ObjectNode definition = (ObjectNode) definitions.parse(attempt.definition());
         return new Ticket(row.id(), attempt.requestId(), attempt.engineInstanceId(), attempt.draftVersion(),
-                attempt.definition());
+                attempt.definition(), brandAssets(tenant, definition));
+    }
+
+    private List<GatewayRequest.BrandAsset> brandAssets(TenantId tenant, ObjectNode definition) {
+        return assets.map(source -> source.brandAssets(tenant, definition)).orElseGet(List::of);
     }
 
     /** 本租户最早登记的 active 实例；没有时 409，问卷保持原状态。 */

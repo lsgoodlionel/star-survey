@@ -47,8 +47,14 @@ _FAVICON_SUFFIXES = _IMAGE_SUFFIXES + (".ico",)
 _MAX_TEXT_LENGTH = 500
 _ASSET_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _ASSET_UUID = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\Z")
-_TRUSTED_URL_PATH = re.compile(r"\A/a/[^/]+/([0-9a-fA-F-]{36})/([1-9][0-9]*)\Z")
-_MATERIALIZED_KEYS = frozenset({"url", "assetVersion", "contentType", "sizeBytes", "fileName"})
+_TRUSTED_URL_PATH = re.compile(
+    r"\A/a/[A-Za-z0-9][A-Za-z0-9_-]{0,127}/([0-9a-fA-F-]{36})/([1-9][0-9]*)\Z"
+)
+_CANONICAL_HOST = re.compile(
+    r"\A(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*\Z"
+)
+_MATERIALIZED_KEYS = frozenset({"url", "assetVersion", "contentType", "sizeBytes", "fileName", "sha256"})
+_SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 _BRAND_MIME_EXTENSIONS = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -90,6 +96,7 @@ class BrandAsset:
     asset_version: int = 0
     content_type: str = ""
     size_bytes: int = 0
+    sha256: str = ""
 
 
 class BrandingError(ValueError):
@@ -281,13 +288,20 @@ class _Reader:
 
     def _materialized_asset(self, value: Mapping[str, Any], key: str) -> Optional[BrandAsset]:
         url = value["url"]
-        parsed = urlsplit(url) if isinstance(url, str) else None
+        try:
+            parsed = urlsplit(url) if isinstance(url, str) else None
+        except ValueError:
+            parsed = None
         path_match = _TRUSTED_URL_PATH.match(parsed.path) if parsed else None
         query = parse_qs(parsed.query, keep_blank_values=True) if parsed else {}
         if (
             parsed is None
             or parsed.scheme != "https"
-            or parsed.netloc != "survey.example"
+            or parsed.username is not None
+            or parsed.password is not None
+            or not parsed.hostname
+            or parsed.netloc != parsed.hostname
+            or not _CANONICAL_HOST.fullmatch(parsed.hostname)
             or parsed.fragment
             or not path_match
             or set(query) != {"exp", "sig"}
@@ -299,11 +313,15 @@ class _Reader:
         version = value["assetVersion"]
         content_type = value["contentType"]
         size_bytes = value["sizeBytes"]
+        sha256 = value["sha256"]
         if not _ASSET_UUID.fullmatch(asset_id):
             self._fail("E_BRAND_ASSET", key, "物化 URL 中的资产 ID 无效")
             return None
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             self._fail("E_BRAND_ASSET", key, "assetVersion 必须是正整数")
+            return None
+        if int(path_match.group(2)) != version:
+            self._fail("E_BRAND_ASSET", key, "物化 URL 中的版本必须与 assetVersion 一致")
             return None
         extension = _BRAND_MIME_EXTENSIONS.get(content_type) if isinstance(content_type, str) else None
         if extension is None:
@@ -311,6 +329,9 @@ class _Reader:
             return None
         if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or not 0 < size_bytes <= _MAX_ASSET_BYTES:
             self._fail("E_BRAND_ASSET", key, "sizeBytes 必须在 1 至 {} 字节之间".format(_MAX_ASSET_BYTES))
+            return None
+        if not isinstance(sha256, str) or not _SHA256.fullmatch(sha256):
+            self._fail("E_BRAND_ASSET", key, "sha256 必须是 64 位小写十六进制摘要")
             return None
         slot = "logo" if key == "logoAsset" else "favicon"
         filename = "mjy-brand-{}{}".format(slot, extension)
@@ -324,6 +345,7 @@ class _Reader:
             asset_version=version,
             content_type=content_type,
             size_bytes=size_bytes,
+            sha256=sha256,
         )
 
     def _check_exclusive(self, raw: Mapping[str, Any], legacy: str, reference: str) -> None:

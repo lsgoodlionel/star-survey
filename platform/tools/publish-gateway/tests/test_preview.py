@@ -1,5 +1,6 @@
 """Durable, tenant-scoped preview operations and signed public access."""
 
+import base64
 import json
 import shutil
 import tempfile
@@ -11,11 +12,40 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from .fixtures import sample_payload
-from .gateway_support import INSTANCE, encode, make_service, new_engine, signed_headers
+from .gateway_support import INSTANCE, NOW, encode, make_service, new_engine, signed_headers
 from .gateway_support import MovableClock
 from .fakes import FakeEngine
-from pubgw.service import PreviewOperationStore
+from .branding_fixtures import branded_payload
+from .test_brand_assets import asset
+from pubgw.service import PreviewOperationStore, _parse_preview_request
 from .test_server import RunningServer, now_headers
+
+
+class _PreviewInstaller:
+    def __init__(self):
+        self.calls = []
+
+    def install(self, survey_id, branding, assets):
+        self.calls.append((survey_id, branding, assets))
+
+
+class _FailingPreviewInstaller(_PreviewInstaller):
+    def install(self, survey_id, branding, assets):
+        super().install(survey_id, branding, assets)
+        from pubgw.brand_assets import BrandAssetError
+
+        raise BrandAssetError("plugin unavailable")
+
+
+def _preview_materialized_logo():
+    return {
+        "url": "https://survey.example/a/tenant/123e4567-e89b-42d3-a456-426614174000/7?exp=1800003600&sig=signed",
+        "assetVersion": 7,
+        "contentType": "image/png",
+        "sizeBytes": 11,
+        "fileName": "mjy-brand-logo.png",
+        "sha256": "e0b18c35151ba8d9002fc29a90f33920067633ab8d929bd1d9679d8eb46ecf62",
+    }
 
 
 class PreviewGatewayTest(unittest.TestCase):
@@ -97,6 +127,63 @@ class PreviewGatewayTest(unittest.TestCase):
             self.assertEqual("invalid_request", body["error"])
         self.assertNotIn("import_survey", self.engine.methods())
 
+    def test_old_preview_operation_replays_without_field_but_explicit_empty_assets_conflicts(self):
+        payload = self.payload()
+
+        prepared = self.send("preview", payload)
+        replay = self.send("preview", payload)
+        explicit_empty = self.send("preview", dict(payload, brandAssets=[]))
+
+        self.assertEqual(prepared, replay)
+        self.assertEqual(400, explicit_empty[0])
+        self.assertEqual("invalid_request", explicit_empty[1]["error"])
+        self.assertEqual(1, self.engine.methods().count("import_survey"))
+
+    def test_prepare_installs_brand_assets_and_the_bytes_change_the_fingerprint(self):
+        installer = _PreviewInstaller()
+        self.service._brand_asset_installer_factory = lambda unused: installer
+        payload = self.payload()
+        payload["definition"] = branded_payload({
+            "brandingVersion": 1,
+            "logoAsset": _preview_materialized_logo(),
+        })
+        payload["brandAssets"] = [asset()]
+
+        prepared = self.send("preview", payload)
+        changed = dict(payload, brandAssets=[asset(content=b"other-bytes")])
+        changed["requestId"] = str(uuid.uuid4())
+
+        self.assertEqual(200, prepared[0])
+        self.assertEqual(1, len(installer.calls))
+        self.assertNotEqual(
+            self.service._preview_operations.get(
+                (payload["tenantId"], payload["sessionId"], payload["requestId"])
+            ).fingerprint,
+            _parse_preview_request(encode(changed), NOW).fingerprint,
+        )
+
+    def test_prepare_brand_asset_failure_deletes_the_imported_preview(self):
+        self.service._brand_asset_installer_factory = lambda unused: _FailingPreviewInstaller()
+        payload = self.payload()
+        payload["definition"] = branded_payload({
+            "brandingVersion": 1,
+            "logoAsset": _preview_materialized_logo(),
+        })
+        payload["brandAssets"] = [asset()]
+        payload["definition"]["branding"]["primaryColor"] = "#176B48"
+        payload["definition"]["branding"]["pageTitle"] = {"en": "Pinned brand assets"}
+
+        status, body = self.send("preview", payload)
+
+        self.assertEqual(502, status)
+        self.assertEqual("failed", body["status"])
+        self.assertEqual("brand_assets", body["result"]["failedStage"])
+        self.assertEqual([body["result"]["surveyId"]], self.engine.deleted)
+        imported = base64.b64decode(next(params[1] for method, params in self.engine.calls
+                                         if method == "import_survey")).decode()
+        self.assertNotIn("#176B48", imported)
+        self.assertNotIn("Pinned brand assets", imported)
+
     def test_unknown_prepare_result_is_reconciled_by_marker_without_second_import(self):
         payload = self.payload()
         clock = MovableClock()
@@ -113,6 +200,30 @@ class PreviewGatewayTest(unittest.TestCase):
         self.assertEqual(200, second[0])
         self.assertEqual("prepared", second[1]["status"])
         self.assertEqual(1, self.engine.methods().count("import_survey"))
+
+    def test_reconciled_prepare_reuses_persisted_brand_assets_after_an_import_crash(self):
+        clock = MovableClock()
+        operations = PreviewOperationStore(self.state_dir + "/brand-prepare-crash.sqlite3", now=clock)
+        service = make_service(self.engine, self.state_dir, clock=clock, preview_operations=operations)
+        installer = _PreviewInstaller()
+        service._brand_asset_installer_factory = lambda unused: installer
+        operations.fail_after_import_once = True
+        payload = self.payload()
+        payload["definition"] = branded_payload({
+            "brandingVersion": 1,
+            "logoAsset": _preview_materialized_logo(),
+        })
+        payload["brandAssets"] = [asset()]
+
+        first = self.send_with(service, "preview", payload)
+        clock.advance(PreviewOperationStore.LEASE_SECONDS)
+        second = self.send_with(service, "preview", payload)
+
+        self.assertEqual(503, first[0])
+        self.assertEqual(200, second[0])
+        self.assertEqual("prepared", second[1]["status"])
+        self.assertEqual(1, self.engine.methods().count("import_survey"))
+        self.assertEqual(1, len(installer.calls))
 
     def test_unknown_activation_result_is_reconciled_without_second_activation_or_participant(self):
         payload = self.payload()

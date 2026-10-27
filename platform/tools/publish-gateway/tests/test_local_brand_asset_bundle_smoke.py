@@ -27,10 +27,13 @@ class LocalBrandAssetBundleSmokeTest(unittest.TestCase):
                 {"logo": "11111111-1111-4111-8111-111111111111", "favicon": "22222222-2222-4222-8222-222222222222"},
                 {asset["slot"]: asset["assetId"] for asset in manifest["assets"]},
             )
+            by_slot = {asset["slot"]: asset for asset in manifest["assets"]}
+            self.assertEqual(by_slot["logo"]["sha256"], result["branding"]["logoAsset"]["sha256"])
+            self.assertEqual(by_slot["favicon"]["sha256"], result["branding"]["faviconAsset"]["sha256"])
 
             options = compile_branding(branded_definition(result["branding"])).options
-            self.assertEqual("./files/mjy-brand-logo.png", options["mjybrandlogofile"])
-            self.assertEqual("./files/mjy-brand-favicon.jpg", options["mjybrandfavicon"])
+            self.assertNotIn("mjybrandlogofile", options)
+            self.assertNotIn("mjybrandfavicon", options)
 
             for asset in manifest["assets"]:
                 data = base64.b64decode(asset["bytesBase64"], validate=True)
@@ -45,7 +48,7 @@ class LocalBrandAssetBundleSmokeTest(unittest.TestCase):
     def test_smoke_is_explicitly_separate_from_gateway_request_byte_transport(self):
         from pubgw.request import PublishRequest
 
-        self.assertEqual({"request_id", "engine_instance_id", "definition", "fingerprint"}, set(PublishRequest.__dataclass_fields__))
+        self.assertIn("brand_assets", PublishRequest.__dataclass_fields__)
         self.assertIsNotNone(sample_definition())
 
 

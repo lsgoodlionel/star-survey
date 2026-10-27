@@ -51,10 +51,11 @@ from .participants import RevokeError, revoke_participant
 from .policy.probe import HttpPolicyProbe, PolicyProbe
 from .ops_request import parse_close_request, parse_drift_request, parse_revoke_request
 from .binding import BindingRecord
+from .brand_assets import BrandAssetError, BrandAssetInstaller, validate_brand_assets
 from .fieldmap import FINGERPRINT_VERSION
 from .logic.scoring import expand_scoring
 from .publish import PublishResult, Publisher, StageStep
-from .request import InvalidRequest, PublishRequest, parse_request
+from .request import InvalidRequest, PublishRequest, _brand_asset, parse_request
 from .rpc import HttpTransport, RemoteControlClient, RpcError, Transport
 from .store import ExpiredResult, InFlight, Lookup, ResultStore
 
@@ -62,6 +63,7 @@ log = logging.getLogger("pubgw.service")
 
 TransportFactory = Callable[[EngineConfig], Transport]
 PolicyProbeFactory = Callable[[EngineConfig], Optional[PolicyProbe]]
+BrandAssetInstallerFactory = Callable[[EngineConfig], Optional[BrandAssetInstaller]]
 
 REDACTED = "***"
 _REJECTED_STAGES = frozenset({"validate", "compile"})
@@ -97,6 +99,8 @@ class _PreviewRequest:
     definition: Mapping[str, Any]
     generation: str
     expires_at: str
+    brand_assets: Tuple[Mapping[str, Any], ...]
+    brand_assets_present: bool
     fingerprint: str
 
 
@@ -332,6 +336,18 @@ def http_policy_probe(engine: EngineConfig) -> Optional[PolicyProbe]:
     return HttpPolicyProbe.from_rpc_url(engine.rpc_url)
 
 
+def http_brand_asset_installer(engine: EngineConfig) -> Optional[BrandAssetInstaller]:
+    """Build the plugin writer only for engines whose channel was explicitly configured."""
+    if not engine.channel_secret:
+        return None
+    try:
+        return BrandAssetInstaller.from_rpc_url(
+            engine.rpc_url, engine.instance_id, engine.channel_secret
+        )
+    except BrandAssetError:
+        return None
+
+
 class PublishService:
     def __init__(
         self,
@@ -342,6 +358,7 @@ class PublishService:
         now: Callable[[], float] = time.time,
         locks: Optional[InFlight] = None,
         policy_probe_factory: PolicyProbeFactory = http_policy_probe,
+        brand_asset_installer_factory: BrandAssetInstallerFactory = http_brand_asset_installer,
         preview_operations: Optional[PreviewOperationStore] = None,
         preview_public_url: str = "http://127.0.0.1:8080",
     ):
@@ -352,6 +369,7 @@ class PublishService:
         self._now = now
         self._locks = locks or InFlight()
         self._policy_probe_factory = policy_probe_factory
+        self._brand_asset_installer_factory = brand_asset_installer_factory
         preview_path = os.path.join(os.path.dirname(getattr(store, "_path", "") or "."),
                                     "preview-operations.sqlite3")
         self._preview_operations = preview_operations or PreviewOperationStore(preview_path)
@@ -739,10 +757,27 @@ class PublishService:
                          engine: EngineConfig, definition: SurveyDefinition) -> Response:
         client = self._preview_client(engine, operation, owner)
         try:
-            publisher = Publisher(client, engine_instance=engine.instance_id,
-                                  policy_probe=self._policy_probe_factory(engine))
             result = PublishResult(survey_id=operation.survey_id)
-            compiled = publisher._stage_validate_and_compile(definition, result)
+            try:
+                assets = validate_brand_assets(definition, request.brand_assets)
+            except BrandAssetError as error:
+                publisher = Publisher(client, engine_instance=engine.instance_id)
+                publisher._fail(result, "brand_assets", [str(error)])
+                payload = {"status": "failed", "result": result.to_dict()}
+                operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
+                return self._operation_response(operation, 422)
+            installer = self._brand_asset_installer_factory(engine) if assets else None
+            publisher = Publisher(
+                client, engine_instance=engine.instance_id,
+                policy_probe=self._policy_probe_factory(engine),
+                brand_asset_installer=installer,
+            )
+            if assets and installer is None:
+                publisher._fail(result, "brand_assets", ["brand asset installer is unavailable"])
+                payload = {"status": "failed", "result": result.to_dict()}
+                operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
+                return self._operation_response(operation, 422)
+            compiled = publisher._stage_validate_and_compile(definition, result, defer_branding=bool(assets))
             if compiled is None:
                 payload = {"status": "failed", "result": result.to_dict()}
                 operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
@@ -761,6 +796,10 @@ class PublishService:
                     (operation.tenant_id, operation.session_id, operation.request_id)
                 ))
             operation = self._preview_operations.progress(operation, owner, result.survey_id)
+            if assets and not publisher._stage_brand_assets(compiled, assets, result):
+                payload = {"status": "failed", "result": result.to_dict()}
+                operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
+                return self._operation_response(operation, 502)
             if publisher._stage_apply(definition, compiled, result) is None:
                 payload = {"status": "failed", "result": result.to_dict()}
                 operation = self._preview_operations.settle(operation, owner, "failed", response=payload)
@@ -890,8 +929,10 @@ class PublishService:
         client = LazyLoginClient(self._transport_factory(engine), engine.user, engine.password)
         try:
             result = Publisher(
-                client, engine_instance=engine.instance_id, policy_probe=self._policy_probe_factory(engine)
-            ).publish(definition)
+                client, engine_instance=engine.instance_id, policy_probe=self._policy_probe_factory(engine),
+                brand_asset_installer=(self._brand_asset_installer_factory(engine)
+                                       if request.brand_assets else None),
+            ).publish(definition, request.brand_assets)
         except Exception:  # noqa: BLE001 — 网关自身缺陷：记日志，对外只说 internal_error
             log.exception(
                 "request %s: unexpected error publishing %s on %s; engine state unknown",
@@ -1033,7 +1074,8 @@ def _parse_preview_request(body: bytes, now: float) -> _PreviewRequest:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as error:
         raise InvalidRequest("body is not UTF-8 JSON: {}".format(error)) from None
-    if not isinstance(payload, dict) or set(payload) != _PREVIEW_FIELDS:
+    allowed_fields = _PREVIEW_FIELDS | {"brandAssets"}
+    if not isinstance(payload, dict) or set(payload) not in (_PREVIEW_FIELDS, allowed_fields):
         raise InvalidRequest("preview body has unexpected fields")
     request_id = payload["requestId"]
     tenant_id = payload["tenantId"]
@@ -1042,6 +1084,8 @@ def _parse_preview_request(body: bytes, now: float) -> _PreviewRequest:
     generation = payload["generation"]
     expires_at = payload["expiresAt"]
     definition = payload["definition"]
+    brand_assets_present = "brandAssets" in payload
+    raw_assets = payload.get("brandAssets", [])
     for name, value in (("tenantId", tenant_id), ("sessionId", session_id), ("requestId", request_id)):
         if not isinstance(value, str) or not _UUID_TEXT.match(value):
             raise InvalidRequest("{} must be a UUID".format(name))
@@ -1062,15 +1106,23 @@ def _parse_preview_request(body: bytes, now: float) -> _PreviewRequest:
         raise InvalidRequest("expiresAt must be in the next 3600 seconds")
     if not isinstance(definition, dict):
         raise InvalidRequest("definition must be a JSON object")
+    if not isinstance(raw_assets, list) or len(raw_assets) > 2:
+        raise InvalidRequest("brandAssets must be a list of at most two items")
+    brand_assets = tuple(_brand_asset(item) for item in raw_assets)
+    canonical_payload = {
+        "tenantId": tenant_id, "sessionId": session_id, "requestId": request_id,
+        "engineInstanceId": instance_id, "definition": definition, "generation": generation,
+        "expiresAt": expires_at,
+    }
+    if brand_assets_present:
+        canonical_payload["brandAssets"] = brand_assets
     canonical = json.dumps(
-        {"tenantId": tenant_id, "sessionId": session_id, "requestId": request_id,
-         "engineInstanceId": instance_id, "definition": definition, "generation": generation,
-         "expiresAt": expires_at},
+        canonical_payload,
         sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     )
     return _PreviewRequest(
         tenant_id.lower(), session_id.lower(), request_id.lower(), instance_id, definition, generation, expires_at,
-        hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        brand_assets, brand_assets_present, hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
     )
 
 
@@ -1088,7 +1140,10 @@ def _parse_preview_identity(body: bytes) -> Tuple[str, str, str]:
 
 
 def _request_from_operation(operation: _PreviewOperation) -> _PreviewRequest:
-    return _PreviewRequest(**json.loads(operation.request_json))
+    payload = json.loads(operation.request_json)
+    payload["brand_assets"] = tuple(payload.get("brand_assets", ()))
+    payload.setdefault("brand_assets_present", False)
+    return _PreviewRequest(**payload)
 
 
 def _preview_marker(request: _PreviewRequest) -> str:

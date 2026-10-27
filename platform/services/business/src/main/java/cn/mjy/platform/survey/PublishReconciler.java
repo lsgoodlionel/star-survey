@@ -8,6 +8,7 @@ import cn.mjy.platform.survey.PublishAttemptRepository.AttemptRow;
 import cn.mjy.platform.survey.PublishReconciliationRepository.LockedCandidate;
 import cn.mjy.platform.survey.SurveyPublishService.Ticket;
 import cn.mjy.platform.survey.gateway.GatewayOutcome;
+import cn.mjy.platform.survey.gateway.GatewayRequest;
 import cn.mjy.platform.survey.gateway.PublishGatewayClient;
 import java.time.Duration;
 import java.util.EnumMap;
@@ -18,6 +19,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * 待核对发布的后台核对（契约 publish-gateway-v1 v1.1：网关按 requestId 存档结果，同一 requestId + 同一请求体
@@ -68,10 +70,13 @@ public class PublishReconciler {
     private final PublishSettlement settlement;
     private final SurveyAudit audit;
     private final PublishReconciliationProperties properties;
+    private final SurveyDefinitions definitions;
+    private final Optional<SurveyAssetSource> assets;
 
     PublishReconciler(TenantDirectory tenants, TenantScope tenantScope, PublishReconciliationRepository candidates,
             PublishAttemptRepository attempts, SurveyRepository surveys, PublishGatewayClient gateway,
-            PublishSettlement settlement, SurveyAudit audit, PublishReconciliationProperties properties) {
+            PublishSettlement settlement, SurveyAudit audit, PublishReconciliationProperties properties,
+            SurveyDefinitions definitions, Optional<SurveyAssetSource> assets) {
         this.tenants = tenants;
         this.tenantScope = tenantScope;
         this.candidates = candidates;
@@ -81,6 +86,8 @@ public class PublishReconciler {
         this.settlement = settlement;
         this.audit = audit;
         this.properties = properties;
+        this.definitions = definitions;
+        this.assets = assets;
     }
 
     /** 跑一轮：跨所有未关闭租户合计最多处理 batchSize 个问卷。单个问卷或租户出错不影响其余。 */
@@ -154,8 +161,11 @@ public class PublishReconciler {
         attempts.markRetry(requestId);
         surveys.markPublishing(surveyId, requestId);
         candidates.scheduleNext(requestId, backoffAfter(attempt.tries() + 1));
+        ObjectNode definition = (ObjectNode) definitions.parse(attempt.definition());
+        List<GatewayRequest.BrandAsset> brandAssets = assets
+                .map(source -> source.brandAssets(system.tenantId(), definition)).orElseGet(List::of);
         return new Claim(null, new Ticket(surveyId, requestId, attempt.engineInstanceId(), attempt.draftVersion(),
-                attempt.definition()));
+                attempt.definition(), brandAssets));
     }
 
     private void flagManualReview(TenantContext system, UUID surveyId, AttemptRow attempt) {

@@ -9,6 +9,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.tenant.TenantScope;
+import cn.mjy.platform.asset.AssetFixture;
+import cn.mjy.platform.asset.AssetService;
+import cn.mjy.platform.asset.AssetUpload;
+import cn.mjy.platform.asset.AssetView;
 import cn.mjy.platform.engine.EngineEvent;
 import cn.mjy.platform.engine.EngineEventType;
 import cn.mjy.platform.engine.EngineEventInbox;
@@ -44,7 +48,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+        "PLATFORM_ASSET_SECRET=asset-master-secret-for-tests-only-0123456789",
+        "platform.asset.public-base-url=https://survey.example"
+})
 @AutoConfigureMockMvc
 @Import(PreviewSessionApiTest.GatewayConfig.class)
 class PreviewSessionApiTest {
@@ -52,6 +59,7 @@ class PreviewSessionApiTest {
     @Autowired MockMvc mvc;
     @Autowired SurveyFixture fixture;
     @Autowired SurveyService surveys;
+    @Autowired AssetService assets;
     @Autowired TestTokens tokens;
     @Autowired JsonMapper json;
     @Autowired FakePreviewGateway gateway;
@@ -166,6 +174,30 @@ class PreviewSessionApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ready"));
         assertThat(gateway.creates).hasSize(2);
+    }
+
+    @Test
+    void previewRetryReusesTheMaterializedBrandAssetVersion() throws Exception {
+        AssetView logo = assets.create(ws.owner(), "品牌标志",
+                new AssetUpload("image/png", "logo.png", AssetFixture.png()));
+        ObjectNode definition = fixture.definition();
+        definition.put("theme", "zh-business");
+        ObjectNode branding = definition.putObject("branding");
+        branding.put("brandingVersion", 1);
+        branding.putObject("logoAsset").put("assetId", logo.id().toString());
+        SurveyView branded = surveys.create(ws.owner(), ws.project(), definition);
+        UUID request = UUID.randomUUID();
+
+        gateway.failCreate = true;
+        create(ws.owner(), branded.id(), request).andExpect(status().isAccepted());
+        assets.addVersion(ws.owner(), logo.id(), new AssetUpload("image/jpeg", "logo.jpg", AssetFixture.jpeg()));
+        gateway.failCreate = false;
+        create(ws.owner(), branded.id(), request).andExpect(status().isOk());
+
+        assertThat(gateway.creates).hasSize(2);
+        assertThat(gateway.creates.get(0).brandAssets()).hasSize(1);
+        assertThat(gateway.creates.get(1).brandAssets()).containsExactlyElementsOf(gateway.creates.get(0).brandAssets());
+        assertThat(gateway.creates.get(1).brandAssets().get(0).fileName()).isEqualTo("mjy-brand-logo.png");
     }
 
     @Test

@@ -48,6 +48,10 @@ from .store import RESULTS_FILE, PruneScheduler, ResultStore, Retention, retenti
 log = logging.getLogger("pubgw.server")
 
 MAX_BODY_BYTES = 1024 * 1024
+# A publish/preview can transport two verified 5 MiB image assets as base64.  Keep
+# the broader HTTP surface at 1 MiB; only the two authenticated authoring routes
+# need this bounded exception.
+MAX_BRAND_BODY_BYTES = 16 * 1024 * 1024
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 #: 单个连接读请求的超时；发布本身耗时由 RPC 超时约束，与此无关。
@@ -211,7 +215,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if handler is None:
             self._not_found()
             return
-        body = self._read_body()
+        body = self._read_body(MAX_BRAND_BODY_BYTES if path in (PUBLISH_PATH, PREVIEW_PATH) else MAX_BODY_BYTES)
         if body is None:
             self.close_connection = True
             self._send(Response(400, _json({"error": "invalid_request"})))
@@ -240,8 +244,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def _path(self) -> str:
         return urlsplit(self.path).path
 
-    def _read_body(self) -> Optional[bytes]:
-        """只接受带 Content-Length 且不超过 1 MiB 的请求体；超限时一个字节都不读。"""
+    def _read_body(self, maximum: int = MAX_BODY_BYTES) -> Optional[bytes]:
+        """只接受带 Content-Length 且不超过调用方上限的请求体；超限时一个字节都不读。"""
         if self.headers.get("Transfer-Encoding"):
             log.info("rejected request: Transfer-Encoding is not supported")
             return None
@@ -250,8 +254,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             log.info("rejected request: missing or invalid Content-Length")
             return None
         length = int(raw_length)
-        if length > MAX_BODY_BYTES:
-            log.info("rejected request: body of %d bytes exceeds %d", length, MAX_BODY_BYTES)
+        if length > maximum:
+            log.info("rejected request: body of %d bytes exceeds %d", length, maximum)
             return None
         body = self.rfile.read(length)
         if len(body) != length:
