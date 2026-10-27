@@ -455,6 +455,8 @@ Expected: zero failure, error or required skip; every evidence item binds to the
 
 2026-10-27 用户改用本机 Docker 验收；生产 Compose 静态解析及 104 项 Docker 支持的配置/单元测试通过，原生验收仍跳过。本机 80 端口被现有服务占用，生产 Compose 固定 80/443 且缺真实双版 Release，故 Step 2 的安装、doctor、升级和恢复未运行；不得把静态门禁计为生产 smoke 完成。
 
+2026-10-27 用户指示继续后，`4bc959c813` 让键盘路径在权限驱动的“新建”按钮可见后开始，原 Tab 顺序断言保持不变。本机 Docker MySQL 和 PostgreSQL 完整管理端浏览器流程均 19/19，通过真实跨层核验；lint、typecheck、diff check 通过。先前同一断言的重复失败已关闭，Task 8 仍因原生生产、Harness 最终门及三路复审缺证据而未完成。
+
 - [ ] **Step 2: Run production Compose smoke**
 
 Install or upgrade a disposable single-host environment, execute the Task 7 journey through the Caddy entrypoint, run `surveyctl doctor`, then verify backup and restore preserve templates, brand assets, published versions and responses.

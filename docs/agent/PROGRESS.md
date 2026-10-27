@@ -19,6 +19,8 @@ Task 8: pending - 用户已明确本轮完成本地验收与同步，生产 Comp
 
 2026-10-27 用户改指定本机 Docker 验收：本机 Docker Engine 29.9.2、Compose 5.6.1 可用；生产 `compose.yml` 用仓库示例环境执行 `docker compose config --quiet` 通过，生产配置/单元测试在有 Docker API 权限的本机重跑 105 项，104 项通过、1 项真实原生验收按前置条件跳过。现有其他服务占用本机 80 端口，生产 Compose 固定绑定 80/443，且缺两版真实 Release manifest；因此未启动生产栈，也未声称 Caddy/doctor/升级恢复的真实产品验收通过。已有隔离管理端测试栈使用随机本地端口；上段记录的浏览器重复焦点失败仍待单独诊断。
 
+2026-10-27 用户指示继续后，重复焦点失败与权限查询完成前开始 Tab 路径的时序竞争一致：测试先等待“新建”按钮可见，再保留完整搜索框→类型→状态→排序→新建的键盘顺序和可见焦点断言。仅测试时序修正提交 `4bc959c813`；本机隔离 Docker MySQL/PostgreSQL 全套真实浏览器各 19/19，平台 API、平台 DB、网关和引擎 DB 交叉核验通过，测试容器已清理；管理端 lint、typecheck 和 `git diff --check` 通过。该结果关闭本轮本地浏览器焦点复现，不改变 Harness 最终、真实 Release、生产 Compose/Caddy/doctor/备份恢复及三路独立复审的待办状态，Wave 2 能力状态不提升。
+
 2026-10-12：用户要求生成报告准备切换模型，暂停新增实现。接续入口为
 [模型切换交接报告](run-history/2026-10-12-wave2-model-handoff.md)。
 本轮网关 1,232 项和既有品牌双语 MySQL E2E 通过；不代表新增 brandAssets 真实链路通过。
