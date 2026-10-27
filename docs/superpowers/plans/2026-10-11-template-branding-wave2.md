@@ -1,5 +1,7 @@
 # Wave 2 Template And Branding Implementation Plan
 
+Status: approved
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把现有模板、资产、品牌和多语言后端能力接入 Admin Web，形成从模板创建问卷、配置品牌、真实预览、发布并完成品牌化作答的可上线闭环。
