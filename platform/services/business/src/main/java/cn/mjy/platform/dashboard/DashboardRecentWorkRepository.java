@@ -40,7 +40,7 @@ public class DashboardRecentWorkRepository {
                   AND EXISTS (
                       SELECT 1 FROM effective_permissions
                       WHERE permission_code = CASE
-                          WHEN :page IN ('edit', 'import', 'preview') THEN 'edit'
+                          WHEN :page IN ('edit', 'import', 'preview', 'branding') THEN 'edit'
                           WHEN :page = 'publish' THEN 'publish'
                           WHEN :page = 'version' THEN 'view'
                           WHEN :page = 'responses' THEN 'view-statistics'
@@ -101,7 +101,7 @@ public class DashboardRecentWorkRepository {
                       SELECT 1 FROM effective_permissions permission
                       WHERE permission.survey_id = work.survey_id
                         AND permission.permission_code = CASE
-                            WHEN work.page IN ('edit', 'import', 'preview') THEN 'edit'
+                            WHEN work.page IN ('edit', 'import', 'preview', 'branding') THEN 'edit'
                             WHEN work.page = 'publish' THEN 'publish'
                             WHEN work.page = 'version' THEN 'view'
                             WHEN work.page = 'responses' THEN 'view-statistics'

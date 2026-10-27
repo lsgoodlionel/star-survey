@@ -7,6 +7,7 @@ import java.util.UUID;
 
 public enum DashboardPage {
     EDIT("edit"),
+    BRANDING("branding"),
     IMPORT("import"),
     PREVIEW("preview"),
     PUBLISH("publish"),

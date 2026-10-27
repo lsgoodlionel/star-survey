@@ -57,6 +57,7 @@ class DashboardRecentWorkRepositoryTest {
         Instant visitedAt = Instant.parse("2026-10-10T08:00:00Z");
         Map<DashboardPage, String> expectedPaths = Map.of(
                 DashboardPage.EDIT, "/surveys/" + surveyId + "/edit",
+                DashboardPage.BRANDING, "/surveys/" + surveyId + "/branding",
                 DashboardPage.IMPORT, "/surveys/" + surveyId + "/import",
                 DashboardPage.PREVIEW, "/surveys/" + surveyId + "/preview",
                 DashboardPage.PUBLISH, "/surveys/" + surveyId + "/publish",

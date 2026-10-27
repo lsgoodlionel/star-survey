@@ -182,6 +182,9 @@ class DashboardRecentWorkTenantIsolationTest {
                 .rootCause().hasMessageContaining("dashboard_recent_work_check");
         assertThatThrownBy(() -> insertRaw("edit", 1))
                 .rootCause().hasMessageContaining("dashboard_recent_work_check");
+        insertRaw("branding", null);
+        assertThatThrownBy(() -> insertRaw("branding", 1))
+                .rootCause().hasMessageContaining("dashboard_recent_work_check");
     }
 
     private void insertRaw(String page, Integer version) {
