@@ -451,6 +451,8 @@ Expected: zero failure, error or required skip; every evidence item binds to the
 
 2026-10-27 本地最终实现提交 c80e9b406b 的相关质量门及双库浏览器均通过，文档提交 fb8bee1188 已推送。托管平台门 run 40446850704 被两份交接排除脚本的执行位阻断；治理门 run 40446762995 另有 strict_unittest 的共享 loader 临时目录导入错误。勾选映射修复已通过定向测试。用户已授权两项脚本执行位变更单独提交，并明确本轮先完成本地验收与同步、生产验收保留待办。托管 Harness 核心错误与独立复审仍为 pending，不提升整体交付状态。 后续已将执行位变更单独提交为 e00a7b5a32，治理映射与边界记录提交为 db267ede9d；db267ede9d 的平台质量门 run 40461852500 为 success、10/10 jobs 通过，治理 run 40461850858 仅余上述两项核心 ERROR。
 
+2026-10-27 追加复验：实现 HEAD `28a5e18925` 的隔离 Harness 11 项非浏览器门禁通过；浏览器门在 Docker Desktop 挂载前失败，无法据此完成 Harness。原 worktree MySQL 19/19 重跑通过，PostgreSQL 在 `authoring.spec.ts:594` 键盘焦点断言失败；该位置此前已在 MySQL 首次运行失败，同类问题重复出现后停止自动修复。生产部署单元/配置测试 104 通过、原生验收 1 项条件跳过；GitHub 无真实 Release/tag，默认分支未注册自动发布 workflow，指定服务器 SSH 两次超时，故 Step 1–3 和 Final Acceptance 仍保持未勾选。证据和后续条件见 `docs/agent/PROGRESS.md`。
+
 - [ ] **Step 2: Run production Compose smoke**
 
 Install or upgrade a disposable single-host environment, execute the Task 7 journey through the Caddy entrypoint, run `surveyctl doctor`, then verify backup and restore preserve templates, brand assets, published versions and responses.
