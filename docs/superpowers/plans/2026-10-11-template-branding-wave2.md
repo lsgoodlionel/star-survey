@@ -453,6 +453,8 @@ Expected: zero failure, error or required skip; every evidence item binds to the
 
 2026-10-27 追加复验：实现 HEAD `28a5e18925` 的隔离 Harness 11 项非浏览器门禁通过；浏览器门在 Docker Desktop 挂载前失败，无法据此完成 Harness。原 worktree MySQL 19/19 重跑通过，PostgreSQL 在 `authoring.spec.ts:594` 键盘焦点断言失败；该位置此前已在 MySQL 首次运行失败，同类问题重复出现后停止自动修复。生产部署单元/配置测试 104 通过、原生验收 1 项条件跳过；GitHub 无真实 Release/tag，默认分支未注册自动发布 workflow，指定服务器 SSH 两次超时，故 Step 1–3 和 Final Acceptance 仍保持未勾选。证据和后续条件见 `docs/agent/PROGRESS.md`。
 
+2026-10-27 用户改用本机 Docker 验收；生产 Compose 静态解析及 104 项 Docker 支持的配置/单元测试通过，原生验收仍跳过。本机 80 端口被现有服务占用，生产 Compose 固定 80/443 且缺真实双版 Release，故 Step 2 的安装、doctor、升级和恢复未运行；不得把静态门禁计为生产 smoke 完成。
+
 - [ ] **Step 2: Run production Compose smoke**
 
 Install or upgrade a disposable single-host environment, execute the Task 7 journey through the Caddy entrypoint, run `surveyctl doctor`, then verify backup and restore preserve templates, brand assets, published versions and responses.

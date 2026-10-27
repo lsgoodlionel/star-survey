@@ -17,6 +17,8 @@ Task 8: pending - 用户已明确本轮完成本地验收与同步，生产 Comp
 
 2026-10-27 Task 8 接续核验（实现 HEAD `28a5e18925`，文档提交另计）：隔离 Harness run `0416bb7c-235d-4107-b050-6a05e45a304a` 的 Java、Gateway、管理端测试/静态检查/构建/production bundle 及文档门共 11 项通过；新增浏览器门在独立 worktree 的 Docker Desktop 嵌套挂载阶段失败，未执行浏览器用例，Harness 仍处于 repairing。原 worktree 直接复验 Java 1494 项/184 类、管理端 353 项、Gateway 1235 项通过；生产部署 Python 测试 105 项中 104 项通过，真实原生验收按前置条件跳过，Python 编译通过。MySQL 浏览器首次在 `authoring.spec.ts:594` 的“新建”按钮键盘焦点断言失败，隔离重跑 19/19；PostgreSQL 随后在同一断言失败（6 项通过、1 项失败、12 项未运行），依“两次同类失败即停”约定停止自动修复，保留 `/tmp/survey-wave2-browser-{mysql-final,mysql-retry,pgsql-final}.log` 脱敏诊断。GitHub 当前无 `v*` tag/Release；自动生成 `release.json` 的 `release.yml` 仅在开发分支，默认分支未注册，首版 baseline policy 为 `0.3.0-rc.1` bootstrap，第二版需真实前版 manifest SHA-256；用户确认尚未制作两版 Release。指定验收服务器的只读 SSH 连续两次连接超时；生产 Compose/Caddy、doctor、备份恢复和三路独立复审均无通过证据。Wave 2 未满足准出，Wave 3 新任务窗口尚未创建。
 
+2026-10-27 用户改指定本机 Docker 验收：本机 Docker Engine 29.9.2、Compose 5.6.1 可用；生产 `compose.yml` 用仓库示例环境执行 `docker compose config --quiet` 通过，生产配置/单元测试在有 Docker API 权限的本机重跑 105 项，104 项通过、1 项真实原生验收按前置条件跳过。现有其他服务占用本机 80 端口，生产 Compose 固定绑定 80/443，且缺两版真实 Release manifest；因此未启动生产栈，也未声称 Caddy/doctor/升级恢复的真实产品验收通过。已有隔离管理端测试栈使用随机本地端口；上段记录的浏览器重复焦点失败仍待单独诊断。
+
 2026-10-12：用户要求生成报告准备切换模型，暂停新增实现。接续入口为
 [模型切换交接报告](run-history/2026-10-12-wave2-model-handoff.md)。
 本轮网关 1,232 项和既有品牌双语 MySQL E2E 通过；不代表新增 brandAssets 真实链路通过。
