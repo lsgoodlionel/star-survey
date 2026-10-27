@@ -23,6 +23,8 @@ Task 8: pending - 用户已明确本轮完成本地验收与同步，生产 Comp
 
 2026-10-27 同提交 `28dcab9b0d` 的独立干净 worktree `/Users/lionel/Develop/survey-wave2-gate-20261027` 运行 Harness `6f0b7c28-bd90-4be9-ad01-78c78eee1c36`：11 项文档、管理端、Java、Gateway 门禁通过；`admin-e2e` 在浏览器执行前被 Docker Desktop 对 `platform/deploy/test/.runtime/config.php` 的 bind mount 拒绝，0 个浏览器用例执行，run 为 repairing。此前另一独立 worktree 曾出现同一挂载失败，按两次同类失败停止自动修复；原 worktree 的 MySQL/PostgreSQL 各 19/19 是独立的直接验收证据，不能替代 Harness 成功。GitHub PR #11 本次 HEAD 的治理 run `40472080896` 仍因独立控制平面 `strict_unittest` 两项临时目录不可导入错误失败，平台业务修正没有新失败指纹。Release 与原生生产验收仍无制品和通过证据，Wave 2 保持未完成。
 
+2026-10-28 用户指示继续处理后，以隔离 Docker 实验确认根因：全新检出缺少被忽略的 `application/config/config.php` 目标时，Docker Desktop 嵌套文件挂载报 `outside of rootfs`；预先创建目标后同一容器命令成功。`551ac98f9a` 在测试栈启动前仅为缺失目标创建空文件，保留已有配置内容；回归测试先失败后通过，相关 Python 测试 49 项通过。全新 worktree 初始目标缺失，Harness run `b55d2545-64a7-435c-a4c0-3dca1998ad8a` 在该提交上 12/12 门禁通过，含 MySQL 真实浏览器 19/19、Gateway 1235 项和 Java 全量；随后 PostgreSQL 真实浏览器 19/19 及跨层核验通过，隔离容器已清理。Harness 状态仍为 verifying；真实 Release、生产 Compose/Caddy/doctor/备份恢复、托管治理和三路独立复审仍待完成，Wave 2 不提升为完成。
+
 2026-10-12：用户要求生成报告准备切换模型，暂停新增实现。接续入口为
 [模型切换交接报告](run-history/2026-10-12-wave2-model-handoff.md)。
 本轮网关 1,232 项和既有品牌双语 MySQL E2E 通过；不代表新增 brandAssets 真实链路通过。
