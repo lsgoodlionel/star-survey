@@ -312,10 +312,13 @@ git commit -m "feat: add template lifecycle controls"
 - Modify: `platform/apps/admin-web/src/app/router.tsx`
 - Modify: `platform/apps/admin-web/src/app/SurveyShell.tsx`
 - Modify: `platform/apps/admin-web/src/app/SurveyShell.test.tsx`
-- Modify: `platform/apps/admin-web/src/app/surveyShellContext.tsx`
 - Modify: `platform/apps/admin-web/src/shared/api/schemas.ts`
+- Modify: `platform/apps/admin-web/src/shared/api/branding.ts`
+- Modify: `platform/apps/admin-web/src/shared/api/branding.test.ts`
 - Modify: `platform/apps/admin-web/src/shared/api/dashboard.test.ts`
+- Modify: `platform/apps/admin-web/src/features/dashboard/DashboardPage.tsx`
 - Modify: `platform/services/business/src/main/java/cn/mjy/platform/dashboard/DashboardPage.java`
+- Modify: `platform/services/business/src/main/java/cn/mjy/platform/dashboard/DashboardRecentWorkRepository.java`
 - Create: `platform/services/business/src/main/resources/db/migration/V934__dashboard_branding_recent_work.sql`
 - Modify: `platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkRepositoryTest.java`
 - Modify: `platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkTenantIsolationTest.java`
@@ -324,29 +327,29 @@ git commit -m "feat: add template lifecycle controls"
 - Consumes: Task 3 draft/brand/asset clients, resource `canEdit`, and SurveyShell unsaved-state contract.
 - Produces: `/surveys/:surveyId/branding`, brand asset upload/selection, localized title/footer and structured translations, and cache-safe draft saving.
 
-- [ ] **Step 1: Write failing page and form tests**
+- [x] **Step 1: Write failing page and form tests**
 
 Cover parse from existing draft, `#rgb`/`#rrggbb`, Logo alt requirements, active image filtering, upload failure/retry, base and additional language validation, removal confirmation, translation target validation, read-only mode, dirty navigation block, beforeunload, successful version/cache synchronization, 409 conflict and preservation of unrelated draft fields.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run: `npm --prefix platform/apps/admin-web test -- --run src/features/branding/BrandingPage.test.tsx src/app/SurveyShell.test.tsx`
 
 Expected: FAIL because the brand route and components do not exist.
 
-- [ ] **Step 3: Implement the brand form and asset picker**
+- [x] **Step 3: Implement the brand form and asset picker**
 
 Use React Hook Form with controlled color text/native color input, accessible upload/select/remove controls and `aria-describedby` errors. Save only through `saveDraft(api, surveyId, version, mergeBrandingDraft(...))`.
 
-- [ ] **Step 4: Implement the structured language editor**
+- [x] **Step 4: Implement the structured language editor**
 
 Read group/question/subquestion/answer identities from the current draft; store only supported translation fields. Missing entries remain absent so the gateway performs base-language fallback.
 
-- [ ] **Step 5: Extend the recent-work contract for branding**
+- [x] **Step 5: Extend the recent-work contract for branding**
 
 Add `DashboardPage.BRANDING("branding")`, target `/surveys/{id}/branding`, and migration `V934` that replaces the page check constraint with the old values plus `branding` while preserving the `version_no` invariant. Extend Java repository/isolation tests and frontend Zod/client tests before wiring `useSurveyPageReady('branding', ready)`; keep versions/publish active-tab behavior unchanged.
 
-- [ ] **Step 6: Run focused tests, full frontend tests and build**
+- [x] **Step 6: Run focused tests, full frontend tests and build**
 
 Run: `platform/deploy/platform-dev/mvn.sh test -Dtest='cn.mjy.platform.dashboard.DashboardRecentWorkRepositoryTest,cn.mjy.platform.dashboard.DashboardRecentWorkTenantIsolationTest'`
 
@@ -358,10 +361,10 @@ Run: `npm --prefix platform/apps/admin-web run build`
 
 Expected: all commands pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
-git add platform/apps/admin-web/src/features/branding platform/apps/admin-web/src/app/router.tsx platform/apps/admin-web/src/app/SurveyShell.tsx platform/apps/admin-web/src/app/SurveyShell.test.tsx platform/apps/admin-web/src/app/surveyShellContext.tsx platform/apps/admin-web/src/shared/api/schemas.ts platform/apps/admin-web/src/shared/api/dashboard.test.ts platform/services/business/src/main/java/cn/mjy/platform/dashboard/DashboardPage.java platform/services/business/src/main/resources/db/migration/V934__dashboard_branding_recent_work.sql platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkRepositoryTest.java platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkTenantIsolationTest.java
+git add platform/apps/admin-web/src/features/branding platform/apps/admin-web/src/features/dashboard/DashboardPage.tsx platform/apps/admin-web/src/app/router.tsx platform/apps/admin-web/src/app/SurveyShell.tsx platform/apps/admin-web/src/app/SurveyShell.test.tsx platform/apps/admin-web/src/shared/api/branding.ts platform/apps/admin-web/src/shared/api/branding.test.ts platform/apps/admin-web/src/shared/api/schemas.ts platform/apps/admin-web/src/shared/api/dashboard.test.ts platform/services/business/src/main/java/cn/mjy/platform/dashboard/DashboardPage.java platform/services/business/src/main/java/cn/mjy/platform/dashboard/DashboardRecentWorkRepository.java platform/services/business/src/main/resources/db/migration/V934__dashboard_branding_recent_work.sql platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkRepositoryTest.java platform/services/business/src/test/java/cn/mjy/platform/dashboard/DashboardRecentWorkTenantIsolationTest.java
 git commit -m "feat: add brand and language editor"
 ```
 

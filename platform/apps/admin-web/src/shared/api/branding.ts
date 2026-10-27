@@ -49,3 +49,42 @@ export function mergeBrandingDraft(definition: unknown, state: BrandingFormState
   }
   return merged;
 }
+
+/** 校验译文只引用当前草稿中仍存在的对象，避免保存后在发布网关才发现失效目标。 */
+export function validateBrandingTranslations(
+  definition: unknown, languages: string[], translations: Record<string, unknown>,
+): string | null {
+  const source = objectSchema.safeParse(definition);
+  if (!source.success) return '问卷草稿定义无效';
+  const base = source.data.language;
+  if (languages.includes(String(base)) || new Set(languages).size !== languages.length) {
+    return '附加语言不能包含基础语言或重复语言';
+  }
+  const record = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown> : {};
+  const list = (value: unknown): Record<string, unknown>[] =>
+    Array.isArray(value) ? value.map(record) : [];
+  const groups = list(source.data.groups);
+  const questions = groups.flatMap((group) => list(group.questions));
+  const ids = {
+    groups: new Set(groups.map((item) => item.uuid)),
+    questions: new Set(questions.map((item) => item.uuid)),
+    subquestions: new Set(questions.flatMap((item) => list(item.subquestions).map((sub) => sub.uuid))),
+  };
+  for (const [language, raw] of Object.entries(translations)) {
+    if (!languages.includes(language)) return '译文语言必须在附加语言列表中';
+    const value = record(raw);
+    for (const section of ['groups', 'questions', 'subquestions'] as const) {
+      if (Object.keys(record(value[section])).some((id) => !ids[section].has(id))) {
+        return `译文引用了不存在的${section === 'groups' ? '题组' : section === 'questions' ? '题目' : '子题'}`;
+      }
+    }
+    for (const item of list(value.answers)) {
+      const question = questions.find((candidate) => candidate.uuid === item.question);
+      if (!question || !list(question.answers).some((answer) => answer.code === item.code
+        && (answer.scale ?? 0) === (item.scale ?? 0))) return '译文引用了不存在的选项';
+    }
+  }
+  return null;
+}

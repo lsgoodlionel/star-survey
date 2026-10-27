@@ -16,6 +16,9 @@ const TemplatesPage = lazy(() =>
 const TemplateDetailPage = lazy(() =>
   import('../features/templates/TemplateDetailPage').then((module) => ({ default: module.TemplateDetailPage })),
 );
+const BrandingPage = lazy(() =>
+  import('../features/branding/BrandingPage').then((module) => ({ default: module.BrandingPage })),
+);
 
 const PublishRoutePage = lazy(() =>
   import('../features/publish/PublishPage').then((module) => ({ default: module.PublishRoutePage })),
@@ -106,6 +109,7 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
               children: [
                 { index: true, element: <Navigate to="edit" replace /> },
                 { path: 'edit', element: <EditorRoutePage /> },
+                { path: 'branding', element: <Suspense fallback={<p>正在加载品牌设置</p>}><BrandingPage /></Suspense> },
                 {
                   path: 'import',
                   element: (

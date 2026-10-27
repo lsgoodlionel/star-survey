@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { mergeBrandingDraft, parseBrandingDraft } from './branding';
+import { mergeBrandingDraft, parseBrandingDraft, validateBrandingTranslations } from './branding';
 
 const id = '10000000-0000-4000-8000-000000000001';
 
@@ -30,4 +30,15 @@ test('merges only owned draft fields and never persists URL or assetVersion', ()
     additionalLanguages: ['en'], translations: state.translations });
   expect(original.branding).toEqual({ brandingVersion: 1, logoFile: 'old.png' });
   expect(JSON.stringify(merged)).not.toMatch(/assetVersion|"url"/);
+});
+test('rejects translations that target deleted survey objects', () => {
+  const definition = { language: 'zh-Hans', groups: [{ uuid: id, questions: [{
+    uuid: '20000000-0000-4000-8000-000000000001', answers: [{ code: 'A1' }],
+  }] }] };
+  expect(validateBrandingTranslations(definition, ['en'], { en: {
+    questions: { '30000000-0000-4000-8000-000000000001': { text: 'missing' } },
+  } })).toContain('译文引用了不存在的题目');
+  expect(validateBrandingTranslations(definition, ['en'], { en: {
+    answers: [{ question: '20000000-0000-4000-8000-000000000001', code: 'A2', text: 'missing' }],
+  } })).toContain('译文引用了不存在的选项');
 });

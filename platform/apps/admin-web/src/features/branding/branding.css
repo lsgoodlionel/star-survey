@@ -1,0 +1,6 @@
+.branding-page { display: grid; gap: 1.25rem; max-width: 72rem; padding: 1.5rem; }
+.branding-page form, .branding-page form section, .language-editor { display: grid; gap: .8rem; }
+.branding-page label { display: grid; gap: .3rem; }
+.branding-page input:not([type="color"]), .branding-page textarea, .branding-page select { width: 100%; max-width: 36rem; }
+.branding-asset-picker, .language-add { display: flex; flex-wrap: wrap; gap: .8rem; align-items: end; }
+.branding-page [role="alert"] { color: #a32727; }

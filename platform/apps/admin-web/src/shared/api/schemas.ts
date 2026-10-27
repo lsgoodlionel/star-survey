@@ -43,6 +43,7 @@ export const dashboardPublishStateSchema = z.enum([
 export const dashboardActionSchema = z.enum(['edit', 'preview', 'publish', 'responses']);
 const recentWorkNonVersionPages = [
   'edit',
+  'branding',
   'import',
   'preview',
   'publish',
@@ -77,7 +78,7 @@ export const recentWorkCommandSchema = z.union([
 ]);
 const surveyTargetPathSchema = z.string()
   .regex(
-    /^\/surveys\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/(?:edit|import|preview|publish|responses|versions\/[1-9][0-9]*)$/,
+    /^\/surveys\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/(?:edit|branding|import|preview|publish|responses|versions\/[1-9][0-9]*)$/,
     'targetPath must be an existing survey-relative route',
   )
   .refine((targetPath) => {

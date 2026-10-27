@@ -92,7 +92,7 @@ test('validates the complete dashboard contract and every enum value', () => {
       surveys: [{ ...dashboard.surveys[0], actions: [action] }],
     })).not.toThrow();
   }
-  for (const page of ['edit', 'import', 'preview', 'publish', 'responses']) {
+  for (const page of ['edit', 'import', 'preview', 'publish', 'responses', 'branding']) {
     expect(() => dashboardViewSchema.parse({
       ...dashboard,
       recentWork: [{

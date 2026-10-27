@@ -305,6 +305,7 @@ test('registersSurveyPagesAsChildrenOfTheProtectedSurveyShell', () => {
 
   expect(surveyShell?.children?.map((route) => route.path).filter(Boolean)).toEqual([
     'edit',
+    'branding',
     'import',
     'preview',
     'publish',

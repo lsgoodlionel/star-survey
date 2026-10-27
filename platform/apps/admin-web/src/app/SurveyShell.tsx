@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, BarChart3, Eye, FileInput, Pencil, Rocket } from 'lucide-react';
+import { ArrowLeft, BarChart3, Eye, FileInput, Palette, Pencil, Rocket } from 'lucide-react';
 import {
   useCallback,
   useLayoutEffect,
@@ -43,6 +43,7 @@ const recentWorkCoordinators = new RecentWorkCoordinatorRegistry<RecentWorkComma
 
 const workflowTabs = [
   { path: 'edit', label: '编辑', icon: Pencil },
+  { path: 'branding', label: '品牌与语言', icon: Palette },
   { path: 'import', label: '批量导入', icon: FileInput },
   { path: 'preview', label: '快速预览', icon: Eye },
   { path: 'publish', label: '发布与版本', icon: Rocket },
@@ -287,6 +288,7 @@ function recentWorkCommandForPath(pathname: string, surveyId: string): RecentWor
     const page = parts[2];
     if (
       page === 'edit' ||
+      page === 'branding' ||
       page === 'import' ||
       page === 'preview' ||
       page === 'publish' ||

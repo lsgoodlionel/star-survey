@@ -69,6 +69,7 @@ const actionPresentation: Record<DashboardAction, { label: string; route: string
 
 const recentPageLabels: Record<RecentWork['page'], string> = {
   edit: '继续编辑',
+  branding: '继续设置品牌与语言',
   import: '继续批量导入',
   preview: '继续真实预览',
   publish: '继续发布',
