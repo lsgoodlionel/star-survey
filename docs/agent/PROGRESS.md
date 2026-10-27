@@ -27,6 +27,8 @@ Task 8: pending - 用户已明确本轮完成本地验收与同步，生产 Comp
 
 2026-10-28 用户决定删除自建控制平面、保留其 GitHub 仓库，并以 Codex 原生功能及插件开发、GitHub Actions 在线 CI 控制质量。Survey 的 `agent-governance` 工作流已在 GitHub 停用；项目移除控制平面程序及配置，产品质量工作流保留既有产品、双库、浏览器和 Release 检查，使用普通 Python 测试入口并继续拒绝意外跳过和空测试集。真实生产验收、产品审查及当前提交的 GitHub Actions 仍需分别验证；此前 Harness 记录属于历史证据，不再是准出要求。
 
+2026-10-28 控制平面移除及在线 CI 切换提交 `dcef1810f85bb368984fef253718624022609510` 的 [GitHub 产品质量 run 40604203635](https://github.com/lsgoodlionel/star-survey/actions/runs/40604203635) 成功，10/10 作业通过，包括真实浏览器、Java、P1、MySQL/PostgreSQL 访问策略与双执行比对，以及产品化和生产发布测试。该结果不代替真实 Release 的安装、升级、备份恢复与生产验收，Wave 2 保持未完成。
+
 2026-10-12：用户要求生成报告准备切换模型，暂停新增实现。接续入口为
 [模型切换交接报告](run-history/2026-10-12-wave2-model-handoff.md)。
 本轮网关 1,232 项和既有品牌双语 MySQL E2E 通过；不代表新增 brandAssets 真实链路通过。
