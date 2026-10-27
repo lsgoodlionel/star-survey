@@ -76,6 +76,13 @@ class SurveyTemplateRepository {
                 .list();
     }
 
+    /** 同租户管理列表：包含未上架状态，仍由 survey_template 的 RLS 隔离。 */
+    List<TemplateView> managed() {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM survey_template ORDER BY updated_at DESC, id")
+                .query(SurveyTemplateRepository::map)
+                .list();
+    }
+
     Optional<TemplateView> submit(UUID id) {
         return jdbc.sql("""
                         UPDATE survey_template

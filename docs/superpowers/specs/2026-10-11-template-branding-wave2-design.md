@@ -84,6 +84,8 @@ Wave 1 已建立管理端问卷工作台、真实预览、发布、作答入口�
 
 - `GET /v1/survey-templates?scope=...`
 - `GET /v1/survey-templates/pending`
+- `GET /v1/survey-templates/managed`（2026-10-27 经用户确认补入；仅列当前租户全部状态的模板，沿用成员校验与 RLS）
+- `GET /v1/survey-templates/{templateId}/capabilities`（2026-10-27 经用户确认补入；按当前状态、最新来源问卷的编辑权及租户级审核权返回 `canAddVersion`、`canSubmit`、`canReview`、`canUnpublish`；跨租户仍为 404）
 - `GET /v1/survey-templates/{templateId}`
 - `GET /v1/survey-templates/{templateId}/versions/{versionNo}`
 - `POST /v1/survey-templates`
