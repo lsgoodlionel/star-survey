@@ -457,6 +457,8 @@ Expected: zero failure, error or required skip; every evidence item binds to the
 
 2026-10-27 用户指示继续后，`4bc959c813` 让键盘路径在权限驱动的“新建”按钮可见后开始，原 Tab 顺序断言保持不变。本机 Docker MySQL 和 PostgreSQL 完整管理端浏览器流程均 19/19，通过真实跨层核验；lint、typecheck、diff check 通过。先前同一断言的重复失败已关闭，Task 8 仍因原生生产、Harness 最终门及三路复审缺证据而未完成。
 
+2026-10-27 在仓库外干净 worktree 对同一 HEAD `28dcab9b0d` 运行 Harness `6f0b7c28-bd90-4be9-ad01-78c78eee1c36`，11 项门禁 passed、`admin-e2e` 因 Docker Desktop bind mount 在浏览器前 failed，状态 repairing；这是第二个独立 worktree 的相同基础设施指纹，停止自动修复。原工作区双库 19/19 不替代 Harness 的 Step 1。PR #11 治理 run `40472080896` 仍仅有既有 `strict_unittest` 两项 ERROR；Step 1–3 与 Final Acceptance 均保持未勾选。
+
 - [ ] **Step 2: Run production Compose smoke**
 
 Install or upgrade a disposable single-host environment, execute the Task 7 journey through the Caddy entrypoint, run `surveyctl doctor`, then verify backup and restore preserve templates, brand assets, published versions and responses.
