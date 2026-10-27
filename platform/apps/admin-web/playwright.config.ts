@@ -33,8 +33,14 @@ export default defineConfig({
       testMatch: /dashboard\.spec\.ts/,
     },
     {
-      name: 'chromium-mobile',
+      name: 'chromium-template-branding',
       dependencies: ['chromium-dashboard'],
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /template-branding\.spec\.ts/,
+    },
+    {
+      name: 'chromium-mobile',
+      dependencies: ['chromium-template-branding'],
       use: { ...devices['Pixel 7'] },
       testMatch: /authoring\.spec\.ts/,
       grep: /@mobile/,

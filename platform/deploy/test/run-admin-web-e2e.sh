@@ -51,12 +51,12 @@ cleanup_run() {
     sanitize_test_artifacts "$([[ "$status" == "0" ]] && printf false || printf true)" >/dev/null 2>&1 || true
   fi
   if ((status != 0)); then
-    echo "--- platform log (tail) ---" >&2
-    docker logs --tail 80 "$PLATFORM_CONTAINER" >&2 2>&1 || true
-    echo "--- gateway log (tail) ---" >&2
-    docker logs --tail 60 "$GATEWAY_CONTAINER" >&2 2>&1 || true
-    echo "--- admin web log (tail) ---" >&2
-    docker logs --tail 40 "$ADMIN_WEB_CONTAINER" >&2 2>&1 || true
+    # Access logs can contain signed asset/preview URLs. Report container state only.
+    local container state
+    for container in "$PLATFORM_CONTAINER" "$GATEWAY_CONTAINER" "$ADMIN_WEB_CONTAINER"; do
+      state="$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || printf unavailable)"
+      echo "  [state] ${container}: ${state}" >&2
+    done
   fi
   if [[ -n "$WORK_DIR" ]]; then
     rm -rf "$WORK_DIR"
@@ -149,6 +149,9 @@ sanitize_test_artifacts() {
   if [[ -n "${ADMIN_WEB_DATA_JWT_FILE:-}" ]]; then
     jwt_files+=("$ADMIN_WEB_DATA_JWT_FILE")
   fi
+  if [[ -n "${ADMIN_WEB_OPERATOR_JWT_FILE:-}" ]]; then
+    jwt_files+=("$ADMIN_WEB_OPERATOR_JWT_FILE")
+  fi
   for jwt_file in "${jwt_files[@]}"; do
     arguments=(
       --base-url "${PLATFORM_URL:-http://127.0.0.1}"
@@ -171,6 +174,7 @@ export_failure_artifacts() {
     --jwt-file "$ADMIN_WEB_EDITOR_JWT_FILE" \
     --jwt-file "$ADMIN_WEB_REVIEWER_JWT_FILE" \
     --jwt-file "$ADMIN_WEB_DATA_JWT_FILE" \
+    --jwt-file "$ADMIN_WEB_OPERATOR_JWT_FILE" \
     --source-dir "$ADMIN_WEB_TEST_RESULTS_DIR" \
     --output-dir "$ADMIN_WEB_CI_ARTIFACT_DIR" \
     --allowed-root "$ADMIN_WEB_DIR/test-results"
@@ -179,7 +183,7 @@ export_failure_artifacts() {
 run_playwright() {
   (
     cd "$ADMIN_WEB_DIR"
-    npm run e2e -- --project=chromium-desktop --project=chromium-mobile
+    npm run e2e -- --project=chromium-desktop --project=chromium-template-branding --project=chromium-mobile
   )
 }
 
@@ -187,14 +191,16 @@ run_browser_tests() {
   export ADMIN_WEB_EDITOR_JWT_FILE="${ADMIN_WEB_EDITOR_JWT_FILE:-$(dirname "$ADMIN_WEB_JWT_FILE")/editor.jwt}"
   export ADMIN_WEB_REVIEWER_JWT_FILE="${ADMIN_WEB_REVIEWER_JWT_FILE:-$(dirname "$ADMIN_WEB_JWT_FILE")/reviewer.jwt}"
   export ADMIN_WEB_DATA_JWT_FILE="${ADMIN_WEB_DATA_JWT_FILE:-$(dirname "$ADMIN_WEB_JWT_FILE")/data.jwt}"
+  export ADMIN_WEB_OPERATOR_JWT_FILE="${ADMIN_WEB_OPERATOR_JWT_FILE:-$(dirname "$ADMIN_WEB_JWT_FILE")/operator.jwt}"
   rm -f "$ADMIN_WEB_JWT_FILE" "$ADMIN_WEB_EDITOR_JWT_FILE" "$ADMIN_WEB_REVIEWER_JWT_FILE" \
-    "$ADMIN_WEB_DATA_JWT_FILE" \
+    "$ADMIN_WEB_DATA_JWT_FILE" "$ADMIN_WEB_OPERATOR_JWT_FILE" \
     "$ADMIN_WEB_RESULT_FILE"
   mkdir -p "$ADMIN_WEB_TEST_RESULTS_DIR"
   issue_browser_token
   issue_browser_token admin-web-e2e-editor "$ADMIN_WEB_EDITOR_JWT_FILE"
   issue_browser_token admin-web-e2e-reviewer "$ADMIN_WEB_REVIEWER_JWT_FILE"
   issue_browser_token admin-web-e2e-data "$ADMIN_WEB_DATA_JWT_FILE"
+  issue_browser_token admin-web-e2e-operator "$ADMIN_WEB_OPERATOR_JWT_FILE"
   (
     while true; do
       docker exec "$CONTAINER" php application/commands/console.php plugin cron >/dev/null 2>&1 || true
@@ -224,6 +230,7 @@ verify_and_archive_run_root() {
   python3 "$GATE" --base-url "$PLATFORM_URL" verify \
     --metadata-file "$ADMIN_WEB_METADATA_FILE" \
     --result-file "$ADMIN_WEB_RESULT_FILE" \
+    --wave2-evidence-file "$ADMIN_WEB_TEST_RESULTS_DIR/wave2-scenarios.json" \
     --platform-db-container "$PLATFORM_DB_CONTAINER" \
     --platform-db-name platform \
     --engine-db-container "$TEST_PREFIX-$DB_SERVICE" \
@@ -259,6 +266,7 @@ export ADMIN_WEB_JWT_FILE="$WORK_DIR/owner.jwt"
 export ADMIN_WEB_EDITOR_JWT_FILE="$WORK_DIR/editor.jwt"
 export ADMIN_WEB_REVIEWER_JWT_FILE="$WORK_DIR/reviewer.jwt"
 export ADMIN_WEB_DATA_JWT_FILE="$WORK_DIR/data.jwt"
+export ADMIN_WEB_OPERATOR_JWT_FILE="$WORK_DIR/operator.jwt"
 export ADMIN_WEB_METADATA_FILE="$WORK_DIR/metadata.json"
 export ADMIN_WEB_RESULT_FILE="$WORK_DIR/result.json"
 export ADMIN_WEB_TEST_RESULTS_DIR="$WORK_DIR/test-results"
@@ -270,12 +278,13 @@ if [[ -n "${ADMIN_WEB_CI_ARTIFACT_DIR:-}" && "$ADMIN_WEB_CI_ARTIFACT_DIR" != /* 
 fi
 EVENT_SECRET_FILE="$WORK_DIR/event-secret"
 
-export PLATFORM_JWT_HMAC_SECRET PLATFORM_ENGINE_EVENTS_SECRET PLATFORM_DELIVERY_SECRET PUBGW_SHARED_SECRET PLATFORM_PUBGW_SECRET
+export PLATFORM_JWT_HMAC_SECRET PLATFORM_ENGINE_EVENTS_SECRET PLATFORM_DELIVERY_SECRET PUBGW_SHARED_SECRET PLATFORM_PUBGW_SECRET PLATFORM_ASSET_SECRET
 PLATFORM_JWT_HMAC_SECRET="$(random_secret)"
 PLATFORM_ENGINE_EVENTS_SECRET="$(random_secret)"
 PLATFORM_DELIVERY_SECRET="$(random_secret)"
 PUBGW_SHARED_SECRET="$(random_secret)"
 PLATFORM_PUBGW_SECRET="$PUBGW_SHARED_SECRET"
+PLATFORM_ASSET_SECRET="$(random_secret)"
 ADMIN_PASSWORD="$(random_secret)"
 export PUBGW_ENGINE_ADMIN_WEB_PASSWORD="$ADMIN_PASSWORD"
 
@@ -284,7 +293,8 @@ cat >"$ADMIN_WEB_ENGINES_FILE" <<JSON
   "$INSTANCE_ID": {
     "rpcUrl": "http://test-web/index.php/admin/remotecontrol",
     "user": "$ADMIN_USER",
-    "passwordEnv": "PUBGW_ENGINE_ADMIN_WEB_PASSWORD"
+    "passwordEnv": "PUBGW_ENGINE_ADMIN_WEB_PASSWORD",
+    "channelSecretEnv": "PUBGW_ENGINE_ADMIN_WEB_CHANNEL_SECRET"
   }
 }
 JSON
@@ -319,6 +329,8 @@ export MJY_ENGINE_INSTANCE_ID="$INSTANCE_ID"
 export MJY_PLATFORM_EVENTS_URL="http://platform:8080/internal/engine-events"
 MJY_PLATFORM_EVENTS_SECRET="$(<"$EVENT_SECRET_FILE")"
 export MJY_PLATFORM_EVENTS_SECRET
+export PUBGW_ENGINE_ADMIN_WEB_CHANNEL_SECRET
+PUBGW_ENGINE_ADMIN_WEB_CHANNEL_SECRET="$(PYTHONPATH="$REPO_ROOT/platform/tools/publish-gateway" python3 -c 'import os; from pubgw.channel import derive_channel_secret; print(derive_channel_secret(os.environ["MJY_PLATFORM_EVENTS_SECRET"], os.environ["MJY_ENGINE_INSTANCE_ID"]))')"
 rm -f "$EVENT_SECRET_FILE"
 prepare_test_stack
 docker exec "$CONTAINER" rm -rf tmp/runtime/cache
@@ -326,6 +338,10 @@ enable_remote_control
 db_query "DELETE FROM lime_plugins WHERE name = 'MjyPlatformBridge'" >/dev/null
 db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
           VALUES ('MjyPlatformBridge', 'user', 1, 0, '0.1.0', 0)" >/dev/null
+db_query "DELETE FROM lime_plugins WHERE name = 'MjyQuestionExtensions'" >/dev/null
+db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
+          VALUES ('MjyQuestionExtensions', 'user', 1, 0, '0.1.0', 0)" >/dev/null
+docker exec "$CONTAINER" php platform/tools/engine-theme/install-survey-theme.php zh-business >/dev/null
 ok "engine installed and RemoteControl enabled"
 
 step "gateway and same-origin admin web: build and start"

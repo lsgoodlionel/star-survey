@@ -2,6 +2,7 @@ FROM node:22.23.3-alpine3.24 AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
+ARG NPM_CONFIG_REGISTRY=https://registry.npmjs.org
 RUN npm ci
 COPY . .
 

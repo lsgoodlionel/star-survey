@@ -58,6 +58,21 @@ def png(width, height):
 
 
 class AdminWebGateTest(unittest.TestCase):
+    def test_wave2_browser_evidence_requires_every_named_scenario(self):
+        gate = load_gate()
+        expected = {
+            "tenant-template-lifecycle", "platform-template-copy", "brand-save-refresh",
+            "preview-branding", "respondent-language-switch", "no-third-party-url",
+            "asset-version-pinning", "version-conflict", "forbidden-actions",
+            "keyboard-access", "responsive-widths",
+        }
+        evidence = {"schemaVersion": 1, "scenarios": sorted(expected)}
+        self.assertEqual(gate.validate_wave2_scenarios(evidence), evidence)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(gate.StepFailed):
+                gate.validate_wave2_scenarios({"schemaVersion": 1,
+                    "scenarios": sorted(expected - {"asset-version-pinning"})})
+
     def test_issue_browser_token_accepts_a_scoped_test_actor(self):
         gate = load_gate()
         tenant_id = "11111111-1111-4111-8111-111111111111"
@@ -105,6 +120,15 @@ class AdminWebGateTest(unittest.TestCase):
         self.assertLess(prepare, clear)
         self.assertLess(clear, enable)
 
+    def test_brand_preview_gateway_has_the_engine_plugin_channel(self):
+        test_dir = Path(__file__).parents[2] / "deploy/test"
+        runner = (test_dir / "run-admin-web-e2e.sh").read_text(encoding="utf-8")
+        compose = (test_dir / "admin-web-e2e.compose.yml").read_text(encoding="utf-8")
+        self.assertIn('"channelSecretEnv": "PUBGW_ENGINE_ADMIN_WEB_CHANNEL_SECRET"', runner)
+        self.assertIn('derive_channel_secret', runner)
+        self.assertIn('PUBGW_ENGINE_ADMIN_WEB_CHANNEL_SECRET:', compose)
+        self.assertIn("VALUES ('MjyQuestionExtensions', 'user', 1", runner)
+
     def test_browser_token_is_valid_for_exactly_ten_minutes(self):
         gate = load_gate()
         claims = decode_claims(gate.mint_token(
@@ -115,6 +139,22 @@ class AdminWebGateTest(unittest.TestCase):
         ))
 
         self.assertEqual(600, claims["exp"] - claims["iat"])
+
+    def test_operator_browser_credential_is_scoped_to_the_e2e_tenant(self):
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as directory:
+            jwt_path = Path(directory, "operator.jwt")
+            metadata_path = Path(directory, "metadata.json")
+            tenant_id = "11111111-1111-4111-8111-111111111111"
+            metadata_path.write_text(json.dumps({"schemaVersion": 1, "tenantId": tenant_id,
+                "actorId": gate.OWNER_ACTOR, "engineInstanceId": "admin-web-engine-01"}))
+            with mock.patch.dict(os.environ, {"PLATFORM_JWT_HMAC_SECRET": "x" * 48}):
+                gate.cmd_issue_browser_token(Namespace(metadata_file=str(metadata_path),
+                    jwt_file=str(jwt_path), actor_id=gate.OPERATOR_ACTOR))
+            claims = decode_claims(jwt_path.read_text())
+            self.assertEqual(tenant_id, claims["tenant_id"])
+            self.assertEqual([gate.OPERATOR_ROLE], claims["roles"])
+            self.assertEqual(0o600, stat.S_IMODE(jwt_path.stat().st_mode))
 
     def test_cli_splits_seed_from_late_browser_token_issuance(self):
         gate = load_gate()
@@ -234,7 +274,10 @@ class AdminWebGateTest(unittest.TestCase):
         }
         engine_db = {"active": "Y", "surveyCount": 1}
 
-        gate.validate_evidence(metadata, result, api, platform_db, engine_db, gateway_publish_calls=1)
+        gate.validate_evidence(metadata, result, api, platform_db, engine_db, gateway_publish_calls=3)
+
+        with self.assertRaises(gate.StepFailed):
+            gate.validate_evidence(metadata, result, api, platform_db, engine_db, gateway_publish_calls=1)
 
         with self.assertRaises(gate.StepFailed):
             gate.validate_evidence(
@@ -243,7 +286,7 @@ class AdminWebGateTest(unittest.TestCase):
                 api,
                 dict(platform_db, publishedVersion=2),
                 engine_db,
-                gateway_publish_calls=1,
+                gateway_publish_calls=3,
             )
         with self.assertRaises(gate.StepFailed):
             gate.validate_evidence(
@@ -252,7 +295,7 @@ class AdminWebGateTest(unittest.TestCase):
                 api,
                 platform_db,
                 dict(engine_db, active="N"),
-                gateway_publish_calls=1,
+                gateway_publish_calls=3,
             )
 
     def test_compose_uses_an_isolated_database_and_loopback_random_ports(self):
@@ -262,6 +305,7 @@ class AdminWebGateTest(unittest.TestCase):
         self.assertIn("admin-web-platform-db:", text)
         self.assertIn("postgres:16-alpine", text)
         self.assertIn("tmpfs:", text)
+        self.assertIn("      PLATFORM_ASSET_SECRET:", text)
         self.assertNotIn("platform-db_default", text)
         self.assertGreaterEqual(text.count('127.0.0.1::8080'), 2)
         self.assertIn(
@@ -285,6 +329,8 @@ class AdminWebGateTest(unittest.TestCase):
             self.assertIn("export " + name, text)
         self.assertIn("--project=chromium-desktop", text)
         self.assertIn("--project=chromium-mobile", text)
+        self.assertIn('PLATFORM_ASSET_SECRET="$(random_secret)"', text)
+        self.assertNotIn('docker logs --tail', text)
         self.assertIn('"$GATE"', text)
         self.assertIn("verify", text)
         self.assertIn('down -v --remove-orphans', text)
@@ -1157,7 +1203,7 @@ run_browser_tests
             self.assertEqual(0, completed.returncode, completed.stderr)
             events = trace.read_text(encoding="utf-8").splitlines()
             issue_indexes = [index for index, event in enumerate(events) if event == "issue"]
-            self.assertEqual(4, len(issue_indexes))
+            self.assertEqual(5, len(issue_indexes))
             self.assertTrue(all(index < events.index("playwright") for index in issue_indexes))
 
     def test_owner_token_issue_is_nounset_safe_without_an_actor_argument(self):
@@ -1243,10 +1289,15 @@ main --fresh
             self.assertEqual(0, completed.returncode, completed.stderr)
             events = trace.read_text(encoding="utf-8").splitlines()
             engine_index = events.index("engine-installed")
+            theme_index = next((i for i, event in enumerate(events)
+                                if "install-survey-theme.php zh-business" in event), None)
             build_index = next(i for i, event in enumerate(events) if "up -d --build gateway admin-web" in event)
             issue_indexes = [i for i, event in enumerate(events) if event == "issue-token"]
             playwright_index = events.index("playwright")
-            self.assertEqual(4, len(issue_indexes))
+            self.assertEqual(5, len(issue_indexes))
+            self.assertIsNotNone(theme_index, "the cold engine must register the branded survey theme")
+            self.assertLess(engine_index, theme_index)
+            self.assertLess(theme_index, build_index)
             self.assertLess(engine_index, issue_indexes[0])
             self.assertLess(build_index, issue_indexes[0])
             self.assertTrue(all(index < playwright_index for index in issue_indexes))

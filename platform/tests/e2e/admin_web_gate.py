@@ -35,7 +35,7 @@ OWNER_ACTOR = "admin-web-e2e-owner"
 EDITOR_ACTOR = "admin-web-e2e-editor"
 REVIEWER_ACTOR = "admin-web-e2e-reviewer"
 DATA_ACTOR = "admin-web-e2e-data"
-TEST_BROWSER_ACTORS = {OWNER_ACTOR, EDITOR_ACTOR, REVIEWER_ACTOR, DATA_ACTOR}
+TEST_BROWSER_ACTORS = {OWNER_ACTOR, EDITOR_ACTOR, REVIEWER_ACTOR, DATA_ACTOR, OPERATOR_ACTOR}
 OPERATOR_ROLE = "platform_operator"
 RESULT_FIELDS = {
     "rootProjectId",
@@ -45,6 +45,12 @@ RESULT_FIELDS = {
     "version",
     "network",
 }
+WAVE2_BROWSER_SCENARIOS = frozenset({
+    "tenant-template-lifecycle", "platform-template-copy", "brand-save-refresh",
+    "preview-branding", "respondent-language-switch", "no-third-party-url",
+    "asset-version-pinning", "version-conflict", "forbidden-actions",
+    "keyboard-access", "responsive-widths",
+})
 SENSITIVE_MEDIA_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".zip", ".webm"}
 SANITIZED_TRACE_FIELDS = {
     "schemaVersion",
@@ -582,6 +588,15 @@ def validate_result(payload: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def validate_wave2_scenarios(payload: Dict[str, Any]) -> Dict[str, Any]:
+    expect(set(payload) == {"schemaVersion", "scenarios"}, "Wave 2 browser evidence uses the exact schema")
+    expect(payload.get("schemaVersion") == 1, "Wave 2 browser evidence schema version is 1")
+    scenarios = payload.get("scenarios")
+    expect(isinstance(scenarios, list) and scenarios == sorted(WAVE2_BROWSER_SCENARIOS),
+           "Wave 2 browser evidence includes each required scenario exactly once")
+    return payload
+
+
 def archive_run_root(api: Api, root_id: str) -> None:
     if not _valid_uuid(root_id):
         raise StepFailed("run root resource ID is not a canonical UUID")
@@ -659,7 +674,7 @@ def validate_evidence(
         engine_db.get("active") == "Y" and engine_db.get("surveyCount") == 1,
         "engine database confirms the bound survey is active",
     )
-    expect(gateway_publish_calls == 1, "gateway handled exactly one publish request")
+    expect(gateway_publish_calls == 3, "gateway handled the baseline and both branded version publishes")
 
 
 def cmd_prepare(args: argparse.Namespace) -> None:
@@ -722,7 +737,8 @@ def cmd_issue_browser_token(args: argparse.Namespace) -> None:
     actor_id = getattr(args, "actor_id", None) or metadata["actorId"]
     if actor_id not in TEST_BROWSER_ACTORS:
         raise StepFailed("browser credential actor is not allowlisted")
-    browser_token = mint_token(jwt_secret(), actor_id, metadata["tenantId"], [])
+    browser_token = mint_token(jwt_secret(), actor_id, metadata["tenantId"],
+                               [OPERATOR_ROLE] if actor_id == OPERATOR_ACTOR else [])
     write_private(Path(args.jwt_file), browser_token)
     print("  [ok] short-lived browser credential issued (value withheld)", file=sys.stderr)
 
@@ -836,6 +852,7 @@ def count_gateway_publish_calls(logs: str) -> int:
 def cmd_verify(args: argparse.Namespace) -> None:
     metadata = validate_metadata(_load_object(Path(args.metadata_file), "metadata"))
     result = validate_result(_load_object(Path(args.result_file), "browser result"))
+    validate_wave2_scenarios(_load_object(Path(args.wave2_evidence_file), "Wave 2 browser evidence"))
     owner = Api(args.base_url, mint_token(jwt_secret(), metadata["actorId"], metadata["tenantId"], []))
 
     status, survey = owner.call("GET", "/v1/surveys/{}".format(result["surveyId"]))
@@ -906,6 +923,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     verify = commands.add_parser("verify")
     verify.add_argument("--metadata-file", required=True)
     verify.add_argument("--result-file", required=True)
+    verify.add_argument("--wave2-evidence-file", required=True)
     verify.add_argument("--platform-db-container", required=True)
     verify.add_argument("--platform-db-name", default="platform")
     verify.add_argument("--engine-db-container", required=True)

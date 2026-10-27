@@ -36,6 +36,7 @@ services:
       PLATFORM_ENGINE_EVENTS_SECRET:
       PLATFORM_DELIVERY_SECRET:
       PLATFORM_PUBGW_SECRET:
+      PLATFORM_ASSET_SECRET:
       PLATFORM_PUBGW_URL: http://gateway:8080
       PLATFORM_PUBLIC_BASE_URL: ${ADMIN_WEB_PUBLIC_URL:?set ADMIN_WEB_PUBLIC_URL}
     depends_on:
@@ -53,6 +54,7 @@ services:
       - ${ADMIN_WEB_ENGINES_FILE:?set ADMIN_WEB_ENGINES_FILE}:/app/engines.json:ro
     environment:
       PUBGW_SHARED_SECRET:
+      PUBGW_ENGINE_ADMIN_WEB_CHANNEL_SECRET:
       PUBGW_ENGINES_CONFIG: /app/engines.json
       PUBGW_ENGINE_ADMIN_WEB_PASSWORD:
       PUBGW_PUBLIC_URL: ${ADMIN_WEB_PUBLIC_URL:?set ADMIN_WEB_PUBLIC_URL}
@@ -62,6 +64,7 @@ services:
       context: ./platform/apps/admin-web
       args:
         VITE_E2E: "true"
+        NPM_CONFIG_REGISTRY: ${ADMIN_WEB_NPM_REGISTRY:-https://registry.npmjs.org}
     image: survey-admin-web-e2e:${SURVEY_TEST_PREFIX:-adminweb}
     container_name: ${SURVEY_TEST_PREFIX:-adminweb}-admin-web
     ports:

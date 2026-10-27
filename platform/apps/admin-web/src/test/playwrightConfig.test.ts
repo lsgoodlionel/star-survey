@@ -32,16 +32,19 @@ describe('Playwright result artifact location', () => {
     expect(config.outputDir).toBe('./test-results');
   });
 
-  test('runs dashboard after desktop and mobile only after dashboard succeeds', async () => {
+  test('runs dashboard, template branding, then mobile after desktop', async () => {
     process.env.ADMIN_WEB_BASE_URL = 'http://127.0.0.1:4173';
 
     const config = await loadConfig();
     const dashboard = config.projects?.find((project) => project.name === 'chromium-dashboard');
+    const branding = config.projects?.find((project) => project.name === 'chromium-template-branding');
     const mobile = config.projects?.find((project) => project.name === 'chromium-mobile');
 
     expect(dashboard?.dependencies).toEqual(['chromium-desktop']);
     expect(dashboard?.testMatch).toEqual(/dashboard\.spec\.ts/);
-    expect(mobile?.dependencies).toEqual(['chromium-dashboard']);
+    expect(branding?.dependencies).toEqual(['chromium-dashboard']);
+    expect(branding?.testMatch).toEqual(/template-branding\.spec\.ts/);
+    expect(mobile?.dependencies).toEqual(['chromium-template-branding']);
   });
 
   test('registers the run-root reporter after the console reporter', async () => {
