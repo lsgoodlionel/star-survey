@@ -1,4 +1,3 @@
-<!-- harness-delivery-status: fully_synchronized -->
 # P2 进度：通用问卷与本土入口
 
 更新：2026-10-08

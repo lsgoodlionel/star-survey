@@ -2,7 +2,7 @@
 
 Status: approved
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 2026-10-28 用户决定移除自建控制平面，后续使用 Codex 原生功能及插件开发，以 GitHub Actions 在线 CI 验证质量。本计划保留历史记录；其中控制平面和 Harness 的历史步骤不再作为执行要求，产品功能、真实测试与生产验收要求继续有效。
 
 **Goal:** 把现有模板、资产、品牌和多语言后端能力接入 Admin Web，形成从模板创建问卷、配置品牌、真实预览、发布并完成品牌化作答的可上线闭环。
 
@@ -14,8 +14,7 @@ Status: approved
 
 ## Global Constraints
 
-- 执行前先关闭 Dashboard Task 7 的 GitHub 治理门和外部同步，不得覆盖未完成的 `activePlan`。
-- 子 Agent 模型由当前运行时能力清单和任务复杂度决定；每次运行记录实际模型与 reasoning effort，不得静默替换。
+- 按现有产品计划与 GitHub Actions 结果推进，保留实际测试和交付证据。
 - 本 Wave 不新增无关后端业务包，不开放租户 CSS、JavaScript、HTML 或外部资源 URL。
 - 租户、操作者和权限只从受信令牌上下文读取；前端隐藏操作不代替后端授权。
 - 草稿保存必须携带 `expectedVersion`；冲突不自动覆盖、不绕过乐观锁。
@@ -420,7 +419,6 @@ git commit -m "test: cover template and branding journey"
 - Modify: `platform/docs/productization/release-roadmap.md`
 - Modify: `platform/docs/productization/capability-matrix.yaml`
 - Modify: `platform/README.md`
-- Modify: `docs/agent/HARNESS_DELIVERY.json`
 - Modify: `docs/agent/PROGRESS.md`
 - Modify: `docs/agent/PROJECT_MEMORY.md`
 - Create: `docs/agent/reviews/2026-10-11-wave2-security.md`
@@ -428,7 +426,7 @@ git commit -m "test: cover template and branding journey"
 - Create: `docs/agent/reviews/2026-10-11-wave2-whole-branch.md`
 
 **Interfaces:**
-- Consumes: all implementation commits, Harness run, real E2E output and three independent reviews.
+- Consumes: implementation commits, GitHub Actions results, real E2E output and review evidence.
 - Produces: six-layer `templates-branding` evidence, production Compose smoke result, GitHub traceability and Obsidian project update.
 
 - [ ] **Step 1: Run complete repository gates**
@@ -443,9 +441,9 @@ Run: `npm --prefix platform/apps/admin-web run typecheck`
 
 Run: `npm --prefix platform/apps/admin-web run build`
 
-Run: `python3 -m unittest discover -s platform/tools/publish-gateway/tests -v`
+Run from `platform/tools/publish-gateway`: `python3 -m unittest discover -s tests -t . -q`
 
-Run: `scripts/agent-harness gate --run-id <wave2-run-id>`
+Run: GitHub Actions `platform-quality.yml` on the implementation commit.
 
 Expected: zero failure, error or required skip; every evidence item binds to the same implementation HEAD.
 
@@ -469,7 +467,7 @@ Install or upgrade a disposable single-host environment, execute the Task 7 jour
 
 Use distinct agents for security, DX/CI and whole-branch review, selecting a model appropriate to each review's risk. Each report records the actual model and reasoning effort, binds the exact implementation commit/range, and ends with canonical `SPEC_COMPLIANCE=APPROVED` and `CODE_QUALITY=APPROVED`; any finding returns to its owning task and invalidates affected evidence.
 
-- [ ] **Step 4: Update product and Harness documentation**
+- [ ] **Step 4: Update product and delivery documentation**
 
 Mark only proven capabilities complete. Record commands, HEAD, scenario counts, remaining external blockers and the next Wave; do not copy secrets, raw agent logs or signed URLs.
 
@@ -495,4 +493,4 @@ After hosted checks pass, update the registered Obsidian project overview with d
 - [ ] Template copies contain no participant, policy, password hash, administrator email or shared entity UUID.
 - [ ] Conflict, forbidden, invalid translation, archived asset and unavailable asset-service paths fail closed with Chinese user-facing recovery guidance.
 - [ ] Full Java, Python, TypeScript, browser and production Compose gates pass with no required skip.
-- [ ] Requirements, blueprint, roadmap, capability matrix, README, Harness, GitHub and Obsidian all point to the same verified implementation commit.
+- [ ] Requirements, blueprint, roadmap, capability matrix, README, GitHub and Obsidian all point to the same verified implementation commit.

@@ -1,4 +1,3 @@
-<!-- harness-delivery-status: fully_synchronized -->
 # MJY 平台（LimeSurvey 本土化）
 
 多租户 SaaS ＋ 私有化交付的问卷／考试／测评平台。引擎用 LimeSurvey 7.1.2，**引擎源码与上游逐文件一致**，本项目的全部内容都是新增文件（P0-00.2 结论，见 [docs/p0/upstream-diff.md](docs/p0/upstream-diff.md)）。
@@ -11,7 +10,7 @@
 
 `main` @ `4206f24a`（[PR #8](https://github.com/lsgoodlionel/star-survey/pull/8) 已合并）· 更新 2026-10-09
 
-**2026-10-27 分支验收**：`feat/admin-product-alignment` @ `c80e9b406b` 已关闭 Wave 2 Task 7 带图真实预览 502 阻塞。隔离 MySQL/PostgreSQL 管理端真实浏览器均 19/19，覆盖品牌化正式答卷、两版发布和旧版图片字节固定；Java 1494 项/184 类、网关 1235 项、管理端 353 项、门禁单元 48 项与管理端静态/生产构建检查通过。Wave 2 Task 8 的生产 Caddy/doctor/备份恢复、Harness 最终门禁与独立复审仍待完成，能力状态不提升。后续执行位与治理映射提交 `db267ede9d` 的[GitHub 平台质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40461852500)已全部通过（10/10 jobs）；独立控制平面核心仍有两项治理测试错误待处理。详见 [当前进度](../docs/agent/PROGRESS.md)。
+**2026-10-27 分支验收**：`feat/admin-product-alignment` @ `c80e9b406b` 已关闭 Wave 2 Task 7 带图真实预览 502 阻塞。隔离 MySQL/PostgreSQL 管理端真实浏览器均 19/19，覆盖品牌化正式答卷、两版发布和旧版图片字节固定；Java 1494 项/184 类、网关 1235 项、管理端 353 项与管理端静态/生产构建检查通过。Wave 2 Task 8 的生产 Caddy/doctor/备份恢复和独立复审仍待完成，能力状态不提升。[GitHub 平台质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40461852500)曾在 `db267ede9d` 全部通过（10/10 jobs）；后续以当前提交的在线 CI 结果为准。详见 [当前进度](../docs/agent/PROGRESS.md)。
 
 | 阶段 | 状态 |
 |---|---|
@@ -46,7 +45,6 @@
 | 管理端 Vitest | **30 个文件 / 299 通过** | lint、typecheck 与 build 同步通过 |
 | 管理端生产构建 | **2101 modules** | 构建通过；大 chunk 提示为非阻断维护项 |
 | 管理端真实 E2E | **15 通过（fresh stack）** | 登录落 Dashboard、发布/答卷/导出、真实角色隔离、最近工作、移动导航及 819/820/1179/1180px DOM 几何；最终全链路核对成功后归档 |
-| 自治工程 Harness | **共 399：392 通过 / 7 typed skip** | Python 3.12 受控 runtime；sandbox 内 Docker 权限受限；历史独立 Docker integration 7/7 零 skip；11/11 fake drills |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
@@ -226,25 +224,10 @@ Task 7 Dashboard 用户可见证据保留在 `platform/apps/admin-web/test-resul
 | WP-09/10 考试测评 | 🔄 | 本波进行中 |
 
 
-### 自治工程治理
+### 开发与质量控制
 
-2026-10-10 已完成自治工程控制平面 Task 8 的本地实现与最终独立审查，实现提交 `9031fcd5`；Task 8 仍为
-`in_progress`。可复用核心位于
-`tools/agent-harness/` 与 `scripts/agent-harness`；Survey 的 Gate/保护路径、项目记忆和计划属于项目策略模板；
-`.github/workflows/agent-governance.yml` 属于当前仓库的只读宿主集成。三层边界、安装、使用、恢复和升级命令见
-[`tools/agent-harness/README.md`](../tools/agent-harness/README.md)。
-
-本轮本地证据为 Harness 共 406 tests：399 通过，7 个 Linux wrapper 用例在 sandbox 内因 Docker socket 权限以
-`linux-fixture:permission-denied` skip；sandbox 外以固定 digest 和受信 `/usr/local/bin/docker` 重跑 7/7 通过、零 skip。
-CI 会把任何 skip 判为失败。11/11 fake drills 通过，productization 37 tests 与 capability check 通过。唯一一次
-disposable real-Codex smoke
-安全暂停：没有文件改动、没有 Gate 运行，脱敏运行历史在 worktree 清理前完成验证；主 worktree 与生产/发布均未接触。
-当前本机 `java` 不是项目要求的 21，裸 `python3` 是 3.9，需继续使用版本化 Harness runtime；真实 smoke 的停止
-分类未被当次旧版 runner 摘要保留，不能据此宣称 Codex 登录/配额/CLI 已可用。
-
-Task 8 已取得 security、DX/CI、whole-branch 三路双 `APPROVED`，审查证据已绑定最终 implementation commit。
-GitHub hosted 零 skip run 与 Obsidian 同步尚未完成，
-不能宣称完整同步。首个候选真实产品 Milestone 是管理端 Phase C-1 的 `820-1179px` 双栏与检查器壳层。
+按 2026-10-28 用户决定，开发使用 Codex 原生功能及插件，产品质量由 GitHub Actions 在线 CI 检查。
+自建控制平面及治理工作流已停用；产品测试、浏览器端到端、数据库和 Release 门禁继续执行。
 
 ### 持续集成
 

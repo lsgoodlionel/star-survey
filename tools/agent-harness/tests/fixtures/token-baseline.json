@@ -1,7 +1,0 @@
-{
-  "version": 1,
-  "rawContextBytes": 204800,
-  "startupActiveTokens": 50000,
-  "minimumRawReductionPercent": 80,
-  "minimumStartupReductionPercent": 70
-}

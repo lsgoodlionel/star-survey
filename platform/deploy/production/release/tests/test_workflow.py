@@ -143,6 +143,12 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual({"contents": "read"}, quality["permissions"])
         self.assertIn("workflow_call", self.quality["on"])
 
+    def test_quality_ci_runs_for_stacked_pull_requests_without_control_plane(self):
+        triggers = self.quality["on"]
+        self.assertIn("pull_request", triggers)
+        self.assertFalse((triggers["pull_request"] or {}).get("branches"))
+        self.assertNotIn("agent-harness", job_text(self.quality))
+
         required_jobs = {
             "parity-tables",
             "admin-web",

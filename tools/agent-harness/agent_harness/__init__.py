@@ -1,1 +1,0 @@
-"""Deterministic autonomous engineering contracts."""
