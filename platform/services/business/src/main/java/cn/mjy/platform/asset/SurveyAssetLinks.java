@@ -171,8 +171,15 @@ class SurveyAssetLinks implements SurveyAssetSource {
         String source = requiredText(reference, SurveyAssetSource.ASSET_URL, slot);
         try {
             URI uri = new URI(source);
+            URI publicBase = URI.create(properties.publicBaseUrl());
+            boolean configuredLoopbackHttp = "http".equals(uri.getScheme())
+                    && "127.0.0.1".equals(uri.getHost())
+                    && "http".equals(publicBase.getScheme())
+                    && uri.getHost().equals(publicBase.getHost())
+                    && uri.getPort() == publicBase.getPort();
             String[] parts = uri.getPath() == null ? new String[0] : uri.getPath().split("/");
-            if (!"https".equals(uri.getScheme()) || uri.getHost() == null || uri.getUserInfo() != null
+            if (!("https".equals(uri.getScheme()) || configuredLoopbackHttp)
+                    || uri.getHost() == null || uri.getUserInfo() != null
                     || parts.length != 5 || !"a".equals(parts[1]) || !tenant.value().toString().equals(parts[2])
                     || uri.getQuery() == null || !uri.getQuery().contains("exp=") || !uri.getQuery().contains("sig=")) {
                 throw invalidBrandAsset(slot, "has an invalid platform asset URL");

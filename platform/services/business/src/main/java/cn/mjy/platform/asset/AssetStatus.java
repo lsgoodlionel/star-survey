@@ -2,6 +2,7 @@ package cn.mjy.platform.asset;
 
 import java.util.Arrays;
 import java.util.Optional;
+import com.fasterxml.jackson.annotation.JsonValue;
 
 /** 资产状态。{@link #ARCHIVED} 是「停用」：不再能被新的发布引用，已发布的问卷照常回放。 */
 public enum AssetStatus {
@@ -14,6 +15,7 @@ public enum AssetStatus {
         this.code = code;
     }
 
+    @JsonValue
     public String code() {
         return code;
     }

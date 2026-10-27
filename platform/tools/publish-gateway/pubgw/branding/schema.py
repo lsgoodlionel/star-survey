@@ -290,17 +290,22 @@ class _Reader:
         url = value["url"]
         try:
             parsed = urlsplit(url) if isinstance(url, str) else None
+            loopback_http = (parsed is not None and parsed.scheme == "http"
+                             and parsed.hostname == "127.0.0.1"
+                             and parsed.port is not None
+                             and parsed.netloc == "127.0.0.1:{}".format(parsed.port))
         except ValueError:
             parsed = None
+            loopback_http = False
         path_match = _TRUSTED_URL_PATH.match(parsed.path) if parsed else None
         query = parse_qs(parsed.query, keep_blank_values=True) if parsed else {}
         if (
             parsed is None
-            or parsed.scheme != "https"
+            or (parsed.scheme != "https" and not loopback_http)
             or parsed.username is not None
             or parsed.password is not None
             or not parsed.hostname
-            or parsed.netloc != parsed.hostname
+            or (parsed.netloc != parsed.hostname and not loopback_http)
             or not _CANONICAL_HOST.fullmatch(parsed.hostname)
             or parsed.fragment
             or not path_match

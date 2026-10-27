@@ -68,6 +68,20 @@ class AcceptedBrandingTest(unittest.TestCase):
         )
         self.assertEqual([], codes(definition))
 
+    def test_materialized_asset_accepts_isolated_loopback_http(self):
+        definition = branded_definition({
+            "brandingVersion": 1,
+            "logoAsset": {
+                "url": "http://127.0.0.1:49123/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+                "assetVersion": 1,
+                "contentType": "image/png",
+                "sizeBytes": 128,
+                "fileName": "mjy-brand-logo.png",
+                "sha256": MATERIALIZED_SHA256,
+            },
+        })
+        self.assertEqual([], codes(definition))
+
 
 class RejectedBrandingTest(unittest.TestCase):
     def test_branding_must_be_an_object(self):
