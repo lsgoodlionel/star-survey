@@ -26,7 +26,7 @@
 | 预览 | `R01-07` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 生产部署 | `R20-11`, `R23-08`, `R23-09`, `R23-10`, `R23-11`, `R23-12` | 部分完成 | 未开始 | 未开始 | 未开始 | 未开始 | Wave 0 |
 | 答卷与摘要 | `R06-01`, `R19-02` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 3 |
-| 模板与品牌 | `R01-03`, `R01-06`, `R19-05`, `R19-06`, `R19-10` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 2 |
+| 模板与品牌 | `R01-03`, `R01-06`, `R19-05`, `R19-06`, `R19-10` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 2 |
 | 工作台 | `R01-01`, `R19-04` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 6 |
 
 ## 证据
@@ -110,7 +110,8 @@
 
 - **后端** （实现）[`platform/contracts/survey-branding-v1.md`](../../contracts/survey-branding-v1.md) 定位 `# 问卷品牌与多语言 v1`：品牌与多语言已定义契约。
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/survey/template/SurveyTemplateController.java`](../../services/business/src/main/java/cn/mjy/platform/survey/template/SurveyTemplateController.java) 定位 `class SurveyTemplateController`：租户模板生命周期后端接口已存在。
-- **前端** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `| 模板库与平台模板 |`：核查报告明确记录模板和品牌均无配置入口。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/template-branding.spec.ts`](../../apps/admin-web/e2e/template-branding.spec.ts) 定位 `branded copy previews and publishes with language and pinned image bytes`：隔离 MySQL 与 PostgreSQL 各 19/19 的 Wave 2 本地浏览器旅程覆盖模板、品牌预览、正式作答和素材版本固定；生产验收待办。
+- **前端** （实现）[`platform/apps/admin-web/src/features/branding/BrandingPage.tsx`](../../apps/admin-web/src/features/branding/BrandingPage.tsx) 定位 `export function BrandingPage()`：Wave 2 品牌与语言编辑入口已实现；本能力映射的封面、背景、水印等更广需求尚未全部验收。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R19-05 |`：企业模板库需求已编号。
 
 ### 工作台 (`workspace`)

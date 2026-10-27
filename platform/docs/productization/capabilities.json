@@ -151,15 +151,16 @@
       "title": "模板与品牌",
       "requirementIds": ["R01-03", "R01-06", "R19-05", "R19-06", "R19-10"],
       "backend": "partial",
-      "frontend": "not_started",
-      "flow": "not_started",
+      "frontend": "partial",
+      "flow": "partial",
       "production": "not_started",
       "status": "partial",
       "evidence": [
         {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R19-05 |", "description": "企业模板库需求已编号。"},
         {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/template/SurveyTemplateController.java", "locator": "class SurveyTemplateController", "description": "租户模板生命周期后端接口已存在。"},
         {"layer": "backend", "kind": "implementation", "path": "platform/contracts/survey-branding-v1.md", "locator": "# 问卷品牌与多语言 v1", "description": "品牌与多语言已定义契约。"},
-        {"layer": "frontend", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "| 模板库与平台模板 |", "description": "核查报告明确记录模板和品牌均无配置入口。"}
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/branding/BrandingPage.tsx", "locator": "export function BrandingPage()", "description": "Wave 2 品牌与语言编辑入口已实现；本能力映射的封面、背景、水印等更广需求尚未全部验收。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/template-branding.spec.ts", "locator": "branded copy previews and publishes with language and pinned image bytes", "description": "隔离 MySQL 与 PostgreSQL 各 19/19 的 Wave 2 本地浏览器旅程覆盖模板、品牌预览、正式作答和素材版本固定；生产验收待办。"}
       ],
       "nextWave": "Wave 2"
     },
