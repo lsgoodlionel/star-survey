@@ -580,6 +580,8 @@ test('keyboard-only workspace and narrow editor flow exposes focus and dialogs',
     `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`,
   );
 
+  const create = page.getByRole('button', { name: '新建' });
+  await expect(create).toBeVisible();
   const search = page.getByLabel('搜索资源');
   await search.focus();
   await expectFocusedWithVisibleOutline(search);
@@ -590,7 +592,6 @@ test('keyboard-only workspace and narrow editor flow exposes focus and dialogs',
   await page.keyboard.press('Tab');
   await expect(page.getByLabel('排序方式')).toBeFocused();
   await page.keyboard.press('Tab');
-  const create = page.getByRole('button', { name: '新建' });
   await expect(create).toBeFocused();
   await page.keyboard.press('Enter');
   await page.keyboard.press('Tab');
