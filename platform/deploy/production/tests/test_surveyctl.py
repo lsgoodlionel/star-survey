@@ -831,6 +831,54 @@ class SurveyctlTest(unittest.TestCase):
             (self.target / "releases" / "0.2.0" / ".env").read_text(),
         )
 
+    def test_channel_secret_derivation_matches_plugin_contract_vector(self):
+        self.assertEqual(
+            "204745a72bcb796d18bf2df097af7efea324f61077971e41b50189196036ff31",
+            self.module.derive_engine_channel_secret(
+                "0123456789abcdef0123456789abcdef-instance",
+                "hd-engine-01",
+            ),
+        )
+        with self.assertRaises(ValueError):
+            self.module.derive_engine_channel_secret("too-short", "hd-engine-01")
+
+    def test_install_generates_a_separate_derived_gateway_channel_secret(self):
+        self.install()
+        secret_dir = self.target / "shared" / "secrets"
+        instance_secret = (secret_dir / "engine_instance_events_secret").read_bytes().strip()
+        channel_path = secret_dir / "pubgw_engine_channel_secret"
+        expected = hmac.new(
+            instance_secret,
+            b"mjy-plugin-channel/v1/production-engine-01",
+            hashlib.sha256,
+        ).hexdigest()
+
+        self.assertEqual(expected, channel_path.read_text(encoding="ascii").strip())
+        self.assertNotEqual(instance_secret.decode("ascii"), channel_path.read_text(encoding="ascii").strip())
+        self.assertEqual(0o600, stat.S_IMODE(channel_path.stat().st_mode))
+        env = (self.target / "releases" / "0.2.0" / ".env").read_text(encoding="utf-8")
+        self.assertIn(f"PUBGW_ENGINE_CHANNEL_SECRET_FILE={channel_path}", env)
+
+    def test_upgrade_refreshes_tampered_channel_secret_idempotently(self):
+        self.install()
+        channel_path = self.target / "shared" / "secrets" / "pubgw_engine_channel_secret"
+        expected = channel_path.read_text(encoding="ascii")
+        channel_path.write_text("tampered\n", encoding="ascii")
+
+        next_manifest = self.manifest(version="0.3.0", minimumSourceVersion="0.2.0")
+        self.manager().upgrade(next_manifest)
+
+        self.assertEqual(expected, channel_path.read_text(encoding="ascii"))
+        self.manager()._configure_release(
+            self.target / "releases" / "0.3.0",
+            self.module.load_manifest(next_manifest),
+            "arm64",
+            "survey.example.com",
+            "operations",
+            "operations@example.com",
+        )
+        self.assertEqual(expected, channel_path.read_text(encoding="ascii"))
+
     def test_setup_probe_creates_least_privilege_identity_without_logging_secrets(self):
         self.install()
         calls = []

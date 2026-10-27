@@ -121,7 +121,7 @@ services:
     command:
       - PUBGW_SHARED_SECRET=/run/secrets/platform_pubgw_secret
       - PUBGW_ENGINE_ADMIN_PASSWORD=/run/secrets/pubgw_engine_admin_password
-      - PUBGW_ENGINE_CHANNEL_SECRET=/run/secrets/engine_instance_events_secret
+      - PUBGW_ENGINE_CHANNEL_SECRET=/run/secrets/pubgw_engine_channel_secret
       - --
       - python
       - -m
@@ -135,7 +135,7 @@ services:
       - publish-gateway-state:/var/lib/pubgw
     secrets:
       - platform_pubgw_secret
-      - engine_instance_events_secret
+      - pubgw_engine_channel_secret
       - pubgw_engine_admin_password
     networks:
       - internal
@@ -340,6 +340,8 @@ secrets:
     file: ${PLATFORM_ENGINE_EVENTS_SECRET_FILE:?set PLATFORM_ENGINE_EVENTS_SECRET_FILE}
   engine_instance_events_secret:
     file: ${ENGINE_INSTANCE_EVENTS_SECRET_FILE:?set ENGINE_INSTANCE_EVENTS_SECRET_FILE}
+  pubgw_engine_channel_secret:
+    file: ${PUBGW_ENGINE_CHANNEL_SECRET_FILE:?set PUBGW_ENGINE_CHANNEL_SECRET_FILE}
   platform_pubgw_secret:
     file: ${PLATFORM_PUBGW_SECRET_FILE:?set PLATFORM_PUBGW_SECRET_FILE}
   pubgw_engine_admin_password:

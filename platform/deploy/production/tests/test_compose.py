@@ -233,6 +233,7 @@ class ProductionComposeTest(unittest.TestCase):
             "PLATFORM_JWT_HMAC_SECRET_FILE",
             "PLATFORM_ENGINE_EVENTS_SECRET_FILE",
             "ENGINE_INSTANCE_EVENTS_SECRET_FILE",
+            "PUBGW_ENGINE_CHANNEL_SECRET_FILE",
             "PLATFORM_PUBGW_SECRET_FILE",
             "PUBGW_ENGINE_ADMIN_PASSWORD_FILE",
         }
@@ -272,9 +273,11 @@ class ProductionComposeTest(unittest.TestCase):
         services = self.render_compose()["services"]
         sources = lambda service: {item["source"] for item in services[service]["secrets"]}
         self.assertIn("platform_engine_events_secret", sources("platform"))
-        for service in ("engine", "publish-gateway"):
-            self.assertIn("engine_instance_events_secret", sources(service))
-            self.assertNotIn("platform_engine_events_secret", sources(service))
+        self.assertIn("engine_instance_events_secret", sources("engine"))
+        self.assertNotIn("pubgw_engine_channel_secret", sources("engine"))
+        self.assertIn("pubgw_engine_channel_secret", sources("publish-gateway"))
+        self.assertNotIn("engine_instance_events_secret", sources("publish-gateway"))
+        self.assertNotIn("platform_engine_events_secret", sources("publish-gateway"))
 
         config = self.render_compose()
         rendered = json.dumps(config, sort_keys=True)

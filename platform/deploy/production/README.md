@@ -11,6 +11,8 @@ Release manifest、校验过的架构 bundle 和固定 digest 镜像；服务器
 - Release manifest、bundle 和镜像必须来自同一发布版本。在线安装必须提供 manifest SHA-256；离线包必须完成同等校验。
 - 管理员密码和所有服务密钥由安装过程生成在 `<target>/shared/secrets`，目录权限 `0700`、文件权限 `0600`。不要把该目录写入日志、工单或仓库。
 
+事件密钥按用途分域：`engine_instance_events_secret` 只提供给 LimeSurvey engine，用于 engine 到 platform 的事件签名；安装和每次升级会按 `HMAC-SHA256(instanceSecret, "mjy-plugin-channel/v1/<engineInstanceId>")` 生成或刷新 `pubgw_engine_channel_secret`，publish gateway 只挂载该派生密钥。原始实例事件密钥不会进入 gateway 容器。`env.example` 中两项配置均为 secret 文件路径，不是密钥值。
+
 ## 生命周期
 
 ```bash

@@ -51,7 +51,7 @@ SECRET_NAMES = (
     "engine_db_root_password", "platform_db_superuser_password", "platform_db_owner_password",
     "platform_db_app_password", "platform_jwt_hmac_secret", "platform_engine_events_secret",
     "platform_pubgw_secret", "pubgw_engine_admin_password", "backup_encryption_key",
-    "engine_instance_events_secret",
+    "engine_instance_events_secret", "pubgw_engine_channel_secret",
 )
 REQUIRED_BUNDLE_FILES = {
     "compose.yml", "Caddyfile", "surveyctl", "surveyctl.py", "release.schema.json",
@@ -88,6 +88,15 @@ def _sha256(path: Path) -> str:
     except OSError as exc:
         raise IntegrityError(f"cannot read integrity-protected file: {path.name}") from exc
     return digest.hexdigest()
+
+
+def derive_engine_channel_secret(instance_secret: str, engine_instance_id: str) -> str:
+    """Derive the gateway-to-plugin channel key without exposing the instance key."""
+    key = (instance_secret or "").encode("utf-8")
+    if len(key) < 32:
+        raise ValueError("instance secret must be at least 32 bytes")
+    context = f"mjy-plugin-channel/v1/{engine_instance_id}".encode("utf-8")
+    return hmac.new(key, context, hashlib.sha256).hexdigest()
 
 
 def _validate_semver(value: Any, label: str = "version") -> str:
@@ -915,22 +924,26 @@ class SurveyManager:
             raise IntegrityError("verified engine configuration template is invalid") from exc
         self._atomic_write(release / "engines.json", json.dumps(engines, indent=2) + "\n")
         secret_dir = self._mkdir("shared/secrets")
+        derived_secrets = {"engine_admin_password_hash", "engine_instance_events_secret", "pubgw_engine_channel_secret"}
         for name in SECRET_NAMES:
             path = secret_dir / name
-            if not path.exists() and name not in {"engine_admin_password_hash", "engine_instance_events_secret"}:
+            if not path.exists() and name not in derived_secrets:
                 self._atomic_write(path, secrets.token_urlsafe(48) + "\n")
+        engine_instance_id = "production-engine-01"
         master = (secret_dir / "platform_engine_events_secret").read_bytes().strip()
         instance_secret = hmac.new(
-            master, b"mjy-engine-events/v1/production-engine-01", hashlib.sha256
+            master, f"mjy-engine-events/v1/{engine_instance_id}".encode("utf-8"), hashlib.sha256
         ).hexdigest()
         instance_path = secret_dir / "engine_instance_events_secret"
         if not instance_path.exists():
             self._atomic_write(instance_path, instance_secret + "\n")
         elif not secrets.compare_digest(instance_path.read_text(encoding="ascii").strip(), instance_secret):
             raise IntegrityError("engine instance event secret does not match the platform trust root")
+        channel_secret = derive_engine_channel_secret(instance_secret, engine_instance_id)
+        self._atomic_write(secret_dir / "pubgw_engine_channel_secret", channel_secret + "\n")
         lines = [f"PUBLIC_HOST={host}"] + [f"{key}={value}" for key, value in sorted(manifest.raw["images"].items())]
         lines += [
-            "ENGINE_INSTANCE_ID=production-engine-01", f"ENGINE_ADMIN_USER={admin_user}",
+            f"ENGINE_INSTANCE_ID={engine_instance_id}", f"ENGINE_ADMIN_USER={admin_user}",
             f"ENGINE_ADMIN_EMAIL={admin_email}", f"ENGINES_CONFIG_FILE={release / 'engines.json'}",
         ]
         if self._native_acceptance_profile(manifest):
@@ -942,6 +955,7 @@ class SurveyManager:
             "PLATFORM_DB_APP_PASSWORD_FILE": "platform_db_app_password", "PLATFORM_JWT_HMAC_SECRET_FILE": "platform_jwt_hmac_secret",
             "PLATFORM_ENGINE_EVENTS_SECRET_FILE": "platform_engine_events_secret", "PLATFORM_PUBGW_SECRET_FILE": "platform_pubgw_secret",
             "ENGINE_INSTANCE_EVENTS_SECRET_FILE": "engine_instance_events_secret",
+            "PUBGW_ENGINE_CHANNEL_SECRET_FILE": "pubgw_engine_channel_secret",
             "PUBGW_ENGINE_ADMIN_PASSWORD_FILE": "pubgw_engine_admin_password",
         }
         lines += [f"{key}={secret_dir / value}" for key, value in env_keys.items()]
