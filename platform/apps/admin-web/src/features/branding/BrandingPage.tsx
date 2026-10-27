@@ -8,6 +8,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { mergeBrandingDraft, parseBrandingDraft, validateBrandingTranslations,
   type BrandingFormState } from '../../shared/api/branding';
 import { getResourceCapabilities } from '../../shared/api/resources';
+import { surveyOverviewQueryKey } from '../../shared/api/approvals';
 import { getSurveyDraft, saveDraft, surveyCapabilitiesQueryKey, surveyDetailQueryKey,
   surveyDraftQueryKey, type DraftView } from '../../shared/api/surveys';
 import { AssetPicker } from './AssetPicker';
@@ -104,7 +105,10 @@ function BrandingForm({ api, surveyId, tenantId, initialDraft, canEdit }: {
     setDraft(saved); setSavedVersion(saved.version); setError(null); setExtraDirty(false);
     form.reset(form.getValues());
     client.setQueryData(surveyDraftQueryKey(tenantId, surveyId), saved);
-    await client.invalidateQueries({ queryKey: surveyDetailQueryKey(tenantId, surveyId) });
+    await Promise.all([
+      client.invalidateQueries({ queryKey: surveyDetailQueryKey(tenantId, surveyId) }),
+      client.invalidateQueries({ queryKey: surveyOverviewQueryKey(tenantId, surveyId) }),
+    ]);
   }, onSettled: () => { setSaveLocked(false); } });
 
   function submit(fields: BrandFields) {

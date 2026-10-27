@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { expect, test, vi } from 'vitest';
 import { createAppRoutes } from '../../app/router';
 import { server } from '../../test/server';
+import { surveyOverviewQueryKey } from '../../shared/api/approvals';
 
 vi.mock('../auth/AuthProvider', async () => {
   const { createApiClient } = await import('../../shared/api/http');
@@ -67,6 +68,27 @@ test('read-only branding page exposes no save action', async () => {
   renderPage(false);
   expect(await screen.findByRole('heading', { name: '品牌与语言' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '保存品牌与语言' })).not.toBeInTheDocument();
+});
+
+test('refreshes a cached publication overview after saving a new brand draft', async () => {
+  const { router, client } = renderPage();
+  const key = surveyOverviewQueryKey('tenant-a', surveyId);
+  client.setQueryDefaults(key, { staleTime: 30_000 });
+  client.setQueryData(key, { id: surveyId, title: '客户调查', status: 'published',
+    draftVersion: 3, publishedVersion: 1, lastPublish: null });
+  server.use(
+    http.put(`/v1/surveys/${surveyId}/draft`, () => HttpResponse.json({ surveyId, version: 4, definition })),
+    http.get(`/v1/surveys/${surveyId}`, () => HttpResponse.json({ id: surveyId, title: '客户调查',
+      status: 'published', draftVersion: 4, publishedVersion: 1, lastPublish: null })),
+    http.get(`/v1/surveys/${surveyId}/approval-requests`, () => HttpResponse.json([])),
+    http.get(`/v1/surveys/${surveyId}/versions`, () => HttpResponse.json([])),
+  );
+  const user = userEvent.setup();
+  await user.type(await screen.findByRole('textbox', { name: '页脚文本' }), '新版页脚');
+  await user.click(screen.getByRole('button', { name: '保存品牌与语言' }));
+  await screen.findByText(/已保存/);
+  await router.navigate(`/surveys/${surveyId}/publish`);
+  await waitFor(() => expect(client.getQueryData<{ draftVersion: number }>(key)?.draftVersion).toBe(4));
 });
 
 test('rejects invalid colors and retains local input on a draft conflict', async () => {
