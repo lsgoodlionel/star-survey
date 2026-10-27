@@ -5,6 +5,8 @@
   background: #fff;
 }
 
+.workspace-template-link { display: inline-flex; align-items: center; min-height: 42px; padding: 8px 12px; color: #0e566a; border: 1px solid #9fc2cb; border-radius: 4px; white-space: nowrap; }
+
 .workspace-project-nav {
   min-width: 0;
   padding: 18px 12px;

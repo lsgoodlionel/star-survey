@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { FileText, LayoutDashboard, LogOut, Menu, X } from 'lucide-react';
+import { FileText, LayoutDashboard, LayoutTemplate, LogOut, Menu, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from '../features/auth/AuthProvider';
@@ -58,6 +58,10 @@ export function AppShell() {
           <NavLink to="/workspace" onClick={() => setNavigationOpen(false)}>
             <FileText aria-hidden="true" />
             项目与问卷
+          </NavLink>
+          <NavLink to="/templates" onClick={() => setNavigationOpen(false)}>
+            <LayoutTemplate aria-hidden="true" />
+            模板中心
           </NavLink>
         </nav>
         <div className="account-actions">

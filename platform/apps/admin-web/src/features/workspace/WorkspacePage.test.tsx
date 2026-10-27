@@ -161,6 +161,12 @@ test('keepsOnlyProjectsAndFoldersInNavigationAndListsCurrentContainerRows', asyn
   expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent('项目甲/调研资料');
 });
 
+test('offers template creation from a permitted container', async () => {
+  installListHandler({ root: [projectA], [projectA.id]: [] });
+  renderWorkspace(`/workspace?project=${projectA.id}&parent=${projectA.id}`);
+  expect(await screen.findByRole('link', { name: '从模板创建' })).toHaveAttribute('href', '/templates');
+});
+
 test('restoresEveryUrlFilterAndPassesOpaquePaginationWithoutClientSorting', async () => {
   const requests: string[] = [];
   const opaqueCursor = 'page:+/=?&';

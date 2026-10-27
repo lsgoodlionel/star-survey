@@ -218,25 +218,25 @@ git commit -m "feat: add template and branding api clients"
 - Consumes: Task 3 read/copy APIs and existing resource tree/capability clients.
 - Produces: `/templates`, `/templates/:templateId`, global “模板中心” navigation, and Workspace “从模板创建” command.
 
-- [ ] **Step 1: Write failing routing, navigation and page tests**
+- [x] **Step 1: Write failing routing, navigation and page tests**
 
 Cover default combined scope, platform/tenant filters, empty/loading/403/failure states, compact responsive rows, detail versions/history, published-only copy, folder selection, optional title, double-submit prevention, successful navigation to `/surveys/{id}/edit`, and mobile navigation closing after selection.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run: `npm --prefix platform/apps/admin-web test -- --run src/features/templates/TemplatesPage.test.tsx src/app/router.test.tsx src/app/App.test.tsx src/features/workspace/WorkspacePage.test.tsx`
 
 Expected: FAIL because routes and pages do not exist.
 
-- [ ] **Step 3: Implement routes, navigation and browse views**
+- [x] **Step 3: Implement routes, navigation and browse views**
 
 Use a lazy route for both template pages, a `LayoutTemplate` Lucide icon, URL-backed `scope` and `view` filters, semantic table/list markup and Chinese status labels. Do not use a marketing card grid.
 
-- [ ] **Step 4: Implement copy flow and Workspace entry**
+- [x] **Step 4: Implement copy flow and Workspace entry**
 
 Reuse resource capabilities to allow only valid destination folders. On success invalidate resource/workspace/dashboard/template queries, then navigate to the independent survey draft while preserving `from=/templates/{id}`.
 
-- [ ] **Step 5: Run focused tests, lint and typecheck**
+- [x] **Step 5: Run focused tests, lint and typecheck**
 
 Run: `npm --prefix platform/apps/admin-web test -- --run src/features/templates/TemplatesPage.test.tsx src/app/router.test.tsx src/app/App.test.tsx src/features/workspace/WorkspacePage.test.tsx`
 
@@ -246,7 +246,7 @@ Run: `npm --prefix platform/apps/admin-web run typecheck`
 
 Expected: all commands pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add platform/apps/admin-web/src/features/templates platform/apps/admin-web/src/app/router.tsx platform/apps/admin-web/src/app/router.test.tsx platform/apps/admin-web/src/app/App.tsx platform/apps/admin-web/src/app/App.test.tsx platform/apps/admin-web/src/features/workspace/WorkspacePage.tsx platform/apps/admin-web/src/features/workspace/WorkspacePage.test.tsx

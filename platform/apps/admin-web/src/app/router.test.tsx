@@ -74,6 +74,14 @@ test('retains workspace query compatibility', async () => {
   expect(router.state.location.search).toBe('?kind=survey');
 });
 
+test('provides template list and detail routes', () => {
+  const app = createAppRoutes(false);
+  const protectedRoute = app.find((route) => route.children?.some((child) => child.children));
+  const shell = protectedRoute?.children?.find((child) => child.children);
+  expect(shell?.children?.some((route) => route.path === 'templates')).toBe(true);
+  expect(shell?.children?.some((route) => route.path === 'templates/:templateId')).toBe(true);
+});
+
 test('redirects a survey index to its edit page', async () => {
   const surveyId = '30000000-0000-4000-8000-000000000001';
   const router = renderRoute(`/surveys/${surveyId}`);

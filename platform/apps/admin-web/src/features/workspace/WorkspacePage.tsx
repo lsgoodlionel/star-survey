@@ -439,6 +439,9 @@ export function WorkspacePage() {
               </ol>
             </nav>
           </div>
+          {parentId && containerCapabilities.data?.canCreateChildren ? (
+            <Link to="/templates" className="workspace-template-link">从模板创建</Link>
+          ) : null}
           <button
             type="button"
             className="workspace-project-toggle"

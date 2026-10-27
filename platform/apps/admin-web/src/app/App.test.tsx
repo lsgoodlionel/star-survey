@@ -24,7 +24,10 @@ function renderAppShell() {
   const router = createMemoryRouter(
     [{
       element: <AppShell />,
-      children: [{ path: '/workspace', element: <p>工作区内容</p> }],
+      children: [
+        { path: '/workspace', element: <p>工作区内容</p> },
+        { path: '/templates', element: <p>模板中心内容</p> },
+      ],
     }],
     { initialEntries: ['/workspace'] },
   );
@@ -50,9 +53,9 @@ test('rendersOnlyAvailableProductNavigationAndKeepsTechnicalIdentityDetailsSepar
   expect(within(navigation).getByRole('link', { name: '工作台' })).not.toHaveAttribute(
     'aria-current',
   );
+  expect(within(navigation).getByRole('link', { name: '模板中心' })).toHaveAttribute('href', '/templates');
   expect(new Set(within(navigation).getAllByRole('link').map((link) => link.getAttribute('href'))).size)
-    .toBe(2);
-  expect(within(navigation).queryByText('模板')).not.toBeInTheDocument();
+    .toBe(3);
   expect(within(navigation).queryByText('待审批')).not.toBeInTheDocument();
   expect(within(navigation).queryByRole('link', { name: /admin/i })).not.toBeInTheDocument();
 
@@ -82,4 +85,11 @@ test('exposesAnAccessibleMobileNavigationToggle', () => {
     'id',
     'global-navigation',
   );
+});
+
+test('closes mobile navigation after selecting template center', () => {
+  renderAppShell();
+  fireEvent.click(screen.getByRole('button', { name: '打开主导航' }));
+  fireEvent.click(screen.getByRole('link', { name: '模板中心' }));
+  expect(screen.getByRole('navigation', { name: '全局导航' })).toHaveAttribute('data-open', 'false');
 });

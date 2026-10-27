@@ -10,6 +10,12 @@ import { EditorRoutePage } from '../features/editor/EditorPage';
 const DashboardPage = lazy(() =>
   import('../features/dashboard/DashboardPage').then((module) => ({ default: module.DashboardPage })),
 );
+const TemplatesPage = lazy(() =>
+  import('../features/templates/TemplatesPage').then((module) => ({ default: module.TemplatesPage })),
+);
+const TemplateDetailPage = lazy(() =>
+  import('../features/templates/TemplateDetailPage').then((module) => ({ default: module.TemplateDetailPage })),
+);
 
 const PublishRoutePage = lazy(() =>
   import('../features/publish/PublishPage').then((module) => ({ default: module.PublishRoutePage })),
@@ -92,6 +98,8 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
               ),
             },
             { path: 'workspace', element: <WorkspacePage /> },
+            { path: 'templates', element: <Suspense fallback={<p>正在加载模板</p>}><TemplatesPage /></Suspense> },
+            { path: 'templates/:templateId', element: <Suspense fallback={<p>正在加载模板详情</p>}><TemplateDetailPage /></Suspense> },
             {
               path: 'surveys/:surveyId',
               element: <SurveyShell />,
