@@ -14,9 +14,7 @@
 
 **2026-10-28 Wave 2 本地功能验收**：用户指定本地 Docker 部署和真实使用验证替代本 Wave 的功能复审与验收。`feat/admin-product-alignment` @ `2dc8e78725` 在隔离 MySQL、PostgreSQL 栈各通过 19/19，平台 API、平台数据库、网关及引擎数据库交叉核验通过；[GitHub 产品质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40609740377) 10/10，[Release 三镜像只读构建](https://github.com/lsgoodlionel/star-survey/actions/runs/40609740345) 成功。Wave 2 模板与品牌本地功能切片完成，准备 Wave 3；正式 Release、公开 TLS 和生产安装/升级/恢复单列后续验收，能力矩阵的更广需求仍为部分完成。
 
-**2026-10-28 Wave 3 本地数据切片**：`feat/wave3-data-productization` 增加答卷时间复合筛选、发布字段标签与显示选择、导出任务重访恢复。隔离 Docker MySQL、PostgreSQL 真实浏览器各 19/19，通过两版正式答卷、跨版本列表与筛选、CSV/XLSX/SAV/DOCX/附件包五种真实下载以及平台/网关/引擎交叉核验；管理端全量 356 项、lint、typecheck、build 和生产包检查通过。本分支 GitHub CI、生产生命周期及六层能力证据尚待完成；取消、失败/过期与撤权下载本次没有双库浏览器故障注入，不据此提升能力矩阵状态。
-
-**2026-10-28 Wave 3 故障门禁复验**：修复撤权夹具的租户作用域与影响行数断言后，隔离 Docker MySQL、PostgreSQL 真实浏览器各 20/20，覆盖 queued 取消、failed/expired 页面状态及完成后撤权下载 403；平台 API、平台数据库、网关和引擎数据库交叉核验通过。旧提交的两条 GitHub workflow 浏览器作业失败，新提交 CI 待核对；正式 Release 和生产生命周期仍待验收。
+**2026-10-28 Wave 3 数据工作区本地准出**：`feat/wave3-data-productization` 已实现答卷时间复合筛选、发布字段标签与显示选择、导出任务重访恢复。撤权夹具修复租户作用域和影响行数断言后，隔离 Docker MySQL、PostgreSQL 真实浏览器各 20/20，覆盖两版正式答卷、跨版本列表/筛选、CSV/XLSX/SAV/DOCX/附件包下载、queued 取消、failed/expired 状态和完成后撤权下载 403；平台 API、平台数据库、网关与引擎数据库交叉核验通过。修复提交的[产品质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40657127681) 10/10 成功，[非 tag Release 三镜像只读构建](https://github.com/lsgoodlionel/star-survey/actions/runs/40657133380) 成功。正式 tag、GHCR/Release、公开 TLS、生产安装/升级/恢复与六层生产证据仍待验收，因此能力矩阵不提升为 accepted。
 
 | 阶段 | 状态 |
 |---|---|

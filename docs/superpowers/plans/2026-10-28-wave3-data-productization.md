@@ -1,6 +1,6 @@
 # Wave 3 数据产品化实施计划
 
-状态：本地功能切片验证通过；增量故障路径已补充针对性前端和后端回归，待以新提交重新核对 GitHub CI（2026-10-28）。基线：`feat/admin-product-alignment` 的 `247cefda1a`；实施分支：`feat/wave3-data-productization`。
+状态：本地功能切片、双库故障路径和 GitHub CI 已核对通过（2026-10-28）；生产 Release 与生命周期仍不在本 Wave 验收范围内。基线：`feat/admin-product-alignment` 的 `247cefda1a`；实施分支：`feat/wave3-data-productization`。
 
 ## 目标与边界
 
@@ -51,7 +51,9 @@ Wave 2 的本地功能验收以 2026-10-28 用户指定的双库 Docker 各 19/1
 
 增量故障证据：新增浏览器旅程以隔离 PostgreSQL 夹具验证 queued 作业取消、failed/expired 状态在页面的恢复提示，以及真实完成后撤销 `raw_data_viewer` 的下载 403；组件测试覆盖 403 后保留已完成任务以便恢复授权后重试。后端 `ResponseExportAccessTest` 新增运行中撤权后旧 job 不可下载、恢复后只能新建并按当前权限冻结脱敏产物的回归，目标类 7/7 已通过。新增浏览器旅程的 MySQL 全量门禁两次均在测试夹具/会话导航处中止（首次为 expired 夹具违反时间约束，第二次为 `page.goto` 清空产品有意的内存会话）；已改为合法时间和 SPA 路由重挂载，但遵循两次同类问题即停止自动修复的约定，未发起第三次 MySQL 或 PostgreSQL 复跑。
 
-边界：当前真实浏览器通过双版本查询和五种格式的成功下载；故障旅程已经有组件、后端和部分真实浏览器证据，但修正后的旅程尚无完整 MySQL/PostgreSQL 门禁结果。因此只记录本地功能切片，不提升六层能力矩阵为 accepted，也不声称生产 Release、公开 TLS 或安装升级恢复完成。
+闭环记录：撤权夹具补充事务内租户作用域与恰好删除一条授权的断言后，修正后的隔离 Docker MySQL/PostgreSQL 真实浏览器各 20/20，平台 API、平台数据库、网关和引擎数据库交叉核验通过。`cde9ba4531` 与文档提交 `dced3debf5` 已推送；准确提交的[产品质量门 40657127681](https://github.com/lsgoodlionel/star-survey/actions/runs/40657127681) 10/10 成功，[非 tag Release 只读构建 40657133380](https://github.com/lsgoodlionel/star-survey/actions/runs/40657133380) 成功，复用质量门及 admin、platform、publish-gateway 三镜像构建均通过，发布作业按策略跳过。
+
+边界：Wave 3 的本地功能准出证据已闭环；但正式 tag、GHCR/Release、公开 TLS、生产安装/升级/恢复及六层生产证据并未因此完成，能力矩阵继续保持 partial，不将本记录写成整体 production-ready 或 accepted。
 
 ## 2026-10-28 撤权夹具修复与双库复验
 
