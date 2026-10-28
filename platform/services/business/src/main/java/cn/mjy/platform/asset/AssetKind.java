@@ -2,6 +2,7 @@ package cn.mjy.platform.asset;
 
 import java.util.Arrays;
 import java.util.Optional;
+import com.fasterxml.jackson.annotation.JsonValue;
 
 /** 资产类别。由内容嗅探结果推出，不由调用方声明（ADR 0019 决定 3）。 */
 public enum AssetKind {
@@ -15,6 +16,7 @@ public enum AssetKind {
         this.code = code;
     }
 
+    @JsonValue
     public String code() {
         return code;
     }

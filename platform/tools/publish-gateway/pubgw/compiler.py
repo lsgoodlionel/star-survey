@@ -10,10 +10,11 @@
    （import_helper.php:2193-2196），这里的数字只用来在文档内部建立父子关系。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .branding.compile import CompiledBranding, compile_branding
+from .branding.schema import BrandingError
 from .branding.translations import LanguageTexts, parse_translations, texts_for
 from .fieldmap import definition_signature, fingerprint
 from .logic.lower import lower_definition
@@ -145,7 +146,7 @@ class LssCompiler:
 
     version = COMPILER_VERSION
 
-    def compile(self, definition: SurveyDefinition) -> CompiledSurvey:
+    def compile(self, definition: SurveyDefinition, defer_branding: bool = False) -> CompiledSurvey:
         report = validate_definition(definition)
         if not report.is_valid:
             raise CompileError(
@@ -158,14 +159,33 @@ class LssCompiler:
         definition = expand_scoring(definition)
         signature = definition_signature(definition)
         policy = compile_policy(definition)
-        branding = compile_branding(definition)
+        try:
+            branding = compile_branding(definition)
+        except BrandingError as error:
+            raise CompileError(
+                "branding compilation failed: E_BRAND_ASSET_NOT_MATERIALIZED {}".format(error)
+            ) from error
         exam = compile_exam(definition)
+        import_branding = branding
+        if defer_branding and branding is not None:
+            # A bundle is installed only after import supplies the real SID.
+            # Import legacy file slots normally; the signed installer applies
+            # all remaining brand values together with the new image bytes.
+            legacy = definition.branding if isinstance(definition.branding, dict) else {}
+            options = {}
+            if "logoFile" in legacy:
+                options.update({key: value for key, value in branding.options.items()
+                                if key in ("mjybrandlogo", "mjybrandlogofile")})
+            if "faviconFile" in legacy:
+                options.update({key: value for key, value in branding.options.items()
+                                if key == "mjybrandfavicon"})
+            import_branding = replace(branding, options=options)
         return CompiledSurvey(
             # v2 的逻辑先降到引擎层（relevance／属性／转义文本）；v1 原样通过。
             # 题型扩展键（format／maxLength／exclusive）再降成属性与服务端规则；没有就原样通过。
             # 访问策略（ADR 0016）另行编译为原生设置与插件设置行。
             # 品牌（契约 survey-branding-v1）另行编译为按问卷的主题选项。
-            lss=self._document(lower_question_types(lower_definition(definition)), policy, branding, exam),
+            lss=self._document(lower_question_types(lower_definition(definition)), policy, import_branding, exam),
             compiler_version=self.version,
             signature=signature,
             fingerprint=fingerprint(signature),

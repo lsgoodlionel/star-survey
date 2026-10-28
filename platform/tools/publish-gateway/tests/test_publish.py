@@ -1,5 +1,6 @@
 """发布编排：每个阶段失败都必须回滚，绝不留下半发布的问卷。"""
 
+import base64
 import unittest
 
 from pubgw.compiler import LssCompiler
@@ -9,12 +10,83 @@ from pubgw.rpc import RemoteControlClient
 from .fakes import FakeEngine
 from .fixtures import sample_definition, sample_payload
 from pubgw.model import SurveyDefinition
+from pubgw.brand_assets import BrandAssetError
+
+from .test_brand_assets import asset, branded_definition
+from .branding_fixtures import branded_payload
 
 
-def publisher_for(engine, compiler=None):
+def publisher_for(engine, compiler=None, brand_asset_installer=None):
     client = RemoteControlClient(engine.transport)
     client.login("admin", "password")
-    return Publisher(client, engine_instance="survey-test-web", compiler=compiler)
+    return Publisher(client, engine_instance="survey-test-web", compiler=compiler,
+                     brand_asset_installer=brand_asset_installer)
+
+
+class RecordingBrandAssetInstaller:
+    def __init__(self, fail=False, observed_methods=None):
+        self.calls = []
+        self.fail = fail
+        self.observed_methods = observed_methods
+
+    def install(self, survey_id, branding, assets):
+        snapshot = self.observed_methods() if self.observed_methods else ()
+        self.calls.append((survey_id, branding, assets, snapshot))
+        if self.fail:
+            raise BrandAssetError("brand asset installer rejected the bundle")
+
+
+class BrandAssetInstallationTest(unittest.TestCase):
+    def test_installs_after_import_and_before_apply(self):
+        definition = branded_definition()
+        engine = FakeEngine(definition)
+        installer = RecordingBrandAssetInstaller(observed_methods=engine.methods)
+
+        result = publisher_for(engine, brand_asset_installer=installer).publish(definition, (asset(),))
+
+        self.assertTrue(result.ok, result.failures)
+        self.assertEqual(1, len(installer.calls))
+        self.assertEqual(result.survey_id, installer.calls[0][0])
+        self.assertIn("import_survey", installer.calls[0][3])
+        self.assertNotIn("get_survey_properties", installer.calls[0][3])
+
+    def test_installer_failure_deletes_the_imported_survey_before_activation(self):
+        definition = branded_definition()
+        engine = FakeEngine(definition)
+        installer = RecordingBrandAssetInstaller(fail=True)
+
+        result = publisher_for(engine, brand_asset_installer=installer).publish(definition, (asset(),))
+
+        self.assertFalse(result.ok)
+        self.assertEqual("brand_assets", result.failed_stage)
+        self.assertTrue(result.rolled_back)
+        self.assertEqual([result.survey_id], engine.deleted)
+        self.assertNotIn("activate_survey", engine.methods())
+
+    def test_asset_install_failure_never_imports_brand_options(self):
+        definition = SurveyDefinition.from_dict(branded_payload({
+            **branded_definition().branding, "primaryColor": "#1f6feb", "pageTitle": "Pinned brand"
+        }))
+        engine = FakeEngine(definition)
+
+        result = publisher_for(engine, brand_asset_installer=RecordingBrandAssetInstaller(fail=True)).publish(
+            definition, (asset(),)
+        )
+
+        imported = next(params for method, params in engine.calls if method == "import_survey")
+        lss = base64.b64decode(imported[1]).decode("utf-8")
+        self.assertEqual("brand_assets", result.failed_stage)
+        self.assertFalse("mjybrand" in lss, "brand options entered LSS before signed installation")
+
+    def test_unmatched_bundle_is_rejected_before_import(self):
+        definition = branded_definition()
+        engine = FakeEngine(definition)
+
+        result = publisher_for(engine, brand_asset_installer=RecordingBrandAssetInstaller()).publish(definition, ())
+
+        self.assertFalse(result.ok)
+        self.assertEqual("brand_assets", result.failed_stage)
+        self.assertNotIn("import_survey", engine.methods())
 
 
 class TamperingCompiler(LssCompiler):
@@ -127,6 +199,20 @@ class ValidationStopsBeforeTheEngineTest(unittest.TestCase):
         result = publisher_for(FakeEngine(definition)).publish(definition)
 
         self.assertIn("E_MISSING_ANSWERS", " ".join(result.failures))
+
+    def test_unmaterialized_brand_asset_is_a_structured_compile_failure(self):
+        payload = sample_payload()
+        payload["theme"] = "zh-business"
+        payload["branding"] = {"brandingVersion": 1, "logoAsset": {"assetId": "logo-id"}}
+        definition = SurveyDefinition.from_dict(payload)
+        engine = FakeEngine(definition)
+
+        result = publisher_for(engine).publish(definition)
+
+        self.assertFalse(result.ok)
+        self.assertEqual("compile", result.failed_stage)
+        self.assertIn("E_BRAND_ASSET_NOT_MATERIALIZED", " ".join(result.failures))
+        self.assertNotIn("import_survey", engine.methods())
 
 
 class RollbackTest(unittest.TestCase):

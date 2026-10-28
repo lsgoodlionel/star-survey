@@ -194,6 +194,32 @@ public class SurveyTemplateService {
         });
     }
 
+    /** 管理入口只列本租户模板；平台模板仍由运营接口维护。 */
+    public List<TemplateView> managed(TenantContext ctx) {
+        return tenantScope.call(ctx.tenantId(), () -> {
+            access.requireMember(ctx);
+            return templates.managed();
+        });
+    }
+
+    public TemplateCapabilities capabilities(TenantContext ctx, UUID templateId) {
+        return tenantScope.call(ctx.tenantId(), () -> {
+            access.requireMember(ctx);
+            TemplateView template = required(templates.find(templateId), templateId);
+            UUID source = templates.versions(templateId).stream()
+                    .reduce((first, second) -> second)
+                    .map(TemplateVersionView::sourceSurveyId)
+                    .orElse(null);
+            boolean canEditSource = source == null || access.canOnSurvey(ctx, Permission.EDIT, source);
+            boolean canReview = access.canInTenant(ctx, Permission.APPROVE_PUBLISH);
+            return new TemplateCapabilities(
+                    canEditSource && template.status() != TemplateStatus.PENDING,
+                    canEditSource && template.status() != TemplateStatus.PENDING,
+                    canReview && template.status() == TemplateStatus.PENDING,
+                    canReview && template.status() == TemplateStatus.PUBLISHED);
+        });
+    }
+
     /** 模板详情：任意状态都能看（含本租户未上架的），别的租户的一律 404。 */
     public TemplateDetail get(TenantContext ctx, UUID templateId) {
         return tenantScope.call(ctx.tenantId(), () -> {

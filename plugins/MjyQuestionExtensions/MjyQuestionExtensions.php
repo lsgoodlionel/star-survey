@@ -109,6 +109,11 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
             }
             return;
         }
+        if ($function === MjyBrandAssetEndpoint::FUNCTION_NAME) {
+            // 端点自身先验签查询，随后才读取 php://input；不要在这里提前取 body。
+            $this->emit($this->brandAssetChannel()->handleHttp($this->channelQuery(), time()), 'brand asset channel');
+            return;
+        }
         if ($function !== MjyExtensionAnswerEndpoint::FUNCTION_NAME) {
             return;
         }
@@ -226,6 +231,15 @@ class MjyQuestionExtensions extends \LimeSurvey\PluginManager\PluginBase
             new MjyAttachmentLocator(App()->getDb(), $this->generations(),
                 (string) App()->getConfig('uploaddir')),
             $this->channelRateLimit()
+        );
+    }
+
+    /** 发布后的品牌资产落点；装配过程不读 body、不碰数据库或磁盘。 */
+    public function brandAssetChannel(): MjyBrandAssetEndpoint
+    {
+        return new MjyBrandAssetEndpoint(
+            new MjyChannelAuth(self::instanceSecrets(), self::engineInstanceId()),
+            (string) App()->getConfig('uploaddir')
         );
     }
 

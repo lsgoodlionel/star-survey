@@ -2,13 +2,22 @@ package cn.mjy.platform.asset;
 
 import cn.mjy.platform.asset.AssetRepository.AssetRow;
 import cn.mjy.platform.shared.TenantContext;
+import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
 import cn.mjy.platform.survey.InvalidDefinitionException;
 import cn.mjy.platform.survey.PublishUnavailableException;
 import cn.mjy.platform.survey.SurveyAssetSource;
+import cn.mjy.platform.survey.gateway.GatewayRequest;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -24,20 +33,37 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 class SurveyAssetLinks implements SurveyAssetSource {
 
+    private static final long MAX_BRAND_BYTES = 5L * 1024 * 1024;
+
+    private static final Map<String, String> LOGO_EXTENSIONS = Map.of(
+            "image/png", ".png",
+            "image/jpeg", ".jpg",
+            "image/gif", ".gif",
+            "image/webp", ".webp");
+    private static final Map<String, String> FAVICON_EXTENSIONS = Map.ofEntries(
+            Map.entry("image/png", ".png"),
+            Map.entry("image/jpeg", ".jpg"),
+            Map.entry("image/gif", ".gif"),
+            Map.entry("image/webp", ".webp"),
+            Map.entry("image/x-icon", ".ico"),
+            Map.entry("image/vnd.microsoft.icon", ".ico"));
+
     private final TenantScope tenantScope;
     private final AssetRepository assets;
     private final AssetTickets tickets;
     private final AssetAudit audit;
     private final AssetProperties properties;
+    private final AssetService assetService;
     private final Clock clock;
 
     SurveyAssetLinks(TenantScope tenantScope, AssetRepository assets, AssetTickets tickets, AssetAudit audit,
-            AssetProperties properties) {
+            AssetProperties properties, AssetService assetService) {
         this.tenantScope = tenantScope;
         this.assets = assets;
         this.tickets = tickets;
         this.audit = audit;
         this.properties = properties;
+        this.assetService = assetService;
         this.clock = Clock.systemUTC();
     }
 
@@ -47,15 +73,23 @@ class SurveyAssetLinks implements SurveyAssetSource {
         // 下面按 assetId 找引用的那一步根本访问不到它（独立安全审查抓到的一条）。
         SurveyAssetSource.requirePlatformKeysUnwritten(definition);
         ObjectNode copy = definition.deepCopy();
-        List<ObjectNode> references = SurveyAssetSource.references(copy);
-        if (references.isEmpty()) {
+        List<String> problems = new ArrayList<>();
+        List<SurveyAssetSource.BrandReference> brandReferences =
+                SurveyAssetSource.brandReferences(copy, problems);
+        List<ObjectNode> references = SurveyAssetSource.referencesOutsideBranding(copy);
+        if (!problems.isEmpty()) {
+            throw new InvalidDefinitionException(problems);
+        }
+        if (references.isEmpty() && brandReferences.isEmpty() && problems.isEmpty()) {
             return definition;
         }
         requireConfigured();
         return tenantScope.call(ctx.tenantId(), () -> {
-            List<String> problems = new ArrayList<>();
             for (ObjectNode reference : references) {
-                resolve(ctx, surveyId, draftVersion, reference, problems);
+                resolve(ctx, surveyId, draftVersion, reference, problems, false, null);
+            }
+            for (SurveyAssetSource.BrandReference reference : brandReferences) {
+                resolve(ctx, surveyId, draftVersion, reference.value(), problems, true, reference.slot());
             }
             if (!problems.isEmpty()) {
                 throw new InvalidDefinitionException(problems);
@@ -64,8 +98,133 @@ class SurveyAssetLinks implements SurveyAssetSource {
         });
     }
 
+    @Override
+    public List<GatewayRequest.BrandAsset> brandAssets(TenantId tenant, ObjectNode materializedDefinition) {
+        JsonNode brandingNode = materializedDefinition.get("branding");
+        if (!(brandingNode instanceof ObjectNode branding)) {
+            return List.of();
+        }
+        List<GatewayRequest.BrandAsset> bundle = new ArrayList<>();
+        for (String slot : SurveyAssetSource.BRAND_SLOTS) {
+            JsonNode node = branding.get(slot);
+            if (node == null) {
+                continue;
+            }
+            if (!(node instanceof ObjectNode reference)) {
+                throw invalidBrandAsset(slot, "must be a platform materialized object");
+            }
+            bundle.add(readBrandAsset(tenant, slot, reference));
+        }
+        return List.copyOf(bundle);
+    }
+
+    private GatewayRequest.BrandAsset readBrandAsset(TenantId tenant, String slot, ObjectNode reference) {
+        UUID assetId = pinnedAssetId(tenant, slot, reference);
+        int version = requiredPositiveInt(reference, "assetVersion", slot);
+        String contentType = requiredText(reference, "contentType", slot);
+        long sizeBytes = requiredPositiveLong(reference, "sizeBytes", slot);
+        String expectedSha256 = requiredText(reference, "sha256", slot);
+        String fileName = requiredText(reference, "fileName", slot);
+        Map<String, String> extensions = slot.equals("faviconAsset") ? FAVICON_EXTENSIONS : LOGO_EXTENSIONS;
+        String extension = extensions.get(contentType);
+        String expectedName = extension == null ? "" : brandFileName(slot, extension);
+        if (sizeBytes > MAX_BRAND_BYTES || extension == null || !expectedName.equals(fileName)
+                || !expectedSha256.matches("[0-9a-f]{64}")) {
+            throw invalidBrandAsset(slot, "does not match the pinned brand metadata");
+        }
+        return readPinnedContent(tenant, assetId, version, slot, fileName, contentType, sizeBytes, expectedSha256);
+    }
+
+    private GatewayRequest.BrandAsset readPinnedContent(TenantId tenant, UUID assetId, int version, String slot,
+            String fileName, String contentType, long sizeBytes, String expectedSha256) {
+        AssetContent content = assetService.open(tenant, assetId, version);
+        if (!contentType.equals(content.contentType()) || sizeBytes != content.byteSize()) {
+            try {
+                content.content().close();
+            } catch (IOException ignored) {
+                // The mismatch is the actionable error; never hide it with a close failure.
+            }
+            throw invalidBrandAsset(slot, "does not match stored asset metadata");
+        }
+        try (InputStream stream = content.content()) {
+            byte[] bytes = stream.readNBytes(Math.toIntExact(MAX_BRAND_BYTES + 1));
+            if (bytes.length != sizeBytes || bytes.length > MAX_BRAND_BYTES) {
+                throw invalidBrandAsset(slot, "does not match stored asset bytes");
+            }
+            String sha256 = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+            if (!sha256.equals(content.sha256())) {
+                throw invalidBrandAsset(slot, "does not match stored asset digest");
+            }
+            if (!sha256.equals(expectedSha256)) {
+                throw invalidBrandAsset(slot, "does not match the pinned brand digest");
+            }
+            return new GatewayRequest.BrandAsset(slot, fileName, contentType, sizeBytes, sha256,
+                    Base64.getEncoder().encodeToString(bytes));
+        } catch (IOException e) {
+            throw new AssetUnavailableException("asset bytes are unreadable: " + assetId + " v" + version, e);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    private UUID pinnedAssetId(TenantId tenant, String slot, ObjectNode reference) {
+        String source = requiredText(reference, SurveyAssetSource.ASSET_URL, slot);
+        try {
+            URI uri = new URI(source);
+            URI publicBase = URI.create(properties.publicBaseUrl());
+            boolean configuredLoopbackHttp = "http".equals(uri.getScheme())
+                    && "127.0.0.1".equals(uri.getHost())
+                    && "http".equals(publicBase.getScheme())
+                    && uri.getHost().equals(publicBase.getHost())
+                    && uri.getPort() == publicBase.getPort();
+            String[] parts = uri.getPath() == null ? new String[0] : uri.getPath().split("/");
+            if (!("https".equals(uri.getScheme()) || configuredLoopbackHttp)
+                    || uri.getHost() == null || uri.getUserInfo() != null
+                    || parts.length != 5 || !"a".equals(parts[1]) || !tenant.value().toString().equals(parts[2])
+                    || uri.getQuery() == null || !uri.getQuery().contains("exp=") || !uri.getQuery().contains("sig=")) {
+                throw invalidBrandAsset(slot, "has an invalid platform asset URL");
+            }
+            UUID assetId = UUID.fromString(parts[3]);
+            int urlVersion = Integer.parseInt(parts[4]);
+            if (urlVersion != requiredPositiveInt(reference, SurveyAssetSource.ASSET_VERSION, slot)) {
+                throw invalidBrandAsset(slot, "has a URL version that does not match assetVersion");
+            }
+            return assetId;
+        } catch (URISyntaxException | IllegalArgumentException e) {
+            throw invalidBrandAsset(slot, "has an invalid platform asset URL");
+        }
+    }
+
+    private static String requiredText(ObjectNode reference, String key, String slot) {
+        JsonNode value = reference.get(key);
+        if (value == null || !value.isString() || value.asString().isBlank()) {
+            throw invalidBrandAsset(slot, "is missing " + key);
+        }
+        return value.asString();
+    }
+
+    private static int requiredPositiveInt(ObjectNode reference, String key, String slot) {
+        JsonNode value = reference.get(key);
+        if (value == null || !value.canConvertToInt() || value.intValue() <= 0) {
+            throw invalidBrandAsset(slot, "has an invalid " + key);
+        }
+        return value.intValue();
+    }
+
+    private static long requiredPositiveLong(ObjectNode reference, String key, String slot) {
+        JsonNode value = reference.get(key);
+        if (value == null || !value.canConvertToLong() || value.longValue() <= 0) {
+            throw invalidBrandAsset(slot, "has an invalid " + key);
+        }
+        return value.longValue();
+    }
+
+    private static InvalidDefinitionException invalidBrandAsset(String slot, String detail) {
+        return new InvalidDefinitionException(List.of("branding." + slot + " " + detail));
+    }
+
     private void resolve(TenantContext ctx, UUID surveyId, int draftVersion, ObjectNode reference,
-            List<String> problems) {
+            List<String> problems, boolean brandAsset, String brandSlot) {
         if (reference.has(SurveyAssetSource.ASSET_URL)) {
             // 作者自带地址就等于绕开资产服务；宁可发布失败，也不把一串来路不明的 URL 发到作答页上。
             problems.add("an asset reference may not carry its own " + SurveyAssetSource.ASSET_URL);
@@ -94,13 +253,41 @@ class SurveyAssetLinks implements SurveyAssetSource {
             return;
         }
         int versionNo = row.currentVersion();
+        String contentType = null;
+        long sizeBytes = 0;
+        String sha256 = null;
+        if (brandAsset) {
+            AssetVersionView version = assets.findVersion(assetId, versionNo).orElse(null);
+            Map<String, String> extensions = brandSlot.equals("faviconAsset")
+                    ? FAVICON_EXTENSIONS : LOGO_EXTENSIONS;
+            if (version == null || row.kind() != AssetKind.IMAGE || !extensions.containsKey(version.contentType())
+                    || version.byteSize() > MAX_BRAND_BYTES) {
+                problems.add("branding." + brandSlot + " must reference an image asset");
+                return;
+            }
+            contentType = version.contentType();
+            sizeBytes = version.byteSize();
+            sha256 = version.sha256();
+        }
         String url = tickets.mint(ctx.tenantId(), assetId, versionNo, clock.instant().plus(properties.ticketTtl()))
                 .url(properties.publicBaseUrl());
         reference.remove(SurveyAssetSource.ASSET_ID);
         reference.put(SurveyAssetSource.ASSET_URL, url);
         reference.put(SurveyAssetSource.ASSET_VERSION, versionNo);
+        if (brandAsset) {
+            Map<String, String> extensions = brandSlot.equals("faviconAsset")
+                    ? FAVICON_EXTENSIONS : LOGO_EXTENSIONS;
+            reference.put("contentType", contentType);
+            reference.put("sizeBytes", sizeBytes);
+            reference.put("sha256", sha256);
+            reference.put("fileName", brandFileName(brandSlot, extensions.get(contentType)));
+        }
         assets.insertReference(assetId, versionNo, surveyId, draftVersion);
         audit.record(ctx, AssetAudit.REFERENCE, assetId, "v" + versionNo + " survey/" + surveyId);
+    }
+
+    private static String brandFileName(String brandSlot, String extension) {
+        return (brandSlot.equals("logoAsset") ? "mjy-brand-logo" : "mjy-brand-favicon") + extension;
     }
 
     private static UUID assetId(ObjectNode reference, List<String> problems) {

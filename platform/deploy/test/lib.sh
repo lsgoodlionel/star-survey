@@ -30,6 +30,13 @@ prepare_test_stack() {
   fi
   cp "$TEST_DIR/config.$TEST_DB.php" "$TEST_DIR/.runtime/config.php"
 
+  # Docker Desktop cannot create a nested file mount target inside the bind-mounted
+  # checkout. A fresh checkout lacks this ignored file; preserve any existing config.
+  local mount_target="$REPO_ROOT/application/config/config.php"
+  if [[ ! -e "$mount_target" && ! -L "$mount_target" ]]; then
+    touch "$mount_target"
+  fi
+
   # test-web 只引用 survey-web 镜像、自己不带 build。全新检出（CI，或刚换的开发机）里
   # 没有这个镜像，compose 会去 registry 拉一个并不存在的名字然后失败。缺了就地构建一次。
   if ! docker image inspect survey-web >/dev/null 2>&1; then

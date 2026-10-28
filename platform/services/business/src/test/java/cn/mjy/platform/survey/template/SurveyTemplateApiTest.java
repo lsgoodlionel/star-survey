@@ -144,6 +144,44 @@ class SurveyTemplateApiTest {
         send(post("/v1/survey-templates/" + id + "/approve"), editor, null).andExpect(status().isForbidden());
     }
 
+    @Test
+    void managedListAndCapabilitiesKeepDraftsDiscoverableAndTenantScoped() throws Exception {
+        TenantContext editor = fixture.member(ws, "managed-editor", "editor", ws.project());
+        String id = JsonPath.read(send(post("/v1/survey-templates"), editor,
+                Map.of("sourceSurveyId", surveyId.toString(), "name", "持续管理模板"))
+                .andReturn().getResponse().getContentAsString(), "$.id");
+
+        String managed = send(get("/v1/survey-templates/managed"), editor, null)
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<List<Map<String, Object>>>read(managed, "$"))
+                .anySatisfy(row -> assertThat(row).containsEntry("id", id).containsEntry("status", "draft"));
+        send(get("/v1/survey-templates/" + id + "/capabilities"), editor, null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canAddVersion").value(true))
+                .andExpect(jsonPath("$.canSubmit").value(true))
+                .andExpect(jsonPath("$.canReview").value(false))
+                .andExpect(jsonPath("$.canUnpublish").value(false));
+
+        send(post("/v1/survey-templates/" + id + "/submit"), editor, null).andExpect(status().isOk());
+        send(get("/v1/survey-templates/" + id + "/capabilities"), reviewer, null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canSubmit").value(false))
+                .andExpect(jsonPath("$.canReview").value(true));
+        send(post("/v1/survey-templates/" + id + "/reject"), reviewer,
+                Map.of("reason", "需要调整")).andExpect(status().isOk());
+        String rejected = send(get("/v1/survey-templates/managed"), editor, null)
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<List<Map<String, Object>>>read(rejected, "$"))
+                .anySatisfy(row -> assertThat(row).containsEntry("id", id).containsEntry("status", "rejected"));
+
+        Workspace other = fixture.workspace();
+        String otherList = send(get("/v1/survey-templates/managed"), other.owner(), null)
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(otherList).doesNotContain(id);
+        send(get("/v1/survey-templates/" + id + "/capabilities"), other.owner(), null)
+                .andExpect(status().isNotFound());
+    }
+
     // ------------------------------------------------------------ 运营模板
 
     @Test

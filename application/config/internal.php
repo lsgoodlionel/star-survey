@@ -155,6 +155,11 @@ $internalConfig = array(
                 'admin/remotecontrol',
                 'plugins/unsecure',
             ),
+            'noCsrfValidationExactRoutes' => array(
+                // The only signed POST plugin channel. MjyBrandAssetEndpoint still rejects every
+                // request unless its per-engine HMAC binds the exact body digest and size.
+                'plugins/direct/plugin/MjyQuestionExtensions/function/brandAssetsV1',
+            ),
             'csrfCookie' => array(
                 'secure' => ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)),
                 'httpOnly' => true

@@ -1,8 +1,13 @@
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, FileSearch, Import } from 'lucide-react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
+import {
+  surveyWorkflowHref,
+  useSurveyPageReady,
+  useSurveyShell,
+} from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import { parseDefinition } from '../editor/model/definition';
 import { ApiError } from '../../shared/api/errors';
@@ -44,6 +49,9 @@ export function ImportPage(props: ImportPageProps) {
 
 function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
   const navigate = useNavigate();
+  const surveyShell = useSurveyShell();
+  const [searchParams] = useSearchParams();
+  const selectedQuestion = searchParams.get('question');
   const queryClient = useQueryClient();
   const [text, setText] = useState('');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -69,6 +77,12 @@ function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
     }
   }, [draftQuery.data]);
   const canEdit = capabilitiesQuery.data?.canEdit === true;
+  const ready = draftQuery.isSuccess
+    && capabilitiesQuery.isSuccess
+    && !draftQuery.isFetching
+    && !capabilitiesQuery.isFetching
+    && Boolean(draftQuery.data && capabilitiesQuery.data && definition);
+  useSurveyPageReady('import', ready);
 
   const previewMutation = useMutation({
     mutationFn: (request: PreviewRequest) => previewSurveyImport(api, surveyId, request.text),
@@ -107,7 +121,7 @@ function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
         }),
         queryClient.invalidateQueries({ queryKey: versionsQueryKey(tenantId, surveyId) }),
       ]);
-      navigate(`/surveys/${surveyId}/edit`, { replace: true });
+      navigate(surveyWorkflowHref(surveyId, 'edit', selectedQuestion), { replace: true });
     },
     onError: async (error) => {
       setActionError(messageFor(error, '导入失败，请稍后重试'));
@@ -129,19 +143,23 @@ function ImportPageInstance({ api, surveyId, tenantId }: ImportPageProps) {
   const selectedCount = selected.size;
   return (
     <main className="survey-import-page">
-      <header className="import-header">
-        <div>
-          <p>问卷编辑</p>
-          <h1>批量文本导入</h1>
-        </div>
-        <div className="import-header-actions">
-          <span>当前草稿版本 {draftQuery.data.version}</span>
-          <Link to={`/surveys/${surveyId}/edit`}>
-            <ArrowLeft aria-hidden="true" />
-            返回编辑
-          </Link>
-        </div>
-      </header>
+      {!surveyShell ? (
+        <header className="import-header">
+          <div>
+            <p>问卷编辑</p>
+            <h1>批量文本导入</h1>
+          </div>
+          <div className="import-header-actions">
+            <span>当前草稿版本 {draftQuery.data.version}</span>
+            <Link to={surveyWorkflowHref(surveyId, 'edit', selectedQuestion)}>
+              <ArrowLeft aria-hidden="true" />
+              返回编辑
+            </Link>
+          </div>
+        </header>
+      ) : (
+        <div className="embedded-page-toolbar">当前草稿版本 {draftQuery.data.version}</div>
+      )}
 
       {!canEdit ? <p role="alert">当前账号仅可查看此问卷，不能导入题目。</p> : null}
       <section className="import-source" aria-labelledby="import-source-title">
@@ -233,6 +251,7 @@ export function ImportRoutePage() {
   if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
   return (
     <ImportPage
+      key={`${session.me.tenantId}:${session.me.actorId}:${surveyId.data}`}
       api={api}
       surveyId={surveyId.data}
       tenantId={session.me.tenantId}

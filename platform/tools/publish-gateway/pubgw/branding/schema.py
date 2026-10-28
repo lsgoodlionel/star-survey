@@ -2,13 +2,14 @@
 
 和访问策略一样：一次遍历同时收集全部问题并构造不可变对象，有一个问题调用方就拿不到品牌。
 
-这里最重要的不是它接受什么，而是它**不接受**什么。租户能提供的只有
-颜色、纯文本与主题目录内的文件名——没有 CSS，没有 JS，没有 HTML 片段，没有 URL。
+这里最重要的不是它接受什么，而是它**不接受**什么。作者能提供的只有
+颜色、纯文本与作者资产 ID；平台物化后才允许受信取件 URL 和固定文件名。
 理由写在契约 §2.1：一行 ``background-image: url(...)`` 就能把作答页变成对外请求，
 一行 JS 就与管理端同源。封闭取值比"安全子集解析器"可靠得多。
 """
 
 import re
+from urllib.parse import parse_qs, urlsplit
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -27,8 +28,10 @@ _TOP_KEYS = frozenset(
         "pageTitle",
         "footerText",
         "logoFile",
+        "logoAsset",
         "logoAlt",
         "faviconFile",
+        "faviconAsset",
     }
 )
 #: 单独报错的键：作者写了它说明误以为能塞 CSS，要给出明确的理由而不是"未知键"。
@@ -42,6 +45,23 @@ _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 #: svg 不在其中：它是可以带脚本的文档，不是图片。
 _FAVICON_SUFFIXES = _IMAGE_SUFFIXES + (".ico",)
 _MAX_TEXT_LENGTH = 500
+_ASSET_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
+_ASSET_UUID = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\Z")
+_TRUSTED_URL_PATH = re.compile(
+    r"\A/a/[A-Za-z0-9][A-Za-z0-9_-]{0,127}/([0-9a-fA-F-]{36})/([1-9][0-9]*)\Z"
+)
+_CANONICAL_HOST = re.compile(
+    r"\A(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*\Z"
+)
+_MATERIALIZED_KEYS = frozenset({"url", "assetVersion", "contentType", "sizeBytes", "fileName", "sha256"})
+_SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
+_BRAND_MIME_EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+_MAX_ASSET_BYTES = 5 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -64,6 +84,19 @@ class Branding:
     logo_file: str = ""
     logo_alt: str = ""
     favicon_file: str = ""
+    logo_asset: Optional["BrandAsset"] = None
+    favicon_asset: Optional["BrandAsset"] = None
+
+
+@dataclass(frozen=True)
+class BrandAsset:
+    asset_id: str
+    filename: str
+    url: str = ""
+    asset_version: int = 0
+    content_type: str = ""
+    size_bytes: int = 0
+    sha256: str = ""
 
 
 class BrandingError(ValueError):
@@ -104,6 +137,10 @@ class _Reader:
         self._check_version(raw)
         self._check_theme()
         self._check_unknown_keys(raw)
+        logo_asset = self._asset_reference(raw.get("logoAsset"), "logoAsset")
+        favicon_asset = self._asset_reference(raw.get("faviconAsset"), "faviconAsset")
+        self._check_exclusive(raw, "logoFile", "logoAsset")
+        self._check_exclusive(raw, "faviconFile", "faviconAsset")
         branding = Branding(
             primary_color=self._color(raw.get("primaryColor")),
             page_title=self._text(raw.get("pageTitle"), "pageTitle"),
@@ -111,6 +148,8 @@ class _Reader:
             logo_file=self._asset(raw.get("logoFile"), "logoFile", _IMAGE_SUFFIXES),
             logo_alt=self._plain(raw.get("logoAlt"), "logoAlt"),
             favicon_file=self._asset(raw.get("faviconFile"), "faviconFile", _FAVICON_SUFFIXES),
+            logo_asset=logo_asset,
+            favicon_asset=favicon_asset,
         )
         if self._issues:
             return None, self._issues
@@ -226,3 +265,94 @@ class _Reader:
             )
             return ""
         return value
+
+    def _asset_reference(self, value: Any, key: str) -> Optional[BrandAsset]:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            self._fail("E_BRAND_ASSET", key, "{} 必须是作者态或受信物化态对象".format(key))
+            return None
+        if "assetId" in value:
+            if set(value) != {"assetId"} or not isinstance(value.get("assetId"), str):
+                self._fail("E_BRAND_ASSET", key, "作者态 {} 只能含有效 assetId".format(key))
+                return None
+            asset_id = value["assetId"]
+            if not _ASSET_ID.fullmatch(asset_id):
+                self._fail("E_BRAND_ASSET", key, "{} 的 assetId 格式无效".format(key))
+                return None
+            return BrandAsset(asset_id=asset_id, filename="")
+        if set(value) != _MATERIALIZED_KEYS:
+            self._fail("E_BRAND_ASSET", key, "受信物化态 {} 必须完整包含 URL、版本、MIME、大小和文件名".format(key))
+            return None
+        return self._materialized_asset(value, key)
+
+    def _materialized_asset(self, value: Mapping[str, Any], key: str) -> Optional[BrandAsset]:
+        url = value["url"]
+        try:
+            parsed = urlsplit(url) if isinstance(url, str) else None
+            loopback_http = (parsed is not None and parsed.scheme == "http"
+                             and parsed.hostname == "127.0.0.1"
+                             and parsed.port is not None
+                             and parsed.netloc == "127.0.0.1:{}".format(parsed.port))
+        except ValueError:
+            parsed = None
+            loopback_http = False
+        path_match = _TRUSTED_URL_PATH.match(parsed.path) if parsed else None
+        query = parse_qs(parsed.query, keep_blank_values=True) if parsed else {}
+        if (
+            parsed is None
+            or (parsed.scheme != "https" and not loopback_http)
+            or parsed.username is not None
+            or parsed.password is not None
+            or not parsed.hostname
+            or (parsed.netloc != parsed.hostname and not loopback_http)
+            or not _CANONICAL_HOST.fullmatch(parsed.hostname)
+            or parsed.fragment
+            or not path_match
+            or set(query) != {"exp", "sig"}
+            or not query["exp"] or not query["sig"]
+        ):
+            self._fail("E_BRAND_ASSET", key, "受信物化态 URL 必须是平台签发的 https 取件地址")
+            return None
+        asset_id = path_match.group(1)
+        version = value["assetVersion"]
+        content_type = value["contentType"]
+        size_bytes = value["sizeBytes"]
+        sha256 = value["sha256"]
+        if not _ASSET_UUID.fullmatch(asset_id):
+            self._fail("E_BRAND_ASSET", key, "物化 URL 中的资产 ID 无效")
+            return None
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            self._fail("E_BRAND_ASSET", key, "assetVersion 必须是正整数")
+            return None
+        if int(path_match.group(2)) != version:
+            self._fail("E_BRAND_ASSET", key, "物化 URL 中的版本必须与 assetVersion 一致")
+            return None
+        extension = _BRAND_MIME_EXTENSIONS.get(content_type) if isinstance(content_type, str) else None
+        if extension is None:
+            self._fail("E_BRAND_ASSET", key, "contentType 不是允许的品牌图片 MIME")
+            return None
+        if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or not 0 < size_bytes <= _MAX_ASSET_BYTES:
+            self._fail("E_BRAND_ASSET", key, "sizeBytes 必须在 1 至 {} 字节之间".format(_MAX_ASSET_BYTES))
+            return None
+        if not isinstance(sha256, str) or not _SHA256.fullmatch(sha256):
+            self._fail("E_BRAND_ASSET", key, "sha256 必须是 64 位小写十六进制摘要")
+            return None
+        slot = "logo" if key == "logoAsset" else "favicon"
+        filename = "mjy-brand-{}{}".format(slot, extension)
+        if value["fileName"] != filename:
+            self._fail("E_BRAND_ASSET", key, "fileName 必须是该槽位和 MIME 派生的不含资产 ID 的固定文件名")
+            return None
+        return BrandAsset(
+            asset_id=asset_id,
+            filename=filename,
+            url=url,
+            asset_version=version,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            sha256=sha256,
+        )
+
+    def _check_exclusive(self, raw: Mapping[str, Any], legacy: str, reference: str) -> None:
+        if raw.get(legacy) is not None and raw.get(reference) is not None:
+            self._fail("E_BRAND_ASSET", reference, "{} 与 {} 不能同时指定".format(legacy, reference))

@@ -7,6 +7,9 @@ from pubgw.validate import validate_definition
 from .branding_fixtures import branded_definition, full_branding
 
 
+MATERIALIZED_SHA256 = "a" * 64
+
+
 def codes(definition):
     return sorted({issue.code for issue in validate_definition(definition).issues})
 
@@ -40,6 +43,43 @@ class AcceptedBrandingTest(unittest.TestCase):
 
     def test_only_a_colour_is_enough(self):
         definition = branded_definition({"brandingVersion": 1, "primaryColor": "#abc"})
+        self.assertEqual([], codes(definition))
+
+    def test_author_asset_references_are_accepted(self):
+        definition = branded_definition(
+            {"brandingVersion": 1, "logoAsset": {"assetId": "asset-logo"},
+             "faviconAsset": {"assetId": "asset-icon"}}
+        )
+        self.assertEqual([], codes(definition))
+
+    def test_materialized_asset_references_are_accepted(self):
+        definition = branded_definition(
+            {
+                "brandingVersion": 1,
+                "logoAsset": {
+                    "url": "https://survey.lsgood.cn/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+                    "assetVersion": 1,
+                    "contentType": "image/png",
+                    "sizeBytes": 128,
+                    "fileName": "mjy-brand-logo.png",
+                    "sha256": MATERIALIZED_SHA256,
+                },
+            }
+        )
+        self.assertEqual([], codes(definition))
+
+    def test_materialized_asset_accepts_isolated_loopback_http(self):
+        definition = branded_definition({
+            "brandingVersion": 1,
+            "logoAsset": {
+                "url": "http://127.0.0.1:49123/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+                "assetVersion": 1,
+                "contentType": "image/png",
+                "sizeBytes": 128,
+                "fileName": "mjy-brand-logo.png",
+                "sha256": MATERIALIZED_SHA256,
+            },
+        })
         self.assertEqual([], codes(definition))
 
 
@@ -93,6 +133,122 @@ class RejectedBrandingTest(unittest.TestCase):
 
     def test_a_logo_may_not_be_an_ico(self):
         self.assertIn("E_BRAND_ASSET", codes(brand(logoFile="logo.ico")))
+
+    def test_author_asset_reference_rejects_url_version_and_unknown_fields(self):
+        for reference in (
+            {"assetId": "asset-logo", "url": "https://example.test/logo.png"},
+            {"assetId": "asset-logo", "assetVersion": 2},
+            {"assetId": "asset-logo", "filename": "../logo.png"},
+            {"assetId": "../logo"},
+            {"assetId": ""},
+            {},
+        ):
+            with self.subTest(reference=reference):
+                self.assertIn("E_BRAND_ASSET", codes(brand(logoAsset=reference)))
+
+    def test_author_asset_reference_rejects_mime_and_size_fields(self):
+        for reference in (
+            {"assetId": "logo-1", "mimeType": "image/png"},
+            {"assetId": "logo-1", "sizeBytes": 10},
+        ):
+            with self.subTest(reference=reference):
+                self.assertIn("E_BRAND_ASSET", codes(brand(logoAsset=reference)))
+
+    def test_materialized_asset_rejects_external_url_path_or_wrong_filename(self):
+        valid = {
+            "url": "https://survey.example/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "assetVersion": 1,
+            "contentType": "image/png",
+            "sizeBytes": 128,
+            "fileName": "mjy-brand-logo.png",
+            "sha256": MATERIALIZED_SHA256,
+        }
+        for key, value in (
+            ("url", "https://evil.example/logo.png"),
+            ("url", "https://survey.example/../evil"),
+            ("fileName", "../../logo.png"),
+            ("fileName", "mjy-brand-logo-11111111-1111-4111-8111-111111111111.png"),
+            ("contentType", "image/svg+xml"),
+            ("sizeBytes", 5_242_881),
+            ("assetVersion", 0),
+        ):
+            with self.subTest(key=key, value=value):
+                reference = dict(valid)
+                reference[key] = value
+                self.assertIn("E_BRAND_ASSET", codes(branded_definition({"brandingVersion": 1, "logoAsset": reference})))
+
+    def test_materialized_asset_requires_a_digest_and_url_version_must_match_metadata(self):
+        valid = {
+            "url": "https://survey.lsgood.cn/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "assetVersion": 1,
+            "contentType": "image/png",
+            "sizeBytes": 128,
+            "fileName": "mjy-brand-logo.png",
+            "sha256": MATERIALIZED_SHA256,
+        }
+        missing_digest = dict(valid)
+        missing_digest.pop("sha256")
+        mismatched_version = dict(valid, url=valid["url"].replace("/1?", "/2?"))
+
+        self.assertIn("E_BRAND_ASSET", codes(branded_definition({
+            "brandingVersion": 1, "logoAsset": missing_digest,
+        })))
+        self.assertIn("E_BRAND_ASSET", codes(branded_definition({
+            "brandingVersion": 1, "logoAsset": mismatched_version,
+        })))
+
+    def test_materialized_asset_rejects_noncanonical_or_credentialed_hosts(self):
+        valid = {
+            "url": "https://survey.lsgood.cn/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "assetVersion": 1,
+            "contentType": "image/png",
+            "sizeBytes": 128,
+            "fileName": "mjy-brand-logo.png",
+            "sha256": MATERIALIZED_SHA256,
+        }
+        for url in (
+            "https://survey.lsgood.cn@evil.example/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "https://survey.lsgood.cn:443/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "https://Survey.lsgood.cn/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+        ):
+            with self.subTest(url=url):
+                self.assertIn("E_BRAND_ASSET", codes(branded_definition({
+                    "brandingVersion": 1, "logoAsset": dict(valid, url=url),
+                })))
+
+    def test_materialized_asset_rejects_author_id_and_unknown_fields(self):
+        reference = {
+            "assetId": "11111111-1111-4111-8111-111111111111",
+            "url": "https://survey.example/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+            "assetVersion": 1,
+            "contentType": "image/png",
+            "sizeBytes": 128,
+            "fileName": "mjy-brand-logo.png",
+            "unexpected": True,
+        }
+        self.assertIn("E_BRAND_ASSET", codes(branded_definition({"brandingVersion": 1, "logoAsset": reference})))
+
+    def test_author_asset_filename_is_fixed_and_slot_specific(self):
+        logo_definition = branded_definition(
+            {
+                "brandingVersion": 1,
+                "logoAsset": {"assetId": "abc-123"},
+            }
+        )
+        self.assertEqual([], codes(logo_definition))
+        favicon_definition = branded_definition(
+            {
+                "brandingVersion": 1,
+                "faviconAsset": {"assetId": "abc-123", "assetVersion": 2},
+            }
+        )
+        self.assertIn("E_BRAND_ASSET", codes(favicon_definition))
+
+    def test_legacy_filename_and_author_reference_cannot_share_a_slot(self):
+        self.assertIn("E_BRAND_ASSET", codes(brand(logoAsset={"assetId": "abc"}, logoFile="logo.png")))
+        self.assertIn(
+            "E_BRAND_ASSET", codes(brand(faviconAsset={"assetId": "abc"}, faviconFile="favicon.ico"))
+        )
 
     def test_a_text_map_may_only_use_the_definitions_languages(self):
         self.assertIn("E_BRAND_LANGUAGE", codes(brand(footerText={"fr": "bonjour"})))
