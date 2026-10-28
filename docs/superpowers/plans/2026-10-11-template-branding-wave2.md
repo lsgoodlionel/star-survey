@@ -461,6 +461,8 @@ Expected: zero failure, error or required skip; every evidence item binds to the
 
 2026-10-28 接续：`platform-quality.yml` 已在 PR #11 的 `3aa6881790` 上通过 10/10；Release 工作流的 PR 触发范围已扩展到堆叠 PR，使三镜像只读构建能够在线验证，触发策略测试先红后绿，Release 测试 58/58 通过。该改动不发布镜像或 Release；需核对新提交的 Release CI，Step 2 生产生命周期与 Step 3 独立复审仍待完成。
 
+首轮在线运行 `40607037885` 暴露复用质量门和独立质量门的并发组冲突，后者 run `40607037755` 被取消。并发组已按 GitHub reusable workflow 上下文加入调用方工作流名，测试先红后绿；待新提交的两条 CI 均结束后再记录 Step 1 结果。
+
 - [ ] **Step 2: Run production Compose smoke**
 
 Install or upgrade a disposable single-host environment, execute the Task 7 journey through the Caddy entrypoint, run `surveyctl doctor`, then verify backup and restore preserve templates, brand assets, published versions and responses.
