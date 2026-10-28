@@ -46,8 +46,21 @@ export const deliveryRecipientSchema = z.object({
   lastReminderAt: z.string().datetime({ offset: true }).nullable(),
 });
 
+export const reminderRuleSchema = z.object({
+  id: z.string().uuid(),
+  surveyId: z.string().uuid(),
+  sourceTaskId: z.string().uuid(),
+  firstDelaySeconds: z.number().int().nonnegative(),
+  intervalSeconds: z.number().int().positive(),
+  maxReminders: z.number().int().min(1).max(10),
+  subject: z.string().nullable(),
+  enabled: z.boolean(),
+  createdAt: z.string().datetime({ offset: true }),
+});
+
 export type DeliveryTask = z.infer<typeof deliveryTaskSchema>;
 export type DeliveryRecipient = z.infer<typeof deliveryRecipientSchema>;
+export type ReminderRule = z.infer<typeof reminderRuleSchema>;
 
 export interface CreateAudienceDeliveryTaskInput {
   channel: 'email';
@@ -62,6 +75,15 @@ export interface CreateDeliveryLinkInput {
   params?: Record<string, string>;
   ttlSeconds?: number | null;
   shortLink: boolean;
+}
+
+export interface CreateReminderRuleInput {
+  sourceTaskId: string;
+  firstDelaySeconds: number;
+  intervalSeconds: number;
+  maxReminders: number;
+  subject?: string | null;
+  bodyTemplate: string;
 }
 
 export interface DeliveryQrOptions {
@@ -84,6 +106,8 @@ export const deliveryTasksQueryKey = (tenantId: string, surveyId: string) =>
   ['delivery-tasks', tenantId, surveyId] as const;
 export const deliveryTaskQueryKey = (tenantId: string, surveyId: string, taskId: string) =>
   [...deliveryTasksQueryKey(tenantId, surveyId), taskId] as const;
+export const reminderRulesQueryKey = (tenantId: string, surveyId: string) =>
+  ['delivery-reminder-rules', tenantId, surveyId] as const;
 
 export function listDeliveryLinks(api: ApiClient, surveyId: string, signal?: AbortSignal) {
   return api.request({
@@ -144,6 +168,53 @@ export function getDeliveryTask(api: ApiClient, taskId: string, signal?: AbortSi
   return api.request({
     path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}`,
     schema: deliveryTaskSchema,
+    signal,
+  });
+}
+
+export function listSurveyDeliveryTasks(api: ApiClient, surveyId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/surveys/${encodeURIComponent(surveyId)}/delivery-tasks?limit=50`,
+    schema: z.array(deliveryTaskSchema),
+    signal,
+  });
+}
+
+export function listReminderRules(api: ApiClient, surveyId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/surveys/${encodeURIComponent(surveyId)}/reminder-rules`,
+    schema: z.array(reminderRuleSchema),
+    signal,
+  });
+}
+
+export function createReminderRule(
+  api: ApiClient,
+  surveyId: string,
+  input: CreateReminderRuleInput,
+  signal?: AbortSignal,
+) {
+  return api.request({
+    path: `/v1/delivery/surveys/${encodeURIComponent(surveyId)}/reminder-rules`,
+    method: 'POST',
+    body: input,
+    schema: reminderRuleSchema,
+    signal,
+  });
+}
+
+export function setReminderRuleEnabled(
+  api: ApiClient,
+  surveyId: string,
+  ruleId: string,
+  enabled: boolean,
+  signal?: AbortSignal,
+) {
+  return api.request({
+    path: `/v1/delivery/surveys/${encodeURIComponent(surveyId)}/reminder-rules/${encodeURIComponent(ruleId)}`,
+    method: 'PATCH',
+    body: { enabled },
+    schema: reminderRuleSchema,
     signal,
   });
 }

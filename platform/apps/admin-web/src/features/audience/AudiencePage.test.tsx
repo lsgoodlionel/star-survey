@@ -19,7 +19,19 @@ const importJob = { jobId: importJobId, listId, status: 'completed', totalRows: 
 const queuedImportJob = { ...importJob, status: 'queued', processedRows: 0, created: 0, invalid: 0 };
 
 function apiFrom(handler: (request: ApiRequest<unknown>) => unknown): ApiClient {
-  return { request: (request) => Promise.resolve(handler(request as ApiRequest<unknown>)) as never };
+  return {
+    request: (request) => {
+      try {
+        return Promise.resolve(handler(request as ApiRequest<unknown>)) as never;
+      } catch (error) {
+        if (request.path === `/v1/surveys/${surveyId}/delivery-tasks?limit=50`
+          || request.path === `/v1/delivery/surveys/${surveyId}/reminder-rules`) {
+          return Promise.resolve([]) as never;
+        }
+        return Promise.reject(error) as never;
+      }
+    },
+  };
 }
 
 describe('AudiencePage', () => {
@@ -82,6 +94,39 @@ describe('AudiencePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '取消任务' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: '取消任务' })).not.toBeInTheDocument());
     expect(screen.getByText(/状态：已取消/)).toBeInTheDocument();
+  });
+
+  test('selects a redacted invite task and creates then pauses its reminder rule', async () => {
+    const ruleId = '77777777-7777-4777-8777-777777777777';
+    const reminder = {
+      id: ruleId, surveyId, sourceTaskId: taskId, firstDelaySeconds: 0, intervalSeconds: 3600,
+      maxReminders: 2, subject: '请继续填写问卷', enabled: true, createdAt: now,
+    };
+    const requests: ApiRequest<unknown>[] = [];
+    const api = apiFrom((request) => {
+      requests.push(request);
+      if (request.path === '/v1/contact-lists') return [list];
+      if (request.path === `/v1/surveys/${surveyId}/audience`) return audience;
+      if (request.path === `/v1/surveys/${surveyId}/delivery-tasks?limit=50`) return [queued];
+      if (request.path === `/v1/delivery/surveys/${surveyId}/reminder-rules`) return request.method === 'POST' ? reminder : [];
+      if (request.path === `/v1/delivery/surveys/${surveyId}/reminder-rules/${ruleId}`) return { ...reminder, enabled: false };
+      if (request.path === `/v1/delivery/tasks/${taskId}`) return queued;
+      if (request.path === `/v1/delivery/tasks/${taskId}/recipients`) return [];
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    renderWithQuery(<AudiencePage api={api} surveyId={surveyId} tenantId="tenant-a" actorId="actor-a" />);
+    expect(await screen.findByLabelText('最近投放任务列表')).toHaveTextContent('邀请任务：等待发送，收件人 1 人。');
+    fireEvent.click(screen.getByRole('button', { name: '查看任务' }));
+    expect(await screen.findByRole('heading', { name: '催答规则' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('首次延迟（分钟）'), { target: { value: '0' } });
+    fireEvent.change(screen.getByLabelText('催答间隔（分钟）'), { target: { value: '60' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建催答规则' }));
+    expect(await screen.findByLabelText('催答规则状态')).toHaveTextContent('已启用；首次延迟 0 分钟，间隔 60 分钟，最多 2 次。');
+    const create = requests.find((request) => request.path.endsWith('/reminder-rules') && request.method === 'POST')!;
+    expect(create.body).toMatchObject({ sourceTaskId: taskId, firstDelaySeconds: 0, intervalSeconds: 3600, maxReminders: 2 });
+    fireEvent.click(screen.getByRole('button', { name: '暂停催答规则' }));
+    await waitFor(() => expect(screen.getByLabelText('催答规则状态')).toHaveTextContent('已暂停'));
+    expect(requests.find((request) => request.method === 'PATCH')?.body).toEqual({ enabled: false });
   });
 
   test('restores the server task and masked recipients after remounting', async () => {

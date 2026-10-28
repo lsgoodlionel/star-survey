@@ -225,7 +225,7 @@ class DeliveryReminderTest {
     @Test
     void aDisabledRuleStopsGeneratingReminders() {
         ReminderRuleView created = rule(3);
-        reminders.setEnabled(p.owner(), created.id(), false);
+        reminders.setEnabled(p.owner(), p.surveyId(), created.id(), false);
         fixture.ageSentAt(p.tenant(), invite.id(), FIRST_DELAY.plusHours(1));
 
         assertThat(reminders.runOnce(p.tenant())).isZero();

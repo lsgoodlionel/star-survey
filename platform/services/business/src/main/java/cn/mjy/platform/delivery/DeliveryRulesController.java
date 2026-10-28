@@ -15,6 +15,7 @@ import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -62,6 +63,16 @@ public class DeliveryRulesController {
     @GetMapping("/reminder-rules")
     List<ReminderRuleView> reminderRules(@PathVariable UUID surveyId) {
         return reminders.list(currentTenant.require(), surveyId);
+    }
+
+    public record SetReminderRuleEnabled(@NotNull Boolean enabled) {
+    }
+
+    /** 启停当前问卷的催答规则；仍要求问卷 SEND 权限。 */
+    @PatchMapping("/reminder-rules/{ruleId}")
+    ReminderRuleView setReminderRuleEnabled(@PathVariable UUID surveyId, @PathVariable UUID ruleId,
+            @Valid @RequestBody SetReminderRuleEnabled request) {
+        return reminders.setEnabled(currentTenant.require(), surveyId, ruleId, request.enabled());
     }
 
     /** 建新答卷通知规则：通知本租户的某个成员，最小间隔内的新增合并成一条。 */

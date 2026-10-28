@@ -1,6 +1,6 @@
 # Wave 4 受众与投放实施计划
 
-状态：最小问卷内受众、投放与联系人批量导入纵切已完成本地双库浏览器核对（2026-10-29）。实施分支：`feat/wave3-data-productization`；保持现有堆叠 PR 关系，不变基或合并父分支。
+状态：问卷内受众、投放、批量导入、任务发现与催答规则管理已完成本地双库核对（2026-10-29）。实施分支：`feat/wave3-data-productization`；保持现有堆叠 PR 关系，不变基或合并父分支。
 
 ## 目标与边界
 
@@ -57,6 +57,12 @@ Wave 4 的首个纵切位于已发布问卷的上下文中：运营人员创建�
 问卷内页面现可向选中 respondent 名单提交 CSV/JSON 文本导入，提交携带幂等键并显式接受既有 `202 Accepted` 作业响应。页面轮询作业计数；作业进入终态后才读取逐行结果，避免运行中空结果被缓存。页面仅展示聚合计数、行号、结果与原因码，不回显提交内容、地址或联系人详情。最近导入作业以租户、操作人、问卷和名单范围保存；重访时只读服务端状态，403/404 会清除恢复标识并提示不可访问。
 
 前端类型化 API/页面测试覆盖 CSV 提交、queued 到 completed 的结果读取、403/404 恢复清理、Idempotency-Key 与无 PII schema。管理端全量 Vitest 373/373、typecheck、lint、生产构建和 production bundle assertion 通过；隔离 Docker MySQL 与 PostgreSQL 真实 Chromium 各 20/20，旅程完成一行 CSV 导入、验证第 1 个数据行的脱敏结果，再继续名单、audience 与无 provider 的 503 路径，并核对平台 API、平台数据库、网关和引擎数据库。真实 provider、回执、催答和生产验收仍留在后续切片。
+
+## 2026-10-29 阶段 6：任务发现与催答规则管理
+
+新增受限的 `GET /v1/surveys/{surveyId}/delivery-tasks?limit=50`：先要求问卷 `VIEW`，限制 1–100 条最新任务，返回仅含类型、状态和统计的 `TaskView`，不包含收件人地址、正文或回执信息。问卷内页面可从该脱敏列表重访任务；仅当前 `invite` 任务显示催答规则管理。
+
+既有催答规则创建/读取接口现补充 `PATCH /v1/delivery/surveys/{surveyId}/reminder-rules/{ruleId}` 启停动作。服务端先核对 rule 归属 URL 中问卷，再要求 `SEND`，跨问卷规则按不存在处理。页面将分钟转换为受服务端边界约束的秒数，强制正文带 `{{unsubscribe}}`，展示启用/暂停与上限；不展示收件人、正文回显或回执密钥。`DeliveryApiTest` 覆盖脱敏任务列表与规则创建/启停，`DeliveryReminderTest` 保持完成者跳过、退订抑制、上限与恢复的测试 provider 契约。管理端全量 Vitest 375/375、typecheck、lint、生产构建和 production bundle assertion 通过；隔离 Docker MySQL/PostgreSQL 真实 Chromium 各 20/20，确认真实运行栈无回归和无 provider 的失败语义。真实 provider、真实发送/回执联调仍非本阶段证据。
 
 ## 风险与停止条件
 

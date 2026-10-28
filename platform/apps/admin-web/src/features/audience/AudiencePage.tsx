@@ -19,10 +19,17 @@ import {
 import {
   cancelDeliveryTask,
   createAudienceDeliveryTask,
+  createReminderRule,
+  deliveryTasksQueryKey,
   deliveryTaskQueryKey,
   getDeliveryTask,
   listDeliveryRecipients,
+  listReminderRules,
+  listSurveyDeliveryTasks,
+  reminderRulesQueryKey,
+  setReminderRuleEnabled,
   type DeliveryTask,
+  type ReminderRule,
 } from '../../shared/api/delivery';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
@@ -57,6 +64,11 @@ export function AudiencePage({ api, surveyId, tenantId, actorId }: {
   const [importContent, setImportContent] = useState('');
   const [subject, setSubject] = useState('邀请填写问卷');
   const [bodyTemplate, setBodyTemplate] = useState(defaultTemplate);
+  const [firstDelayMinutes, setFirstDelayMinutes] = useState('1440');
+  const [intervalMinutes, setIntervalMinutes] = useState('1440');
+  const [maxReminders, setMaxReminders] = useState('2');
+  const [reminderSubject, setReminderSubject] = useState('请继续填写问卷');
+  const [reminderBody, setReminderBody] = useState(defaultTemplate);
   const storageKey = `survey-delivery:${tenantId}:${actorId}:${surveyId}`;
   const [taskId, setTaskId] = useState<string | null>(() => sessionStorage.getItem(storageKey));
 
@@ -124,6 +136,16 @@ export function AudiencePage({ api, surveyId, tenantId, actorId }: {
     }, enabled: Boolean(taskId), retry: false,
     refetchInterval: (query) => ['queued', 'running'].includes(query.state.data?.status ?? '') ? 1_500 : false,
   });
+  const surveyTasks = useQuery({
+    queryKey: deliveryTasksQueryKey(tenantId, surveyId),
+    queryFn: ({ signal }) => listSurveyDeliveryTasks(api, surveyId, signal),
+    retry: false,
+  });
+  const reminderRules = useQuery({
+    queryKey: reminderRulesQueryKey(tenantId, surveyId),
+    queryFn: ({ signal }) => listReminderRules(api, surveyId, signal),
+    retry: false,
+  });
   const recipients = useQuery({
     queryKey: ['delivery-recipients', tenantId, taskId], queryFn: ({ signal }) => listDeliveryRecipients(api, taskId!, signal),
     enabled: Boolean(taskId && task.data), retry: false,
@@ -151,6 +173,36 @@ export function AudiencePage({ api, surveyId, tenantId, actorId }: {
   const cancel = useMutation({
     mutationFn: () => cancelDeliveryTask(api, taskId!),
     onSuccess: (cancelled) => { client.setQueryData(deliveryTaskQueryKey(tenantId, surveyId, cancelled.id), cancelled); },
+  });
+  const selectedInviteTask = task.data?.kind === 'invite'
+    ? task.data
+    : surveyTasks.data?.find((candidate) => candidate.id === taskId && candidate.kind === 'invite');
+  const selectedReminderRule = reminderRules.data?.find((rule) => rule.sourceTaskId === selectedInviteTask?.id);
+  const firstDelaySeconds = Number(firstDelayMinutes) * 60;
+  const intervalSeconds = Number(intervalMinutes) * 60;
+  const reminderCount = Number(maxReminders);
+  const reminderFieldsValid = Number.isInteger(firstDelaySeconds) && firstDelaySeconds >= 0 && firstDelaySeconds <= 2_592_000
+    && Number.isInteger(intervalSeconds) && intervalSeconds >= 60 && intervalSeconds <= 2_592_000
+    && Number.isInteger(reminderCount) && reminderCount >= 1 && reminderCount <= 10 && reminderBody.includes('{{unsubscribe}}');
+  const createReminder = useMutation({
+    mutationFn: () => createReminderRule(api, surveyId, {
+      sourceTaskId: selectedInviteTask!.id,
+      firstDelaySeconds,
+      intervalSeconds,
+      maxReminders: reminderCount,
+      subject: reminderSubject.trim() || null,
+      bodyTemplate: reminderBody.trim(),
+    }),
+    onSuccess: (created) => {
+      client.setQueryData<ReminderRule[]>(reminderRulesQueryKey(tenantId, surveyId), (current = []) => [created, ...current]);
+    },
+  });
+  const toggleReminder = useMutation({
+    mutationFn: (rule: ReminderRule) => setReminderRuleEnabled(api, surveyId, rule.id, !rule.enabled),
+    onSuccess: (updated) => {
+      client.setQueryData<ReminderRule[]>(reminderRulesQueryKey(tenantId, surveyId), (current = []) =>
+        current.map((rule) => rule.id === updated.id ? updated : rule));
+    },
   });
   const taskUnavailable = isTaskUnavailable(task.error);
   const importUnavailable = isImportUnavailable(importJob.error);
@@ -205,6 +257,30 @@ export function AudiencePage({ api, surveyId, tenantId, actorId }: {
       {task.data && !taskUnavailable ? <TaskStatus task={task.data} recipients={recipients.data} recipientsError={recipients.isError} cancelling={cancel.isPending}
         cancelError={cancel.isError} onCancel={() => cancel.mutate()} /> : null}
     </section>
+    <section aria-labelledby="audience-history-title"><h3 id="audience-history-title">最近投放任务</h3>
+      <p>仅显示服务端返回的任务类型、状态和统计，不显示收件人地址或邮件内容。</p>
+      {surveyTasks.isError ? <p role="alert">投放任务列表加载失败，请稍后重试。</p> : null}
+      {surveyTasks.data?.length === 0 ? <p>暂无投放任务。</p> : null}
+      {surveyTasks.data?.length ? <ul aria-label="最近投放任务列表">{surveyTasks.data.map((candidate) => <li key={candidate.id}>
+        {candidate.kind === 'invite' ? '邀请任务' : candidate.kind}：{taskStatusLabel(candidate.status)}，收件人 {candidate.recipientCount} 人。
+        <button type="button" onClick={() => { setTaskId(candidate.id); sessionStorage.setItem(storageKey, candidate.id); }}>查看任务</button>
+      </li>)}</ul> : null}
+    </section>
+    {selectedInviteTask ? <section aria-labelledby="audience-reminder-title"><h3 id="audience-reminder-title">催答规则</h3>
+      <p>仅管理当前邀请任务；已完成答卷或退订的联系人会由服务端跳过。</p>
+      {reminderRules.isError ? <p role="alert">催答规则加载失败，请稍后重试。</p> : null}
+      {selectedReminderRule ? <ReminderRuleStatus rule={selectedReminderRule} pending={toggleReminder.isPending}
+        error={toggleReminder.isError} onToggle={() => toggleReminder.mutate(selectedReminderRule)} /> : <>
+        <label>首次延迟（分钟）<input aria-label="首次延迟（分钟）" inputMode="numeric" value={firstDelayMinutes} onChange={(event) => setFirstDelayMinutes(event.target.value)} /></label>
+        <label>催答间隔（分钟）<input aria-label="催答间隔（分钟）" inputMode="numeric" value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} /></label>
+        <label>最多催答次数<input aria-label="最多催答次数" inputMode="numeric" value={maxReminders} onChange={(event) => setMaxReminders(event.target.value)} /></label>
+        <label>催答主题<input aria-label="催答主题" value={reminderSubject} onChange={(event) => setReminderSubject(event.target.value)} /></label>
+        <label>催答正文<textarea aria-label="催答正文" value={reminderBody} onChange={(event) => setReminderBody(event.target.value)} /></label>
+        <button type="button" disabled={!reminderFieldsValid || createReminder.isPending} onClick={() => createReminder.mutate()}>创建催答规则</button>
+        {!reminderFieldsValid ? <p>请填写合法分钟数、1–10 次上限，且正文必须包含 {'{{unsubscribe}}'}。</p> : null}
+        {createReminder.isError ? <p role="alert">创建催答规则失败，请检查任务、权限和规则参数后重试。</p> : null}
+      </>}
+    </section> : null}
   </main>;
 }
 
@@ -226,6 +302,13 @@ function TaskStatus({ task, recipients, recipientsError, cancelling, cancelError
   </section>;
 }
 
+function ReminderRuleStatus({ rule, pending, error, onToggle }: { rule: ReminderRule; pending: boolean; error: boolean; onToggle(): void }) {
+  return <section className="audience-task" aria-label="催答规则状态"><p>状态：{rule.enabled ? '已启用' : '已暂停'}；首次延迟 {formatMinutes(rule.firstDelaySeconds)} 分钟，间隔 {formatMinutes(rule.intervalSeconds)} 分钟，最多 {rule.maxReminders} 次。</p>
+    <button type="button" disabled={pending} onClick={onToggle}>{rule.enabled ? '暂停催答规则' : '启用催答规则'}</button>
+    {error ? <p role="alert">更新催答规则失败，请稍后重试。</p> : null}
+  </section>;
+}
+
 function isNotFound(error: unknown) { return error instanceof ApiError && error.status === 404; }
 function isTaskUnavailable(error: unknown) { return error instanceof ApiError && (error.status === 403 || error.status === 404); }
 function isImportUnavailable(error: unknown) { return error instanceof ApiError && (error.status === 403 || error.status === 404); }
@@ -233,3 +316,4 @@ function isDeliveryUnavailable(error: unknown) { return error instanceof ApiErro
 function taskStatusLabel(status: string) { return ({ queued: '等待发送', running: '发送中', completed: '已完成', cancelled: '已取消', failed: '发送失败' } as Record<string, string>)[status] ?? status; }
 function importStatusLabel(status: string) { return ({ queued: '等待处理', running: '处理中', completed: '已完成', failed: '处理失败' } as Record<string, string>)[status] ?? status; }
 function importOutcomeLabel(outcome: string) { return ({ created: '已新增', updated: '已更新', duplicate: '重复', invalid: '无效' } as Record<string, string>)[outcome] ?? outcome; }
+function formatMinutes(seconds: number) { return Math.floor(seconds / 60); }

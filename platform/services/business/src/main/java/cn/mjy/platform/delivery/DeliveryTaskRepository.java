@@ -90,6 +90,16 @@ class DeliveryTaskRepository {
                 .optional();
     }
 
+    /** 问卷内的最新任务；调用方先在服务层完成问卷范围授权。 */
+    List<TaskRow> listBySurvey(UUID surveyId, int limit) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM delivery_task WHERE survey_id = :survey"
+                        + " ORDER BY created_at DESC, id DESC LIMIT :limit")
+                .param("survey", surveyId)
+                .param("limit", limit)
+                .query(DeliveryTaskRepository::map)
+                .list();
+    }
+
     /** 本租户里到期可推进的任务，按登记顺序；只扫在途任务（部分索引）。 */
     List<UUID> dueTasks(int limit) {
         return jdbc.sql("""

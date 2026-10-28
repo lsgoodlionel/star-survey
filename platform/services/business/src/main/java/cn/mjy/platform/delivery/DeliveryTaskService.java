@@ -131,6 +131,15 @@ public class DeliveryTaskService {
         });
     }
 
+    /** 问卷内最近任务。视图不含收件人地址或消息正文。 */
+    public List<TaskView> list(TenantContext ctx, UUID surveyId, int limit) {
+        access.require(ctx, DeliveryAccess.READ, surveyId);
+        int boundedLimit = Math.min(Math.max(limit, 1), 100);
+        return tenantScope.call(ctx.tenantId(), () -> tasks.listBySurvey(surveyId, boundedLimit).stream()
+                .map(TaskView::of)
+                .toList());
+    }
+
     public List<RecipientView> recipients(TenantContext ctx, UUID taskId) {
         return tenantScope.call(ctx.tenantId(), () -> {
             TaskRow row = row(taskId);

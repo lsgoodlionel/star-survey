@@ -2,6 +2,7 @@ package cn.mjy.platform.delivery;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -167,6 +168,20 @@ class DeliveryApiTest {
     }
 
     @Test
+    void listSurveyTasksIsBoundedAndDoesNotExposeRecipients() throws Exception {
+        fixture.emailTask(p, 1);
+        fixture.emailTask(p, 1);
+
+        getAs(p.owner(), "/v1/surveys/" + p.surveyId() + "/delivery-tasks?limit=1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].surveyId").value(p.surveyId().toString()))
+                .andExpect(jsonPath("$[0].recipientCount").value(1))
+                .andExpect(jsonPath("$[0].address").doesNotExist())
+                .andExpect(jsonPath("$[0].bodyTemplate").doesNotExist());
+    }
+
+    @Test
     void anAudienceTaskUsesOnlyTheTestEmailProviderAndKeepsItsRecipientReadRedacted() throws Exception {
         var list = lists.create(p.owner(), "Wave 4 发送受众", ContactKind.RESPONDENT, DedupeKey.EMAIL);
         contacts.create(p.owner(), list.id(), ContactKind.RESPONDENT,
@@ -189,6 +204,29 @@ class DeliveryApiTest {
         getAs(p.owner(), "/v1/delivery/tasks/" + taskId + "/recipients")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].address").value(org.hamcrest.Matchers.not("delivery-audience@example.com")));
+    }
+
+    @Test
+    void anOwnerCanCreateListAndToggleTheSurveysReminderRule() throws Exception {
+        TaskView invite = fixture.emailTask(p, 1);
+        String created = postAs(p.owner(), "/v1/delivery/surveys/" + p.surveyId() + "/reminder-rules", """
+                {"sourceTaskId":"%s","firstDelaySeconds":3600,"intervalSeconds":86400,
+                 "maxReminders":2,"subject":"请继续填写","bodyTemplate":"%s"}
+                """.formatted(invite.id(), DeliveryFixture.REMINDER_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.enabled").value(true))
+                .andReturn().getResponse().getContentAsString();
+        String ruleId = com.jayway.jsonpath.JsonPath.read(created, "$.id");
+
+        mvc.perform(patch("/v1/delivery/surveys/" + p.surveyId() + "/reminder-rules/" + ruleId)
+                        .header("Authorization", bearer(p.owner()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(ruleId))
+                .andExpect(jsonPath("$.enabled").value(false));
+        getAs(p.owner(), "/v1/delivery/surveys/" + p.surveyId() + "/reminder-rules")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].enabled").value(false));
     }
 
     @Test

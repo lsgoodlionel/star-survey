@@ -7,12 +7,17 @@ import {
   deliveryLinksQueryKey,
   deliveryRecipientSchema,
   deliveryTaskSchema,
+  reminderRuleSchema,
   fetchDeliveryQr,
+  createReminderRule,
   getDeliveryTask,
   linkViewSchema,
+  listReminderRules,
+  listSurveyDeliveryTasks,
   listDeliveryRecipients,
   listDeliveryLinks,
   revokeDeliveryLink,
+  setReminderRuleEnabled,
 } from './delivery';
 import { binaryResponse, jsonResponse } from '../../test/server';
 
@@ -39,6 +44,11 @@ const recipient = {
   id: '40000000-0000-4000-8000-000000000001', address: 'w***@example.test', displayName: '王小明',
   state: 'queued', attempts: 0, remindersSent: 0, lastError: null, sentAt: null, lastReminderAt: null,
 };
+const reminderRule = {
+  id: '50000000-0000-4000-8000-000000000001', surveyId, sourceTaskId: taskId,
+  firstDelaySeconds: 3600, intervalSeconds: 86400, maxReminders: 2, subject: '请继续填写',
+  enabled: true, createdAt: '2026-10-29T08:00:00Z',
+};
 
 test('validates the complete delivery link contract', () => {
   expect(linkViewSchema.parse(link)).toEqual(link);
@@ -50,6 +60,35 @@ test('validates task state and redacted recipient contracts', () => {
   expect(deliveryTaskSchema.parse(task)).toEqual(task);
   expect(deliveryRecipientSchema.parse(recipient)).toEqual(recipient);
   expect(() => deliveryTaskSchema.parse({ ...task, recipientCount: -1 })).toThrow();
+  expect(reminderRuleSchema.parse(reminderRule)).toEqual(reminderRule);
+  expect(() => reminderRuleSchema.parse({ ...reminderRule, maxReminders: 11 })).toThrow();
+});
+
+test('lists survey tasks and manages only typed reminder rules', async () => {
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    const path = String(input);
+    if (path.includes('reminder-rules') && init?.method === 'POST') return jsonResponse(reminderRule, 201);
+    if (path.includes('reminder-rules') && init?.method === 'PATCH') return jsonResponse({ ...reminderRule, enabled: false });
+    if (path.includes('reminder-rules')) return jsonResponse([reminderRule]);
+    return jsonResponse([task]);
+  });
+  const api = createApiClient({ fetchImpl });
+  await listSurveyDeliveryTasks(api, 'survey/id');
+  await listReminderRules(api, 'survey/id');
+  await createReminderRule(api, 'survey/id', {
+    sourceTaskId: 'task/id', firstDelaySeconds: 0, intervalSeconds: 60, maxReminders: 2,
+    subject: null, bodyTemplate: '请点击 {{unsubscribe}}',
+  });
+  await setReminderRuleEnabled(api, 'survey/id', 'rule/id', false);
+  expect(fetchImpl.mock.calls.map(([path, init]) => [path, init?.method, init?.body])).toEqual([
+    ['/v1/surveys/survey%2Fid/delivery-tasks?limit=50', 'GET', undefined],
+    ['/v1/delivery/surveys/survey%2Fid/reminder-rules', 'GET', undefined],
+    ['/v1/delivery/surveys/survey%2Fid/reminder-rules', 'POST', JSON.stringify({
+      sourceTaskId: 'task/id', firstDelaySeconds: 0, intervalSeconds: 60, maxReminders: 2,
+      subject: null, bodyTemplate: '请点击 {{unsubscribe}}',
+    })],
+    ['/v1/delivery/surveys/survey%2Fid/reminder-rules/rule%2Fid', 'PATCH', JSON.stringify({ enabled: false })],
+  ]);
 });
 
 test('uses the audience scoped create endpoint and task status endpoints', async () => {
