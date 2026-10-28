@@ -97,7 +97,7 @@
 
 | 路径 | 内容 |
 |---|---|
-| `platform/apps/admin-web/` | 作者管理 SPA：内存会话、业务 Dashboard、资源树、基础编辑、大纲拖拽排序、批量导入、快速/真实预览、审批发布、投放链接、答卷与导出 |
+| `platform/apps/admin-web/` | 作者管理 SPA：内存会话、业务 Dashboard、资源树、基础编辑、大纲拖拽排序、批量导入、快速/真实预览、审批发布、问卷内受众与投放、投放链接、答卷与导出 |
 | `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、dashboard、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
 | `platform/tools/publish-gateway/` | 发布网关：定义 → LSS → 导入 → 激活 → 回读校验 → 回滚；答卷读取；插件通道客户端 |
 | `platform/tools/engine-theme/` | 把随镜像发布的作答主题装进引擎库 |

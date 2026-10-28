@@ -16,6 +16,47 @@ export const linkViewSchema = z.object({
 
 export type LinkView = z.infer<typeof linkViewSchema>;
 
+export const deliveryTaskSchema = z.object({
+  id: z.string().uuid(),
+  surveyId: z.string().uuid(),
+  channel: z.enum(['email', 'sms']),
+  kind: z.string(),
+  status: z.string(),
+  sourceTaskId: z.string().uuid().nullable(),
+  recipientCount: z.number().int().nonnegative(),
+  sentCount: z.number().int().nonnegative(),
+  failedCount: z.number().int().nonnegative(),
+  skippedCount: z.number().int().nonnegative(),
+  billedUnits: z.number().int().nonnegative(),
+  attempts: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+  createdAt: z.string().datetime({ offset: true }),
+  finishedAt: z.string().datetime({ offset: true }).nullable(),
+});
+
+export const deliveryRecipientSchema = z.object({
+  id: z.string().uuid(),
+  address: z.string(),
+  displayName: z.string().nullable(),
+  state: z.string(),
+  attempts: z.number().int().nonnegative(),
+  remindersSent: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+  sentAt: z.string().datetime({ offset: true }).nullable(),
+  lastReminderAt: z.string().datetime({ offset: true }).nullable(),
+});
+
+export type DeliveryTask = z.infer<typeof deliveryTaskSchema>;
+export type DeliveryRecipient = z.infer<typeof deliveryRecipientSchema>;
+
+export interface CreateAudienceDeliveryTaskInput {
+  channel: 'email';
+  linkId?: string | null;
+  subject?: string | null;
+  bodyTemplate: string;
+  idempotencyKey?: string | null;
+}
+
 export interface CreateDeliveryLinkInput {
   label: string;
   params?: Record<string, string>;
@@ -38,6 +79,11 @@ export interface DeliveryBinaryClientOptions {
 
 export const deliveryLinksQueryKey = (tenantId: string, surveyId: string) =>
   ['delivery-links', tenantId, surveyId] as const;
+
+export const deliveryTasksQueryKey = (tenantId: string, surveyId: string) =>
+  ['delivery-tasks', tenantId, surveyId] as const;
+export const deliveryTaskQueryKey = (tenantId: string, surveyId: string, taskId: string) =>
+  [...deliveryTasksQueryKey(tenantId, surveyId), taskId] as const;
 
 export function listDeliveryLinks(api: ApiClient, surveyId: string, signal?: AbortSignal) {
   return api.request({
@@ -75,6 +121,46 @@ export function revokeDeliveryLink(api: ApiClient, linkId: string, signal?: Abor
     path: `/v1/delivery/links/${encodeURIComponent(linkId)}`,
     method: 'DELETE',
     schema: linkViewSchema,
+    signal,
+  });
+}
+
+export function createAudienceDeliveryTask(
+  api: ApiClient,
+  surveyId: string,
+  input: CreateAudienceDeliveryTaskInput,
+  signal?: AbortSignal,
+) {
+  return api.request({
+    path: `/v1/surveys/${encodeURIComponent(surveyId)}/delivery-tasks`,
+    method: 'POST',
+    body: input,
+    schema: deliveryTaskSchema,
+    signal,
+  });
+}
+
+export function getDeliveryTask(api: ApiClient, taskId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}`,
+    schema: deliveryTaskSchema,
+    signal,
+  });
+}
+
+export function listDeliveryRecipients(api: ApiClient, taskId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}/recipients`,
+    schema: z.array(deliveryRecipientSchema),
+    signal,
+  });
+}
+
+export function cancelDeliveryTask(api: ApiClient, taskId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}/cancel`,
+    method: 'POST',
+    schema: deliveryTaskSchema,
     signal,
   });
 }

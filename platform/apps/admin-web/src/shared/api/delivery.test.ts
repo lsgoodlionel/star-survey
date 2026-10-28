@@ -1,10 +1,16 @@
 import { expect, test, vi } from 'vitest';
 import { createApiClient } from './http';
 import {
+  cancelDeliveryTask,
+  createAudienceDeliveryTask,
   createDeliveryLink,
   deliveryLinksQueryKey,
+  deliveryRecipientSchema,
+  deliveryTaskSchema,
   fetchDeliveryQr,
+  getDeliveryTask,
   linkViewSchema,
+  listDeliveryRecipients,
   listDeliveryLinks,
   revokeDeliveryLink,
 } from './delivery';
@@ -23,11 +29,47 @@ const link = {
   revokedAt: null,
   createdAt: '2026-10-09T08:00:00Z',
 };
+const taskId = '30000000-0000-4000-8000-000000000001';
+const task = {
+  id: taskId, surveyId, channel: 'email', kind: 'delivery', status: 'queued', sourceTaskId: null,
+  recipientCount: 2, sentCount: 0, failedCount: 0, skippedCount: 0, billedUnits: 0, attempts: 0,
+  lastError: null, createdAt: '2026-10-28T08:00:00Z', finishedAt: null,
+};
+const recipient = {
+  id: '40000000-0000-4000-8000-000000000001', address: 'w***@example.test', displayName: '王小明',
+  state: 'queued', attempts: 0, remindersSent: 0, lastError: null, sentAt: null, lastReminderAt: null,
+};
 
 test('validates the complete delivery link contract', () => {
   expect(linkViewSchema.parse(link)).toEqual(link);
   expect(() => linkViewSchema.parse({ ...link, signedParams: { exp: 123 } })).toThrow();
   expect(() => linkViewSchema.parse({ ...link, createdAt: 'today' })).toThrow();
+});
+
+test('validates task state and redacted recipient contracts', () => {
+  expect(deliveryTaskSchema.parse(task)).toEqual(task);
+  expect(deliveryRecipientSchema.parse(recipient)).toEqual(recipient);
+  expect(() => deliveryTaskSchema.parse({ ...task, recipientCount: -1 })).toThrow();
+});
+
+test('uses the audience scoped create endpoint and task status endpoints', async () => {
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    if (String(input).endsWith('/recipients')) return jsonResponse([recipient]);
+    return jsonResponse(task, init?.method === 'POST' && String(input).includes('/surveys/') ? 201 : 200);
+  });
+  const api = createApiClient({ fetchImpl });
+  await createAudienceDeliveryTask(api, 'survey/id', {
+    channel: 'email', subject: '邀请填写', bodyTemplate: '请填写问卷', idempotencyKey: 'request-1',
+  });
+  await getDeliveryTask(api, 'task/id');
+  await listDeliveryRecipients(api, 'task/id');
+  await cancelDeliveryTask(api, 'task/id');
+  expect(fetchImpl.mock.calls.map(([path, init]) => [path, init?.method, init?.body])).toEqual([
+    ['/v1/surveys/survey%2Fid/delivery-tasks', 'POST', JSON.stringify({ channel: 'email', subject: '邀请填写', bodyTemplate: '请填写问卷', idempotencyKey: 'request-1' })],
+    ['/v1/delivery/tasks/task%2Fid', 'GET', undefined],
+    ['/v1/delivery/tasks/task%2Fid/recipients', 'GET', undefined],
+    ['/v1/delivery/tasks/task%2Fid/cancel', 'POST', undefined],
+  ]);
 });
 
 test('isolates delivery link queries by tenant and survey', () => {

@@ -37,6 +37,9 @@ const PreviewRoutePage = lazy(() =>
 const ResponsesRoutePage = lazy(() =>
   import('../features/responses/ResponsesPage').then((module) => ({ default: module.ResponsesRoutePage })),
 );
+const AudienceRoutePage = lazy(() =>
+  import('../features/audience/AudiencePage').then((module) => ({ default: module.AudienceRoutePage })),
+);
 
 const testTokenEnabled = import.meta.env.DEV || import.meta.env.VITE_E2E === 'true';
 const DevelopmentTokenPage = testTokenEnabled
@@ -139,6 +142,14 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
                   element: (
                     <Suspense fallback={<p>正在加载答卷数据</p>}>
                       <ResponsesRoutePage />
+                    </Suspense>
+                  ),
+                },
+                {
+                  path: 'audience',
+                  element: (
+                    <Suspense fallback={<p>正在加载受众与投放</p>}>
+                      <AudienceRoutePage />
                     </Suspense>
                   ),
                 },

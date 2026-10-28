@@ -190,6 +190,7 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | R05-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 二维码像素可解码且 payload 等于刚创建的作答 URL，再经链接完成正式作答 |
 | R05-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliverySendTest.java::aCrashMidTaskResumesWithoutSendingAnythingTwice` | 批量投放：恢复不重发 |
 | R05-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReceiptTest.java::aDeliveredReceiptIsCountedOnceNoMatterHowOftenItIsRedelivered` | 回执重复投递只计一次 |
+| R05-04 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 已发布问卷从保存 audience 创建 Email 任务；无 provider 时真实浏览器断言 503 与未创建任务提示 |
 | R05-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReceiptTest.java::aReceiptWithoutAValidSignatureIsRejectedAndLeavesNoTrace` | 渠道商回执验签 |
 | R05-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReceiptTest.java::anOldTimestampIsRejectedEvenWithAValidSignature` | 回执防重放 |
 | R05-06 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReminderTest.java::someoneWhoAlreadyCompletedIsNotReminded` | 已完成的人不再被催 |
@@ -227,6 +228,7 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | R18-01 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/identity/org/OrgDepartureTest.java::departureRemovesTheMemberAndFreesTheSeat` | 离职后立即失权 |
 | R18-02 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/contacts/ContactTagTest.java::anotherTenantsTagCannotBeAssigned` | 标签权限隔离 |
 | R18-02 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/contacts/ContactOrgUnitScopeTest.java::aDepartmentAdminSeesOnlyItsOwnDepartmentAndDescendants` | 部门级数据范围 |
+| R18-02 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 真实浏览器在问卷上下文创建 respondent 名单与联系人并保存 audience；投放请求不携带联系人地址 |
 
 ## WP-19 团队品牌
 

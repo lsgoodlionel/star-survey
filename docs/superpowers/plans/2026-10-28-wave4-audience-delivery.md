@@ -1,6 +1,6 @@
 # Wave 4 受众与投放实施计划
 
-状态：已完成 Wave 3 本地准出核对，待从最小问卷内受众与投放纵切开始实施（2026-10-28）。实施分支：`feat/wave3-data-productization`；保持现有堆叠 PR 关系，不变基或合并父分支。
+状态：最小问卷内受众与投放纵切已完成本地双库浏览器核对（2026-10-28）。实施分支：`feat/wave3-data-productization`；保持现有堆叠 PR 关系，不变基或合并父分支。
 
 ## 目标与边界
 
@@ -39,6 +39,12 @@ Wave 4 的首个纵切位于已发布问卷的上下文中：运营人员创建�
 ## 2026-10-28 阶段 1 起步
 
 已新增 `POST /v1/surveys/{surveyId}/delivery-tasks`：请求不接收 `recipients`，`DeliveryTaskService` 在服务端按已保存 audience 和当前调用者的数据范围选择可用的 Email/SMS 地址，再复用既有任务创建与收件人快照逻辑。`DeliveryApiTest` 覆盖从保存 audience 创建任务及收件人地址脱敏；隔离 Docker Maven 目标类通过。联系人/受众前端、未配置通道的页面恢复状态和双库浏览器纵切仍待后续阶段，不能将该服务端契约单独视作 Wave 4 准出。
+
+## 2026-10-28 阶段 2–3：问卷内前端与本地验证
+
+`SurveyShell` 已增加“受众与投放”标签及 `/surveys/:surveyId/audience` 子路由，保留当前问卷上下文。页面以类型化 API 客户端提供名单创建、单个 respondent 联系人创建、问卷 audience 读取/保存及服务端人数；浏览器不会读取联系人名册来建立投放请求。Email 任务仅提交 channel、主题、模板与幂等键，任务状态和收件人页面只消费后端脱敏响应；可取消状态提供取消动作。
+
+`DeliveryUnavailable`（HTTP 503）在页面固定显示“渠道未配置，未创建任务”，且不渲染任务成功状态。前端 API/页面/壳层定向测试 49/49、typecheck、lint、生产构建和 production bundle assertion 通过。隔离 Docker MySQL 与 PostgreSQL 真实 Chromium 各 20/20，通过已发布问卷完成名单 → 联系人 → audience → 服务端 503 失败路径，随后核对平台 API、平台数据库、网关和引擎数据库。真实 provider、成功投递、回执、催答、批量导入及生产验收继续留在后续切片。
 
 ## 风险与停止条件
 

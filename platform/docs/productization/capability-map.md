@@ -18,7 +18,7 @@
 |---|---|---|---|---|---|---|---|
 | 管理 | `R19-01`, `R19-03`, `R20-01`, `R20-02`, `R20-03`, `R22-01`, `R22-11`, `R22-12` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 6 |
 | 审批与发布 | `R01-07`, `R01-09` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
-| 通讯录与投放 | `R05-04`, `R05-05`, `R05-06`, `R18-01`, `R18-02`, `R18-03`, `R18-06` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 4 |
+| 通讯录与投放 | `R05-04`, `R05-05`, `R05-06`, `R18-01`, `R18-02`, `R18-03`, `R18-06` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 4 |
 | 投放链接与二维码 | `R05-01`, `R05-07`, `R05-08` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 编辑 | `R01-04`, `R01-05`, `R01-08` | 完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 5 |
 | 导出 | `R06-02`, `R06-03`, `R06-05`, `R06-06`, `R06-07` | 部分完成 | 完成 | 部分完成 | 未开始 | 部分完成 | Wave 3 |
@@ -49,8 +49,10 @@
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java`](../../services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java) 定位 `class ContactController`：联系人、部门、标签和名单后端已形成。
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryTaskController.java`](../../services/business/src/main/java/cn/mjy/platform/delivery/DeliveryTaskController.java) 定位 `public class DeliveryTaskController`：批量任务、回执、退订和催答后端已形成；真实供应商未接入。
-- **前端** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `| 通讯录、部门、标签、名单 |`：核查报告明确记录通讯录和投放无前端入口。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：2026-10-28 隔离 Docker MySQL/PostgreSQL 各 20/20：发布后完成名单、联系人、audience 和无 provider 的 503 恢复路径；不宣称真实投递成功。
+- **前端** （实现）[`platform/apps/admin-web/src/features/audience/AudiencePage.tsx`](../../apps/admin-web/src/features/audience/AudiencePage.tsx) 定位 `export function AudiencePage`：问卷内页面支持名单和单个 respondent 联系人创建、audience 人数、服务端任务创建与脱敏任务状态；未覆盖批量导入、真实 provider、回执和催答。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R18-01 |`：通讯录导入与同步需求已编号。
+- **追溯** （追溯记录）[`docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md`](../../../docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md) 定位 `2026-10-28 阶段 2–3：问卷内前端与本地验证`：最小问卷内受众与投放纵切的范围、PII 边界、双库浏览器证据和遗留项已记录。
 
 ### 投放链接与二维码 (`delivery-links`)
 
