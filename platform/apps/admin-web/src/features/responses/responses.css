@@ -133,6 +133,7 @@
 .response-filters,
 .export-create-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: end;
   gap: 10px;
   margin-top: 16px;
@@ -153,6 +154,7 @@
 }
 
 .delivery-create input,
+.response-filters input,
 .response-filters select,
 .export-create-row select {
   min-width: 0;
@@ -162,6 +164,33 @@
   background: #fff;
   border: 1px solid #85959b;
   border-radius: 4px;
+}
+
+.response-fields {
+  margin-top: 12px;
+}
+
+.response-fields > button {
+  min-height: 38px;
+  padding: 7px 11px;
+  color: #204c59;
+  background: #fff;
+  border: 1px solid #8ca5ac;
+  border-radius: 4px;
+}
+
+.response-fields__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 10px;
+}
+
+.response-fields__options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
 }
 
 .delivery-list {

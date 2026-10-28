@@ -276,6 +276,7 @@ test('branded copy previews and publishes with language and pinned image bytes',
   expect(published.map((item) => item.version).sort()).toEqual([1, 2]);
   expect(published.find((item) => item.live)?.version).toBe(2);
   const version2 = await page.context().newPage();
+  version2.setDefaultTimeout(30_000);
   await version2.goto(deliveryUrl!);
   await expect(version2.getByText('感谢参与第二版')).toBeVisible();
   const version2Image = await version2.request.get(new URL((await version2.getByRole('img', { name: '验收Logo' })
@@ -286,6 +287,52 @@ test('branded copy previews and publishes with language and pinned image bytes',
   const version1Image = await version2.request.get(imageUrl, { headers: { 'Cache-Control': 'no-cache' } });
   expect(version1Image.status()).toBe(200);
   expect(createHash('sha256').update(await version1Image.body()).digest('hex')).toBe(beforeHash);
+  await switchToEnglish(version2);
+  await expectEnglishQuestion(version2);
+  await version2.locator('input[type="radio"]:visible').first().check();
+  for (let step = 0; step < 4; step += 1) {
+    const submit = version2.locator('#ls-button-submit:visible, #ls-button-next:visible, button[type="submit"]:visible, input[type="submit"]:visible').last();
+    if (await submit.count() === 0) break;
+    await submit.click();
+    await version2.waitForLoadState('domcontentloaded');
+    if (await version2.locator('input[type="radio"]:visible').count() === 0) break;
+  }
+  await expect.poll(async () => {
+    const response = await page.request.get(`${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${copiedSurveyId}/responses/summary`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    expect(response.status()).toBe(200);
+    return (await response.json() as { total: { engineCompleted: number } }).total.engineCompleted;
+  }, { timeout: 60_000 }).toBe(2);
+  await page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '答卷与导出' }).click();
+  await expect(page.getByLabel('已完成 2')).toBeVisible();
+  await expect(page.locator('.response-table-wrap tbody tr')).toHaveCount(2);
+  const versionFilter = page.getByRole('combobox', { name: '发布版本', exact: true });
+  await versionFilter.selectOption('1');
+  await expect(page.locator('.response-table-wrap tbody tr')).toHaveCount(1);
+  await expect(page.locator('.response-table-wrap tbody')).toContainText('版本 1');
+  await versionFilter.selectOption('2');
+  await expect(page.locator('.response-table-wrap tbody tr')).toHaveCount(1);
+  await expect(page.locator('.response-table-wrap tbody')).toContainText('版本 2');
+  await versionFilter.selectOption('');
+  await expect(page.locator('.response-table-wrap tbody tr')).toHaveCount(2);
+  for (const [format, label, suffix] of [
+    ['csv', 'CSV 数据包', '.zip'], ['xlsx', 'Excel 工作簿', '.xlsx'],
+    ['sav', 'SPSS 数据包', '.sav.zip'], ['docx', 'Word 答卷文档', '.docx'],
+    ['attachments', '附件包', '.zip'],
+  ]) {
+    await page.getByLabel('导出格式').selectOption(format);
+    const creation = page.waitForResponse((response) => response.url().endsWith(`/v1/surveys/${copiedSurveyId}/exports`)
+      && response.request().method() === 'POST');
+    await page.getByRole('button', { name: '创建导出任务' }).click();
+    expect((await creation).status()).toBe(202);
+    await expect(page.locator('.export-job')).toContainText(label);
+    await expect(page.locator('.export-job')).toContainText('导出完成', { timeout: 60_000 });
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: '下载导出文件' }).click();
+    const file = await downloadPromise;
+    expect(file.suggestedFilename()).toMatch(new RegExp(`${suffix.replaceAll('.', '\\.')}$`));
+    expect((await stat(await file.path())).size).toBeGreaterThan(0);
+  }
   scenarios.add('asset-version-pinning');
   await assertNoThirdPartyUrls(version2);
   await version2.close();

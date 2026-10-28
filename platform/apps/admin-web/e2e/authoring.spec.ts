@@ -247,6 +247,17 @@ test('author filters stable resources, restores archive, and publishes the same 
   expect(download.suggestedFilename()).toMatch(/\.(?:csv|zip)$/i);
   await assertDownloadedCsvContainsFormalResponse(download, formalQuestionCode);
 
+  const filteredRequest = page.waitForRequest((request) => request.url().includes('/responses?')
+    && request.url().includes('startedFrom='));
+  await fillAction(page.getByLabel('开始时间起'), '2020-01-01T00:00');
+  await filteredRequest;
+  await expect(formalAnswer).toBeVisible();
+  await clickAction(page.getByRole('button', { name: '选择显示字段' }));
+  await expect(page.getByRole('group', { name: '显示字段' }).getByRole('checkbox').first()).toBeVisible();
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
+  await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '答卷与导出' }));
+  await expect(page.locator('.export-job')).toContainText('导出完成');
+
   const versionLink = page.getByRole('link', { name: /查看版本 \d+/ }).first();
   await clickAction(page.getByRole('link', { name: '发布与版本' }));
   const version = Number((await versionLink.textContent())?.match(/\d+/)?.[0]);

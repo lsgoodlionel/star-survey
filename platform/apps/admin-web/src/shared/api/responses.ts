@@ -41,10 +41,32 @@ export const responsePageSchema = z.object({
   sensitiveRevealed: z.boolean(),
 });
 
+export const fieldDictionarySchema = z.object({
+  surveyId: z.string().uuid(),
+  versions: z.array(z.object({
+    version: z.number().int().positive(),
+    engineInstanceId: z.string().min(1),
+    engineSid: z.number().int().positive(),
+    language: z.string(),
+    fields: z.array(z.object({
+      fieldname: z.string().min(1),
+      questionUuid: z.string().uuid(),
+      code: z.string(),
+      type: z.string(),
+      aid: z.string(),
+      scale: z.number().int(),
+      label: z.string(),
+      sensitive: z.boolean(),
+      options: z.array(z.object({ code: z.string(), text: z.string() })),
+    })),
+  })),
+});
+
 export type ResponseState = z.infer<typeof responseStateSchema>;
 export type ResponseSummary = z.infer<typeof responseSummarySchema>;
 export type ResponseRow = z.infer<typeof responseRowSchema>;
 export type ResponsePage = z.infer<typeof responsePageSchema>;
+export type FieldDictionary = z.infer<typeof fieldDictionarySchema>;
 
 export interface ResponseFilters {
   state?: ResponseState | null;
@@ -86,6 +108,17 @@ const responseQueryRoot = (tenantId: string, surveyId: string) =>
 
 export const responseSummaryQueryKey = (tenantId: string, surveyId: string) =>
   [...responseQueryRoot(tenantId, surveyId), 'summary'] as const;
+
+export const responseFieldsQueryKey = (tenantId: string, surveyId: string) =>
+  [...responseQueryRoot(tenantId, surveyId), 'fields'] as const;
+
+export function getResponseFields(api: ApiClient, surveyId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/surveys/${encodeURIComponent(surveyId)}/fields`,
+    schema: fieldDictionarySchema,
+    signal,
+  });
+}
 
 export const responsePageQueryKey = (
   tenantId: string,

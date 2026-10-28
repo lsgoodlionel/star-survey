@@ -15,13 +15,16 @@ import {
 import type { ApiClient } from '../../shared/api/http';
 import {
   getResponseSummary,
+  getResponseFields,
   listResponses,
+  responseFieldsQueryKey,
   responsePageQueryKey,
   responseSummaryQueryKey,
   type ResponseFilters,
   type ResponseRow,
   type ResponseState,
   type ResponseSummary,
+  type FieldDictionary,
 } from '../../shared/api/responses';
 import { parseSurveyIdParam } from '../publish/routeParams';
 import './responses.css';
@@ -31,6 +34,7 @@ interface ResponsesPageProps {
   exportClient: ExportClient;
   surveyId: string;
   tenantId: string;
+  actorId?: string;
 }
 
 const exportFormats: ReadonlyArray<{ value: ExportFormat; label: string }> = [
@@ -47,17 +51,32 @@ const stateOptions: ReadonlyArray<{ value: ResponseState; label: string }> = [
   { value: 'deleted', label: '已删除' },
 ];
 
-export function ResponsesPage({ api, exportClient, surveyId, tenantId }: ResponsesPageProps) {
+export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId }: ResponsesPageProps) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<ResponseState | null>(null);
   const [version, setVersion] = useState<number | null>(null);
+  const [startedFrom, setStartedFrom] = useState('');
+  const [startedTo, setStartedTo] = useState('');
+  const [completedFrom, setCompletedFrom] = useState('');
+  const [completedTo, setCompletedTo] = useState('');
+  const [fieldPickerOpen, setFieldPickerOpen] = useState(false);
+  const [selectedFields, setSelectedFields] = useState<string[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([]);
   const [format, setFormat] = useState<ExportFormat>('csv');
   const [currentJob, setCurrentJob] = useState<ExportJobView | null>(null);
+  const storageKey = actorId ? `survey-export:${tenantId}:${actorId}:${surveyId}` : null;
+  const [currentJobId, setCurrentJobId] = useState<string | null>(() => storageKey
+    ? sessionStorage.getItem(storageKey) : null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [refreshState, setRefreshState] = useState<'idle' | 'refreshing' | 'done'>('idle');
-  const filters: ResponseFilters = { state, version, cursor, limit: 50 };
+  const invalidTimeRange = Boolean((startedFrom && startedTo && startedFrom > startedTo)
+    || (completedFrom && completedTo && completedFrom > completedTo));
+  const filters: ResponseFilters = {
+    state, version, cursor, limit: 50,
+    startedFrom: toInstant(startedFrom), startedTo: toInstant(startedTo),
+    completedFrom: toInstant(completedFrom), completedTo: toInstant(completedTo),
+  };
 
   const summary = useQuery({
     queryKey: responseSummaryQueryKey(tenantId, surveyId),
@@ -72,19 +91,33 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
     retry: false,
     staleTime: 0,
     refetchOnMount: 'always',
+    enabled: !invalidTimeRange,
   });
+  const fields = useQuery({
+    queryKey: responseFieldsQueryKey(tenantId, surveyId),
+    queryFn: ({ signal }) => getResponseFields(api, surveyId, signal),
+    enabled: fieldPickerOpen && responses.isSuccess,
+    retry: false,
+  });
+  const availableFields = useMemo(() => {
+    const entries = fields.data?.versions.filter((item) => version === null || item.version === version)
+      .flatMap((item) => item.fields) ?? [];
+    return [...new Map(entries.map((field) => [field.fieldname, field])).values()];
+  }, [fields.data, version]);
   const job = useQuery({
-    queryKey: exportJobQueryKey(tenantId, surveyId, currentJob?.jobId ?? 'none'),
-    queryFn: ({ signal }) => exportClient.get(currentJob!.jobId, signal),
-    enabled: currentJob?.status === 'queued' || currentJob?.status === 'running',
-    initialData: currentJob?.status === 'queued' || currentJob?.status === 'running' ? currentJob : undefined,
+    queryKey: exportJobQueryKey(tenantId, surveyId, currentJobId ?? 'none'),
+    queryFn: ({ signal }) => exportClient.get(currentJobId!, signal),
+    enabled: Boolean(currentJobId),
+    initialData: currentJob && currentJob.jobId === currentJobId ? currentJob : undefined,
     retry: false,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === 'queued' || status === 'running' ? 1_500 : false;
     },
   });
-  const visibleJob = job.data ?? currentJob;
+  const jobAccessRevoked = job.error instanceof ApiError
+    && (job.error.kind === 'forbidden' || job.error.kind === 'not_found');
+  const visibleJob = jobAccessRevoked ? null : (job.data ?? currentJob);
 
   const createJob = useMutation({
     mutationFn: () => exportClient.create(surveyId, {
@@ -96,6 +129,8 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
     onSuccess: (created) => {
       queryClient.setQueryData(exportJobQueryKey(tenantId, surveyId, created.jobId), created);
       setCurrentJob(created);
+      setCurrentJobId(created.jobId);
+      if (storageKey) sessionStorage.setItem(storageKey, created.jobId);
     },
   });
   const cancelJob = useMutation({
@@ -109,7 +144,10 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
     mutationFn: (jobId: string) => exportClient.download(jobId),
     onMutate: () => setDownloadError(null),
     onSuccess: (file) => triggerDownload(file.blob, file.filename),
-    onError: (error) => setDownloadError(publicMessage(error)),
+    onError: (error) => {
+      setDownloadError(publicMessage(error));
+      if (error instanceof ApiError && error.status === 410) void job.refetch();
+    },
   });
 
   const summaryForbidden = isForbidden(summary.error);
@@ -117,7 +155,7 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
   const loadFailed = (summary.isError && !summaryForbidden) || (responses.isError && !detailForbidden);
   const ready = !summary.isFetching
     && !responses.isFetching
-    && !loadFailed
+    && !loadFailed && !invalidTimeRange
     && Boolean(summary.data || summaryForbidden)
     && Boolean(responses.data || detailForbidden)
     && Boolean(summary.data || responses.data);
@@ -190,6 +228,46 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
                 ))}
               </select>
             </label>
+            {([
+              ['开始时间起', startedFrom, setStartedFrom],
+              ['开始时间止', startedTo, setStartedTo],
+              ['完成时间起', completedFrom, setCompletedFrom],
+              ['完成时间止', completedTo, setCompletedTo],
+            ] as const).map(([label, value, setter]) => (
+              <label key={label}>{label}
+                <input type="datetime-local" value={value} onChange={(event) => {
+                  setter(event.target.value);
+                  resetPagination(setCursor, setCursorHistory);
+                }} />
+              </label>
+            ))}
+          </div>
+        ) : null}
+
+        {invalidTimeRange ? <p role="alert">时间起点不能晚于终点，请调整筛选条件。</p> : null}
+        {!detailForbidden && !invalidTimeRange ? (
+          <div className="response-fields">
+            <button type="button" onClick={() => setFieldPickerOpen((open) => !open)}>
+              {fieldPickerOpen ? '收起显示字段' : '选择显示字段'}
+            </button>
+            {fieldPickerOpen && fields.isPending ? <span>正在加载字段</span> : null}
+            {fieldPickerOpen && fields.isError ? <p role="alert">字段字典加载失败。<button type="button" onClick={() => void fields.refetch()}>重试</button></p> : null}
+            {fieldPickerOpen && fields.data ? (
+              <div className="response-fields__options" role="group" aria-label="显示字段">
+                {availableFields.map((field) => (
+                  <label key={field.fieldname}>
+                    <input type="checkbox" checked={selectedFields === null || selectedFields.includes(field.fieldname)}
+                      onChange={() => setSelectedFields((current) => {
+                        const visible = current ?? availableFields.map((item) => item.fieldname);
+                        return visible.includes(field.fieldname)
+                          ? visible.filter((name) => name !== field.fieldname)
+                          : [...visible, field.fieldname];
+                      })} />
+                    {field.label || field.code || field.fieldname}{field.sensitive ? '（敏感）' : ''}
+                  </label>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -199,7 +277,7 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
           <p className="responses-empty">正在加载答卷</p>
         ) : responses.data ? (
           <>
-            {responses.data.items.length ? <ResponseTable rows={responses.data.items} /> : (
+            {responses.data.items.length ? <ResponseTable rows={responses.data.items} dictionary={fields.data} selectedFields={selectedFields} /> : (
               <p className="responses-empty">
                 {summary.data && totalResponses(summary.data) === 0 && !state && version === null
                   ? '当前还没有答卷。'
@@ -226,7 +304,7 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
       {!detailForbidden ? (
         <section className="export-workspace" aria-labelledby="create-export-title">
           <div className="responses-section-heading">
-            <div><h3 id="create-export-title">创建导出</h3><p>导出任务按创建时的筛选快照执行。</p></div>
+            <div><h3 id="create-export-title">创建导出</h3><p>导出任务按创建时的状态和版本筛选快照执行。时间条件仅用于答卷列表，显示字段选择也不改变导出文件。</p></div>
           </div>
           <div className="export-create-row">
             <label>导出格式
@@ -273,6 +351,11 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId }: Respons
                 </div>
               ) : null}
             </>
+          ) : currentJobId && job.isError ? (
+            <div className="export-job-error" role="alert">
+              <p>{jobAccessRevoked ? '当前导出任务不可访问。' : '导出任务加载失败，请重试。'}</p>
+              <button type="button" onClick={() => void job.refetch()}>重新加载任务状态</button>
+            </div>
           ) : <p className="responses-empty">尚未创建导出任务。</p>}
           {downloadError ? <p role="alert">{downloadError}</p> : null}
         </section>
@@ -292,20 +375,26 @@ function Summary({ summary }: { summary: ResponseSummary }) {
   );
 }
 
-function ResponseTable({ rows }: { rows: ResponseRow[] }) {
+function ResponseTable({ rows, dictionary, selectedFields }: {
+  rows: ResponseRow[];
+  dictionary?: FieldDictionary;
+  selectedFields: string[] | null;
+}) {
   return (
     <div className="response-table-wrap">
       <table>
         <thead><tr><th>答卷</th><th>状态</th><th>版本</th><th>开始/完成时间</th><th>作答内容</th></tr></thead>
         <tbody>{rows.map((row) => (
-          <tr key={`${row.generation}:${row.responseId}`}>
+          <tr key={`${row.version}:${row.generation}:${row.responseId}`}>
             <td>#{row.responseId}</td>
             <td>{responseStateLabel(row.state)}</td>
             <td>版本 {row.version}</td>
             <td><time dateTime={row.startedAt}>{formatDateTime(row.startedAt)}</time>{row.completedAt ? <><br /><time dateTime={row.completedAt}>{formatDateTime(row.completedAt)}</time></> : null}</td>
             <td>{row.answers ? (
-              <dl className="response-answers">{Object.entries(row.answers).map(([key, value]) => (
-                <div key={key}><dt>{key}</dt><dd>{value ?? '未填写'}</dd></div>
+              <dl className="response-answers">{Object.entries(row.answers)
+                .filter(([key]) => selectedFields === null || selectedFields.includes(key))
+                .map(([key, value]) => (
+                <div key={key}><dt>{fieldLabel(dictionary, row.version, key)}</dt><dd>{value ?? '未填写'}</dd></div>
               ))}</dl>
             ) : answersStatusLabel(row.answersStatus)}</td>
           </tr>
@@ -332,7 +421,9 @@ function ExportJob({ job, cancelling, downloading, onCancel, onDownload }: {
       {job.status === 'running' && job.totalRows ? (
         <progress max={job.totalRows} value={job.processedRows}>{job.processedRows} / {job.totalRows}</progress>
       ) : null}
-      {job.error ? <p role="alert">导出失败，请重新创建任务。</p> : null}
+      {job.status === 'failed' ? <p role="alert">导出失败，请按当前筛选重新创建任务。</p> : null}
+      {job.status === 'expired' ? <p>导出文件已过期，请重新创建任务。</p> : null}
+      {job.status === 'cancelled' ? <p>任务已取消，可按当前筛选重新创建。</p> : null}
       <div className="export-job__actions">
         {active ? <button type="button" disabled={cancelling} onClick={onCancel}><Ban aria-hidden="true" />取消任务</button> : null}
         {job.status === 'completed' ? <button type="button" disabled={downloading} onClick={onDownload}><Download aria-hidden="true" />下载导出文件</button> : null}
@@ -356,6 +447,7 @@ export function ResponsesRoutePage() {
       exportClient={exportClient}
       surveyId={surveyId}
       tenantId={session.me.tenantId}
+      actorId={session.me.actorId}
     />
   );
 }
@@ -421,4 +513,14 @@ function exportFormatLabel(format: ExportFormat) {
 
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value));
+}
+
+function toInstant(value: string): string | null {
+  return value ? new Date(value).toISOString() : null;
+}
+
+function fieldLabel(dictionary: FieldDictionary | undefined, version: number, fieldname: string) {
+  const field = dictionary?.versions.find((item) => item.version === version)
+    ?.fields.find((item) => item.fieldname === fieldname);
+  return field?.label || field?.code || fieldname;
 }
