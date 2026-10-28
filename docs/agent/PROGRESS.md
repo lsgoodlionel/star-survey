@@ -44,6 +44,10 @@ Dashboard Task 1: complete - 治理 HEAD 绑定、hosted agent-governance run 19
 
 Wave 2: local-function-accepted - 模板与品牌计划切片按 2026-10-28 用户指定的本地 Docker 双库真实使用口径完成；正式 Release 与生产部署另行验收，接续 Wave 3。
 
+Wave 3: implementation-paused - 2026-10-28 从 Wave 2 的 `247cefda1a` 隔离出 `feat/wave3-data-productization`，计划见 [`2026-10-28-wave3-data-productization.md`](../superpowers/plans/2026-10-28-wave3-data-productization.md)。答卷时间复合筛选、字段显示选择、任务重访恢复已有未提交实现；管理端 356 项单测、lint、typecheck、生产构建和 bundle 检查通过。初版浏览器增强在隔离 MySQL/PostgreSQL 各 19/19 及跨层核验通过。后续新增双版本和五格式真实验收在同一浏览器场景连续两次失败：首次第二版答题页时序导致超时，修正后第二次在版本筛选控件定位遇到 Playwright strict mode 歧义（13 通过、1 失败、5 未运行）。依项目“两次同类失败即停”规则停止自动修复，保留未提交分支现场；五格式下载、双库最终真实验收、GitHub CI 与 Obsidian 同步未完成，不提升 Wave 3 状态，不提交或推送。
+
+Wave 3: local-slice-verified（2026-10-28 接续）- 用户明确要求继续后，修正浏览器版本筛选定位与导出任务断言。隔离 Docker MySQL、PostgreSQL 各 19/19，完成双版本正式答卷、跨版本列表与筛选、CSV/XLSX/SAV/DOCX/附件包五种真实下载，并通过平台 API/平台 DB/网关/引擎 DB 交叉核验；容器已清理。管理端 356/356、lint、typecheck、build、production bundle 通过。推送前核对登记仓库 `lsgoodlionel/star-survey`，PR #11 开放，父分支远端 `b8535c203f`；其最新产品质量 run `40616502706` 和只读镜像构建 run `40616502723` 成功。本 Wave 3 分支 CI 尚未触发，待本分支提交/推送后核对。取消、失败/过期及撤权下载保留既有后端/前端测试证据，本次没有双库浏览器故障注入；能力矩阵不提升，正式 Release 与生产生命周期另行验收。
+
 ## Token 控制平面（2026-10-12）
 
 Task 1-10: delivered - Context Capsule、Gate Summary/证据复用、并发租约、Token Telemetry、
