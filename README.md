@@ -1,3 +1,5 @@
+[简体中文](README.md) · [English](README.en.md) · [日本語](README.ja.md)
+
 # Survey · LimeSurvey 本土化问卷平台
 
 Survey（仓库名 star-survey）是在 LimeSurvey 7.1.2 引擎之外建设的中文问卷管理与交付平台，面向多租户 SaaS 和私有化部署。自有代码主要位于 platform/ 与 plugins/；引擎源码保持上游版本，平台通过受控接口、发布网关和插件与引擎协作。
