@@ -44,6 +44,8 @@ Dashboard Task 1: complete - 治理 HEAD 绑定、hosted agent-governance run 19
 
 Wave 2: local-function-accepted - 模板与品牌计划切片按 2026-10-28 用户指定的本地 Docker 双库真实使用口径完成；正式 Release 与生产部署另行验收，接续 Wave 3。
 
+2026-10-28 仓库入口文档更新：根目录 README 已按现有代码、Wave 2 本地双库验收和 GitHub CI 证据改为 Survey 项目说明，列出本地 Docker 演示入口、开发检查命令及正式 Release 的未验收边界；多语言 README 的生成方式另在独立任务分析，本次不增加翻译或发布流水线。
+
 ## Token 控制平面（2026-10-12）
 
 Task 1-10: delivered - Context Capsule、Gate Summary/证据复用、并发租约、Token Telemetry、
