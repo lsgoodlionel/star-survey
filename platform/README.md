@@ -318,3 +318,10 @@ PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh --expect-te
 - 上游 fork `lsgoodlionel/LimeSurvey` 保留为 remote `limesurvey-fork`，用于对比上游与合并升级。
 - `main` 的根提交是 LimeSurvey 7.1.2 快照（上游 `4c20c680`）：本地为浅克隆，无法推送浅历史，故以单个根提交导入；上游完整历史仍在 fork 仓库。
 - **不要修改引擎源码与根 `README.md`**：自有内容全部是新增文件，这个不变式是上游升级可行性的基础。
+
+## Codex 与 Actions（试运行）
+
+- 开发阶段：Codex 编写或修改工作流 YAML；构建仍由 Actions 的平台构建步骤执行。
+- 运行阶段：`codex-autofix.yml` 仅通过手动触发处理“MJY 平台 - 质量闸门”同仓库 PR 失败，调用 `openai/codex-action` 作最小修复，最多两次；Shell/Python 负责次数、提交、推送和报告。
+- 提交标记 `[codex-fix-attempt: N]` 最多到 3；再次失败则在 PR 报告，合并由人工执行。支持 `workflow_dispatch` 手动运行，需填失败的运行 ID。
+- 启用前设置 Actions secrets：`OPENAI_API_KEY`、`SURVEY_AUTOFIX_PUSH_TOKEN`（仅授予本仓库 Contents 写权限的 fine-grained PAT）。后者必须能触发后续 CI；默认 `GITHUB_TOKEN` 推送无法形成循环。工作流文件须位于默认分支才能手动触发或接收 `workflow_run`。
