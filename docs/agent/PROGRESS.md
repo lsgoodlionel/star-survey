@@ -46,7 +46,7 @@ Wave 2: local-function-accepted - 模板与品牌计划切片按 2026-10-28 用�
 
 2026-10-28 仓库入口文档更新：根目录 README 已按现有代码、Wave 2 本地双库验收和 GitHub CI 证据改为 Survey 项目说明，列出本地 Docker 演示入口、开发检查命令及正式 Release 的未验收边界；多语言 README 的生成方式另在独立任务分析，本次不增加翻译或发布流水线。
 
-2026-10-28 README 多语言首批：以 `96086f6f42` 的中文 README 为内容基线，新增英文、日文完整翻译草稿与语言导航；`docs/readme-languages.json` 是版本清单，`scripts/docs/check_readme_translations.py` 核对导航、代码块、链接和关键产品事实。首次线上翻译 Action 在提供商请求阶段返回 HTTPError；复核后确认备选 GitHub Models 服务已退役，仓库亦未配置受支持的翻译 API 密钥。因此将工作流收敛为只读一致性检查，自动生成候选 PR 待确定翻译服务后再接入。译文需技术和语言人工复审；本地静态检查通过，线上检查结果单独核对。
+2026-10-28 README 多语言首批：以 `96086f6f42` 的中文 README 为内容基线，新增英文、日文完整翻译草稿与语言导航；`docs/readme-languages.json` 是版本清单，`scripts/docs/check_readme_translations.py` 核对导航、代码块、链接和关键产品事实。首次线上翻译 Action 在提供商请求阶段返回 HTTPError；备选 GitHub Models 服务已退役。用户明确不接受启用 Google Cloud 账单，故不接入官方 Cloud Translation，也不继续使用无密钥的非官方翻译接口。当前工作流只做只读一致性检查，不自动生成译文或候选 PR。译文仍需技术和语言人工复审；线上只读检查 run `40616252792` 成功。
 
 ## Token 控制平面（2026-10-12）
 
