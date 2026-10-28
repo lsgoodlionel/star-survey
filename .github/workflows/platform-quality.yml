@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: platform-quality-${{ github.event.pull_request.number || github.ref }}
+  group: platform-quality-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

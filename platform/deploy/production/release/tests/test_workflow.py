@@ -148,6 +148,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         triggers = self.quality["on"]
         self.assertIn("pull_request", triggers)
         self.assertFalse((triggers["pull_request"] or {}).get("branches"))
+        self.assertIn("github.workflow", self.quality["concurrency"]["group"])
         self.assertNotIn("agent-harness", job_text(self.quality))
 
         required_jobs = {
