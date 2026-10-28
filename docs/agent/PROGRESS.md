@@ -6,6 +6,8 @@
 
 ## 当前状态
 
+2026-10-28 全分支合并候选：在隔离工作区基于远端 `main` 集成产品对齐（含多语言 README 提交）、PDF 导出、其他分支及 LimeSurvey 上游独立历史；与旧网关和重写前作者工作台分支重复的实现保留当前版本。`codex/survey-autofix` 仅保留手动触发，自动修复至多两次。前端 353 项、lint、typecheck，网关 1235 项，Java 全量 1513 项/186 类（失败、错误、跳过为 0）及 PDF 单元测试 14 项通过。重写前 P0 备份含不应明文公开的历史对象，原始分支未纳入；临时副本脱敏操作两次被工作区检查阻止，按协作约定停止并保留现场。候选尚未推送或合并到 `main`，真实浏览器与 GitHub CI 待验证。
+
 Task 1: complete - Wave 2 已激活；治理完成记录见 SDD 账本。
 Task 2: complete - 品牌资产跨 Java/Python/PHP 边界已实现并通过 2026-10-27 双库真实 E2E、PHPUnit、Gateway、Java 定向和 production 配置门禁；发布与预览的错误 channel key 回滚均验证问卷删除、上传目录清除及无作者品牌残留。能力矩阵仍按 Wave 2 完整六层证据维持原状态。
 Task 3: complete - 模板、资产与品牌 typed client 已接入现有端点；FormData 上传、Zod 响应校验、租户缓存键及品牌草稿安全合并已实现。2026-10-27 定向 18 项与管理端全套 317 项通过，lint、typecheck、build、production bundle 检查通过；页面流程仍由 Task 4-7 承接。
