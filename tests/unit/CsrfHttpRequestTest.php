@@ -5,10 +5,30 @@ namespace ls\tests;
 class CsrfHttpRequestTest extends TestBaseClass
 {
     public static $noCsrfValidationRoutes;
+    public static $noCsrfValidationExactRoutes;
 
     public static function setUpBeforeClass(): void
     {
         self::$noCsrfValidationRoutes = \Yii::app()->request->noCsrfValidationRoutes;
+        self::$noCsrfValidationExactRoutes = \Yii::app()->request->noCsrfValidationExactRoutes;
+    }
+
+    public function testBrandAssetChannelSkipsCsrfOnlyForTheExactRoute()
+    {
+        $rule = self::$noCsrfValidationExactRoutes[0];
+
+        $this->assertTrue(\LSHttpRequest::routeMatchesExactNoCsrfValidationRule(
+            'plugins/direct/plugin/MjyQuestionExtensions/function/brandAssetsV1',
+            $rule
+        ));
+        $this->assertTrue(\LSHttpRequest::routeMatchesExactNoCsrfValidationRule(
+            '/plugins/direct/plugin/MjyQuestionExtensions/function/brandAssetsV1',
+            $rule
+        ));
+        $this->assertFalse(\LSHttpRequest::routeMatchesExactNoCsrfValidationRule(
+            'plugins/direct/plugin/MjyQuestionExtensions/function/brandAssetsV1/child',
+            $rule
+        ));
     }
 
     /**

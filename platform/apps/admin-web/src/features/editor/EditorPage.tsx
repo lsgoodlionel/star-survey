@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type InfiniteData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Eye, FileInput, RefreshCw, Rocket, Save } from 'lucide-react';
 import { Link, useBlocker, useParams, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
+import {
+  surveyWorkflowHref,
+  useSurveyPageReady,
+  useSurveyShell,
+} from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
-import { getResourceCapabilities } from '../../shared/api/resources';
+import {
+  getResourceCapabilities,
+  type ResourcePage,
+  type ResourceView,
+} from '../../shared/api/resources';
 import {
   getSurvey,
   getSurveyDraft,
@@ -57,6 +66,14 @@ export function EditorPage({ api, surveyId, tenantId }: EditorPageProps) {
   });
 
   const loading = surveyQuery.isPending || draftQuery.isPending || capabilitiesQuery.isPending;
+  const ready = surveyQuery.isSuccess
+    && draftQuery.isSuccess
+    && capabilitiesQuery.isSuccess
+    && !surveyQuery.isFetching
+    && !draftQuery.isFetching
+    && !capabilitiesQuery.isFetching
+    && Boolean(surveyQuery.data && draftQuery.data && capabilitiesQuery.data);
+  useSurveyPageReady('edit', ready);
   if (loading) return <p className="editor-loading">正在加载问卷草稿</p>;
   if (surveyQuery.error || draftQuery.error || capabilitiesQuery.error || !draftQuery.data) {
     return <p role="alert">问卷草稿暂时不可用，请稍后重试。</p>;
@@ -83,6 +100,8 @@ interface LoadedEditorProps extends EditorPageProps {
 
 function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenantId }: LoadedEditorProps) {
   const queryClient = useQueryClient();
+  const surveyShell = useSurveyShell();
+  const setShellUnsavedChanges = surveyShell?.setUnsavedChanges;
   const [searchParams, setSearchParams] = useSearchParams();
   const [initialState] = useState(() => {
     const recovered = takeEditorRecovery(tenantId, surveyId);
@@ -143,6 +162,11 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
+  useEffect(() => {
+    setShellUnsavedChanges?.(dirty);
+    return () => setShellUnsavedChanges?.(false);
+  }, [dirty, setShellUnsavedChanges]);
+
   const selectedQuestion = useMemo(
     () =>
       definition.groups
@@ -164,11 +188,12 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       return { saved, submittedRevision };
     },
     onSuccess: ({ saved, submittedRevision }) => {
-      synchronizeDraftCache(saved);
+      const savedDefinition = parseDefinition(saved.definition);
+      synchronizeDraftCache(saved, savedDefinition.title);
       setVersion(saved.version);
       setSavedVersion(saved.version);
       if (revisionRef.current === submittedRevision) {
-        setDefinition(parseDefinition(saved.definition));
+        setDefinition(savedDefinition);
         setDirty(false);
       }
       setConflict(false);
@@ -178,14 +203,37 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
     },
   });
 
-  function synchronizeDraftCache(saved: DraftView) {
+  function synchronizeDraftCache(saved: DraftView, savedTitle?: string) {
     queryClient.setQueryData(surveyDraftQueryKey(tenantId, surveyId), saved);
     queryClient.setQueryData<SurveyView>(
       surveyDetailQueryKey(tenantId, surveyId),
       (current) => current
-        ? { ...current, draftVersion: saved.version }
+        ? { ...current, draftVersion: saved.version, title: savedTitle ?? current.title }
         : current,
     );
+    if (savedTitle === undefined) return;
+    queryClient.setQueriesData<ResourceView[]>(
+      { queryKey: ['resource-path', tenantId] },
+      (current) => current?.map((resource) =>
+        resource.id === surveyId ? { ...resource, name: savedTitle } : resource),
+    );
+    queryClient.setQueriesData<InfiniteData<ResourcePage>>(
+      { queryKey: ['resources', tenantId] },
+      (current) => current
+        ? {
+            ...current,
+            pages: current.pages.map((page) => ({
+              ...page,
+              items: page.items.map((resource) =>
+                resource.id === surveyId ? { ...resource, name: savedTitle } : resource),
+            })),
+          }
+        : current,
+    );
+    void queryClient.invalidateQueries({
+      queryKey: ['resources', tenantId],
+      refetchType: 'inactive',
+    });
   }
 
   function changeDefinition(next: EditableSurveyDefinition) {
@@ -254,25 +302,29 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   return (
     <main className="survey-editor">
       <header className="survey-editor-header">
-        <div>
-          <p>问卷编辑</p>
-          <h1>{surveyTitle || definition.title}</h1>
-        </div>
+        {!surveyShell ? (
+          <div>
+            <p>问卷编辑</p>
+            <h1>{surveyTitle || definition.title}</h1>
+          </div>
+        ) : <h2 className="sr-only">问卷编辑</h2>}
         <div className="survey-editor-actions">
-          <nav className="survey-editor-nav" aria-label="问卷工作流">
-            <Link to={`/surveys/${surveyId}/import`}>
-              <FileInput aria-hidden="true" />
-              批量导入
-            </Link>
-            <Link to={`/surveys/${surveyId}/preview`}>
-              <Eye aria-hidden="true" />
-              草稿预览
-            </Link>
-            <Link to={`/surveys/${surveyId}/publish`}>
-              <Rocket aria-hidden="true" />
-              发布管理
-            </Link>
-          </nav>
+          {!surveyShell ? (
+            <nav className="survey-editor-nav" aria-label="问卷工作流">
+              <Link to={surveyWorkflowHref(surveyId, 'import', requestedQuestionUuid)}>
+                <FileInput aria-hidden="true" />
+                批量导入
+              </Link>
+              <Link to={surveyWorkflowHref(surveyId, 'preview', requestedQuestionUuid)}>
+                <Eye aria-hidden="true" />
+                快速预览
+              </Link>
+              <Link to={surveyWorkflowHref(surveyId, 'publish', requestedQuestionUuid)}>
+                <Rocket aria-hidden="true" />
+                发布管理
+              </Link>
+            </nav>
+          ) : null}
           <div className="survey-editor-save">
             {!canEdit ? <span>当前账号仅可查看此问卷</span> : null}
             {savedVersion ? <span>已保存版本 {savedVersion}</span> : null}
@@ -370,7 +422,14 @@ export function EditorRoutePage() {
   const { api, session } = useAuth();
   const surveyId = z.string().uuid().safeParse(useParams().surveyId);
   if (!surveyId.success || !session) return <p role="alert">问卷标识无效</p>;
-  return <EditorPage api={api} surveyId={surveyId.data} tenantId={session.me.tenantId} />;
+  return (
+    <EditorPage
+      key={`${session.me.tenantId}:${session.me.actorId}:${surveyId.data}`}
+      api={api}
+      surveyId={surveyId.data}
+      tenantId={session.me.tenantId}
+    />
+  );
 }
 
 function hasQuestion(definition: EditableSurveyDefinition, uuid: string) {
@@ -417,11 +476,11 @@ function normalizedSearch(params: URLSearchParams) {
 
 function useNarrowViewport() {
   const [narrow, setNarrow] = useState(
-    () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches,
+    () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 819px)').matches,
   );
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return;
-    const media = window.matchMedia('(max-width: 760px)');
+    const media = window.matchMedia('(max-width: 819px)');
     const update = () => setNarrow(media.matches);
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);

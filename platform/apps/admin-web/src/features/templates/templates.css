@@ -1,0 +1,17 @@
+.templates-page { max-width: 1080px; margin: 0 auto; padding: 28px 24px 64px; color: #24363b; }
+.templates-page header h1 { margin: 0 0 8px; }
+.templates-page header p { margin: 0 0 22px; color: #52656b; }
+.templates-page section { margin-top: 28px; padding-top: 16px; border-top: 1px solid #d6dfe2; }
+.templates-page label { display: inline-grid; gap: 6px; margin: 0 14px 14px 0; }
+.templates-page select, .templates-page input { min-height: 42px; min-width: 190px; padding: 8px; border: 1px solid #8ea3aa; border-radius: 4px; background: #fff; }
+.templates-page button { min-height: 42px; padding: 8px 16px; border: 1px solid #1c5968; border-radius: 4px; background: #e6f2f5; color: #174756; cursor: pointer; }
+.templates-page button:disabled { cursor: not-allowed; opacity: .55; }
+.templates-table-wrap { overflow-x: auto; }
+.templates-page table { width: 100%; border-collapse: collapse; text-align: left; }
+.templates-page th, .templates-page td { padding: 12px; border-bottom: 1px solid #d6dfe2; }
+.templates-page td small { display: block; color: #52656b; }
+.templates-page a { color: #0f596e; }
+.template-facts { display: flex; flex-wrap: wrap; gap: 24px; }
+.template-facts dt { color: #52656b; }
+.template-facts dd { margin: 4px 0 0; font-weight: 600; }
+@media (max-width: 820px) { .templates-page { padding: 20px 16px 48px; } .templates-page table { min-width: 620px; } }

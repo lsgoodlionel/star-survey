@@ -41,6 +41,14 @@ class TemplateAccess {
         }
     }
 
+    boolean canOnSurvey(TenantContext ctx, Permission permission, UUID surveyId) {
+        return access.can(ctx, permission, surveyId).allowed();
+    }
+
+    boolean canInTenant(TenantContext ctx, Permission permission) {
+        return access.canInTenant(ctx, permission).allowed();
+    }
+
     /** 租户级权限（没有具体资源）。 */
     void requireInTenant(TenantContext ctx, Permission permission) {
         Decision decision = access.canInTenant(ctx, permission);

@@ -84,6 +84,7 @@
 .survey-editor-save button,
 .editor-dialog-actions button {
   display: inline-flex;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
   gap: 7px;
@@ -96,6 +97,11 @@
 .survey-editor button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.editor-reorder-actions button:focus {
+  outline: 3px solid #0b6bcb;
+  outline-offset: 2px;
 }
 
 .survey-editor svg {
@@ -392,7 +398,7 @@
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 819px) {
   .editor-outline-group-header,
   .editor-outline li {
     grid-template-columns: 44px minmax(0, 1fr) 88px;

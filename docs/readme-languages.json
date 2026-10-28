@@ -1,0 +1,5 @@
+[
+  {"code": "zh-CN", "name": "简体中文", "file": "README.md"},
+  {"code": "en", "name": "English", "file": "README.en.md"},
+  {"code": "ja", "name": "日本語", "file": "README.ja.md"}
+]

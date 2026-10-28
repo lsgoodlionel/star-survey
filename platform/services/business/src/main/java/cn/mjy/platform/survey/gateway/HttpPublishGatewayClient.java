@@ -88,6 +88,9 @@ public class HttpPublishGatewayClient implements PublishGatewayClient {
         envelope.put("requestId", request.requestId().toString());
         envelope.put("engineInstanceId", request.engineInstanceId());
         envelope.set("definition", json.readTree(request.definitionJson()));
+        if (!request.brandAssets().isEmpty()) {
+            envelope.set("brandAssets", json.valueToTree(request.brandAssets()));
+        }
         Exchange exchange = post(PUBLISH_PATH, json.writeValueAsBytes(envelope));
         if (exchange.failure() != null) {
             log.warn("publish gateway outcome unknown for request {}: {}", request.requestId(), exchange.failure());

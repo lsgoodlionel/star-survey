@@ -6,14 +6,27 @@
 """
 
 import hashlib
+import base64
 import json
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-_FIELDS = frozenset({"requestId", "engineInstanceId", "definition"})
+_FIELDS = frozenset({"requestId", "engineInstanceId", "definition", "brandAssets"})
 _UUID = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 _MAX_INSTANCE_ID_LENGTH = 128
+_MAX_BRAND_ASSET_BYTES = 5 * 1024 * 1024
+_BRAND_ASSET_FIELDS = frozenset({"slot", "fileName", "contentType", "sizeBytes", "sha256", "contentBase64"})
+_BRAND_FILES = {
+    ("logoAsset", "image/png"): "mjy-brand-logo.png",
+    ("logoAsset", "image/jpeg"): "mjy-brand-logo.jpg",
+    ("logoAsset", "image/gif"): "mjy-brand-logo.gif",
+    ("logoAsset", "image/webp"): "mjy-brand-logo.webp",
+    ("faviconAsset", "image/png"): "mjy-brand-favicon.png",
+    ("faviconAsset", "image/jpeg"): "mjy-brand-favicon.jpg",
+    ("faviconAsset", "image/gif"): "mjy-brand-favicon.gif",
+    ("faviconAsset", "image/webp"): "mjy-brand-favicon.webp",
+}
 
 
 class InvalidRequest(ValueError):
@@ -25,6 +38,8 @@ class PublishRequest:
     request_id: str
     engine_instance_id: str
     definition: Mapping[str, Any]
+    brand_assets: tuple[Mapping[str, Any], ...]
+    brand_assets_present: bool
     #: 请求内容的规范化摘要：同一 requestId 带着不同内容重放时据此识别。
     fingerprint: str
 
@@ -36,7 +51,7 @@ def parse_request(body: bytes) -> PublishRequest:
         raise InvalidRequest("body is not UTF-8 JSON: {}".format(error)) from None
     if not isinstance(payload, dict):
         raise InvalidRequest("body must be a JSON object")
-    if set(payload) != _FIELDS:
+    if set(payload) not in (_FIELDS, _FIELDS - {"brandAssets"}):
         raise InvalidRequest(
             "body must have exactly the fields {}, got {}".format(sorted(_FIELDS), sorted(payload))
         )
@@ -51,19 +66,54 @@ def parse_request(body: bytes) -> PublishRequest:
     if not isinstance(definition, dict):
         raise InvalidRequest("definition must be a JSON object")
 
+    brand_assets_present = "brandAssets" in payload
+    brand_assets = payload.get("brandAssets", [])
+    if not isinstance(brand_assets, list) or len(brand_assets) > 2:
+        raise InvalidRequest("brandAssets must be a list of at most two items")
+    brand_assets = tuple(_brand_asset(item) for item in brand_assets)
     return PublishRequest(
         request_id=request_id.lower(),
         engine_instance_id=instance_id,
         definition=definition,
-        fingerprint=_fingerprint(instance_id, definition),
+        brand_assets=tuple(brand_assets),
+        brand_assets_present=brand_assets_present,
+        fingerprint=_fingerprint(instance_id, definition, brand_assets, brand_assets_present),
     )
 
 
-def _fingerprint(instance_id: str, definition: Mapping[str, Any]) -> str:
+def _fingerprint(instance_id: str, definition: Mapping[str, Any], brand_assets: Any = (),
+                 brand_assets_present: bool = False) -> str:
+    payload = {"engineInstanceId": instance_id, "definition": definition}
+    if brand_assets_present:
+        payload["brandAssets"] = brand_assets
     canonical = json.dumps(
-        {"engineInstanceId": instance_id, "definition": definition},
+        payload,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _brand_asset(item: Any) -> Mapping[str, Any]:
+    """Validate bytes before engine work.  This is deliberately closed-world."""
+    if not isinstance(item, dict) or set(item) != _BRAND_ASSET_FIELDS:
+        raise InvalidRequest("brandAssets item has unexpected fields")
+    slot, filename, content_type = item["slot"], item["fileName"], item["contentType"]
+    size, digest, payload = item["sizeBytes"], item["sha256"], item["contentBase64"]
+    expected = _BRAND_FILES.get((slot, content_type))
+    if expected is None or filename != expected:
+        raise InvalidRequest("brandAssets item has unsupported slot or file")
+    if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= _MAX_BRAND_ASSET_BYTES:
+        raise InvalidRequest("brandAssets item size is outside bounds")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise InvalidRequest("brandAssets item digest is invalid")
+    if not isinstance(payload, str):
+        raise InvalidRequest("brandAssets item payload is invalid")
+    try:
+        content = base64.b64decode(payload, validate=True)
+    except (ValueError, TypeError):
+        raise InvalidRequest("brandAssets item payload is not base64") from None
+    if len(content) != size or hashlib.sha256(content).hexdigest() != digest:
+        raise InvalidRequest("brandAssets item digest mismatch")
+    return item

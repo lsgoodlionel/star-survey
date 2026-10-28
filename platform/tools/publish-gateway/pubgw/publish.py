@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .binding import BindingRecord
+from .brand_assets import BrandAssetError, validate_brand_assets
 from .compiler import CompiledSurvey, CompileError, LssCompiler
 from .fieldmap import FINGERPRINT_VERSION, parse_fieldmap
 from .invitations import InvitationError, collect
@@ -90,18 +91,27 @@ class Publisher:
         compiler: Optional[LssCompiler] = None,
         clock: Callable[[], str] = None,
         policy_probe: Optional[PolicyProbe] = None,
+        brand_asset_installer: Optional[Any] = None,
     ):
         self._client = client
         self._engine_instance = engine_instance
         self._compiler = compiler or LssCompiler()
         self._clock = clock or (lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         self._policy_probe = policy_probe
+        self._brand_asset_installer = brand_asset_installer
 
-    def publish(self, definition: SurveyDefinition) -> PublishResult:
+    def publish(self, definition: SurveyDefinition,
+                brand_assets: Sequence[Dict[str, Any]] = ()) -> PublishResult:
         result = PublishResult()
-        compiled = self._stage_validate_and_compile(definition, result)
+        compiled = self._stage_validate_and_compile(definition, result, defer_branding=bool(brand_assets))
         if compiled is None:
             return result
+        try:
+            brand_assets = validate_brand_assets(definition, brand_assets)
+        except BrandAssetError as error:
+            return self._fail(result, "brand_assets", [str(error)])
+        if brand_assets and (compiled.branding is None or self._brand_asset_installer is None):
+            return self._fail(result, "brand_assets", ["brand asset installer is unavailable"])
         # 计分表在校验阶段已经查过（check_scoring）。从这里起一律用展开后的定义：
         # 编译进 LSS 的是展开后的题，回读校验、字段映射、主题检查也必须按它来对，
         # 否则引擎里的分数题会被当成「定义里没有的代码」。
@@ -113,6 +123,9 @@ class Publisher:
             return self._fail(result, "import", [str(error)])
         result.survey_id = survey_id
         result.steps.append(StageStep("import", True, "sid={}".format(survey_id)))
+
+        if brand_assets and not self._stage_brand_assets(compiled, brand_assets, result):
+            return result
 
         verification = self._stage_apply(definition, compiled, result)
         if verification is None:
@@ -144,7 +157,7 @@ class Publisher:
     # ------------------------------------------------------------ 阶段
 
     def _stage_validate_and_compile(
-        self, definition: SurveyDefinition, result: PublishResult
+        self, definition: SurveyDefinition, result: PublishResult, defer_branding: bool = False
     ) -> Optional[CompiledSurvey]:
         report = validate_definition(definition)
         if not report.is_valid:
@@ -157,12 +170,28 @@ class Publisher:
         result.steps.append(StageStep("validate", True))
 
         try:
-            compiled = self._compiler.compile(definition)
+            compiled = (self._compiler.compile(definition, defer_branding=True)
+                        if defer_branding else self._compiler.compile(definition))
         except CompileError as error:
             self._fail(result, "compile", [str(error)])
             return None
         result.steps.append(StageStep("compile", True, compiled.fingerprint))
         return compiled
+
+    def _stage_brand_assets(self, compiled: CompiledSurvey,
+                            brand_assets: Sequence[Dict[str, Any]], result: PublishResult) -> bool:
+        """Install post-import resource bytes before any engine apply/activation mutation."""
+        try:
+            self._brand_asset_installer.install(
+                result.survey_id, compiled.branding.engine_branding, brand_assets
+            )
+        except BrandAssetError as error:
+            self._fail_and_roll_back(result, "brand_assets", [str(error)])
+            return False
+        result.steps.append(StageStep("brand_assets", True, "installed {} resource(s)".format(
+            len(brand_assets)
+        )))
+        return True
 
     def _stage_apply(
         self, definition: SurveyDefinition, compiled: CompiledSurvey, result: PublishResult

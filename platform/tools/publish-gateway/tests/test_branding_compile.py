@@ -4,6 +4,7 @@ import unittest
 import xml.etree.ElementTree as ElementTree
 
 from pubgw.branding.compile import compile_branding
+from pubgw.branding.schema import BrandingError
 from pubgw.compiler import LssCompiler
 from pubgw.fieldmap import fingerprint
 from pubgw.model import SurveyDefinition
@@ -86,6 +87,52 @@ class BrandingCompileTest(unittest.TestCase):
         self.assertEqual("./files/logo.png", options["mjybrandlogofile"])
         self.assertEqual("Acme", options["mjybrandlogoalt"])
         self.assertEqual("./files/favicon.ico", options["mjybrandfavicon"])
+
+    def test_author_assets_materialize_to_fixed_names_and_author_fields_are_absent(self):
+        definition = branded_definition(
+            {
+                "brandingVersion": 1,
+                "logoAsset": {
+                    "url": "https://survey.example/a/tenant/11111111-1111-4111-8111-111111111111/1?exp=123&sig=abc",
+                    "assetVersion": 1,
+                    "contentType": "image/png",
+                    "sizeBytes": 120,
+                    "fileName": "mjy-brand-logo.png",
+                    "sha256": "a" * 64,
+                },
+                "faviconAsset": {
+                    "url": "https://survey.example/a/tenant/22222222-2222-4222-8222-222222222222/2?exp=123&sig=abc",
+                    "assetVersion": 2,
+                    "contentType": "image/jpeg",
+                    "sizeBytes": 48,
+                    "fileName": "mjy-brand-favicon.jpg",
+                    "sha256": "b" * 64,
+                },
+            }
+        )
+        compiled = compile_lss(definition)
+        branding = compile_branding(definition)
+        self.assertEqual([], theme_rows(compiled.lss))
+        self.assertNotIn("https://", compiled.lss)
+        self.assertNotIn("assetVersion", compiled.lss)
+        self.assertNotIn("contentType", compiled.lss)
+        self.assertNotIn("sizeBytes", compiled.lss)
+        self.assertNotIn("fileName", compiled.lss)
+        self.assertNotIn("sha256", compiled.lss)
+        self.assertNotIn("logoAsset", branding.engine_branding)
+        self.assertNotIn("faviconAsset", branding.engine_branding)
+
+    def test_legacy_logo_file_remains_supported(self):
+        compiled = compile_branding(branded_definition({"brandingVersion": 1, "logoFile": "legacy.webp"}))
+        self.assertEqual("./files/legacy.webp", compiled.options["mjybrandlogofile"])
+
+    def test_no_external_url_can_enter_compiled_theme_options(self):
+        definition = branded_definition({"brandingVersion": 1, "logoFile": "mjy-brand-logo.png"})
+        self.assertFalse(any("https://" in value or "http://" in value for value in compile_branding(definition).options.values()))
+
+    def test_author_asset_reference_cannot_be_compiled_without_materialization(self):
+        with self.assertRaises(BrandingError):
+            compile_branding(branded_definition({"brandingVersion": 1, "logoAsset": {"assetId": "logo-id"}}))
 
     def test_text_maps_become_one_flat_option_per_language(self):
         options = self.themes[0]["options"]

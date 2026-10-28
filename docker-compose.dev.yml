@@ -70,6 +70,8 @@ services:
     profiles: ["test"]
     image: survey-web
     container_name: ${SURVEY_TEST_PREFIX:-survey}-test-web
+    environment:
+      ENGINE_DB_ROOT_PASSWORD: root
     volumes:
       - ./:/var/www/html
       - ./platform/deploy/test/.runtime/config.php:/var/www/html/application/config/config.php
@@ -80,6 +82,23 @@ services:
       test-db:
         condition: service_healthy
 
+  # Optional local AI sandbox. It is never part of the default dev/test stacks
+  # and is not referenced by production deployment files.
+  ollama:
+    profiles: ["ai"]
+    image: ollama/ollama:latest
+    container_name: survey-ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
 volumes:
   survey-db:
   test-tmp:
+  ollama-data:

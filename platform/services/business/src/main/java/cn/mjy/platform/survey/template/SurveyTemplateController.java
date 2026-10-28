@@ -51,6 +51,16 @@ class SurveyTemplateController {
         return templates.pendingForReview(currentTenant.require());
     }
 
+    @GetMapping("/managed")
+    List<TemplateView> managed() {
+        return templates.managed(currentTenant.require());
+    }
+
+    @GetMapping("/{templateId}/capabilities")
+    TemplateCapabilities capabilities(@PathVariable UUID templateId) {
+        return templates.capabilities(currentTenant.require(), templateId);
+    }
+
     @GetMapping("/{templateId}")
     TemplateDetail get(@PathVariable UUID templateId) {
         return templates.get(currentTenant.require(), templateId);

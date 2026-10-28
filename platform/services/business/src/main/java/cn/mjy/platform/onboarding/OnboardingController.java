@@ -13,6 +13,7 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -40,6 +41,17 @@ public class OnboardingController {
         PlanVersion plan = plans.publish(new PlanDefinition(request.planCode(), Set.copyOf(request.capabilities()),
                 Map.copyOf(request.quotas()), request.exportWindowDays()));
         return new PlanView(plan.id().toString(), plan.planCode(), plan.version());
+    }
+
+    @GetMapping("/v1/platform/plans/{planCode}")
+    public ResponseEntity<PlanView> latestPlan(@PathVariable String planCode) {
+        guard.requireOperator();
+        List<PlanVersion> versions = plans.versionsOf(planCode);
+        if (versions.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        PlanVersion plan = versions.getLast();
+        return ResponseEntity.ok(new PlanView(plan.id().toString(), plan.planCode(), plan.version()));
     }
 
     @PostMapping("/v1/platform/tenants/{tenantId}/onboarding")

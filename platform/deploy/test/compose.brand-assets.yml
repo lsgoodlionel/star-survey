@@ -1,0 +1,69 @@
+# Dedicated services only; usable standalone or as an additive compose overlay.
+# Every run gets its own project/network and tmpfs state. No shared test service is inherited.
+services:
+  brand-assets-mysql:
+    image: mariadb:10.11
+    container_name: ${BRAND_ASSETS_PROJECT:?}-mysql
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: limesurvey
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    tmpfs:
+      - /var/lib/mysql
+    networks:
+      default:
+        aliases: [test-db]
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 2s
+      retries: 60
+
+  brand-assets-pgsql:
+    image: postgres:16-alpine
+    container_name: ${BRAND_ASSETS_PROJECT:?}-pgsql
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: limesurvey
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks:
+      default:
+        aliases: [test-pg]
+    healthcheck:
+      test: [CMD, pg_isready, -U, postgres, -d, limesurvey]
+      interval: 2s
+      retries: 60
+
+  brand-assets-web:
+    image: survey-web
+    container_name: ${BRAND_ASSETS_PROJECT:?}-web
+    environment:
+      ENGINE_DB_ROOT_PASSWORD: root
+      BRAND_ASSETS_DB: ${BRAND_ASSETS_DB:?}
+      MJY_ENGINE_INSTANCE_ID: ${MJY_ENGINE_INSTANCE_ID:?}
+      MJY_PLATFORM_EVENTS_SECRET: ${MJY_PLATFORM_EVENTS_SECRET:?}
+    volumes:
+      - ${BRAND_ASSETS_ROOT:?}:/var/www/html:ro
+      - ${BRAND_ASSETS_ROOT:?}/application/config:/source-config:ro
+      - ${BRAND_ASSETS_ROOT:?}/platform/deploy/test:/test-config:ro
+    tmpfs:
+      - /var/www/html/application/config
+      - /var/www/html/upload
+      - /var/www/html/tmp
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        cp -a /source-config/. /var/www/html/application/config/
+        cp /test-config/config.$${BRAND_ASSETS_DB}.php /var/www/html/application/config/config.php
+        rm -f /var/www/html/application/config/allowed_hosts.php
+        mkdir -p /var/www/html/tmp/runtime /var/www/html/tmp/assets
+        chmod -R 777 /var/www/html/application/config /var/www/html/tmp /var/www/html/upload
+        # Signed plugin requests must never enter Apache access logs.
+        sed -i 's|CustomLog .*|CustomLog /dev/null combined|' /etc/apache2/sites-enabled/*.conf
+        a2disconf other-vhosts-access-log >/dev/null 2>&1 || true
+        exec apache2-foreground
+    healthcheck:
+      test: [CMD, curl, --silent, --output, /dev/null, http://localhost/]
+      interval: 2s
+      retries: 60

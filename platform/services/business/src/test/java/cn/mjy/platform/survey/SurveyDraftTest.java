@@ -4,8 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.mjy.platform.access.DecisionReason;
+import cn.mjy.platform.access.ResourceTreeService;
+import cn.mjy.platform.access.ResourceView;
 import cn.mjy.platform.shared.TenantContext;
+import cn.mjy.platform.shared.tenant.TenantScope;
 import cn.mjy.platform.survey.SurveyFixture.Workspace;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -17,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import tools.jackson.databind.node.ObjectNode;
 
 /** 问卷与草稿：稳定的公开 UUID、乐观锁、服务端形状校验；已发布版本不随草稿变化。 */
@@ -33,6 +39,15 @@ class SurveyDraftTest {
 
     @Autowired
     private SurveyPublishService publisher;
+
+    @Autowired
+    private ResourceTreeService resources;
+
+    @Autowired
+    private TenantScope tenantScope;
+
+    @Autowired
+    private JdbcClient jdbc;
 
     private Workspace ws;
     private SurveyView created;
@@ -60,6 +75,21 @@ class SurveyDraftTest {
 
         assertThat(saved.version()).isEqualTo(2);
         assertThat(surveys.get(ws.owner(), created.id()).title()).isEqualTo("第二稿");
+    }
+
+    @Test
+    void savingDraftTitleSynchronizesNormalizedResourceNameAndUpdatedAt() {
+        Instant old = Instant.parse("2020-01-01T00:00:00Z");
+        tenantScope.run(ws.tenant(), () -> jdbc.sql(
+                "UPDATE access_resource SET updated_at = :updated WHERE id = :id")
+                .param("updated", Timestamp.from(old)).param("id", created.id()).update());
+
+        surveys.saveDraft(ws.owner(), created.id(), 1, fixture.definitionTitled("Cafe\u0301 调查"));
+
+        ResourceView resource = resources.get(ws.owner(), created.id());
+        assertThat(resource.name()).isEqualTo("Caf\u00e9 调查");
+        assertThat(resource.updatedAt()).isAfter(old);
+        assertThat(resources.get(ws.owner(), created.id()).updatedAt()).isEqualTo(resource.updatedAt());
     }
 
     @Test
