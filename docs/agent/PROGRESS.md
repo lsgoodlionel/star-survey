@@ -2,9 +2,11 @@
 
 计划：`docs/superpowers/plans/2026-10-11-template-branding-wave2.md`
 
-分支：`feat/admin-product-alignment`
+分支：`main`（全分支合并见 PR #13）
 
 ## 当前状态
+
+2026-10-28 全分支合并完成：PR [#13](https://github.com/lsgoodlionel/star-survey/pull/13) 经最新候选 `cf13af165ae5` 全部检查通过后，以保留分支祖先的 merge commit 合并到登记仓库 `main`，合并提交为 `dd8fb35a4d05`。最新候选的 GitHub 检查 36 项中 25 成功、11 条件跳过、0 失败，包含两条 MySQL 真实浏览器 Job、Java 全量、双库访问策略与双执行比对、P1 纵切，以及 admin/platform/publish-gateway 多架构只读构建；运行 [40631144648](https://github.com/lsgoodlionel/star-survey/actions/runs/40631144648)、[40631144698](https://github.com/lsgoodlionel/star-survey/actions/runs/40631144698)、[40631144803](https://github.com/lsgoodlionel/star-survey/actions/runs/40631144803)。本地隔离 PostgreSQL 真实 Chromium 浏览器 19/19 通过，平台 API、网关、平台及引擎数据库交叉核验与运行根归档通过，隔离容器已清理。原始敏感备份仍不在合并历史中，脱敏备份及上游 `master` 在合并历史中，原始历史独有对象与候选可达对象交集为 0。正式 Release、生产安装/升级/恢复及公网 TLS 仍需独立验收。
 
 2026-10-28 PR #13 验收：全分支候选 `76be7b0d0ea8` 已普通推送至登记的 `origin`，草稿 PR [#13](https://github.com/lsgoodlionel/star-survey/pull/13) 指向仍为 `d84c271daca3` 的 `main`。该提交的 GitHub 检查全部结束，36 项中 25 成功、11 条件跳过、0 失败，包含两条管理端真实浏览器 Job、Java 全量、双库访问策略与双执行比对、P1 纵切，以及 admin/platform/publish-gateway 三个不访问注册表的多架构只读构建；运行 [40629761591](https://github.com/lsgoodlionel/star-survey/actions/runs/40629761591)、[40629761601](https://github.com/lsgoodlionel/star-survey/actions/runs/40629761601)、[40629761521](https://github.com/lsgoodlionel/star-survey/actions/runs/40629761521)。本地隔离 PostgreSQL 真实 Chromium 浏览器 19/19 通过，跨平台 API、网关、平台及引擎数据库的校验与运行根归档通过；隔离容器已清理。首次本地运行因候选工作区缺少 `playwright` 命令而未执行断言；按本机有界测速选择较快的 npmmirror 安装锁定依赖、切换项目要求的 Node 22 后第二次通过。后续待最新文档提交的 GitHub 检查及 PR 合并。
 
