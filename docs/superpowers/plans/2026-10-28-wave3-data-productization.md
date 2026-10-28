@@ -52,3 +52,9 @@ Wave 2 的本地功能验收以 2026-10-28 用户指定的双库 Docker 各 19/1
 增量故障证据：新增浏览器旅程以隔离 PostgreSQL 夹具验证 queued 作业取消、failed/expired 状态在页面的恢复提示，以及真实完成后撤销 `raw_data_viewer` 的下载 403；组件测试覆盖 403 后保留已完成任务以便恢复授权后重试。后端 `ResponseExportAccessTest` 新增运行中撤权后旧 job 不可下载、恢复后只能新建并按当前权限冻结脱敏产物的回归，目标类 7/7 已通过。新增浏览器旅程的 MySQL 全量门禁两次均在测试夹具/会话导航处中止（首次为 expired 夹具违反时间约束，第二次为 `page.goto` 清空产品有意的内存会话）；已改为合法时间和 SPA 路由重挂载，但遵循两次同类问题即停止自动修复的约定，未发起第三次 MySQL 或 PostgreSQL 复跑。
 
 边界：当前真实浏览器通过双版本查询和五种格式的成功下载；故障旅程已经有组件、后端和部分真实浏览器证据，但修正后的旅程尚无完整 MySQL/PostgreSQL 门禁结果。因此只记录本地功能切片，不提升六层能力矩阵为 accepted，也不声称生产 Release、公开 TLS 或安装升级恢复完成。
+
+## 2026-10-28 撤权夹具修复与双库复验
+
+MySQL 再次复验在撤权后下载返回 200（预期 403）处失败，10 项通过、1 项失败、9 项未运行。只读核对发现撤权 SQL 未设置 `app.tenant_id`，而 `access_resource` 和 `access_grant` 对 `platform_owner` 强制租户行级安全；删除语句没有确认影响行数。应用户要求继续后，撤权夹具在事务内设置租户作用域并要求恰好删除一条授权。
+
+修复后隔离 Docker MySQL 和 PostgreSQL 管理端真实浏览器各 20/20，包含 queued 取消、failed/expired 页面状态、完成后撤权下载 403；平台 API、平台数据库、网关和引擎数据库交叉核验均通过。定向 ESLint、TypeScript typecheck 与 `git diff --check` 通过。旧提交 `ccc12ddf46` 的产品质量 run [40648943924](https://github.com/lsgoodlionel/star-survey/actions/runs/40648943924) 与非 tag Release run [40648947745](https://github.com/lsgoodlionel/star-survey/actions/runs/40648947745) 均因浏览器验收作业失败，后者镜像构建跳过；新提交 CI 以实际运行结果为准。正式 Release、公开 TLS 和生产生命周期仍待另行验收，六层能力矩阵不因此提升。

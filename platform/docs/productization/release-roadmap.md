@@ -143,3 +143,5 @@ Wave 2-6 各自单独编写实施计划，只在前一 Wave 形成可运行版�
 - 需要业务或供应商输入的 15 条外部项，只有真实凭据、许可或法务结论到位后才能进入对应 Wave。
 - PDF 中文字体、附件大文件通道、行政区划数据许可等现有明确阻断，继续保留为有依据的待办。
 - 任何未进入六层证据的 Controller、测试、页面草图、流水线骨架或文档，不进入 Release 完成清单。
+
+2026-10-28 故障门禁接续：撤权夹具补充事务内租户作用域及恰好删除一条授权的断言后，隔离 Docker MySQL/PostgreSQL 真实浏览器各 20/20，覆盖 queued 取消、failed/expired 终态和完成后撤权下载 403；平台 API、平台数据库、网关及引擎数据库交叉核验均通过，定向 ESLint、typecheck 和 diff check 通过。旧提交 `ccc12ddf46` 的产品质量 run [40648943924](https://github.com/lsgoodlionel/star-survey/actions/runs/40648943924) 和非 tag Release run [40648947745](https://github.com/lsgoodlionel/star-survey/actions/runs/40648947745) 均因浏览器作业失败，后续镜像构建跳过；新提交 CI 待核对。正式 Release 与生产生命周期仍待验收，能力矩阵不据此提升。
