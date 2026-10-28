@@ -1,6 +1,6 @@
 # Wave 3 数据产品化实施计划
 
-状态：本地功能切片验证通过，GitHub CI 待核对（2026-10-28）。基线：`feat/admin-product-alignment` 的 `247cefda1a`；实施分支：`feat/wave3-data-productization`。
+状态：本地功能切片验证通过；增量故障路径已补充针对性前端和后端回归，待以新提交重新核对 GitHub CI（2026-10-28）。基线：`feat/admin-product-alignment` 的 `247cefda1a`；实施分支：`feat/wave3-data-productization`。
 
 ## 目标与边界
 
@@ -49,4 +49,6 @@ Wave 2 的本地功能验收以 2026-10-28 用户指定的双库 Docker 各 19/1
 
 推送前只读核对：登记仓库为 `lsgoodlionel/star-survey`，PR #11 仍开放且堆叠在 `feat/admin-web-drag-sort`；`origin/feat/admin-product-alignment` 已前进至 `b8535c203f`，本分支从已确认的 Wave 2 收尾提交 `247cefda1a` 开始，远端尚无 `feat/wave3-data-productization`。父分支该提交的质量门 run `40616502706` 与只读镜像构建 run `40616502723` 均成功。本分支尚无 CI 结论；后续 GitHub 同步只针对本分支，不合并或改写父分支。
 
-边界：当前真实浏览器覆盖双版本查询和五种格式的成功下载；取消、失败/过期和下载撤权的后端行为仍依既有 `ResponseExportResumeTest`、`ResponseExportAccessTest` 与管理端状态测试，尚未取得本次双库浏览器故障注入证据。因此只记录本地功能切片，不提升六层能力矩阵为 accepted，也不声称生产 Release、公开 TLS 或安装升级恢复完成。
+增量故障证据：新增浏览器旅程以隔离 PostgreSQL 夹具验证 queued 作业取消、failed/expired 状态在页面的恢复提示，以及真实完成后撤销 `raw_data_viewer` 的下载 403；组件测试覆盖 403 后保留已完成任务以便恢复授权后重试。后端 `ResponseExportAccessTest` 新增运行中撤权后旧 job 不可下载、恢复后只能新建并按当前权限冻结脱敏产物的回归，目标类 7/7 已通过。新增浏览器旅程的 MySQL 全量门禁两次均在测试夹具/会话导航处中止（首次为 expired 夹具违反时间约束，第二次为 `page.goto` 清空产品有意的内存会话）；已改为合法时间和 SPA 路由重挂载，但遵循两次同类问题即停止自动修复的约定，未发起第三次 MySQL 或 PostgreSQL 复跑。
+
+边界：当前真实浏览器通过双版本查询和五种格式的成功下载；故障旅程已经有组件、后端和部分真实浏览器证据，但修正后的旅程尚无完整 MySQL/PostgreSQL 门禁结果。因此只记录本地功能切片，不提升六层能力矩阵为 accepted，也不声称生产 Release、公开 TLS 或安装升级恢复完成。

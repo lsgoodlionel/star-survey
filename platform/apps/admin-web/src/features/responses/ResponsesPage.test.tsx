@@ -406,6 +406,30 @@ describe('ResponsesPage', () => {
     expect(await screen.findByText('已取消')).toBeInTheDocument();
   });
 
+  test('keeps a completed export visible and explains when download authorization was revoked', async () => {
+    const download = vi.fn().mockRejectedValue(new ApiError('forbidden', '无权执行当前操作', 403));
+    renderWithQuery(
+      <ResponsesPage
+        api={responseApi()}
+        exportClient={exportClient({
+          create: vi.fn().mockResolvedValue(baseJob('completed')),
+          get: vi.fn().mockResolvedValue(baseJob('completed')),
+          download,
+        })}
+        surveyId={surveyId}
+        tenantId="tenant-a"
+      />,
+    );
+
+    await screen.findByRole('heading', { name: '创建导出' });
+    fireEvent.click(screen.getByRole('button', { name: '创建导出任务' }));
+    expect(await screen.findByText('导出完成')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '下载导出文件' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('无权执行当前操作');
+    expect(screen.getByRole('button', { name: '下载导出文件' })).toBeInTheDocument();
+  });
+
   test('keeps summary available when detail permission is missing and separates empty and failed states', async () => {
     const noDetailApi = apiFrom((request) => {
       if (request.path.endsWith('/responses/summary')) return summary;

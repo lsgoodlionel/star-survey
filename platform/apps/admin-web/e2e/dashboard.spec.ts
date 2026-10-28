@@ -148,6 +148,50 @@ test('real data role sees only authorized response and export facts and actions'
   }
 });
 
+test('data export faults cancel safely, expose terminal state, and reauthorize each download', async ({ browser }) => {
+  const metadata = await readMetadata();
+  const result = await readResult();
+  await seedScopedActors(metadata.tenantId, result.surveyId);
+  const faults = await seedExportFaultJobs(metadata.tenantId, result.surveyId);
+
+  const data = await rolePage(browser, 'ADMIN_WEB_DATA_JWT_FILE');
+  try {
+    await login(data, await readPrivateToken('ADMIN_WEB_DATA_JWT_FILE'), DATA_ACTOR, metadata.tenantId);
+    await restoreExportJob(data, metadata.tenantId, result.surveyId, faults.queued);
+    const cancel = data.waitForResponse((response) => response.url().includes(`/v1/exports/${faults.queued}/cancel`));
+    await data.getByRole('button', { name: '取消任务' }).click();
+    expect((await cancel).status()).toBe(200);
+    await expect(data.locator('.export-job')).toContainText('已取消');
+    await expect(data.getByText('任务已取消，可按当前筛选重新创建。')).toBeVisible();
+
+    await restoreExportJob(data, metadata.tenantId, result.surveyId, faults.failed);
+    await expect(data.locator('.export-job')).toContainText('导出失败');
+    await expect(data.getByRole('alert')).toHaveText('导出失败，请按当前筛选重新创建任务。');
+    await expect(data.getByRole('button', { name: '下载导出文件' })).toHaveCount(0);
+
+    await restoreExportJob(data, metadata.tenantId, result.surveyId, faults.expired);
+    await expect(data.locator('.export-job')).toContainText('文件已过期');
+    await expect(data.getByText('导出文件已过期，请重新创建任务。')).toBeVisible();
+    await expect(data.getByRole('button', { name: '下载导出文件' })).toHaveCount(0);
+
+    await data.evaluate((key) => sessionStorage.removeItem(key), exportStorageKey(metadata.tenantId, result.surveyId));
+    await navigateToResponses(data, result.surveyId);
+    await data.getByRole('button', { name: '创建导出任务' }).click();
+    await expect(data.locator('.export-job')).toContainText('导出完成', { timeout: 60_000 });
+
+    await revokeDataExportPermission(metadata.tenantId, result.surveyId);
+    const denied = data.waitForResponse((response) => response.url().includes('/download')
+      && response.request().method() === 'GET');
+    await data.getByRole('button', { name: '下载导出文件' }).click();
+    expect((await denied).status()).toBe(403);
+    await expect(data.getByRole('alert')).toHaveText('无权执行当前操作');
+    await expect(data.getByRole('button', { name: '下载导出文件' })).toBeVisible();
+  } finally {
+    await seedScopedActors(metadata.tenantId, result.surveyId);
+    await data.context().close();
+  }
+});
+
 test('dashboard breakpoints and mobile navigation keep primary actions usable', async ({ page }) => {
   const metadata = await readMetadata();
   await login(page, await readPrivateToken('ADMIN_WEB_JWT_FILE'), metadata.actorId, metadata.tenantId);
@@ -292,6 +336,80 @@ VALUES ('${tenantId}'::uuid, '${queuedExport}'::uuid, '${surveyId}'::uuid, '${DA
         now() + interval '2 hours', now())
 ON CONFLICT (tenant_id, id) DO NOTHING;
 COMMIT;`;
+  await run('docker', [
+    'exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'),
+    'psql', '-U', 'platform_owner', '-d', 'platform', '-v', 'ON_ERROR_STOP=1', '-q', '-c', sql,
+  ]);
+}
+
+async function seedExportFaultJobs(tenantId: string, surveyId: string) {
+  assertUuid(tenantId);
+  assertUuid(surveyId);
+  const queued = randomUUID();
+  const failed = randomUUID();
+  const expired = randomUUID();
+  const sql = `BEGIN;
+SELECT set_config('app.tenant_id', '${tenantId}', true);
+DELETE FROM response_export_job
+WHERE tenant_id = '${tenantId}'::uuid AND requested_by = '${DATA_ACTOR}';
+INSERT INTO response_export_job
+    (tenant_id, id, survey_id, requested_by, format, filter_snapshot, plan,
+     reveal_sensitive, batch_size, status, next_attempt_at, expires_at, finished_at, last_error, created_at)
+VALUES ('${tenantId}'::uuid, '${queued}'::uuid, '${surveyId}'::uuid, '${DATA_ACTOR}', 'csv',
+        '{}'::jsonb, '{}'::jsonb, false, 100, 'queued', now() + interval '1 hour',
+        now() + interval '2 hours', NULL, NULL, now()),
+       ('${tenantId}'::uuid, '${failed}'::uuid, '${surveyId}'::uuid, '${DATA_ACTOR}', 'csv',
+        '{}'::jsonb, '{}'::jsonb, false, 100, 'failed', now(),
+        now() + interval '2 hours', now(), 'fault_injection', now()),
+       ('${tenantId}'::uuid, '${expired}'::uuid, '${surveyId}'::uuid, '${DATA_ACTOR}', 'csv',
+        '{}'::jsonb, '{}'::jsonb, false, 100, 'expired', now(),
+        now() - interval '1 second', now(), NULL, now() - interval '2 hours');
+COMMIT;`;
+  await run('docker', [
+    'exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'),
+    'psql', '-U', 'platform_owner', '-d', 'platform', '-v', 'ON_ERROR_STOP=1', '-q', '-c', sql,
+  ]);
+  return { queued, failed, expired };
+}
+
+async function restoreExportJob(page: Page, tenantId: string, surveyId: string, jobId: string) {
+  await page.evaluate(({ key, value }) => sessionStorage.setItem(key, value), {
+    key: exportStorageKey(tenantId, surveyId), value: jobId,
+  });
+  await navigateToResponses(page, surveyId);
+}
+
+async function navigateToResponses(page: Page, surveyId: string) {
+  await page.evaluate(() => {
+    window.history.pushState({}, '', '/dashboard');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page.getByRole('heading', { name: '工作台' })).toBeVisible();
+  await page.evaluate((path) => {
+    window.history.pushState({}, '', path);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, `/surveys/${surveyId}/responses`);
+  await expect(page.getByRole('heading', { name: '答卷与导出' })).toBeVisible();
+}
+
+function exportStorageKey(tenantId: string, surveyId: string) {
+  return `survey-export:${tenantId}:${DATA_ACTOR}:${surveyId}`;
+}
+
+async function revokeDataExportPermission(tenantId: string, surveyId: string) {
+  assertUuid(tenantId);
+  assertUuid(surveyId);
+  const sql = `WITH RECURSIVE ancestors AS (
+  SELECT id, parent_id FROM access_resource WHERE tenant_id = '${tenantId}' AND id = '${surveyId}'
+  UNION ALL
+  SELECT parent.id, parent.parent_id
+  FROM access_resource parent
+  JOIN ancestors child ON child.parent_id = parent.id
+  WHERE parent.tenant_id = '${tenantId}'
+)
+DELETE FROM access_grant
+WHERE tenant_id = '${tenantId}'::uuid AND actor_id = '${DATA_ACTOR}' AND role_code = 'raw_data_viewer'
+  AND resource_id IN (SELECT id FROM ancestors);`;
   await run('docker', [
     'exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'),
     'psql', '-U', 'platform_owner', '-d', 'platform', '-v', 'ON_ERROR_STOP=1', '-q', '-c', sql,
