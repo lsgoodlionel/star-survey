@@ -1,5 +1,7 @@
 package cn.mjy.platform.delivery;
 
+import cn.mjy.platform.contacts.ContactView;
+import cn.mjy.platform.contacts.SurveyAudienceService;
 import cn.mjy.platform.delivery.DeliveryTaskRepository.TaskRow;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
@@ -41,9 +43,11 @@ public class DeliveryTaskService {
     private final DeliveryAudit audit;
     private final DeliveryLinkService links;
     private final DeliveryProviders providers;
+    private final SurveyAudienceService audiences;
 
     DeliveryTaskService(TenantScope tenantScope, DeliveryTaskRepository tasks, RecipientRepository recipients,
-            DeliveryAccess access, DeliveryAudit audit, DeliveryLinkService links, DeliveryProviders providers) {
+            DeliveryAccess access, DeliveryAudit audit, DeliveryLinkService links, DeliveryProviders providers,
+            SurveyAudienceService audiences) {
         this.tenantScope = tenantScope;
         this.tasks = tasks;
         this.recipients = recipients;
@@ -51,6 +55,7 @@ public class DeliveryTaskService {
         this.audit = audit;
         this.links = links;
         this.providers = providers;
+        this.audiences = audiences;
     }
 
     /** 名单里的一行。{@code engineToken} 是发布后从引擎回读到的参与者 token（邀请码），可为空。 */
@@ -104,6 +109,20 @@ public class DeliveryTaskService {
         });
     }
 
+    /**
+     * 从问卷已保存的受众创建任务。联系人地址只在服务端按当前数据范围读取并冻结为任务快照，
+     * 不经由浏览器回传，避免扩大 PII 暴露面。
+     */
+    public TaskView createFromAudience(TenantContext ctx, NewTask request) {
+        access.require(ctx, DeliveryAccess.SEND, request.surveyId());
+        List<NewRecipient> selected = audiences.recipients(ctx, request.surveyId()).stream()
+                .map(contact -> audienceRecipient(request.channel(), contact))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        return create(ctx, new NewTask(request.surveyId(), request.channel(), request.linkId(), request.subject(),
+                request.bodyTemplate(), selected, request.idempotencyKey()));
+    }
+
     public TaskView status(TenantContext ctx, UUID taskId) {
         return tenantScope.call(ctx.tenantId(), () -> {
             TaskRow row = row(taskId);
@@ -155,6 +174,14 @@ public class DeliveryTaskService {
         byte[] bytes = new byte[16];
         RANDOM.nextBytes(bytes);
         return HexFormat.of().formatHex(bytes);
+    }
+
+    private static NewRecipient audienceRecipient(DeliveryChannel channel, ContactView contact) {
+        String address = channel == DeliveryChannel.EMAIL ? contact.email() : contact.phone();
+        if (address == null || address.isBlank()) {
+            return null;
+        }
+        return new NewRecipient(address, contact.displayName(), null, Map.of());
     }
 
     TaskRow row(UUID taskId) {

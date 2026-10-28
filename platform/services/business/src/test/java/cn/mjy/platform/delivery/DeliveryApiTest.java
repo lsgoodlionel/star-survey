@@ -9,6 +9,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import cn.mjy.platform.response.ResponseFixture.Published;
+import cn.mjy.platform.contacts.ContactDirectoryService;
+import cn.mjy.platform.contacts.ContactDraft;
+import cn.mjy.platform.contacts.ContactKind;
+import cn.mjy.platform.contacts.ContactListService;
+import cn.mjy.platform.contacts.DedupeKey;
+import cn.mjy.platform.contacts.SurveyAudienceService;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.support.TestTokens;
 import java.nio.charset.StandardCharsets;
@@ -41,6 +47,15 @@ class DeliveryApiTest {
 
     @Autowired
     private FakeEmailProvider email;
+
+    @Autowired
+    private ContactListService lists;
+
+    @Autowired
+    private ContactDirectoryService contacts;
+
+    @Autowired
+    private SurveyAudienceService audiences;
 
     private Published p;
 
@@ -129,6 +144,26 @@ class DeliveryApiTest {
                  "recipients":[{"address":"a@example.com"}]}
                 """.formatted(UUID.randomUUID(), DeliveryFixture.EMAIL_BODY))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void createsATaskFromTheSavedAudienceWithoutAcceptingRecipientAddresses() throws Exception {
+        var list = lists.create(p.owner(), "Wave 4 受众", ContactKind.RESPONDENT, DedupeKey.EMAIL);
+        contacts.create(p.owner(), list.id(), ContactKind.RESPONDENT,
+                ContactDraft.named("受访者").withEmail("audience@example.com"));
+        audiences.set(p.owner(), p.surveyId(), list.id(), null, true, null);
+
+        String body = postAs(p.owner(), "/v1/surveys/" + p.surveyId() + "/delivery-tasks", """
+                {"channel":"email","subject":"请填写","bodyTemplate":"%s"}
+                """.formatted(DeliveryFixture.EMAIL_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.recipientCount").value(1))
+                .andReturn().getResponse().getContentAsString();
+        String taskId = com.jayway.jsonpath.JsonPath.read(body, "$.id");
+
+        getAs(p.owner(), "/v1/delivery/tasks/" + taskId + "/recipients")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].address").value(org.hamcrest.Matchers.not("audience@example.com")));
     }
 
     @Test

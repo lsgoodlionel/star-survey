@@ -36,6 +36,10 @@ Wave 4 的首个纵切位于已发布问卷的上下文中：运营人员创建�
 - 隔离 Docker MySQL、PostgreSQL 使用真实发布问卷完成：名单/联系人 -> audience -> 未配置通道的真实不可用 -> 配置测试通道后的任务创建、脱敏状态/收件人和取消；核对平台 API、平台数据库、网关与引擎数据。
 - 通过范围内测试后更新 README、路线图、能力映射/追溯（仅在证据满足时），同步 Obsidian，按功能边界提交并普通推送当前分支，核对 GitHub CI。
 
+## 2026-10-28 阶段 1 起步
+
+已新增 `POST /v1/surveys/{surveyId}/delivery-tasks`：请求不接收 `recipients`，`DeliveryTaskService` 在服务端按已保存 audience 和当前调用者的数据范围选择可用的 Email/SMS 地址，再复用既有任务创建与收件人快照逻辑。`DeliveryApiTest` 覆盖从保存 audience 创建任务及收件人地址脱敏；隔离 Docker Maven 目标类通过。联系人/受众前端、未配置通道的页面恢复状态和双库浏览器纵切仍待后续阶段，不能将该服务端契约单独视作 Wave 4 准出。
+
 ## 风险与停止条件
 
 - 当前后端 `DeliveryTaskController` 只接受调用方提交的 recipients，不能被前端直接复用为受众投放；若受众物化不能在不扩大 PII 或权限范围的前提下完成，停止并保留证据。
