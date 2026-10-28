@@ -2,8 +2,6 @@ name: Survey production images
 
 on:
   pull_request:
-    branches:
-      - main
     paths:
       - '.github/release/**'
       - '.github/workflows/release.yml'

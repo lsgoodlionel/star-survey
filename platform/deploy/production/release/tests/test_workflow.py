@@ -98,6 +98,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("workflow_dispatch", triggers)
         self.assertIn("push", triggers)
         self.assertTrue(triggers["pull_request"].get("paths"))
+        self.assertFalse(triggers["pull_request"].get("branches"))
         self.assertEqual(["v*"], triggers["push"].get("tags"))
         self.assertNotIn("branches", triggers["push"])
 
