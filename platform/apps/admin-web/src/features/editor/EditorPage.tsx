@@ -25,7 +25,7 @@ import {
   serializeDefinition,
   type EditableSurveyDefinition,
 } from './model/definition';
-import { moveQuestion, updateQuestion, validateDefinition } from './model/operations';
+import { moveGroup, moveQuestion, updateQuestion, validateDefinition } from './model/operations';
 import {
   clearActiveEditorRecovery,
   discardEditorRecovery,
@@ -226,6 +226,9 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       selectedQuestionUuid={selectedQuestionUuid}
       disabled={!canEdit}
       onSelect={(uuid) => setSearchParams({ question: uuid }, { replace: true })}
+      onMoveGroup={(uuid, targetIndex) => {
+        changeDefinition(moveGroup(definition, uuid, targetIndex));
+      }}
       onMoveQuestion={(uuid, groupUuid, targetIndex) => {
         changeDefinition(moveQuestion(definition, uuid, groupUuid, targetIndex));
       }}
