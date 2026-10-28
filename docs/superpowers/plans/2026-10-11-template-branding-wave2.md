@@ -461,7 +461,7 @@ Expected: zero failure, error or required skip; every evidence item binds to the
 
 2026-10-28 接续：`platform-quality.yml` 已在 PR #11 的 `3aa6881790` 上通过 10/10；Release 工作流的 PR 触发范围已扩展到堆叠 PR，使三镜像只读构建能够在线验证，触发策略测试先红后绿，Release 测试 58/58 通过。该改动不发布镜像或 Release；需核对新提交的 Release CI，Step 2 生产生命周期与 Step 3 独立复审仍待完成。
 
-首轮在线运行 `40607037885` 暴露复用质量门和独立质量门的并发组冲突，后者 run `40607037755` 被取消。并发组已按 GitHub reusable workflow 上下文加入调用方工作流名，测试先红后绿；待新提交的两条 CI 均结束后再记录 Step 1 结果。
+首轮在线运行 `40607037885` 暴露复用质量门和独立质量门的并发组冲突，后者 run `40607037755` 被取消。并发组已按 GitHub reusable workflow 上下文加入调用方工作流名，测试先红后绿。修复提交 `0fb16c8c7d` 的独立产品质量 run `40608389887` 成功 10/10；Release run `40608389960` 成功，三镜像 AMD64/ARM64 只读构建均通过。Step 1 的在线质量与构建证据已齐；Step 2 的真实生产生命周期和 Step 3 的独立复审仍待完成，Task 8 与 Wave 2 不勾选。
 
 - [ ] **Step 2: Run production Compose smoke**
 

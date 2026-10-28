@@ -31,7 +31,7 @@ Task 8: pending - 用户已明确本轮完成本地验收与同步，生产 Comp
 
 2026-10-28 Wave 2 Task 8 接续：产品质量工作流在当前 PR #11 的 `3aa6881790` 提交上 10/10 通过。Release 工作流原本只对目标为 `main` 的 PR 执行，堆叠 PR #11 因此没有三镜像构建验证；已改为对任何目标分支的相关 PR 执行只读的 `build-local` 路径，并增加触发策略回归断言。本地 Release 测试 58/58 通过。线上 Release 工作流结果须在新提交推送后核对；真实 tag、GHCR 镜像、双版 Release 与原生生产生命周期验收仍未完成。
 
-2026-10-28 新触发的 Release CI `40607037885` 暴露跨工作流并发组冲突：复用 `platform-quality.yml` 时，独立产品质量 run `40607037755` 被取消。根据 GitHub 对 reusable workflow 的 `github.workflow` 上下文说明，已将调用方工作流名纳入质量门并发组，避免互相取消；回归测试先红后绿，Release 测试仍为 58/58。当前两条 CI 的最终结果需以并发修复推送后的新提交为准。
+2026-10-28 新触发的 Release CI `40607037885` 暴露跨工作流并发组冲突：复用 `platform-quality.yml` 时，独立产品质量 run `40607037755` 被取消。根据 GitHub 对 reusable workflow 的 `github.workflow` 上下文说明，已将调用方工作流名纳入质量门并发组，避免互相取消；回归测试先红后绿，Release 测试仍为 58/58。修复提交 `0fb16c8c7d` 的 [独立产品质量 run 40608389887](https://github.com/lsgoodlionel/star-survey/actions/runs/40608389887) 成功，10/10；[Release 构建 run 40608389960](https://github.com/lsgoodlionel/star-survey/actions/runs/40608389960) 成功，复用质量门与 admin、platform、publish-gateway 三镜像 AMD64/ARM64 只读构建均通过。PR 路径未发布镜像或 Release；真实 tag、双版制品和生产生命周期验收仍未完成。
 
 2026-10-12：用户要求生成报告准备切换模型，暂停新增实现。接续入口为
 [模型切换交接报告](run-history/2026-10-12-wave2-model-handoff.md)。
