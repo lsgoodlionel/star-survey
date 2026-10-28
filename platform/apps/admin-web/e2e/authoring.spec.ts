@@ -224,11 +224,21 @@ test('author filters stable resources, restores archive, and publishes the same 
   await fillAction(page.getByLabel('新名单名称'), '浏览器验收受众');
   await clickAction(page.getByRole('button', { name: '创建名单' }));
   await expect(page.getByRole('combobox', { name: '用于当前问卷的名单' })).not.toHaveValue('');
+  await fillAction(page.getByLabel('导入内容'), 'name,email\n批量验收联系人,bulk-recipient@example.test\n');
+  const importSubmission = page.waitForResponse((response) =>
+    response.url().includes('/v1/contact-lists/')
+      && response.url().endsWith('/imports')
+      && response.request().method() === 'POST',
+  );
+  await clickAction(page.getByRole('button', { name: '提交批量导入' }));
+  expect((await importSubmission).status()).toBe(202);
+  await expect(page.getByLabel('联系人导入状态')).toContainText('已处理 1/1 行', { timeout: 60_000 });
+  await expect(page.getByLabel('导入行结果')).toContainText('第 1 行：已新增');
   await fillAction(page.getByLabel('联系人姓名'), '浏览器验收联系人');
   await fillAction(page.getByLabel('联系人邮箱'), 'browser-recipient@example.test');
   await clickAction(page.getByRole('button', { name: '新增联系人' }));
   await clickAction(page.getByRole('button', { name: '保存当前受众' }));
-  await expect(page.getByRole('status')).toContainText('受众已保存，当前可邀请 1 人。');
+  await expect(page.getByRole('status')).toContainText('受众已保存，当前可邀请 2 人。');
   const unavailableTask = page.waitForResponse((response) =>
     response.url().includes(`/v1/surveys/${surveyId}/delivery-tasks`)
       && response.request().method() === 'POST',

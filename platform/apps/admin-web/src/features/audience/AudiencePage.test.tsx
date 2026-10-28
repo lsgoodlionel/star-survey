@@ -8,11 +8,15 @@ import { AudiencePage } from './AudiencePage';
 const surveyId = '11111111-1111-4111-8111-111111111111';
 const listId = '22222222-2222-4222-8222-222222222222';
 const taskId = '33333333-3333-4333-8333-333333333333';
+const importJobId = '55555555-5555-4555-8555-555555555555';
 const now = '2026-10-28T08:00:00Z';
 const list = { id: listId, name: 'Wave 4 测试名单', kind: 'respondent', dedupeKey: 'email', createdAt: now };
 const audience = { audience: { surveyId, listId, orgUnitId: null, includeDescendants: true, tag: null, updatedBy: 'actor-a', updatedAt: now }, recipients: 1 };
 const queued = { id: taskId, surveyId, channel: 'email', kind: 'invite', status: 'queued', sourceTaskId: null, recipientCount: 1, sentCount: 0, failedCount: 0, skippedCount: 0, billedUnits: 0, attempts: 0, lastError: null, createdAt: now, finishedAt: null };
 const storageKey = `survey-delivery:tenant-a:actor-a:${surveyId}`;
+const importStorageKey = `contact-import:tenant-a:actor-a:${surveyId}:${listId}`;
+const importJob = { jobId: importJobId, listId, status: 'completed', totalRows: 2, processedRows: 2, created: 1, updated: 0, duplicate: 0, invalid: 1 };
+const queuedImportJob = { ...importJob, status: 'queued', processedRows: 0, created: 0, invalid: 0 };
 
 function apiFrom(handler: (request: ApiRequest<unknown>) => unknown): ApiClient {
   return { request: (request) => Promise.resolve(handler(request as ApiRequest<unknown>)) as never };
@@ -125,5 +129,54 @@ describe('AudiencePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '取消任务' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('取消任务失败，请稍后重试。');
     expect(screen.getByLabelText('投放任务状态')).toHaveTextContent('等待发送');
+  });
+
+  test('submits a scoped CSV import and renders only non-PII row outcomes', async () => {
+    const requests: ApiRequest<unknown>[] = [];
+    const api = apiFrom((request) => {
+      requests.push(request);
+      if (request.path === '/v1/contact-lists') return [list];
+      if (request.path === `/v1/surveys/${surveyId}/audience`) return audience;
+      if (request.path === `/v1/contact-lists/${listId}/imports`) return queuedImportJob;
+      if (request.path === `/v1/contact-imports/${importJobId}`) return importJob;
+      if (request.path === `/v1/contact-imports/${importJobId}/outcomes?fromRow=1&limit=100`) return [
+        { rowNo: 2, outcome: 'created', reason: null, contactId: '66666666-6666-4666-8666-666666666666' },
+        { rowNo: 3, outcome: 'invalid', reason: 'email_invalid', contactId: null },
+      ];
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    renderWithQuery(<AudiencePage api={api} surveyId={surveyId} tenantId="tenant-a" actorId="actor-a" />);
+    await screen.findByText(/服务端当前可邀请/);
+    fireEvent.change(screen.getByLabelText('导入内容'), { target: { value: 'name,email\n王同学,student@example.test\n坏数据,not-an-email' } });
+    fireEvent.click(screen.getByRole('button', { name: '提交批量导入' }));
+    await waitFor(() => expect(screen.getByLabelText('联系人导入状态')).toHaveTextContent('已处理 2/2 行；新增 1、更新 0、重复 0、无效 1'));
+    expect(await screen.findByLabelText('导入行结果')).toHaveTextContent('第 2 行：已新增');
+    expect(screen.getByLabelText('导入行结果')).toHaveTextContent('第 3 行：无效（email_invalid）');
+    expect(screen.queryByText('student@example.test')).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(importStorageKey)).toBe(importJobId);
+    expect(requests.find((request) => request.path.endsWith('/imports'))?.body).toEqual({
+      format: 'csv', content: 'name,email\n王同学,student@example.test\n坏数据,not-an-email',
+    });
+  });
+
+  test.each([403, 404])('forgets an inaccessible restored import after %i instead of displaying its old summary', async (status) => {
+    sessionStorage.setItem(importStorageKey, importJobId);
+    let statusReads = 0;
+    const api = apiFrom((request) => {
+      if (request.path === '/v1/contact-lists') return [list];
+      if (request.path === `/v1/surveys/${surveyId}/audience`) return audience;
+      if (request.path === `/v1/contact-imports/${importJobId}`) {
+        statusReads += 1;
+        return Promise.reject(new ApiError(status === 403 ? 'forbidden' : 'not_found', '导入作业不可访问', status));
+      }
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    renderWithQuery(<AudiencePage api={api} surveyId={surveyId} tenantId="tenant-a" actorId="actor-a" />);
+    await screen.findByText(/服务端当前可邀请/);
+    fireEvent.change(screen.getByLabelText('用于当前问卷的名单'), { target: { value: listId } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('导入作业不可访问或已不存在');
+    expect(statusReads).toBe(1);
+    expect(sessionStorage.getItem(importStorageKey)).toBeNull();
+    expect(screen.queryByLabelText('联系人导入状态')).not.toBeInTheDocument();
   });
 });

@@ -50,10 +50,10 @@
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java`](../../services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java) 定位 `class ContactController`：联系人、部门、标签和名单后端已形成。
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryTaskController.java`](../../services/business/src/main/java/cn/mjy/platform/delivery/DeliveryTaskController.java) 定位 `public class DeliveryTaskController`：批量任务、回执、退订和催答后端已形成；真实供应商未接入。
 - **后端** （自动化测试）[`platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryApiTest.java`](../../services/business/src/test/java/cn/mjy/platform/delivery/DeliveryApiTest.java) 定位 `anAudienceTaskUsesOnlyTheTestEmailProviderAndKeepsItsRecipientReadRedacted`：测试源码 FakeEmailProvider 验证 audience 任务成功投递、completed 计数和读取脱敏；不属于生产 provider 证据。
-- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：2026-10-28 隔离 Docker MySQL/PostgreSQL 各 20/20：发布后完成名单、联系人、audience 和无 provider 的 503 恢复路径；不宣称真实投递成功。
-- **前端** （实现）[`platform/apps/admin-web/src/features/audience/AudiencePage.tsx`](../../apps/admin-web/src/features/audience/AudiencePage.tsx) 定位 `export function AudiencePage`：问卷内页面支持名单和单个 respondent 联系人创建、audience 人数、服务端任务创建、按租户/操作人/问卷恢复任务与脱敏任务状态；未覆盖批量导入、真实 provider、回执和催答。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：2026-10-29 隔离 Docker MySQL/PostgreSQL 各 20/20：发布后完成 CSV 导入及无 PII 行结果、名单、联系人、audience 和无 provider 的 503 路径；不宣称真实投递成功。
+- **前端** （实现）[`platform/apps/admin-web/src/features/audience/AudiencePage.tsx`](../../apps/admin-web/src/features/audience/AudiencePage.tsx) 定位 `export function AudiencePage`：问卷内页面支持名单、单个 respondent 联系人、CSV/JSON 批量导入、audience 人数与服务端任务创建；任务和导入按范围恢复，结果不回显 PII；未覆盖真实 provider、回执和催答。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R18-01 |`：通讯录导入与同步需求已编号。
-- **追溯** （追溯记录）[`docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md`](../../../docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md) 定位 `2026-10-28 阶段 4：任务重访恢复与测试投递契约`：最小纵切的任务重访、测试投递契约、双库浏览器证据及遗留项已记录。
+- **追溯** （追溯记录）[`docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md`](../../../docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md) 定位 `2026-10-29 阶段 5：问卷内联系人批量导入`：最小纵切的批量导入、范围恢复、双库浏览器证据及遗留项已记录。
 
 ### 投放链接与二维码 (`delivery-links`)
 

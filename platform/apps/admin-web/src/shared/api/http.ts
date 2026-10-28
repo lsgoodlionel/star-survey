@@ -11,6 +11,9 @@ export interface ApiRequest<T> {
   path: string;
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
+  headers?: HeadersInit;
+  /** 202 normally maps to a pending error; opt in only for APIs that return a usable accepted resource. */
+  acceptStatuses?: readonly number[];
   schema: ZodType<T>;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -59,6 +62,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
           async (signal) => {
             const token = options.getToken?.();
             const headers = new Headers({ Accept: 'application/json' });
+            if (request.headers) {
+              new Headers(request.headers).forEach((value, name) => headers.set(name, value));
+            }
             if (request.body !== undefined && !(request.body instanceof FormData)) {
               headers.set('Content-Type', 'application/json');
             }
@@ -74,7 +80,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
             });
             if (response.status === 401) await options.onUnauthorized?.(token ?? null);
             const payload = response.ok ? await readPayload(response) : await readErrorPayload(response);
-            if (response.status === 202 || !response.ok) {
+            if (!response.ok || (response.status === 202 && !request.acceptStatuses?.includes(202))) {
               throw apiErrorForStatus(response.status, payload);
             }
 
