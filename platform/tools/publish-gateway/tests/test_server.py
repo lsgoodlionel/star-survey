@@ -11,7 +11,7 @@ import unittest
 import uuid
 
 from pubgw import server
-from pubgw.server import MAX_BODY_BYTES, build_server, load_settings
+from pubgw.server import MAX_BODY_BYTES, MAX_BRAND_BODY_BYTES, build_server, load_settings
 
 from .gateway_support import (
     ENGINE_PASSWORD,
@@ -126,10 +126,10 @@ class PublishOverHttpTest(ServerTestCase):
         finally:
             connection.close()
 
-    def test_a_body_over_one_mebibyte_is_refused_before_reading_it(self):
+    def test_a_body_over_brand_limit_is_refused_before_reading_it(self):
         # 只声明长度、不发正文：若服务端试图读正文就会卡到读超时，而不是立刻 400
         status, raw = self.raw_post(
-            {"Content-Type": "application/json", "Content-Length": str(MAX_BODY_BYTES + 1)}
+            {"Content-Type": "application/json", "Content-Length": str(MAX_BRAND_BODY_BYTES + 1)}
         )
 
         self.assertEqual(400, status)

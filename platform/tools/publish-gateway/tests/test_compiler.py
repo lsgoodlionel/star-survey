@@ -166,6 +166,16 @@ class SafetyTest(unittest.TestCase):
         with self.assertRaises(CompileError):
             compile_sample(payload)
 
+    def test_converts_an_unmaterialized_brand_asset_to_compile_error(self):
+        payload = sample_payload()
+        payload["theme"] = "zh-business"
+        payload["branding"] = {"brandingVersion": 1, "logoAsset": {"assetId": "logo-id"}}
+
+        with self.assertRaises(CompileError) as caught:
+            compile_sample(payload)
+
+        self.assertIn("E_BRAND_ASSET_NOT_MATERIALIZED", str(caught.exception))
+
     def test_escapes_a_cdata_terminator_inside_question_text(self):
         payload = sample_payload()
         payload["groups"][0]["questions"][1]["text"] = "危险 ]]> 文本"

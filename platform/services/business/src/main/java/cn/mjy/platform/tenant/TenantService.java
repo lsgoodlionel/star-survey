@@ -42,6 +42,10 @@ public class TenantService {
         return tenantScope.call(id, () -> tenants.findById(id));
     }
 
+    public Optional<Tenant> findByCode(String code) {
+        return tenants.findByCode(code);
+    }
+
     /** 按状态机迁移；非法迁移抛 409，不写审计。 */
     public Tenant changeStatus(TenantId id, TenantStatus target, String actorId, String traceId) {
         return tenantScope.call(id, () -> {

@@ -1,7 +1,17 @@
 # 发布网关服务镜像：纯标准库，不装任何额外包。
 #   docker build -t survey-publish-gateway platform/tools/publish-gateway
 # 运行所需的环境变量与引擎配置格式见 README.md「作为服务运行」。
-FROM python:3.12-alpine
+FROM python:3.12.15-alpine3.24
+
+ARG VERSION=0.0.0-dev
+ARG REVISION=unknown
+ARG CREATED=unknown
+LABEL org.opencontainers.image.title="Survey Publish Gateway" \
+      org.opencontainers.image.description="Survey platform production publish gateway" \
+      org.opencontainers.image.source="https://github.com/lsgoodlionel/star-survey" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$REVISION" \
+      org.opencontainers.image.created="$CREATED"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -15,7 +25,7 @@ RUN addgroup -S -g 10001 pubgw \
  && chown pubgw:pubgw /var/lib/pubgw
 
 WORKDIR /app
-COPY pubgw /app/pubgw
+COPY --chown=10001:10001 pubgw /app/pubgw
 
 USER 10001:10001
 VOLUME ["/var/lib/pubgw"]

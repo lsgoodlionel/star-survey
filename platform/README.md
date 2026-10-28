@@ -10,24 +10,43 @@
 
 `main` @ `4206f24a`（[PR #8](https://github.com/lsgoodlionel/star-survey/pull/8) 已合并）· 更新 2026-10-09
 
+**2026-10-27 分支验收**：`feat/admin-product-alignment` @ `c80e9b406b` 已关闭 Wave 2 Task 7 带图真实预览 502 阻塞。隔离 MySQL/PostgreSQL 管理端真实浏览器均 19/19，覆盖品牌化正式答卷、两版发布和旧版图片字节固定；Java 1494 项/184 类、网关 1235 项、管理端 353 项与管理端静态/生产构建检查通过。Wave 2 Task 8 的生产 Caddy/doctor/备份恢复和独立复审仍待完成，能力状态不提升。[GitHub 平台质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40461852500)曾在 `db267ede9d` 全部通过（10/10 jobs）；后续以当前提交的在线 CI 结果为准。详见 [当前进度](../docs/agent/PROGRESS.md)。
+
+**2026-10-28 Wave 2 本地功能验收**：用户指定本地 Docker 部署和真实使用验证替代本 Wave 的功能复审与验收。`feat/admin-product-alignment` @ `2dc8e78725` 在隔离 MySQL、PostgreSQL 栈各通过 19/19，平台 API、平台数据库、网关及引擎数据库交叉核验通过；[GitHub 产品质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40609740377) 10/10，[Release 三镜像只读构建](https://github.com/lsgoodlionel/star-survey/actions/runs/40609740345) 成功。Wave 2 模板与品牌本地功能切片完成，准备 Wave 3；正式 Release、公开 TLS 和生产安装/升级/恢复单列后续验收，能力矩阵的更广需求仍为部分完成。
+
 | 阶段 | 状态 |
 |---|---|
 | P0 基线与可行性 | ✅（供应商询证与法务意见待业务侧） |
 | P1 租户与平台骨架 | ✅ 闸门通过 |
-| P2 通用问卷与本土入口 | 🔄 第一阶段管理端创作链路已交付并通过真实浏览器验收 |
+| P2 通用问卷与本土入口 | 🔄 Business Dashboard v1、管理端 Phase A+B 与 Wave 2 模板/品牌本地功能切片已通过真实浏览器验收；接续 Wave 3–6 |
 | P3 商业与业务应用 | 🔄 考试与测评（WP-09/10）已起步 |
 | P4–P5 | ⬜ |
 
-**测试基线**
+**产品化需求基线（2026-10-09）**
+
+- 前后端需求：[`platform/docs/productization/frontend-backend-requirements.md`](docs/productization/frontend-backend-requirements.md)
+- 产品蓝图：[`platform/docs/productization/product-blueprint.md`](docs/productization/product-blueprint.md)
+- 发布路线图：[`platform/docs/productization/release-roadmap.md`](docs/productization/release-roadmap.md)
+- 机器生成状态：[`platform/docs/productization/capability-map.md`](docs/productization/capability-map.md)
+
+核查报告的需求起点仍为 13 条完整达成、86 条部分完成、191 条未开始、15 条等待外部输入；当前机器能力状态仍为
+下列唯一摘要。
+
+能力摘要（机器事实）：accepted=0，partial=11，not_started=1，external=0。
+
+三份 canonical 文档定义角色、用户流、信息架构和 Wave 0-6 门禁，不构成状态提升证据；状态只由
+`capabilities.json` 的强类型六层证据和生成器决定。
+
+**2026-10-09 历史测试基线**
 
 | 套件 | 数量 | 说明 |
 |---|---|---|
-| 平台 Java | **1403 通过 / 175 类** | 0 失败 0 错误 0 跳过 |
+| 平台 Java | **1478 通过 / 182 类** | Task 7 Dashboard focused 16/16；0 失败 0 错误 0 跳过 |
 | 发布网关 Python | **1180 通过** | 0 失败 |
-| 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、95 个源码编号；矩阵校验通过 |
-| 管理端 Vitest | **13 个文件 / 134 通过** | lint、typecheck 同步通过 |
-| 管理端生产构建 | **2080 modules / 13 个产物文件检查** | production bundle 不含开发令牌入口 |
-| 管理端真实 E2E | **3 通过（7.6s）** | 桌面完整创作、移动端响应式编辑、真实 Chromium 敏感控件遮蔽 |
+| 需求追溯工具 | **72 通过** | 305 条需求、80 条证据、覆盖 37 条需求、114 个源码编号；矩阵校验通过 |
+| 管理端 Vitest | **30 个文件 / 299 通过** | lint、typecheck 与 build 同步通过 |
+| 管理端生产构建 | **2101 modules** | 构建通过；大 chunk 提示为非阻断维护项 |
+| 管理端真实 E2E | **15 通过（fresh stack）** | 登录落 Dashboard、发布/答卷/导出、真实角色隔离、最近工作、移动导航及 819/820/1179/1180px DOM 几何；最终全链路核对成功后归档 |
 | 插件 PHPUnit | 双库各 147 测试 / 337 断言 | MariaDB 10.11 ＋ PostgreSQL 16 |
 | 运行时策略 PHPUnit | 双库各 81 测试 / 392 断言 | |
 | 引擎端到端 | 14 个场景脚本 | 涉及数据库的**一律双库执行** |
@@ -76,8 +95,8 @@
 
 | 路径 | 内容 |
 |---|---|
-| `platform/apps/admin-web/` | 作者工作台 SPA：内存会话、资源树、基础编辑、批量导入、草稿预览、审批发布与版本查看 |
-| `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
+| `platform/apps/admin-web/` | 作者管理 SPA：内存会话、业务 Dashboard、资源树、基础编辑、大纲拖拽排序、批量导入、快速/真实预览、审批发布、投放链接、答卷与导出 |
+| `platform/services/business/` | 平台主服务（Spring Boot）。模块：access、asset、audit、contacts、dashboard、delivery、dictionary、engine、entitlement、identity、onboarding、response、survey、tenant |
 | `platform/tools/publish-gateway/` | 发布网关：定义 → LSS → 导入 → 激活 → 回读校验 → 回滚；答卷读取；插件通道客户端 |
 | `platform/tools/engine-theme/` | 把随镜像发布的作答主题装进引擎库 |
 | `platform/tools/log-shipper/` | 错误日志脱敏、去重、上报 |
@@ -88,6 +107,7 @@
 | `platform/docs/adr/` | 架构决策记录（19 份） |
 | `platform/docs/p0|p1|p2/` | 逐阶段进度与证据 |
 | `platform/deploy/test/` | 与 CI 一致的测试配置与 14 个端到端脚本 |
+| `platform/deploy/production/` | 单机生产 Compose、`surveyctl`、加密备份/隔离恢复、脱敏 doctor 与 clean-host 验收入口 |
 | `platform/deploy/platform-dev/` | 容器化 Maven（本机无需装 JDK）与平台数据库 |
 | `platform/tests/e2e/` | 端到端驱动脚本 |
 | `plugins/MjyPlatformBridge/` | 答卷生命周期事件日志与补偿扫描 |
@@ -159,6 +179,12 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 摘要而非 Playwright raw trace。gate 会在 JSON 解码、percent decode、NFKC 规范化后检查所有字符串，并复扫
 最终输出 bytes；JWT、headers、body、临时元数据、raw trace 和原始截图不会上传。
 
+Task 7 Dashboard 用户可见证据保留在 `platform/apps/admin-web/test-results/ci-artifacts/`：819、820、1179、1180px
+均为等待异步区块和底部“最近工作”稳定后的全页截图。导出 gate 解析 PNG IHDR，并核对 viewport、document 与 image
+真实尺寸及全页覆盖；人工检查确认无明显遮挡、裁切或重叠。横向溢出和 44px 控件仍由真实 Playwright DOM 测量，截图不替代
+行为断言。详细边界和结果见 `docs/audits/2026-10-09-product-alignment/15-business-dashboard-v1-follow-up.md`。
+仓库已具备单机生产部署和 Release publication 代码路径，详见 [`platform/deploy/production/README.md`](deploy/production/README.md)：固定 digest Compose、`surveyctl` 生命周期、加密备份、隔离恢复、脱敏 doctor、RC 制品签名/证明、四节点 native readiness、stable 原字节推广，以及 GitHub Release 页面身份与资产字节的幂等核对均有自动化契约与故障注入。当前仍不能宣称正式 production-ready：本任务没有创建真实 tag、GitHub Release 或正式 Engine 多架构镜像，Ubuntu 22.04/24.04 × AMD64/ARM64 的真实 GitHub runner 与公网 TLS clean-host 证据仍须在首个 RC 流水线中产生。PR #10 于 2026-10-09 重新核验仍为 OPEN、未合并，依赖仍待合并。
+
 ### 跑测试的三条硬规矩（都是真实踩出来的）
 
 1. **必须 `clean test`**。Maven 不删被改名或删除的资源，`target/classes` 里会留旧文件。迁移改名后只跑 `test`，轻则看到 935 个报错的**假故障**，重则旧迁移恰好可重复执行而给出**假成功**。
@@ -185,7 +211,7 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 
 | 工作包 | 状态 | 内容 |
 |---|---|---|
-| 管理端创作链路（第一阶段） | 🟡 | 组织免登安全交接、资源树和项目/文件夹/问卷创建、说明文字与单选/多选/短文本/长文本编辑、无损保存与冲突保护、批量文本导入、草稿预览、审批发布和不可变版本查看；桌面完整创作与移动端响应式编辑已有真实 E2E |
+| 管理端创作链路 | 🟡 | 组织免登安全交接、资源树和项目/文件夹/问卷创建、说明文字与单选/多选/短文本/长文本编辑、题组及题目拖拽/按钮/键盘排序、无损保存与冲突保护、批量文本导入、快速预览（本地草稿渲染）、审批发布和不可变版本查看；桌面与移动端已有真实 E2E |
 | WP-23 共同基础 | 🟡 | 租户隔离（RLS）、公开路由、身份绑定、每实例事件密钥、审计；事件日志与补偿扫描；催答完成对账。跨系统对账报表、隐私删除、监控 ⬜ |
 | WP-22 套餐与计量 | 🟡 | 套餐版本、试用／付费订阅、有效答卷计量、席位额度、租户开通；赠送有效期 ⬜ |
 | WP-19 团队与品牌 | 🟡 | 角色目录、资源树授权继承、字段与导出权限、席位联动；企业模板库；`zh-business` 主题与多语言。协作员到期、自定义域名 ⬜ |
@@ -194,11 +220,16 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 | WP-03 逻辑与计算 | ✅ | 定义 v2 DSL、类型检查与环检测、AST→ExpressionScript、**计分**、**双执行比对**（双库 48 例零分歧） |
 | WP-04 访问与作答规则 | ✅ | 时间窗（含改客户端时钟）、密码、邀请码、按 token/设备/IP 限次、服务端时长、验证码、IP 规则；策略摘要双端校验 |
 | WP-05 投放触达 | ✅ | 链接、二维码、短链、内嵌、签名渠道参数；批量任务（崩溃续跑不重发）、回执验签去重、退订不可翻转；催答与通知。真实短信／邮件通道 ⏳ |
-| WP-06 数据与输出 | 🟡 | 分页查询、字段字典、脱敏；导出作业（快照、续跑、再授权）；CSV／XLSX／**SAV**／**DOCX**；**扩展表作答进导出**。附件打包、PDF ⬜ |
+| WP-06 数据与输出 | 🟡 | 分页查询、字段字典、脱敏；导出作业（快照、续跑、再授权）；CSV／XLSX／SAV／DOCX／PDF；扩展表作答进导出。PDF 已合入候选并通过单元测试，完整产品验收待续；附件打包仍待完成。 |
 | WP-18 通讯录 | ✅ | 三类身份分离、名单导入去重、部门树与数据范围、**联系人 → 邀请码自动登记** |
 | WP-20 集成 | 🟡 | 企微／钉钉／飞书授权与免登、事件回调、定时同步。真实联调待凭据 ⏳ |
 | WP-09/10 考试测评 | 🔄 | 本波进行中 |
 
+
+### 开发与质量控制
+
+按 2026-10-28 用户决定，开发使用 Codex 原生功能及插件，产品质量由 GitHub Actions 在线 CI 检查。
+自建控制平面及治理工作流已停用；产品测试、浏览器端到端、数据库和 Release 门禁继续执行。
 
 ### 持续集成
 
@@ -208,7 +239,7 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 |---|---|---|
 | `parity-tables` | 发布网关单测（含**三端注册表**与**三端数值上限**两张对照表）＋ 对账脚本自己的用例 ＋ **需求追溯校验** | 只要 Python，秒级 |
 | `admin-web` | Node 22 下执行 `npm ci`、lint、typecheck、Vitest、生产构建与 production bundle assertion | Node 22 |
-| `admin-web-e2e` | 桌面完整创作与移动端响应式编辑；真实串起管理端、平台、网关和 MySQL 引擎 | Docker ＋ Chromium；依赖 `admin-web` 与 `parity-tables` |
+| `admin-web-e2e` | 桌面完整创作、pointer/键盘/按钮排序与移动端响应式编辑；真实串起管理端、平台、网关和 MySQL 引擎 | Docker ＋ Chromium；依赖 `admin-web` 与 `parity-tables` |
 | `gateway-parity-e2e` | WP-03.4 双执行比对，`mysql` 与 `pgsql` 两个矩阵分支各跑一遍 | 起引擎栈（脚本自行构建 `survey-web` 镜像） |
 | `platform-java` | 平台 Java 全套（`run-platform-tests.sh`，含测试数对账） | `actions/setup-java` ＋ PostgreSQL service 容器 |
 | `access-policy-e2e` | WP-04 访问策略端到端（R04-01…05），`mysql` 与 `pgsql` 各一遍 | 起引擎栈 |
@@ -237,6 +268,8 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 
 ## 7. 已知遗留
 
+单机生产运行手册、命令与当前验收边界见 [`deploy/production/README.md`](deploy/production/README.md)。本地故障注入通过不替代 Release CI 的真实主机矩阵；备份加密密钥的异地保管和备份保留策略仍由部署运维负责。
+
 **部署前必须处理**
 
 - 发布网关的并发锁与限流**都在进程内**：网关只能单副本运行；多副本时实际限额 ＝ 缺省值 × 副本数。真实按 IP 限流需入口层提供客户端地址（不信任 `X-Forwarded-For`）。
@@ -259,8 +292,8 @@ CI 失败时只上传 `platform/apps/admin-web/test-results/ci-artifacts/` 中�
 
 **功能缺口**
 
-- 管理端首期仍未交付拖拽排序、高级题型可视化配置、真实 LimeSurvey 运行时预览和专门的屏幕阅读器审计；当前只有按钮式排序、复杂题型只读无损往返、明确标注的“草稿预览”和可访问性基础检查。
-- PDF 导出卡在中文字体（已决定随仓库交付思源黑体，SIL OFL 1.1）。
+- 管理端已交付题组与题目的 pointer 拖拽、键盘排序和移动端按钮替代操作；仍未交付高级题型可视化配置、真实 LimeSurvey 运行时预览和专门的屏幕阅读器审计。当前复杂题型仍是只读无损往返，现有入口明确标注为“快速预览”，仅使用本地草稿 renderer。
+- PDF 导出已接入随交付嵌入的思源黑体子集（SIL OFL 1.1）；本地 PDF 单元测试通过，完整产品验收待续。
 - 附件打包卡在 `get_uploaded_files`——它一次把**整份答卷**的全部文件 base64 塞进一个 JSON 应答。
 - 字典节点上限 8000（由定义快照 1 MiB 倒推）：到区县够用，到乡镇街道不够。
 - 行政区划数据集**不随仓库交付**（各家许可与署名义务不同，由交付方决定）。
@@ -285,3 +318,11 @@ PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh --expect-te
 - 上游 fork `lsgoodlionel/LimeSurvey` 保留为 remote `limesurvey-fork`，用于对比上游与合并升级。
 - `main` 的根提交是 LimeSurvey 7.1.2 快照（上游 `4c20c680`）：本地为浅克隆，无法推送浅历史，故以单个根提交导入；上游完整历史仍在 fork 仓库。
 - **不要修改引擎源码与根 `README.md`**：自有内容全部是新增文件，这个不变式是上游升级可行性的基础。
+
+## Codex 与 Actions（试运行）
+
+- 开发阶段：Codex 编写或修改工作流 YAML；构建仍由 Actions 的平台构建步骤执行。
+- 运行阶段：`codex-autofix.yml` 仅通过手动触发处理“MJY 平台 - 质量闸门”同仓库 PR 失败，调用 `openai/codex-action` 作最小修复，最多两次；Shell/Python 负责次数、提交、推送和报告。
+- 提交标记 `[codex-fix-attempt: N]` 最多到 2；再次失败则在 PR 报告，合并由人工执行。支持 `workflow_dispatch` 手动运行，需填失败的运行 ID。
+- 启用前设置 Actions secrets：`OPENAI_API_KEY`、`SURVEY_AUTOFIX_PUSH_TOKEN`（仅授予本仓库 Contents 写权限的 fine-grained PAT）。后者必须能触发后续 CI；默认 `GITHUB_TOKEN` 推送无法形成循环。工作流文件须位于默认分支才能手动触发或接收 `workflow_run`。
+- 自动修复先解析失败步骤日志中的测试命令与文件行号；仅将最多 5 个已跟踪源码文件放入隔离工作区供 Codex 修改。无法确定范围、修改了其他文件或生成新文件时停止并报告，不推送补丁。

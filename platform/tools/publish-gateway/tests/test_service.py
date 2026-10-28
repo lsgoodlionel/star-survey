@@ -23,6 +23,8 @@ from .gateway_support import (
     signed_headers,
 )
 from .fixtures import sample_payload
+from .branding_fixtures import branded_payload
+from .test_brand_assets import asset
 from pubgw.store import Retention
 
 CONTRACT_RESULT_KEYS = {
@@ -73,6 +75,75 @@ class PublishedTest(ServiceTestCase):
         method, params = engine.calls[0]
         self.assertEqual(("get_session_key", ["admin", ENGINE_PASSWORD]), (method, params))
         self.assertEqual("release_session_key", engine.methods()[-1])
+
+
+class BrandAssetPublishTest(ServiceTestCase):
+    def test_passes_matching_assets_to_the_engine_installer(self):
+        engine = new_engine()
+        service = make_service(engine, self.state_dir)
+        installer = _RecordingInstaller()
+        service._brand_asset_installer_factory = lambda unused: installer
+        payload = envelope(definition=branded_payload({
+            "brandingVersion": 1,
+            "logoAsset": _materialized_logo(),
+        }))
+        payload["brandAssets"] = [asset()]
+
+        status, body = self.send(service, payload)
+
+        self.assertEqual(200, status)
+        self.assertTrue(body["result"]["ok"])
+        self.assertEqual(1, len(installer.calls))
+
+    def test_rejects_missing_materialized_asset_bytes_before_import(self):
+        engine = new_engine()
+        service = make_service(engine, self.state_dir)
+        service._brand_asset_installer_factory = lambda unused: _RecordingInstaller()
+        payload = envelope(definition=branded_payload({
+            "brandingVersion": 1,
+            "logoAsset": _materialized_logo(),
+        }))
+
+        status, body = self.send(service, payload)
+
+        self.assertEqual(502, status)
+        self.assertEqual("brand_assets", body["result"]["failedStage"])
+        self.assertNotIn("import_survey", engine.methods())
+
+
+class LegacyBrandAssetFingerprintTest(ServiceTestCase):
+    def test_old_missing_field_replays_but_explicit_empty_assets_is_a_new_request_shape(self):
+        engine = new_engine()
+        service = make_service(engine, self.state_dir)
+        payload = envelope()
+
+        first = self.send(service, payload)
+        replay = self.send(service, payload)
+        explicit_empty = self.send(service, dict(payload, brandAssets=[]))
+
+        self.assertEqual(first, replay)
+        self.assertEqual(400, explicit_empty[0])
+        self.assertEqual("invalid_request", explicit_empty[1]["error"])
+        self.assertEqual(1, engine.methods().count("import_survey"))
+
+
+class _RecordingInstaller:
+    def __init__(self):
+        self.calls = []
+
+    def install(self, survey_id, branding, assets):
+        self.calls.append((survey_id, branding, assets))
+
+
+def _materialized_logo():
+    return {
+        "url": "https://survey.example/a/tenant/123e4567-e89b-42d3-a456-426614174000/7?exp=1800003600&sig=signed",
+        "assetVersion": 7,
+        "contentType": "image/png",
+        "sizeBytes": 11,
+        "fileName": "mjy-brand-logo.png",
+        "sha256": "e0b18c35151ba8d9002fc29a90f33920067633ab8d929bd1d9679d8eb46ecf62",
+    }
 
 
 class RejectedTest(ServiceTestCase):

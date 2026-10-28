@@ -7,5 +7,7 @@ public record ResourceCapabilities(
         boolean canEdit,
         boolean canSubmitApproval,
         boolean canPublishDirectly,
-        boolean canApprovePublish) {
+        boolean canApprovePublish,
+        boolean canArchive,
+        boolean canRestore) {
 }

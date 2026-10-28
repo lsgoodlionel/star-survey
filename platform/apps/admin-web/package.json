@@ -13,11 +13,15 @@
     "assert:e2e-bundle": "node scripts/assert-e2e-bundle.mjs",
     "assert:production-bundle": "node scripts/assert-production-bundle.mjs",
     "e2e": "playwright test",
+    "e2e:demo": "node --experimental-strip-types e2e/demoDataGate.ts",
     "lint": "eslint .",
     "test": "vitest",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@tanstack/react-query": "5.104.1",
     "lucide-react": "1.52.0",
     "react": "19.3.0",
@@ -41,6 +45,7 @@
     "eslint-plugin-react-refresh": "0.5.7",
     "globals": "17.13.0",
     "jsdom": "30.1.2",
+    "jsqr": "^1.4.0",
     "msw": "3.0.2",
     "typescript": "5.9.3",
     "typescript-eslint": "8.71.1",

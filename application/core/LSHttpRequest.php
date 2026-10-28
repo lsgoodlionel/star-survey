@@ -37,6 +37,8 @@ class LSHttpRequest extends CHttpRequest
     private $_pathInfo;
 
     public $noCsrfValidationRoutes = array();
+    /** @var string[] routes that must match exactly, without inheriting the prefix semantics above */
+    public $noCsrfValidationExactRoutes = array();
     public $noCsrfValidationParams = array();
 
     /** @var array<string,mixed>|null the request query parameters (name-value pairs) */
@@ -158,6 +160,7 @@ class LSHttpRequest extends CHttpRequest
 
         if ($this->enableCsrfValidation) {
             $validationRoutes = $this->noCsrfValidationRoutes;
+            $exactValidationRoutes = $this->noCsrfValidationExactRoutes;
             $validationParams = $this->noCsrfValidationParams;
             // $validationRoutes[] = 'plugins/direct/plugin/AuthSAML/function/acs';
             // $validationParams['request'] = 'acs';
@@ -170,6 +173,17 @@ class LSHttpRequest extends CHttpRequest
                     );
                     Yii::trace('Route "' . $route . ' passed without CSRF validation');
                     break; // found first route and break
+                }
+            }
+
+            foreach ($exactValidationRoutes as $cr) {
+                if (self::routeMatchesExactNoCsrfValidationRule($route, $cr)) {
+                    Yii::app()->detachEventHandler(
+                        'onBeginRequest',
+                        array($this, 'validateCsrfToken')
+                    );
+                    Yii::trace('Route "' . $route . '" passed without CSRF validation');
+                    break;
                 }
             }
 
@@ -265,6 +279,17 @@ class LSHttpRequest extends CHttpRequest
         // should not.
         $route = ltrim($route, '/');
         return preg_match('#^' . $rule . '$|^' . $rule . '/#', (string) $route);
+    }
+
+    /**
+     * Returns true only when the normalized route matches the configured route exactly.
+     *
+     * Unlike routeMatchesNoCsrfValidationRule(), this deliberately does not authorize
+     * child routes. Use it for narrowly scoped machine-to-machine endpoints.
+     */
+    public static function routeMatchesExactNoCsrfValidationRule($route, $rule)
+    {
+        return ltrim((string) $route, '/') === ltrim((string) $rule, '/');
     }
 
     /**

@@ -1,0 +1,32 @@
+name: README translations
+
+on:
+  push:
+    branches: [feat/admin-product-alignment]
+    paths:
+      - README.md
+      - README.en.md
+      - README.ja.md
+      - docs/readme-languages.json
+      - scripts/docs/check_readme_translations.py
+      - .github/workflows/readme-translations.yml
+  pull_request:
+    branches: [feat/admin-product-alignment]
+    paths:
+      - README.md
+      - README.en.md
+      - README.ja.md
+      - docs/readme-languages.json
+      - scripts/docs/check_readme_translations.py
+      - .github/workflows/readme-translations.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check README translations and local links
+        run: python3 scripts/docs/check_readme_translations.py
