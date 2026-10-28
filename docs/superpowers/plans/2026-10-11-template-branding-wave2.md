@@ -459,6 +459,8 @@ Expected: zero failure, error or required skip; every evidence item binds to the
 
 2026-10-28 用户指示继续处理后，`551ac98f9a` 修复全新检出缺少嵌套文件挂载目标的问题；最小 Docker 实验证实挂载根因，新增回归测试先红后绿，相关测试全套 49 项通过并验证已有配置不被覆盖。全新检出 Harness run `b55d2545-64a7-435c-a4c0-3dca1998ad8a` 的 12 项门禁均通过，MySQL 浏览器 19/19；同提交直接运行 PostgreSQL 浏览器 19/19。run 仍为 verifying，生产 Release、托管治理及三路独立复审尚未完成，最终验收保持未勾选。
 
+2026-10-28 接续：`platform-quality.yml` 已在 PR #11 的 `3aa6881790` 上通过 10/10；Release 工作流的 PR 触发范围已扩展到堆叠 PR，使三镜像只读构建能够在线验证，触发策略测试先红后绿，Release 测试 58/58 通过。该改动不发布镜像或 Release；需核对新提交的 Release CI，Step 2 生产生命周期与 Step 3 独立复审仍待完成。
+
 - [ ] **Step 2: Run production Compose smoke**
 
 Install or upgrade a disposable single-host environment, execute the Task 7 journey through the Caddy entrypoint, run `surveyctl doctor`, then verify backup and restore preserve templates, brand assets, published versions and responses.

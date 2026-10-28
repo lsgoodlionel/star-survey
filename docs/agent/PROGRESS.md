@@ -29,6 +29,8 @@ Task 8: pending - 用户已明确本轮完成本地验收与同步，生产 Comp
 
 2026-10-28 控制平面移除及在线 CI 切换提交 `dcef1810f85bb368984fef253718624022609510` 的 [GitHub 产品质量 run 40604203635](https://github.com/lsgoodlionel/star-survey/actions/runs/40604203635) 成功，10/10 作业通过，包括真实浏览器、Java、P1、MySQL/PostgreSQL 访问策略与双执行比对，以及产品化和生产发布测试。该结果不代替真实 Release 的安装、升级、备份恢复与生产验收，Wave 2 保持未完成。
 
+2026-10-28 Wave 2 Task 8 接续：产品质量工作流在当前 PR #11 的 `3aa6881790` 提交上 10/10 通过。Release 工作流原本只对目标为 `main` 的 PR 执行，堆叠 PR #11 因此没有三镜像构建验证；已改为对任何目标分支的相关 PR 执行只读的 `build-local` 路径，并增加触发策略回归断言。本地 Release 测试 58/58 通过。线上 Release 工作流结果须在新提交推送后核对；真实 tag、GHCR 镜像、双版 Release 与原生生产生命周期验收仍未完成。
+
 2026-10-12：用户要求生成报告准备切换模型，暂停新增实现。接续入口为
 [模型切换交接报告](run-history/2026-10-12-wave2-model-handoff.md)。
 本轮网关 1,232 项和既有品牌双语 MySQL E2E 通过；不代表新增 brandAssets 真实链路通过。
