@@ -399,17 +399,28 @@ function exportStorageKey(tenantId: string, surveyId: string) {
 async function revokeDataExportPermission(tenantId: string, surveyId: string) {
   assertUuid(tenantId);
   assertUuid(surveyId);
-  const sql = `WITH RECURSIVE ancestors AS (
-  SELECT id, parent_id FROM access_resource WHERE tenant_id = '${tenantId}' AND id = '${surveyId}'
-  UNION ALL
-  SELECT parent.id, parent.parent_id
-  FROM access_resource parent
-  JOIN ancestors child ON child.parent_id = parent.id
-  WHERE parent.tenant_id = '${tenantId}'
-)
-DELETE FROM access_grant
-WHERE tenant_id = '${tenantId}'::uuid AND actor_id = '${DATA_ACTOR}' AND role_code = 'raw_data_viewer'
-  AND resource_id IN (SELECT id FROM ancestors);`;
+  const sql = `BEGIN;
+SELECT set_config('app.tenant_id', '${tenantId}', true);
+DO $$
+DECLARE deleted_count integer;
+BEGIN
+  WITH RECURSIVE ancestors AS (
+    SELECT id, parent_id FROM access_resource WHERE tenant_id = '${tenantId}' AND id = '${surveyId}'
+    UNION ALL
+    SELECT parent.id, parent.parent_id
+    FROM access_resource parent
+    JOIN ancestors child ON child.parent_id = parent.id
+    WHERE parent.tenant_id = '${tenantId}'
+  )
+  DELETE FROM access_grant
+  WHERE tenant_id = '${tenantId}'::uuid AND actor_id = '${DATA_ACTOR}' AND role_code = 'raw_data_viewer'
+    AND resource_id IN (SELECT id FROM ancestors);
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  IF deleted_count <> 1 THEN
+    RAISE EXCEPTION 'expected one raw data grant to be revoked, got %', deleted_count;
+  END IF;
+END $$;
+COMMIT;`;
   await run('docker', [
     'exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'),
     'psql', '-U', 'platform_owner', '-d', 'platform', '-v', 'ON_ERROR_STOP=1', '-q', '-c', sql,
