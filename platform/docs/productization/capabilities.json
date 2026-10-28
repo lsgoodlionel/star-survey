@@ -160,7 +160,8 @@
         {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/template/SurveyTemplateController.java", "locator": "class SurveyTemplateController", "description": "租户模板生命周期后端接口已存在。"},
         {"layer": "backend", "kind": "implementation", "path": "platform/contracts/survey-branding-v1.md", "locator": "# 问卷品牌与多语言 v1", "description": "品牌与多语言已定义契约。"},
         {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/branding/BrandingPage.tsx", "locator": "export function BrandingPage()", "description": "Wave 2 品牌与语言编辑入口已实现；本能力映射的封面、背景、水印等更广需求尚未全部验收。"},
-        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/template-branding.spec.ts", "locator": "branded copy previews and publishes with language and pinned image bytes", "description": "隔离 MySQL 与 PostgreSQL 各 19/19 的 Wave 2 本地浏览器旅程覆盖模板、品牌预览、正式作答和素材版本固定；生产验收待办。"}
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/template-branding.spec.ts", "locator": "branded copy previews and publishes with language and pinned image bytes", "description": "2026-10-28 本地 Docker MySQL 与 PostgreSQL 各 19/19 的 Wave 2 真实浏览器旅程覆盖模板、品牌预览、正式作答和素材版本固定，按用户口径完成本地功能验收；正式 Release 和生产部署另行验收。"},
+        {"layer": "traceability", "kind": "traceability-record", "path": "docs/agent/PROGRESS.md", "locator": "Task 8: complete", "description": "Wave 2 本地功能切片验收、双库浏览器及 GitHub CI 证据已登记；更广需求和生产层仍保持部分完成。"}
       ],
       "nextWave": "Wave 2"
     },

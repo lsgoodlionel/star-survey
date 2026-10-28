@@ -110,9 +110,10 @@
 
 - **后端** （实现）[`platform/contracts/survey-branding-v1.md`](../../contracts/survey-branding-v1.md) 定位 `# 问卷品牌与多语言 v1`：品牌与多语言已定义契约。
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/survey/template/SurveyTemplateController.java`](../../services/business/src/main/java/cn/mjy/platform/survey/template/SurveyTemplateController.java) 定位 `class SurveyTemplateController`：租户模板生命周期后端接口已存在。
-- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/template-branding.spec.ts`](../../apps/admin-web/e2e/template-branding.spec.ts) 定位 `branded copy previews and publishes with language and pinned image bytes`：隔离 MySQL 与 PostgreSQL 各 19/19 的 Wave 2 本地浏览器旅程覆盖模板、品牌预览、正式作答和素材版本固定；生产验收待办。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/template-branding.spec.ts`](../../apps/admin-web/e2e/template-branding.spec.ts) 定位 `branded copy previews and publishes with language and pinned image bytes`：2026-10-28 本地 Docker MySQL 与 PostgreSQL 各 19/19 的 Wave 2 真实浏览器旅程覆盖模板、品牌预览、正式作答和素材版本固定，按用户口径完成本地功能验收；正式 Release 和生产部署另行验收。
 - **前端** （实现）[`platform/apps/admin-web/src/features/branding/BrandingPage.tsx`](../../apps/admin-web/src/features/branding/BrandingPage.tsx) 定位 `export function BrandingPage()`：Wave 2 品牌与语言编辑入口已实现；本能力映射的封面、背景、水印等更广需求尚未全部验收。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R19-05 |`：企业模板库需求已编号。
+- **追溯** （追溯记录）[`docs/agent/PROGRESS.md`](../../../docs/agent/PROGRESS.md) 定位 `Task 8: complete`：Wave 2 本地功能切片验收、双库浏览器及 GitHub CI 证据已登记；更广需求和生产层仍保持部分完成。
 
 ### 工作台 (`workspace`)
 

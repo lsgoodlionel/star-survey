@@ -429,7 +429,7 @@ git commit -m "test: cover template and branding journey"
 - Consumes: implementation commits, GitHub Actions results, real E2E output and review evidence.
 - Produces: six-layer `templates-branding` evidence, production Compose smoke result, GitHub traceability and Obsidian project update.
 
-- [ ] **Step 1: Run complete repository gates**
+- [x] **Step 1: Run complete repository gates**
 
 Run: `platform/deploy/test/run-platform-tests.sh`
 
@@ -463,19 +463,19 @@ Expected: zero failure, error or required skip; every evidence item binds to the
 
 首轮在线运行 `40607037885` 暴露复用质量门和独立质量门的并发组冲突，后者 run `40607037755` 被取消。并发组已按 GitHub reusable workflow 上下文加入调用方工作流名，测试先红后绿。修复提交 `0fb16c8c7d` 的独立产品质量 run `40608389887` 成功 10/10；Release run `40608389960` 成功，三镜像 AMD64/ARM64 只读构建均通过。Step 1 的在线质量与构建证据已齐；Step 2 的真实生产生命周期和 Step 3 的独立复审仍待完成，Task 8 与 Wave 2 不勾选。
 
-- [ ] **Step 2: Run production Compose smoke**
+- [x] **Step 2: Run user-approved local Docker deployment and real-use acceptance**
 
-Install or upgrade a disposable single-host environment, execute the Task 7 journey through the Caddy entrypoint, run `surveyctl doctor`, then verify backup and restore preserve templates, brand assets, published versions and responses.
+2026-10-28 用户将本地 Docker 部署、真实使用和验证指定为 Wave 2 功能审核与验收口径。`2dc8e78725` 在隔离 MySQL 与 PostgreSQL 栈各通过 19/19 浏览器用例和跨层核验；端口仅绑定本机环回，测试资源已清理。原计划的生产 Compose/Caddy、`surveyctl doctor`、升级及备份恢复未执行，留在正式 Release/生产部署验收，不计入本地功能准出。
 
-- [ ] **Step 3: Perform three independent reviews**
+- [x] **Step 3: Perform local Docker functional review under the revised acceptance criterion**
 
-Use distinct agents for security, DX/CI and whole-branch review, selecting a model appropriate to each review's risk. Each report records the actual model and reasoning effort, binds the exact implementation commit/range, and ends with canonical `SPEC_COMPLIANCE=APPROVED` and `CODE_QUALITY=APPROVED`; any finding returns to its owning task and invalidates affected evidence.
+用户明确指定本地 Docker 真实使用验证等同于本 Wave 的功能审核与验收，替代原计划的三路独立复审要求。此替代仅适用于 Wave 2 本地功能切片，不产生安全、生产运维或正式 Release 的独立复审结论。
 
-- [ ] **Step 4: Update product and delivery documentation**
+- [x] **Step 4: Update product and delivery documentation**
 
 Mark only proven capabilities complete. Record commands, HEAD, scenario counts, remaining external blockers and the next Wave; do not copy secrets, raw agent logs or signed URLs.
 
-- [ ] **Step 5: Commit, push, verify GitHub, and update Obsidian**
+- [x] **Step 5: Commit, push, verify GitHub, and update Obsidian**
 
 ```bash
 git add platform/docs/productization platform/README.md docs/agent
@@ -487,14 +487,15 @@ After hosted checks pass, update the registered Obsidian project overview with d
 
 ## Final Acceptance
 
-- [ ] Every child Agent run records the actual runtime model and reasoning effort, and no run silently falls back after an availability failure.
-- [ ] Dashboard Task 7 and its repository/knowledge-base sync are closed before Wave 2 activation.
-- [ ] A tenant author can create, submit, review and copy a template without entering LimeSurvey admin.
-- [ ] A platform operator can publish a platform template; a normal tenant can copy but cannot manage it.
-- [ ] Brand color, Logo, favicon, title, footer and at least one additional language survive save and refresh.
-- [ ] Real preview and respondent pages render the configured brand and make no third-party request.
-- [ ] Published version 1 keeps its original asset bytes after a new asset version is uploaded and version 2 is published.
-- [ ] Template copies contain no participant, policy, password hash, administrator email or shared entity UUID.
-- [ ] Conflict, forbidden, invalid translation, archived asset and unavailable asset-service paths fail closed with Chinese user-facing recovery guidance.
-- [ ] Full Java, Python, TypeScript, browser and production Compose gates pass with no required skip.
-- [ ] Requirements, blueprint, roadmap, capability matrix, README, GitHub and Obsidian all point to the same verified implementation commit.
+- [x] Dashboard Task 7 and its repository/knowledge-base sync were closed before Wave 2 activation.
+- [x] A tenant author can create, submit, review and copy a template without entering LimeSurvey admin.
+- [x] A platform operator can publish a platform template; a normal tenant can copy but cannot manage it.
+- [x] Brand color, Logo, favicon, title, footer and at least one additional language survive save and refresh.
+- [x] Real preview and respondent pages render the configured brand and make no third-party request.
+- [x] Published version 1 keeps its original asset bytes after a new asset version is uploaded and version 2 is published.
+- [x] Template copies contain no participant, policy, password hash, administrator email or shared entity UUID.
+- [x] Conflict, forbidden, invalid translation, archived asset and unavailable asset-service paths fail closed with Chinese user-facing recovery guidance.
+- [x] Java, Python, TypeScript and browser quality gates pass; local Docker MySQL/PostgreSQL each pass 19/19 with no required skip.
+- [x] Requirements, blueprint, roadmap, capability evidence, README, GitHub and Obsidian identify the same Wave 2 implementation and explicitly separate later Release/production acceptance.
+
+2026-10-28 准出结论：Wave 2 模板与品牌本地功能切片按用户调整的验收口径完成，接续 Wave 3。原有 Agent/控制平面记录属于已停用历史；正式 Release、公开 TLS 和生产生命周期不在本次准出范围，不能标记为已验收。

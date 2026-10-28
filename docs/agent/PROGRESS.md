@@ -13,7 +13,7 @@ Task 4: complete - 模板中心列表、范围与状态 URL 筛选、版本/历�
 Task 5: complete - 用户确认后补入最小只读管理列表与模板动作能力接口，沿用同租户 RLS 和真实权限判定；前端已接入创建/添加版本、送审、批准、驳回、下架、运营 JSON 导入与选版上架。2026-10-27 Java 全量 1492 项/183 类（失败、错误、跳过均为 0），前端全套 345 项、lint、typecheck、build、production bundle 检查通过。Task 6–7 的品牌编辑器及真实浏览器纵向验收尚未完成，Wave 2 能力状态不提升。
 Task 6: complete - 品牌与语言编辑页、受控图片选择/上传、题组/题目/子题/选项结构化译文、草稿乐观锁保存、未保存离开拦截及 dashboard 最近访问已接入；V934 仅扩展品牌页受控枚举并保留版本约束。2026-10-27 隔离数据库 Java 全量 1492 项/183 类（失败、错误、跳过均为 0），前端全套 352 项、lint、typecheck、build、production bundle 检查通过。Task 7 真实浏览器纵向验收及 Task 8 生产门禁仍待完成，Wave 2 能力状态不提升。
 Task 7: complete - 2026-10-27 隔离 MySQL 与 PostgreSQL 真实浏览器均为 19/19，通过模板生命周期、平台模板复制、品牌/语言保存、409 冲突、带图预览、正式答卷、两版发布、旧版图片字节固定、无第三方请求及四断点布局；平台 API、平台 DB、网关与引擎 DB 交叉核验通过。预览 502 的最终断点是冷启动引擎未注册 zh-business，已复用既有主题安装器补齐；同时修复资产 JSON 枚举契约、受控环回 HTTP 物化地址、插件通道测试配置及品牌保存后发布概览缓存。前端 353 项、网关 1235 项、门禁单元 48 项、隔离 Java 1494 项/184 类通过（失败、错误、跳过均为 0），lint、typecheck、build、production bundle 检查通过。实现分界提交：1ed42c34a2、9b059a7523、c80e9b406b；最终实现提交为 c80e9b406b，Task 8 完成前不提升 Wave 2 整体能力状态。
-Task 8: pending - 用户已明确本轮完成本地验收与同步，生产 Compose/Caddy、doctor、备份恢复保留待办。已授权的两项脚本执行位变更仅以模式提交 e00a7b5a32 同步，治理映射提交 db267ede9d 已推送；该提交的 GitHub 平台质量门 run 40461852500 全部通过（10/10 jobs，含真实浏览器）。治理 run 40461850858 的映射失败已消除，仍有 strict_unittest 共享 defaultTestLoader 导致临时目录不可导入的两项 ERROR；核心归独立控制平面仓库维护，本轮未修改。Harness 最终门禁、三路独立复审与六层交付仍未完成，Wave 2 整体能力状态不提升。
+Task 8: complete（Wave 2 本地功能验收口径）- 用户于 2026-10-28 指定本地 Docker 部署与真实使用验证作为功能审核和验收。当前实现提交 `2dc8e78725` 在隔离 MySQL、PostgreSQL Docker 栈中各通过 19/19 浏览器用例，平台 API、平台数据库、网关及引擎数据库交叉核验通过，容器已清理。GitHub 产品质量 run `40609740377` 为 10/10，Release 只读三镜像 AMD64/ARM64 构建 run `40609740345` 成功。正式 tag、GHCR/Release、公开 TLS 与生产安装升级恢复由后续 GitHub 发布及部署流程承接，不作为本次本地功能验收条件；能力矩阵涵盖的更广需求仍按部分完成记录。
 
 2026-10-27 Task 8 接续核验（实现 HEAD `28a5e18925`，文档提交另计）：隔离 Harness run `0416bb7c-235d-4107-b050-6a05e45a304a` 的 Java、Gateway、管理端测试/静态检查/构建/production bundle 及文档门共 11 项通过；新增浏览器门在独立 worktree 的 Docker Desktop 嵌套挂载阶段失败，未执行浏览器用例，Harness 仍处于 repairing。原 worktree 直接复验 Java 1494 项/184 类、管理端 353 项、Gateway 1235 项通过；生产部署 Python 测试 105 项中 104 项通过，真实原生验收按前置条件跳过，Python 编译通过。MySQL 浏览器首次在 `authoring.spec.ts:594` 的“新建”按钮键盘焦点断言失败，隔离重跑 19/19；PostgreSQL 随后在同一断言失败（6 项通过、1 项失败、12 项未运行），依“两次同类失败即停”约定停止自动修复，保留 `/tmp/survey-wave2-browser-{mysql-final,mysql-retry,pgsql-final}.log` 脱敏诊断。GitHub 当前无 `v*` tag/Release；自动生成 `release.json` 的 `release.yml` 仅在开发分支，默认分支未注册，首版 baseline policy 为 `0.3.0-rc.1` bootstrap，第二版需真实前版 manifest SHA-256；用户确认尚未制作两版 Release。指定验收服务器的只读 SSH 连续两次连接超时；生产 Compose/Caddy、doctor、备份恢复和三路独立复审均无通过证据。Wave 2 未满足准出，Wave 3 新任务窗口尚未创建。
 
@@ -33,6 +33,8 @@ Task 8: pending - 用户已明确本轮完成本地验收与同步，生产 Comp
 
 2026-10-28 新触发的 Release CI `40607037885` 暴露跨工作流并发组冲突：复用 `platform-quality.yml` 时，独立产品质量 run `40607037755` 被取消。根据 GitHub 对 reusable workflow 的 `github.workflow` 上下文说明，已将调用方工作流名纳入质量门并发组，避免互相取消；回归测试先红后绿，Release 测试仍为 58/58。修复提交 `0fb16c8c7d` 的 [独立产品质量 run 40608389887](https://github.com/lsgoodlionel/star-survey/actions/runs/40608389887) 成功，10/10；[Release 构建 run 40608389960](https://github.com/lsgoodlionel/star-survey/actions/runs/40608389960) 成功，复用质量门与 admin、platform、publish-gateway 三镜像 AMD64/ARM64 只读构建均通过。PR 路径未发布镜像或 Release；真实 tag、双版制品和生产生命周期验收仍未完成。
 
+2026-10-28 用户调整 Wave 2 准出：完成本地 Docker 部署、真实使用和验证即视为该 Wave 的功能审核及验收；其他版本 Release 由 GitHub 发布流水线处理。本次在 `2dc8e78725` 分支提交上重新执行隔离 MySQL 与 PostgreSQL 栈，各 19/19 浏览器用例通过，并确认平台 API、平台数据库、引擎数据库与网关状态一致；容器已清理，对外端口只绑定环回地址。[最终提交产品质量 run 40609740377](https://github.com/lsgoodlionel/star-survey/actions/runs/40609740377) 10/10 通过，[Release 构建 run 40609740345](https://github.com/lsgoodlionel/star-survey/actions/runs/40609740345) 成功。按本地功能切片完成 Wave 2，准备 Wave 3；正式 Release、公开 TLS 和生产安装/升级/恢复继续单列，不能由本地测试推断已完成。
+
 2026-10-12：用户要求生成报告准备切换模型，暂停新增实现。接续入口为
 [模型切换交接报告](run-history/2026-10-12-wave2-model-handoff.md)。
 本轮网关 1,232 项和既有品牌双语 MySQL E2E 通过；不代表新增 brandAssets 真实链路通过。
@@ -40,7 +42,7 @@ Task 8: pending - 用户已明确本轮完成本地验收与同步，生产 Comp
 
 Dashboard Task 1: complete - 治理 HEAD 绑定、hosted agent-governance run 19 与控制平面迁移已完成。
 
-Wave 2: active - Dashboard Task 1 治理闭环已完成，Wave 2 计划已激活。
+Wave 2: local-function-accepted - 模板与品牌计划切片按 2026-10-28 用户指定的本地 Docker 双库真实使用口径完成；正式 Release 与生产部署另行验收，接续 Wave 3。
 
 ## Token 控制平面（2026-10-12）
 

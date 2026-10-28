@@ -12,11 +12,13 @@
 
 **2026-10-27 分支验收**：`feat/admin-product-alignment` @ `c80e9b406b` 已关闭 Wave 2 Task 7 带图真实预览 502 阻塞。隔离 MySQL/PostgreSQL 管理端真实浏览器均 19/19，覆盖品牌化正式答卷、两版发布和旧版图片字节固定；Java 1494 项/184 类、网关 1235 项、管理端 353 项与管理端静态/生产构建检查通过。Wave 2 Task 8 的生产 Caddy/doctor/备份恢复和独立复审仍待完成，能力状态不提升。[GitHub 平台质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40461852500)曾在 `db267ede9d` 全部通过（10/10 jobs）；后续以当前提交的在线 CI 结果为准。详见 [当前进度](../docs/agent/PROGRESS.md)。
 
+**2026-10-28 Wave 2 本地功能验收**：用户指定本地 Docker 部署和真实使用验证替代本 Wave 的功能复审与验收。`feat/admin-product-alignment` @ `2dc8e78725` 在隔离 MySQL、PostgreSQL 栈各通过 19/19，平台 API、平台数据库、网关及引擎数据库交叉核验通过；[GitHub 产品质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40609740377) 10/10，[Release 三镜像只读构建](https://github.com/lsgoodlionel/star-survey/actions/runs/40609740345) 成功。Wave 2 模板与品牌本地功能切片完成，准备 Wave 3；正式 Release、公开 TLS 和生产安装/升级/恢复单列后续验收，能力矩阵的更广需求仍为部分完成。
+
 | 阶段 | 状态 |
 |---|---|
 | P0 基线与可行性 | ✅（供应商询证与法务意见待业务侧） |
 | P1 租户与平台骨架 | ✅ 闸门通过 |
-| P2 通用问卷与本土入口 | 🔄 Business Dashboard v1 与管理端 Phase A+B 已通过真实浏览器验收；Wave 2–6 仍按路线图推进 |
+| P2 通用问卷与本土入口 | 🔄 Business Dashboard v1、管理端 Phase A+B 与 Wave 2 模板/品牌本地功能切片已通过真实浏览器验收；接续 Wave 3–6 |
 | P3 商业与业务应用 | 🔄 考试与测评（WP-09/10）已起步 |
 | P4–P5 | ⬜ |
 
