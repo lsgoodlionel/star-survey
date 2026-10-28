@@ -6,6 +6,8 @@
 
 ## 当前状态
 
+2026-10-28 PR #13 验收：全分支候选 `76be7b0d0ea8` 已普通推送至登记的 `origin`，草稿 PR [#13](https://github.com/lsgoodlionel/star-survey/pull/13) 指向仍为 `d84c271daca3` 的 `main`。该提交的 GitHub 检查全部结束，36 项中 25 成功、11 条件跳过、0 失败，包含两条管理端真实浏览器 Job、Java 全量、双库访问策略与双执行比对、P1 纵切，以及 admin/platform/publish-gateway 三个不访问注册表的多架构只读构建；运行 [40629761591](https://github.com/lsgoodlionel/star-survey/actions/runs/40629761591)、[40629761601](https://github.com/lsgoodlionel/star-survey/actions/runs/40629761601)、[40629761521](https://github.com/lsgoodlionel/star-survey/actions/runs/40629761521)。本地隔离 PostgreSQL 真实 Chromium 浏览器 19/19 通过，跨平台 API、网关、平台及引擎数据库的校验与运行根归档通过；隔离容器已清理。首次本地运行因候选工作区缺少 `playwright` 命令而未执行断言；按本机有界测速选择较快的 npmmirror 安装锁定依赖、切换项目要求的 Node 22 后第二次通过。后续待最新文档提交的 GitHub 检查及 PR 合并。
+
 2026-10-28 Git 对象补齐完成：按用户继续下载至 100% 的指示，先从引用匹配的 `ghfast.top` 获取 64 KiB 以下对象，使候选缺失数从 181232 降至 46070；再在隔离 bare 仓库按对象 ID 分 92 批获取剩余对象。最终 pack 的 46070 个对象与候选缺失集合逐项完全匹配，`git verify-pack`、候选 HEAD 的 `git fsck --connectivity-only` 通过，导入后候选缺失数为 **0**。再次核对远端 `main` 为 `d84c271daca3`、上游 `master` 为 `4c20c68033c8`，两者均为候选祖先。原始敏感备份不是祖先，脱敏备份是祖先，原始历史独有对象与候选可达对象交集为 0。候选仍未推送；下一步是普通推送、PR、GitHub CI、真实浏览器和 `main` 合并。
 
 2026-10-28 中国镜像接续：已将此前遗漏的 `codex/survey-autofix` 分支纳入全分支候选 `6f5c6c19ce40`，并保留候选的手动触发、两次自动修复上限；新增失败日志文件范围限制。自动修复定向测试 9 项通过，工作流 YAML 可解析；除原始敏感备份外，核对的 87 个本地及 `origin` 分支引用均已成为候选祖先。原始备份仍不是祖先，脱敏备份是祖先，原始历史独有对象与候选可达对象交集为 0。官方源约 28 KB/s；`gitclone.com` 返回 504，`ghproxy.cn` 不支持该 Git URL，`ghproxy.net` 约 27 KB/s；引用匹配的 `ghfast.top` 有界测速约 472 KB/s。经用户明确要求改用中国镜像，HTTP/1.1 全量 Git fetch 在约 1.00 GiB、60% 处以 `curl 18`、`early EOF` 中断，候选仍缺 181232 个上游对象。结合前次镜像中断，按两次同类失败即停约定停止自动补齐。候选未推送，PR、GitHub CI、真实浏览器和 `main` 合并均未执行；诊断保留在本机 `/tmp/survey-ghfast-fetch-20261028.log`，原工作区未提交改动未触碰。本机 `gh` CLI 登录状态显示令牌失效，实际 Git 推送认证尚未验证。
