@@ -196,9 +196,8 @@ class ResponseExportApiTest {
 
     @Test
     void invalidRequestsAre400() throws Exception {
-        // pdf 还没实现；sav（切片 06.3）与 docx（切片 06.4）都已是合法取值，不能再拿它们当
-        // "不认识的格式"的例子。
-        for (String body : new String[] {"{\"format\":\"pdf\"}", "{\"format\":\"csv\",\"templateVersion\":\"v9\"}",
+        // rtf 尚未实现；PDF 与其他已支持格式不能作为未知格式示例。
+        for (String body : new String[] {"{\"format\":\"rtf\"}", "{\"format\":\"csv\",\"templateVersion\":\"v9\"}",
                 "{\"format\":\"csv\",\"filter\":{\"states\":[\"bogus\"]}}",
                 "{\"format\":\"csv\",\"filter\":{\"versions\":[0]}}",
                 "{\"format\":\"csv\",\"filter\":{\"versions\":[1.5]}}",

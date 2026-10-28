@@ -763,3 +763,40 @@ Phase A+B 的工程与浏览器证据不自动把复合需求或能力标为 Acc
   Release/生产 TLS 均未改变。
 - **交付控制**：本轮暂不 commit、不 push；自治 run `d1a22d5b-6d14-469d-b77c-676f83e3c9a1` 必须先由用户运行
   Harness gate 绑定当前 dirty paths，之后才能进入提交、独立复审和 GitHub/Obsidian 同步。
+
+
+### R06-05：PDF 导出（ADR 0015 增补六）
+
+导出的第六种格式。**卡点一直是中文字体而不是排版**（增补三第六节把话说死了）：冻结工作表 P-10
+要求随交付自带并**嵌入**中文字体，靠阅读器 CJK 字体包那条备选已被否决，而仓库里没有可嵌的字体
+（`assets/fonts/` 下 CJK 的几个是占位 `.txt`）。这一波先解决字体，PDF 就顺着增补三已经铺好的
+`ExportRecord` 视图落地了——排版结构与 Word 共用，差别只在写出器。
+
+**字体**：思源黑体（Noto Sans CJK SC）的 GB2312 子集，SIL OFL 1.1，7 300 个字形、1.99 MB，
+放在 `src/main/resources/fonts/`，同目录带 `OFL.txt` 与 `PROVENANCE.md`。
+取自**本机容器镜像里已有的** Debian 包 `fonts-noto-cjk`，子集化全程 `--network none`，
+**没有联网抓取**（本车道禁止抓任何 URL）。字符集用 Python 自带的 `gb2312` 编解码器枚举，
+不依赖外部字表。上游是 CFF，转成 `glyf` 以便走通行最久的 CIDFontType2 / FontFile2。
+取了子集又改了轮廓，所以按 OFL 第 5 条**改名**为 `MJY Sans SC`（不含 Noto / Source / Adobe /
+Google 任何一个词），上游的版权、商标、设计师、许可声明原样保留——合规推理见 `PROVENANCE.md`。
+
+**子集外的字符**（繁体专用字、假名、谚文、emoji）画成 `〓`，但 `ToUnicode` 里仍映射到它真实的
+码位：肉眼看到替代符，复制、检索、第三方读回拿到的是原文。宁愿这样也不整份作业失败——
+作答内容是作答者给的，不能因为一个 emoji 就导不出来。
+
+顺带把 `ExtensionTables` 的副表透视抽成与格式无关的 `pivot()`，Word 与 PDF 共用一份实现。
+
+**一个实测出来的盲区，值得记下来**：崩溃恢复真正发生在**另一个进程**里，而
+`ResponseExportResumeTest` 的两次跑法在**同一个 JVM** 内。所以「每个 JVM 随机一次」的文档 `/ID`
+在那条测试里照样两次相同——真上线了却每次重启都变。把 `/ID` 改成
+`static final = UUID.randomUUID()` 实测过：逐字节相同那条断言**依旧是绿的**；改成每次调用都随机，
+它才红（报文点名 `[pdf]`）。所以另加一条把 ID 字面值钉死的断言，只有它关得住「每进程一次」这一档。
+
+验证：平台全量 **1406 通过、0 失败 0 错误、176 个测试类**（对账脚本
+`platform/deploy/test/run-platform-tests.sh` 的输出；基线 1387 / 174，新增
+`PdfExportFormatTest` 14 项、`ResponseExportPdfTest` 5 项，`ResponseExportResumeTest` 的
+「崩溃恢复后逐字节相同」加跑了 `pdf`）。
+`target/export-sample.pdf` 另用**第三方库 PyMuPDF 1.24.10**（MuPDF C 库）读回核对，54 项断言全通过：
+中文逐句提取得出、`/FontFile2` 真在（取出 62 752 字节的 TrueType 子集，不是整份 1.99 MB）、
+顺着 `ToUnicode` → `CIDToGIDMap` → `glyf` 每个汉字都落在真有轮廓的字形上、渲染出来有 26 364 个
+深色像素、子集外的四个字符提取出来仍是它们自己。网关与引擎未改动，不涉及端到端。
