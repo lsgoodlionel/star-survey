@@ -167,6 +167,31 @@ class DeliveryApiTest {
     }
 
     @Test
+    void anAudienceTaskUsesOnlyTheTestEmailProviderAndKeepsItsRecipientReadRedacted() throws Exception {
+        var list = lists.create(p.owner(), "Wave 4 发送受众", ContactKind.RESPONDENT, DedupeKey.EMAIL);
+        contacts.create(p.owner(), list.id(), ContactKind.RESPONDENT,
+                ContactDraft.named("测试收件人").withEmail("delivery-audience@example.com"));
+        audiences.set(p.owner(), p.surveyId(), list.id(), null, true, null);
+
+        String body = postAs(p.owner(), "/v1/surveys/" + p.surveyId() + "/delivery-tasks", """
+                {"channel":"email","subject":"请填写","bodyTemplate":"%s"}
+                """.formatted(DeliveryFixture.EMAIL_BODY))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID taskId = UUID.fromString(com.jayway.jsonpath.JsonPath.read(body, "$.id"));
+
+        assertThat(fixture.run(p.tenant(), taskId)).isEqualTo(1);
+        assertThat(email.deliveredTo("delivery-audience@example.com")).isPresent();
+        getAs(p.owner(), "/v1/delivery/tasks/" + taskId)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("completed"))
+                .andExpect(jsonPath("$.sentCount").value(1));
+        getAs(p.owner(), "/v1/delivery/tasks/" + taskId + "/recipients")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].address").value(org.hamcrest.Matchers.not("delivery-audience@example.com")));
+    }
+
+    @Test
     void requestsWithoutATokenAreRejected() throws Exception {
         mvc.perform(get("/v1/delivery/links/" + UUID.randomUUID())).andExpect(status().isUnauthorized());
         mvc.perform(post("/v1/delivery/tasks").contentType(MediaType.APPLICATION_JSON).content("{}"))

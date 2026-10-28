@@ -23,10 +23,20 @@ export function AudienceRoutePage() {
   const { api, session } = useAuth();
   const parsedSurveyId = z.string().uuid().safeParse(useParams().surveyId);
   if (!session || !parsedSurveyId.success) return <p role="alert">问卷标识无效</p>;
-  return <AudiencePage api={api} surveyId={parsedSurveyId.data} tenantId={session.me.tenantId} />;
+  return <AudiencePage
+    api={api}
+    surveyId={parsedSurveyId.data}
+    tenantId={session.me.tenantId}
+    actorId={session.me.actorId}
+  />;
 }
 
-export function AudiencePage({ api, surveyId, tenantId }: { api: ApiClient; surveyId: string; tenantId: string }) {
+export function AudiencePage({ api, surveyId, tenantId, actorId }: {
+  api: ApiClient;
+  surveyId: string;
+  tenantId: string;
+  actorId: string;
+}) {
   const client = useQueryClient();
   const [listName, setListName] = useState('');
   const [selectedListId, setSelectedListId] = useState('');
@@ -34,7 +44,8 @@ export function AudiencePage({ api, surveyId, tenantId }: { api: ApiClient; surv
   const [contactEmail, setContactEmail] = useState('');
   const [subject, setSubject] = useState('邀请填写问卷');
   const [bodyTemplate, setBodyTemplate] = useState(defaultTemplate);
-  const [taskId, setTaskId] = useState<string | null>(null);
+  const storageKey = `survey-delivery:${tenantId}:${actorId}:${surveyId}`;
+  const [taskId, setTaskId] = useState<string | null>(() => sessionStorage.getItem(storageKey));
 
   const lists = useQuery({ queryKey: contactListsQueryKey(tenantId), queryFn: ({ signal }) => listContactLists(api, signal), retry: false });
   const audience = useQuery({ queryKey: audienceQueryKey(tenantId, surveyId), queryFn: ({ signal }) => getSurveyAudience(api, surveyId, signal), retry: false });
@@ -60,11 +71,22 @@ export function AudiencePage({ api, surveyId, tenantId }: { api: ApiClient; surv
     mutationFn: () => createAudienceDeliveryTask(api, surveyId, {
       channel: 'email', subject: subject.trim() || null, bodyTemplate: bodyTemplate.trim(), idempotencyKey: crypto.randomUUID(),
     }),
-    onSuccess: (created) => { setTaskId(created.id); client.setQueryData(deliveryTaskQueryKey(tenantId, surveyId, created.id), created); },
+    onSuccess: (created) => {
+      setTaskId(created.id);
+      sessionStorage.setItem(storageKey, created.id);
+      client.setQueryData(deliveryTaskQueryKey(tenantId, surveyId, created.id), created);
+    },
   });
   const task = useQuery({
     queryKey: deliveryTaskQueryKey(tenantId, surveyId, taskId ?? 'none'),
-    queryFn: ({ signal }) => getDeliveryTask(api, taskId!, signal), enabled: Boolean(taskId), retry: false,
+    queryFn: async ({ signal }) => {
+      try {
+        return await getDeliveryTask(api, taskId!, signal);
+      } catch (error) {
+        if (isTaskUnavailable(error)) sessionStorage.removeItem(storageKey);
+        throw error;
+      }
+    }, enabled: Boolean(taskId), retry: false,
     refetchInterval: (query) => ['queued', 'running'].includes(query.state.data?.status ?? '') ? 1_500 : false,
   });
   const recipients = useQuery({
@@ -75,6 +97,7 @@ export function AudiencePage({ api, surveyId, tenantId }: { api: ApiClient; surv
     mutationFn: () => cancelDeliveryTask(api, taskId!),
     onSuccess: (cancelled) => { client.setQueryData(deliveryTaskQueryKey(tenantId, surveyId, cancelled.id), cancelled); },
   });
+  const taskUnavailable = isTaskUnavailable(task.error);
   const currentAudienceList = audience.data?.audience.listId ?? '';
   const effectiveListId = selectedListId || currentAudienceList;
   return <main className="audience-page">
@@ -109,21 +132,25 @@ export function AudiencePage({ api, surveyId, tenantId }: { api: ApiClient; surv
       {createTask.isPending ? <p role="status">正在创建任务</p> : null}
       {isDeliveryUnavailable(createTask.error) ? <p role="alert">渠道未配置，未创建任务</p> : null}
       {createTask.isError && !isDeliveryUnavailable(createTask.error) ? <p role="alert">创建投放任务失败，请检查受众和邮件内容。</p> : null}
-      {task.data ? <TaskStatus task={task.data} recipients={recipients.data} recipientsError={recipients.isError} cancelling={cancel.isPending}
-        onCancel={() => cancel.mutate()} /> : null}
+      {taskUnavailable ? <p role="alert">任务不可访问或已不存在</p> : null}
+      {task.isError && !isTaskUnavailable(task.error) ? <p role="alert">任务状态加载失败，请稍后重试。</p> : null}
+      {task.data && !taskUnavailable ? <TaskStatus task={task.data} recipients={recipients.data} recipientsError={recipients.isError} cancelling={cancel.isPending}
+        cancelError={cancel.isError} onCancel={() => cancel.mutate()} /> : null}
     </section>
   </main>;
 }
 
-function TaskStatus({ task, recipients, recipientsError, cancelling, onCancel }: { task: DeliveryTask; recipients?: Array<{ id: string; address: string; displayName: string | null; state: string }>; recipientsError: boolean; cancelling: boolean; onCancel(): void }) {
+function TaskStatus({ task, recipients, recipientsError, cancelling, cancelError, onCancel }: { task: DeliveryTask; recipients?: Array<{ id: string; address: string; displayName: string | null; state: string }>; recipientsError: boolean; cancelling: boolean; cancelError: boolean; onCancel(): void }) {
   const cancellable = task.status === 'queued' || task.status === 'running';
   return <section className="audience-task" aria-label="投放任务状态"><h4>投放任务</h4><p>状态：{taskStatusLabel(task.status)}，收件人 {task.recipientCount} 人。</p>
     {cancellable ? <button type="button" disabled={cancelling} onClick={onCancel}>取消任务</button> : null}
+    {cancelError ? <p role="alert">取消任务失败，请稍后重试。</p> : null}
     {recipientsError ? <p role="alert">收件人状态加载失败，请稍后重试。</p> : null}
     {recipients ? <ul aria-label="脱敏收件人">{recipients.map((recipient) => <li key={recipient.id}>{recipient.displayName || '未命名联系人'}：{recipient.address}（{recipient.state}）</li>)}</ul> : null}
   </section>;
 }
 
 function isNotFound(error: unknown) { return error instanceof ApiError && error.status === 404; }
+function isTaskUnavailable(error: unknown) { return error instanceof ApiError && (error.status === 403 || error.status === 404); }
 function isDeliveryUnavailable(error: unknown) { return error instanceof ApiError && error.status === 503; }
 function taskStatusLabel(status: string) { return ({ queued: '等待发送', running: '发送中', completed: '已完成', cancelled: '已取消', failed: '发送失败' } as Record<string, string>)[status] ?? status; }

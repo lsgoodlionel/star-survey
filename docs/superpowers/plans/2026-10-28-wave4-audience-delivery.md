@@ -1,6 +1,6 @@
 # Wave 4 受众与投放实施计划
 
-状态：最小问卷内受众与投放纵切已完成本地双库浏览器核对（2026-10-28）。实施分支：`feat/wave3-data-productization`；保持现有堆叠 PR 关系，不变基或合并父分支。
+状态：最小问卷内受众与投放纵切及任务重访恢复已完成本地双库浏览器核对（2026-10-28）。实施分支：`feat/wave3-data-productization`；保持现有堆叠 PR 关系，不变基或合并父分支。
 
 ## 目标与边界
 
@@ -45,6 +45,12 @@ Wave 4 的首个纵切位于已发布问卷的上下文中：运营人员创建�
 `SurveyShell` 已增加“受众与投放”标签及 `/surveys/:surveyId/audience` 子路由，保留当前问卷上下文。页面以类型化 API 客户端提供名单创建、单个 respondent 联系人创建、问卷 audience 读取/保存及服务端人数；浏览器不会读取联系人名册来建立投放请求。Email 任务仅提交 channel、主题、模板与幂等键，任务状态和收件人页面只消费后端脱敏响应；可取消状态提供取消动作。
 
 `DeliveryUnavailable`（HTTP 503）在页面固定显示“渠道未配置，未创建任务”，且不渲染任务成功状态。前端 API/页面/壳层定向测试 49/49、typecheck、lint、生产构建和 production bundle assertion 通过。隔离 Docker MySQL 与 PostgreSQL 真实 Chromium 各 20/20，通过已发布问卷完成名单 → 联系人 → audience → 服务端 503 失败路径，随后核对平台 API、平台数据库、网关和引擎数据库。真实 provider、成功投递、回执、催答、批量导入及生产验收继续留在后续切片。
+
+## 2026-10-28 阶段 4：任务重访恢复与测试投递契约
+
+前端以 `sessionStorage` 按租户、操作人和问卷保存最近创建的任务 ID；重访问卷内页面时只向既有脱敏任务/收件人接口读取服务端状态。403/404 会删除该恢复标识，并显示“任务不可访问或已不存在”，不会继续渲染旧任务数据；取消失败也保持任务可见并给出可恢复的中文说明。全量管理端 Vitest 369/369、typecheck、lint、生产构建和 production bundle assertion 通过。
+
+`DeliveryApiTest` 新增仅测试上下文的成功发送契约：已保存 audience 创建的 Email 任务可由 `src/test` 的 `FakeEmailProvider` 完成一次投递，任务转为 `completed` 且发送计数正确，而读取任务收件人依旧不返回完整地址。该 Fake provider 不进入生产源码或镜像，不能被视为真实供应商接入。隔离 Docker Maven 目标类、MySQL 与 PostgreSQL 真实 Chromium 各 20/20 均通过；后两项继续验证无 provider 的真实 503 路径及全栈回归。
 
 ## 风险与停止条件
 

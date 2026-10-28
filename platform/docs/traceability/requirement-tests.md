@@ -189,6 +189,7 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | R05-01 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryLinkTest.java::theLinkPointsAtTheEnginesurveyAndCarriesTheSignedParameters` | 投放链接带签名参数 |
 | R05-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 二维码像素可解码且 payload 等于刚创建的作答 URL，再经链接完成正式作答 |
 | R05-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliverySendTest.java::aCrashMidTaskResumesWithoutSendingAnythingTwice` | 批量投放：恢复不重发 |
+| R05-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryApiTest.java::anAudienceTaskUsesOnlyTheTestEmailProviderAndKeepsItsRecipientReadRedacted` | 已保存 audience 在测试 FakeEmailProvider 下成功投递，任务完成计数正确且读取地址仍脱敏；不宣称生产 provider 可用 |
 | R05-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReceiptTest.java::aDeliveredReceiptIsCountedOnceNoMatterHowOftenItIsRedelivered` | 回执重复投递只计一次 |
 | R05-04 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 已发布问卷从保存 audience 创建 Email 任务；无 provider 时真实浏览器断言 503 与未创建任务提示 |
 | R05-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryReceiptTest.java::aReceiptWithoutAValidSignatureIsRejectedAndLeavesNoTrace` | 渠道商回执验签 |
