@@ -19,6 +19,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record DeliveryEmailProperties(
         @DefaultValue("false") boolean enabled,
         @DefaultValue("") String provider,
+        @DefaultValue("") String authMode,
         @DefaultValue("") String fromAddress,
         @DefaultValue("") String username,
         @DefaultValue("") String credential,
@@ -27,22 +28,20 @@ public record DeliveryEmailProperties(
         @DefaultValue("PT30S") Duration writeTimeout) {
 
     enum Profile {
-        GMAIL("gmail", "smtp.gmail.com", 587, TlsMode.STARTTLS, AuthMode.APP_PASSWORD_OR_OAUTH2),
-        OUTLOOK_COM("outlook-com", "smtp-mail.outlook.com", 587, TlsMode.STARTTLS, AuthMode.OAUTH2),
-        NETEASE_163("netease-163", "smtp.163.com", 465, TlsMode.IMPLICIT_TLS, AuthMode.APP_PASSWORD);
+        GMAIL("gmail", "smtp.gmail.com", 587, TlsMode.STARTTLS),
+        OUTLOOK_COM("outlook-com", "smtp-mail.outlook.com", 587, TlsMode.STARTTLS),
+        NETEASE_163("netease-163", "smtp.163.com", 465, TlsMode.IMPLICIT_TLS);
 
         private final String code;
         private final String host;
         private final int port;
         private final TlsMode tlsMode;
-        private final AuthMode authMode;
 
-        Profile(String code, String host, int port, TlsMode tlsMode, AuthMode authMode) {
+        Profile(String code, String host, int port, TlsMode tlsMode) {
             this.code = code;
             this.host = host;
             this.port = port;
             this.tlsMode = tlsMode;
-            this.authMode = authMode;
         }
 
         static Profile require(String value) {
@@ -63,15 +62,41 @@ public record DeliveryEmailProperties(
 
         TlsMode tlsMode() { return tlsMode; }
 
-        AuthMode authMode() { return authMode; }
+        boolean accepts(AuthMode mode) {
+            return switch (this) {
+                case GMAIL -> mode == AuthMode.APP_PASSWORD || mode == AuthMode.OAUTH2;
+                case OUTLOOK_COM -> mode == AuthMode.OAUTH2;
+                case NETEASE_163 -> mode == AuthMode.APP_PASSWORD;
+            };
+        }
     }
 
     enum TlsMode { STARTTLS, IMPLICIT_TLS }
 
-    enum AuthMode { APP_PASSWORD, APP_PASSWORD_OR_OAUTH2, OAUTH2 }
+    enum AuthMode {
+        APP_PASSWORD("app-password"),
+        OAUTH2("oauth2");
+
+        private final String code;
+
+        AuthMode(String code) {
+            this.code = code;
+        }
+
+        static AuthMode require(String value) {
+            String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replace('_', '-');
+            for (AuthMode mode : values()) {
+                if (mode.code.equals(normalized)) {
+                    return mode;
+                }
+            }
+            throw new IllegalArgumentException("platform.delivery.email.auth-mode must be app-password or oauth2");
+        }
+    }
 
     public DeliveryEmailProperties {
         provider = safe(provider);
+        authMode = safe(authMode);
         fromAddress = safe(fromAddress);
         username = safe(username);
         credential = safe(credential);
@@ -85,6 +110,11 @@ public record DeliveryEmailProperties(
             throw new IllegalStateException("email delivery is disabled");
         }
         Profile selected = Profile.require(provider);
+        AuthMode selectedAuthMode = AuthMode.require(authMode);
+        if (!selected.accepts(selectedAuthMode)) {
+            throw new IllegalArgumentException("platform.delivery.email.auth-mode is not supported by provider "
+                    + selected.code());
+        }
         requireAddress(fromAddress, "from-address");
         requireAddress(username, "username");
         if (!fromAddress.equalsIgnoreCase(username)) {
@@ -97,11 +127,11 @@ public record DeliveryEmailProperties(
         if (sendLease == null || sendLease.compareTo(timeoutBudget) <= 0) {
             throw new IllegalArgumentException("platform.delivery.send-lease must exceed the total email SMTP timeouts");
         }
-        return new Resolved(selected, fromAddress, username, credential, connectTimeout, readTimeout, writeTimeout,
+        return new Resolved(selected, selectedAuthMode, fromAddress, username, credential, connectTimeout, readTimeout, writeTimeout,
                 domain(fromAddress));
     }
 
-    record Resolved(Profile profile, String fromAddress, String username, String credential,
+    record Resolved(Profile profile, AuthMode authMode, String fromAddress, String username, String credential,
             Duration connectTimeout, Duration readTimeout, Duration writeTimeout, String messageIdDomain) {
         Resolved {
             Objects.requireNonNull(profile);

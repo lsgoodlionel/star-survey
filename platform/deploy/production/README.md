@@ -19,7 +19,7 @@ Release manifest、校验过的架构 bundle 和固定 digest 镜像；服务器
 docker compose -f compose.yml -f compose.email.yml up -d
 ```
 
-只支持经固定配置档核对的 `gmail`、`outlook-com`（Hotmail/Outlook.com）与 `netease-163`：Gmail 使用客户端授权码或 OAuth2；网易 163 先在网页邮箱开启 SMTP 并使用客户端授权码；Outlook.com/Hotmail 使用 OAuth2 access token，不能使用网页登录密码。`PLATFORM_DELIVERY_EMAIL_CREDENTIAL_FILE` 指向权限为 `0600` 的 secret 文件，内容不会进入 compose 环境文件、平台日志或 API 响应。发件地址与登录名必须相同且已获供应商授权。
+只支持经固定配置档核对的 `gmail`、`outlook-com`（Hotmail/Outlook.com）与 `netease-163`：Gmail 显式设 `PLATFORM_DELIVERY_EMAIL_AUTH_MODE=app-password` 或 `oauth2`；网易 163 先在网页邮箱开启 SMTP 并设为 `app-password`；Outlook.com/Hotmail 必须设为 `oauth2` 并使用 OAuth2 access token，不能使用网页登录密码。`PLATFORM_DELIVERY_EMAIL_CREDENTIAL_FILE` 指向权限为 `0600` 的 secret 文件，内容不会进入 compose 环境文件、平台日志或 API 响应。发件地址与登录名必须相同且已获供应商授权。
 
 SMTP 服务端接受仅表示“已提交 SMTP”，不表示进入收件箱或已读；SMTP 不提供跨供应商的幂等键，网络中断后的恢复是至少一次尝试，可能出现重复邮件。不要将它作为投递回执或计费依据。真实生产开通前分别用 Gmail、Outlook.com/Hotmail、网易 163 的隔离测试帐号记录授权、TLS、退信与退订验证结果。
 

@@ -112,6 +112,7 @@ platform:
     email:
       enabled: ${PLATFORM_DELIVERY_EMAIL_ENABLED:false}
       provider: ${PLATFORM_DELIVERY_EMAIL_PROVIDER:}
+      auth-mode: ${PLATFORM_DELIVERY_EMAIL_AUTH_MODE:}
       from-address: ${PLATFORM_DELIVERY_EMAIL_FROM_ADDRESS:}
       username: ${PLATFORM_DELIVERY_EMAIL_USERNAME:}
       credential: ${PLATFORM_DELIVERY_EMAIL_CREDENTIAL:}

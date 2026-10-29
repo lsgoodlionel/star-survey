@@ -55,7 +55,7 @@ final class JakartaMailSmtpTransport implements SmtpTransport {
         } else {
             properties.setProperty("mail.smtp.ssl.enable", "true");
         }
-        if (config.profile().authMode() == DeliveryEmailProperties.AuthMode.OAUTH2) {
+        if (config.authMode() == DeliveryEmailProperties.AuthMode.OAUTH2) {
             properties.setProperty("mail.smtp.auth.mechanisms", "XOAUTH2");
             properties.setProperty("mail.smtp.auth.login.disable", "true");
             properties.setProperty("mail.smtp.auth.plain.disable", "true");

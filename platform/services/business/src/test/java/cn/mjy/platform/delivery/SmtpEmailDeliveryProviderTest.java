@@ -15,7 +15,7 @@ class SmtpEmailDeliveryProviderTest {
     @Test
     void gmailUsesAnExplicitProfileAndPassesNoRawIdempotencyKeyIntoMessageId() {
         AtomicReference<String> observedId = new AtomicReference<>();
-        DeliveryEmailProperties.Resolved configuration = properties("gmail", "sender@gmail.com", "app-code")
+        DeliveryEmailProperties.Resolved configuration = properties("gmail", "app-password", "sender@gmail.com", "app-code")
                 .resolve(LEASE);
         SmtpEmailDeliveryProvider provider = new SmtpEmailDeliveryProvider(configuration,
                 (configured, message, messageId) -> {
@@ -40,23 +40,23 @@ class SmtpEmailDeliveryProviderTest {
 
     @Test
     void outlookAndNeteaseProfilesKeepTheirTlsAndAuthenticationRequirementsDistinct() {
-        DeliveryEmailProperties.Resolved outlook = properties("outlook-com", "sender@outlook.com", "oauth-token")
+        DeliveryEmailProperties.Resolved outlook = properties("outlook-com", "oauth2", "sender@outlook.com", "oauth-token")
                 .resolve(LEASE);
-        DeliveryEmailProperties.Resolved netease = properties("netease-163", "sender@163.com", "auth-code")
+        DeliveryEmailProperties.Resolved netease = properties("netease-163", "app-password", "sender@163.com", "auth-code")
                 .resolve(LEASE);
 
         assertThat(outlook.profile().host()).isEqualTo("smtp-mail.outlook.com");
         assertThat(outlook.profile().tlsMode()).isEqualTo(DeliveryEmailProperties.TlsMode.STARTTLS);
-        assertThat(outlook.profile().authMode()).isEqualTo(DeliveryEmailProperties.AuthMode.OAUTH2);
+        assertThat(outlook.authMode()).isEqualTo(DeliveryEmailProperties.AuthMode.OAUTH2);
         assertThat(netease.profile().host()).isEqualTo("smtp.163.com");
         assertThat(netease.profile().port()).isEqualTo(465);
         assertThat(netease.profile().tlsMode()).isEqualTo(DeliveryEmailProperties.TlsMode.IMPLICIT_TLS);
-        assertThat(netease.profile().authMode()).isEqualTo(DeliveryEmailProperties.AuthMode.APP_PASSWORD);
+        assertThat(netease.authMode()).isEqualTo(DeliveryEmailProperties.AuthMode.APP_PASSWORD);
     }
 
     @Test
     void mapsOnlySafeErrorCodesAndDoesNotExposeAddressOrCredential() {
-        DeliveryEmailProperties.Resolved configuration = properties("gmail", "sender@gmail.com", "private-code")
+        DeliveryEmailProperties.Resolved configuration = properties("gmail", "app-password", "sender@gmail.com", "private-code")
                 .resolve(LEASE);
         SmtpEmailDeliveryProvider temporary = new SmtpEmailDeliveryProvider(configuration,
                 (ignored, message, id) -> { throw new SmtpTransportException(SmtpTransportException.Kind.TEMPORARY); });
@@ -73,16 +73,18 @@ class SmtpEmailDeliveryProviderTest {
 
     @Test
     void refusesIncompleteOrUnsafeEmailConfigurationBeforeRegisteringAProvider() {
-        assertThatThrownBy(() -> properties("outlook-com", "sender@outlook.com", "").resolve(LEASE))
+        assertThatThrownBy(() -> properties("outlook-com", "oauth2", "sender@outlook.com", "").resolve(LEASE))
                 .hasMessageContaining("credential");
-        assertThatThrownBy(() -> properties("unsupported", "sender@gmail.com", "code").resolve(LEASE))
+        assertThatThrownBy(() -> properties("unsupported", "app-password", "sender@gmail.com", "code").resolve(LEASE))
                 .hasMessageContaining("provider");
-        assertThatThrownBy(() -> properties("gmail", "sender@gmail.com", "code").resolve(Duration.ofSeconds(50)))
+        assertThatThrownBy(() -> properties("gmail", "app-password", "sender@gmail.com", "code").resolve(Duration.ofSeconds(50)))
                 .hasMessageContaining("send-lease");
+        assertThatThrownBy(() -> properties("outlook-com", "app-password", "sender@outlook.com", "code")
+                .resolve(LEASE)).hasMessageContaining("auth-mode");
     }
 
-    private static DeliveryEmailProperties properties(String profile, String address, String credential) {
-        return new DeliveryEmailProperties(true, profile, address, address, credential,
+    private static DeliveryEmailProperties properties(String profile, String authMode, String address, String credential) {
+        return new DeliveryEmailProperties(true, profile, authMode, address, address, credential,
                 Duration.ofSeconds(10), Duration.ofSeconds(20), Duration.ofSeconds(20));
     }
 
