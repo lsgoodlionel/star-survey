@@ -105,6 +105,19 @@ platform:
     link-ttl: ${PLATFORM_DELIVERY_LINK_TTL:P30D}
     # 短链 /d/s/{code}、退订 /d/u/{token}、回执 /d/receipts/{租户}/{渠道商} 都挂在它下面。
     public-base-url: ${PLATFORM_PUBLIC_BASE_URL:}
+    # 邮件投递是显式 opt-in：未配置凭据或未打开开关时不会注册 Email provider，任务会安全地
+    # 以 provider_not_configured 结束。SMS 本轮不接入、不受这些配置影响。
+    # credential 只能由环境变量或 Docker secret 注入；Gmail / 网易使用客户端授权码，
+    # Outlook.com / Hotmail 使用 OAuth2 access token，不能填网页登录密码。
+    email:
+      enabled: ${PLATFORM_DELIVERY_EMAIL_ENABLED:false}
+      provider: ${PLATFORM_DELIVERY_EMAIL_PROVIDER:}
+      from-address: ${PLATFORM_DELIVERY_EMAIL_FROM_ADDRESS:}
+      username: ${PLATFORM_DELIVERY_EMAIL_USERNAME:}
+      credential: ${PLATFORM_DELIVERY_EMAIL_CREDENTIAL:}
+      connect-timeout: ${PLATFORM_DELIVERY_EMAIL_CONNECT_TIMEOUT:PT10S}
+      read-timeout: ${PLATFORM_DELIVERY_EMAIL_READ_TIMEOUT:PT30S}
+      write-timeout: ${PLATFORM_DELIVERY_EMAIL_WRITE_TIMEOUT:PT30S}
   # 平台字节存储的**唯一**一份配置：导出文件与资产字节共用它（ADR 0015 增补五）。
   # kind=local（缺省）时各模块按自己的 storage-dir 落本地盘，多副本需要共享卷；
   # kind=s3 时两处**一起**切到对象存储，在同一个桶里各占一个键前缀（exports/、assets/），
