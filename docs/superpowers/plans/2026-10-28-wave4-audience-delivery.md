@@ -64,6 +64,10 @@ Wave 4 的首个纵切位于已发布问卷的上下文中：运营人员创建�
 
 既有催答规则创建/读取接口现补充 `PATCH /v1/delivery/surveys/{surveyId}/reminder-rules/{ruleId}` 启停动作。服务端先核对 rule 归属 URL 中问卷，再要求 `SEND`，跨问卷规则按不存在处理。页面将分钟转换为受服务端边界约束的秒数，强制正文带 `{{unsubscribe}}`，展示启用/暂停与上限；不展示收件人、正文回显或回执密钥。`DeliveryApiTest` 覆盖脱敏任务列表与规则创建/启停，`DeliveryReminderTest` 保持完成者跳过、退订抑制、上限与恢复的测试 provider 契约。管理端全量 Vitest 375/375、typecheck、lint、生产构建和 production bundle assertion 通过；隔离 Docker MySQL/PostgreSQL 真实 Chromium 各 20/20，确认真实运行栈无回归和无 provider 的失败语义。真实 provider、真实发送/回执联调仍非本阶段证据。
 
+## 2026-10-29 阶段 7：已认证回执只读视图
+
+`GET /v1/delivery/tasks/{taskId}/receipts?limit=50` 先在当前租户读取任务并要求问卷 `VIEW`，再返回最多 200 条最近的已验签、已去重回执。响应只含收件人内部标识、provider、类别、计费标识、事件时间与平台接收时间；不返回地址、正文、渠道商 eventId 或消息 ID。管理端任务详情展示中文回执类别和时间，并明确 SMTP 已提交不等于送达；暂无回执与读取失败分别可辨。`DeliveryReceiptTest` 覆盖去重回执后的安全读取，`DeliveryApiTest` 回归 API 权限路径；前端 API/页面定向测试、typecheck 与 lint 已通过。真实供应商回执仍须另行验收。
+
 ## 风险与停止条件
 
 - 当前后端 `DeliveryTaskController` 只接受调用方提交的 recipients，不能被前端直接复用为受众投放；若受众物化不能在不扩大 PII 或权限范围的前提下完成，停止并保留证据。

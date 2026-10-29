@@ -6,6 +6,7 @@ import {
   createDeliveryLink,
   deliveryLinksQueryKey,
   deliveryRecipientSchema,
+  deliveryReceiptSchema,
   deliveryTaskSchema,
   reminderRuleSchema,
   fetchDeliveryQr,
@@ -15,6 +16,7 @@ import {
   listReminderRules,
   listSurveyDeliveryTasks,
   listDeliveryRecipients,
+  listDeliveryReceipts,
   listDeliveryLinks,
   revokeDeliveryLink,
   setReminderRuleEnabled,
@@ -44,6 +46,10 @@ const recipient = {
   id: '40000000-0000-4000-8000-000000000001', address: 'w***@example.test', displayName: '王小明',
   state: 'queued', attempts: 0, remindersSent: 0, lastError: null, sentAt: null, lastReminderAt: null,
 };
+const receipt = {
+  recipientId: recipient.id, provider: 'smtp-gmail', kind: 'delivered', billable: true,
+  occurredAt: '2026-10-29T08:00:00Z', receivedAt: '2026-10-29T08:00:01Z',
+};
 const reminderRule = {
   id: '50000000-0000-4000-8000-000000000001', surveyId, sourceTaskId: taskId,
   firstDelaySeconds: 3600, intervalSeconds: 86400, maxReminders: 2, subject: '请继续填写',
@@ -59,6 +65,7 @@ test('validates the complete delivery link contract', () => {
 test('validates task state and redacted recipient contracts', () => {
   expect(deliveryTaskSchema.parse(task)).toEqual(task);
   expect(deliveryRecipientSchema.parse(recipient)).toEqual(recipient);
+  expect(deliveryReceiptSchema.parse(receipt)).toEqual(receipt);
   expect(() => deliveryTaskSchema.parse({ ...task, recipientCount: -1 })).toThrow();
   expect(reminderRuleSchema.parse(reminderRule)).toEqual(reminderRule);
   expect(() => reminderRuleSchema.parse({ ...reminderRule, maxReminders: 11 })).toThrow();
@@ -93,6 +100,7 @@ test('lists survey tasks and manages only typed reminder rules', async () => {
 
 test('uses the audience scoped create endpoint and task status endpoints', async () => {
   const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    if (String(input).includes('/receipts?')) return jsonResponse([receipt]);
     if (String(input).endsWith('/recipients')) return jsonResponse([recipient]);
     return jsonResponse(task, init?.method === 'POST' && String(input).includes('/surveys/') ? 201 : 200);
   });
@@ -102,11 +110,13 @@ test('uses the audience scoped create endpoint and task status endpoints', async
   });
   await getDeliveryTask(api, 'task/id');
   await listDeliveryRecipients(api, 'task/id');
+  await listDeliveryReceipts(api, 'task/id');
   await cancelDeliveryTask(api, 'task/id');
   expect(fetchImpl.mock.calls.map(([path, init]) => [path, init?.method, init?.body])).toEqual([
     ['/v1/surveys/survey%2Fid/delivery-tasks', 'POST', JSON.stringify({ channel: 'email', subject: '邀请填写', bodyTemplate: '请填写问卷', idempotencyKey: 'request-1' })],
     ['/v1/delivery/tasks/task%2Fid', 'GET', undefined],
     ['/v1/delivery/tasks/task%2Fid/recipients', 'GET', undefined],
+    ['/v1/delivery/tasks/task%2Fid/receipts?limit=50', 'GET', undefined],
     ['/v1/delivery/tasks/task%2Fid/cancel', 'POST', undefined],
   ]);
 });

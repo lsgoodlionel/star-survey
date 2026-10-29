@@ -73,6 +73,22 @@ class DeliveryReceiptTest {
         assertThat(fixture.billedUnits(p.tenant(), task.id())).isEqualTo(3);
     }
 
+    @Test
+    void authenticatedReceiptsCanBeReadWithoutExposingProviderEventIdsOrAddresses() {
+        post(p.tenant(), events("evt-view", "delivered", idempotencyKey(1)));
+
+        assertThat(tasks.receipts(p.owner(), task.id(), 50))
+                .singleElement()
+                .satisfies(receipt -> {
+                    assertThat(receipt.provider()).isEqualTo(PROVIDER);
+                    assertThat(receipt.kind()).isEqualTo("delivered");
+                    assertThat(receipt.billable()).isTrue();
+                    assertThat(receipt.recipientId()).isEqualTo(fixture.recipientIdOf(p.tenant(), task.id(), 1));
+                    assertThat(receipt.occurredAt()).isNotNull();
+                    assertThat(receipt.receivedAt()).isNotNull();
+                });
+    }
+
     /** 未送达不计费：多收不如少收。 */
     @Test
     void aBouncedReceiptIsNotBilledAndSuppressesTheAddress() {

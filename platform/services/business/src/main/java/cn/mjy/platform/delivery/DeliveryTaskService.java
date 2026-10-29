@@ -44,10 +44,11 @@ public class DeliveryTaskService {
     private final DeliveryLinkService links;
     private final DeliveryProviders providers;
     private final SurveyAudienceService audiences;
+    private final ReceiptRepository receipts;
 
     DeliveryTaskService(TenantScope tenantScope, DeliveryTaskRepository tasks, RecipientRepository recipients,
             DeliveryAccess access, DeliveryAudit audit, DeliveryLinkService links, DeliveryProviders providers,
-            SurveyAudienceService audiences) {
+            SurveyAudienceService audiences, ReceiptRepository receipts) {
         this.tenantScope = tenantScope;
         this.tasks = tasks;
         this.recipients = recipients;
@@ -56,6 +57,7 @@ public class DeliveryTaskService {
         this.links = links;
         this.providers = providers;
         this.audiences = audiences;
+        this.receipts = receipts;
     }
 
     /** 名单里的一行。{@code engineToken} 是发布后从引擎回读到的参与者 token（邀请码），可为空。 */
@@ -145,6 +147,16 @@ public class DeliveryTaskService {
             TaskRow row = row(taskId);
             access.require(ctx, DeliveryAccess.READ, row.surveyId());
             return recipients.list(taskId).stream().map(RecipientView::of).toList();
+        });
+    }
+
+    /** 读取已认证并去重的投递回执；不把渠道商 eventId 或地址抄回浏览器。 */
+    public List<ReceiptView> receipts(TenantContext ctx, UUID taskId, int limit) {
+        return tenantScope.call(ctx.tenantId(), () -> {
+            TaskRow row = row(taskId);
+            access.require(ctx, DeliveryAccess.READ, row.surveyId());
+            int boundedLimit = Math.min(Math.max(limit, 1), 200);
+            return receipts.listByTask(taskId, boundedLimit).stream().map(ReceiptRepository.ReceiptRow::view).toList();
         });
     }
 

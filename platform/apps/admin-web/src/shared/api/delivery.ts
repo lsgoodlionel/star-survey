@@ -46,6 +46,15 @@ export const deliveryRecipientSchema = z.object({
   lastReminderAt: z.string().datetime({ offset: true }).nullable(),
 });
 
+export const deliveryReceiptSchema = z.object({
+  recipientId: z.string().uuid(),
+  provider: z.string(),
+  kind: z.enum(['delivered', 'bounced', 'failed', 'complaint', 'unsubscribed']),
+  billable: z.boolean(),
+  occurredAt: z.string().datetime({ offset: true }).nullable(),
+  receivedAt: z.string().datetime({ offset: true }),
+});
+
 export const reminderRuleSchema = z.object({
   id: z.string().uuid(),
   surveyId: z.string().uuid(),
@@ -60,6 +69,7 @@ export const reminderRuleSchema = z.object({
 
 export type DeliveryTask = z.infer<typeof deliveryTaskSchema>;
 export type DeliveryRecipient = z.infer<typeof deliveryRecipientSchema>;
+export type DeliveryReceipt = z.infer<typeof deliveryReceiptSchema>;
 export type ReminderRule = z.infer<typeof reminderRuleSchema>;
 
 export interface CreateAudienceDeliveryTaskInput {
@@ -106,6 +116,8 @@ export const deliveryTasksQueryKey = (tenantId: string, surveyId: string) =>
   ['delivery-tasks', tenantId, surveyId] as const;
 export const deliveryTaskQueryKey = (tenantId: string, surveyId: string, taskId: string) =>
   [...deliveryTasksQueryKey(tenantId, surveyId), taskId] as const;
+export const deliveryReceiptsQueryKey = (tenantId: string, taskId: string) =>
+  ['delivery-receipts', tenantId, taskId] as const;
 export const reminderRulesQueryKey = (tenantId: string, surveyId: string) =>
   ['delivery-reminder-rules', tenantId, surveyId] as const;
 
@@ -223,6 +235,14 @@ export function listDeliveryRecipients(api: ApiClient, taskId: string, signal?: 
   return api.request({
     path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}/recipients`,
     schema: z.array(deliveryRecipientSchema),
+    signal,
+  });
+}
+
+export function listDeliveryReceipts(api: ApiClient, taskId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}/receipts?limit=50`,
+    schema: z.array(deliveryReceiptSchema),
     signal,
   });
 }

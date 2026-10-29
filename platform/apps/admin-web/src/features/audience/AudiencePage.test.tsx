@@ -25,6 +25,7 @@ function apiFrom(handler: (request: ApiRequest<unknown>) => unknown): ApiClient 
         return Promise.resolve(handler(request as ApiRequest<unknown>)) as never;
       } catch (error) {
         if (request.path === `/v1/surveys/${surveyId}/delivery-tasks?limit=50`
+          || request.path === `/v1/delivery/tasks/${taskId}/receipts?limit=50`
           || request.path === `/v1/delivery/surveys/${surveyId}/reminder-rules`) {
           return Promise.resolve([]) as never;
         }
@@ -55,6 +56,7 @@ describe('AudiencePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '从受众创建 Email 任务' }));
     expect(await screen.findByText(/状态：等待发送/)).toBeInTheDocument();
     expect(await screen.findByLabelText('脱敏收件人')).toHaveTextContent('a***@example.test');
+    expect(screen.getByText('暂无已认证回执。')).toBeInTheDocument();
     const create = requests.find((item) => item.path.endsWith('/delivery-tasks'))!;
     expect(create.body).not.toHaveProperty('recipients');
     expect(create.body).toMatchObject({ channel: 'email' });

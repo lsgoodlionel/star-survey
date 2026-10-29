@@ -22,7 +22,9 @@ import {
   createReminderRule,
   deliveryTasksQueryKey,
   deliveryTaskQueryKey,
+  deliveryReceiptsQueryKey,
   getDeliveryTask,
+  listDeliveryReceipts,
   listDeliveryRecipients,
   listReminderRules,
   listSurveyDeliveryTasks,
@@ -150,6 +152,11 @@ export function AudiencePage({ api, surveyId, tenantId, actorId }: {
     queryKey: ['delivery-recipients', tenantId, taskId], queryFn: ({ signal }) => listDeliveryRecipients(api, taskId!, signal),
     enabled: Boolean(taskId && task.data), retry: false,
   });
+  const receipts = useQuery({
+    queryKey: deliveryReceiptsQueryKey(tenantId, taskId ?? 'none'),
+    queryFn: ({ signal }) => listDeliveryReceipts(api, taskId!, signal),
+    enabled: Boolean(taskId && task.data), retry: false,
+  });
   const importJob = useQuery({
     queryKey: contactImportQueryKey(tenantId, importJobId ?? 'none'),
     queryFn: async ({ signal }) => {
@@ -254,7 +261,8 @@ export function AudiencePage({ api, surveyId, tenantId, actorId }: {
       {createTask.isError && !isDeliveryUnavailable(createTask.error) ? <p role="alert">创建投放任务失败，请检查受众和邮件内容。</p> : null}
       {taskUnavailable ? <p role="alert">任务不可访问或已不存在</p> : null}
       {task.isError && !isTaskUnavailable(task.error) ? <p role="alert">任务状态加载失败，请稍后重试。</p> : null}
-      {task.data && !taskUnavailable ? <TaskStatus task={task.data} recipients={recipients.data} recipientsError={recipients.isError} cancelling={cancel.isPending}
+      {task.data && !taskUnavailable ? <TaskStatus task={task.data} recipients={recipients.data} recipientsError={recipients.isError}
+        receipts={receipts.data} receiptsError={receipts.isError} cancelling={cancel.isPending}
         cancelError={cancel.isError} onCancel={() => cancel.mutate()} /> : null}
     </section>
     <section aria-labelledby="audience-history-title"><h3 id="audience-history-title">最近投放任务</h3>
@@ -292,13 +300,19 @@ function ImportStatus({ job, outcomes, outcomesError }: { job: ContactImportJob;
   </section>;
 }
 
-function TaskStatus({ task, recipients, recipientsError, cancelling, cancelError, onCancel }: { task: DeliveryTask; recipients?: Array<{ id: string; address: string; displayName: string | null; state: string }>; recipientsError: boolean; cancelling: boolean; cancelError: boolean; onCancel(): void }) {
+function TaskStatus({ task, recipients, recipientsError, receipts, receiptsError, cancelling, cancelError, onCancel }: { task: DeliveryTask; recipients?: Array<{ id: string; address: string; displayName: string | null; state: string }>; recipientsError: boolean; receipts?: Array<{ recipientId: string; provider: string; kind: string; occurredAt: string | null; receivedAt: string }>; receiptsError: boolean; cancelling: boolean; cancelError: boolean; onCancel(): void }) {
   const cancellable = task.status === 'queued' || task.status === 'running';
   return <section className="audience-task" aria-label="投放任务状态"><h4>投放任务</h4><p>状态：{taskStatusLabel(task.status)}，收件人 {task.recipientCount} 人。</p>
     {cancellable ? <button type="button" disabled={cancelling} onClick={onCancel}>取消任务</button> : null}
     {cancelError ? <p role="alert">取消任务失败，请稍后重试。</p> : null}
     {recipientsError ? <p role="alert">收件人状态加载失败，请稍后重试。</p> : null}
     {recipients ? <ul aria-label="脱敏收件人">{recipients.map((recipient) => <li key={recipient.id}>{recipient.displayName || '未命名联系人'}：{recipient.address}（{recipient.state}）</li>)}</ul> : null}
+    <h5>已认证回执</h5><p>仅显示已验签、已去重的回执；SMTP 已提交不等于送达。</p>
+    {receiptsError ? <p role="alert">投递回执加载失败，请稍后重试。</p> : null}
+    {receipts?.length === 0 ? <p>暂无已认证回执。</p> : null}
+    {receipts?.length ? <ul aria-label="投递回执">{receipts.map((receipt) => <li key={`${receipt.recipientId}:${receipt.receivedAt}:${receipt.kind}`}>
+      {receiptKindLabel(receipt.kind)}（{receipt.provider}，{formatReceiptTime(receipt.occurredAt ?? receipt.receivedAt)}）
+    </li>)}</ul> : null}
   </section>;
 }
 
@@ -314,6 +328,8 @@ function isTaskUnavailable(error: unknown) { return error instanceof ApiError &&
 function isImportUnavailable(error: unknown) { return error instanceof ApiError && (error.status === 403 || error.status === 404); }
 function isDeliveryUnavailable(error: unknown) { return error instanceof ApiError && error.status === 503; }
 function taskStatusLabel(status: string) { return ({ queued: '等待发送', running: '发送中', completed: '已完成', cancelled: '已取消', failed: '发送失败' } as Record<string, string>)[status] ?? status; }
+function receiptKindLabel(kind: string) { return ({ delivered: '已送达', bounced: '退信', failed: '投递失败', complaint: '投诉', unsubscribed: '已退订' } as Record<string, string>)[kind] ?? kind; }
+function formatReceiptTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false }); }
 function importStatusLabel(status: string) { return ({ queued: '等待处理', running: '处理中', completed: '已完成', failed: '处理失败' } as Record<string, string>)[status] ?? status; }
 function importOutcomeLabel(outcome: string) { return ({ created: '已新增', updated: '已更新', duplicate: '重复', invalid: '无效' } as Record<string, string>)[outcome] ?? outcome; }
 function formatMinutes(seconds: number) { return Math.floor(seconds / 60); }

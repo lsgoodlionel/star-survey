@@ -182,6 +182,16 @@ class DeliveryApiTest {
     }
 
     @Test
+    void taskReceiptReadIsBoundedAndRequiresOnlyTheTasksReadPath() throws Exception {
+        TaskView task = fixture.emailTask(p, 1);
+
+        getAs(p.owner(), "/v1/delivery/tasks/" + task.id() + "/receipts?limit=999")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
     void anAudienceTaskUsesOnlyTheTestEmailProviderAndKeepsItsRecipientReadRedacted() throws Exception {
         var list = lists.create(p.owner(), "Wave 4 发送受众", ContactKind.RESPONDENT, DedupeKey.EMAIL);
         contacts.create(p.owner(), list.id(), ContactKind.RESPONDENT,
