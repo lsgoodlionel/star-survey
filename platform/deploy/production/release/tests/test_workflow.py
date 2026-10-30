@@ -92,6 +92,15 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
                 result.stdout += output.read_text(encoding="utf-8")
             return result
 
+    def test_engine_runtime_has_no_compilation_step(self):
+        dockerfile = (ROOT / "platform/deploy/production/Dockerfile.engine").read_text()
+        self.assertIn("FROM alpine:3.24", dockerfile)
+        self.assertIn("php83-apache2", dockerfile)
+        self.assertIn("WORKDIR /var/www/html", dockerfile)
+        self.assertIn("USER 10001:10001", dockerfile)
+        self.assertNotIn("docker-php-ext-install", dockerfile)
+        self.assertNotIn("-dev", dockerfile)
+
     def test_triggers_are_review_or_manual_builds_and_release_tags(self):
         triggers = self.workflow["on"]
         self.assertIn("pull_request", triggers)

@@ -122,3 +122,9 @@ publication 采用可恢复的幂等发布：先查询现有 Release，规范化
 本地 verifier 递归枚举下载目录的所有 entry。除了清单精确列出的单链接普通文件，不允许额外目录、嵌套文件、symlink、hardlink、FIFO/socket/device，也拒绝大小写或 Unicode NFC 冲突路径。
 
 当前仓库没有因为本地实现或测试而创建真实 tag、GHCR 镜像或 GitHub Release。首次 RC 仍需在 GitHub Actions 中实际完成四节点矩阵，随后人工核对公网 TLS、备份密钥异地保存和 Release 资产，再决定是否创建稳定 tag。
+
+### Engine 运行镜像（2026-10-30）
+
+Engine 使用 Alpine 3.24 同源 PHP 8.3 CLI/Apache 包，保留 UID 10001、80 端口、`php`、`apache2-foreground`、`/var/www/html` 和既有静态附件防护。镜像仅安装运行包，构建时升级安全包；可传 `APK_MIRROR` 选择已测速源，仓库默认保留官方源及索引更新失败回退。
+
+本地构建后执行 `python3 platform/deploy/production/release/engine_image_smoke.py <image>`，验证非 root、PHP/session、健康检查和附件访问边界。发布仍须按漏洞策略运行固定版本 Trivy；不忽略未修复 HIGH/CRITICAL。此次 ARM64 完整镜像本地扫描 0 阻断项，发布相关测试 59/59；双架构和线上检查须以 PR CI 结果为准，不能代替正式 RC 原生生命周期验收。
