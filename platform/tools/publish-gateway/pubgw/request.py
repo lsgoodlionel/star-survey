@@ -26,6 +26,14 @@ _BRAND_FILES = {
     ("faviconAsset", "image/jpeg"): "mjy-brand-favicon.jpg",
     ("faviconAsset", "image/gif"): "mjy-brand-favicon.gif",
     ("faviconAsset", "image/webp"): "mjy-brand-favicon.webp",
+    ("coverAsset", "image/png"): "mjy-brand-cover.png",
+    ("coverAsset", "image/jpeg"): "mjy-brand-cover.jpg",
+    ("coverAsset", "image/gif"): "mjy-brand-cover.gif",
+    ("coverAsset", "image/webp"): "mjy-brand-cover.webp",
+    ("backgroundAsset", "image/png"): "mjy-brand-background.png",
+    ("backgroundAsset", "image/jpeg"): "mjy-brand-background.jpg",
+    ("backgroundAsset", "image/gif"): "mjy-brand-background.gif",
+    ("backgroundAsset", "image/webp"): "mjy-brand-background.webp",
 }
 
 
@@ -68,8 +76,8 @@ def parse_request(body: bytes) -> PublishRequest:
 
     brand_assets_present = "brandAssets" in payload
     brand_assets = payload.get("brandAssets", [])
-    if not isinstance(brand_assets, list) or len(brand_assets) > 2:
-        raise InvalidRequest("brandAssets must be a list of at most two items")
+    if not isinstance(brand_assets, list) or len(brand_assets) > 4:
+        raise InvalidRequest("brandAssets must be a list of at most four items")
     brand_assets = tuple(_brand_asset(item) for item in brand_assets)
     return PublishRequest(
         request_id=request_id.lower(),

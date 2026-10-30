@@ -16,7 +16,7 @@ import { LanguageEditor } from './LanguageEditor';
 import './branding.css';
 
 interface BrandFields { primaryColor: string; pageTitle: string; footerText: string; logoAlt: string;
-  decorativeLogo: boolean }
+  watermarkText: string; decorativeLogo: boolean }
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const text = (value: unknown, base: string) => typeof value === 'string' ? value
@@ -68,6 +68,7 @@ function BrandingForm({ api, surveyId, tenantId, initialDraft, canEdit }: {
     primaryColor: initial.branding?.primaryColor ?? '',
     pageTitle: text(initial.branding?.pageTitle, base),
     footerText: text(initial.branding?.footerText, base),
+    watermarkText: text(initial.branding?.watermarkText, base),
     logoAlt: initial.branding?.logoAlt ?? '',
     decorativeLogo: Boolean(initial.branding?.logoAsset && initial.branding.logoAlt === ''),
   } });
@@ -94,8 +95,12 @@ function BrandingForm({ api, surveyId, tenantId, initialDraft, canEdit }: {
         ? current?.pageTitle ?? fields.pageTitle.trim() : fields.pageTitle.trim() } : {}),
       ...(fields.footerText.trim() ? { footerText: fields.footerText.trim() === text(current?.footerText, base)
         ? current?.footerText ?? fields.footerText.trim() : fields.footerText.trim() } : {}),
+      ...(fields.watermarkText.trim() ? { watermarkText: fields.watermarkText.trim() === text(current?.watermarkText, base)
+        ? current?.watermarkText ?? fields.watermarkText.trim() : fields.watermarkText.trim() } : {}),
       ...(state.branding?.logoAsset ? { logoAsset: state.branding.logoAsset } : {}),
       ...(state.branding?.faviconAsset ? { faviconAsset: state.branding.faviconAsset } : {}),
+      ...(state.branding?.coverAsset ? { coverAsset: state.branding.coverAsset } : {}),
+      ...(state.branding?.backgroundAsset ? { backgroundAsset: state.branding.backgroundAsset } : {}),
       ...(state.branding?.logoAsset || fields.logoAlt.trim()
         ? { logoAlt: fields.decorativeLogo ? '' : fields.logoAlt.trim() } : {}),
     };
@@ -123,11 +128,13 @@ function BrandingForm({ api, surveyId, tenantId, initialDraft, canEdit }: {
     if (translationError) { setError(translationError); return; }
     setSaveLocked(true); save.mutate(fields);
   }
-  function assetChange(slot: 'logoAsset' | 'faviconAsset', assetId: string) {
+  function assetChange(slot: 'logoAsset' | 'faviconAsset' | 'coverAsset' | 'backgroundAsset', assetId: string) {
     const brand = { brandingVersion: 1 as const, ...state.branding };
     if (assetId) brand[slot] = { assetId }; else delete brand[slot];
     if (slot === 'logoAsset') delete brand.logoFile;
     if (slot === 'faviconAsset') delete brand.faviconFile;
+    if (slot === 'coverAsset') delete brand.coverFile;
+    if (slot === 'backgroundAsset') delete brand.backgroundFile;
     setState({ ...state, branding: brand }); setExtraDirty(true);
   }
   return <main className="branding-page">
@@ -143,12 +150,17 @@ function BrandingForm({ api, surveyId, tenantId, initialDraft, canEdit }: {
           onChange={(event) => form.setValue('primaryColor', event.target.value, { shouldDirty: true })} />
         <label>页面标题 <input disabled={!canEdit} {...form.register('pageTitle')} /></label>
         <label>页脚文本 <textarea disabled={!canEdit} {...form.register('footerText')} /></label>
+        <label>页面水印 <input disabled={!canEdit} maxLength={80} {...form.register('watermarkText')} /></label>
         <AssetPicker api={api} tenantId={tenantId} label="Logo" disabled={!canEdit}
           assetId={state.branding?.logoAsset?.assetId ?? ''} onChange={(id) => assetChange('logoAsset', id)} />
         <label>Logo 替代文本 <input disabled={!canEdit} {...form.register('logoAlt')} /></label>
         <label><input type="checkbox" disabled={!canEdit} {...form.register('decorativeLogo')} />Logo 仅作装饰</label>
         <AssetPicker api={api} tenantId={tenantId} label="网站图标" disabled={!canEdit}
           assetId={state.branding?.faviconAsset?.assetId ?? ''} onChange={(id) => assetChange('faviconAsset', id)} />
+        <AssetPicker api={api} tenantId={tenantId} label="问卷封面" disabled={!canEdit}
+          assetId={state.branding?.coverAsset?.assetId ?? ''} onChange={(id) => assetChange('coverAsset', id)} />
+        <AssetPicker api={api} tenantId={tenantId} label="页面背景" disabled={!canEdit}
+          assetId={state.branding?.backgroundAsset?.assetId ?? ''} onChange={(id) => assetChange('backgroundAsset', id)} />
       </section>
       <LanguageEditor definition={draft.definition} languages={state.additionalLanguages}
         translations={state.translations} disabled={!canEdit} onChange={(languages, translations) => {

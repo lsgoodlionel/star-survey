@@ -122,6 +122,24 @@ class BrandingCompileTest(unittest.TestCase):
         self.assertNotIn("logoAsset", branding.engine_branding)
         self.assertNotIn("faviconAsset", branding.engine_branding)
 
+    def test_cover_background_and_watermark_compile_to_closed_theme_options(self):
+        def materialized(slot, asset_id):
+            return {
+                "url": "https://survey.example/a/tenant/{}/1?exp=123&sig=abc".format(asset_id),
+                "assetVersion": 1, "contentType": "image/png", "sizeBytes": 16,
+                "fileName": "mjy-brand-{}.png".format(slot), "sha256": "c" * 64,
+            }
+        definition = branded_definition({"brandingVersion": 1,
+            "coverAsset": materialized("cover", "33333333-3333-4333-8333-333333333333"),
+            "backgroundAsset": materialized("background", "44444444-4444-4444-8444-444444444444"),
+            "watermarkText": {"en": "Internal", "zh-Hans": "内部资料"}})
+        compiled = compile_branding(definition)
+        self.assertEqual("./files/mjy-brand-cover.png", compiled.options["mjybrandcover"])
+        self.assertEqual("./files/mjy-brand-background.png", compiled.options["mjybrandbackground"])
+        self.assertEqual("内部资料", compiled.options["mjybrandwatermark__zh-Hans"])
+        self.assertEqual("mjy-brand-cover.png", compiled.engine_branding["coverFile"])
+        self.assertEqual("mjy-brand-background.png", compiled.engine_branding["backgroundFile"])
+
     def test_legacy_logo_file_remains_supported(self):
         compiled = compile_branding(branded_definition({"brandingVersion": 1, "logoFile": "legacy.webp"}))
         self.assertEqual("./files/legacy.webp", compiled.options["mjybrandlogofile"])

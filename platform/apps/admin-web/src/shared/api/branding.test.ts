@@ -19,6 +19,14 @@ test('keeps valid brand text and author asset IDs without trusting materialized 
   expect(parseBrandingDraft({ branding: { brandingVersion: 1, logoAsset: { assetId: id, url: 'https://host/a', assetVersion: 7 } } }).branding).toBeNull();
 });
 
+test('keeps cover background and localized watermark as closed brand fields', () => {
+  const state = parseBrandingDraft({ branding: { brandingVersion: 1,
+    coverAsset: { assetId: id }, backgroundAsset: { assetId: id },
+    watermarkText: { 'zh-Hans': '内部资料', en: 'Internal' } } });
+  expect(state.branding).toMatchObject({ coverAsset: { assetId: id },
+    backgroundAsset: { assetId: id }, watermarkText: { 'zh-Hans': '内部资料', en: 'Internal' } });
+});
+
 test('merges only owned draft fields and never persists URL or assetVersion', () => {
   const original = { title: '问卷', groups: [{ uuid: id }], extension: { unknown: true },
     settings: { anonymized: 'Y' }, branding: { brandingVersion: 1, logoFile: 'old.png' } };

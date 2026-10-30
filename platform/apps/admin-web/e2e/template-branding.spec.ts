@@ -72,6 +72,7 @@ test('tenant template lifecycle copies a real survey and preserves brand draft c
   await page.getByRole('textbox', { name: '主色', exact: true }).fill('#1464A0');
   await page.getByRole('textbox', { name: '页面标题' }).fill('品牌问卷');
   await page.getByRole('textbox', { name: '页脚文本' }).fill('感谢参与');
+  await page.getByRole('textbox', { name: '页面水印' }).fill('内部资料');
   await page.getByRole('textbox', { name: '新增语言代码' }).fill('en');
   await page.getByRole('button', { name: '添加语言' }).click();
   await page.getByRole('textbox', { name: 'en 问卷标题' }).fill('Branded survey');
@@ -171,6 +172,12 @@ test('branded copy previews and publishes with language and pinned image bytes',
   await page.getByLabel('上传网站图标').setInputFiles({ name: 'favicon.png', mimeType: 'image/png', buffer: logoV1 });
   await expect(page.getByRole('combobox', { name: '网站图标', exact: true })
     .getByRole('option', { name: 'favicon.png' })).toHaveCount(1);
+  await page.getByLabel('上传问卷封面').setInputFiles({ name: 'cover.png', mimeType: 'image/png', buffer: png([30, 110, 80]) });
+  await expect(page.getByRole('combobox', { name: '问卷封面', exact: true })
+    .getByRole('option', { name: 'cover.png' })).toHaveCount(1);
+  await page.getByLabel('上传页面背景').setInputFiles({ name: 'background.png', mimeType: 'image/png', buffer: png([245, 245, 240]) });
+  await expect(page.getByRole('combobox', { name: '页面背景', exact: true })
+    .getByRole('option', { name: 'background.png' })).toHaveCount(1);
   await page.getByRole('textbox', { name: 'Logo 替代文本' }).fill('验收Logo');
   await page.getByRole('button', { name: '保存品牌与语言' }).click();
   await expect(page.getByText(/已保存，草稿版本/)).toBeVisible();
@@ -191,6 +198,9 @@ test('branded copy previews and publishes with language and pinned image bytes',
   const preview = await previewPromise;
   await expect(preview).toHaveTitle(/品牌问卷/);
   await expect(preview.getByText('感谢参与')).toBeVisible();
+  await expect(preview.locator('#mjy-brand-cover img')).toBeVisible();
+  await expect(preview.getByText('内部资料')).toBeVisible();
+  await expect(preview.locator('#mjy-brand-background')).toHaveCount(1);
   scenarios.add('preview-branding');
   await assertNoThirdPartyUrls(preview);
   scenarios.add('no-third-party-url');
@@ -220,6 +230,9 @@ test('branded copy previews and publishes with language and pinned image bytes',
   await respondent.goto(deliveryUrl!);
   const logoImage = respondent.getByRole('img', { name: '验收Logo' });
   await expect(logoImage).toBeVisible();
+  await expect(respondent.locator('#mjy-brand-cover img')).toBeVisible();
+  await expect(respondent.getByText('内部资料')).toBeVisible();
+  await expect(respondent.locator('#mjy-brand-background')).toHaveCount(1);
   const imageUrl = new URL((await logoImage.getAttribute('src'))!, respondent.url()).href;
   const originalImage = await respondent.request.get(imageUrl);
   expect(originalImage.status()).toBe(200);

@@ -26,6 +26,7 @@
 {% set mjyBrandTitle = aSurveyInfo.options['mjybrandtitle' ~ mjyLanguageSuffix]|default(aSurveyInfo.options.mjybrandtitle|default('')) %}
 {% set mjyBrandFavicon = aSurveyInfo.options.mjybrandfavicon|default('') %}
 {% set mjyBrandPrimary = aSurveyInfo.options.mjybrandprimary|default('') %}
+{% set mjyBrandBackground = aSurveyInfo.options.mjybrandbackground|default('') %}
 
 <head>
     <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
@@ -46,6 +47,9 @@
 
     {% if mjyBrandPrimary starts with '#' and mjyBrandPrimary|length <= 7 %}
         <style id="mjy-brand-tokens">:root{--mjy-brand-primary: {{ mjyBrandPrimary|escape }};}</style>
+    {% endif %}
+    {% if mjyBrandBackground and imageSrc(mjyBrandBackground) %}
+        <style id="mjy-brand-background">body{background-image:url('{{ imageSrc(mjyBrandBackground)|escape('html_attr') }}');}</style>
     {% endif %}
 
     <script type="text/javascript">
