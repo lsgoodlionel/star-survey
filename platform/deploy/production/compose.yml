@@ -72,6 +72,7 @@ services:
       - PLATFORM_JWT_HMAC_SECRET=/run/secrets/platform_jwt_hmac_secret
       - PLATFORM_ENGINE_EVENTS_SECRET=/run/secrets/platform_engine_events_secret
       - PLATFORM_PUBGW_SECRET=/run/secrets/platform_pubgw_secret
+      - PLATFORM_DELIVERY_SECRET=/run/secrets/platform_delivery_secret
       - --
       - java
       - -jar
@@ -84,6 +85,7 @@ services:
       PLATFORM_PUBGW_URL: http://publish-gateway:8080
       PLATFORM_RESPONSE_EXPORT_DIR: /var/lib/survey/exports
       PLATFORM_ASSET_DIR: /var/lib/survey/assets
+      PLATFORM_DELIVERY_ENABLED: ${PLATFORM_DELIVERY_ENABLED:-false}
     volumes:
       - ./init/run-with-secrets.sh:/opt/survey/run-with-secrets.sh:ro
       - platform-assets:/var/lib/survey/assets
@@ -94,6 +96,7 @@ services:
       - platform_jwt_hmac_secret
       - platform_engine_events_secret
       - platform_pubgw_secret
+      - platform_delivery_secret
     networks:
       - edge
       - internal
@@ -344,5 +347,7 @@ secrets:
     file: ${PUBGW_ENGINE_CHANNEL_SECRET_FILE:?set PUBGW_ENGINE_CHANNEL_SECRET_FILE}
   platform_pubgw_secret:
     file: ${PLATFORM_PUBGW_SECRET_FILE:?set PLATFORM_PUBGW_SECRET_FILE}
+  platform_delivery_secret:
+    file: ${PLATFORM_DELIVERY_SECRET_FILE:?set PLATFORM_DELIVERY_SECRET_FILE}
   pubgw_engine_admin_password:
     file: ${PUBGW_ENGINE_ADMIN_PASSWORD_FILE:?set PUBGW_ENGINE_ADMIN_PASSWORD_FILE}

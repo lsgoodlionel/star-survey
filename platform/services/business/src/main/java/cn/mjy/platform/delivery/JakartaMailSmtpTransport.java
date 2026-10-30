@@ -18,6 +18,23 @@ final class JakartaMailSmtpTransport implements SmtpTransport {
     private static final Pattern SMTP_STATUS = Pattern.compile("(?:^|\\D)([245]\\d{2})(?:\\D|$)");
 
     @Override
+    public void verify(DeliveryEmailProperties.Resolved config) {
+        Transport transport = null;
+        try {
+            Session session = Session.getInstance(properties(config));
+            session.setDebug(false);
+            transport = session.getTransport("smtp");
+            transport.connect(config.profile().host(), config.profile().port(), config.username(), config.credential());
+        } catch (AuthenticationFailedException e) {
+            throw new SmtpTransportException(SmtpTransportException.Kind.AUTHENTICATION);
+        } catch (MessagingException e) {
+            throw new SmtpTransportException(classify(e));
+        } finally {
+            if (transport != null) try { transport.close(); } catch (MessagingException ignored) { }
+        }
+    }
+
+    @Override
     public String submit(DeliveryEmailProperties.Resolved config, DeliveryMessage delivery, String messageId) {
         try {
             Session session = Session.getInstance(properties(config));

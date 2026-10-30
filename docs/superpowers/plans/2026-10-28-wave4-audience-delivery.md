@@ -1,12 +1,12 @@
 # Wave 4 受众与投放实施计划
 
-状态：问卷内受众、投放、批量导入、任务发现与催答规则管理已完成本地双库核对（2026-10-29）。实施分支：`feat/wave3-data-productization`；保持现有堆叠 PR 关系，不变基或合并父分支。
+状态：问卷内受众、投放、批量导入、任务发现、催答规则及租户级 Email 设置已完成本地核对；网易 163 隔离测试账户已完成真实 SMTP 提交（2026-10-30）。实施分支：`feat/wave3-data-productization`；保持现有堆叠 PR 关系，不变基或合并父分支。
 
 ## 目标与边界
 
 Wave 4 的首个纵切位于已发布问卷的上下文中：运营人员创建或选择联系人名单、配置问卷受众、从该受众创建 Email 投放任务、查看脱敏收件人和任务状态，并在未配置真实通道时明确显示不可用而不伪造投递成功。
 
-本轮不配置任何真实凭据、不做全局一级“投放”导航、不实现短信或回执 Webhook。Email SMTP adapter 作为受控后续切片：只支持 Gmail、Outlook.com/Hotmail、网易 163 的固定配置档，默认关闭且需 Docker secret 注入凭据；SMS 暂停。SMTP 接收不等于投递回执，网络中断恢复只能做到至少一次尝试，不能声称跨供应商恰好一次。投放链接/二维码现有发布页能力不改变。
+不做全局一级“投放”导航，不实现短信或回执 Webhook。Email SMTP adapter 只支持 Gmail、Outlook.com/Hotmail、网易 163 的固定配置档，批量 worker 默认关闭，租户凭据使用部署侧主密钥派生的 AES-GCM 密钥加密；SMS 暂停。SMTP 接收不等于投递回执，网络中断恢复只能做到至少一次尝试，不能声称跨供应商恰好一次。投放链接/二维码现有发布页能力不改变。
 
 ## 已锁定的契约
 
@@ -67,6 +67,12 @@ Wave 4 的首个纵切位于已发布问卷的上下文中：运营人员创建�
 ## 2026-10-29 阶段 7：已认证回执只读视图
 
 `GET /v1/delivery/tasks/{taskId}/receipts?limit=50` 先在当前租户读取任务并要求问卷 `VIEW`，再返回最多 200 条最近的已验签、已去重回执。响应只含收件人内部标识、provider、类别、计费标识、事件时间与平台接收时间；不返回地址、正文、渠道商 eventId 或消息 ID。管理端任务详情展示中文回执类别和时间，并明确 SMTP 已提交不等于送达；暂无回执与读取失败分别可辨。`DeliveryReceiptTest` 覆盖去重回执后的安全读取，`DeliveryApiTest` 回归 API 权限路径；前端 API/页面定向测试、typecheck 与 lint 已通过。真实供应商回执仍须另行验收。
+
+## 2026-10-30 阶段 8：租户级 SMTP 设置、真实提交与生产密钥闭环
+
+新增仅 `MANAGE_SETTINGS` 可访问的“邮件服务设置”页及 `/v1/delivery/email-settings` API。Gmail、Outlook.com/Hotmail 与网易 163 使用固定 TLS/认证配置档；授权码或 OAuth token 以租户隔离的 AES-GCM 密文保存，不回显、不进入浏览器持久化。“仅验证登录”只认证 SMTP 会话；“发送测试邮件”必须由管理员明确填写收件人并点击，且结果文案只声明 SMTP 接受。网易 163 隔离测试账户已完成登录验证、页面测试邮件提交和一名受众的真实批量任务，任务由 `queued` 进入 `completed`、收件人由 `queued` 进入 `sent`；这证明应用到 SMTP 服务端的提交链路，不证明收件箱送达、打开或真实回执。
+
+生产基础 compose、`surveyctl install` 和测试 fixture 已补齐 `platform_delivery_secret` 的生成、`0600` 文件路径、容器挂载与 `PLATFORM_DELIVERY_SECRET` 注入；批量 worker 由 `PLATFORM_DELIVERY_ENABLED` 控制且默认 `false`。静态 SMTP 覆盖仍可作为迁移回退：租户没有保存设置时无需动态设置主密钥；一旦存在租户设置但密钥缺失，发送失败关闭，不能静默改用共享发件账户。生产运维回归 105 项通过（1 项按环境跳过），邮件设置/adapter 定向测试通过。真实供应商回执 Webhook 和 Gmail、Outlook.com/Hotmail 隔离账户实测仍待后续验收。
 
 ## 风险与停止条件
 

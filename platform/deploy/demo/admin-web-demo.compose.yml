@@ -73,8 +73,11 @@ services:
       PLATFORM_DB_OWNER_PASSWORD: ${PLATFORM_DB_OWNER_PASSWORD:?set PLATFORM_DB_OWNER_PASSWORD}
       PLATFORM_JWT_HMAC_SECRET:
       PLATFORM_ENGINE_EVENTS_SECRET:
+      PLATFORM_DELIVERY_SECRET:
       PLATFORM_PUBGW_SECRET: ${PUBGW_SHARED_SECRET}
       PLATFORM_PUBGW_URL: http://gateway:8080
+      PLATFORM_DELIVERY_ENABLED: "true"
+      PLATFORM_PUBLIC_BASE_URL: http://127.0.0.1:${ADMIN_WEB_DEMO_PORT:-51888}
     depends_on:
       platform-db:
         condition: service_healthy
@@ -101,7 +104,7 @@ services:
         VITE_E2E: "true"
     image: survey-admin-web-demo
     ports:
-      - "127.0.0.1::80"
+      - "127.0.0.1:${ADMIN_WEB_DEMO_PORT:-51888}:80"
     depends_on:
       - platform
 

@@ -89,6 +89,6 @@ class SmtpEmailDeliveryProviderTest {
     }
 
     private static DeliveryMessage message(String key) {
-        return new DeliveryMessage(DeliveryChannel.EMAIL, "recipient@example.com", "问卷邀请", "正文", key);
+        return new DeliveryMessage(new cn.mjy.platform.shared.TenantId(java.util.UUID.randomUUID()), DeliveryChannel.EMAIL, "recipient@example.com", "问卷邀请", "正文", key);
     }
 }

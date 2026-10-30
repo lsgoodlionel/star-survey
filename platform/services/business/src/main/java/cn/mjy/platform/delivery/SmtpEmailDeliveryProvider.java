@@ -3,6 +3,7 @@ package cn.mjy.platform.delivery;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.function.Function;
 
 /**
  * 固定供应商配置档的 SMTP Email adapter。
@@ -14,10 +15,19 @@ import java.security.NoSuchAlgorithmException;
 final class SmtpEmailDeliveryProvider implements DeliveryProvider {
 
     private final DeliveryEmailProperties.Resolved configuration;
+    private final Function<DeliveryMessage, DeliveryEmailProperties.Resolved> resolver;
     private final SmtpTransport transport;
 
     SmtpEmailDeliveryProvider(DeliveryEmailProperties.Resolved configuration, SmtpTransport transport) {
         this.configuration = configuration;
+        this.resolver = ignored -> configuration;
+        this.transport = transport;
+    }
+
+    SmtpEmailDeliveryProvider(Function<DeliveryMessage, DeliveryEmailProperties.Resolved> resolver,
+            SmtpTransport transport) {
+        this.configuration = null;
+        this.resolver = resolver;
         this.transport = transport;
     }
 
@@ -28,7 +38,7 @@ final class SmtpEmailDeliveryProvider implements DeliveryProvider {
 
     @Override
     public String name() {
-        return "smtp-" + configuration.profile().code();
+        return configuration == null ? "smtp-configured" : "smtp-" + configuration.profile().code();
     }
 
     @Override
@@ -36,9 +46,11 @@ final class SmtpEmailDeliveryProvider implements DeliveryProvider {
         if (message.channel() != DeliveryChannel.EMAIL) {
             return SendResult.rejected("smtp_channel_mismatch");
         }
-        String messageId = messageId(message.idempotencyKey(), configuration.messageIdDomain());
+        DeliveryEmailProperties.Resolved selected = resolver.apply(message);
+        if (selected == null) return SendResult.rejected("email_not_configured");
+        String messageId = messageId(message.idempotencyKey(), selected.messageIdDomain());
         try {
-            String acceptedId = transport.submit(configuration, message, messageId);
+            String acceptedId = transport.submit(selected, message, messageId);
             return SendResult.accepted(acceptedId == null || acceptedId.isBlank() ? messageId : acceptedId);
         } catch (SmtpTransportException exception) {
             return switch (exception.kind()) {

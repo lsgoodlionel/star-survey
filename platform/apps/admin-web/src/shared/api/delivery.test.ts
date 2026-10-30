@@ -20,6 +20,7 @@ import {
   listDeliveryLinks,
   revokeDeliveryLink,
   setReminderRuleEnabled,
+  sendTestEmail,
 } from './delivery';
 import { binaryResponse, jsonResponse } from '../../test/server';
 
@@ -119,6 +120,28 @@ test('uses the audience scoped create endpoint and task status endpoints', async
     ['/v1/delivery/tasks/task%2Fid/receipts?limit=50', 'GET', undefined],
     ['/v1/delivery/tasks/task%2Fid/cancel', 'POST', undefined],
   ]);
+});
+
+test('sends a test email only through the dedicated settings endpoint', async () => {
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+    accepted: true,
+    message: '测试邮件已被 SMTP 服务器接受，请检查收件箱及垃圾邮件目录',
+  }));
+  const api = createApiClient({ fetchImpl });
+
+  const result = await sendTestEmail(api, {
+    recipient: 'owner@example.test',
+    subject: '投递测试',
+    body: '这是一封测试邮件。',
+  });
+
+  expect(result.accepted).toBe(true);
+  expect(fetchImpl).toHaveBeenCalledWith('/v1/delivery/email-settings/test-send', expect.objectContaining({
+    method: 'POST',
+    body: JSON.stringify({
+      recipient: 'owner@example.test', subject: '投递测试', body: '这是一封测试邮件。',
+    }),
+  }));
 });
 
 test('isolates delivery link queries by tenant and survey', () => {

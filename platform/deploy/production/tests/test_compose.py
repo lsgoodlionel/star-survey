@@ -235,6 +235,7 @@ class ProductionComposeTest(unittest.TestCase):
             "ENGINE_INSTANCE_EVENTS_SECRET_FILE",
             "PUBGW_ENGINE_CHANNEL_SECRET_FILE",
             "PLATFORM_PUBGW_SECRET_FILE",
+            "PLATFORM_DELIVERY_SECRET_FILE",
             "PUBGW_ENGINE_ADMIN_PASSWORD_FILE",
         }
         fixture_lines = FIXTURE_ENV.read_text(encoding="utf-8").splitlines()
@@ -273,11 +274,19 @@ class ProductionComposeTest(unittest.TestCase):
         services = self.render_compose()["services"]
         sources = lambda service: {item["source"] for item in services[service]["secrets"]}
         self.assertIn("platform_engine_events_secret", sources("platform"))
+        self.assertIn("platform_delivery_secret", sources("platform"))
         self.assertIn("engine_instance_events_secret", sources("engine"))
         self.assertNotIn("pubgw_engine_channel_secret", sources("engine"))
         self.assertIn("pubgw_engine_channel_secret", sources("publish-gateway"))
         self.assertNotIn("engine_instance_events_secret", sources("publish-gateway"))
         self.assertNotIn("platform_engine_events_secret", sources("publish-gateway"))
+
+        platform = services["platform"]
+        self.assertIn(
+            "PLATFORM_DELIVERY_SECRET=/run/secrets/platform_delivery_secret",
+            platform["command"],
+        )
+        self.assertEqual("false", platform["environment"]["PLATFORM_DELIVERY_ENABLED"])
 
         config = self.render_compose()
         rendered = json.dumps(config, sort_keys=True)

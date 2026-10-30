@@ -72,6 +72,37 @@ export type DeliveryRecipient = z.infer<typeof deliveryRecipientSchema>;
 export type DeliveryReceipt = z.infer<typeof deliveryReceiptSchema>;
 export type ReminderRule = z.infer<typeof reminderRuleSchema>;
 
+export const emailSettingSchema = z.object({
+  configured: z.boolean(),
+  provider: z.enum(['gmail', 'outlook-com', 'netease-163']).nullable(),
+  authMode: z.enum(['app-password', 'oauth2']).nullable(),
+  fromAddress: z.string().email().nullable(),
+  updatedAt: z.string().datetime({ offset: true }).nullable(),
+});
+export type EmailSetting = z.infer<typeof emailSettingSchema>;
+export interface SaveEmailSettingInput { provider: 'gmail' | 'outlook-com' | 'netease-163'; authMode: 'app-password' | 'oauth2'; fromAddress: string; username: string; credential: string; }
+export const emailSettingQueryKey = (tenantId: string) => ['delivery-email-setting', tenantId] as const;
+
+export function getEmailSetting(api: ApiClient, signal?: AbortSignal) {
+  return api.request({ path: '/v1/delivery/email-settings', schema: emailSettingSchema, signal });
+}
+export function saveEmailSetting(api: ApiClient, input: SaveEmailSettingInput, signal?: AbortSignal) {
+  return api.request({ path: '/v1/delivery/email-settings', method: 'PUT', body: input, schema: emailSettingSchema, signal });
+}
+export function deleteEmailSetting(api: ApiClient, signal?: AbortSignal) {
+  return api.request({ path: '/v1/delivery/email-settings', method: 'DELETE', schema: emailSettingSchema, signal });
+}
+export function verifyEmailSetting(api: ApiClient, input: SaveEmailSettingInput, signal?: AbortSignal) {
+  return api.request({ path: '/v1/delivery/email-settings/verify', method: 'POST', body: input, schema: z.object({ verified: z.boolean(), message: z.string() }), signal });
+}
+export interface SendTestEmailInput { recipient: string; subject: string; body: string; }
+export function sendTestEmail(api: ApiClient, input: SendTestEmailInput, signal?: AbortSignal) {
+  return api.request({
+    path: '/v1/delivery/email-settings/test-send', method: 'POST', body: input,
+    schema: z.object({ accepted: z.boolean(), message: z.string() }), signal,
+  });
+}
+
 export interface CreateAudienceDeliveryTaskInput {
   channel: 'email';
   linkId?: string | null;

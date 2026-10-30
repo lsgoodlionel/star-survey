@@ -51,6 +51,7 @@ SECRET_NAMES = (
     "engine_db_root_password", "platform_db_superuser_password", "platform_db_owner_password",
     "platform_db_app_password", "platform_jwt_hmac_secret", "platform_engine_events_secret",
     "platform_pubgw_secret", "pubgw_engine_admin_password", "backup_encryption_key",
+    "platform_delivery_secret",
     "engine_instance_events_secret", "pubgw_engine_channel_secret",
 )
 REQUIRED_BUNDLE_FILES = {
@@ -954,6 +955,7 @@ class SurveyManager:
             "PLATFORM_DB_SUPERUSER_PASSWORD_FILE": "platform_db_superuser_password", "PLATFORM_DB_OWNER_PASSWORD_FILE": "platform_db_owner_password",
             "PLATFORM_DB_APP_PASSWORD_FILE": "platform_db_app_password", "PLATFORM_JWT_HMAC_SECRET_FILE": "platform_jwt_hmac_secret",
             "PLATFORM_ENGINE_EVENTS_SECRET_FILE": "platform_engine_events_secret", "PLATFORM_PUBGW_SECRET_FILE": "platform_pubgw_secret",
+            "PLATFORM_DELIVERY_SECRET_FILE": "platform_delivery_secret",
             "ENGINE_INSTANCE_EVENTS_SECRET_FILE": "engine_instance_events_secret",
             "PUBGW_ENGINE_CHANNEL_SECRET_FILE": "pubgw_engine_channel_secret",
             "PUBGW_ENGINE_ADMIN_PASSWORD_FILE": "pubgw_engine_admin_password",

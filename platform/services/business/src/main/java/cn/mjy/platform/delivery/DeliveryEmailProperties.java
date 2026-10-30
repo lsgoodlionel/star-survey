@@ -92,6 +92,8 @@ public record DeliveryEmailProperties(
             }
             throw new IllegalArgumentException("platform.delivery.email.auth-mode must be app-password or oauth2");
         }
+
+        String code() { return code; }
     }
 
     public DeliveryEmailProperties {

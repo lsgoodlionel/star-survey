@@ -176,6 +176,20 @@ summary:focus-visible {
   min-width: 0;
 }
 
+.settings-page { max-width: 720px; margin: 32px auto; padding: 24px; background: #fff; border: 1px solid #c7d2d6; border-radius: 8px; }
+.settings-page form { display: grid; gap: 16px; margin-top: 20px; }
+.settings-page label { display: grid; gap: 6px; color: #33474d; font-weight: 600; }
+.settings-page input, .settings-page select, .settings-page textarea { min-height: 40px; padding: 8px; border: 1px solid #87989e; border-radius: 4px; background: #fff; }
+.settings-page textarea { min-height: 120px; resize: vertical; }
+.settings-status { padding: 10px; background: #eaf5f7; border-left: 4px solid #0b6bcb; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.settings-actions button { min-height: 38px; padding: 8px 12px; border: 1px solid #0c586e; border-radius: 4px; color: #fff; background: #176b82; }
+.settings-actions button[type='button'] { color: #153c47; background: #fff; }
+.settings-test-email { display: grid; gap: 14px; margin-top: 28px; padding-top: 24px; border-top: 1px solid #d8e0e3; }
+.settings-test-email h2, .settings-test-email p { margin: 0; }
+.settings-test-email button { justify-self: start; min-height: 40px; padding: 8px 14px; border: 1px solid #0c586e; border-radius: 4px; color: #fff; background: #176b82; }
+.settings-test-email button:disabled { cursor: not-allowed; opacity: .55; }
+
 .survey-shell {
   min-width: 0;
   min-height: calc(100vh - 52px);

@@ -1,6 +1,5 @@
 package cn.mjy.platform.delivery;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,8 +10,17 @@ import org.springframework.context.annotation.Configuration;
 class DeliveryEmailConfig {
 
     @Bean
-    @ConditionalOnProperty(prefix = "platform.delivery.email", name = "enabled", havingValue = "true")
-    DeliveryProvider smtpEmailDeliveryProvider(DeliveryEmailProperties email, DeliveryProperties delivery) {
-        return new SmtpEmailDeliveryProvider(email.resolve(delivery.sendLease()), new JakartaMailSmtpTransport());
+    SmtpTransport smtpTransport() {
+        return new JakartaMailSmtpTransport();
+    }
+
+    @Bean
+    DeliveryProvider smtpEmailDeliveryProvider(DeliveryEmailProperties email, DeliveryProperties delivery,
+            EmailSettingsService settings, SmtpTransport transport) {
+        DeliveryEmailProperties.Resolved fallback = email.enabled() ? email.resolve(delivery.sendLease()) : null;
+        return new SmtpEmailDeliveryProvider(message -> {
+            DeliveryEmailProperties.Resolved configured = settings.resolve(message.tenant());
+            return configured == null ? fallback : configured;
+        }, transport);
     }
 }
