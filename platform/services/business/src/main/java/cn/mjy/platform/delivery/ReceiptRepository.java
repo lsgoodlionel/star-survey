@@ -3,6 +3,7 @@ package cn.mjy.platform.delivery;
 import cn.mjy.platform.shared.TenantId;
 import java.time.OffsetDateTime;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -19,6 +20,13 @@ class ReceiptRepository {
 
     /** 回执匹配到的发送记录。 */
     record SendMatch(UUID taskId, UUID recipientId) {
+    }
+
+    record ReceiptRow(UUID recipientId, String provider, String kind, boolean billable,
+            OffsetDateTime occurredAt, OffsetDateTime receivedAt) {
+        ReceiptView view() {
+            return new ReceiptView(recipientId, provider, kind, billable, occurredAt, receivedAt);
+        }
     }
 
     private final JdbcClient jdbc;
@@ -69,5 +77,23 @@ class ReceiptRepository {
                 .param("billable", billable)
                 .param("occurredAt", occurredAt)
                 .update() == 1;
+    }
+
+    /** 最近的已验签回执；调用方先完成任务归属和 VIEW 权限检查。 */
+    List<ReceiptRow> listByTask(UUID taskId, int limit) {
+        return jdbc.sql("""
+                        SELECT recipient_id, provider, kind, billable, occurred_at, received_at
+                          FROM delivery_receipt
+                         WHERE task_id = :taskId
+                         ORDER BY received_at DESC, id DESC
+                         LIMIT :limit
+                        """)
+                .param("taskId", taskId)
+                .param("limit", limit)
+                .query((rs, n) -> new ReceiptRow(rs.getObject("recipient_id", UUID.class),
+                        rs.getString("provider"), rs.getString("kind"), rs.getBoolean("billable"),
+                        rs.getObject("occurred_at", OffsetDateTime.class),
+                        rs.getObject("received_at", OffsetDateTime.class)))
+                .list();
     }
 }

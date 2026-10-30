@@ -1,5 +1,6 @@
 package cn.mjy.platform.delivery;
 
+import cn.mjy.platform.shared.TenantId;
 import java.util.Objects;
 
 /**
@@ -9,6 +10,7 @@ import java.util.Objects;
  * @param idempotencyKey 按 (任务, 收件人) 生成、随发送台账固定不变；重发必须带同一个键
  */
 public record DeliveryMessage(
+        TenantId tenant,
         DeliveryChannel channel,
         String address,
         String subject,
@@ -16,6 +18,7 @@ public record DeliveryMessage(
         String idempotencyKey) {
 
     public DeliveryMessage {
+        Objects.requireNonNull(tenant, "tenant");
         Objects.requireNonNull(channel, "channel");
         Objects.requireNonNull(address, "address");
         Objects.requireNonNull(body, "body");

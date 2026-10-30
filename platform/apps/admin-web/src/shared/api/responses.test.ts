@@ -2,6 +2,8 @@ import { expect, test, vi } from 'vitest';
 import { createApiClient } from './http';
 import {
   getResponseSummary,
+  getResponseFields,
+  fieldDictionarySchema,
   listResponses,
   normalizeResponseFilters,
   responsePageQueryKey,
@@ -101,4 +103,17 @@ test('requests the survey scoped response summary', async () => {
     '/v1/surveys/survey%2Fid/responses/summary',
     expect.any(Object),
   );
+});
+
+test('reads the published field dictionary and rejects an invalid sensitive flag', async () => {
+  const dictionary = { surveyId, versions: [{ version: 2, engineInstanceId: 'engine-cn-1',
+    engineSid: 731245, language: 'zh-Hans', fields: [{ fieldname: 'Q1', questionUuid: surveyId,
+      code: 'Q1', type: 'L', aid: '', scale: 0, label: '满意度', sensitive: true,
+      options: [{ code: 'A1', text: '满意' }] }] }] };
+  expect(() => fieldDictionarySchema.parse({ ...dictionary, versions: [{
+    ...dictionary.versions[0], fields: [{ ...dictionary.versions[0]!.fields[0], sensitive: 'yes' }],
+  }] })).toThrow();
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(dictionary));
+  await expect(getResponseFields(createApiClient({ fetchImpl }), surveyId)).resolves.toEqual(dictionary);
+  expect(fetchImpl).toHaveBeenCalledWith(`/v1/surveys/${surveyId}/fields`, expect.any(Object));
 });

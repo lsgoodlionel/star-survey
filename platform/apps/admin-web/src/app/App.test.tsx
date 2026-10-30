@@ -54,8 +54,10 @@ test('rendersOnlyAvailableProductNavigationAndKeepsTechnicalIdentityDetailsSepar
     'aria-current',
   );
   expect(within(navigation).getByRole('link', { name: '模板中心' })).toHaveAttribute('href', '/templates');
+  expect(within(navigation).getByRole('link', { name: '投放' })).toHaveAttribute('href', '/delivery');
+  expect(within(navigation).getByRole('link', { name: '邮件服务' })).toHaveAttribute('href', '/settings/email');
   expect(new Set(within(navigation).getAllByRole('link').map((link) => link.getAttribute('href'))).size)
-    .toBe(3);
+    .toBe(5);
   expect(within(navigation).queryByText('待审批')).not.toBeInTheDocument();
   expect(within(navigation).queryByRole('link', { name: /admin/i })).not.toBeInTheDocument();
 

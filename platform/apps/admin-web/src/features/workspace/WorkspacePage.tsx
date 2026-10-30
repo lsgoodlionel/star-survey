@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Menu, Move, Pencil, RotateCcw } from 'lucide-react';
+import { Archive, Menu, Move, Pencil, RotateCcw, UsersRound } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import {
@@ -468,10 +468,15 @@ export function WorkspacePage() {
             </div>
             <div className="workspace-selection-actions">
               {selectedResource.kind === 'survey' ? (
-                <Link to={`/surveys/${selectedResource.id}/edit`}>
-                  <Pencil aria-hidden="true" />
-                  {selectedCaps?.canEdit ? '编辑问卷' : '查看问卷'}
-                </Link>
+                <>
+                  <Link to={`/surveys/${selectedResource.id}/edit`}>
+                    <Pencil aria-hidden="true" />
+                    {selectedCaps?.canEdit ? '编辑问卷' : '查看问卷'}
+                  </Link>
+                  <Link to={`/surveys/${selectedResource.id}/audience`}>
+                    <UsersRound aria-hidden="true" />受众与投放
+                  </Link>
+                </>
               ) : null}
               {canRename ? (
                 <button type="button" onClick={(event) => openAction('rename', event.currentTarget)}>

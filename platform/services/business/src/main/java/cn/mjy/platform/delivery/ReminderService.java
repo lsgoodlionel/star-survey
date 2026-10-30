@@ -124,10 +124,13 @@ public class ReminderService {
                 () -> rules.listBySurvey(surveyId).stream().map(ReminderRuleView::of).toList());
     }
 
-    public ReminderRuleView setEnabled(TenantContext ctx, UUID ruleId, boolean enabled) {
+    public ReminderRuleView setEnabled(TenantContext ctx, UUID surveyId, UUID ruleId, boolean enabled) {
         return tenantScope.call(ctx.tenantId(), () -> {
             RuleRow rule = rules.find(ruleId)
                     .orElseThrow(() -> DeliveryExceptions.notFound("reminder rule not found: " + ruleId));
+            if (!rule.surveyId().equals(surveyId)) {
+                throw DeliveryExceptions.notFound("reminder rule not found: " + ruleId);
+            }
             access.require(ctx, DeliveryAccess.SEND, rule.surveyId());
             rules.setEnabled(ruleId, enabled);
             audit.record(ctx, DeliveryAudit.REMINDER_RULE, "rule/" + ruleId + " enabled=" + enabled);

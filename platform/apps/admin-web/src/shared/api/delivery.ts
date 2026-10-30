@@ -16,11 +16,115 @@ export const linkViewSchema = z.object({
 
 export type LinkView = z.infer<typeof linkViewSchema>;
 
+export const deliveryTaskSchema = z.object({
+  id: z.string().uuid(),
+  surveyId: z.string().uuid(),
+  channel: z.enum(['email', 'sms']),
+  kind: z.string(),
+  status: z.string(),
+  sourceTaskId: z.string().uuid().nullable(),
+  recipientCount: z.number().int().nonnegative(),
+  sentCount: z.number().int().nonnegative(),
+  failedCount: z.number().int().nonnegative(),
+  skippedCount: z.number().int().nonnegative(),
+  billedUnits: z.number().int().nonnegative(),
+  attempts: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+  createdAt: z.string().datetime({ offset: true }),
+  finishedAt: z.string().datetime({ offset: true }).nullable(),
+});
+
+export const deliveryRecipientSchema = z.object({
+  id: z.string().uuid(),
+  address: z.string(),
+  displayName: z.string().nullable(),
+  state: z.string(),
+  attempts: z.number().int().nonnegative(),
+  remindersSent: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+  sentAt: z.string().datetime({ offset: true }).nullable(),
+  lastReminderAt: z.string().datetime({ offset: true }).nullable(),
+});
+
+export const deliveryReceiptSchema = z.object({
+  recipientId: z.string().uuid(),
+  provider: z.string(),
+  kind: z.enum(['delivered', 'bounced', 'failed', 'complaint', 'unsubscribed']),
+  billable: z.boolean(),
+  occurredAt: z.string().datetime({ offset: true }).nullable(),
+  receivedAt: z.string().datetime({ offset: true }),
+});
+
+export const reminderRuleSchema = z.object({
+  id: z.string().uuid(),
+  surveyId: z.string().uuid(),
+  sourceTaskId: z.string().uuid(),
+  firstDelaySeconds: z.number().int().nonnegative(),
+  intervalSeconds: z.number().int().positive(),
+  maxReminders: z.number().int().min(1).max(10),
+  subject: z.string().nullable(),
+  enabled: z.boolean(),
+  createdAt: z.string().datetime({ offset: true }),
+});
+
+export type DeliveryTask = z.infer<typeof deliveryTaskSchema>;
+export type DeliveryRecipient = z.infer<typeof deliveryRecipientSchema>;
+export type DeliveryReceipt = z.infer<typeof deliveryReceiptSchema>;
+export type ReminderRule = z.infer<typeof reminderRuleSchema>;
+
+export const emailSettingSchema = z.object({
+  configured: z.boolean(),
+  provider: z.enum(['gmail', 'outlook-com', 'netease-163']).nullable(),
+  authMode: z.enum(['app-password', 'oauth2']).nullable(),
+  fromAddress: z.string().email().nullable(),
+  updatedAt: z.string().datetime({ offset: true }).nullable(),
+});
+export type EmailSetting = z.infer<typeof emailSettingSchema>;
+export interface SaveEmailSettingInput { provider: 'gmail' | 'outlook-com' | 'netease-163'; authMode: 'app-password' | 'oauth2'; fromAddress: string; username: string; credential: string; }
+export const emailSettingQueryKey = (tenantId: string) => ['delivery-email-setting', tenantId] as const;
+
+export function getEmailSetting(api: ApiClient, signal?: AbortSignal) {
+  return api.request({ path: '/v1/delivery/email-settings', schema: emailSettingSchema, signal });
+}
+export function saveEmailSetting(api: ApiClient, input: SaveEmailSettingInput, signal?: AbortSignal) {
+  return api.request({ path: '/v1/delivery/email-settings', method: 'PUT', body: input, schema: emailSettingSchema, signal });
+}
+export function deleteEmailSetting(api: ApiClient, signal?: AbortSignal) {
+  return api.request({ path: '/v1/delivery/email-settings', method: 'DELETE', schema: emailSettingSchema, signal });
+}
+export function verifyEmailSetting(api: ApiClient, input: SaveEmailSettingInput, signal?: AbortSignal) {
+  return api.request({ path: '/v1/delivery/email-settings/verify', method: 'POST', body: input, schema: z.object({ verified: z.boolean(), message: z.string() }), signal });
+}
+export interface SendTestEmailInput { recipient: string; subject: string; body: string; }
+export function sendTestEmail(api: ApiClient, input: SendTestEmailInput, signal?: AbortSignal) {
+  return api.request({
+    path: '/v1/delivery/email-settings/test-send', method: 'POST', body: input,
+    schema: z.object({ accepted: z.boolean(), message: z.string() }), signal,
+  });
+}
+
+export interface CreateAudienceDeliveryTaskInput {
+  channel: 'email';
+  linkId?: string | null;
+  subject?: string | null;
+  bodyTemplate: string;
+  idempotencyKey?: string | null;
+}
+
 export interface CreateDeliveryLinkInput {
   label: string;
   params?: Record<string, string>;
   ttlSeconds?: number | null;
   shortLink: boolean;
+}
+
+export interface CreateReminderRuleInput {
+  sourceTaskId: string;
+  firstDelaySeconds: number;
+  intervalSeconds: number;
+  maxReminders: number;
+  subject?: string | null;
+  bodyTemplate: string;
 }
 
 export interface DeliveryQrOptions {
@@ -38,6 +142,15 @@ export interface DeliveryBinaryClientOptions {
 
 export const deliveryLinksQueryKey = (tenantId: string, surveyId: string) =>
   ['delivery-links', tenantId, surveyId] as const;
+
+export const deliveryTasksQueryKey = (tenantId: string, surveyId: string) =>
+  ['delivery-tasks', tenantId, surveyId] as const;
+export const deliveryTaskQueryKey = (tenantId: string, surveyId: string, taskId: string) =>
+  [...deliveryTasksQueryKey(tenantId, surveyId), taskId] as const;
+export const deliveryReceiptsQueryKey = (tenantId: string, taskId: string) =>
+  ['delivery-receipts', tenantId, taskId] as const;
+export const reminderRulesQueryKey = (tenantId: string, surveyId: string) =>
+  ['delivery-reminder-rules', tenantId, surveyId] as const;
 
 export function listDeliveryLinks(api: ApiClient, surveyId: string, signal?: AbortSignal) {
   return api.request({
@@ -75,6 +188,101 @@ export function revokeDeliveryLink(api: ApiClient, linkId: string, signal?: Abor
     path: `/v1/delivery/links/${encodeURIComponent(linkId)}`,
     method: 'DELETE',
     schema: linkViewSchema,
+    signal,
+  });
+}
+
+export function createAudienceDeliveryTask(
+  api: ApiClient,
+  surveyId: string,
+  input: CreateAudienceDeliveryTaskInput,
+  signal?: AbortSignal,
+) {
+  return api.request({
+    path: `/v1/surveys/${encodeURIComponent(surveyId)}/delivery-tasks`,
+    method: 'POST',
+    body: input,
+    schema: deliveryTaskSchema,
+    signal,
+  });
+}
+
+export function getDeliveryTask(api: ApiClient, taskId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}`,
+    schema: deliveryTaskSchema,
+    signal,
+  });
+}
+
+export function listSurveyDeliveryTasks(api: ApiClient, surveyId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/surveys/${encodeURIComponent(surveyId)}/delivery-tasks?limit=50`,
+    schema: z.array(deliveryTaskSchema),
+    signal,
+  });
+}
+
+export function listReminderRules(api: ApiClient, surveyId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/surveys/${encodeURIComponent(surveyId)}/reminder-rules`,
+    schema: z.array(reminderRuleSchema),
+    signal,
+  });
+}
+
+export function createReminderRule(
+  api: ApiClient,
+  surveyId: string,
+  input: CreateReminderRuleInput,
+  signal?: AbortSignal,
+) {
+  return api.request({
+    path: `/v1/delivery/surveys/${encodeURIComponent(surveyId)}/reminder-rules`,
+    method: 'POST',
+    body: input,
+    schema: reminderRuleSchema,
+    signal,
+  });
+}
+
+export function setReminderRuleEnabled(
+  api: ApiClient,
+  surveyId: string,
+  ruleId: string,
+  enabled: boolean,
+  signal?: AbortSignal,
+) {
+  return api.request({
+    path: `/v1/delivery/surveys/${encodeURIComponent(surveyId)}/reminder-rules/${encodeURIComponent(ruleId)}`,
+    method: 'PATCH',
+    body: { enabled },
+    schema: reminderRuleSchema,
+    signal,
+  });
+}
+
+export function listDeliveryRecipients(api: ApiClient, taskId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}/recipients`,
+    schema: z.array(deliveryRecipientSchema),
+    signal,
+  });
+}
+
+export function listDeliveryReceipts(api: ApiClient, taskId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}/receipts?limit=50`,
+    schema: z.array(deliveryReceiptSchema),
+    signal,
+  });
+}
+
+export function cancelDeliveryTask(api: ApiClient, taskId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/delivery/tasks/${encodeURIComponent(taskId)}/cancel`,
+    method: 'POST',
+    schema: deliveryTaskSchema,
     signal,
   });
 }

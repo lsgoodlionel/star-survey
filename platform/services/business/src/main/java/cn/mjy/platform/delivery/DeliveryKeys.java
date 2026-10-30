@@ -67,6 +67,17 @@ public class DeliveryKeys {
         return new SecretKeySpec(receiptSecret(tenant, provider).getBytes(StandardCharsets.US_ASCII), ALGORITHM);
     }
 
+    /**
+     * 每租户 SMTP 凭据的加密密钥。它与链接、退订和回执密钥使用不同的派生上下文，不能互换。
+     * 原始主密钥始终不离开部署侧的 secret 注入。
+     */
+    public SecretKeySpec emailCredentialKey(TenantId tenant) {
+        // HMAC-SHA256 produces 32 bytes, which is a valid AES-256 key.  The
+        // algorithm label must however be AES: Cipher rejects a key labelled
+        // HmacSHA256 even when its bytes have the right length.
+        return new SecretKeySpec(hmac(require(), PREFIX + "email-credential/" + tenant.value()), "AES");
+    }
+
     private SecretKeySpec derive(String context) {
         return new SecretKeySpec(hmac(require(), PREFIX + context), ALGORITHM);
     }

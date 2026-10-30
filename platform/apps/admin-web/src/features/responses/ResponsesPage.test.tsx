@@ -119,6 +119,49 @@ afterEach(() => {
 });
 
 describe('ResponsesPage', () => {
+  test('restores the current export job for the same tenant and actor after returning to the page', async () => {
+    const key = `survey-export:tenant-a:actor-a:${surveyId}`;
+    sessionStorage.setItem(key, jobId);
+    const get = vi.fn().mockResolvedValue(baseJob('completed'));
+    try {
+      renderWithQuery(<ResponsesPage api={responseApi()} exportClient={exportClient({ get })}
+        surveyId={surveyId} tenantId="tenant-a" actorId="actor-a" />);
+      expect(await screen.findByText('导出完成')).toBeInTheDocument();
+      expect(get).toHaveBeenCalledWith(jobId, expect.any(AbortSignal));
+      expect(screen.getByRole('button', { name: '下载导出文件' })).toBeInTheDocument();
+    } finally {
+      sessionStorage.removeItem(key);
+    }
+  });
+  test('combines time filters and uses published field labels with a selectable column', async () => {
+    const requests: string[] = [];
+    const api = apiFrom((request) => {
+      requests.push(request.path);
+      if (request.path.endsWith('/responses/summary')) return summary;
+      if (request.path.endsWith('/fields')) return {
+        surveyId,
+        versions: [{ version: 2, engineInstanceId: 'engine-a', engineSid: 123456,
+          language: 'zh-Hans', fields: [{ fieldname: 'Q1', questionUuid: surveyId,
+            code: 'Q1', type: 'L', aid: '', scale: 0, label: '满意度', sensitive: false, options: [] },
+          { fieldname: 'email', questionUuid: surveyId, code: 'email', type: 'S', aid: '',
+            scale: 0, label: '邮箱', sensitive: true, options: [] }] }],
+      };
+      if (request.path.includes('/responses?')) return page;
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    renderWithQuery(<ResponsesPage api={api} exportClient={exportClient()} surveyId={surveyId} tenantId="tenant-a" />);
+    await screen.findByText('m***@example.test');
+    fireEvent.change(screen.getByLabelText('开始时间起'), { target: { value: '2026-10-09T08:00' } });
+    fireEvent.change(screen.getByLabelText('完成时间止'), { target: { value: '2026-10-10T08:00' } });
+    await waitFor(() => expect(requests.some((path) => path.includes('startedFrom=2026-10-09T')
+      && path.includes('completedTo=2026-10-10T'))).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: '选择显示字段' }));
+    expect(await screen.findByRole('checkbox', { name: '满意度' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /邮箱/ }));
+    expect(screen.queryByText('m***@example.test')).not.toBeInTheDocument();
+    expect(screen.getByText('满意')).toBeInTheDocument();
+    expect(screen.getByText(/时间条件仅用于答卷列表/)).toBeInTheDocument();
+  });
   test('waitsForCachedSummaryAndRowsToFinishTheirRequiredRefetchBeforeReportingReady', async () => {
     const summaryRequest = deferred<typeof summary>();
     const pageRequest = deferred<typeof page>();
@@ -361,6 +404,30 @@ describe('ResponsesPage', () => {
     expect(screen.getByRole('button', { name: '刷新任务状态' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '重试取消' }));
     expect(await screen.findByText('已取消')).toBeInTheDocument();
+  });
+
+  test('keeps a completed export visible and explains when download authorization was revoked', async () => {
+    const download = vi.fn().mockRejectedValue(new ApiError('forbidden', '无权执行当前操作', 403));
+    renderWithQuery(
+      <ResponsesPage
+        api={responseApi()}
+        exportClient={exportClient({
+          create: vi.fn().mockResolvedValue(baseJob('completed')),
+          get: vi.fn().mockResolvedValue(baseJob('completed')),
+          download,
+        })}
+        surveyId={surveyId}
+        tenantId="tenant-a"
+      />,
+    );
+
+    await screen.findByRole('heading', { name: '创建导出' });
+    fireEvent.click(screen.getByRole('button', { name: '创建导出任务' }));
+    expect(await screen.findByText('导出完成')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '下载导出文件' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('无权执行当前操作');
+    expect(screen.getByRole('button', { name: '下载导出文件' })).toBeInTheDocument();
   });
 
   test('keeps summary available when detail permission is missing and separates empty and failed states', async () => {

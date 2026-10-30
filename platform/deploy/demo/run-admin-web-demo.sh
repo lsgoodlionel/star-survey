@@ -57,6 +57,7 @@ parse_runtime_env() {
   local line key value seen='|'
   PLATFORM_JWT_HMAC_SECRET=''
   PLATFORM_ENGINE_EVENTS_SECRET=''
+  PLATFORM_DELIVERY_SECRET=''
   PUBGW_SHARED_SECRET=''
   DEMO_ENGINE_ADMIN_USER=''
   DEMO_ENGINE_ADMIN_PASSWORD=''
@@ -69,7 +70,7 @@ parse_runtime_env() {
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
     case "$key" in
-      PLATFORM_JWT_HMAC_SECRET|PLATFORM_ENGINE_EVENTS_SECRET|PUBGW_SHARED_SECRET|DEMO_ENGINE_ADMIN_USER|DEMO_ENGINE_ADMIN_PASSWORD|ENGINE_DB_ROOT_PASSWORD|PLATFORM_DB_SUPERUSER_PASSWORD|PLATFORM_DB_APP_PASSWORD|PLATFORM_DB_OWNER_PASSWORD) ;;
+      PLATFORM_JWT_HMAC_SECRET|PLATFORM_ENGINE_EVENTS_SECRET|PLATFORM_DELIVERY_SECRET|PUBGW_SHARED_SECRET|DEMO_ENGINE_ADMIN_USER|DEMO_ENGINE_ADMIN_PASSWORD|ENGINE_DB_ROOT_PASSWORD|PLATFORM_DB_SUPERUSER_PASSWORD|PLATFORM_DB_APP_PASSWORD|PLATFORM_DB_OWNER_PASSWORD) ;;
       *) fail "runtime.env contains an unknown key" ;;
     esac
     [[ "$seen" != *"|$key|"* ]] || fail "runtime.env contains a duplicate key"
@@ -88,11 +89,12 @@ validate_base_runtime_env() {
 
 validate_runtime_env() {
   validate_base_runtime_env
+  [[ ${#PLATFORM_DELIVERY_SECRET} -ge 32 ]] || fail "runtime.env is missing a valid delivery secret"
   [[ ${#ENGINE_DB_ROOT_PASSWORD} -ge 32 ]] || fail "runtime.env is missing a valid engine database password"
   [[ ${#PLATFORM_DB_SUPERUSER_PASSWORD} -ge 32 ]] || fail "runtime.env is missing a valid database bootstrap password"
   [[ ${#PLATFORM_DB_APP_PASSWORD} -ge 32 ]] || fail "runtime.env is missing a valid application database password"
   [[ ${#PLATFORM_DB_OWNER_PASSWORD} -ge 32 ]] || fail "runtime.env is missing a valid owner database password"
-  export PLATFORM_JWT_HMAC_SECRET PLATFORM_ENGINE_EVENTS_SECRET PUBGW_SHARED_SECRET
+  export PLATFORM_JWT_HMAC_SECRET PLATFORM_ENGINE_EVENTS_SECRET PLATFORM_DELIVERY_SECRET PUBGW_SHARED_SECRET
   export DEMO_ENGINE_ADMIN_USER DEMO_ENGINE_ADMIN_PASSWORD ENGINE_DB_ROOT_PASSWORD
   export PLATFORM_DB_SUPERUSER_PASSWORD PLATFORM_DB_APP_PASSWORD PLATFORM_DB_OWNER_PASSWORD
 }
@@ -103,18 +105,20 @@ load_runtime_env() {
 }
 
 upgrade_runtime_env() {
-  if [[ -n "$ENGINE_DB_ROOT_PASSWORD" && -n "$PLATFORM_DB_SUPERUSER_PASSWORD" \
+  if [[ -n "$PLATFORM_DELIVERY_SECRET" && -n "$ENGINE_DB_ROOT_PASSWORD" && -n "$PLATFORM_DB_SUPERUSER_PASSWORD" \
       && -n "$PLATFORM_DB_APP_PASSWORD" && -n "$PLATFORM_DB_OWNER_PASSWORD" ]]; then
     return 0
   fi
   local temporary="$RUNTIME_DIR/.runtime.env.$$"
   [[ -z "$ENGINE_DB_ROOT_PASSWORD" ]] && ENGINE_DB_ROOT_PASSWORD="$(random_secret)"
+  [[ -z "$PLATFORM_DELIVERY_SECRET" ]] && PLATFORM_DELIVERY_SECRET="$(random_secret)"
   [[ -z "$PLATFORM_DB_SUPERUSER_PASSWORD" ]] && PLATFORM_DB_SUPERUSER_PASSWORD="$(random_secret)"
   [[ -z "$PLATFORM_DB_APP_PASSWORD" ]] && PLATFORM_DB_APP_PASSWORD="$(random_secret)"
   [[ -z "$PLATFORM_DB_OWNER_PASSWORD" ]] && PLATFORM_DB_OWNER_PASSWORD="$(random_secret)"
   {
     printf 'PLATFORM_JWT_HMAC_SECRET=%s\n' "$PLATFORM_JWT_HMAC_SECRET"
     printf 'PLATFORM_ENGINE_EVENTS_SECRET=%s\n' "$PLATFORM_ENGINE_EVENTS_SECRET"
+    printf 'PLATFORM_DELIVERY_SECRET=%s\n' "$PLATFORM_DELIVERY_SECRET"
     printf 'PUBGW_SHARED_SECRET=%s\n' "$PUBGW_SHARED_SECRET"
     printf 'DEMO_ENGINE_ADMIN_USER=%s\n' "$DEMO_ENGINE_ADMIN_USER"
     printf 'DEMO_ENGINE_ADMIN_PASSWORD=%s\n' "$DEMO_ENGINE_ADMIN_PASSWORD"
@@ -142,6 +146,7 @@ ensure_runtime() {
     {
       printf 'PLATFORM_JWT_HMAC_SECRET=%s\n' "$(random_secret)"
       printf 'PLATFORM_ENGINE_EVENTS_SECRET=%s\n' "$(random_secret)"
+      printf 'PLATFORM_DELIVERY_SECRET=%s\n' "$(random_secret)"
       printf 'PUBGW_SHARED_SECRET=%s\n' "$(random_secret)"
       printf 'DEMO_ENGINE_ADMIN_USER=admin\n'
       printf 'DEMO_ENGINE_ADMIN_PASSWORD=%s\n' "$(random_secret)"
@@ -319,7 +324,9 @@ start_demo() {
   wait_container_healthy platform-db
   wait_container_healthy engine-db
   sync_database_credentials
-  run_quiet "${COMPOSE[@]}" up -d platform engine
+  # runtime.env may have been upgraded with a new secret; force the application
+  # containers to consume it instead of retaining their previous environment.
+  run_quiet "${COMPOSE[@]}" up -d --force-recreate platform engine
   platform_url="$(service_url platform 8080)"
   engine_url="$(service_url engine 80)"
   wait_url platform "$platform_url/actuator/health"

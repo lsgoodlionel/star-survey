@@ -161,6 +161,17 @@ test('keepsOnlyProjectsAndFoldersInNavigationAndListsCurrentContainerRows', asyn
   expect(screen.getByRole('navigation', { name: '当前位置' })).toHaveTextContent('项目甲/调研资料');
 });
 
+test('offers a direct audience-and-delivery shortcut for a selected survey', async () => {
+  installListHandler({ root: [projectA], [projectA.id]: [surveyA] });
+  const user = userEvent.setup();
+  renderWorkspace(`/workspace?project=${projectA.id}&parent=${projectA.id}`);
+
+  await user.click(await screen.findByRole('button', { name: surveyA.name }));
+
+  expect(await screen.findByRole('link', { name: '受众与投放' }))
+    .toHaveAttribute('href', `/surveys/${surveyA.id}/audience`);
+});
+
 test('offers template creation from a permitted container', async () => {
   installListHandler({ root: [projectA], [projectA.id]: [] });
   renderWorkspace(`/workspace?project=${projectA.id}&parent=${projectA.id}`);

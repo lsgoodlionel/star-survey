@@ -44,4 +44,13 @@ class DeliveryProviders {
         return find(channel).orElseThrow(() -> new DeliveryUnavailableException(
                 "no delivery provider is configured for channel " + channel.code()));
     }
+
+    DeliveryProvider require(DeliveryChannel channel, cn.mjy.platform.shared.TenantId tenant) {
+        DeliveryProvider provider = require(channel);
+        if (!provider.available(tenant)) {
+            throw new DeliveryUnavailableException(
+                    "no delivery provider is configured for channel " + channel.code());
+        }
+        return provider;
+    }
 }

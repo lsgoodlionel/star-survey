@@ -18,7 +18,7 @@
 |---|---|---|---|---|---|---|---|
 | 管理 | `R19-01`, `R19-03`, `R20-01`, `R20-02`, `R20-03`, `R22-01`, `R22-11`, `R22-12` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 6 |
 | 审批与发布 | `R01-07`, `R01-09` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
-| 通讯录与投放 | `R05-04`, `R05-05`, `R05-06`, `R18-01`, `R18-02`, `R18-03`, `R18-06` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 4 |
+| 通讯录与投放 | `R05-04`, `R05-05`, `R05-06`, `R18-01`, `R18-02`, `R18-03`, `R18-06` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 4 |
 | 投放链接与二维码 | `R05-01`, `R05-07`, `R05-08` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 编辑 | `R01-04`, `R01-05`, `R01-08` | 完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 5 |
 | 导出 | `R06-02`, `R06-03`, `R06-05`, `R06-06`, `R06-07` | 部分完成 | 完成 | 部分完成 | 未开始 | 部分完成 | Wave 3 |
@@ -26,7 +26,7 @@
 | 预览 | `R01-07` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 生产部署 | `R20-11`, `R23-08`, `R23-09`, `R23-10`, `R23-11`, `R23-12` | 部分完成 | 未开始 | 未开始 | 未开始 | 未开始 | Wave 0 |
 | 答卷与摘要 | `R06-01`, `R19-02` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 3 |
-| 模板与品牌 | `R01-03`, `R01-06`, `R19-05`, `R19-06`, `R19-10` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 2 |
+| 模板与品牌 | `R01-03`, `R01-06`, `R19-05`, `R19-06`, `R19-10` | 完成 | 完成 | 完成 | 部分完成 | 部分完成 | Wave 2 |
 | 工作台 | `R01-01`, `R19-04` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 6 |
 
 ## 证据
@@ -48,9 +48,14 @@
 ### 通讯录与投放 (`contacts-delivery`)
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java`](../../services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java) 定位 `class ContactController`：联系人、部门、标签和名单后端已形成。
-- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryTaskController.java`](../../services/business/src/main/java/cn/mjy/platform/delivery/DeliveryTaskController.java) 定位 `public class DeliveryTaskController`：批量任务、回执、退订和催答后端已形成；真实供应商未接入。
-- **前端** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `| 通讯录、部门、标签、名单 |`：核查报告明确记录通讯录和投放无前端入口。
+- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryRulesController.java`](../../services/business/src/main/java/cn/mjy/platform/delivery/DeliveryRulesController.java) 定位 `setReminderRuleEnabled`：批量任务、验签去重回执、不可翻转退订、完成者抑制和催答上限后端已形成；渠道可用性按租户失败即关闭。
+- **后端** （自动化测试）[`platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryApiTest.java`](../../services/business/src/test/java/cn/mjy/platform/delivery/DeliveryApiTest.java) 定位 `anOwnerCanCreateListAndToggleTheSurveysReminderRule`：测试源码 FakeEmailProvider 验证 audience 任务成功投递、脱敏任务发现和催答规则启停；不属于生产 provider 证据。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `exerciseDeliveryWorkspace`：2026-10-30 隔离 Docker MySQL/PostgreSQL 各 20/20：一级投放工作区完成名单、部门、标签、联系人、标签分配和导入任务，再贯通发布、链接/二维码、audience、未配置渠道 503、正式作答与导出。
+- **前端** （实现）[`platform/apps/admin-web/src/features/audience/AudiencePage.tsx`](../../apps/admin-web/src/features/audience/AudiencePage.tsx) 定位 `export function AudiencePage`：问卷内页面支持 audience、链接/二维码入口、批量任务、中文逐收件人状态、催答次数、已认证回执与退订/完成抑制状态。
+- **前端** （实现）[`platform/apps/admin-web/src/features/delivery/DeliveryWorkspacePage.tsx`](../../apps/admin-web/src/features/delivery/DeliveryWorkspacePage.tsx) 定位 `export function DeliveryWorkspacePage`：正式一级投放工作区支持名单、部门、标签、联系人、停用、标签分配及 CSV/JSON 导入任务，并进入问卷内受众投放上下文。
+- **生产** （部署基线）[`platform/deploy/production/compose.yml`](../../deploy/production/compose.yml) 定位 `PLATFORM_DELIVERY_SECRET`：生产 compose 与安装器已具备投递主密钥 secret 和默认关闭的 worker 开关；网易 163 已在本地 Docker 完成真实 SMTP 提交，正式生产环境仍待 Wave 6 验收。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R18-01 |`：通讯录导入与同步需求已编号。
+- **追溯** （追溯记录）[`docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md`](../../../docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md) 定位 `2026-10-30 阶段 9：正式投放工作区与 Wave 4 本地准出`：Wave 4 蓝图本地功能准出、双库浏览器、真实 SMTP 与明确延期边界已记录。
 
 ### 投放链接与二维码 (`delivery-links`)
 

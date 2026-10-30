@@ -1,12 +1,26 @@
 import { expect, test, vi } from 'vitest';
 import { createApiClient } from './http';
 import {
+  cancelDeliveryTask,
+  createAudienceDeliveryTask,
   createDeliveryLink,
   deliveryLinksQueryKey,
+  deliveryRecipientSchema,
+  deliveryReceiptSchema,
+  deliveryTaskSchema,
+  reminderRuleSchema,
   fetchDeliveryQr,
+  createReminderRule,
+  getDeliveryTask,
   linkViewSchema,
+  listReminderRules,
+  listSurveyDeliveryTasks,
+  listDeliveryRecipients,
+  listDeliveryReceipts,
   listDeliveryLinks,
   revokeDeliveryLink,
+  setReminderRuleEnabled,
+  sendTestEmail,
 } from './delivery';
 import { binaryResponse, jsonResponse } from '../../test/server';
 
@@ -23,11 +37,111 @@ const link = {
   revokedAt: null,
   createdAt: '2026-10-09T08:00:00Z',
 };
+const taskId = '30000000-0000-4000-8000-000000000001';
+const task = {
+  id: taskId, surveyId, channel: 'email', kind: 'delivery', status: 'queued', sourceTaskId: null,
+  recipientCount: 2, sentCount: 0, failedCount: 0, skippedCount: 0, billedUnits: 0, attempts: 0,
+  lastError: null, createdAt: '2026-10-28T08:00:00Z', finishedAt: null,
+};
+const recipient = {
+  id: '40000000-0000-4000-8000-000000000001', address: 'w***@example.test', displayName: '王小明',
+  state: 'queued', attempts: 0, remindersSent: 0, lastError: null, sentAt: null, lastReminderAt: null,
+};
+const receipt = {
+  recipientId: recipient.id, provider: 'smtp-gmail', kind: 'delivered', billable: true,
+  occurredAt: '2026-10-29T08:00:00Z', receivedAt: '2026-10-29T08:00:01Z',
+};
+const reminderRule = {
+  id: '50000000-0000-4000-8000-000000000001', surveyId, sourceTaskId: taskId,
+  firstDelaySeconds: 3600, intervalSeconds: 86400, maxReminders: 2, subject: '请继续填写',
+  enabled: true, createdAt: '2026-10-29T08:00:00Z',
+};
 
 test('validates the complete delivery link contract', () => {
   expect(linkViewSchema.parse(link)).toEqual(link);
   expect(() => linkViewSchema.parse({ ...link, signedParams: { exp: 123 } })).toThrow();
   expect(() => linkViewSchema.parse({ ...link, createdAt: 'today' })).toThrow();
+});
+
+test('validates task state and redacted recipient contracts', () => {
+  expect(deliveryTaskSchema.parse(task)).toEqual(task);
+  expect(deliveryRecipientSchema.parse(recipient)).toEqual(recipient);
+  expect(deliveryReceiptSchema.parse(receipt)).toEqual(receipt);
+  expect(() => deliveryTaskSchema.parse({ ...task, recipientCount: -1 })).toThrow();
+  expect(reminderRuleSchema.parse(reminderRule)).toEqual(reminderRule);
+  expect(() => reminderRuleSchema.parse({ ...reminderRule, maxReminders: 11 })).toThrow();
+});
+
+test('lists survey tasks and manages only typed reminder rules', async () => {
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    const path = String(input);
+    if (path.includes('reminder-rules') && init?.method === 'POST') return jsonResponse(reminderRule, 201);
+    if (path.includes('reminder-rules') && init?.method === 'PATCH') return jsonResponse({ ...reminderRule, enabled: false });
+    if (path.includes('reminder-rules')) return jsonResponse([reminderRule]);
+    return jsonResponse([task]);
+  });
+  const api = createApiClient({ fetchImpl });
+  await listSurveyDeliveryTasks(api, 'survey/id');
+  await listReminderRules(api, 'survey/id');
+  await createReminderRule(api, 'survey/id', {
+    sourceTaskId: 'task/id', firstDelaySeconds: 0, intervalSeconds: 60, maxReminders: 2,
+    subject: null, bodyTemplate: '请点击 {{unsubscribe}}',
+  });
+  await setReminderRuleEnabled(api, 'survey/id', 'rule/id', false);
+  expect(fetchImpl.mock.calls.map(([path, init]) => [path, init?.method, init?.body])).toEqual([
+    ['/v1/surveys/survey%2Fid/delivery-tasks?limit=50', 'GET', undefined],
+    ['/v1/delivery/surveys/survey%2Fid/reminder-rules', 'GET', undefined],
+    ['/v1/delivery/surveys/survey%2Fid/reminder-rules', 'POST', JSON.stringify({
+      sourceTaskId: 'task/id', firstDelaySeconds: 0, intervalSeconds: 60, maxReminders: 2,
+      subject: null, bodyTemplate: '请点击 {{unsubscribe}}',
+    })],
+    ['/v1/delivery/surveys/survey%2Fid/reminder-rules/rule%2Fid', 'PATCH', JSON.stringify({ enabled: false })],
+  ]);
+});
+
+test('uses the audience scoped create endpoint and task status endpoints', async () => {
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    if (String(input).includes('/receipts?')) return jsonResponse([receipt]);
+    if (String(input).endsWith('/recipients')) return jsonResponse([recipient]);
+    return jsonResponse(task, init?.method === 'POST' && String(input).includes('/surveys/') ? 201 : 200);
+  });
+  const api = createApiClient({ fetchImpl });
+  await createAudienceDeliveryTask(api, 'survey/id', {
+    channel: 'email', subject: '邀请填写', bodyTemplate: '请填写问卷', idempotencyKey: 'request-1',
+  });
+  await getDeliveryTask(api, 'task/id');
+  await listDeliveryRecipients(api, 'task/id');
+  await listDeliveryReceipts(api, 'task/id');
+  await cancelDeliveryTask(api, 'task/id');
+  expect(fetchImpl.mock.calls.map(([path, init]) => [path, init?.method, init?.body])).toEqual([
+    ['/v1/surveys/survey%2Fid/delivery-tasks', 'POST', JSON.stringify({ channel: 'email', subject: '邀请填写', bodyTemplate: '请填写问卷', idempotencyKey: 'request-1' })],
+    ['/v1/delivery/tasks/task%2Fid', 'GET', undefined],
+    ['/v1/delivery/tasks/task%2Fid/recipients', 'GET', undefined],
+    ['/v1/delivery/tasks/task%2Fid/receipts?limit=50', 'GET', undefined],
+    ['/v1/delivery/tasks/task%2Fid/cancel', 'POST', undefined],
+  ]);
+});
+
+test('sends a test email only through the dedicated settings endpoint', async () => {
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+    accepted: true,
+    message: '测试邮件已被 SMTP 服务器接受，请检查收件箱及垃圾邮件目录',
+  }));
+  const api = createApiClient({ fetchImpl });
+
+  const result = await sendTestEmail(api, {
+    recipient: 'owner@example.test',
+    subject: '投递测试',
+    body: '这是一封测试邮件。',
+  });
+
+  expect(result.accepted).toBe(true);
+  expect(fetchImpl).toHaveBeenCalledWith('/v1/delivery/email-settings/test-send', expect.objectContaining({
+    method: 'POST',
+    body: JSON.stringify({
+      recipient: 'owner@example.test', subject: '投递测试', body: '这是一封测试邮件。',
+    }),
+  }));
 });
 
 test('isolates delivery link queries by tenant and survey', () => {

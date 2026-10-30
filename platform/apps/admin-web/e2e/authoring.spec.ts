@@ -125,6 +125,8 @@ test('author filters stable resources, restores archive, and publishes the same 
 
   const me = await login(page, token, metadata);
 
+  await exerciseDeliveryWorkspace(page);
+
   await clickAction(page.getByRole('link', { name: '项目与问卷' }));
   await expect(page).toHaveURL(/\/workspace$/);
   await expect(page.getByText(/^E2E(?:项目|文件夹|问卷).*[0-9a-z]{6,}$/i)).toHaveCount(0);
@@ -219,6 +221,35 @@ test('author filters stable resources, restores archive, and publishes the same 
   expect(deliveryUrl).toBe(createdLink.shortUrl ?? createdLink.url);
   expect(deliveryUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
 
+  await clickAction(page.getByRole('link', { name: '受众与投放' }));
+  await expect(page.getByRole('heading', { name: '受众与投放' })).toBeVisible();
+  await fillAction(page.getByLabel('新名单名称'), '浏览器验收受众');
+  await clickAction(page.getByRole('button', { name: '创建名单' }));
+  await expect(page.getByRole('combobox', { name: '用于当前问卷的名单' })).not.toHaveValue('');
+  await fillAction(page.getByLabel('导入内容'), 'name,email\n批量验收联系人,bulk-recipient@example.test\n');
+  const importSubmission = page.waitForResponse((response) =>
+    response.url().includes('/v1/contact-lists/')
+      && response.url().endsWith('/imports')
+      && response.request().method() === 'POST',
+  );
+  await clickAction(page.getByRole('button', { name: '提交批量导入' }));
+  expect((await importSubmission).status()).toBe(202);
+  await expect(page.getByLabel('联系人导入状态')).toContainText('已处理 1/1 行', { timeout: 60_000 });
+  await expect(page.getByLabel('导入行结果')).toContainText('第 1 行：已新增');
+  await fillAction(page.getByLabel('联系人姓名'), '浏览器验收联系人');
+  await fillAction(page.getByLabel('联系人邮箱'), 'browser-recipient@example.test');
+  await clickAction(page.getByRole('button', { name: '新增联系人' }));
+  await clickAction(page.getByRole('button', { name: '保存当前受众' }));
+  await expect(page.getByRole('status')).toContainText('受众已保存，当前可邀请 2 人。');
+  const unavailableTask = page.waitForResponse((response) =>
+    response.url().includes(`/v1/surveys/${surveyId}/delivery-tasks`)
+      && response.request().method() === 'POST',
+  );
+  await clickAction(page.getByRole('button', { name: '从受众创建 Email 任务' }));
+  expect((await unavailableTask).status()).toBe(503);
+  await expect(page.getByRole('alert')).toContainText('渠道未配置，未创建任务');
+  await expect(page.getByLabel('投放任务状态')).toHaveCount(0);
+
   const respondentPage = await page.context().newPage();
   await respondentPage.goto(deliveryUrl!);
   await completeLimeSurvey(respondentPage);
@@ -246,6 +277,17 @@ test('author filters stable resources, restores archive, and publishes the same 
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/\.(?:csv|zip)$/i);
   await assertDownloadedCsvContainsFormalResponse(download, formalQuestionCode);
+
+  const filteredRequest = page.waitForRequest((request) => request.url().includes('/responses?')
+    && request.url().includes('startedFrom='));
+  await fillAction(page.getByLabel('开始时间起'), '2020-01-01T00:00');
+  await filteredRequest;
+  await expect(formalAnswer).toBeVisible();
+  await clickAction(page.getByRole('button', { name: '选择显示字段' }));
+  await expect(page.getByRole('group', { name: '显示字段' }).getByRole('checkbox').first()).toBeVisible();
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
+  await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '答卷与导出' }));
+  await expect(page.locator('.export-job')).toContainText('导出完成');
 
   const versionLink = page.getByRole('link', { name: /查看版本 \d+/ }).first();
   await clickAction(page.getByRole('link', { name: '发布与版本' }));
@@ -292,6 +334,39 @@ async function completeLimeSurvey(enginePage: Page) {
     if (await visibleChoices.count() === 0) break;
   }
   await expect(visibleChoices).toHaveCount(0, { timeout: 30_000 });
+}
+
+async function exerciseDeliveryWorkspace(page: Page) {
+  const suffix = Date.now().toString(36);
+  await clickAction(page.getByRole('link', { name: '投放', exact: true }));
+  await expect(page).toHaveURL(/\/delivery$/);
+  await expect(page.getByRole('heading', { name: '通讯录与投放' })).toBeVisible();
+
+  await fillAction(page.getByLabel('投放工作区新名单名称'), `全链路名单-${suffix}`);
+  await clickAction(page.getByRole('button', { name: '创建名单' }));
+  await expect(page.getByLabel('当前联系人名单')).not.toHaveValue('');
+
+  await fillAction(page.getByLabel('部门名称'), `华东区-${suffix}`);
+  await clickAction(page.getByRole('button', { name: '创建部门' }));
+  await expect(page.getByText(`华东区-${suffix}（顶级部门）`)).toBeVisible();
+
+  await fillAction(page.getByLabel('标签名称'), `重点客户-${suffix}`);
+  await clickAction(page.getByRole('button', { name: '创建标签' }));
+  await expect(page.getByText(new RegExp(`现有标签：.*重点客户-${suffix}`))).toBeVisible();
+
+  await fillAction(page.getByLabel('工作区联系人姓名'), `目录联系人-${suffix}`);
+  await fillAction(page.getByLabel('工作区联系人邮箱'), `directory-${suffix}@example.test`);
+  await page.getByLabel('联系人部门').selectOption({ label: `华东区-${suffix}` });
+  await clickAction(page.getByRole('button', { name: '新增联系人' }));
+  const row = page.getByRole('row').filter({ hasText: `目录联系人-${suffix}` });
+  await expect(row).toContainText(`directory-${suffix}@example.test`);
+  await row.getByRole('combobox').selectOption({ label: `重点客户-${suffix}` });
+  await clickAction(row.getByRole('button', { name: '添加标签' }));
+  await expect(row).toContainText(`重点客户-${suffix}`);
+
+  await fillAction(page.getByLabel('投放工作区导入内容'), `name,email\n导入联系人-${suffix},import-${suffix}@example.test\n`);
+  await clickAction(page.getByRole('button', { name: '提交导入任务' }));
+  await expect(page.getByRole('status')).toContainText('已处理 1/1 行', { timeout: 60_000 });
 }
 
 async function readCreatedDeliveryLink(response: Response): Promise<CreatedDeliveryLink> {

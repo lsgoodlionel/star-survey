@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -76,6 +77,11 @@ public class DeliveryTaskController {
     @GetMapping("/{taskId}/recipients")
     List<RecipientView> recipients(@PathVariable UUID taskId) {
         return tasks.recipients(currentTenant.require(), taskId);
+    }
+
+    @GetMapping("/{taskId}/receipts")
+    List<ReceiptView> receipts(@PathVariable UUID taskId, @RequestParam(defaultValue = "50") int limit) {
+        return tasks.receipts(currentTenant.require(), taskId, limit);
     }
 
     @PostMapping("/{taskId}/cancel")

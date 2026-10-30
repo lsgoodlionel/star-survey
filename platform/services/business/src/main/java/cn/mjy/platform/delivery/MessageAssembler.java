@@ -54,7 +54,7 @@ class MessageAssembler {
         String unsubscribeUrl = properties.requirePublicBaseUrl() + UnsubscribeService.PATH
                 + unsubscribeTokens.issue(tenant, task.id(), recipient.id());
         String body = MessageRenderer.render(task.bodyTemplate(), recipient.displayName(), url, unsubscribeUrl);
-        return new DeliveryMessage(task.channel(), recipient.address(), task.subject(), body, idempotencyKey);
+        return new DeliveryMessage(tenant, task.channel(), recipient.address(), task.subject(), body, idempotencyKey);
     }
 
     /** 首次认领时写进台账的键。 */

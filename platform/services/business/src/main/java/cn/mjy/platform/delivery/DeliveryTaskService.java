@@ -1,5 +1,7 @@
 package cn.mjy.platform.delivery;
 
+import cn.mjy.platform.contacts.ContactView;
+import cn.mjy.platform.contacts.SurveyAudienceService;
 import cn.mjy.platform.delivery.DeliveryTaskRepository.TaskRow;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
@@ -41,9 +43,12 @@ public class DeliveryTaskService {
     private final DeliveryAudit audit;
     private final DeliveryLinkService links;
     private final DeliveryProviders providers;
+    private final SurveyAudienceService audiences;
+    private final ReceiptRepository receipts;
 
     DeliveryTaskService(TenantScope tenantScope, DeliveryTaskRepository tasks, RecipientRepository recipients,
-            DeliveryAccess access, DeliveryAudit audit, DeliveryLinkService links, DeliveryProviders providers) {
+            DeliveryAccess access, DeliveryAudit audit, DeliveryLinkService links, DeliveryProviders providers,
+            SurveyAudienceService audiences, ReceiptRepository receipts) {
         this.tenantScope = tenantScope;
         this.tasks = tasks;
         this.recipients = recipients;
@@ -51,6 +56,8 @@ public class DeliveryTaskService {
         this.audit = audit;
         this.links = links;
         this.providers = providers;
+        this.audiences = audiences;
+        this.receipts = receipts;
     }
 
     /** 名单里的一行。{@code engineToken} 是发布后从引擎回读到的参与者 token（邀请码），可为空。 */
@@ -82,7 +89,7 @@ public class DeliveryTaskService {
 
     public TaskView create(TenantContext ctx, NewTask request) {
         access.require(ctx, DeliveryAccess.SEND, request.surveyId());
-        requireChannelIsServiceable(request.channel());
+        requireChannelIsServiceable(ctx.tenantId(), request.channel());
         validate(request);
         return tenantScope.call(ctx.tenantId(), () -> {
             if (request.idempotencyKey() != null) {
@@ -104,6 +111,20 @@ public class DeliveryTaskService {
         });
     }
 
+    /**
+     * 从问卷已保存的受众创建任务。联系人地址只在服务端按当前数据范围读取并冻结为任务快照，
+     * 不经由浏览器回传，避免扩大 PII 暴露面。
+     */
+    public TaskView createFromAudience(TenantContext ctx, NewTask request) {
+        access.require(ctx, DeliveryAccess.SEND, request.surveyId());
+        List<NewRecipient> selected = audiences.recipients(ctx, request.surveyId()).stream()
+                .map(contact -> audienceRecipient(request.channel(), contact))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        return create(ctx, new NewTask(request.surveyId(), request.channel(), request.linkId(), request.subject(),
+                request.bodyTemplate(), selected, request.idempotencyKey()));
+    }
+
     public TaskView status(TenantContext ctx, UUID taskId) {
         return tenantScope.call(ctx.tenantId(), () -> {
             TaskRow row = row(taskId);
@@ -112,11 +133,30 @@ public class DeliveryTaskService {
         });
     }
 
+    /** 问卷内最近任务。视图不含收件人地址或消息正文。 */
+    public List<TaskView> list(TenantContext ctx, UUID surveyId, int limit) {
+        access.require(ctx, DeliveryAccess.READ, surveyId);
+        int boundedLimit = Math.min(Math.max(limit, 1), 100);
+        return tenantScope.call(ctx.tenantId(), () -> tasks.listBySurvey(surveyId, boundedLimit).stream()
+                .map(TaskView::of)
+                .toList());
+    }
+
     public List<RecipientView> recipients(TenantContext ctx, UUID taskId) {
         return tenantScope.call(ctx.tenantId(), () -> {
             TaskRow row = row(taskId);
             access.require(ctx, DeliveryAccess.READ, row.surveyId());
             return recipients.list(taskId).stream().map(RecipientView::of).toList();
+        });
+    }
+
+    /** 读取已认证并去重的投递回执；不把渠道商 eventId 或地址抄回浏览器。 */
+    public List<ReceiptView> receipts(TenantContext ctx, UUID taskId, int limit) {
+        return tenantScope.call(ctx.tenantId(), () -> {
+            TaskRow row = row(taskId);
+            access.require(ctx, DeliveryAccess.READ, row.surveyId());
+            int boundedLimit = Math.min(Math.max(limit, 1), 200);
+            return receipts.listByTask(taskId, boundedLimit).stream().map(ReceiptRepository.ReceiptRow::view).toList();
         });
     }
 
@@ -157,12 +197,20 @@ public class DeliveryTaskService {
         return HexFormat.of().formatHex(bytes);
     }
 
+    private static NewRecipient audienceRecipient(DeliveryChannel channel, ContactView contact) {
+        String address = channel == DeliveryChannel.EMAIL ? contact.email() : contact.phone();
+        if (address == null || address.isBlank()) {
+            return null;
+        }
+        return new NewRecipient(address, contact.displayName(), null, Map.of());
+    }
+
     TaskRow row(UUID taskId) {
         return tasks.find(taskId).orElseThrow(() -> DeliveryExceptions.notFound("delivery task not found: " + taskId));
     }
 
-    private void requireChannelIsServiceable(DeliveryChannel channel) {
-        providers.require(channel);
+    private void requireChannelIsServiceable(TenantId tenant, DeliveryChannel channel) {
+        providers.require(channel, tenant);
     }
 
     private void validate(NewTask request) {

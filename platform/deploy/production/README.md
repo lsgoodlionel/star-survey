@@ -11,6 +11,22 @@ Release manifest、校验过的架构 bundle 和固定 digest 镜像；服务器
 - Release manifest、bundle 和镜像必须来自同一发布版本。在线安装必须提供 manifest SHA-256；离线包必须完成同等校验。
 - 管理员密码和所有服务密钥由安装过程生成在 `<target>/shared/secrets`，目录权限 `0700`、文件权限 `0600`。不要把该目录写入日志、工单或仓库。
 
+## 可选 SMTP Email 投递
+
+基础 `compose.yml` 默认以 `PLATFORM_DELIVERY_ENABLED=false` 停止后台批量投递 worker。管理员可在管理端的“邮件服务设置”页按租户保存供应商、发件邮箱和授权凭据；读取页面只显示脱敏状态，凭据不会回显。保存配置后可在同页填写收件地址、主题和纯文本正文，明确点击“发送测试邮件”进行一次真实 SMTP 提交；“仅验证登录”只建立并认证 SMTP 会话，不发送邮件。此能力要求部署侧提供权限为 `0600`、长度至少 32 字节的 `PLATFORM_DELIVERY_SECRET_FILE`：平台按租户派生 AES-GCM 密钥加密 SMTP 凭据，缺失时保存和读取已保存凭据都会失败关闭，绝不降级为明文或浏览器持久化。至少一个租户完成登录验证和测试发送后，运维人员才可将 `PLATFORM_DELIVERY_ENABLED=true` 并重启 platform 服务，启用批量任务消费。
+
+管理员设置页面仅供具备 `MANAGE_SETTINGS` 权限的租户成员使用。页面的“验证连接”只完成 SMTP 登录与 TLS 协商，不发送邮件；保存、清除和验证均会记录脱敏审计信息。部署环境、Docker Compose 与本地启动使用同一 API 和加密数据模型，差异仅在 `PLATFORM_DELIVERY_SECRET` 的注入来源（Docker Secret、Kubernetes Secret 或本地受限环境变量）。
+
+仍可使用启动时的可选 SMTP 覆盖层作为迁移回退；它不应与同租户的管理端配置混用。要启用该回退，先用隔离的、可撤销的测试邮箱完成供应商侧的 TLS 与授权验证，然后以可选覆盖层启动：
+
+```bash
+docker compose -f compose.yml -f compose.email.yml up -d
+```
+
+只支持经固定配置档核对的 `gmail`、`outlook-com`（Hotmail/Outlook.com）与 `netease-163`：Gmail 显式设 `PLATFORM_DELIVERY_EMAIL_AUTH_MODE=app-password` 或 `oauth2`；网易 163 先在网页邮箱开启 SMTP 并设为 `app-password`；Outlook.com/Hotmail 必须设为 `oauth2` 并使用 OAuth2 access token，不能使用网页登录密码。`PLATFORM_DELIVERY_EMAIL_CREDENTIAL_FILE` 指向权限为 `0600` 的 secret 文件，内容不会进入 compose 环境文件、平台日志或 API 响应。发件地址与登录名必须相同且已获供应商授权。
+
+SMTP 服务端接受仅表示“已提交 SMTP”，不表示进入收件箱或已读；SMTP 不提供跨供应商的幂等键，网络中断后的恢复是至少一次尝试，可能出现重复邮件。不要将它作为投递回执或计费依据。真实生产开通前分别用 Gmail、Outlook.com/Hotmail、网易 163 的隔离测试帐号记录授权、TLS、退信与退订验证结果。
+
 事件密钥按用途分域：`engine_instance_events_secret` 只提供给 LimeSurvey engine，用于 engine 到 platform 的事件签名；安装和每次升级会按 `HMAC-SHA256(instanceSecret, "mjy-plugin-channel/v1/<engineInstanceId>")` 生成或刷新 `pubgw_engine_channel_secret`，publish gateway 只挂载该派生密钥。原始实例事件密钥不会进入 gateway 容器。`env.example` 中两项配置均为 secret 文件路径，不是密钥值。
 
 ## 生命周期

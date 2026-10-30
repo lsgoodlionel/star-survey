@@ -2,6 +2,7 @@ package cn.mjy.platform.delivery;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -9,6 +10,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import cn.mjy.platform.response.ResponseFixture.Published;
+import cn.mjy.platform.contacts.ContactDirectoryService;
+import cn.mjy.platform.contacts.ContactDraft;
+import cn.mjy.platform.contacts.ContactKind;
+import cn.mjy.platform.contacts.ContactListService;
+import cn.mjy.platform.contacts.DedupeKey;
+import cn.mjy.platform.contacts.SurveyAudienceService;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.support.TestTokens;
 import java.nio.charset.StandardCharsets;
@@ -41,6 +48,15 @@ class DeliveryApiTest {
 
     @Autowired
     private FakeEmailProvider email;
+
+    @Autowired
+    private ContactListService lists;
+
+    @Autowired
+    private ContactDirectoryService contacts;
+
+    @Autowired
+    private SurveyAudienceService audiences;
 
     private Published p;
 
@@ -129,6 +145,98 @@ class DeliveryApiTest {
                  "recipients":[{"address":"a@example.com"}]}
                 """.formatted(UUID.randomUUID(), DeliveryFixture.EMAIL_BODY))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void createsATaskFromTheSavedAudienceWithoutAcceptingRecipientAddresses() throws Exception {
+        var list = lists.create(p.owner(), "Wave 4 受众", ContactKind.RESPONDENT, DedupeKey.EMAIL);
+        contacts.create(p.owner(), list.id(), ContactKind.RESPONDENT,
+                ContactDraft.named("受访者").withEmail("audience@example.com"));
+        audiences.set(p.owner(), p.surveyId(), list.id(), null, true, null);
+
+        String body = postAs(p.owner(), "/v1/surveys/" + p.surveyId() + "/delivery-tasks", """
+                {"channel":"email","subject":"请填写","bodyTemplate":"%s"}
+                """.formatted(DeliveryFixture.EMAIL_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.recipientCount").value(1))
+                .andReturn().getResponse().getContentAsString();
+        String taskId = com.jayway.jsonpath.JsonPath.read(body, "$.id");
+
+        getAs(p.owner(), "/v1/delivery/tasks/" + taskId + "/recipients")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].address").value(org.hamcrest.Matchers.not("audience@example.com")));
+    }
+
+    @Test
+    void listSurveyTasksIsBoundedAndDoesNotExposeRecipients() throws Exception {
+        fixture.emailTask(p, 1);
+        fixture.emailTask(p, 1);
+
+        getAs(p.owner(), "/v1/surveys/" + p.surveyId() + "/delivery-tasks?limit=1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].surveyId").value(p.surveyId().toString()))
+                .andExpect(jsonPath("$[0].recipientCount").value(1))
+                .andExpect(jsonPath("$[0].address").doesNotExist())
+                .andExpect(jsonPath("$[0].bodyTemplate").doesNotExist());
+    }
+
+    @Test
+    void taskReceiptReadIsBoundedAndRequiresOnlyTheTasksReadPath() throws Exception {
+        TaskView task = fixture.emailTask(p, 1);
+
+        getAs(p.owner(), "/v1/delivery/tasks/" + task.id() + "/receipts?limit=999")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void anAudienceTaskUsesOnlyTheTestEmailProviderAndKeepsItsRecipientReadRedacted() throws Exception {
+        var list = lists.create(p.owner(), "Wave 4 发送受众", ContactKind.RESPONDENT, DedupeKey.EMAIL);
+        contacts.create(p.owner(), list.id(), ContactKind.RESPONDENT,
+                ContactDraft.named("测试收件人").withEmail("delivery-audience@example.com"));
+        audiences.set(p.owner(), p.surveyId(), list.id(), null, true, null);
+
+        String body = postAs(p.owner(), "/v1/surveys/" + p.surveyId() + "/delivery-tasks", """
+                {"channel":"email","subject":"请填写","bodyTemplate":"%s"}
+                """.formatted(DeliveryFixture.EMAIL_BODY))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID taskId = UUID.fromString(com.jayway.jsonpath.JsonPath.read(body, "$.id"));
+
+        assertThat(fixture.run(p.tenant(), taskId)).isEqualTo(1);
+        assertThat(email.deliveredTo("delivery-audience@example.com")).isPresent();
+        getAs(p.owner(), "/v1/delivery/tasks/" + taskId)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("completed"))
+                .andExpect(jsonPath("$.sentCount").value(1));
+        getAs(p.owner(), "/v1/delivery/tasks/" + taskId + "/recipients")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].address").value(org.hamcrest.Matchers.not("delivery-audience@example.com")));
+    }
+
+    @Test
+    void anOwnerCanCreateListAndToggleTheSurveysReminderRule() throws Exception {
+        TaskView invite = fixture.emailTask(p, 1);
+        String created = postAs(p.owner(), "/v1/delivery/surveys/" + p.surveyId() + "/reminder-rules", """
+                {"sourceTaskId":"%s","firstDelaySeconds":3600,"intervalSeconds":86400,
+                 "maxReminders":2,"subject":"请继续填写","bodyTemplate":"%s"}
+                """.formatted(invite.id(), DeliveryFixture.REMINDER_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.enabled").value(true))
+                .andReturn().getResponse().getContentAsString();
+        String ruleId = com.jayway.jsonpath.JsonPath.read(created, "$.id");
+
+        mvc.perform(patch("/v1/delivery/surveys/" + p.surveyId() + "/reminder-rules/" + ruleId)
+                        .header("Authorization", bearer(p.owner()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(ruleId))
+                .andExpect(jsonPath("$.enabled").value(false));
+        getAs(p.owner(), "/v1/delivery/surveys/" + p.surveyId() + "/reminder-rules")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].enabled").value(false));
     }
 
     @Test

@@ -17,5 +17,10 @@ public interface DeliveryProvider {
     /** 渠道商标识，写进发送台账与回执（回执按它匹配）。只允许 1–64 个小写字母、数字与连字符。 */
     String name();
 
+    /** 当前租户是否已具备可实际提交的渠道配置。静态 provider 默认可用。 */
+    default boolean available(cn.mjy.platform.shared.TenantId tenant) {
+        return true;
+    }
+
     SendResult send(DeliveryMessage message);
 }

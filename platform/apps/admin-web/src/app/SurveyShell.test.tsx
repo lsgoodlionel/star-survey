@@ -198,6 +198,7 @@ function renderSurveyShell(
         { path: 'import', element: <ReadyPage page="import" /> },
         { path: 'preview', element: options.routeElements?.preview ?? <ReadyPage page="preview" /> },
         { path: 'publish', element: options.routeElements?.publish ?? <ReadyPage page="publish" /> },
+        { path: 'audience', element: <p>audience内容</p> },
         { path: 'responses', element: options.routeElements?.responses ?? <ReadyPage page="responses" /> },
         { path: '*', element: <p>未知页面</p> },
         {
@@ -256,6 +257,7 @@ test('loadsSurveyContextAndPreservesTheSelectedQuestionAcrossWorkflowLinks', asy
     ['批量导入', 'import'],
     ['快速预览', 'preview'],
     ['发布与版本', 'publish'],
+    ['受众与投放', 'audience'],
     ['答卷与导出', 'responses'],
   ] as const) {
     expect(within(tabs).getByRole('link', { name })).toHaveAttribute(
@@ -310,6 +312,7 @@ test('registersSurveyPagesAsChildrenOfTheProtectedSurveyShell', () => {
     'preview',
     'publish',
     'responses',
+    'audience',
     'versions/:version',
   ]);
   expect(appShell?.children?.some((route) => route.path === 'surveys/:surveyId/edit')).toBe(false);

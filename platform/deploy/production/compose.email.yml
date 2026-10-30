@@ -1,0 +1,34 @@
+# 可选 Email 投递覆盖层：默认 compose 不包含真实 SMTP provider。
+# 仅在已在隔离测试邮箱完成对应供应商 TLS / 授权校验后使用：
+# docker compose -f compose.yml -f compose.email.yml up -d
+services:
+  platform:
+    command:
+      - PLATFORM_DB_APP_PASSWORD=/run/secrets/platform_db_app_password
+      - PLATFORM_DB_OWNER_PASSWORD=/run/secrets/platform_db_owner_password
+      - PLATFORM_JWT_HMAC_SECRET=/run/secrets/platform_jwt_hmac_secret
+      - PLATFORM_ENGINE_EVENTS_SECRET=/run/secrets/platform_engine_events_secret
+      - PLATFORM_PUBGW_SECRET=/run/secrets/platform_pubgw_secret
+      - PLATFORM_DELIVERY_EMAIL_CREDENTIAL=/run/secrets/platform_delivery_email_credential
+      - --
+      - java
+      - -jar
+      - /app/business.jar
+    environment:
+      PLATFORM_DELIVERY_ENABLED: "true"
+      PLATFORM_DELIVERY_EMAIL_ENABLED: "true"
+      PLATFORM_DELIVERY_EMAIL_PROVIDER: ${PLATFORM_DELIVERY_EMAIL_PROVIDER:?set to gmail, outlook-com, or netease-163}
+      PLATFORM_DELIVERY_EMAIL_AUTH_MODE: ${PLATFORM_DELIVERY_EMAIL_AUTH_MODE:?set to app-password or oauth2}
+      PLATFORM_DELIVERY_EMAIL_FROM_ADDRESS: ${PLATFORM_DELIVERY_EMAIL_FROM_ADDRESS:?set a provider-authorized sender}
+      PLATFORM_DELIVERY_EMAIL_USERNAME: ${PLATFORM_DELIVERY_EMAIL_USERNAME:?set the same provider-authorized sender}
+    secrets:
+      - platform_db_app_password
+      - platform_db_owner_password
+      - platform_jwt_hmac_secret
+      - platform_engine_events_secret
+      - platform_pubgw_secret
+      - platform_delivery_email_credential
+
+secrets:
+  platform_delivery_email_credential:
+    file: ${PLATFORM_DELIVERY_EMAIL_CREDENTIAL_FILE:?set a path to the SMTP app password or OAuth2 access token}

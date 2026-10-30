@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, BarChart3, Eye, FileInput, Palette, Pencil, Rocket } from 'lucide-react';
+import { ArrowLeft, BarChart3, Eye, FileInput, Palette, Pencil, Rocket, UsersRound } from 'lucide-react';
 import {
   useCallback,
   useLayoutEffect,
@@ -47,6 +47,7 @@ const workflowTabs = [
   { path: 'import', label: '批量导入', icon: FileInput },
   { path: 'preview', label: '快速预览', icon: Eye },
   { path: 'publish', label: '发布与版本', icon: Rocket },
+  { path: 'audience', label: '受众与投放', icon: UsersRound },
   { path: 'responses', label: '答卷与导出', icon: BarChart3 },
 ] as const;
 

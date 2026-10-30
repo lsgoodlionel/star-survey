@@ -122,6 +122,15 @@ class ResponseExportAccessTest {
         ExportJobView seen = exports.status(raw.ctx(), job.jobId());
         assertThat(seen.status()).isEqualTo("failed");
         assertThat(seen.error()).isEqualTo("permission_changed");
+        assertThatThrownBy(() -> exports.download(raw.ctx(), job.jobId()))
+                .isInstanceOf(ResponseAccessDeniedException.class);
+
+        // 失败的快照不能在权限恢复后被当作旧文件下载；恢复路径必须是重新创建、重新冻结权限。
+        fixture.grant(p, raw.ctx(), "project_manager");
+        ExportJobView recovered = fixture.runToEnd(raw.ctx(), fixture.create(raw.ctx(), p, "csv"));
+        assertThat(recovered.status()).isEqualTo("completed");
+        assertThat(recovered.sensitiveRevealed()).isFalse();
+        assertThat(fixture.download(raw.ctx(), recovered)).isNotEmpty();
     }
 
     @Test
