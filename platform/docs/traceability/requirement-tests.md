@@ -213,8 +213,6 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | R06-02 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 下载的 ZIP 含 UTF-8 BOM/CRLF CSV，字段字典映射到一条真实答卷值 `A1` |
 | R06-04 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/StatisticalDocxExportWriterTest.java::writesFrequencyPercentAndMissingCountsForEveryAnswerField` | Word 统计报告逐字段输出有效值、空值、频数和比例 |
 | R06-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportStatisticalDocxTest.java::completedJobDownloadsAReadableStatisticalWordReport` | 整条作业链路产出可读 Word 统计报告 |
-| R06-05 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/PdfExportFormatTest.java::pdfIsRealNonEmptyAndChineseTextRoundTrips` | PDF 嵌入中文字体并通过文本读回 |
-| R06-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportPdfTest.java::completedJobDownloadsAReadablePdf` | 整条作业链路产出可读 PDF |
 | R06-05 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | `--wave3` 场景覆盖真实作答、跨版本筛选与七种标准格式的创建和非空下载；当前工作区最终双库复跑待完成 |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::valueLabelsAreAttachedToBothNumericAndShortStringVariables` | SPSS 值标签 |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::cellsRoundTripWithSystemMissingForBlanksAndUtf8SafeTruncation` | 缺失值与 UTF-8 截断 |
