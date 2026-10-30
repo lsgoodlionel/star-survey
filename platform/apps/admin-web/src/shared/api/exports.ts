@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ApiError, apiErrorForStatus, unavailableApiError, unexpectedApiError } from './errors';
 import { withRequestTimeout } from './http';
 
-export const exportFormatSchema = z.enum(['csv', 'xlsx', 'sav', 'docx', 'attachments']);
+export const exportFormatSchema = z.enum(['csv', 'xlsx', 'sav', 'docx', 'pdf', 'report-docx', 'attachments']);
 export const exportStatusSchema = z.enum([
   'queued',
   'running',
@@ -36,10 +36,20 @@ export const exportJobSchema = z.object({
   expiresAt: z.string().datetime({ offset: true }).nullable(),
 });
 
+export const wordTemplateSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(200),
+  version: z.number().int().positive(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  createdAt: z.string().datetime({ offset: true }).optional(),
+});
+export const wordTemplateListSchema = z.array(wordTemplateSchema);
+
 export type ExportFormat = z.infer<typeof exportFormatSchema>;
 export type ExportStatus = z.infer<typeof exportStatusSchema>;
 export type ExportJobView = z.infer<typeof exportJobSchema>;
 export type ExportFilter = z.infer<typeof exportFilterSchema>;
+export type WordTemplateView = z.infer<typeof wordTemplateSchema>;
 
 export interface CreateExportInput {
   format: ExportFormat;
@@ -71,10 +81,15 @@ export interface ExportClient {
   get(jobId: string, signal?: AbortSignal): Promise<ExportJobView>;
   cancel(jobId: string, signal?: AbortSignal): Promise<ExportJobView>;
   download(jobId: string, signal?: AbortSignal): Promise<ExportDownload>;
+  listWordTemplates(surveyId: string, signal?: AbortSignal): Promise<WordTemplateView[]>;
+  uploadWordTemplate(surveyId: string, name: string, file: File, signal?: AbortSignal): Promise<WordTemplateView>;
+  uploadWordTemplateVersion(surveyId: string, templateId: string, file: File, signal?: AbortSignal): Promise<WordTemplateView>;
 }
 
 export const exportJobQueryKey = (tenantId: string, surveyId: string, jobId: string) =>
   ['export-job', tenantId, surveyId, jobId] as const;
+export const wordTemplatesQueryKey = (tenantId: string, surveyId: string) =>
+  ['word-templates', tenantId, surveyId] as const;
 
 export function createExportClient(options: ExportClientOptions = {}): ExportClient {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -122,6 +137,17 @@ export function createExportClient(options: ExportClientOptions = {}): ExportCli
     }
   }
 
+  async function requestTemplate(path: string, init: RequestInit): Promise<WordTemplateView> {
+    try {
+      return await request(path, init, async (response) =>
+        wordTemplateSchema.parse(await response.json()),
+      );
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw unexpectedApiError();
+    }
+  }
+
   return {
     create: (surveyId, input, requestOptions = {}) => {
       const headers = new Headers({ Accept: 'application/json', 'Content-Type': 'application/json' });
@@ -161,6 +187,34 @@ export function createExportClient(options: ExportClientOptions = {}): ExportCli
           }
           return { blob: await response.blob(), filename, contentType, sha256 };
         },
+      );
+    },
+    listWordTemplates: async (surveyId, signal) => {
+      try {
+        return await request(
+          `/v1/surveys/${encodeURIComponent(surveyId)}/word-templates`,
+          { method: 'GET', headers: { Accept: 'application/json' }, signal },
+          async (response) => wordTemplateListSchema.parse(await response.json()),
+        );
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
+        throw unexpectedApiError();
+      }
+    },
+    uploadWordTemplate: (surveyId, name, file, signal) => {
+      const body = new FormData();
+      body.set('name', name.trim());
+      body.set('file', file);
+      return requestTemplate(`/v1/surveys/${encodeURIComponent(surveyId)}/word-templates`, {
+        method: 'POST', headers: { Accept: 'application/json' }, body, signal,
+      });
+    },
+    uploadWordTemplateVersion: (surveyId, templateId, file, signal) => {
+      const body = new FormData();
+      body.set('file', file);
+      return requestTemplate(
+        `/v1/surveys/${encodeURIComponent(surveyId)}/word-templates/${encodeURIComponent(templateId)}/versions`,
+        { method: 'POST', headers: { Accept: 'application/json' }, body, signal },
       );
     },
   };

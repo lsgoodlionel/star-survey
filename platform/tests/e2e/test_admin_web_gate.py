@@ -354,6 +354,8 @@ class AdminWebGateTest(unittest.TestCase):
             self.assertIn("export " + name, text)
         self.assertIn("--project=chromium-desktop", text)
         self.assertIn("--project=chromium-mobile", text)
+        self.assertIn("--project=chromium-wave3-data", text)
+        self.assertIn("--wave3", text)
         self.assertIn('PLATFORM_ASSET_SECRET="$(random_secret)"', text)
         self.assertNotIn('docker logs --tail', text)
         self.assertIn('"$GATE"', text)
@@ -370,6 +372,30 @@ class AdminWebGateTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, syntax.returncode, syntax.stderr)
+
+    def test_wave3_runner_selects_only_the_isolated_data_project(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory, "trace")
+            script = r'''
+source "$RUNNER"
+ADMIN_WEB_DIR="$APP"
+npm() { printf '%s\n' "$*" >"$TRACE"; }
+main() { :; }
+E2E_SUITE=wave3
+run_playwright
+'''
+            completed = run_bash(script, {
+                "RUNNER": str(runner),
+                "APP": directory,
+                "TRACE": str(trace),
+            })
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            invocation = trace.read_text(encoding="utf-8")
+            self.assertIn("--project=chromium-wave3-data", invocation)
+            self.assertNotIn("--project=chromium-desktop", invocation)
+            self.assertNotIn("--project=chromium-mobile", invocation)
 
     def test_gateway_publish_counter_only_counts_publish_requests(self):
         gate = load_gate()

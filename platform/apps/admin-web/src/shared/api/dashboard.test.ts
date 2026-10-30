@@ -13,7 +13,7 @@ const surveyId = '10000000-0000-4000-8000-000000000001';
 
 const dashboard: DashboardView = {
   generatedAt: '2026-10-10T00:00:00Z',
-  visibleSections: ['approval', 'publish', 'preview', 'export', 'survey'],
+  visibleSections: ['approval', 'publish', 'preview', 'export', 'data', 'survey'],
   summary: {
     pendingApprovals: 1,
     publishExceptions: 2,
@@ -57,7 +57,7 @@ const dashboard: DashboardView = {
 test('validates the complete dashboard contract and every enum value', () => {
   expect(dashboardViewSchema.parse(dashboard)).toEqual(dashboard);
 
-  for (const section of ['approval', 'publish', 'preview', 'export', 'survey']) {
+  for (const section of ['approval', 'publish', 'preview', 'export', 'data', 'survey']) {
     expect(() => dashboardViewSchema.parse({ ...dashboard, visibleSections: [section] })).not.toThrow();
   }
   for (const kind of [

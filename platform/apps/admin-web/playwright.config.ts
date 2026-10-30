@@ -45,5 +45,17 @@ export default defineConfig({
       testMatch: /authoring\.spec\.ts/,
       grep: /@mobile/,
     },
+    {
+      name: 'chromium-wave3-seed',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /authoring\.spec\.ts/,
+      grep: /author filters stable resources, restores archive, and publishes the same survey/,
+    },
+    {
+      name: 'chromium-wave3-data',
+      dependencies: ['chromium-wave3-seed'],
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /template-branding\.spec\.ts/,
+    },
   ],
 });

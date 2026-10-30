@@ -36,7 +36,7 @@ vi.mock('../auth/AuthProvider', () => ({
 
 const emptyDashboard: DashboardView = {
   generatedAt: '2026-10-10T00:00:00Z',
-  visibleSections: ['approval', 'publish', 'preview', 'export', 'survey'],
+  visibleSections: ['approval', 'publish', 'preview', 'export', 'data', 'survey'],
   summary: {
     pendingApprovals: 0,
     publishExceptions: 0,

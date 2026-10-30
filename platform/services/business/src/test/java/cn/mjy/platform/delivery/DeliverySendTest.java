@@ -234,6 +234,20 @@ class DeliverySendTest {
         assertThat(again.id()).isEqualTo(first.id());
     }
 
+    @Test
+    void idempotentReplayStillReturnsTheTaskWhenProviderBecomesUnavailable() {
+        NewTask request = new NewTask(p.surveyId(), DeliveryChannel.EMAIL, null, "请填写问卷",
+                DeliveryFixture.EMAIL_BODY, fixture.recipients(1), "provider-changed");
+        TaskView first = tasks.create(p.owner(), request);
+
+        email.available(false);
+        try {
+            assertThat(tasks.create(p.owner(), request).id()).isEqualTo(first.id());
+        } finally {
+            email.available(true);
+        }
+    }
+
     /** 与邮件正文里那条退订地址用的是同一个令牌签发器，因此这就是收件人真正会点到的令牌。 */
     private String unsubscribeToken(Published published, UUID taskId, UUID recipientId) {
         String token = tokens.issue(published.tenant(), taskId, recipientId);

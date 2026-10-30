@@ -425,6 +425,58 @@
   border-radius: 6px;
 }
 
+.word-template-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #b7c4c8;
+  border-radius: 6px;
+  background: #f8fafb;
+}
+
+.word-template-panel h4,
+.word-template-panel p {
+  margin: 0;
+}
+
+.word-template-panel p {
+  margin-top: 5px;
+  color: #52636b;
+  font-size: 13px;
+}
+
+.word-template-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.word-template-upload label {
+  display: grid;
+  gap: 5px;
+  color: #465a61;
+  font-size: 13px;
+}
+
+.word-template-upload input {
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 1px solid #85959b;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.word-template-upload button,
+.word-template-panel [role="alert"] button {
+  min-height: 38px;
+  padding: 7px 11px;
+  color: #204c59;
+  background: #fff;
+  border: 1px solid #8ca5ac;
+  border-radius: 4px;
+}
+
 .export-job-error {
   margin-top: 10px;
   padding: 11px 12px;
@@ -510,7 +562,8 @@
 
   .delivery-create,
   .response-filters,
-  .export-create-row {
+  .export-create-row,
+  .word-template-upload {
     align-items: stretch;
     flex-direction: column;
   }

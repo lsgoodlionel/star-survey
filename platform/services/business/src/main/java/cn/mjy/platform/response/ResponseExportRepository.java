@@ -30,7 +30,8 @@ class ResponseExportRepository {
 
     /** 新作业需要的字段。 */
     record NewJob(TenantId tenant, UUID id, UUID surveyId, String requestedBy, ExportFormat format,
-            String templateVersion, String filterJson, String planJson, boolean revealSensitive,
+            String templateVersion, byte[] templateContent, String templateSha256,
+            String filterJson, String planJson, boolean revealSensitive,
             String idempotencyKey, int batchSize, Duration retention) {
     }
 
@@ -45,14 +46,18 @@ class ResponseExportRepository {
     ExportJob insert(NewJob job) {
         return jdbc.sql("""
                         INSERT INTO response_export_job (tenant_id, id, survey_id, requested_by, format,
-                            template_version, filter_snapshot, plan, reveal_sensitive, idempotency_key, batch_size, expires_at)
-                        VALUES (:tenant, :id, :survey, :by, :format, :template, CAST(:filter AS jsonb),
+                            template_version, template_content, template_sha256, filter_snapshot, plan,
+                            reveal_sensitive, idempotency_key, batch_size, expires_at)
+                        VALUES (:tenant, :id, :survey, :by, :format, :template, :templateContent, :templateSha,
+                            CAST(:filter AS jsonb),
                             CAST(:plan AS jsonb), :reveal, :key, :batch, now() + make_interval(secs => :retention))
                         RETURNING *, filter_snapshot::text AS filter_text, plan::text AS plan_text
                         """)
                 .param("tenant", job.tenant().value()).param("id", job.id()).param("survey", job.surveyId())
                 .param("by", job.requestedBy()).param("format", job.format().code())
-                .param("template", job.templateVersion()).param("filter", job.filterJson())
+                .param("template", job.templateVersion())
+                .param("templateContent", job.templateContent(), Types.BINARY)
+                .param("templateSha", job.templateSha256(), Types.VARCHAR).param("filter", job.filterJson())
                 .param("plan", job.planJson()).param("reveal", job.revealSensitive())
                 .param("key", job.idempotencyKey(), Types.VARCHAR).param("batch", job.batchSize())
                 .param("retention", (double) job.retention().toSeconds())
@@ -229,7 +234,8 @@ class ResponseExportRepository {
         return new ExportJob(rs.getObject("id", UUID.class), rs.getObject("survey_id", UUID.class),
                 rs.getString("requested_by"),
                 ExportFormat.fromCode(rs.getString("format")).orElseThrow(),
-                rs.getString("template_version"), rs.getString("filter_text"), rs.getString("plan_text"),
+                rs.getString("template_version"), rs.getBytes("template_content"), rs.getString("template_sha256"),
+                rs.getString("filter_text"), rs.getString("plan_text"),
                 rs.getBoolean("reveal_sensitive"), rs.getString("idempotency_key"), rs.getInt("batch_size"),
                 ExportStatus.fromDb(rs.getString("status")), rs.getBoolean("snapshot_done"),
                 rs.getObject("snapshot_version", Integer.class), rs.getString("snapshot_generation"),

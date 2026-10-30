@@ -131,7 +131,7 @@
     {
       "id": "exports",
       "title": "导出",
-      "requirementIds": ["R06-02", "R06-03", "R06-05", "R06-06", "R06-07"],
+      "requirementIds": ["R06-02", "R06-03", "R06-04", "R06-05", "R06-06", "R06-07"],
       "backend": "partial",
       "frontend": "complete",
       "flow": "partial",
@@ -140,8 +140,12 @@
       "evidence": [
         {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R06-02 |", "description": "Excel 和 CSV 导出需求已编号。"},
         {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/response/ResponseExportController.java", "locator": "public class ResponseExportController", "description": "导出作业创建、进度、下载和再次授权接口已存在。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/response/PdfExportWriter.java", "locator": "final class PdfExportWriter", "description": "逐份答卷 PDF 使用随包中文字体和 ToUnicode 映射生成可复制中文；最终资源预算回归仍待收口。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/response/StatisticalDocxExportWriter.java", "locator": "final class StatisticalDocxExportWriter", "description": "Word 统计报告按冻结字段输出有效值、空值、频数和比例；最终资源预算回归仍待收口。"},
+        {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/response/WordTemplateController.java", "locator": "class WordTemplateController", "description": "自定义 Word 模板提供租户与问卷隔离的上传、不可变版本和服务端冻结接口；最终安全回归仍待收口。"},
         {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/responses/ResponsesPage.tsx", "locator": "创建导出任务", "description": "前端提供真实支持格式选择、任务状态、取消、重试和下载。"},
         {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/authoring.spec.ts", "locator": "assertDownloadedCsvContainsFormalResponse", "description": "真实浏览器解包下载 ZIP，校验 CSV UTF-8 BOM/CRLF，并通过 fields.csv 字段字典确认唯一正式答卷的真实字段值为 A1；其他格式继续由专项测试覆盖。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/template-branding.spec.ts", "locator": "自定义 Word 模板", "description": "2026-10-30 当前工作区隔离 MySQL/PostgreSQL 各 5/5，覆盖七种标准格式及自定义模板拒绝、上传、版本固定、真实替换和制品解包；跨层门禁通过。"},
         {"layer": "traceability", "kind": "traceability-record", "path": "platform/docs/traceability/requirement-tests.md", "locator": "| R06-02 | 端到端 |", "description": "CSV 创建、完成和下载的完整旅程证据已登记。"}
       ],
       "nextWave": "Wave 3"

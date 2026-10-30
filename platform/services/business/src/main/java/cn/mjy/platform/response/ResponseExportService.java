@@ -13,6 +13,7 @@ import cn.mjy.platform.response.ResponseSources.Source;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
+import cn.mjy.platform.survey.SurveyService;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -52,6 +53,8 @@ public class ResponseExportService {
     private final ResponseFieldPolicies fieldPolicies;
     private final ResponseSources sources;
     private final ResponseProjectionQuery projections;
+    private final SurveyService surveys;
+    private final WordTemplateService wordTemplates;
     private final ResponseExportRepository jobs;
     private final ExportFileStore files;
     private final AuditLogRepository audit;
@@ -59,13 +62,16 @@ public class ResponseExportService {
     private final JsonMapper json;
 
     ResponseExportService(TenantScope tenantScope, ResponseAccess access, ResponseFieldPolicies fieldPolicies,
-            ResponseSources sources, ResponseProjectionQuery projections, ResponseExportRepository jobs,
+            ResponseSources sources, ResponseProjectionQuery projections, SurveyService surveys,
+            WordTemplateService wordTemplates, ResponseExportRepository jobs,
             ExportFileStore files, AuditLogRepository audit, ResponseExportProperties properties, JsonMapper json) {
         this.tenantScope = tenantScope;
         this.access = access;
         this.fieldPolicies = fieldPolicies;
         this.sources = sources;
         this.projections = projections;
+        this.surveys = surveys;
+        this.wordTemplates = wordTemplates;
         this.jobs = jobs;
         this.files = files;
         this.audit = audit;
@@ -78,17 +84,21 @@ public class ResponseExportService {
         Objects.requireNonNull(ctx, "ctx");
         access.require(ctx, Permission.EXPORT_RAW_RESPONSES, surveyId);
         ExportSpec spec = ExportSpec.of(surveyId, request);
+        WordTemplateService.Frozen template = DEFAULT_TEMPLATE.equals(spec.templateVersion()) ? null
+                : wordTemplates.resolve(ctx, surveyId, spec.templateVersion());
         String key = idempotencyKey(idempotencyKey);
         Optional<ExportJobView> replay = replay(ctx, key, spec);
         if (replay.isPresent()) {
             return replay.get();
         }
         List<Source> surveySources = selectedSources(sources.sources(ctx, surveyId), spec.filter().versions());
-        ExportPlan plan = tenantScope.call(ctx.tenantId(), () -> plan(surveySources));
+        String surveyTitle = surveys.get(ctx, surveyId).title();
+        ExportPlan plan = tenantScope.call(ctx.tenantId(), () -> plan(surveySources, surveyTitle));
         boolean reveal = fieldPolicies.forExport(ctx, surveyId, plan.sensitiveFieldnames()).revealsSensitiveFields();
         NewJob job = new NewJob(ctx.tenantId(), UUID.randomUUID(), surveyId, ctx.actorId(), spec.format(),
-                DEFAULT_TEMPLATE, json.writeValueAsString(spec.filter()), json.writeValueAsString(plan), reveal, key,
-                properties.batchSize(), properties.retention());
+                spec.templateVersion(), template == null ? null : template.content(),
+                template == null ? null : template.sha256(), json.writeValueAsString(spec.filter()),
+                json.writeValueAsString(plan), reveal, key, properties.batchSize(), properties.retention());
         try {
             ExportJob created = tenantScope.call(ctx.tenantId(), () -> {
                 ExportJob inserted = jobs.insert(job);
@@ -148,8 +158,11 @@ public class ResponseExportService {
         }
         tenantScope.run(ctx.tenantId(), () -> audit.record(ctx.tenantId(), ctx.actorId(), AUDIT_DOWNLOAD,
                 resource(job), ctx.traceId()));
-        String name = "survey-" + job.surveyId() + "-export-" + jobId + "." + job.format().extension();
-        return new ExportDownload(name, job.format().contentType(), job.fileSize(), job.fileSha256(), content);
+        boolean customWord = job.templateContent() != null;
+        String extension = customWord ? "docx.zip" : job.format().extension();
+        String contentType = customWord ? "application/zip" : job.format().contentType();
+        String name = "survey-" + job.surveyId() + "-export-" + jobId + "." + extension;
+        return new ExportDownload(name, contentType, job.fileSize(), job.fileSha256(), content);
     }
 
     private ExportJob owned(TenantContext ctx, UUID jobId) {
@@ -166,6 +179,7 @@ public class ResponseExportService {
                 .map(existing -> {
                     ExportFilter filter = json.readValue(existing.filterJson(), ExportFilter.class);
                     if (!existing.surveyId().equals(spec.surveyId()) || existing.format() != spec.format()
+                            || !existing.templateVersion().equals(spec.templateVersion())
                             || !filter.equals(spec.filter())) {
                         throw new ExportConflictException("idempotency_key_reused",
                                 "Idempotency-Key was already used for a different export");
@@ -180,12 +194,12 @@ public class ResponseExportService {
      * <p>副表题超过网关单次上限时当场拒绝建作业：分多次读会让同一份文件里的副表来自不同时刻，
      * 与「作业创建即定水位线」相冲；悄悄少读几道题更不行。
      */
-    private ExportPlan plan(List<Source> surveySources) {
+    private ExportPlan plan(List<Source> surveySources, String surveyTitle) {
         return new ExportPlan(surveySources.stream()
                 .map(s -> new PlannedSource(s.version(), s.engineInstanceId(), s.engineSid(),
                         projections.latestGeneration(s.engineInstanceId(), s.engineSid()).orElse(null), s.fields(),
                         extensionQuestions(s)))
-                .toList());
+                .toList(), surveyTitle);
     }
 
     private static List<Source> selectedSources(List<Source> surveySources, List<PublishedVersion> versions) {
@@ -235,7 +249,7 @@ public class ResponseExportService {
     }
 
     /** 校验过的请求：格式、筛选（状态按固定顺序、去重）。 */
-    record ExportSpec(UUID surveyId, ExportFormat format, ExportFilter filter) {
+    record ExportSpec(UUID surveyId, ExportFormat format, String templateVersion, ExportFilter filter) {
 
         static ExportSpec of(UUID surveyId, ExportRequest request) {
             if (request == null) {
@@ -246,12 +260,16 @@ public class ResponseExportService {
             }
             ExportFormat format = ExportFormat.fromCode(request.format())
                     .orElseThrow(() -> new InvalidResponseQueryException(
-                            "format must be one of csv, xlsx, sav, docx"));
+                            "format must be one of csv, xlsx, sav, docx, pdf, report-docx, attachments"));
             String template = request.templateVersion();
-            if (template != null && !template.isEmpty() && !DEFAULT_TEMPLATE.equals(template)) {
-                throw new InvalidResponseQueryException("templateVersion must be empty or default");
+            template = template == null || template.isEmpty() ? DEFAULT_TEMPLATE : template;
+            if (!DEFAULT_TEMPLATE.equals(template) && format != ExportFormat.DOCX) {
+                throw new InvalidResponseQueryException("custom Word templates require format docx");
             }
-            return new ExportSpec(surveyId, format,
+            if (!DEFAULT_TEMPLATE.equals(template) && !template.startsWith("custom:")) {
+                throw new InvalidResponseQueryException("templateVersion must be default or custom:<uuid>:<version>");
+            }
+            return new ExportSpec(surveyId, format, template,
                     new ExportFilter(states(request.filter()), versions(request.filter())));
         }
 

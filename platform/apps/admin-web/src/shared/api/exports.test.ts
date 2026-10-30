@@ -3,6 +3,7 @@ import {
   createExportClient,
   exportJobQueryKey,
   exportJobSchema,
+  wordTemplateSchema,
 } from './exports';
 import { binaryResponse, jsonResponse } from '../../test/server';
 
@@ -77,6 +78,60 @@ test('loads and cancels an export job through typed responses', async () => {
     ['/v1/exports/job%2Fid', 'GET'],
     ['/v1/exports/job%2Fid/cancel', 'POST'],
   ]);
+});
+
+test('lists and uploads immutable Word template versions without reading their content', async () => {
+  const template = {
+    id: '50000000-0000-4000-8000-000000000001',
+    name: '客户报告模板',
+    version: 2,
+    sha256: 'c'.repeat(64),
+    createdAt: '2026-10-30T08:00:00Z',
+  };
+  expect(wordTemplateSchema.parse(template)).toEqual(template);
+  const fetchImpl = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse([template]))
+    .mockResolvedValueOnce(jsonResponse({ ...template, version: 3 }, 201));
+  const client = createExportClient({ fetchImpl, getToken: () => 'jwt-token' });
+
+  await expect(client.listWordTemplates('survey/id')).resolves.toEqual([template]);
+  const file = new File(['safe-docx-bytes'], 'report.docx', {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+  await expect(client.uploadWordTemplateVersion(
+    'survey/id', template.id, file,
+  )).resolves.toMatchObject({ version: 3 });
+
+  expect(fetchImpl.mock.calls[0]?.[0]).toBe('/v1/surveys/survey%2Fid/word-templates');
+  expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe('GET');
+  expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+    `/v1/surveys/survey%2Fid/word-templates/${template.id}/versions`,
+  );
+  const upload = fetchImpl.mock.calls[1]?.[1];
+  expect(upload?.method).toBe('POST');
+  expect(upload?.body).toBeInstanceOf(FormData);
+  expect((upload?.body as FormData).get('file')).toBe(file);
+  expect(new Headers(upload?.headers).get('Content-Type')).toBeNull();
+  expect(new Headers(upload?.headers).get('Authorization')).toBe('Bearer jwt-token');
+});
+
+test('uploads a named Word template to the survey collection', async () => {
+  const template = {
+    id: '50000000-0000-4000-8000-000000000001', name: '客户报告模板', version: 1,
+    sha256: 'd'.repeat(64),
+  };
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(template, 201));
+  const file = new File(['safe-docx-bytes'], 'report.docx');
+
+  await expect(createExportClient({ fetchImpl }).uploadWordTemplate(
+    'survey/id', '  客户报告模板  ', file,
+  )).resolves.toEqual(template);
+
+  const [path, init] = fetchImpl.mock.calls[0] ?? [];
+  expect(path).toBe('/v1/surveys/survey%2Fid/word-templates');
+  const body = init?.body as FormData;
+  expect(body.get('name')).toBe('客户报告模板');
+  expect(body.get('file')).toBe(file);
 });
 
 test('export query keys are isolated by tenant survey and job', () => {

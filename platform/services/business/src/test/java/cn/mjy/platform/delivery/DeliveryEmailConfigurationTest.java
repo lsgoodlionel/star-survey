@@ -3,17 +3,24 @@ package cn.mjy.platform.delivery;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
+import static org.mockito.Mockito.mock;
+import cn.mjy.platform.shared.TenantId;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
-/** 配置开关回归：默认无生产 provider，启用后也只注册 Email。 */
+/** 配置回归：租户可用性及静态配置回退。 */
 class DeliveryEmailConfigurationTest {
 
     private final ApplicationContextRunner context = new ApplicationContextRunner()
-            .withUserConfiguration(DeliveryConfig.class, DeliveryEmailConfig.class);
+            .withUserConfiguration(DeliveryConfig.class, DeliveryEmailConfig.class)
+            .withBean(EmailSettingsService.class, () -> mock(EmailSettingsService.class));
 
     @Test
     void remainsFailClosedWhenEmailIsNotExplicitlyEnabled() {
-        context.run(application -> assertThat(application.getBeansOfType(DeliveryProvider.class)).isEmpty());
+        context.run(application -> {
+            assertThat(application).hasNotFailed();
+            assertThat(application.getBeansOfType(DeliveryProvider.class).values()).singleElement()
+                    .satisfies(provider -> assertThat(provider.available(TenantId.random())).isFalse());
+        });
     }
 
     @Test
@@ -31,7 +38,8 @@ class DeliveryEmailConfigurationTest {
                             .singleElement()
                             .satisfies(provider -> {
                                 assertThat(provider.channel()).isEqualTo(DeliveryChannel.EMAIL);
-                                assertThat(provider.name()).isEqualTo("smtp-gmail");
+                                assertThat(provider.name()).isEqualTo("smtp-configured");
+                                assertThat(provider.available(TenantId.random())).isTrue();
                             });
                 });
     }

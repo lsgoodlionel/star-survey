@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { deflateSync } from 'node:zlib';
+import { deflateSync, inflateRawSync } from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { redactSensitiveInputs } from './redaction';
@@ -318,6 +318,7 @@ test('branded copy previews and publishes with language and pinned image bytes',
   for (const [format, label, suffix] of [
     ['csv', 'CSV 数据包', '.zip'], ['xlsx', 'Excel 工作簿', '.xlsx'],
     ['sav', 'SPSS 数据包', '.sav.zip'], ['docx', 'Word 答卷文档', '.docx'],
+    ['pdf', 'PDF 答卷文档', '.pdf'], ['report-docx', 'Word 统计报告', '.report.docx'],
     ['attachments', '附件包', '.zip'],
   ]) {
     await page.getByLabel('导出格式').selectOption(format);
@@ -332,6 +333,76 @@ test('branded copy previews and publishes with language and pinned image bytes',
     const file = await downloadPromise;
     expect(file.suggestedFilename()).toMatch(new RegExp(`${suffix.replaceAll('.', '\\.')}$`));
     expect((await stat(await file.path())).size).toBeGreaterThan(0);
+  }
+
+  await page.getByLabel('导出格式').selectOption('docx');
+  const wordTemplatePanel = page.locator('.word-template-panel');
+  await expect(wordTemplatePanel.getByRole('heading', { name: '自定义 Word 模板' })).toBeVisible();
+  await wordTemplatePanel.getByLabel('模板名称').fill('浏览器验收自定义模板');
+  await wordTemplatePanel.getByLabel('Word 模板文件').setInputFiles({
+    name: 'invalid-secret.docx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    buffer: minimalDocx('E2E {{tenant.secret}}'),
+  });
+  const rejectedTemplate = page.waitForResponse((response) => response.request().method() === 'POST'
+    && response.url().endsWith(`/v1/surveys/${copiedSurveyId}/word-templates`));
+  await wordTemplatePanel.getByRole('button', { name: '上传 Word 模板' }).click();
+  expect((await rejectedTemplate).status()).toBe(400);
+  await expect(wordTemplatePanel.getByRole('alert')).toContainText('操作失败，请稍后重试');
+  await expect(wordTemplatePanel.getByRole('alert')).not.toContainText('tenant.secret');
+
+  await wordTemplatePanel.getByLabel('Word 模板文件').setInputFiles({
+    name: 'wave3-custom.docx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    buffer: minimalDocx('E2E|{{survey.title}}|ID={{response.id}}|VERSION={{response.version}}|ANSWERS={{response.answers}}|END'),
+  });
+  const uploadedTemplate = page.waitForResponse((response) => response.request().method() === 'POST'
+    && response.url().endsWith(`/v1/surveys/${copiedSurveyId}/word-templates`));
+  await wordTemplatePanel.getByRole('button', { name: '上传 Word 模板' }).click();
+  const uploadResponse = await uploadedTemplate;
+  expect(uploadResponse.status()).toBe(201);
+  const template = await uploadResponse.json() as {
+    id: string; name: string; version: number; sha256: string;
+  };
+  expect(template.id).toMatch(uuid);
+  expect(template.name).toBe('浏览器验收自定义模板');
+  expect(template.version).toBe(1);
+  expect(template.sha256).toMatch(/^[a-f0-9]{64}$/);
+  await expect(wordTemplatePanel.getByText('模板已上传，可用于本次导出。')).toBeVisible();
+  const customTemplateVersion = `custom:${template.id}:1`;
+  const wordTemplateSelect = page.getByRole('combobox').filter({
+    has: page.getByRole('option', { name: '平台默认模板' }),
+  });
+  await expect(wordTemplateSelect).toHaveValue(customTemplateVersion);
+
+  const customCreation = page.waitForResponse((response) => response.url()
+    .endsWith(`/v1/surveys/${copiedSurveyId}/exports`) && response.request().method() === 'POST');
+  await page.getByRole('button', { name: '创建导出任务' }).click();
+  const customCreationResponse = await customCreation;
+  expect(customCreationResponse.status()).toBe(202);
+  expect(customCreationResponse.request().postDataJSON()).toMatchObject({
+    format: 'docx', templateVersion: customTemplateVersion,
+  });
+  await expect(page.locator('.export-job')).toContainText('导出完成', { timeout: 60_000 });
+  const customDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: '下载导出文件' }).click();
+  const customFile = await customDownload;
+  expect(customFile.suggestedFilename()).toMatch(/\.docx\.zip$/);
+  const outer = readZipEntries(await readFile((await customFile.path())!));
+  expect([...outer.keys()]).toHaveLength(2);
+  for (const [filename, documentBytes] of outer) {
+    const identity = /^response-\d+-v(\d+)-r(\d+)\.docx$/.exec(filename);
+    expect(identity).not.toBeNull();
+    const document = readZipEntries(documentBytes).get('word/document.xml');
+    expect(document).toBeDefined();
+    const rendered = xmlText(document!.toString('utf8'));
+    expect(rendered).toContain('E2E|品牌化模板副本');
+    expect(rendered).toContain(`|ID=${identity![2]}|VERSION=${identity![1]}|ANSWERS=`);
+    const answers = rendered.match(/\|ANSWERS=([\s\S]+)\|END$/)?.[1] ?? '';
+    expect(answers.trim().length).toBeGreaterThan(0);
+    expect(rendered).not.toContain('{{');
+    expect(rendered).not.toContain('tenant.secret');
+    expect(rendered).not.toContain('response.unknown');
   }
   scenarios.add('asset-version-pinning');
   await assertNoThirdPartyUrls(version2);
@@ -455,4 +526,108 @@ function chunk(type: string, data: Buffer) {
   }
   checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
   return Buffer.concat([length, body, checksum]);
+}
+
+function minimalDocx(text: string) {
+  return createZip(new Map([
+    ['[Content_Types].xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?>'
+      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '</Types>')],
+    ['_rels/.rels', Buffer.from('<?xml version="1.0" encoding="UTF-8"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+      + '</Relationships>')],
+    ['word/document.xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?>'
+      + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + `<w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`)],
+  ]));
+}
+
+function createZip(entries: Map<string, Buffer>) {
+  const local: Buffer[] = [];
+  const central: Buffer[] = [];
+  let offset = 0;
+  for (const [name, data] of entries) {
+    const filename = Buffer.from(name, 'utf8');
+    const checksum = crc32(data);
+    const header = Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(20, 4);
+    header.writeUInt16LE(0x0800, 6);
+    header.writeUInt16LE(0, 8);
+    header.writeUInt32LE(checksum, 14);
+    header.writeUInt32LE(data.length, 18);
+    header.writeUInt32LE(data.length, 22);
+    header.writeUInt16LE(filename.length, 26);
+    local.push(header, filename, data);
+
+    const directory = Buffer.alloc(46);
+    directory.writeUInt32LE(0x02014b50, 0);
+    directory.writeUInt16LE(20, 4);
+    directory.writeUInt16LE(20, 6);
+    directory.writeUInt16LE(0x0800, 8);
+    directory.writeUInt16LE(0, 10);
+    directory.writeUInt32LE(checksum, 16);
+    directory.writeUInt32LE(data.length, 20);
+    directory.writeUInt32LE(data.length, 24);
+    directory.writeUInt16LE(filename.length, 28);
+    directory.writeUInt32LE(offset, 42);
+    central.push(directory, filename);
+    offset += header.length + filename.length + data.length;
+  }
+  const centralBytes = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.size, 8);
+  end.writeUInt16LE(entries.size, 10);
+  end.writeUInt32LE(centralBytes.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...local, centralBytes, end]);
+}
+
+function readZipEntries(zip: Buffer) {
+  let end = zip.length - 22;
+  while (end >= 0 && zip.readUInt32LE(end) !== 0x06054b50) end -= 1;
+  if (end < 0) throw new Error('ZIP end directory is missing');
+  const count = zip.readUInt16LE(end + 10);
+  let cursor = zip.readUInt32LE(end + 16);
+  const entries = new Map<string, Buffer>();
+  for (let index = 0; index < count; index += 1) {
+    if (zip.readUInt32LE(cursor) !== 0x02014b50) throw new Error('ZIP central directory is invalid');
+    const method = zip.readUInt16LE(cursor + 10);
+    const compressedSize = zip.readUInt32LE(cursor + 20);
+    const filenameLength = zip.readUInt16LE(cursor + 28);
+    const extraLength = zip.readUInt16LE(cursor + 30);
+    const commentLength = zip.readUInt16LE(cursor + 32);
+    const localOffset = zip.readUInt32LE(cursor + 42);
+    const name = zip.subarray(cursor + 46, cursor + 46 + filenameLength).toString('utf8');
+    if (zip.readUInt32LE(localOffset) !== 0x04034b50) throw new Error('ZIP local entry is invalid');
+    const localNameLength = zip.readUInt16LE(localOffset + 26);
+    const localExtraLength = zip.readUInt16LE(localOffset + 28);
+    const start = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = zip.subarray(start, start + compressedSize);
+    const value = method === 0 ? compressed : method === 8 ? inflateRawSync(compressed)
+      : (() => { throw new Error(`unsupported ZIP method ${method}`); })();
+    entries.set(name, value);
+    cursor += 46 + filenameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function xmlText(xml: string) {
+  return xml.replace(/<[^>]+>/g, '')
+    .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"')
+    .replaceAll('&apos;', "'").replaceAll('&amp;', '&');
+}
+
+function crc32(data: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
