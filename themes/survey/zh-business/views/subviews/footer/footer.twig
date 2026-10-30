@@ -6,6 +6,8 @@
     （契约 survey-branding-v1 §2.1——租户不能提供 CSS/JS/HTML）。
 #}
 {% set mjyFooter = aSurveyInfo.options['mjybrandfooter__' ~ aSurveyInfo.languagecode]|default(aSurveyInfo.options.mjybrandfooter|default('')) %}
+{% set mjyWatermark = aSurveyInfo.options['mjybrandwatermark__' ~ aSurveyInfo.languagecode]|default(aSurveyInfo.options.mjybrandwatermark|default('')) %}
+{% if mjyWatermark %}<div class="mjy-brand-watermark" aria-hidden="true">{{ mjyWatermark|escape }}</div>{% endif %}
 {% if mjyFooter %}
     <footer class="mjy-brand-footer" id="mjy-brand-footer">
         <div class="container-fluid text-center py-3">

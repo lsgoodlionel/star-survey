@@ -61,8 +61,11 @@
         <mjybrandlogofile type="dropdown" category="MJY brand" width="6" title="Brand logo file" parent="mjybrandlogo"/>
         <mjybrandlogoalt type="text" category="MJY brand" width="6" title="Brand logo alt text"/>
         <mjybrandfavicon type="dropdown" category="MJY brand" width="6" title="Brand favicon"/>
+        <mjybrandcover type="dropdown" category="MJY brand" width="6" title="Survey cover"/>
+        <mjybrandbackground type="dropdown" category="MJY brand" width="6" title="Page background"/>
         <mjybrandtitle type="text" category="MJY brand" width="12" title="Browser title"/>
         <mjybrandfooter type="text" category="MJY brand" width="12" title="Footer text"/>
+        <mjybrandwatermark type="text" category="MJY brand" width="12" title="Page watermark"/>
     </options>
 
     <updaters disabled="disabled"/>

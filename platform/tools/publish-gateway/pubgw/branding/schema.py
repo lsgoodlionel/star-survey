@@ -32,6 +32,11 @@ _TOP_KEYS = frozenset(
         "logoAlt",
         "faviconFile",
         "faviconAsset",
+        "coverFile",
+        "coverAsset",
+        "backgroundFile",
+        "backgroundAsset",
+        "watermarkText",
     }
 )
 #: 单独报错的键：作者写了它说明误以为能塞 CSS，要给出明确的理由而不是"未知键"。
@@ -86,6 +91,11 @@ class Branding:
     favicon_file: str = ""
     logo_asset: Optional["BrandAsset"] = None
     favicon_asset: Optional["BrandAsset"] = None
+    cover_file: str = ""
+    cover_asset: Optional["BrandAsset"] = None
+    background_file: str = ""
+    background_asset: Optional["BrandAsset"] = None
+    watermark_text: BrandText = BrandText()
 
 
 @dataclass(frozen=True)
@@ -139,8 +149,12 @@ class _Reader:
         self._check_unknown_keys(raw)
         logo_asset = self._asset_reference(raw.get("logoAsset"), "logoAsset")
         favicon_asset = self._asset_reference(raw.get("faviconAsset"), "faviconAsset")
+        cover_asset = self._asset_reference(raw.get("coverAsset"), "coverAsset")
+        background_asset = self._asset_reference(raw.get("backgroundAsset"), "backgroundAsset")
         self._check_exclusive(raw, "logoFile", "logoAsset")
         self._check_exclusive(raw, "faviconFile", "faviconAsset")
+        self._check_exclusive(raw, "coverFile", "coverAsset")
+        self._check_exclusive(raw, "backgroundFile", "backgroundAsset")
         branding = Branding(
             primary_color=self._color(raw.get("primaryColor")),
             page_title=self._text(raw.get("pageTitle"), "pageTitle"),
@@ -150,6 +164,11 @@ class _Reader:
             favicon_file=self._asset(raw.get("faviconFile"), "faviconFile", _FAVICON_SUFFIXES),
             logo_asset=logo_asset,
             favicon_asset=favicon_asset,
+            cover_file=self._asset(raw.get("coverFile"), "coverFile", _IMAGE_SUFFIXES),
+            cover_asset=cover_asset,
+            background_file=self._asset(raw.get("backgroundFile"), "backgroundFile", _IMAGE_SUFFIXES),
+            background_asset=background_asset,
+            watermark_text=self._text(raw.get("watermarkText"), "watermarkText"),
         )
         if self._issues:
             return None, self._issues
@@ -338,7 +357,8 @@ class _Reader:
         if not isinstance(sha256, str) or not _SHA256.fullmatch(sha256):
             self._fail("E_BRAND_ASSET", key, "sha256 必须是 64 位小写十六进制摘要")
             return None
-        slot = "logo" if key == "logoAsset" else "favicon"
+        slot = {"logoAsset": "logo", "faviconAsset": "favicon",
+                "coverAsset": "cover", "backgroundAsset": "background"}.get(key, "")
         filename = "mjy-brand-{}{}".format(slot, extension)
         if value["fileName"] != filename:
             self._fail("E_BRAND_ASSET", key, "fileName 必须是该槽位和 MIME 派生的不含资产 ID 的固定文件名")

@@ -53,6 +53,8 @@ def _options(branding: Branding) -> Dict[str, str]:
     favicon_file = branding.favicon_file
     if (branding.logo_asset and not branding.logo_asset.filename) or (
         branding.favicon_asset and not branding.favicon_asset.filename
+    ) or (branding.cover_asset and not branding.cover_asset.filename) or (
+        branding.background_asset and not branding.background_asset.filename
     ):
         raise BrandingError("brand asset reference requires trusted platform materialization")
     if logo_file:
@@ -64,6 +66,13 @@ def _options(branding: Branding) -> Dict[str, str]:
         options[PREFIX + "favicon"] = ASSET_DIRECTORY + favicon_file
     options.update(_text_options(PREFIX + "title", branding.page_title))
     options.update(_text_options(PREFIX + "footer", branding.footer_text))
+    cover_file = branding.cover_file or _materialized_filename(branding.cover_asset)
+    background_file = branding.background_file or _materialized_filename(branding.background_asset)
+    if cover_file:
+        options[PREFIX + "cover"] = ASSET_DIRECTORY + cover_file
+    if background_file:
+        options[PREFIX + "background"] = ASSET_DIRECTORY + background_file
+    options.update(_text_options(PREFIX + "watermark", branding.watermark_text))
     return options
 
 
@@ -82,12 +91,22 @@ def _engine_branding(branding: Branding) -> Dict[str, Any]:
         result["footerText"] = dict(branding.footer_text.by_language) if branding.footer_text.by_language else branding.footer_text.default
     logo_file = branding.logo_file or _materialized_filename(branding.logo_asset)
     favicon_file = branding.favicon_file or _materialized_filename(branding.favicon_asset)
+    cover_file = branding.cover_file or _materialized_filename(branding.cover_asset)
+    background_file = branding.background_file or _materialized_filename(branding.background_asset)
     if logo_file:
         result["logoFile"] = logo_file
     if branding.logo_alt:
         result["logoAlt"] = branding.logo_alt
     if favicon_file:
         result["faviconFile"] = favicon_file
+    if cover_file:
+        result["coverFile"] = cover_file
+    if background_file:
+        result["backgroundFile"] = background_file
+    if not branding.watermark_text.is_empty:
+        result["watermarkText"] = (dict(branding.watermark_text.by_language)
+                                   if branding.watermark_text.by_language
+                                   else branding.watermark_text.default)
     return result
 
 

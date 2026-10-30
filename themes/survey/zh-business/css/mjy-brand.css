@@ -25,6 +25,39 @@
     color: var(--mjy-brand-footer-fg);
 }
 
+body {
+    background-position: center top;
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-attachment: fixed;
+}
+
+.mjy-brand-cover {
+    margin-top: 58px;
+    max-height: 32vh;
+    overflow: hidden;
+    text-align: center;
+}
+
+.mjy-brand-cover img {
+    width: 100%;
+    max-height: 32vh;
+    object-fit: cover;
+}
+
+.mjy-brand-watermark {
+    position: fixed;
+    inset: 50% auto auto 50%;
+    z-index: 0;
+    transform: translate(-50%, -50%) rotate(-24deg);
+    color: rgba(0, 0, 0, 0.08);
+    font-size: clamp(2rem, 8vw, 7rem);
+    font-weight: 700;
+    pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+}
+
 /* 主按钮与进度条跟随主色，让品牌不只是一个 logo。 */
 .ls-move-next-btn,
 .ls-move-submit-btn {

@@ -12,13 +12,15 @@ class MjyBrandAssetEndpoint
     public const PLUGIN_NAME = 'MjyQuestionExtensions';
     public const THEME_NAME = 'zh-business';
     public const MAX_ASSET_BYTES = 5242880;
-    public const MAX_BODY_BYTES = 15728640;
+    // Four 5 MiB images expand to roughly 26.7 MiB in base64; leave bounded JSON overhead.
+    public const MAX_BODY_BYTES = 29360128;
 
     private const ALLOWED_PARAMS = ['plugin', 'function', 'sid', 'bodySha256', 'bodySize', 'ts', 'sig'];
     private const REQUIRED_PARAMS = ['plugin', 'function', 'sid', 'bodySha256', 'bodySize', 'ts'];
     private const TOP_LEVEL_FIELDS = ['version', 'theme', 'branding', 'assets'];
     private const BRANDING_FIELDS = [
-        'brandingVersion', 'primaryColor', 'pageTitle', 'footerText', 'logoFile', 'logoAlt', 'faviconFile',
+        'brandingVersion', 'primaryColor', 'pageTitle', 'footerText', 'watermarkText',
+        'logoFile', 'logoAlt', 'faviconFile', 'coverFile', 'backgroundFile',
     ];
     private const ASSET_FIELDS = ['slot', 'fileName', 'contentType', 'sizeBytes', 'sha256', 'contentBase64'];
     private const SID_PATTERN = '/\A[1-9][0-9]{0,9}\z/D';
@@ -122,7 +124,7 @@ class MjyBrandAssetEndpoint
         }
         if (!is_array($payload) || !self::hasExactKeys($payload, self::TOP_LEVEL_FIELDS)
             || $payload['version'] !== 1 || $payload['theme'] !== self::THEME_NAME
-            || !is_array($payload['branding']) || !is_array($payload['assets']) || count($payload['assets']) > 2) {
+            || !is_array($payload['branding']) || !is_array($payload['assets']) || count($payload['assets']) > 4) {
             return null;
         }
 
@@ -189,7 +191,8 @@ class MjyBrandAssetEndpoint
             }
             $options['mjybrandprimary'] = $branding['primaryColor'];
         }
-        foreach (['pageTitle' => 'mjybrandtitle', 'footerText' => 'mjybrandfooter'] as $field => $prefix) {
+        foreach (['pageTitle' => 'mjybrandtitle', 'footerText' => 'mjybrandfooter',
+            'watermarkText' => 'mjybrandwatermark'] as $field => $prefix) {
             if (isset($branding[$field]) && !self::addTextOptions($options, $prefix, $branding[$field])) {
                 return null;
             }
@@ -200,7 +203,10 @@ class MjyBrandAssetEndpoint
             }
             $options['mjybrandlogoalt'] = $branding['logoAlt'];
         }
-        foreach (['logoFile' => ['logoAsset', 'mjybrandlogofile'], 'faviconFile' => ['faviconAsset', 'mjybrandfavicon']] as $field => $target) {
+        foreach (['logoFile' => ['logoAsset', 'mjybrandlogofile'],
+            'faviconFile' => ['faviconAsset', 'mjybrandfavicon'],
+            'coverFile' => ['coverAsset', 'mjybrandcover'],
+            'backgroundFile' => ['backgroundAsset', 'mjybrandbackground']] as $field => $target) {
             if (!isset($branding[$field])) {
                 continue;
             }
@@ -226,7 +232,9 @@ class MjyBrandAssetEndpoint
         }
         // 每个已上传槽位必须在受控主题配置中被消费，避免死文件与意外语义。
         if ((isset($slots['logoAsset']) && !isset($branding['logoFile']))
-            || (isset($slots['faviconAsset']) && !isset($branding['faviconFile']))) {
+            || (isset($slots['faviconAsset']) && !isset($branding['faviconFile']))
+            || (isset($slots['coverAsset']) && !isset($branding['coverFile']))
+            || (isset($slots['backgroundAsset']) && !isset($branding['backgroundFile']))) {
             return null;
         }
         return $options;
@@ -348,8 +356,10 @@ class MjyBrandAssetEndpoint
     {
         $replaceLogo = isset($updates['mjybrandlogofile']);
         $replaceFavicon = isset($updates['mjybrandfavicon']);
+        $replaceCover = isset($updates['mjybrandcover']);
+        $replaceBackground = isset($updates['mjybrandbackground']);
         foreach (array_keys($existing) as $key) {
-            if (preg_match('/\Amjybrand(?:primary|logo|logofile|logoalt|favicon|title(?:__.*)?|footer(?:__.*)?)\z/D', (string) $key) !== 1) {
+            if (preg_match('/\Amjybrand(?:primary|logo|logofile|logoalt|favicon|cover|background|title(?:__.*)?|footer(?:__.*)?|watermark(?:__.*)?)\z/D', (string) $key) !== 1) {
                 continue;
             }
             // The import keeps a legacy image slot when only the other slot
@@ -358,6 +368,12 @@ class MjyBrandAssetEndpoint
                 continue;
             }
             if ($key === 'mjybrandfavicon' && !$replaceFavicon) {
+                continue;
+            }
+            if ($key === 'mjybrandcover' && !$replaceCover) {
+                continue;
+            }
+            if ($key === 'mjybrandbackground' && !$replaceBackground) {
                 continue;
             }
             unset($existing[$key]);
@@ -376,6 +392,12 @@ class MjyBrandAssetEndpoint
         }
         if ($slot === 'faviconAsset') {
             return 'mjy-brand-favicon.' . $extensions[$contentType];
+        }
+        if ($slot === 'coverAsset') {
+            return 'mjy-brand-cover.' . $extensions[$contentType];
+        }
+        if ($slot === 'backgroundAsset') {
+            return 'mjy-brand-background.' . $extensions[$contentType];
         }
         return null;
     }

@@ -196,6 +196,30 @@ class MjyBrandAssetEndpointTest extends TestBaseClass
         $this->assertArrayNotHasKey('logoAsset', $captured[1]);
     }
 
+    public function testWritesCoverAndBackgroundAndAppliesLocalizedWatermark(): void
+    {
+        $payload = json_decode($this->body(), true);
+        $payload['branding']['coverFile'] = 'mjy-brand-cover.png';
+        $payload['branding']['backgroundFile'] = 'mjy-brand-background.png';
+        $payload['branding']['watermarkText'] = ['zh-Hans' => '内部资料', 'en' => 'Internal'];
+        $payload['assets'][] = $this->asset('coverAsset', 'mjy-brand-cover.png', 'image/png', 'cover-bytes');
+        $payload['assets'][] = $this->asset('backgroundAsset', 'mjy-brand-background.png', 'image/png', 'background-bytes');
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $captured = null;
+        $response = $this->endpoint(static function (int $sid, array $options) use (&$captured): void {
+            $captured = $options;
+        })->handle($this->signed($this->params($body)), static function () use ($body): string {
+            return $body;
+        }, self::NOW);
+
+        $this->assertSame(200, $response->status());
+        $this->assertSame('cover-bytes', file_get_contents(self::$root . '/surveys/' . self::SURVEY_ID . '/images/mjy-brand-cover.png'));
+        $this->assertSame('background-bytes', file_get_contents(self::$root . '/surveys/' . self::SURVEY_ID . '/images/mjy-brand-background.png'));
+        $this->assertSame('image::survey::mjy-brand-cover.png', $captured['mjybrandcover']);
+        $this->assertSame('image::survey::mjy-brand-background.png', $captured['mjybrandbackground']);
+        $this->assertSame('内部资料', $captured['mjybrandwatermark__zh-Hans']);
+    }
+
     public function testNewLogoCanCoexistWithLegacyFaviconFile(): void
     {
         $payload = json_decode($this->body(), true);

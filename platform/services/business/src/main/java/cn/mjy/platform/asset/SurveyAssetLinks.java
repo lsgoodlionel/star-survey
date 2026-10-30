@@ -287,7 +287,13 @@ class SurveyAssetLinks implements SurveyAssetSource {
     }
 
     private static String brandFileName(String brandSlot, String extension) {
-        return (brandSlot.equals("logoAsset") ? "mjy-brand-logo" : "mjy-brand-favicon") + extension;
+        return "mjy-brand-" + switch (brandSlot) {
+            case "logoAsset" -> "logo";
+            case "faviconAsset" -> "favicon";
+            case "coverAsset" -> "cover";
+            case "backgroundAsset" -> "background";
+            default -> throw new IllegalArgumentException("unsupported brand slot: " + brandSlot);
+        } + extension;
     }
 
     private static UUID assetId(ObjectNode reference, List<String> problems) {

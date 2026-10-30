@@ -18,7 +18,10 @@ WP-19 切片 19.3，覆盖需求 R19-06（主题／页眉页脚）、R19-07（�
   "footerText": {"en": "© Acme Ltd.", "zh-Hans": "© 艾克姆有限公司"},
   "logoAsset": {"assetId": "作者资产 UUID"},
   "logoAlt": "Acme",
-  "faviconAsset": {"assetId": "作者资产 UUID"}
+  "faviconAsset": {"assetId": "作者资产 UUID"},
+  "coverAsset": {"assetId": "作者资产 UUID"},
+  "backgroundAsset": {"assetId": "作者资产 UUID"},
+  "watermarkText": {"en": "Internal", "zh-Hans": "内部使用"}
 },
 "translations": {
   "zh-Hans": {
@@ -45,16 +48,19 @@ WP-19 切片 19.3，覆盖需求 R19-06（主题／页眉页脚）、R19-07（�
 | `logoAlt` | 字符串 | `mjybrandlogoalt` | 图片替代文本 |
 | `faviconFile` | 同 `logoFile`，另允许 `.ico` | `mjybrandfavicon`＝`./files/<名>` | |
 | `faviconAsset` | 作者态 `{ "assetId": "<UUID>" }`；受信物化态 `{ "url", "assetVersion", "contentType", "sizeBytes", "sha256", "fileName": "mjy-brand-favicon.<ext>" }` | 导入后写入 `image::survey::mjy-brand-favicon.<ext>` 到 `mjybrandfavicon`，不写入 LSS | PNG/JPEG/GIF/WebP，最大 5 MiB |
+| `coverFile` / `coverAsset` | 与 Logo 相同的旧文件名／作者态资产形状；固定物化名 `mjy-brand-cover.<ext>` | `mjybrandcover`，在导航下方渲染受控封面图 | PNG/JPEG/GIF/WebP，最大 5 MiB |
+| `backgroundFile` / `backgroundAsset` | 与 Logo 相同的旧文件名／作者态资产形状；固定物化名 `mjy-brand-background.<ext>` | `mjybrandbackground`，仅作为同源作答页背景图 | PNG/JPEG/GIF/WebP，最大 5 MiB |
+| `watermarkText` | 字符串，或语言→字符串的对象 | `mjybrandwatermark` ＋ `mjybrandwatermark__<语言>` | 纯文本转义，以不可交互的背景水印渲染 |
 
-`logoAsset` / `faviconAsset` 是管理端作者草稿的稳定引用。作者态对象只能含 `assetId`，不能直接进入网关编译。平台在预览或发布时按当前租户、资产状态和签名取件结果解析实际版本，生成受信物化态对象。网关只接受完整的物化态字段：URL 必须是规范 HTTPS 主机上的固定 `/a/<tenant>/<uuid>/<version>` 取件形状并只带 `exp`、`sig`，路径版本必须与 `assetVersion` 一致；`contentType` 必须与槽位匹配，`sizeBytes` 为 1 至 5 MiB，`sha256` 必须是该钉住版本的 64 位小写十六进制摘要，`fileName` 必须由槽位和 MIME 派生为固定名 `mjy-brand-logo.<ext>` 或 `mjy-brand-favicon.<ext>`，不含资产 UUID。URL 仅是平台签名请求中的身份元数据，网关不会抓取它；真实字节必须由下述 bundle 携带并与 `sha256` 再绑定。网关不把 URL、版本、MIME、大小或摘要写入引擎输出。凭据、端口、非规范主机、路径分隔符、`..`、未知字段、超限或不匹配的文件名均拒绝。SVG 不允许。
+四个 `*Asset` 品牌槽位是管理端作者草稿的稳定引用。作者态对象只能含 `assetId`，不能直接进入网关编译。平台在预览或发布时按当前租户、资产状态和签名取件结果解析实际版本，生成受信物化态对象。网关只接受完整的物化态字段：URL 必须是规范 HTTPS 主机上的固定 `/a/<tenant>/<uuid>/<version>` 取件形状并只带 `exp`、`sig`，路径版本必须与 `assetVersion` 一致；`contentType` 必须与槽位匹配，`sizeBytes` 为 1 至 5 MiB，`sha256` 必须是该钉住版本的 64 位小写十六进制摘要，`fileName` 必须由槽位和 MIME 派生为固定名 `mjy-brand-{logo|favicon|cover|background}.<ext>`，不含资产 UUID。URL 仅是平台签名请求中的身份元数据，网关不会抓取它；真实字节必须由下述 bundle 携带并与 `sha256` 再绑定。网关不把 URL、版本、MIME、大小或摘要写入引擎输出。凭据、端口、非规范主机、路径分隔符、`..`、未知字段、超限或不匹配的文件名均拒绝。SVG 不允许。
 
 ### 2.1 品牌资源的网关到引擎落地
 
-发布与预览的请求边界携带版本化、有限大小的 `brandAssets` 包。每一项由平台在资产服务中读取，并同时携带槽位、固定文件名、内容类型、字节数、SHA-256 与字节；网关先把每项同受信物化态的槽位、文件名、MIME、大小和摘要逐项比对，再调用 `MjyQuestionExtensions` 的签名直连端点。该端点只允许 `zh-business`、`mjy-brand-logo.<ext>` 和 `mjy-brand-favicon.<ext>` 两个由 MIME 派生的固定名字，使用原子写入把字节落到 `upload/surveys/<sid>/images/`，再仅更新该问卷的主题选项为 `image::survey::<fixed-name>`。
+发布与预览的请求边界携带版本化、有限大小的 `brandAssets` 包。每一项由平台在资产服务中读取，并同时携带槽位、固定文件名、内容类型、字节数、SHA-256 与字节；网关先把每项同受信物化态的槽位、文件名、MIME、大小和摘要逐项比对，再调用 `MjyQuestionExtensions` 的签名直连端点。该端点只允许 `zh-business` 以及四个由槽位和 MIME 派生的固定名字，使用原子写入把字节落到 `upload/surveys/<sid>/images/`，再仅更新该问卷的主题选项为 `image::survey::<fixed-name>`。
 
 LimeSurvey 的 RemoteControl `import_survey` 不会从 LSS/LSA 搬运任意主题文件，且主题配置在导入时会校验图片路径。因此含资源的选项不得在导入前写入 LSS；网关在导入获取 `sid` 后，必须通过上述端点一次性写入资源及对应选项。验签、包形状、摘要、大小、内容类型、写入或选项更新任一环节失败时，发布/预览失败并沿用既有回滚删除新建问卷。引擎侧不得接收作者 URL、资产 UUID、版本号、签名地址或任意文件路径。
 
-同一个槽位不得同时设置旧 `logoFile` / `faviconFile` 与新 `logoAsset` / `faviconAsset`。兼容已有引擎态定义中的合法 `logoFile` / `faviconFile`；新管理端写入作者态资产引用。发送给引擎的品牌块只保留编译后的文件名与品牌文本，移除 `logoAsset` / `faviconAsset` 及任何作者态/物化元数据；不得包含 URL 或 `assetVersion`。
+同一个槽位不得同时设置旧 `*File` 与新 `*Asset`。兼容已有引擎态定义中的四个合法文件名字段；新管理端写入作者态资产引用。发送给引擎的品牌块只保留编译后的文件名与品牌文本，移除四个 `*Asset` 及任何作者态/物化元数据；不得包含 URL 或 `assetVersion`。
 
 `branding` 出现时定义的 `theme` 必须是 `zh-business`（当前唯一带品牌位的主题），否则 422。
 
@@ -67,7 +73,7 @@ LimeSurvey 的 RemoteControl `import_survey` 不会从 LSS/LSA 搬运任意主�
 |---|---|
 | `customCss` | 422 `E_BRAND_CUSTOM_CSS_UNSUPPORTED` |
 | `customJs`、`headHtml`、`footerHtml` 等任何 HTML／脚本片段 | 422 `E_BRAND_UNKNOWN_KEY` |
-| `logoFile` / `faviconFile` 里带 `/`、`\`、`..`、`:` 或任何 URL；作者资产对象带路径、URL、版本或未知字段 | 422 `E_BRAND_ASSET` |
+| 任一 `*File` 里带 `/`、`\`、`..`、`:` 或任何 URL；作者资产对象带路径、URL、版本或未知字段 | 422 `E_BRAND_ASSET` |
 
 **租户不能提供 CSS 或 JS，一行都不行**，这是本切片的安全默认值，理由：
 
@@ -116,10 +122,10 @@ LimeSurvey 的 RemoteControl `import_survey` 不会从 LSS/LSA 搬运任意主�
 
 | 文件 | 改动 | 理由 |
 |---|---|---|
-| `views/subviews/header/head.twig` | 去掉 `<meta name="generator" content="LimeSurvey http://www.limesurvey.org">`；不再 include `google_analytics.twig`；favicon 与 `<title>` 改读品牌选项；注入 `--mjy-brand-primary` | 去广告（R19-10）：作答页不得出现上游标识，也不得向任何非租户来源发请求 |
-| `views/subviews/header/nav_bar.twig` | logo 改读 `mjybrandlogofile`／`mjybrandlogoalt` | 品牌（R19-06） |
-| `views/subviews/footer/footer.twig` | 渲染 `mjybrandfooter`（按当前语言取，转义） | 页脚（R19-06） |
-| `css/mjy-brand.css` | 用 `--mjy-brand-primary` 上色 | 主色 |
+| `views/subviews/header/head.twig` | 去掉上游 generator 与 Google Analytics；favicon、标题、主色和同源背景图改读品牌选项 | 去广告（R19-10）和背景品牌（R19-06） |
+| `views/subviews/header/nav_bar.twig` | logo 改读品牌选项，并在导航下方渲染受控封面 | 品牌（R19-06） |
+| `views/subviews/footer/footer.twig` | 渲染本地化页脚和纯文本水印 | 页脚与水印（R19-06） |
+| `css/mjy-brand.css` | 用 `--mjy-brand-primary` 上色，并约束封面、背景和水印布局 | 主色与广义品牌素材 |
 
 主题必须先装进引擎（`lime_templates` ＋ 全局 `lime_template_configuration`，
 `Template::getTemplateList()` 只认库里登记过且磁盘上存在的主题）。
