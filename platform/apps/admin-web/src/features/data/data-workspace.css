@@ -1,0 +1,24 @@
+.data-workspace-page { display: grid; gap: 1.25rem; padding: 1.5rem; }
+.data-workspace-header, .data-workspace-section__heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.data-workspace-header h1, .data-workspace-section h2 { margin: 0; }
+.data-workspace-header p, .data-workspace-header span { margin: 0; color: var(--color-text-muted, #667085); }
+.data-workspace-header button { display: inline-flex; align-items: center; gap: .4rem; }
+.data-workspace-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.data-workspace-summary div, .data-workspace-section, .data-workspace-state { padding: 1rem; border: 1px solid var(--color-border, #d0d5dd); border-radius: .75rem; background: var(--color-surface, #fff); }
+.data-workspace-summary span, .data-workspace-summary strong { display: block; }
+.data-workspace-summary strong { margin-top: .35rem; font-size: 1.5rem; }
+.data-workspace-table-wrap { overflow-x: auto; }
+.data-workspace-table-wrap table { width: 100%; border-collapse: collapse; }
+.data-workspace-table-wrap th, .data-workspace-table-wrap td { padding: .75rem; border-bottom: 1px solid var(--color-border, #eaecf0); text-align: left; }
+.data-workspace-table-wrap td span { display: block; color: var(--color-text-muted, #667085); }
+.data-workspace-issues { display: grid; gap: .75rem; padding: 0; list-style: none; }
+.data-workspace-issues li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem; background: var(--color-warning-soft, #fffaeb); border-radius: .5rem; }
+.data-workspace-issues li span, .data-workspace-issues li time { margin-left: .75rem; color: var(--color-text-muted, #667085); }
+.data-workspace-state { text-align: center; }
+.data-workspace-stale { padding: .75rem; background: var(--color-warning-soft, #fffaeb); }
+.data-workspace-empty { color: var(--color-text-muted, #667085); }
+@media (max-width: 720px) {
+  .data-workspace-page { padding: 1rem; }
+  .data-workspace-summary { grid-template-columns: 1fr; }
+  .data-workspace-header, .data-workspace-section__heading, .data-workspace-issues li { align-items: flex-start; flex-direction: column; }
+}

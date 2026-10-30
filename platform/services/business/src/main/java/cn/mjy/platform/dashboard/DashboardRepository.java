@@ -109,6 +109,14 @@ public class DashboardRepository {
                     ) THEN 'export' END,
                     CASE WHEN EXISTS (
                         SELECT 1 FROM actor_permissions
+                        WHERE resource_id IS NULL
+                          AND permission_code IN ('view-statistics', 'export-raw-responses')
+                    ) OR EXISTS (
+                        SELECT 1 FROM permissions
+                        WHERE can_view AND (can_statistics OR can_export)
+                    ) THEN 'data' END,
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM actor_permissions
                         WHERE resource_id IS NULL AND permission_code = 'view'
                     ) OR EXISTS (
                         SELECT 1 FROM permissions WHERE can_view

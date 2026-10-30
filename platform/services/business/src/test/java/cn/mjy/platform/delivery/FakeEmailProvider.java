@@ -6,6 +6,8 @@ import org.springframework.stereotype.Component;
 @Component
 class FakeEmailProvider extends FakeDeliveryProvider {
 
+    private volatile boolean available = true;
+
     @Override
     public DeliveryChannel channel() {
         return DeliveryChannel.EMAIL;
@@ -14,5 +16,14 @@ class FakeEmailProvider extends FakeDeliveryProvider {
     @Override
     public String name() {
         return "fake-email";
+    }
+
+    @Override
+    public boolean available(cn.mjy.platform.shared.TenantId tenant) {
+        return available;
+    }
+
+    void available(boolean value) {
+        available = value;
     }
 }

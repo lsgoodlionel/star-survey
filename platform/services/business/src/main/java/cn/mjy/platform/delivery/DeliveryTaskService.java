@@ -89,7 +89,6 @@ public class DeliveryTaskService {
 
     public TaskView create(TenantContext ctx, NewTask request) {
         access.require(ctx, DeliveryAccess.SEND, request.surveyId());
-        requireChannelIsServiceable(ctx.tenantId(), request.channel());
         validate(request);
         return tenantScope.call(ctx.tenantId(), () -> {
             if (request.idempotencyKey() != null) {
@@ -98,6 +97,7 @@ public class DeliveryTaskService {
                     return TaskView.of(existing);
                 }
             }
+            requireChannelIsServiceable(ctx.tenantId(), request.channel());
             UUID taskId = UUID.randomUUID();
             tasks.insert(ctx.tenantId(), taskId, request.surveyId(), request.linkId(), request.channel(),
                     TaskKind.INVITE, request.subject(), request.bodyTemplate(), null, request.idempotencyKey(),

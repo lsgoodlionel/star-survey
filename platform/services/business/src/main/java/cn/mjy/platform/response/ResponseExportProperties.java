@@ -34,7 +34,12 @@ public record ResponseExportProperties(
         @DefaultValue("5") int maxAttempts,
         @DefaultValue("PT1M") Duration backoff,
         @DefaultValue("200") int maxStepsPerRun,
-        @DefaultValue("67108864") long attachmentMaxBytes) {
+        @DefaultValue("67108864") long attachmentMaxBytes,
+        @DefaultValue("500") long pdfMaxRows,
+        @DefaultValue("200") long customDocxMaxRows,
+        @DefaultValue("50000") long statisticalMaxRows,
+        @DefaultValue("268435456") long maxArtifactBytes,
+        @DefaultValue("PT2M") Duration assemblyTimeout) {
 
     /** 网关读取端点单次最多 500 个答卷号（契约 response-read-v1）。 */
     public static final int MAX_BATCH_SIZE = 500;
@@ -55,8 +60,14 @@ public record ResponseExportProperties(
             throw new IllegalArgumentException(
                     "platform.response.export snapshot-page-size, max-attempts and max-steps-per-run must be positive");
         }
-        if (attachmentMaxBytes < 1) {
-            throw new IllegalArgumentException("platform.response.export.attachment-max-bytes must be positive");
+        if (attachmentMaxBytes < 1 || pdfMaxRows < 1 || customDocxMaxRows < 1 || statisticalMaxRows < 1
+                || maxArtifactBytes < 1) {
+            throw new IllegalArgumentException("platform.response.export resource budgets must be positive");
+        }
+        requirePositive(assemblyTimeout, "assembly-timeout");
+        if (assemblyTimeout.compareTo(lease) >= 0) {
+            throw new IllegalArgumentException(
+                    "platform.response.export.assembly-timeout must be shorter than lease");
         }
     }
 

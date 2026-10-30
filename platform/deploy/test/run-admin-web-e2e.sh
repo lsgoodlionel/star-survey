@@ -6,6 +6,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TEST_DB="${TEST_DB:-mysql}"
 is_fresh=false
+E2E_SUITE="${E2E_SUITE:-full}"
 
 export SURVEY_TEST_PREFIX="${SURVEY_TEST_PREFIX:-adminweb}"
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$SURVEY_TEST_PREFIX}"
@@ -183,7 +184,11 @@ export_failure_artifacts() {
 run_playwright() {
   (
     cd "$ADMIN_WEB_DIR"
-    npm run e2e -- --project=chromium-desktop --project=chromium-template-branding --project=chromium-mobile
+    if [[ "$E2E_SUITE" == "wave3" ]]; then
+      npm run e2e -- --project=chromium-wave3-data
+    else
+      npm run e2e -- --project=chromium-desktop --project=chromium-template-branding --project=chromium-mobile
+    fi
   )
 }
 
@@ -244,11 +249,14 @@ verify_and_archive_run_root() {
 }
 
 main() {
-case "${1:-}" in
-  --fresh) is_fresh=true ;;
-  "") ;;
-  *) echo "usage: $0 [--fresh]" >&2; return 2 ;;
-esac
+while (($#)); do
+  case "$1" in
+    --fresh) is_fresh=true ;;
+    --wave3) E2E_SUITE=wave3 ;;
+    *) echo "usage: $0 [--fresh] [--wave3]" >&2; return 2 ;;
+  esac
+  shift
+done
 trap cleanup EXIT
 
 ensure_node22

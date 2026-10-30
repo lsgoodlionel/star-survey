@@ -156,6 +156,7 @@ class DashboardTenantIsolationTest {
 
         DashboardView view = dashboard.getDashboard(dataViewer, 50, 50);
 
+        assertThat(view.visibleSections()).contains("data");
         assertThat(view.tasks()).filteredOn(task -> task.kind().equals("export_exception"))
                 .extracting(DashboardTaskView::surveyId, DashboardTaskView::status, DashboardTaskView::updatedAt)
                 .containsExactly(
@@ -186,7 +187,7 @@ class DashboardTenantIsolationTest {
 
         DashboardView view = dashboard.getDashboard(editor, 50, 50);
 
-        assertThat(view.visibleSections()).containsExactly("publish", "preview", "survey");
+        assertThat(view.visibleSections()).containsExactly("publish", "preview", "data", "survey");
         assertThat(view.summary()).isEqualTo(new DashboardSummary(0, 0, 0, 0));
         assertThat(view.tasks()).isEmpty();
         assertThat(view.surveys()).isEmpty();

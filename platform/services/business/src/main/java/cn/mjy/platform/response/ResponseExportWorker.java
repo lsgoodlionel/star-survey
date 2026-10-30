@@ -159,6 +159,8 @@ public class ResponseExportWorker {
             retryLater(run, "answers_unavailable", e);
         } catch (ResponseAttachmentsUnavailableException e) {
             retryLater(run, "attachments_unavailable", e);
+        } catch (ExportBudgetExceededException e) {
+            tenantScope.run(tenant, () -> jobs.fail(jobId, token, "export_budget_exceeded"));
         } catch (UncheckedIOException e) {
             retryLater(run, "storage_error", e);
         } catch (RuntimeException e) {
@@ -254,12 +256,22 @@ public class ResponseExportWorker {
             return jobs.snapshotProgress(run.jobId(), run.token(), sources.get(index + 1).version(), null, null,
                     properties.lease());
         }
-        long limit = run.claimed().format().writer().maxDataRows();
+        long limit = maxDataRows(run.claimed());
         if (total > limit) {
             throw new TerminalFailure("too_many_rows",
                     total + " rows exceed the " + run.claimed().format().code() + " limit of " + limit);
         }
         return jobs.snapshotDone(run.jobId(), run.token(), total, properties.lease());
+    }
+
+    private long maxDataRows(ExportJob job) {
+        long configured = switch (job.format()) {
+            case PDF -> properties.pdfMaxRows();
+            case REPORT_DOCX -> properties.statisticalMaxRows();
+            case DOCX -> job.templateContent() == null ? Long.MAX_VALUE : properties.customDocxMaxRows();
+            default -> Long.MAX_VALUE;
+        };
+        return Math.min(job.format().writer().maxDataRows(), configured);
     }
 
     private Step finishSnapshot(Run run, long total) {
@@ -358,10 +370,13 @@ public class ResponseExportWorker {
     // ---- 阶段三：收尾 ----
 
     private Step finish(Run run, ExportJob job) {
-        String key = fileKey(run.tenant(), run.jobId(), job.format().extension());
+        String extension = job.templateContent() == null ? job.format().extension() : "docx.zip";
+        String key = fileKey(run.tenant(), run.jobId(), extension);
         List<String> parts = partKeys(run.tenant(), run.jobId(), job);
         ExportFileAssembler.Written written = assembler.assemble(key, job.format(), run.layout(),
-                job.revealSensitive(), parts, attachments(run.tenant(), run.jobId(), job.format()));
+                job.revealSensitive(), parts, attachments(run.tenant(), run.jobId(), job.format()),
+                run.plan().surveyTitle(), job.templateContent(), job.templateSha256(),
+                properties.maxArtifactBytes(), properties.assemblyTimeout());
         boolean mine = tenantScope.call(run.tenant(), () -> {
             boolean ok = jobs.complete(run.jobId(), run.token(), key, written.size(), written.sha256());
             if (ok) {

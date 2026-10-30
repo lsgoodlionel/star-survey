@@ -11,7 +11,7 @@ import java.util.Optional;
  * 支持的导出格式（ADR 0015 决定 5；切片 06.3 增补 SAV，06.4 增补 DOCX）。新格式在这里加一项并实现
  * {@link Writer}：写出方拿到的是与格式无关的 {@link ExportContent}——既可以按表出列
  * （答卷、字段字典、附件清单、扩展表作答），也可以逐份答卷成文，两个视图都能重复重放
- * （SAV 要扫两遍：先定变量宽度，再写数据）。
+ * （SAV 要扫两遍：先定变量宽度，再写数据）。PDF 内嵌随包分发的 OFL 中文字体。
  *
  * <p>加新格式时别忘了迁移里 {@code response_export_job.format} 的取值约束。
  */
@@ -27,14 +27,22 @@ public enum ExportFormat {
     /** 逐份答卷成文的 Word 文档：每份答卷一页，题目与作答成对呈现（R06-05 / R06-06）。 */
     DOCX("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx",
             new DocxExportWriter()),
+    /** 逐份答卷成文的 PDF；内嵌 OFL 中文字体，不依赖运行环境字体（R06-05）。 */
+    PDF("pdf", "application/pdf", "pdf", new PdfExportWriter()),
+    /** 按冻结答卷快照生成逐题频数、有效值和空值的 Word 统计报告（R06-04）。 */
+    REPORT_DOCX("report-docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "report.docx", new StatisticalDocxExportWriter()),
     /** 附件包：清单、打包结果索引，以及上传的文件本身（R06-07，ADR 0015 增补四）。 */
-    ATTACHMENTS("attachments", "application/zip", "zip", new AttachmentsExportWriter()),
-    /** 逐份答卷成文的 PDF：每份答卷起一页，中文字体随交付自带并嵌入（R06-05，ADR 0015 增补六）。 */
-    PDF("pdf", "application/pdf", "pdf", new PdfExportWriter());
+    ATTACHMENTS("attachments", "application/zip", "zip", new AttachmentsExportWriter());
 
     /** 把导出内容写成一个文件；只写 out，不关闭它。 */
     interface Writer {
         void write(ExportContent content, OutputStream out) throws IOException;
+
+        default void write(ExportContent content, OutputStream out, ExportWriteBudget budget) throws IOException {
+            budget.checkpoint();
+            write(content, out);
+        }
 
         /** 数据行（不含表头）的上限；超过时作业失败而不是截断。 */
         default long maxDataRows() {

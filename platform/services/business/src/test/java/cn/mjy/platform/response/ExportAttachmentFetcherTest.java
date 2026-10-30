@@ -56,12 +56,13 @@ class ExportAttachmentFetcherTest {
     /** 默认配置，只把单份上限压到很小，好让"超限"与"正常"在同一份配置下都跑得出来。 */
     private static ResponseExportProperties properties() {
         return new ResponseExportProperties(false, Duration.ofSeconds(10), Duration.ZERO, "", Duration.ofHours(72),
-                500, 5000, Duration.ofMinutes(5), 5, Duration.ofMinutes(1), 200, 1024);
+                500, 5000, Duration.ofMinutes(5), 5, Duration.ofMinutes(1), 200, 1024,
+                500, 200, 50_000, 256 * 1024 * 1024L, Duration.ofMinutes(2));
     }
 
     private static ExportPlan plan() {
         return new ExportPlan(List.of(
-                new PlannedSource(1, INSTANCE, SID, GENERATION, List.of(), List.of())));
+                new PlannedSource(1, INSTANCE, SID, GENERATION, List.of(), List.of())), "测试问卷");
     }
 
     /** 一份答卷、两道上传题各一份附件。 */

@@ -32,19 +32,26 @@ describe('Playwright result artifact location', () => {
     expect(config.outputDir).toBe('./test-results');
   });
 
-  test('runs dashboard, template branding, then mobile after desktop', async () => {
+  test('keeps the full suite chain and exposes an isolated Wave 3 data chain', async () => {
     process.env.ADMIN_WEB_BASE_URL = 'http://127.0.0.1:4173';
 
     const config = await loadConfig();
     const dashboard = config.projects?.find((project) => project.name === 'chromium-dashboard');
     const branding = config.projects?.find((project) => project.name === 'chromium-template-branding');
     const mobile = config.projects?.find((project) => project.name === 'chromium-mobile');
+    const wave3Seed = config.projects?.find((project) => project.name === 'chromium-wave3-seed');
+    const wave3Data = config.projects?.find((project) => project.name === 'chromium-wave3-data');
 
     expect(dashboard?.dependencies).toEqual(['chromium-desktop']);
     expect(dashboard?.testMatch).toEqual(/dashboard\.spec\.ts/);
     expect(branding?.dependencies).toEqual(['chromium-dashboard']);
     expect(branding?.testMatch).toEqual(/template-branding\.spec\.ts/);
     expect(mobile?.dependencies).toEqual(['chromium-template-branding']);
+    expect(wave3Seed?.dependencies).toBeUndefined();
+    expect(wave3Seed?.testMatch).toEqual(/authoring\.spec\.ts/);
+    expect(wave3Seed?.grep).toEqual(/author filters stable resources, restores archive, and publishes the same survey/);
+    expect(wave3Data?.dependencies).toEqual(['chromium-wave3-seed']);
+    expect(wave3Data?.testMatch).toEqual(/template-branding\.spec\.ts/);
   });
 
   test('registers the run-root reporter after the console reporter', async () => {

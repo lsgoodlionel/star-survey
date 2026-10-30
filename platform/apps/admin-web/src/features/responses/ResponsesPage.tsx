@@ -1,13 +1,14 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, ChevronLeft, ChevronRight, Download, FileDown, RefreshCw } from 'lucide-react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useSurveyPageReady } from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
 import { ApiError } from '../../shared/api/errors';
 import {
   createExportClient,
   exportJobQueryKey,
+  wordTemplatesQueryKey,
   type ExportClient,
   type ExportFormat,
   type ExportJobView,
@@ -35,6 +36,10 @@ interface ResponsesPageProps {
   surveyId: string;
   tenantId: string;
   actorId?: string;
+  urlState?: {
+    searchParams: URLSearchParams;
+    setSearchParams: (next: URLSearchParams, options?: { replace?: boolean }) => void;
+  };
 }
 
 const exportFormats: ReadonlyArray<{ value: ExportFormat; label: string }> = [
@@ -42,6 +47,8 @@ const exportFormats: ReadonlyArray<{ value: ExportFormat; label: string }> = [
   { value: 'xlsx', label: 'Excel 工作簿' },
   { value: 'sav', label: 'SPSS 数据包' },
   { value: 'docx', label: 'Word 答卷文档' },
+  { value: 'pdf', label: 'PDF 答卷文档' },
+  { value: 'report-docx', label: 'Word 统计报告' },
   { value: 'attachments', label: '附件包' },
 ];
 
@@ -51,19 +58,24 @@ const stateOptions: ReadonlyArray<{ value: ResponseState; label: string }> = [
   { value: 'deleted', label: '已删除' },
 ];
 
-export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId }: ResponsesPageProps) {
+export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId, urlState }: ResponsesPageProps) {
   const queryClient = useQueryClient();
-  const [state, setState] = useState<ResponseState | null>(null);
-  const [version, setVersion] = useState<number | null>(null);
-  const [startedFrom, setStartedFrom] = useState('');
-  const [startedTo, setStartedTo] = useState('');
-  const [completedFrom, setCompletedFrom] = useState('');
-  const [completedTo, setCompletedTo] = useState('');
+  const [initialUrlState] = useState(() => readUrlState(urlState?.searchParams));
+  const [state, setState] = useState<ResponseState | null>(initialUrlState.state);
+  const [version, setVersion] = useState<number | null>(initialUrlState.version);
+  const [startedFrom, setStartedFrom] = useState(initialUrlState.startedFrom);
+  const [startedTo, setStartedTo] = useState(initialUrlState.startedTo);
+  const [completedFrom, setCompletedFrom] = useState(initialUrlState.completedFrom);
+  const [completedTo, setCompletedTo] = useState(initialUrlState.completedTo);
   const [fieldPickerOpen, setFieldPickerOpen] = useState(false);
-  const [selectedFields, setSelectedFields] = useState<string[] | null>(null);
+  const [selectedFields, setSelectedFields] = useState<string[] | null>(initialUrlState.fields);
   const [cursor, setCursor] = useState<string | null>(null);
   const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([]);
   const [format, setFormat] = useState<ExportFormat>('csv');
+  const [wordTemplateVersion, setWordTemplateVersion] = useState('default');
+  const [wordTemplateName, setWordTemplateName] = useState('');
+  const [wordTemplateFile, setWordTemplateFile] = useState<File | null>(null);
+  const [wordTemplateValidation, setWordTemplateValidation] = useState<string | null>(null);
   const [currentJob, setCurrentJob] = useState<ExportJobView | null>(null);
   const storageKey = actorId ? `survey-export:${tenantId}:${actorId}:${surveyId}` : null;
   const [currentJobId, setCurrentJobId] = useState<string | null>(() => storageKey
@@ -77,6 +89,21 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId }
     startedFrom: toInstant(startedFrom), startedTo: toInstant(startedTo),
     completedFrom: toInstant(completedFrom), completedTo: toInstant(completedTo),
   };
+
+  useEffect(() => {
+    if (!urlState) return;
+    const next = new URLSearchParams(urlState.searchParams);
+    writeParam(next, 'state', state);
+    writeParam(next, 'version', version === null ? null : String(version));
+    writeParam(next, 'startedFrom', startedFrom || null);
+    writeParam(next, 'startedTo', startedTo || null);
+    writeParam(next, 'completedFrom', completedFrom || null);
+    writeParam(next, 'completedTo', completedTo || null);
+    writeParam(next, 'fields', selectedFields === null ? null : JSON.stringify(selectedFields));
+    if (next.toString() !== urlState.searchParams.toString()) {
+      urlState.setSearchParams(next, { replace: true });
+    }
+  }, [completedFrom, completedTo, selectedFields, startedFrom, startedTo, state, urlState, version]);
 
   const summary = useQuery({
     queryKey: responseSummaryQueryKey(tenantId, surveyId),
@@ -104,6 +131,12 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId }
       .flatMap((item) => item.fields) ?? [];
     return [...new Map(entries.map((field) => [field.fieldname, field])).values()];
   }, [fields.data, version]);
+  const wordTemplates = useQuery({
+    queryKey: wordTemplatesQueryKey(tenantId, surveyId),
+    queryFn: ({ signal }) => exportClient.listWordTemplates(surveyId, signal),
+    enabled: format === 'docx' && responses.isSuccess,
+    retry: false,
+  });
   const job = useQuery({
     queryKey: exportJobQueryKey(tenantId, surveyId, currentJobId ?? 'none'),
     queryFn: ({ signal }) => exportClient.get(currentJobId!, signal),
@@ -123,7 +156,7 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId }
     mutationFn: () => exportClient.create(surveyId, {
       format,
       filter: { states: state ? [state] : null, versions: version ? [version] : null },
-      templateVersion: null,
+      templateVersion: format === 'docx' ? wordTemplateVersion : null,
     }, { idempotencyKey: crypto.randomUUID() }),
     onMutate: () => setDownloadError(null),
     onSuccess: (created) => {
@@ -131,6 +164,22 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId }
       setCurrentJob(created);
       setCurrentJobId(created.jobId);
       if (storageKey) sessionStorage.setItem(storageKey, created.jobId);
+    },
+  });
+  const uploadWordTemplate = useMutation({
+    mutationFn: ({ name, file }: { name: string; file: File }) =>
+      exportClient.uploadWordTemplate(surveyId, name, file),
+    onSuccess: async (created) => {
+      queryClient.setQueryData(wordTemplatesQueryKey(tenantId, surveyId), (current: unknown) => {
+        const templates = Array.isArray(current) ? current : [];
+        return [created, ...templates.filter((item) => typeof item !== 'object' || item === null
+          || !('id' in item) || item.id !== created.id)];
+      });
+      setWordTemplateVersion(customTemplateVersion(created.id, created.version));
+      setWordTemplateName('');
+      setWordTemplateFile(null);
+      setWordTemplateValidation(null);
+      await queryClient.invalidateQueries({ queryKey: wordTemplatesQueryKey(tenantId, surveyId) });
     },
   });
   const cancelJob = useMutation({
@@ -202,7 +251,7 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId }
 
       <section className="responses-workspace" aria-labelledby="response-list-title">
         <div className="responses-section-heading">
-          <div><h3 id="response-list-title">答卷明细</h3><p>筛选条件同时用于创建导出任务。</p></div>
+          <div><h3 id="response-list-title">答卷明细</h3><p>状态和版本筛选用于创建导出任务；时间与显示字段仅影响当前列表。</p></div>
           {responses.data && !responses.data.sensitiveRevealed ? <span>敏感字段已按权限遮蔽</span> : null}
         </div>
 
@@ -312,10 +361,47 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId }
                 {exportFormats.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
+            {format === 'docx' ? <label>Word 模板
+              <select value={wordTemplateVersion} onChange={(event) => setWordTemplateVersion(event.target.value)}>
+                <option value="default">平台默认模板</option>
+                {(wordTemplates.data ?? []).map((template) => (
+                  <option key={`${template.id}:${template.version}`}
+                    value={customTemplateVersion(template.id, template.version)}>
+                    {template.name}（版本 {template.version}）
+                  </option>
+                ))}
+              </select>
+            </label> : null}
             <button type="button" disabled={createJob.isPending} onClick={() => createJob.mutate()}>
               <FileDown aria-hidden="true" />创建导出任务
             </button>
           </div>
+          {format === 'docx' ? <section className="word-template-panel" aria-labelledby="word-template-title">
+            <div><h4 id="word-template-title">自定义 Word 模板</h4>
+              <p>仅上传受信任的 .docx 模板。平台只展示名称、版本和处理状态，不会在页面显示或回传模板正文。</p>
+            </div>
+            {wordTemplates.isPending ? <p role="status">正在加载自定义 Word 模板</p> : null}
+            {wordTemplates.isError ? <p role="alert">自定义 Word 模板加载失败，可继续使用平台默认模板。
+              <button type="button" onClick={() => void wordTemplates.refetch()}>重试加载模板</button></p> : null}
+            <div className="word-template-upload">
+              <label>模板名称<input value={wordTemplateName} maxLength={200}
+                onChange={(event) => { setWordTemplateName(event.target.value); setWordTemplateValidation(null); }} /></label>
+              <label>Word 模板文件<input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                onChange={(event) => { setWordTemplateFile(event.target.files?.[0] ?? null); setWordTemplateValidation(null); }} /></label>
+              <button type="button" disabled={uploadWordTemplate.isPending} onClick={() => {
+                const name = wordTemplateName.trim();
+                if (!name) { setWordTemplateValidation('请填写模板名称。'); return; }
+                if (!wordTemplateFile) { setWordTemplateValidation('请选择 .docx 模板文件。'); return; }
+                if (!wordTemplateFile.name.toLowerCase().endsWith('.docx')) {
+                  setWordTemplateValidation('模板文件必须使用 .docx 格式。'); return;
+                }
+                uploadWordTemplate.mutate({ name, file: wordTemplateFile });
+              }}>上传 Word 模板</button>
+            </div>
+            {wordTemplateValidation ? <p role="alert">{wordTemplateValidation}</p> : null}
+            {uploadWordTemplate.isError ? <p role="alert">{publicMessage(uploadWordTemplate.error)}</p> : null}
+            {uploadWordTemplate.isSuccess ? <p role="status">模板已上传，可用于本次导出。</p> : null}
+          </section> : null}
           {createJob.isError ? <p role="alert">{publicMessage(createJob.error)}</p> : null}
           {visibleJob ? (
             <>
@@ -435,6 +521,7 @@ function ExportJob({ job, cancelling, downloading, onCancel, onDownload }: {
 export function ResponsesRoutePage() {
   const { api, logout, session } = useAuth();
   const surveyId = parseSurveyIdParam(useParams().surveyId);
+  const [searchParams, setSearchParams] = useSearchParams();
   const exportClient = useMemo(() => createExportClient({
     getToken: () => session?.token ?? null,
     onUnauthorized: () => logout(),
@@ -448,6 +535,7 @@ export function ResponsesRoutePage() {
       surveyId={surveyId}
       tenantId={session.me.tenantId}
       actorId={session.me.actorId}
+      urlState={{ searchParams, setSearchParams }}
     />
   );
 }
@@ -523,4 +611,42 @@ function fieldLabel(dictionary: FieldDictionary | undefined, version: number, fi
   const field = dictionary?.versions.find((item) => item.version === version)
     ?.fields.find((item) => item.fieldname === fieldname);
   return field?.label || field?.code || fieldname;
+}
+
+function readUrlState(searchParams?: URLSearchParams) {
+  const stateValue = searchParams?.get('state');
+  const versionValue = Number(searchParams?.get('version'));
+  return {
+    state: stateOptions.some((option) => option.value === stateValue) ? stateValue as ResponseState : null,
+    version: Number.isSafeInteger(versionValue) && versionValue > 0 ? versionValue : null,
+    startedFrom: validLocalDateTime(searchParams?.get('startedFrom')),
+    startedTo: validLocalDateTime(searchParams?.get('startedTo')),
+    completedFrom: validLocalDateTime(searchParams?.get('completedFrom')),
+    completedTo: validLocalDateTime(searchParams?.get('completedTo')),
+    fields: parseFields(searchParams?.get('fields')),
+  };
+}
+
+function validLocalDateTime(value: string | null | undefined) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) || Number.isNaN(new Date(value).getTime())) return '';
+  return value;
+}
+
+function parseFields(value: string | null | undefined): string[] | null {
+  if (value == null) return null;
+  try {
+    const fields: unknown = JSON.parse(value);
+    return Array.isArray(fields) && fields.every((field) => typeof field === 'string') ? [...new Set(fields)] : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeParam(params: URLSearchParams, name: string, value: string | null) {
+  if (value === null) params.delete(name);
+  else params.set(name, value);
+}
+
+function customTemplateVersion(id: string, version: number) {
+  return `custom:${id}:${version}`;
 }
