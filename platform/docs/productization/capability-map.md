@@ -26,7 +26,7 @@
 | 预览 | `R01-07` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 生产部署 | `R20-11`, `R23-08`, `R23-09`, `R23-10`, `R23-11`, `R23-12` | 部分完成 | 未开始 | 未开始 | 未开始 | 未开始 | Wave 0 |
 | 答卷与摘要 | `R06-01`, `R19-02` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 3 |
-| 模板与品牌 | `R01-03`, `R01-06`, `R19-05`, `R19-06`, `R19-10` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 2 |
+| 模板与品牌 | `R01-03`, `R01-06`, `R19-05`, `R19-06`, `R19-10` | 完成 | 完成 | 完成 | 部分完成 | 部分完成 | Wave 2 |
 | 工作台 | `R01-01`, `R19-04` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 6 |
 
 ## 证据
@@ -48,12 +48,14 @@
 ### 通讯录与投放 (`contacts-delivery`)
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java`](../../services/business/src/main/java/cn/mjy/platform/contacts/ContactController.java) 定位 `class ContactController`：联系人、部门、标签和名单后端已形成。
-- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryRulesController.java`](../../services/business/src/main/java/cn/mjy/platform/delivery/DeliveryRulesController.java) 定位 `setReminderRuleEnabled`：批量任务、回执、退订与催答后端已形成；问卷范围任务发现和催答规则启停受 VIEW/SEND 权限与问卷归属约束，真实供应商未接入。
+- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/delivery/DeliveryRulesController.java`](../../services/business/src/main/java/cn/mjy/platform/delivery/DeliveryRulesController.java) 定位 `setReminderRuleEnabled`：批量任务、验签去重回执、不可翻转退订、完成者抑制和催答上限后端已形成；渠道可用性按租户失败即关闭。
 - **后端** （自动化测试）[`platform/services/business/src/test/java/cn/mjy/platform/delivery/DeliveryApiTest.java`](../../services/business/src/test/java/cn/mjy/platform/delivery/DeliveryApiTest.java) 定位 `anOwnerCanCreateListAndToggleTheSurveysReminderRule`：测试源码 FakeEmailProvider 验证 audience 任务成功投递、脱敏任务发现和催答规则启停；不属于生产 provider 证据。
-- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `author filters stable resources, restores archive, and publishes the same survey`：2026-10-29 隔离 Docker MySQL/PostgreSQL 各 20/20：发布后完成 CSV 导入及无 PII 行结果、名单、联系人、audience 和无 provider 的 503 路径；不宣称真实投递成功。
-- **前端** （实现）[`platform/apps/admin-web/src/features/audience/AudiencePage.tsx`](../../apps/admin-web/src/features/audience/AudiencePage.tsx) 定位 `export function AudiencePage`：问卷内页面支持名单、单个 respondent 联系人、CSV/JSON 批量导入、audience、脱敏任务发现和当前邀请任务的催答规则管理；不回显 PII、正文或回执密钥，未覆盖真实 provider/回执 UI。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `exerciseDeliveryWorkspace`：2026-10-30 隔离 Docker MySQL/PostgreSQL 各 20/20：一级投放工作区完成名单、部门、标签、联系人、标签分配和导入任务，再贯通发布、链接/二维码、audience、未配置渠道 503、正式作答与导出。
+- **前端** （实现）[`platform/apps/admin-web/src/features/audience/AudiencePage.tsx`](../../apps/admin-web/src/features/audience/AudiencePage.tsx) 定位 `export function AudiencePage`：问卷内页面支持 audience、链接/二维码入口、批量任务、中文逐收件人状态、催答次数、已认证回执与退订/完成抑制状态。
+- **前端** （实现）[`platform/apps/admin-web/src/features/delivery/DeliveryWorkspacePage.tsx`](../../apps/admin-web/src/features/delivery/DeliveryWorkspacePage.tsx) 定位 `export function DeliveryWorkspacePage`：正式一级投放工作区支持名单、部门、标签、联系人、停用、标签分配及 CSV/JSON 导入任务，并进入问卷内受众投放上下文。
+- **生产** （部署基线）[`platform/deploy/production/compose.yml`](../../deploy/production/compose.yml) 定位 `PLATFORM_DELIVERY_SECRET`：生产 compose 与安装器已具备投递主密钥 secret 和默认关闭的 worker 开关；网易 163 已在本地 Docker 完成真实 SMTP 提交，正式生产环境仍待 Wave 6 验收。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R18-01 |`：通讯录导入与同步需求已编号。
-- **追溯** （追溯记录）[`docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md`](../../../docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md) 定位 `2026-10-29 阶段 6：任务发现与催答规则管理`：最小纵切的批量导入、任务发现、催答规则、双库浏览器证据及遗留项已记录。
+- **追溯** （追溯记录）[`docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md`](../../../docs/superpowers/plans/2026-10-28-wave4-audience-delivery.md) 定位 `2026-10-30 阶段 9：正式投放工作区与 Wave 4 本地准出`：Wave 4 蓝图本地功能准出、双库浏览器、真实 SMTP 与明确延期边界已记录。
 
 ### 投放链接与二维码 (`delivery-links`)
 

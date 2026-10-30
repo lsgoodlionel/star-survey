@@ -3,6 +3,7 @@ package cn.mjy.platform.delivery;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 
 /** 只在明确启用 Email 时注册 SMTP adapter；SMS 本轮保持未配置。 */
 @Configuration(proxyBeanMethods = false)
@@ -15,12 +16,13 @@ class DeliveryEmailConfig {
     }
 
     @Bean
+    @ConditionalOnMissingBean(DeliveryProvider.class)
     DeliveryProvider smtpEmailDeliveryProvider(DeliveryEmailProperties email, DeliveryProperties delivery,
             EmailSettingsService settings, SmtpTransport transport) {
         DeliveryEmailProperties.Resolved fallback = email.enabled() ? email.resolve(delivery.sendLease()) : null;
         return new SmtpEmailDeliveryProvider(message -> {
             DeliveryEmailProperties.Resolved configured = settings.resolve(message.tenant());
             return configured == null ? fallback : configured;
-        }, transport);
+        }, tenant -> settings.isConfigured(tenant) || fallback != null, transport);
     }
 }

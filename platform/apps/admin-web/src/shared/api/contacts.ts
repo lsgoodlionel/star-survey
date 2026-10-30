@@ -37,6 +37,18 @@ export const contactPageSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 
+export const orgUnitViewSchema = z.object({
+  id: z.string().uuid(),
+  parentId: z.string().uuid().nullable(),
+  name: z.string(),
+  externalRef: z.string().nullable(),
+});
+
+export const contactTagViewSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+});
+
 /** Import results intentionally exclude submitted row content and contact addresses. */
 export const contactImportJobSchema = z.object({
   jobId: z.string().uuid(),
@@ -63,6 +75,8 @@ export type ContactKind = z.infer<typeof contactKindSchema>;
 export type DedupeKey = z.infer<typeof dedupeKeySchema>;
 export type ContactImportJob = z.infer<typeof contactImportJobSchema>;
 export type ContactImportOutcome = z.infer<typeof contactImportOutcomeSchema>;
+export type OrgUnitView = z.infer<typeof orgUnitViewSchema>;
+export type ContactTagView = z.infer<typeof contactTagViewSchema>;
 
 export interface CreateContactListInput {
   name: string;
@@ -75,6 +89,7 @@ export interface CreateContactInput {
   displayName: string;
   email?: string | null;
   phone?: string | null;
+  orgUnitId?: string | null;
 }
 
 export interface SubmitContactImportInput {
@@ -89,6 +104,8 @@ export const contactImportQueryKey = (tenantId: string, jobId: string) =>
   ['contact-imports', tenantId, jobId] as const;
 export const contactImportOutcomesQueryKey = (tenantId: string, jobId: string, fromRow: number, limit: number) =>
   [...contactImportQueryKey(tenantId, jobId), 'outcomes', fromRow, limit] as const;
+export const orgUnitsQueryKey = (tenantId: string) => ['org-units', tenantId] as const;
+export const contactTagsQueryKey = (tenantId: string) => ['contact-tags', tenantId] as const;
 
 export function listContactLists(api: ApiClient, signal?: AbortSignal) {
   return api.request({ path: '/v1/contact-lists', schema: z.array(contactListViewSchema), signal });
@@ -103,6 +120,39 @@ export function listContacts(api: ApiClient, listId: string, signal?: AbortSigna
     path: `/v1/contacts?listId=${encodeURIComponent(listId)}`,
     schema: contactPageSchema,
     signal,
+  });
+}
+
+export function listOrgUnits(api: ApiClient, signal?: AbortSignal) {
+  return api.request({ path: '/v1/org-units', schema: z.array(orgUnitViewSchema), signal });
+}
+
+export function createOrgUnit(api: ApiClient, input: { name: string; parentId?: string | null }, signal?: AbortSignal) {
+  return api.request({
+    path: '/v1/org-units', method: 'POST',
+    body: { name: input.name, parentId: input.parentId ?? null, externalRef: null },
+    schema: orgUnitViewSchema, signal,
+  });
+}
+
+export function listContactTags(api: ApiClient, signal?: AbortSignal) {
+  return api.request({ path: '/v1/contact-tags', schema: z.array(contactTagViewSchema), signal });
+}
+
+export function createContactTag(api: ApiClient, name: string, signal?: AbortSignal) {
+  return api.request({ path: '/v1/contact-tags', method: 'POST', body: { name }, schema: contactTagViewSchema, signal });
+}
+
+export function assignContactTag(api: ApiClient, contactId: string, tagId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/contacts/${encodeURIComponent(contactId)}/tags`, method: 'POST', body: { tagId },
+    schema: z.undefined(), acceptStatuses: [204], signal,
+  });
+}
+
+export function disableContact(api: ApiClient, contactId: string, signal?: AbortSignal) {
+  return api.request({
+    path: `/v1/contacts/${encodeURIComponent(contactId)}/disable`, method: 'POST', schema: contactViewSchema, signal,
   });
 }
 

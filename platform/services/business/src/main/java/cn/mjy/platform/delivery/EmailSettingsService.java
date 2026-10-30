@@ -105,6 +105,10 @@ final class EmailSettingsService {
         }).orElse(null));
     }
 
+    boolean isConfigured(cn.mjy.platform.shared.TenantId tenant) {
+        return keys.isConfigured() && scope.call(tenant, () -> settings.find(tenant).isPresent());
+    }
+
     private void require(TenantContext actor) {
         if (!access.canInTenant(actor, Permission.MANAGE_SETTINGS).allowed()) throw new AccessDeniedException("manage-settings is required");
     }

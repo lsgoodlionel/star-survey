@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * 固定供应商配置档的 SMTP Email adapter。
@@ -17,18 +18,26 @@ final class SmtpEmailDeliveryProvider implements DeliveryProvider {
     private final DeliveryEmailProperties.Resolved configuration;
     private final Function<DeliveryMessage, DeliveryEmailProperties.Resolved> resolver;
     private final SmtpTransport transport;
+    private final Predicate<cn.mjy.platform.shared.TenantId> availability;
 
     SmtpEmailDeliveryProvider(DeliveryEmailProperties.Resolved configuration, SmtpTransport transport) {
         this.configuration = configuration;
         this.resolver = ignored -> configuration;
         this.transport = transport;
+        this.availability = ignored -> true;
     }
 
     SmtpEmailDeliveryProvider(Function<DeliveryMessage, DeliveryEmailProperties.Resolved> resolver,
-            SmtpTransport transport) {
+            Predicate<cn.mjy.platform.shared.TenantId> availability, SmtpTransport transport) {
         this.configuration = null;
         this.resolver = resolver;
+        this.availability = availability;
         this.transport = transport;
+    }
+
+    @Override
+    public boolean available(cn.mjy.platform.shared.TenantId tenant) {
+        return availability.test(tenant);
     }
 
     @Override

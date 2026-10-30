@@ -125,6 +125,8 @@ test('author filters stable resources, restores archive, and publishes the same 
 
   const me = await login(page, token, metadata);
 
+  await exerciseDeliveryWorkspace(page);
+
   await clickAction(page.getByRole('link', { name: '项目与问卷' }));
   await expect(page).toHaveURL(/\/workspace$/);
   await expect(page.getByText(/^E2E(?:项目|文件夹|问卷).*[0-9a-z]{6,}$/i)).toHaveCount(0);
@@ -332,6 +334,39 @@ async function completeLimeSurvey(enginePage: Page) {
     if (await visibleChoices.count() === 0) break;
   }
   await expect(visibleChoices).toHaveCount(0, { timeout: 30_000 });
+}
+
+async function exerciseDeliveryWorkspace(page: Page) {
+  const suffix = Date.now().toString(36);
+  await clickAction(page.getByRole('link', { name: '投放', exact: true }));
+  await expect(page).toHaveURL(/\/delivery$/);
+  await expect(page.getByRole('heading', { name: '通讯录与投放' })).toBeVisible();
+
+  await fillAction(page.getByLabel('投放工作区新名单名称'), `全链路名单-${suffix}`);
+  await clickAction(page.getByRole('button', { name: '创建名单' }));
+  await expect(page.getByLabel('当前联系人名单')).not.toHaveValue('');
+
+  await fillAction(page.getByLabel('部门名称'), `华东区-${suffix}`);
+  await clickAction(page.getByRole('button', { name: '创建部门' }));
+  await expect(page.getByText(`华东区-${suffix}（顶级部门）`)).toBeVisible();
+
+  await fillAction(page.getByLabel('标签名称'), `重点客户-${suffix}`);
+  await clickAction(page.getByRole('button', { name: '创建标签' }));
+  await expect(page.getByText(new RegExp(`现有标签：.*重点客户-${suffix}`))).toBeVisible();
+
+  await fillAction(page.getByLabel('工作区联系人姓名'), `目录联系人-${suffix}`);
+  await fillAction(page.getByLabel('工作区联系人邮箱'), `directory-${suffix}@example.test`);
+  await page.getByLabel('联系人部门').selectOption({ label: `华东区-${suffix}` });
+  await clickAction(page.getByRole('button', { name: '新增联系人' }));
+  const row = page.getByRole('row').filter({ hasText: `目录联系人-${suffix}` });
+  await expect(row).toContainText(`directory-${suffix}@example.test`);
+  await row.getByRole('combobox').selectOption({ label: `重点客户-${suffix}` });
+  await clickAction(row.getByRole('button', { name: '添加标签' }));
+  await expect(row).toContainText(`重点客户-${suffix}`);
+
+  await fillAction(page.getByLabel('投放工作区导入内容'), `name,email\n导入联系人-${suffix},import-${suffix}@example.test\n`);
+  await clickAction(page.getByRole('button', { name: '提交导入任务' }));
+  await expect(page.getByRole('status')).toContainText('已处理 1/1 行', { timeout: 60_000 });
 }
 
 async function readCreatedDeliveryLink(response: Response): Promise<CreatedDeliveryLink> {

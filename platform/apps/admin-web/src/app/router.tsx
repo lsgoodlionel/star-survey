@@ -41,6 +41,7 @@ const AudienceRoutePage = lazy(() =>
   import('../features/audience/AudiencePage').then((module) => ({ default: module.AudienceRoutePage })),
 );
 const EmailSettingsPage = lazy(() => import('../features/delivery/EmailSettingsPage').then((module) => ({ default: module.EmailSettingsPage })));
+const DeliveryWorkspacePage = lazy(() => import('../features/delivery/DeliveryWorkspacePage').then((module) => ({ default: module.DeliveryWorkspacePage })));
 
 const testTokenEnabled = import.meta.env.DEV || import.meta.env.VITE_E2E === 'true';
 const DevelopmentTokenPage = testTokenEnabled
@@ -106,6 +107,7 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
             },
             { path: 'workspace', element: <WorkspacePage /> },
             { path: 'settings/email', element: <Suspense fallback={<p>正在加载邮件服务设置</p>}><EmailSettingsPage /></Suspense> },
+            { path: 'delivery', element: <Suspense fallback={<p>正在加载投放工作区</p>}><DeliveryWorkspacePage /></Suspense> },
             { path: 'templates', element: <Suspense fallback={<p>正在加载模板</p>}><TemplatesPage /></Suspense> },
             { path: 'templates/:templateId', element: <Suspense fallback={<p>正在加载模板详情</p>}><TemplateDetailPage /></Suspense> },
             {

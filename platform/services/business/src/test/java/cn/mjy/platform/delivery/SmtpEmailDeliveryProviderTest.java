@@ -72,6 +72,27 @@ class SmtpEmailDeliveryProviderTest {
     }
 
     @Test
+    void reportsTenantAvailabilityBeforeATaskCanBeCreated() {
+        cn.mjy.platform.shared.TenantId configured = new cn.mjy.platform.shared.TenantId(
+                java.util.UUID.fromString("10000000-0000-4000-8000-000000000001"));
+        cn.mjy.platform.shared.TenantId missing = new cn.mjy.platform.shared.TenantId(
+                java.util.UUID.fromString("10000000-0000-4000-8000-000000000002"));
+        DeliveryEmailProperties.Resolved configuration = properties(
+                "netease-163", "app-password", "sender@163.com", "auth-code").resolve(LEASE);
+        SmtpEmailDeliveryProvider provider = new SmtpEmailDeliveryProvider(
+                ignored -> configuration, configured::equals,
+                (ignored, message, id) -> id);
+
+        assertThat(provider.available(configured)).isTrue();
+        assertThat(provider.available(missing)).isFalse();
+        DeliveryProviders registry = new DeliveryProviders(java.util.List.of(provider));
+        assertThat(registry.require(DeliveryChannel.EMAIL, configured)).isSameAs(provider);
+        assertThatThrownBy(() -> registry.require(DeliveryChannel.EMAIL, missing))
+                .isInstanceOf(DeliveryUnavailableException.class)
+                .hasMessageContaining("no delivery provider");
+    }
+
+    @Test
     void refusesIncompleteOrUnsafeEmailConfigurationBeforeRegisteringAProvider() {
         assertThatThrownBy(() -> properties("outlook-com", "oauth2", "sender@outlook.com", "").resolve(LEASE))
                 .hasMessageContaining("credential");

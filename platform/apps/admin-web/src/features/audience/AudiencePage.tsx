@@ -300,13 +300,13 @@ function ImportStatus({ job, outcomes, outcomesError }: { job: ContactImportJob;
   </section>;
 }
 
-function TaskStatus({ task, recipients, recipientsError, receipts, receiptsError, cancelling, cancelError, onCancel }: { task: DeliveryTask; recipients?: Array<{ id: string; address: string; displayName: string | null; state: string }>; recipientsError: boolean; receipts?: Array<{ recipientId: string; provider: string; kind: string; occurredAt: string | null; receivedAt: string }>; receiptsError: boolean; cancelling: boolean; cancelError: boolean; onCancel(): void }) {
+function TaskStatus({ task, recipients, recipientsError, receipts, receiptsError, cancelling, cancelError, onCancel }: { task: DeliveryTask; recipients?: Array<{ id: string; address: string; displayName: string | null; state: string; remindersSent: number; lastError: string | null }>; recipientsError: boolean; receipts?: Array<{ recipientId: string; provider: string; kind: string; occurredAt: string | null; receivedAt: string }>; receiptsError: boolean; cancelling: boolean; cancelError: boolean; onCancel(): void }) {
   const cancellable = task.status === 'queued' || task.status === 'running';
   return <section className="audience-task" aria-label="投放任务状态"><h4>投放任务</h4><p>状态：{taskStatusLabel(task.status)}，收件人 {task.recipientCount} 人。</p>
     {cancellable ? <button type="button" disabled={cancelling} onClick={onCancel}>取消任务</button> : null}
     {cancelError ? <p role="alert">取消任务失败，请稍后重试。</p> : null}
     {recipientsError ? <p role="alert">收件人状态加载失败，请稍后重试。</p> : null}
-    {recipients ? <ul aria-label="脱敏收件人">{recipients.map((recipient) => <li key={recipient.id}>{recipient.displayName || '未命名联系人'}：{recipient.address}（{recipient.state}）</li>)}</ul> : null}
+    {recipients ? <ul aria-label="脱敏收件人">{recipients.map((recipient) => <li key={recipient.id}>{recipient.displayName || '未命名联系人'}：{recipient.address}（{recipientStateLabel(recipient.state)}；已催答 {recipient.remindersSent} 次{recipient.lastError ? `；${recipientErrorLabel(recipient.lastError)}` : ''}）</li>)}</ul> : null}
     <h5>已认证回执</h5><p>仅显示已验签、已去重的回执；SMTP 已提交不等于送达。</p>
     {receiptsError ? <p role="alert">投递回执加载失败，请稍后重试。</p> : null}
     {receipts?.length === 0 ? <p>暂无已认证回执。</p> : null}
@@ -329,6 +329,8 @@ function isImportUnavailable(error: unknown) { return error instanceof ApiError 
 function isDeliveryUnavailable(error: unknown) { return error instanceof ApiError && error.status === 503; }
 function taskStatusLabel(status: string) { return ({ queued: '等待发送', running: '发送中', completed: '已完成', cancelled: '已取消', failed: '发送失败' } as Record<string, string>)[status] ?? status; }
 function receiptKindLabel(kind: string) { return ({ delivered: '已送达', bounced: '退信', failed: '投递失败', complaint: '投诉', unsubscribed: '已退订' } as Record<string, string>)[kind] ?? kind; }
+function recipientStateLabel(state: string) { return ({ queued: '等待发送', sending: '发送中', sent: '已提交', retry_wait: '等待重试', failed: '发送失败', cancelled: '已取消', unsubscribed: '已退订', completed: '已完成作答，停止催答' } as Record<string, string>)[state] ?? '未知状态'; }
+function recipientErrorLabel(error: string) { return ({ unsubscribed: '已退订，不再发送', completed: '已完成作答，不再催答', smtp_authentication_failed: '邮件认证失败', smtp_recipient_rejected: '收件地址被拒绝', smtp_temporary_failure: '邮件服务暂时不可用' } as Record<string, string>)[error] ?? '投递未完成'; }
 function formatReceiptTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false }); }
 function importStatusLabel(status: string) { return ({ queued: '等待处理', running: '处理中', completed: '已完成', failed: '处理失败' } as Record<string, string>)[status] ?? status; }
 function importOutcomeLabel(outcome: string) { return ({ created: '已新增', updated: '已更新', duplicate: '重复', invalid: '无效' } as Record<string, string>)[outcome] ?? outcome; }

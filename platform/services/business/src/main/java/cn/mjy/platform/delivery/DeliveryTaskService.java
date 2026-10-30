@@ -89,7 +89,7 @@ public class DeliveryTaskService {
 
     public TaskView create(TenantContext ctx, NewTask request) {
         access.require(ctx, DeliveryAccess.SEND, request.surveyId());
-        requireChannelIsServiceable(request.channel());
+        requireChannelIsServiceable(ctx.tenantId(), request.channel());
         validate(request);
         return tenantScope.call(ctx.tenantId(), () -> {
             if (request.idempotencyKey() != null) {
@@ -209,8 +209,8 @@ public class DeliveryTaskService {
         return tasks.find(taskId).orElseThrow(() -> DeliveryExceptions.notFound("delivery task not found: " + taskId));
     }
 
-    private void requireChannelIsServiceable(DeliveryChannel channel) {
-        providers.require(channel);
+    private void requireChannelIsServiceable(TenantId tenant, DeliveryChannel channel) {
+        providers.require(channel, tenant);
     }
 
     private void validate(NewTask request) {
