@@ -106,3 +106,9 @@ GitHub 受信摘要、全局规则安装与 Obsidian 单向投影均已实现，
 ## Wave 4 合并验证（2026-10-30）
 
 隔离合并候选 `76e2a4e622` 基于 main `5062459f40` 与 Wave 4 `735b982581`。全新 PostgreSQL 16 容器在独立网络中完成 53 项 Flyway 迁移；`DeliveryApiTest` 14/14、`DeliveryReceiptTest` 9/9、`DeliveryReminderTest` 11/11，合计 34/34，无失败或跳过。合并树前端 40 文件 / 379 tests、typecheck、构建及 SMTP 定向单测通过。同步前登记仓库 main 为 `5062459f40`，未启用分支保护，其[质量闸门](https://github.com/lsgoodlionel/star-survey/actions/runs/40983194330)通过；本候选 CI 待推送后核验。Gmail、Outlook 真实联调及供应商回执、正式生产验收仍待后续，SMS 暂停。
+
+## Wave 3 全分支主线合并（2026-10-30，同步前）
+
+登记仓库 `lsgoodlionel/star-survey` 的 Wave 3 远端分支为 `feat/wave3-data-productization` 与 `codex/wave3-accepted`；前者已同时包含于最新 `main` 和最终分支，合并提交 `f4858d38b1` 因此覆盖全部 Wave 3 历史。冲突解决保留主线更完整的自研 PDF/嵌入字体实现，同时纳入数据工作区、七格式、Word 统计报告、自定义 Word 模板和资源预算；新增 V951 统一并行 V935/V950 后的最终导出格式约束，不改历史迁移校验和。
+
+本地验证：Admin Web 41 文件 / 390 tests、lint、typecheck、生产构建（2123 modules）及 production bundle 通过；全新隔离 PostgreSQL 完成 56 项迁移至 V951，平台 Java 1548/1548、195 类通过。首次 Java 全量复用了旧库并被 V111 历史校验和阻断，不计业务结果；全新库首次暴露 `report-docx` 被 V950 后置约束覆盖，V951 修复后定向 8/8 与最终全量通过。待推送 `main` 后核对 GitHub Actions；生产 GHCR/Release、Ubuntu 四节点和真实 predecessor 升级验证仍未完成。

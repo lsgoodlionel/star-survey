@@ -4,7 +4,7 @@
 
 Survey（仓库名 star-survey）是在 LimeSurvey 7.1.2 引擎之外建设的中文问卷管理与交付平台，面向多租户 SaaS 和私有化部署。自有代码主要位于 platform/ 与 plugins/；引擎源码保持上游版本，平台通过受控接口、发布网关和插件与引擎协作。
 
-> 当前状态（2026-10-28）：Wave 2 的模板与品牌功能已按本地 Docker 双库真实使用口径验收；Wave 3 数据产品化正在推进。正式 GitHub Release、公网 TLS 及生产安装、升级、恢复尚未完成验收。本仓库不是可直接宣称生产就绪的稳定发行版。
+> 当前状态（2026-10-30）：Wave 2 模板与品牌、Wave 3 数据产品化和 Wave 4 通讯录投放的本地功能均已完成验证；Wave 3 全部分支已形成 `main` 合并提交 `f4858d38b1`。正式 GitHub Release、公网 TLS 及生产安装、升级、恢复尚未完成验收。本仓库不是可直接宣称生产就绪的稳定发行版。
 
 ## 已验证的产品流程
 
@@ -12,10 +12,10 @@ Survey（仓库名 star-survey）是在 LimeSurvey 7.1.2 引擎之外建设的�
 | --- | --- |
 | 管理工作台 | 中文 Dashboard、项目和问卷上下文、最近工作与角色可见性已有真实浏览器验收。 |
 | 模板与品牌（Wave 2） | 租户及平台模板浏览、审批、复制；主色、标题、页脚、Logo、favicon 和多语言配置；带图真实预览、正式作答及发布版本素材固定，完成本地功能验收。 |
-| 发布与答卷 | 隔离预览、审批发布、公开作答和答卷回读已有贯通流程；完整数据工作区及导出任务体验属于 Wave 3。 |
+| 发布与答卷 | 隔离预览、审批发布、公开作答和答卷回读已有贯通流程；Wave 3 数据工作区、跨版本筛选、七种标准导出、自定义 Word 模板及统计报告已完成本地双库验收。 |
 | 正式部署 | 单机生产 Compose、surveyctl 和 Release 流水线已有实现与自动检查；真实 Release 和生产生命周期仍需独立验收。 |
 
-Wave 2 的验收在隔离 Docker 栈上分别使用 MySQL 和 PostgreSQL 执行，管理端真实浏览器各 **19/19** 通过，并核对平台 API、平台数据库、发布网关和引擎数据库。此结论只覆盖计划中的本地功能切片；[机器能力映射](platform/docs/productization/capability-map.md)涵盖更广需求，仍保持部分完成状态。
+Wave 3 的最终分支验收在隔离 Docker MySQL 和 PostgreSQL 栈上各 **5/5** 通过，并核对平台 API、平台数据库、发布网关和引擎数据库；合并候选另通过 Admin Web **390/390** 和平台 Java **1548/1548（195 类）**。此结论只覆盖本地功能与合并质量；[机器能力映射](platform/docs/productization/capability-map.md)涵盖更广需求，生产状态仍保持部分完成。
 
 [当前进度](docs/agent/PROGRESS.md) · [产品蓝图](platform/docs/productization/product-blueprint.md) · [Wave 0–6 路线图](platform/docs/productization/release-roadmap.md) · [平台技术入口](platform/README.md)
 
