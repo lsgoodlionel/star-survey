@@ -117,7 +117,7 @@ async function writeSanitizedTraceSummary(page: Page, testInfo: TestInfo) {
   );
 }
 
-test('author filters stable resources, restores archive, and publishes the same survey', async ({ page }) => {
+test('author filters stable resources, restores archive, and publishes the same survey', async ({ page }, testInfo) => {
   const metadata = await readMetadata();
   const token = await readToken();
   const network: NetworkRecord[] = [];
@@ -221,34 +221,36 @@ test('author filters stable resources, restores archive, and publishes the same 
   expect(deliveryUrl).toBe(createdLink.shortUrl ?? createdLink.url);
   expect(deliveryUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
 
-  await clickAction(page.getByRole('link', { name: '受众与投放' }));
-  await expect(page.getByRole('heading', { name: '受众与投放' })).toBeVisible();
-  await fillAction(page.getByLabel('新名单名称'), '浏览器验收受众');
-  await clickAction(page.getByRole('button', { name: '创建名单' }));
-  await expect(page.getByRole('combobox', { name: '用于当前问卷的名单' })).not.toHaveValue('');
-  await fillAction(page.getByLabel('导入内容'), 'name,email\n批量验收联系人,bulk-recipient@example.test\n');
-  const importSubmission = page.waitForResponse((response) =>
-    response.url().includes('/v1/contact-lists/')
-      && response.url().endsWith('/imports')
-      && response.request().method() === 'POST',
-  );
-  await clickAction(page.getByRole('button', { name: '提交批量导入' }));
-  expect((await importSubmission).status()).toBe(202);
-  await expect(page.getByLabel('联系人导入状态')).toContainText('已处理 1/1 行', { timeout: 60_000 });
-  await expect(page.getByLabel('导入行结果')).toContainText('第 1 行：已新增');
-  await fillAction(page.getByLabel('联系人姓名'), '浏览器验收联系人');
-  await fillAction(page.getByLabel('联系人邮箱'), 'browser-recipient@example.test');
-  await clickAction(page.getByRole('button', { name: '新增联系人' }));
-  await clickAction(page.getByRole('button', { name: '保存当前受众' }));
-  await expect(page.getByRole('status')).toContainText('受众已保存，当前可邀请 2 人。');
-  const unavailableTask = page.waitForResponse((response) =>
-    response.url().includes(`/v1/surveys/${surveyId}/delivery-tasks`)
-      && response.request().method() === 'POST',
-  );
-  await clickAction(page.getByRole('button', { name: '从受众创建 Email 任务' }));
-  expect((await unavailableTask).status()).toBe(503);
-  await expect(page.getByRole('alert')).toContainText('渠道未配置，未创建任务');
-  await expect(page.getByLabel('投放任务状态')).toHaveCount(0);
+  if (testInfo.project.name !== 'chromium-wave3-seed') {
+    await clickAction(page.getByRole('link', { name: '受众与投放' }));
+    await expect(page.getByRole('heading', { name: '受众与投放' })).toBeVisible();
+    await fillAction(page.getByLabel('新名单名称'), '浏览器验收受众');
+    await clickAction(page.getByRole('button', { name: '创建名单' }));
+    await expect(page.getByRole('combobox', { name: '用于当前问卷的名单' })).not.toHaveValue('');
+    await fillAction(page.getByLabel('导入内容'), 'name,email\n批量验收联系人,bulk-recipient@example.test\n');
+    const importSubmission = page.waitForResponse((response) =>
+      response.url().includes('/v1/contact-lists/')
+        && response.url().endsWith('/imports')
+        && response.request().method() === 'POST',
+    );
+    await clickAction(page.getByRole('button', { name: '提交批量导入' }));
+    expect((await importSubmission).status()).toBe(202);
+    await expect(page.getByLabel('联系人导入状态')).toContainText('已处理 1/1 行', { timeout: 60_000 });
+    await expect(page.getByLabel('导入行结果')).toContainText('第 1 行：已新增');
+    await fillAction(page.getByLabel('联系人姓名'), '浏览器验收联系人');
+    await fillAction(page.getByLabel('联系人邮箱'), 'browser-recipient@example.test');
+    await clickAction(page.getByRole('button', { name: '新增联系人' }));
+    await clickAction(page.getByRole('button', { name: '保存当前受众' }));
+    await expect(page.getByRole('status')).toContainText('受众已保存，当前可邀请 2 人。');
+    const unavailableTask = page.waitForResponse((response) =>
+      response.url().includes(`/v1/surveys/${surveyId}/delivery-tasks`)
+        && response.request().method() === 'POST',
+    );
+    await clickAction(page.getByRole('button', { name: '从受众创建 Email 任务' }));
+    expect((await unavailableTask).status()).toBe(503);
+    await expect(page.getByRole('alert')).toContainText('渠道未配置，未创建任务');
+    await expect(page.getByLabel('投放任务状态')).toHaveCount(0);
+  }
 
   const respondentPage = await page.context().newPage();
   await respondentPage.goto(deliveryUrl!);

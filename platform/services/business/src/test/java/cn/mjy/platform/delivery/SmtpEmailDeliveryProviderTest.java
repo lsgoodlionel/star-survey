@@ -104,6 +104,19 @@ class SmtpEmailDeliveryProviderTest {
                 .resolve(LEASE)).hasMessageContaining("auth-mode");
     }
 
+    @Test
+    void availabilityIsTenantSpecificAndNeverInvokesTransport() {
+        var configuredTenant = cn.mjy.platform.shared.TenantId.random();
+        var otherTenant = cn.mjy.platform.shared.TenantId.random();
+        var configuration = properties("netease-163", "app-password", "sender@163.com", "test-code").resolve(LEASE);
+        SmtpEmailDeliveryProvider provider = new SmtpEmailDeliveryProvider(
+                message -> message.tenant().equals(configuredTenant) ? configuration : null,
+                tenant -> tenant.equals(configuredTenant),
+                (ignored, message, id) -> { throw new AssertionError("must not send"); });
+        assertThat(provider.available(configuredTenant)).isTrue();
+        assertThat(provider.available(otherTenant)).isFalse();
+    }
+
     private static DeliveryEmailProperties properties(String profile, String authMode, String address, String credential) {
         return new DeliveryEmailProperties(true, profile, authMode, address, address, credential,
                 Duration.ofSeconds(10), Duration.ofSeconds(20), Duration.ofSeconds(20));

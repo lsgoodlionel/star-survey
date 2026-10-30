@@ -10,6 +10,8 @@ record ExportJob(
         String requestedBy,
         ExportFormat format,
         String templateVersion,
+        byte[] templateContent,
+        String templateSha256,
         String filterJson,
         String planJson,
         boolean revealSensitive,

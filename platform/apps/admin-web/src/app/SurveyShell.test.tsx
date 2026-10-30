@@ -522,6 +522,9 @@ test.each([
     get: vi.fn(),
     cancel: vi.fn(),
     download: vi.fn(),
+    listWordTemplates: vi.fn(),
+    uploadWordTemplate: vi.fn(),
+    uploadWordTemplateVersion: vi.fn(),
   };
   const routeElements = {
     preview: (

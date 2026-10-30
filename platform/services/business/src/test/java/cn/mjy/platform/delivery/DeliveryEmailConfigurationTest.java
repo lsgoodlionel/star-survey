@@ -3,6 +3,7 @@ package cn.mjy.platform.delivery;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
+import cn.mjy.platform.shared.TenantId;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -22,6 +23,7 @@ class DeliveryEmailConfigurationTest {
                     .satisfies(provider -> {
                         assertThat(provider.channel()).isEqualTo(DeliveryChannel.EMAIL);
                         assertThat(provider.name()).isEqualTo("smtp-configured");
+                        assertThat(provider.available(TenantId.random())).isFalse();
                     });
         });
     }
@@ -42,6 +44,7 @@ class DeliveryEmailConfigurationTest {
                             .satisfies(provider -> {
                                 assertThat(provider.channel()).isEqualTo(DeliveryChannel.EMAIL);
                                 assertThat(provider.name()).isEqualTo("smtp-configured");
+                                assertThat(provider.available(TenantId.random())).isTrue();
                             });
                 });
     }

@@ -211,6 +211,9 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 |---|---|---|---|
 | R06-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 正式作答经引擎事件投影后，通过有界 UI 刷新在摘要和明细页可见 |
 | R06-02 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 下载的 ZIP 含 UTF-8 BOM/CRLF CSV，字段字典映射到一条真实答卷值 `A1` |
+| R06-04 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/StatisticalDocxExportWriterTest.java::writesFrequencyPercentAndMissingCountsForEveryAnswerField` | Word 统计报告逐字段输出有效值、空值、频数和比例 |
+| R06-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportStatisticalDocxTest.java::completedJobDownloadsAReadableStatisticalWordReport` | 整条作业链路产出可读 Word 统计报告 |
+| R06-05 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | `--wave3` 场景覆盖真实作答、跨版本筛选与七种标准格式的创建和非空下载；当前工作区最终双库复跑待完成 |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::valueLabelsAreAttachedToBothNumericAndShortStringVariables` | SPSS 值标签 |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::cellsRoundTripWithSystemMissingForBlanksAndUtf8SafeTruncation` | 缺失值与 UTF-8 截断 |
 | R06-03 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportSavTest.java::theBundleHasTheDatasetItsVariableDictionaryAndTheUsualSideSheets` | 整条作业链路产出 SPSS 包与变量字典 |
@@ -222,6 +225,9 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | R06-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportPdfTest.java::everyResponseBecomesItsOwnPageWithQuestionsAndAnswers` | 整条作业链路产出 PDF |
 | R06-05 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportPdfTest.java::sensitiveAnswersAreMaskedInThePdfToo` | 敏感字段脱敏在 PDF 里同样生效 |
 | R06-06 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/DocxExportFormatTest.java::sideTableAnswersArePivotedBackIntoARealTable` | 副表作答还原成表格 |
+| R06-06 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/DocxTemplateRendererTest.java::rejectsMacrosExternalRelationshipsAndUnsafeEntryNames` | 自定义模板拒绝宏、外部关系和不安全 ZIP 路径 |
+| R06-06 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportCustomTemplateTest.java::customTemplateIsFrozenAndRenderedOncePerResponse` | 模板版本、字节和摘要在任务创建时冻结，每份答卷独立渲染 |
+| R06-06 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | `--wave3` 的 template-branding 浏览器场景验证非法模板拒绝、合法模板上传与版本选择、导出下载、逐份 DOCX 解包和变量替换；2026-10-30 隔离 MySQL/PostgreSQL 各 5/5，跨层门禁通过 |
 | R06-07 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportAttachmentPackageTest.java::thePackageCarriesTheFilesThemselvesAlongsideTheManifest` | 附件包含文件本体与清单 |
 | R06-07 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportAttachmentPackageTest.java::aTransientFailureRetriesAndOnlyRefetchesWhatIsStillMissing` | 失败项可重试 |
 | R06-07 | 单测 | `plugins/MjyQuestionExtensions/tests/MjyAttachmentFileEndpointTest.php::testTheEndpointNeverHoldsTheFileContents` | 引擎侧取件端点不把文件内容留在内存里（内存有界） |

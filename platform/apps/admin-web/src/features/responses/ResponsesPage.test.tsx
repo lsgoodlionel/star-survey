@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation, useSearchParams } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SurveyShellContext, type RecentWorkReadiness } from '../../app/surveyShellContext';
 import { ApiError } from '../../shared/api/errors';
@@ -109,8 +109,21 @@ function exportClient(overrides: Partial<ExportClient> = {}): ExportClient {
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       sha256: 'a'.repeat(64),
     }),
+    listWordTemplates: vi.fn().mockResolvedValue([]),
+    uploadWordTemplate: vi.fn(),
+    uploadWordTemplateVersion: vi.fn(),
     ...overrides,
   };
+}
+
+function UrlSyncedResponses({ api }: { api: ApiClient }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  return <>
+    <output aria-label="当前查询参数">{location.search}</output>
+    <ResponsesPage api={api} exportClient={exportClient()} surveyId={surveyId} tenantId="tenant-a"
+      urlState={{ searchParams, setSearchParams }} />
+  </>;
 }
 
 afterEach(() => {
@@ -161,6 +174,41 @@ describe('ResponsesPage', () => {
     expect(screen.queryByText('m***@example.test')).not.toBeInTheDocument();
     expect(screen.getByText('满意')).toBeInTheDocument();
     expect(screen.getByText(/时间条件仅用于答卷列表/)).toBeInTheDocument();
+  });
+  test('restores filters and selected fields from the URL and keeps later changes in the URL', async () => {
+    const api = apiFrom((request) => {
+      if (request.path.endsWith('/responses/summary')) return summary;
+      if (request.path.endsWith('/fields')) return {
+        surveyId,
+        versions: [{ version: 2, engineInstanceId: 'engine-a', engineSid: 123456,
+          language: 'zh-Hans', fields: [{ fieldname: 'Q1', questionUuid: surveyId,
+            code: 'Q1', type: 'L', aid: '', scale: 0, label: '满意度', sensitive: false, options: [] },
+          { fieldname: 'email', questionUuid: surveyId, code: 'email', type: 'S', aid: '',
+            scale: 0, label: '邮箱', sensitive: true, options: [] }] }],
+      };
+      if (request.path.includes('/responses?')) return page;
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    const initial = `/surveys/${surveyId}/responses?question=keep-me&state=engine_completed&version=2`
+      + '&startedFrom=2026-10-09T08%3A00&fields=%5B%22Q1%22%5D';
+    renderWithQuery(<MemoryRouter initialEntries={[initial]}><UrlSyncedResponses api={api} /></MemoryRouter>);
+
+    expect(await screen.findByLabelText('答卷状态')).toHaveValue('engine_completed');
+    await waitFor(() => expect(screen.getByLabelText('发布版本')).toHaveValue('2'));
+    expect(screen.getByLabelText('开始时间起')).toHaveValue('2026-10-09T08:00');
+    fireEvent.click(screen.getByRole('button', { name: '选择显示字段' }));
+    expect(await screen.findByRole('checkbox', { name: '满意度' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /邮箱/ })).not.toBeChecked();
+    expect(screen.queryByText('m***@example.test')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('完成时间止'), { target: { value: '2026-10-10T08:00' } });
+    await waitFor(() => {
+      const search = screen.getByLabelText('当前查询参数').textContent ?? '';
+      expect(search).toContain('question=keep-me');
+      expect(search).toContain('completedTo=2026-10-10T08%3A00');
+      expect(search).toContain('fields=%5B%22Q1%22%5D');
+    });
+    expect(screen.getByText(/状态和版本筛选用于创建导出任务/)).toBeInTheDocument();
   });
   test('waitsForCachedSummaryAndRowsToFinishTheirRequiredRefetchBeforeReportingReady', async () => {
     const summaryRequest = deferred<typeof summary>();
@@ -306,9 +354,10 @@ describe('ResponsesPage', () => {
     await screen.findByRole('heading', { name: '创建导出' });
     const format = screen.getByLabelText('导出格式');
     expect(within(format).getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual([
-      'csv', 'xlsx', 'sav', 'docx', 'attachments',
+      'csv', 'xlsx', 'sav', 'docx', 'pdf', 'report-docx', 'attachments',
     ]);
-    expect(screen.queryByRole('option', { name: /pdf/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'PDF 答卷文档' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Word 统计报告' })).toBeInTheDocument();
 
     fireEvent.change(format, { target: { value: 'xlsx' } });
     fireEvent.click(screen.getByRole('button', { name: '创建导出任务' }));
@@ -352,6 +401,60 @@ describe('ResponsesPage', () => {
         filter: { states: ['engine_completed'], versions: [2] },
         templateVersion: null,
       },
+      { idempotencyKey: expect.any(String) },
+    ));
+  });
+
+  test('uploads and selects a safe Word template version for a DOCX export', async () => {
+    const template = {
+      id: '50000000-0000-4000-8000-000000000001', name: '客户报告模板', version: 2,
+      sha256: 'c'.repeat(64), createdAt: '2026-10-30T08:00:00Z',
+    };
+    const listWordTemplates = vi.fn().mockResolvedValue([template]);
+    const uploadWordTemplate = vi.fn().mockResolvedValue({ ...template, version: 3 });
+    const create = vi.fn().mockResolvedValue({ ...baseJob('queued'), format: 'docx' });
+    renderWithQuery(<ResponsesPage api={responseApi()} exportClient={exportClient({
+      create, listWordTemplates, uploadWordTemplate,
+    })} surveyId={surveyId} tenantId="tenant-a" />);
+
+    await screen.findByRole('heading', { name: '创建导出' });
+    expect(screen.queryByLabelText('Word 模板')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('导出格式'), { target: { value: 'docx' } });
+
+    expect(await screen.findByRole('option', { name: '客户报告模板（版本 2）' })).toBeInTheDocument();
+    expect(screen.getByText(/不会在页面显示或回传模板正文/)).toBeInTheDocument();
+    const file = new File(['safe-docx-bytes'], 'report.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+    fireEvent.change(screen.getByLabelText('模板名称'), { target: { value: '季度报告' } });
+    fireEvent.change(screen.getByLabelText('Word 模板文件'), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: '上传 Word 模板' }));
+    await waitFor(() => expect(uploadWordTemplate).toHaveBeenCalledWith(surveyId, '季度报告', file));
+    expect(await screen.findByText('模板已上传，可用于本次导出。')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '创建导出任务' }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith(
+      surveyId,
+      expect.objectContaining({ format: 'docx', templateVersion: `custom:${template.id}:3` }),
+      { idempotencyKey: expect.any(String) },
+    ));
+  });
+
+  test('keeps the default Word template usable when custom templates fail to load', async () => {
+    const create = vi.fn().mockResolvedValue({ ...baseJob('queued'), format: 'docx' });
+    renderWithQuery(<ResponsesPage api={responseApi()} exportClient={exportClient({
+      create,
+      listWordTemplates: vi.fn().mockRejectedValue(new ApiError('unavailable', '服务暂时不可用', 503)),
+    })} surveyId={surveyId} tenantId="tenant-a" />);
+
+    await screen.findByRole('heading', { name: '创建导出' });
+    fireEvent.change(screen.getByLabelText('导出格式'), { target: { value: 'docx' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('自定义 Word 模板加载失败');
+    expect(screen.getByLabelText('Word 模板')).toHaveValue('default');
+    fireEvent.click(screen.getByRole('button', { name: '创建导出任务' }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith(
+      surveyId,
+      expect.objectContaining({ format: 'docx', templateVersion: 'default' }),
       { idempotencyKey: expect.any(String) },
     ));
   });

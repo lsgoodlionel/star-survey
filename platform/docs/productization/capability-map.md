@@ -21,7 +21,7 @@
 | 通讯录与投放 | `R05-04`, `R05-05`, `R05-06`, `R18-01`, `R18-02`, `R18-03`, `R18-06` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 4 |
 | 投放链接与二维码 | `R05-01`, `R05-07`, `R05-08` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 编辑 | `R01-04`, `R01-05`, `R01-08` | 完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 5 |
-| 导出 | `R06-02`, `R06-03`, `R06-05`, `R06-06`, `R06-07` | 部分完成 | 完成 | 部分完成 | 未开始 | 部分完成 | Wave 3 |
+| 导出 | `R06-02`, `R06-03`, `R06-04`, `R06-05`, `R06-06`, `R06-07` | 部分完成 | 完成 | 部分完成 | 未开始 | 部分完成 | Wave 3 |
 | 导入 | `R01-02` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 5 |
 | 预览 | `R01-07` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 生产部署 | `R20-11`, `R23-08`, `R23-09`, `R23-10`, `R23-11`, `R23-12` | 部分完成 | 未开始 | 未开始 | 未开始 | 未开始 | Wave 0 |
@@ -74,8 +74,12 @@
 
 ### 导出 (`exports`)
 
+- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/response/PdfExportWriter.java`](../../services/business/src/main/java/cn/mjy/platform/response/PdfExportWriter.java) 定位 `final class PdfExportWriter`：逐份答卷 PDF 使用随包中文字体和 ToUnicode 映射生成可复制中文；最终资源预算回归仍待收口。
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/response/ResponseExportController.java`](../../services/business/src/main/java/cn/mjy/platform/response/ResponseExportController.java) 定位 `public class ResponseExportController`：导出作业创建、进度、下载和再次授权接口已存在。
+- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/response/StatisticalDocxExportWriter.java`](../../services/business/src/main/java/cn/mjy/platform/response/StatisticalDocxExportWriter.java) 定位 `final class StatisticalDocxExportWriter`：Word 统计报告按冻结字段输出有效值、空值、频数和比例；最终资源预算回归仍待收口。
+- **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/response/WordTemplateController.java`](../../services/business/src/main/java/cn/mjy/platform/response/WordTemplateController.java) 定位 `class WordTemplateController`：自定义 Word 模板提供租户与问卷隔离的上传、不可变版本和服务端冻结接口；最终安全回归仍待收口。
 - **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `assertDownloadedCsvContainsFormalResponse`：真实浏览器解包下载 ZIP，校验 CSV UTF-8 BOM/CRLF，并通过 fields.csv 字段字典确认唯一正式答卷的真实字段值为 A1；其他格式继续由专项测试覆盖。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/template-branding.spec.ts`](../../apps/admin-web/e2e/template-branding.spec.ts) 定位 `自定义 Word 模板`：2026-10-30 当前工作区隔离 MySQL/PostgreSQL 各 5/5，覆盖七种标准格式及自定义模板拒绝、上传、版本固定、真实替换和制品解包；跨层门禁通过。
 - **前端** （实现）[`platform/apps/admin-web/src/features/responses/ResponsesPage.tsx`](../../apps/admin-web/src/features/responses/ResponsesPage.tsx) 定位 `创建导出任务`：前端提供真实支持格式选择、任务状态、取消、重试和下载。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R06-02 |`：Excel 和 CSV 导出需求已编号。
 - **追溯** （追溯记录）[`platform/docs/traceability/requirement-tests.md`](../traceability/requirement-tests.md) 定位 `| R06-02 | 端到端 |`：CSV 创建、完成和下载的完整旅程证据已登记。

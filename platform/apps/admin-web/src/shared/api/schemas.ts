@@ -19,6 +19,7 @@ export const dashboardSectionSchema = z.enum([
   'publish',
   'preview',
   'export',
+  'data',
   'survey',
 ]);
 

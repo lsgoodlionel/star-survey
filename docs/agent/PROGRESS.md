@@ -116,3 +116,9 @@ GitHub 受信摘要、全局规则安装与 Obsidian 单向投影均已实现，
 用户授权继续后，限时诊断发现 `apk info -v` 在断网时等待索引，而 `apk info --installed` 离线成功；不能据此认定容器启动失败。ARM64 镜像在环回绑定的临时容器返回 HTTP 200，`nginx -t` 通过、用户为 10001，临时容器已删除。Alpine 官方索引 12 秒未下载完，阿里云镜像约 0.17 秒完成；本机构建使用临时镜像，生产默认保留官方源。生产测试 105 通过、真实原生验收 1 项按前置条件跳过；Release 测试 58/58。同步前额外核对发现独立质量 [run 40987922827](https://github.com/lsgoodlionel/star-survey/actions/runs/40987922827) 的 P1 纵切因 close 调用次数 2 与预期 1 不符而失败，同一 Release 内复用质量门成功；独立失败不能视为通过。候选的 CI、Trivy 及正式验收按实际结果另记。
 
 Trivy 0.74.0 对本机 ARM64 构建镜像 `sha256:02fdee230604129442feda2ae3413d6709f1531af1e910a63519b002b2189b86` 执行 HIGH/CRITICAL、包含未修复项且无例外的扫描，结果 0 项；报告 `/private/tmp/survey-wave2-admin-trivy.json`。扫描器二进制按官方 SHA-256 校验，数据库临时使用与官方 digest 一致的镜像。此结果只覆盖本机镜像，不代替线上多架构不可变 digest 扫描。
+
+## Wave 3 全分支主线合并（2026-10-30，同步前）
+
+登记仓库 `lsgoodlionel/star-survey` 的 Wave 3 远端分支为 `feat/wave3-data-productization` 与 `codex/wave3-accepted`；前者已同时包含于最新 `main` 和最终分支，合并提交 `f4858d38b1` 因此覆盖全部 Wave 3 历史。冲突解决保留主线更完整的自研 PDF/嵌入字体实现，同时纳入数据工作区、七格式、Word 统计报告、自定义 Word 模板和资源预算；新增 V951 统一并行 V935/V950 后的最终导出格式约束，不改历史迁移校验和。
+
+本地验证：Admin Web 41 文件 / 390 tests、lint、typecheck、生产构建（2123 modules）及 production bundle 通过；全新隔离 PostgreSQL 完成 56 项迁移至 V951，平台 Java 1548/1548、195 类通过。首次 Java 全量复用了旧库并被 V111 历史校验和阻断，不计业务结果；全新库首次暴露 `report-docx` 被 V950 后置约束覆盖，V951 修复后定向 8/8 与最终全量通过。待推送 `main` 后核对 GitHub Actions；生产 GHCR/Release、Ubuntu 四节点和真实 predecessor 升级验证仍未完成。

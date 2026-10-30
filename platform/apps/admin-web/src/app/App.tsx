@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { FileText, LayoutDashboard, LayoutTemplate, LogOut, Mail, Menu, Send, X } from 'lucide-react';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { Database, FileText, LayoutDashboard, LayoutTemplate, LogOut, Mail, Menu, Send, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from '../features/auth/AuthProvider';
 import { captureEditorRecovery } from '../features/editor/recovery';
+import { getDashboard } from '../shared/api/dashboard';
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -24,9 +25,17 @@ export function AppProviders({ children }: { children: ReactNode }) {
 }
 
 export function AppShell() {
-  const { logout, session } = useAuth();
+  const { api, logout, session } = useAuth();
   const [navigationOpen, setNavigationOpen] = useState(false);
   const role = roleLabel(session?.me.roles ?? []);
+  const navigationCapabilities = useQuery({
+    queryKey: ['navigation-capabilities', session?.me.tenantId, session?.me.actorId],
+    queryFn: ({ signal }) => getDashboard(api, { surveyLimit: 1, taskLimit: 1 }, signal),
+    enabled: Boolean(session),
+    retry: false,
+    staleTime: 30_000,
+  });
+  const canOpenDataWorkspace = navigationCapabilities.data?.visibleSections.includes('data') ?? false;
 
   return (
     <div className="app-shell">
@@ -67,6 +76,12 @@ export function AppShell() {
             <Send aria-hidden="true" />
             投放
           </NavLink>
+          {canOpenDataWorkspace ? (
+            <NavLink to="/data" onClick={() => setNavigationOpen(false)}>
+              <Database aria-hidden="true" />
+              数据
+            </NavLink>
+          ) : null}
           <NavLink to="/settings/email" onClick={() => setNavigationOpen(false)}>
             <Mail aria-hidden="true" />
             邮件服务

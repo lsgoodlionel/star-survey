@@ -22,6 +22,10 @@ vi.mock('../features/dashboard/DashboardPage', () => ({
   DashboardPage: () => <p>业务工作台内容</p>,
 }));
 
+vi.mock('../features/data/DataWorkspacePage', () => ({
+  DataWorkspacePage: () => <LocationProbe label="数据工作区内容" />,
+}));
+
 vi.mock('../features/workspace/WorkspacePage', () => ({
   WorkspacePage: () => <LocationProbe label="项目与问卷内容" />,
 }));
@@ -72,6 +76,13 @@ test('retains workspace query compatibility', async () => {
 
   expect(await screen.findByText('项目与问卷内容:/workspace?kind=survey')).toBeInTheDocument();
   expect(router.state.location.search).toBe('?kind=survey');
+});
+
+test('provides a first-level data workspace route', async () => {
+  const router = renderRoute('/data');
+
+  expect(await screen.findByText('数据工作区内容:/data')).toBeInTheDocument();
+  expect(router.state.location.pathname).toBe('/data');
 });
 
 test('provides template list and detail routes', () => {
