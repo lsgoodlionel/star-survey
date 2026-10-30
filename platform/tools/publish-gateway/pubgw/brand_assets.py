@@ -33,6 +33,14 @@ _SLOT_FILE_NAMES = {
     ("faviconAsset", "image/jpeg"): "mjy-brand-favicon.jpg",
     ("faviconAsset", "image/gif"): "mjy-brand-favicon.gif",
     ("faviconAsset", "image/webp"): "mjy-brand-favicon.webp",
+    ("coverAsset", "image/png"): "mjy-brand-cover.png",
+    ("coverAsset", "image/jpeg"): "mjy-brand-cover.jpg",
+    ("coverAsset", "image/gif"): "mjy-brand-cover.gif",
+    ("coverAsset", "image/webp"): "mjy-brand-cover.webp",
+    ("backgroundAsset", "image/png"): "mjy-brand-background.png",
+    ("backgroundAsset", "image/jpeg"): "mjy-brand-background.jpg",
+    ("backgroundAsset", "image/gif"): "mjy-brand-background.gif",
+    ("backgroundAsset", "image/webp"): "mjy-brand-background.webp",
 }
 _TIMEOUT_SECONDS = 30
 
@@ -59,7 +67,7 @@ def validate_brand_assets(
         return ()
 
     expected = {}
-    for slot in ("logoAsset", "faviconAsset"):
+    for slot in ("logoAsset", "faviconAsset", "coverAsset", "backgroundAsset"):
         materialized = branding.get(slot)
         if materialized is None:
             continue

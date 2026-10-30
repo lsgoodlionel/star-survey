@@ -52,4 +52,10 @@
             {% endif %}
         </div>
     </div>
+    {% set mjyBrandCover = aSurveyInfo.options.mjybrandcover|default('') %}
+    {% if mjyBrandCover and imageSrc(mjyBrandCover) %}
+        <div class="mjy-brand-cover" id="mjy-brand-cover" aria-hidden="true">
+            {{ image(mjyBrandCover, '', {"class": "img-fluid"}) }}
+        </div>
+    {% endif %}
 {% endif %}

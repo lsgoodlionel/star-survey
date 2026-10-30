@@ -86,10 +86,10 @@ JSON body 必须恰为：
 }
 ```
 
-`assets` 最多两项，且每项只能含 `slot`、`fileName`、`contentType`、`sizeBytes`、`sha256`、
-`contentBase64`。槽位只能是 `logoAsset` / `faviconAsset`；MIME 只能是 PNG、JPEG、GIF、WebP；
-文件名必须由槽位与 MIME 固定派生为 `mjy-brand-logo.<ext>` / `mjy-brand-favicon.<ext>`；单项最多
-5 MiB。端点严格校验 Base64、长度和 SHA-256，禁止重复槽位或文件名，禁止调用方提供路径、URL、
+`assets` 最多四项，且每项只能含 `slot`、`fileName`、`contentType`、`sizeBytes`、`sha256`、
+`contentBase64`。槽位只能是 `logoAsset` / `faviconAsset` / `coverAsset` / `backgroundAsset`；MIME 只能是 PNG、JPEG、GIF、WebP；
+文件名必须由槽位与 MIME 固定派生为 `mjy-brand-{logo|favicon|cover|background}.<ext>`；单项最多
+5 MiB，完整请求体最多 28 MiB（覆盖四项 Base64 膨胀和有界 JSON 开销）。端点严格校验 Base64、长度和 SHA-256，禁止重复槽位或文件名，禁止调用方提供路径、URL、
 资产 ID、版本、签名 URL 或任意主题选项。
 
 全部资源先原子落到 `upload/surveys/<sid>/images/`，之后才更新该问卷 `zh-business` 的

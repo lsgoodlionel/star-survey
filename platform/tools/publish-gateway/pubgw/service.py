@@ -1106,8 +1106,8 @@ def _parse_preview_request(body: bytes, now: float) -> _PreviewRequest:
         raise InvalidRequest("expiresAt must be in the next 3600 seconds")
     if not isinstance(definition, dict):
         raise InvalidRequest("definition must be a JSON object")
-    if not isinstance(raw_assets, list) or len(raw_assets) > 2:
-        raise InvalidRequest("brandAssets must be a list of at most two items")
+    if not isinstance(raw_assets, list) or len(raw_assets) > 4:
+        raise InvalidRequest("brandAssets must be a list of at most four items")
     brand_assets = tuple(_brand_asset(item) for item in raw_assets)
     canonical_payload = {
         "tenantId": tenant_id, "sessionId": session_id, "requestId": request_id,

@@ -19,7 +19,9 @@ CONTENT = b"brand-image"
 
 
 def asset(slot="logoAsset", content_type="image/png", content=CONTENT):
-    filename = "mjy-brand-logo.png" if slot == "logoAsset" else "mjy-brand-favicon.png"
+    name = {"logoAsset": "logo", "faviconAsset": "favicon",
+            "coverAsset": "cover", "backgroundAsset": "background"}[slot]
+    filename = "mjy-brand-{}.png".format(name)
     return {
         "slot": slot,
         "fileName": filename,
@@ -63,6 +65,18 @@ class BrandAssetCorrespondenceTest(unittest.TestCase):
         assets = validate_brand_assets(branded_definition(), (asset(),))
 
         self.assertEqual((asset(),), assets)
+
+    def test_accepts_cover_and_background_bytes_bound_to_their_slots(self):
+        def reference(slot, asset_id):
+            item = asset(slot=slot)
+            return {"url": "https://survey.example/a/tenant/{}/1?exp=1&sig=x".format(asset_id),
+                "assetVersion": 1, "contentType": item["contentType"], "sizeBytes": item["sizeBytes"],
+                "fileName": item["fileName"], "sha256": item["sha256"]}
+        definition = SurveyDefinition.from_dict(branded_payload({"brandingVersion": 1,
+            "coverAsset": reference("coverAsset", "33333333-3333-4333-8333-333333333333"),
+            "backgroundAsset": reference("backgroundAsset", "44444444-4444-4444-8444-444444444444")}))
+        assets = (asset(slot="coverAsset"), asset(slot="backgroundAsset"))
+        self.assertEqual(assets, validate_brand_assets(definition, assets))
 
     def test_rejects_a_bundle_without_a_materialized_definition_match(self):
         with self.assertRaises(BrandAssetError):

@@ -6,9 +6,15 @@ export const brandingSchema = z.object({
   brandingVersion: z.literal(1),
   primaryColor: z.string().regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
   pageTitle: text.optional(), footerText: text.optional(),
-  logoAsset: authorAsset.optional(), faviconAsset: authorAsset.optional(), logoAlt: z.string().optional(),
+  logoAsset: authorAsset.optional(), faviconAsset: authorAsset.optional(),
+  coverAsset: authorAsset.optional(), backgroundAsset: authorAsset.optional(),
+  logoAlt: z.string().optional(), watermarkText: text.optional(),
   logoFile: z.string().optional(), faviconFile: z.string().optional(),
-}).strict().refine((brand) => !(brand.logoAsset && brand.logoFile) && !(brand.faviconAsset && brand.faviconFile));
+  coverFile: z.string().optional(), backgroundFile: z.string().optional(),
+}).strict().refine((brand) => !(brand.logoAsset && brand.logoFile)
+  && !(brand.faviconAsset && brand.faviconFile)
+  && !(brand.coverAsset && brand.coverFile)
+  && !(brand.backgroundAsset && brand.backgroundFile));
 export type Branding = z.infer<typeof brandingSchema>;
 export interface BrandingFormState {
   branding: Branding | null;

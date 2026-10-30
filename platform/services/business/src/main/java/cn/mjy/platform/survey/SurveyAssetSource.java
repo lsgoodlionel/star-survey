@@ -43,7 +43,7 @@ public interface SurveyAssetSource {
     String ASSET_VERSION = "assetVersion";
 
     /** 只允许由平台固定的品牌文件元数据；作者态品牌对象仅能包含 assetId。 */
-    List<String> BRAND_SLOTS = List.of("logoAsset", "faviconAsset");
+    List<String> BRAND_SLOTS = List.of("logoAsset", "faviconAsset", "coverAsset", "backgroundAsset");
 
     /**
      * 把定义里每一处 {@code assetId} 换成签名地址与版本号，并登记这一版的引用。
@@ -64,7 +64,9 @@ public interface SurveyAssetSource {
      */
     default List<GatewayRequest.BrandAsset> brandAssets(TenantId tenant, ObjectNode materializedDefinition) {
         if (materializedDefinition.path("branding").has("logoAsset")
-                || materializedDefinition.path("branding").has("faviconAsset")) {
+                || materializedDefinition.path("branding").has("faviconAsset")
+                || materializedDefinition.path("branding").has("coverAsset")
+                || materializedDefinition.path("branding").has("backgroundAsset")) {
             throw new InvalidDefinitionException(List.of(
                     "the definition references platform brand assets but the asset service is not available"));
         }
@@ -95,7 +97,7 @@ public interface SurveyAssetSource {
             if (node == null) {
                 continue;
             }
-            String legacyKey = slot.equals("logoAsset") ? "logoFile" : "faviconFile";
+            String legacyKey = slot.replace("Asset", "File");
             if (branding.has(legacyKey)) {
                 problems.add("branding may not contain both " + legacyKey + " and " + slot);
             }
@@ -124,7 +126,7 @@ public interface SurveyAssetSource {
                 found.add(object);
             }
             for (String name : object.propertyNames()) {
-                boolean brandSlot = name.equals("logoAsset") || name.equals("faviconAsset");
+                boolean brandSlot = BRAND_SLOTS.contains(name);
                 collectOutsideBranding(object.get(name), key, found, definition,
                         insideBrandAsset || (object == definition.get("branding") && brandSlot));
             }
