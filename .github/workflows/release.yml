@@ -96,13 +96,20 @@ jobs:
         include:
           - id: admin
             context: platform/apps/admin-web
+            file: platform/apps/admin-web/Dockerfile
             image: star-survey-admin
           - id: platform
             context: platform/services/business
+            file: platform/services/business/Dockerfile
             image: star-survey-platform
           - id: publish-gateway
             context: platform/tools/publish-gateway
+            file: platform/tools/publish-gateway/Dockerfile
             image: star-survey-publish-gateway
+          - id: engine
+            context: .
+            file: platform/deploy/production/Dockerfile.engine
+            image: star-survey-engine
     steps:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -123,7 +130,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ matrix.context }}
-          file: ${{ matrix.context }}/Dockerfile
+          file: ${{ matrix.file }}
           platforms: linux/amd64,linux/arm64
           push: false
           outputs: type=oci,dest=/tmp/${{ matrix.id }}.tar
@@ -165,13 +172,20 @@ jobs:
         include:
           - id: admin
             context: platform/apps/admin-web
+            file: platform/apps/admin-web/Dockerfile
             image: star-survey-admin
           - id: platform
             context: platform/services/business
+            file: platform/services/business/Dockerfile
             image: star-survey-platform
           - id: publish-gateway
             context: platform/tools/publish-gateway
+            file: platform/tools/publish-gateway/Dockerfile
             image: star-survey-publish-gateway
+          - id: engine
+            context: .
+            file: platform/deploy/production/Dockerfile.engine
+            image: star-survey-engine
     steps:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -199,7 +213,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ matrix.context }}
-          file: ${{ matrix.context }}/Dockerfile
+          file: ${{ matrix.file }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ env.REGISTRY }}/lsgoodlionel/${{ matrix.image }}:${{ needs.policy.outputs.version }}
@@ -253,7 +267,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [admin, platform, publish-gateway]
+        image: [admin, platform, publish-gateway, engine]
     steps:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -440,7 +454,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download all three application image identities
+      - name: Download all application image identities
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           pattern: image-*-metadata
@@ -547,7 +561,6 @@ jobs:
         env:
           VERSION: ${{ needs.policy.outputs.version }}
           CADDY_SOURCE_IMAGE: caddy:2.11.6-alpine
-          ENGINE_SOURCE_IMAGE: ghcr.io/lsgoodlionel/survey-engine:0.1.0
           POSTGRES_SOURCE_IMAGE: postgres:16.10-alpine
           MARIADB_SOURCE_IMAGE: mariadb:10.11.14
         run: |
@@ -566,7 +579,7 @@ jobs:
           }
 
           caddy_image="$(resolve_image "$CADDY_SOURCE_IMAGE")"
-          engine_image="$(resolve_image "$ENGINE_SOURCE_IMAGE")"
+          engine_image="$(jq -er '.image + "@" + .digest' image-metadata/engine.json)"
           postgres_image="$(resolve_image "$POSTGRES_SOURCE_IMAGE")"
           mariadb_image="$(resolve_image "$MARIADB_SOURCE_IMAGE")"
           admin_image="$(jq -er '.image + "@" + .digest' image-metadata/admin.json)"
@@ -615,6 +628,8 @@ jobs:
             --arg platformDigest "$(jq -er '.digest' image-metadata/platform.json)" \
             --arg gatewayReference "$gateway_image" \
             --arg gatewayDigest "$(jq -er '.digest' image-metadata/publish-gateway.json)" \
+            --arg engineReference "$engine_image" \
+            --arg engineDigest "$(jq -er '.digest' image-metadata/engine.json)" \
             --arg baselineMode "$BASELINE_MODE" \
             --argjson bundles "$(jq '.assets.bundles' release-artifact/candidate/release.json)" \
             --argjson baseline "$(if [[ "$BASELINE_MODE" == predecessor ]]; then jq --arg manifestSha256 "$BASELINE_MANIFEST_SHA256" '{mode: "predecessor", manifestSha256: $manifestSha256, version, commit, images, bundles: .assets.bundles}' release-artifact/baseline/release.json; else printf '{"mode":"bootstrap"}'; fi)" \
@@ -624,7 +639,8 @@ jobs:
               images: {
                 admin: {reference: $adminReference, digest: $adminDigest},
                 platform: {reference: $platformReference, digest: $platformDigest},
-                "publish-gateway": {reference: $gatewayReference, digest: $gatewayDigest}
+                "publish-gateway": {reference: $gatewayReference, digest: $gatewayDigest},
+                engine: {reference: $engineReference, digest: $engineDigest}
               }}' > release-artifact/identity.json
 
       - name: Upload the single candidate consumed by every native runner
@@ -850,7 +866,7 @@ jobs:
           cp candidate/candidate/survey-*-linux-amd64.tar.gz publication-assets/
           cp candidate/candidate/survey-*-linux-arm64.tar.gz publication-assets/
           cp readiness/release-readiness.json publication-assets/
-          for name in admin platform publish-gateway; do
+          for name in admin platform publish-gateway engine; do
             mapfile -t sboms < <(find supply-chain -type f -name "sbom-$name.spdx.json" -print)
             mapfile -t bundles < <(find supply-chain -type f -name "cosign-$name.sigstore.json" -print)
             [[ "${#sboms[@]}" -eq 1 && "${#bundles[@]}" -eq 1 ]]
@@ -862,7 +878,7 @@ jobs:
             sha256sum \
               SHA256SUMS release-readiness.json release-notes.md release.json \
               sbom-*.spdx.json cosign-admin.sigstore.json cosign-platform.sigstore.json \
-              cosign-publish-gateway.sigstore.json survey-*-linux-*.tar.gz \
+              cosign-publish-gateway.sigstore.json cosign-engine.sigstore.json survey-*-linux-*.tar.gz \
               | LC_ALL=C sort -k2 > RELEASE_SHA256SUMS
           )
 
@@ -898,6 +914,7 @@ jobs:
             publication-assets/sbom-admin.spdx.json
             publication-assets/sbom-platform.spdx.json
             publication-assets/sbom-publish-gateway.spdx.json
+            publication-assets/sbom-engine.spdx.json
 
       - name: Independently verify the complete RC before publication
         shell: bash

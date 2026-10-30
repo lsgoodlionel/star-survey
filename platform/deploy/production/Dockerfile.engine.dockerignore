@@ -1,0 +1,15 @@
+.git
+.github
+.idea
+.vscode
+node_modules
+**/node_modules
+**/dist
+**/target
+**/.gradle
+**/.cache
+**/test-results
+**/playwright-report
+tmp
+upload
+platform/deploy/test/.runtime

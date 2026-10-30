@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[5]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "release.yml"
 QUALITY_PATH = ROOT / ".github" / "workflows" / "platform-quality.yml"
 POLICY_PATH = ROOT / ".github" / "release" / "vulnerability-policy.json"
-IMAGE_NAMES = {"admin", "platform", "publish-gateway"}
+IMAGE_NAMES = {"admin", "platform", "publish-gateway", "engine"}
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 ALLOWED_ACTIONS = {
     "actions/attest",
