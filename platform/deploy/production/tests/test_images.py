@@ -60,6 +60,10 @@ class ProductionImagePolicyTest(unittest.TestCase):
         self.assertNotRegex(runtime, r"(?m)^COPY\s+(?!--from=)")
         self.assertNotRegex(runtime, r"(?m)^VOLUME\s+")
 
+    def test_admin_runtime_refreshes_alpine_security_packages(self):
+        runtime = runtime_stage(dockerfile("admin-web"))
+        self.assertRegex(runtime, r"\bapk\s+upgrade\s+--no-cache\b")
+
     def test_business_uses_java_21_builder_and_minimal_jre_runtime(self):
         contents = dockerfile("business")
         runtime = runtime_stage(contents)

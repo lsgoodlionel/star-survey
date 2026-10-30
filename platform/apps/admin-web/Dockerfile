@@ -24,7 +24,13 @@ LABEL org.opencontainers.image.title="Survey Admin Web" \
       org.opencontainers.image.created="$CREATED"
 
 ENV PLATFORM_UPSTREAM=http://platform:8080
-RUN addgroup -S -g 10001 survey \
+ARG ALPINE_MIRROR=""
+RUN set -e; if [ -n "$ALPINE_MIRROR" ]; then \
+      printf '%s/v3.24/main\n%s/v3.24/community\n' "$ALPINE_MIRROR" "$ALPINE_MIRROR" > /tmp/apk-repositories; \
+      apk upgrade --no-cache --repositories-file /tmp/apk-repositories || apk upgrade --no-cache || exit 1; \
+      rm -f /tmp/apk-repositories; \
+    else apk upgrade --no-cache; fi \
+    && addgroup -S -g 10001 survey \
     && adduser -S -D -H -u 10001 -G survey survey \
     && chown -R 10001:10001 /var/cache/nginx /run /etc/nginx/conf.d
 
