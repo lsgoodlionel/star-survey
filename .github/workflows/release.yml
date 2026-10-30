@@ -377,7 +377,7 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v3.0.2
+          cosign-release: v3.1.4
 
       - name: Sign manifest digest with GitHub OIDC
         shell: bash
@@ -869,7 +869,7 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v3.0.2
+          cosign-release: v3.1.4
 
       - name: Log in to GHCR for final attestation verification
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

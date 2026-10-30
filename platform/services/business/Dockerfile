@@ -22,7 +22,8 @@ LABEL org.opencontainers.image.title="Survey Platform Service" \
 ENV PLATFORM_RESPONSE_EXPORT_DIR=/var/lib/survey/exports \
     PLATFORM_ASSET_DIR=/var/lib/survey/assets
 
-RUN addgroup -S -g 10001 survey \
+RUN apk upgrade --no-cache \
+    && addgroup -S -g 10001 survey \
     && adduser -S -D -H -u 10001 -G survey survey \
     && mkdir -p /var/lib/survey/exports /var/lib/survey/assets \
     && chown -R 10001:10001 /var/lib/survey
