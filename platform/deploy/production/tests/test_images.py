@@ -64,6 +64,11 @@ class ProductionImagePolicyTest(unittest.TestCase):
         runtime = runtime_stage(dockerfile("admin-web"))
         self.assertRegex(runtime, r"\bapk\s+upgrade\s+--no-cache\b")
 
+    def test_admin_static_bundle_builds_on_native_builder(self):
+        contents = dockerfile("admin-web")
+        self.assertRegex(contents, r"(?m)^FROM\s+--platform=\$BUILDPLATFORM\s+node:\S+\s+AS\s+build\s*$")
+        self.assertRegex(runtime_stage(contents), r"(?m)^FROM\s+nginx:\S+\s+AS\s+runtime\s*$")
+
     def test_business_uses_java_21_builder_and_minimal_jre_runtime(self):
         contents = dockerfile("business")
         runtime = runtime_stage(contents)

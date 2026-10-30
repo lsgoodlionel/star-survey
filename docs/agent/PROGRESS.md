@@ -117,6 +117,8 @@ GitHub 受信摘要、全局规则安装与 Obsidian 单向投影均已实现，
 
 Trivy 0.74.0 对本机 ARM64 构建镜像 `sha256:02fdee230604129442feda2ae3413d6709f1531af1e910a63519b002b2189b86` 执行 HIGH/CRITICAL、包含未修复项且无例外的扫描，结果 0 项；报告 `/private/tmp/survey-wave2-admin-trivy.json`。扫描器二进制按官方 SHA-256 校验，数据库临时使用与官方 digest 一致的镜像。此结果只覆盖本机镜像，不代替线上多架构不可变 digest 扫描。
 
+PR #18 接续：原 [只读构建 40991736075](https://github.com/lsgoodlionel/star-survey/actions/runs/40991736075) 的 ARM64 `npm ci` 长时间未完成；日志不足以确认具体根因。已合入 main `60972ffe4723` 并保留双方进度记录。admin 前端构建阶段改用构建机原生架构，静态产物复制到各目标架构的 nginx 运行镜像；本机双架构 OCI 构建成功，清单含 amd64 与 arm64，production bundle 检查通过。生产测试 106 通过、1 项原生验收按前置条件跳过；GitHub 新提交的检查与正式 Release 验收仍待核对。
+
 ## Wave 3 全分支主线合并（2026-10-30，同步前）
 
 登记仓库 `lsgoodlionel/star-survey` 的 Wave 3 远端分支为 `feat/wave3-data-productization` 与 `codex/wave3-accepted`；前者已同时包含于最新 `main` 和最终分支，合并提交 `f4858d38b1` 因此覆盖全部 Wave 3 历史。冲突解决保留主线更完整的自研 PDF/嵌入字体实现，同时纳入数据工作区、七格式、Word 统计报告、自定义 Word 模板和资源预算；新增 V951 统一并行 V935/V950 后的最终导出格式约束，不改历史迁移校验和。
