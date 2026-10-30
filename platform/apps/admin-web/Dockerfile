@@ -11,7 +11,7 @@ ENV VITE_E2E=${VITE_E2E}
 RUN npm run build \
     && if [ "$VITE_E2E" = "true" ]; then npm run assert:e2e-bundle; else npm run assert:production-bundle; fi
 
-FROM nginx:1.30.5-alpine3.24 AS runtime
+FROM nginx:1.30.6-alpine3.24 AS runtime
 
 ARG VERSION=0.0.0-dev
 ARG REVISION=unknown
