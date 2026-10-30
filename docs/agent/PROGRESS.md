@@ -107,6 +107,18 @@ GitHub 受信摘要、全局规则安装与 Obsidian 单向投影均已实现，
 
 隔离合并候选 `76e2a4e622` 基于 main `5062459f40` 与 Wave 4 `735b982581`。全新 PostgreSQL 16 容器在独立网络中完成 53 项 Flyway 迁移；`DeliveryApiTest` 14/14、`DeliveryReceiptTest` 9/9、`DeliveryReminderTest` 11/11，合计 34/34，无失败或跳过。合并树前端 40 文件 / 379 tests、typecheck、构建及 SMTP 定向单测通过。同步前登记仓库 main 为 `5062459f40`，未启用分支保护，其[质量闸门](https://github.com/lsgoodlionel/star-survey/actions/runs/40983194330)通过；本候选 CI 待推送后核验。Gmail、Outlook 真实联调及供应商回执、正式生产验收仍待后续，SMS 暂停。
 
+## Wave 2 发布阻断诊断（2026-10-30）
+
+隔离分支 `codex/wave2-admin-security` 基于登记仓库 main `e7020e209cd2d2d0ba3e4fddb420c7d549190cbd`；同步前 [Release run 40987973770](https://github.com/lsgoodlionel/star-survey/actions/runs/40987973770) 因 admin Trivy 失败，原生验收及 Release 组装跳过；其余两镜像扫描、签名和 attestation 成功。未发现已发布的 GitHub Release。保持既有 RC 标签不动，拟以 `0.3.2-rc.1` 作为首个真实 Release 的 bootstrap 候选，后续正式版仍需真实前版和升级证据。
+
+本地候选让 admin runtime 刷新 Alpine 包并允许构建时临时选择镜像源，默认及回退为官方源。ARM64 实际构建成功，包数据库确认 `brotli-libs 1.2.1-r0`、`curl` / `libcurl 8.23.0-r0`；管理端生产 bundle 检查通过，镜像策略测试 6/6、Release 测试 58/58。两次运行容器内 `apk info` 均卡住，停止同类自动修复，包数据库留在 `/private/tmp/survey-wave2-admin-installed`。这些结果不代替镜像 Trivy、运行时验收和四平台原生验收；改动尚未提交或推送，Wave 2 不提升为 Accepted。
+
+用户授权继续后，限时诊断发现 `apk info -v` 在断网时等待索引，而 `apk info --installed` 离线成功；不能据此认定容器启动失败。ARM64 镜像在环回绑定的临时容器返回 HTTP 200，`nginx -t` 通过、用户为 10001，临时容器已删除。Alpine 官方索引 12 秒未下载完，阿里云镜像约 0.17 秒完成；本机构建使用临时镜像，生产默认保留官方源。生产测试 105 通过、真实原生验收 1 项按前置条件跳过；Release 测试 58/58。同步前额外核对发现独立质量 [run 40987922827](https://github.com/lsgoodlionel/star-survey/actions/runs/40987922827) 的 P1 纵切因 close 调用次数 2 与预期 1 不符而失败，同一 Release 内复用质量门成功；独立失败不能视为通过。候选的 CI、Trivy 及正式验收按实际结果另记。
+
+Trivy 0.74.0 对本机 ARM64 构建镜像 `sha256:02fdee230604129442feda2ae3413d6709f1531af1e910a63519b002b2189b86` 执行 HIGH/CRITICAL、包含未修复项且无例外的扫描，结果 0 项；报告 `/private/tmp/survey-wave2-admin-trivy.json`。扫描器二进制按官方 SHA-256 校验，数据库临时使用与官方 digest 一致的镜像。此结果只覆盖本机镜像，不代替线上多架构不可变 digest 扫描。
+
+PR #18 接续：原 [只读构建 40991736075](https://github.com/lsgoodlionel/star-survey/actions/runs/40991736075) 的 ARM64 `npm ci` 长时间未完成；日志不足以确认具体根因。已合入 main `60972ffe4723` 并保留双方进度记录。admin 前端构建阶段改用构建机原生架构，静态产物复制到各目标架构的 nginx 运行镜像；本机双架构 OCI 构建成功，清单含 amd64 与 arm64，production bundle 检查通过。生产测试 106 通过、1 项原生验收按前置条件跳过；GitHub 新提交的检查与正式 Release 验收仍待核对。
+
 ## Wave 3 全分支主线合并（2026-10-30，同步前）
 
 登记仓库 `lsgoodlionel/star-survey` 的 Wave 3 远端分支为 `feat/wave3-data-productization` 与 `codex/wave3-accepted`；前者已同时包含于最新 `main` 和最终分支，合并提交 `f4858d38b1` 因此覆盖全部 Wave 3 历史。冲突解决保留主线更完整的自研 PDF/嵌入字体实现，同时纳入数据工作区、七格式、Word 统计报告、自定义 Word 模板和资源预算；新增 V951 统一并行 V935/V950 后的最终导出格式约束，不改历史迁移校验和。
