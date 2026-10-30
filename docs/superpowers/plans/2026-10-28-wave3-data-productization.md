@@ -10,6 +10,8 @@
 
 同步前核对：登记仓库为 `lsgoodlionel/star-survey`，本地分支 `codex/wave3-accepted` 基于 `a7a169352a`，远端 `feat/wave3-data-productization` 为 `735b982581`，PR #15 为 draft、DIRTY 且该头无 checks。待同步内容包括 Wave 3 数据入口、PDF／统计报告／模板、资源预算、安全与幂等修复、测试及本记录；先重放到远端头并复验，不能覆盖 Wave 4。最新可查的其他提交 `e7020e209c` 质量门与镜像流程失败，不代表当前工作区结果。
 
+重放后提交 `946f27433e` 的 Java 1533/1533、管理端 389/389 和隔离 MySQL/PostgreSQL 浏览器各 5/5 均通过。GitHub [质量门 40992606584](https://github.com/lsgoodlionel/star-survey/actions/runs/40992606584) 因追溯表新增 `.ts` 定位符不符合校验器后缀规则而失败；[非 tag Release 40992609780](https://github.com/lsgoodlionel/star-survey/actions/runs/40992609780) 复用质量门失败，镜像构建与发布跳过。已改为同一场景的实际 shell 入口，本地追溯校验器 72/72 通过；修正提交的 CI 须另行核对。
+
 状态：本地功能切片、双库故障路径和 GitHub CI 已核对通过（2026-10-28）；生产 Release 与生命周期仍不在本 Wave 验收范围内。基线：`feat/admin-product-alignment` 的 `247cefda1a`；实施分支：`feat/wave3-data-productization`。
 
 ## 目标与边界

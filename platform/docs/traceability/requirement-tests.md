@@ -224,7 +224,7 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | R06-06 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/DocxExportFormatTest.java::sideTableAnswersArePivotedBackIntoARealTable` | 副表作答还原成表格 |
 | R06-06 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/DocxTemplateRendererTest.java::rejectsMacrosExternalRelationshipsAndUnsafeEntryNames` | 自定义模板拒绝宏、外部关系和不安全 ZIP 路径 |
 | R06-06 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportCustomTemplateTest.java::customTemplateIsFrozenAndRenderedOncePerResponse` | 模板版本、字节和摘要在任务创建时冻结，每份答卷独立渲染 |
-| R06-06 | 端到端 | `platform/apps/admin-web/e2e/template-branding.spec.ts` | 非法模板拒绝、合法模板上传与版本选择、导出下载、逐份 DOCX 解包和变量替换；2026-10-30 当前工作区隔离 MySQL/PostgreSQL 各 5/5，跨层门禁通过 |
+| R06-06 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | `--wave3` 的 template-branding 浏览器场景验证非法模板拒绝、合法模板上传与版本选择、导出下载、逐份 DOCX 解包和变量替换；2026-10-30 隔离 MySQL/PostgreSQL 各 5/5，跨层门禁通过 |
 | R06-07 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportAttachmentPackageTest.java::thePackageCarriesTheFilesThemselvesAlongsideTheManifest` | 附件包含文件本体与清单 |
 | R06-07 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportAttachmentPackageTest.java::aTransientFailureRetriesAndOnlyRefetchesWhatIsStillMissing` | 失败项可重试 |
 | R06-07 | 单测 | `plugins/MjyQuestionExtensions/tests/MjyAttachmentFileEndpointTest.php::testTheEndpointNeverHoldsTheFileContents` | 引擎侧取件端点不把文件内容留在内存里（内存有界） |
