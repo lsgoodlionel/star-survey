@@ -34,6 +34,7 @@ docker exec "$CONTAINER" rm -rf tmp/runtime/cache
 
 # Unit tests first: they need no engine, so a broken gateway fails fast.
 (cd "$REPO_ROOT/platform/tools/publish-gateway" && python3 -m unittest discover -s tests -t .)
+python3 -m unittest discover -s "$REPO_ROOT/platform/tests/e2e" -p test_access_policy_time.py
 
 python3 "$REPO_ROOT/platform/tests/e2e/access_policy.py" \
   --container "$CONTAINER" --db "$TEST_DB" --db-container "$TEST_PREFIX-$DB_SERVICE"

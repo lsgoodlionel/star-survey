@@ -179,6 +179,13 @@ def local(zone_name: str, moment: datetime) -> str:
     return moment.astimezone(load_zone(zone_name)).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
+def closed_window_instant(now: datetime) -> datetime:
+    """Previous New York noon is safely past and outside DST transition hours."""
+    zone = load_zone("America/New_York")
+    previous_day = now.astimezone(zone).date() - timedelta(days=1)
+    return datetime(previous_day.year, previous_day.month, previous_day.day, 12, tzinfo=zone).astimezone(timezone.utc)
+
+
 def tokens(context: Context, survey_id: int) -> Dict[str, str]:
     """邀请码，按平台自选的 ref 取（ADR 0016）。
 
@@ -251,7 +258,7 @@ def scenario_not_open(context: Context, now: datetime) -> None:
 
 def scenario_closed(context: Context, now: datetime) -> None:
     print("W2: closed window (America/New_York), native expires removed, forged client time", file=sys.stderr)
-    closes = now - timedelta(hours=1)
+    closes = closed_window_instant(now)
     policy = {"policyVersion": 1, "window": {"closesAt": local("America/New_York", closes), "timezone": "America/New_York"}}
     sid = publish_ok(context, definition("W2 closed", policy))
     stored = context.db.value("SELECT expires FROM lime_surveys WHERE sid = {}".format(sid))
