@@ -730,6 +730,23 @@ jobs:
             release/native_acceptance.sh release/native_acceptance_evidence.py
           chmod 0755 orchestrator/release/native_acceptance.sh orchestrator/release/native_acceptance_evidence.py
 
+      - name: Require ready native systemd and Docker
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d /run/systemd/system
+          test "$(ps -p 1 -o comm=)" = systemd
+          state="$(sudo timeout 180 systemctl is-system-running --wait)" || status=$?
+          printf 'Native host systemd state: %s (status %s)\n' "$state" "${status:-0}"
+          case "$state" in
+            running|degraded) ;;
+            *) echo 'Native host systemd did not become ready' >&2; exit 1 ;;
+          esac
+          sudo systemctl is-active docker
+          docker info --format '{{json .ServerVersion}}'
+          docker compose version
+
       - name: Execute real clean-host install upgrade restore and uninstall
         timeout-minutes: 90
         shell: bash

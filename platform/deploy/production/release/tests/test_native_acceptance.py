@@ -103,6 +103,18 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         cls.workflow = load_workflow()
         cls.workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
 
+    def test_host_readiness_precedes_immutable_lifecycle(self):
+        steps = self.workflow["jobs"]["native-acceptance"]["steps"]
+        readiness = next(step for step in steps if step.get("name") == "Require ready native systemd and Docker")
+        lifecycle = next(step for step in steps if step.get("name") == "Execute real clean-host install upgrade restore and uninstall")
+        self.assertLess(steps.index(readiness), steps.index(lifecycle))
+        self.assertEqual(4, readiness["timeout-minutes"])
+        script = readiness["run"]
+        for required in ("/run/systemd/system", "systemctl is-system-running --wait", "running|degraded", "docker info", "exit 1"):
+            self.assertIn(required, script)
+        self.assertNotIn("|| true", script)
+        assert_native_workflow_invocation(self, self.workflow)
+
     def test_matrix_uses_all_four_official_native_ubuntu_labels(self):
         job = self.workflow["jobs"]["native-acceptance"]
         matrix = job["strategy"]["matrix"]["include"]

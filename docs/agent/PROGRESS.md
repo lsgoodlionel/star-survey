@@ -126,3 +126,22 @@ PR #18 接续：原 [只读构建 40991736075](https://github.com/lsgoodlionel/s
 本地验证：Admin Web 41 文件 / 390 tests、lint、typecheck、生产构建（2123 modules）及 production bundle 通过；全新隔离 PostgreSQL 完成 56 项迁移至 V951，平台 Java 1548/1548、195 类通过。首次 Java 全量复用了旧库并被 V111 历史校验和阻断，不计业务结果；全新库首次暴露 `report-docx` 被 V950 后置约束覆盖，V951 修复后定向 8/8 与最终全量通过。待推送 `main` 后核对 GitHub Actions；生产 GHCR/Release、Ubuntu 四节点和真实 predecessor 升级验证仍未完成。
 
 2026-10-30 Engine 供应链修复候选：正式 run 41031418974 在提交 `271bbace6090f573baa86ce3e520b8d93c272fc1` 的 Engine Trivy 失败（309 条 HIGH/CRITICAL，均无 FixedVersion）。Debian 13 多阶段候选仍有 59 条；停止后用户再次明确授权继续。现改为 Alpine 3.24 原生 PHP 8.3/Apache 运行包，保留生产启动与 CLI 契约、非 root、静态防护。ARM64 本地构建、no-new-privileges/HTTP/健康检查、PHP/session/应用 autoload 与附件拒绝/公开资源烟测通过；Trivy v0.74.0 同策略扫描 HIGH/CRITICAL 为 0，发布测试 59/59。远端 main 推送前核对为 `271bbace`，质量 run 41031418951 与 41029509115 成功，正式 Release run 41031418974 失败。候选分支 `codex/wave2-engine-trivy` 待提交推送和 PR CI，未创建新标签，不代表正式 Release 或原生生命周期验收通过。
+
+## 原生验收宿主就绪检查（2026-11-01，同步前）
+
+分支 `codex/native-systemd-diagnosis` 基于登记仓库 `lsgoodlionel/star-survey` 的 main `60aea7478ae9ea9268e75b908016e3ddda9ff27b`。重新下载 [正式 run 41182166181](https://github.com/lsgoodlionel/star-survey/actions/runs/41182166181) 的日志及四节点工件，确认 24.04 AMD64、22.04 ARM64 在 install 因 systemd 检查失败（exit 3）；24.04 ARM64、22.04 AMD64 实际通过前置检查，因 publish-gateway unhealthy 安装失败（exit 4）。四节点磁盘通过，upgradeVerified=false。不能把全部节点归因于 systemd，也不能将尚未记录的 systemd 状态认定为启动中。
+
+本次仅为宿主契约补充有界就绪检查：要求 PID 1 为 systemd，最多等待 180 秒，沿用安装器接受 running/degraded 的状态标准，随后检查 Docker daemon 和 Compose。候选包仍由 SHA-256 校验后提取并执行原有完整生命周期；不修改 v0.3.4-rc.1。新增回归测试先失败后通过；Release suite 60/60，production suite 107 项中 106 通过、1 项真实原生测试按环境条件跳过。首次 production 测试因沙盒无 Docker socket 权限失败，授权访问后通过。macOS Docker Desktop 不证明四节点原生 systemd 验收成功。
+
+推送前该 commit 产品质量检查成功，正式 Release run 因上述原生节点失败；无 v0.3.4-rc.1 GitHub Release。服务启动失败缺少容器日志、health 输出和实际 systemd 状态，尚未关闭；PR 质量门及非 tag Release 构建待推送后记录。此次是一次有界环境修复，若原生 systemd 再次失败应停止并保留证据，不追加修复提交。
+
+
+## 原生容器挂载权限修复（2026-11-01，同步前）
+
+用户在上一轮原生运行失败后明确授权继续。PR #22 分支 `codex/native-systemd-diagnosis` 的 `8bc42deeab` 产品质量 run 41252429687、非 tag 构建 run 41252429710 均成功；原候选运行 41252436155 的四节点均通过 systemd 就绪检查（24.04 AMD64 等待约 75 秒），但两个 ARM64 节点 platform-db unhealthy、两个 AMD64 节点 publish-gateway unhealthy，install 全部 exit 4，完整生命周期未通过。
+
+本轮已复现安装器的 Linux 文件权限缺陷：root 生成的 `0600` 原始密钥通过文件型 Compose secret 挂载后，UID 10001 网关和数据库非 root 用户不能读取；网关生成配置 `engines.json` 同样为 `0600`。Docker 官方 Compose services 文档确认文件型 secret 保留绑定文件权限，忽略 uid/gid/mode 转换。修复保留 canonical secret `0600`，仅将容器所需密钥投影到 `0700` 宿主目录内的 `0444` 副本，继续按各服务既有 secret 列表只读挂载；不投影备份加密密钥。生成的非密钥配置 `engines.json` 为 `0644`，release 父目录保持 `0700`。补充权限、内容一致、派生哈希同步、刷新及拒绝符号链接回归测试，既有 canonical 权限断言保留。
+
+验证：新增回归先失败后通过；production 110 项中 109 通过、1 原生项按环境跳过，Release 60/60。Linux 容器内由原候选/修复后安装器生成真实配置，以 UID 10001、70 降权读取单文件挂载等价路径：修复前网关 secret、DB 角色 secret、engines.json 全部 Permission denied，修复后全部可读。Docker Desktop 的原版和修复版隔离数据库/网关均 healthy，不能把 Desktop 的宿主文件映射结果当成 Linux 权限复现；实验没有发布端口，专用容器/卷已清理。证据脚本 /private/tmp/survey-linux-permissions.py、/private/tmp/survey-permission-proof.py；未输出生成密钥。
+
+本轮只修改安装器、对应测试、生产 README 和本进度，共 4 个文件。推送前登记远端仍为 lsgoodlionel/star-survey，目标任务分支一致，PR 未合并。最新 CI 待新提交推送后核验；不可变 v0.3.4-rc.1 的 bundled installer 含旧缺陷，不能用本次源码修复宣称该 RC 完整验收通过，不重新打包旧候选、不创建新 RC 标签。
