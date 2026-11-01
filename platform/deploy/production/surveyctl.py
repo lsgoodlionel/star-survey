@@ -607,7 +607,7 @@ class SurveyManager:
             _regular_file(release / name, f"release {name}")
             self._reject_symlink_components(release / name)
         return [
-            "docker", "compose", "--project-directory", str(self.target),
+            "docker", "compose", "--project-directory", str(release),
             "--env-file", str(release / ".env"), "-f", str(release / "compose.yml"),
         ]
 
