@@ -147,3 +147,9 @@ PR #18 接续：原 [只读构建 40991736075](https://github.com/lsgoodlionel/s
 本轮只修改安装器、对应测试、生产 README 和本进度，共 4 个文件。推送前登记远端仍为 lsgoodlionel/star-survey，目标任务分支一致，PR 未合并。最新 CI 待新提交推送后核验；不可变 v0.3.4-rc.1 的 bundled installer 含旧缺陷，不能用本次源码修复宣称该 RC 完整验收通过，不重新打包旧候选、不创建新 RC 标签。
 
 2026-11-01 原生 RC 安装修复：`v0.3.5-rc.1` 四节点 install 失败定位为 Compose `--project-directory` 指向安装根目录，相对脚本挂载未落到版本目录。改为所选 release 目录；回归先失败后通过，production 111 项（110 passed / 1 opt-in skipped）、Release 60/60，Docker 确认错误路径及目录脚本退出 0。新 RC、完整原生生命周期和生产 Accepted 均待后续授权验收；既有标签不变。
+
+## 访问策略 DST 测试夹具修复（2026-11-01，同步前）
+
+PR #24 合并提交 `25dd9e186d0bad8a8dacec7f58dee0e9743b01e7` 的 [main 质量闸门 41286125561](https://github.com/lsgoodlionel/star-survey/actions/runs/41286125561) 以 failure 完成：MySQL、PostgreSQL 的 W2 均把当前时刻前一小时换算为纽约夏令时回拨的歧义本地时间，按产品契约被 `E_POLICY_LOCAL_TIME` 拒绝，其余 8 个作业成功。本次只修正 W2 测试夹具为纽约前一天中午，保留纽约时区、真实截止拒绝、UTC 换算及伪造客户端时间断言；新增春秋 DST 回归并纳入端到端入口。生产时间校验不变。
+
+回归测试 2/2、PostgreSQL 与 MySQL 串行完整端到端均通过。首次本地并发双库共用运行时配置，MySQL 在 W2 前遇到数据库连接错误，保留日志 `/private/tmp/survey-dst-mysql.log`；PostgreSQL 结束后串行复测通过。当前 GitHub main 仍为上述合并提交，新分支 CI 尚未触发。原生四节点验收及新 RC 仍需后续授权。
