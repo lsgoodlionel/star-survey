@@ -237,6 +237,16 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         with self.assertRaises(self.module.IntegrityError):
             self.manager().install(manifest, "survey.example.com", "operations", "operations@example.com")
 
+    def test_compose_resolves_bundle_mounts_from_the_selected_release(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+        command = manager._compose("0.2.0")
+        self.assertEqual(
+            str(self.target / "releases" / "0.2.0"),
+            command[command.index("--project-directory") + 1],
+        )
+
     def test_staged_payload_and_generated_config_are_reverified_before_compose(self):
         for name in ("compose.yml", "Caddyfile", ".env"):
             with self.subTest(name=name):

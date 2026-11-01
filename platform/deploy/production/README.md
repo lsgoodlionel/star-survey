@@ -130,3 +130,9 @@ publication 采用可恢复的幂等发布：先查询现有 Release，规范化
 Engine 使用 Alpine 3.24 同源 PHP 8.3 CLI/Apache 包，保留 UID 10001、80 端口、`php`、`apache2-foreground`、`/var/www/html` 和既有静态附件防护。镜像仅安装运行包，构建时升级安全包；可传 `APK_MIRROR` 选择已测速源，仓库默认保留官方源及索引更新失败回退。
 
 本地构建后执行 `python3 platform/deploy/production/release/engine_image_smoke.py <image>`，验证非 root、PHP/session、健康检查和附件访问边界。发布仍须按漏洞策略运行固定版本 Trivy；不忽略未修复 HIGH/CRITICAL。此次 ARM64 完整镜像本地扫描 0 阻断项，发布相关测试 59/59；双架构和线上检查须以 PR CI 结果为准，不能代替正式 RC 原生生命周期验收。
+
+### 2026-11-01 原生安装路径修复
+
+`v0.3.5-rc.1` 四个原生节点在 install 阶段失败。安装器曾把 Compose 的项目目录指向安装根目录，使 `./init/` 和 `./Caddyfile` 等相对挂载偏离已校验的版本目录；缺失脚本被创建为目录后，shell 可退出 0，服务持续重启，PostgreSQL 初始化脚本也无法执行。安装器现以所选 `releases/<version>` 作为 Compose 工作目录，确保安装、升级和恢复使用对应版本的文件。Compose 固定项目名保持不变，数据卷身份不变。
+
+回归测试先失败后通过；production suite 111 项中 110 通过、1 项原生 opt-in 跳过，Release suite 60/60 通过。Docker 实测确认错误相对路径解析和 shell 对目录退出 0。完整四节点生命周期仍须人工合并后以另行授权的新不可变候选重新验收；本修复不提升生产状态。

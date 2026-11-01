@@ -145,3 +145,5 @@ PR #18 接续：原 [只读构建 40991736075](https://github.com/lsgoodlionel/s
 验证：新增回归先失败后通过；production 110 项中 109 通过、1 原生项按环境跳过，Release 60/60。Linux 容器内由原候选/修复后安装器生成真实配置，以 UID 10001、70 降权读取单文件挂载等价路径：修复前网关 secret、DB 角色 secret、engines.json 全部 Permission denied，修复后全部可读。Docker Desktop 的原版和修复版隔离数据库/网关均 healthy，不能把 Desktop 的宿主文件映射结果当成 Linux 权限复现；实验没有发布端口，专用容器/卷已清理。证据脚本 /private/tmp/survey-linux-permissions.py、/private/tmp/survey-permission-proof.py；未输出生成密钥。
 
 本轮只修改安装器、对应测试、生产 README 和本进度，共 4 个文件。推送前登记远端仍为 lsgoodlionel/star-survey，目标任务分支一致，PR 未合并。最新 CI 待新提交推送后核验；不可变 v0.3.4-rc.1 的 bundled installer 含旧缺陷，不能用本次源码修复宣称该 RC 完整验收通过，不重新打包旧候选、不创建新 RC 标签。
+
+2026-11-01 原生 RC 安装修复：`v0.3.5-rc.1` 四节点 install 失败定位为 Compose `--project-directory` 指向安装根目录，相对脚本挂载未落到版本目录。改为所选 release 目录；回归先失败后通过，production 111 项（110 passed / 1 opt-in skipped）、Release 60/60，Docker 确认错误路径及目录脚本退出 0。新 RC、完整原生生命周期和生产 Accepted 均待后续授权验收；既有标签不变。
