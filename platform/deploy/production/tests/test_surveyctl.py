@@ -804,6 +804,46 @@ class SurveyctlTest(unittest.TestCase):
         with self.assertRaises(self.module.EnvironmentError):
             manager.preflight(self.module.load_manifest(FIXTURE_MANIFEST), "survey.example.com")
 
+    def test_bind_mounts_are_readable_without_exposing_canonical_secrets(self):
+        self.install()
+        canonical = self.target / "shared/secrets"
+        projected = self.target / "shared/runtime-secrets"
+        self.assertEqual(0o700, stat.S_IMODE(projected.stat().st_mode))
+        self.assertFalse((projected / "backup_encryption_key").exists())
+        for name in self.module.SECRET_NAMES:
+            self.assertEqual(0o600, stat.S_IMODE((canonical / name).stat().st_mode))
+            if name == "backup_encryption_key":
+                continue
+            path = projected / name
+            self.assertEqual((canonical / name).read_bytes(), path.read_bytes())
+            self.assertEqual(0o444, stat.S_IMODE(path.stat().st_mode))
+        release = self.target / "releases/0.2.0"
+        self.assertEqual(0o644, stat.S_IMODE((release / "engines.json").stat().st_mode))
+        env = (release / ".env").read_text()
+        self.assertIn(f"PLATFORM_DB_OWNER_PASSWORD_FILE={projected / 'platform_db_owner_password'}", env)
+        self.assertNotIn(str(canonical), env)
+
+    def test_runtime_projections_refresh_from_canonical_files(self):
+        self.install()
+        canonical = self.target / "shared/secrets/platform_pubgw_secret"
+        canonical.write_text("fixture-rotation\n")
+        self.manager()._sync_runtime_secrets()
+        projected = self.target / "shared/runtime-secrets/platform_pubgw_secret"
+        self.assertEqual(canonical.read_bytes(), projected.read_bytes())
+        self.assertEqual(0o444, stat.S_IMODE(projected.stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE(canonical.stat().st_mode))
+
+    def test_runtime_secret_projection_rejects_symlinks(self):
+        self.install()
+        projected = self.target / "shared/runtime-secrets/platform_pubgw_secret"
+        projected.unlink()
+        victim = self.target / "victim"
+        victim.write_text("preserve")
+        projected.symlink_to(victim)
+        with self.assertRaises(self.module.InputError):
+            self.manager()._sync_runtime_secrets()
+        self.assertEqual("preserve", victim.read_text())
+
     def test_install_writes_only_target_state_secures_secrets_and_starts_in_order(self):
         self.install()
         self.assertEqual("0.2.0", (self.target / "current").read_text().strip())
@@ -827,7 +867,7 @@ class SurveyctlTest(unittest.TestCase):
         expected = hmac.new(master, b"mjy-engine-events/v1/production-engine-01", hashlib.sha256).hexdigest()
         self.assertEqual(expected, (secret_dir / "engine_instance_events_secret").read_text().strip())
         self.assertIn(
-            f"ENGINE_INSTANCE_EVENTS_SECRET_FILE={secret_dir / 'engine_instance_events_secret'}",
+            f"ENGINE_INSTANCE_EVENTS_SECRET_FILE={self.target / 'shared/runtime-secrets/engine_instance_events_secret'}",
             (self.target / "releases" / "0.2.0" / ".env").read_text(),
         )
 
@@ -857,7 +897,7 @@ class SurveyctlTest(unittest.TestCase):
         self.assertNotEqual(instance_secret.decode("ascii"), channel_path.read_text(encoding="ascii").strip())
         self.assertEqual(0o600, stat.S_IMODE(channel_path.stat().st_mode))
         env = (self.target / "releases" / "0.2.0" / ".env").read_text(encoding="utf-8")
-        self.assertIn(f"PUBGW_ENGINE_CHANNEL_SECRET_FILE={channel_path}", env)
+        self.assertIn(f"PUBGW_ENGINE_CHANNEL_SECRET_FILE={self.target / 'shared/runtime-secrets/pubgw_engine_channel_secret'}", env)
 
     def test_upgrade_refreshes_tampered_channel_secret_idempotently(self):
         self.install()

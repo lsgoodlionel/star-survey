@@ -923,7 +923,7 @@ class SurveyManager:
             engines = json.loads(example.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise IntegrityError("verified engine configuration template is invalid") from exc
-        self._atomic_write(release / "engines.json", json.dumps(engines, indent=2) + "\n")
+        self._atomic_write(release / "engines.json", json.dumps(engines, indent=2) + "\n", mode=0o644)
         secret_dir = self._mkdir("shared/secrets")
         derived_secrets = {"engine_admin_password_hash", "engine_instance_events_secret", "pubgw_engine_channel_secret"}
         for name in SECRET_NAMES:
@@ -960,7 +960,8 @@ class SurveyManager:
             "PUBGW_ENGINE_CHANNEL_SECRET_FILE": "pubgw_engine_channel_secret",
             "PUBGW_ENGINE_ADMIN_PASSWORD_FILE": "pubgw_engine_admin_password",
         }
-        lines += [f"{key}={secret_dir / value}" for key, value in env_keys.items()]
+        runtime_secrets = self._sync_runtime_secrets()
+        lines += [f"{key}={runtime_secrets / value}" for key, value in env_keys.items()]
         self._atomic_write(release / ".env", "\n".join(lines) + "\n")
         deployment_integrity = {
             "schemaVersion": 1,
@@ -974,10 +975,27 @@ class SurveyManager:
         }
         self._atomic_write(release / "deployment-integrity.json", json.dumps(deployment_integrity, indent=2, sort_keys=True) + "\n")
 
+    def _sync_runtime_secrets(self) -> Path:
+        # File-backed Compose secrets preserve source permissions. Keep the
+        # canonical files private; only explicit per-service binds expose these
+        # read-only projections, under host directories that remain 0700.
+        self._managed("shared/secrets", must_exist=True)
+        destination = self._mkdir("shared/runtime-secrets")
+        for name in SECRET_NAMES:
+            if name == "backup_encryption_key":
+                continue
+            path = self._managed(Path("shared/secrets") / name)
+            if name == "engine_admin_password_hash" and not path.exists():
+                continue  # Derived after the Caddy image has been pulled.
+            _regular_file(path, "canonical runtime secret")
+            self._atomic_write(destination / name, path.read_text(encoding="utf-8"), mode=0o444)
+        return destination
+
     def _ensure_admin_password_hash(self, caddy_image: str) -> None:
         secret_dir, hash_path = self._managed("shared/secrets", must_exist=True), self._managed("shared/secrets/engine_admin_password_hash")
         if hash_path.exists():
             _regular_file(hash_path, "administrator password hash")
+            self._sync_runtime_secrets()
             return
         password_path = secret_dir / "engine_admin_password"
         _regular_file(password_path, "administrator password")
@@ -990,6 +1008,7 @@ class SurveyManager:
         if re.fullmatch(r"\$2[aby]\$\d{2}\$.{53}", password_hash) is None:
             raise IntegrityError("Caddy returned an invalid administrator password hash")
         self._atomic_write(hash_path, password_hash + "\n")
+        self._sync_runtime_secrets()
 
     def install(self, manifest_path, public_host, admin_user, admin_email, expected_sha256=None, bundle_path=None, asset_loader=None) -> None:
         manifest = load_manifest(manifest_path, expected_sha256)

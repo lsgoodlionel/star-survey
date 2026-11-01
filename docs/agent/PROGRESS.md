@@ -134,3 +134,14 @@ PR #18 接续：原 [只读构建 40991736075](https://github.com/lsgoodlionel/s
 本次仅为宿主契约补充有界就绪检查：要求 PID 1 为 systemd，最多等待 180 秒，沿用安装器接受 running/degraded 的状态标准，随后检查 Docker daemon 和 Compose。候选包仍由 SHA-256 校验后提取并执行原有完整生命周期；不修改 v0.3.4-rc.1。新增回归测试先失败后通过；Release suite 60/60，production suite 107 项中 106 通过、1 项真实原生测试按环境条件跳过。首次 production 测试因沙盒无 Docker socket 权限失败，授权访问后通过。macOS Docker Desktop 不证明四节点原生 systemd 验收成功。
 
 推送前该 commit 产品质量检查成功，正式 Release run 因上述原生节点失败；无 v0.3.4-rc.1 GitHub Release。服务启动失败缺少容器日志、health 输出和实际 systemd 状态，尚未关闭；PR 质量门及非 tag Release 构建待推送后记录。此次是一次有界环境修复，若原生 systemd 再次失败应停止并保留证据，不追加修复提交。
+
+
+## 原生容器挂载权限修复（2026-11-01，同步前）
+
+用户在上一轮原生运行失败后明确授权继续。PR #22 分支 `codex/native-systemd-diagnosis` 的 `8bc42deeab` 产品质量 run 41252429687、非 tag 构建 run 41252429710 均成功；原候选运行 41252436155 的四节点均通过 systemd 就绪检查（24.04 AMD64 等待约 75 秒），但两个 ARM64 节点 platform-db unhealthy、两个 AMD64 节点 publish-gateway unhealthy，install 全部 exit 4，完整生命周期未通过。
+
+本轮已复现安装器的 Linux 文件权限缺陷：root 生成的 `0600` 原始密钥通过文件型 Compose secret 挂载后，UID 10001 网关和数据库非 root 用户不能读取；网关生成配置 `engines.json` 同样为 `0600`。Docker 官方 Compose services 文档确认文件型 secret 保留绑定文件权限，忽略 uid/gid/mode 转换。修复保留 canonical secret `0600`，仅将容器所需密钥投影到 `0700` 宿主目录内的 `0444` 副本，继续按各服务既有 secret 列表只读挂载；不投影备份加密密钥。生成的非密钥配置 `engines.json` 为 `0644`，release 父目录保持 `0700`。补充权限、内容一致、派生哈希同步、刷新及拒绝符号链接回归测试，既有 canonical 权限断言保留。
+
+验证：新增回归先失败后通过；production 110 项中 109 通过、1 原生项按环境跳过，Release 60/60。Linux 容器内由原候选/修复后安装器生成真实配置，以 UID 10001、70 降权读取单文件挂载等价路径：修复前网关 secret、DB 角色 secret、engines.json 全部 Permission denied，修复后全部可读。Docker Desktop 的原版和修复版隔离数据库/网关均 healthy，不能把 Desktop 的宿主文件映射结果当成 Linux 权限复现；实验没有发布端口，专用容器/卷已清理。证据脚本 /private/tmp/survey-linux-permissions.py、/private/tmp/survey-permission-proof.py；未输出生成密钥。
+
+本轮只修改安装器、对应测试、生产 README 和本进度，共 4 个文件。推送前登记远端仍为 lsgoodlionel/star-survey，目标任务分支一致，PR 未合并。最新 CI 待新提交推送后核验；不可变 v0.3.4-rc.1 的 bundled installer 含旧缺陷，不能用本次源码修复宣称该 RC 完整验收通过，不重新打包旧候选、不创建新 RC 标签。
