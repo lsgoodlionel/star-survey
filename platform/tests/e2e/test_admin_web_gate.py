@@ -1335,6 +1335,7 @@ run_playwright() {
   printf '11111111-1111-4111-8111-111111111111\n' >"$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
 }
 sanitize_test_artifacts() { return 0; }
+run_personnel_status_test() { echo personnel-status >>"$TRACE"; }
 main --fresh
 '''
             completed = run_bash(script, {
@@ -1358,6 +1359,7 @@ main --fresh
             self.assertLess(engine_index, issue_indexes[0])
             self.assertLess(build_index, issue_indexes[0])
             self.assertTrue(all(index < playwright_index for index in issue_indexes))
+            self.assertLess(events.index("verify"), events.index("personnel-status"))
 
     def test_post_playwright_verify_failure_does_not_archive(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"

@@ -1,6 +1,8 @@
 package cn.mjy.platform.platformadmin;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import cn.mjy.platform.shared.tenant.TenantScope;
@@ -15,6 +17,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(properties = {"platform.admin.enforce-personnel=true", "PLATFORM_PROBE_HMAC_SECRET=isolated-probe-key-for-tests-only-000000000000", "PLATFORM_PROBE_INSTALLATION_ID=10000000-0000-4000-8000-000000000001", "PLATFORM_ENGINE_EVENTS_SECRET=isolated-events-key-for-tests-only-00000000000"})
@@ -35,11 +38,24 @@ class PlatformPersonnelGuardHttpTest {
           try {
             try (var bootstrap = owner.prepareStatement("SELECT platform_admin_bootstrap(?,?,?,?)")) { bootstrap.setObject(1,tenant.value()); bootstrap.setObject(2,principal); bootstrap.setString(3,"test"); bootstrap.setString(4,"isolated test"); bootstrap.execute(); }
             String personnel = "Bearer " + tokens.issueWithClaims(principal.toString(), tenant.value(), Map.of("iss","mjy-platform","sid",session.toString()));
+            var target = fixtures.activeTenant();
+            String statusPath = "/v1/platform/tenants/" + target + "/status";
             mvc.perform(get("/v1/platform/tenants/directory").header("Authorization", personnel)).andExpect(status().isOk());
             mvc.perform(get("/v1/platform-admin/capabilities").header("Authorization", personnel)).andExpect(status().isOk()).andExpect(jsonPath("$.managePlatform").value(true));
             mvc.perform(get("/v1/platform/tenants/directory").header("Authorization", fixtures.operatorBearer())).andExpect(status().isForbidden());
             mvc.perform(get("/v1/platform-admin/capabilities").header("Authorization", fixtures.operatorBearer())).andExpect(status().isOk()).andExpect(jsonPath("$.managePlatform").value(false));
+            mvc.perform(post(statusPath).header("Authorization", personnel).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"suspended\"}"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("suspended"));
+            mvc.perform(post(statusPath).header("Authorization", personnel).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"suspended\"}"))
+                    .andExpect(status().isConflict());
+            mvc.perform(post(statusPath).header("Authorization", fixtures.operatorBearer()).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"active\"}"))
+                    .andExpect(status().isForbidden());
             scope.run(tenant, () -> jdbc.sql("UPDATE access_member SET status='removed' WHERE actor_id=:a").param("a",principal.toString()).update());
+            mvc.perform(post(statusPath).header("Authorization", personnel).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"active\"}"))
+                    .andExpect(status().isForbidden());
+            var audit = scope.call(target, () -> jdbc.sql("SELECT actor_id FROM audit_log WHERE action='tenant.status:active->suspended'")
+                    .query(String.class).list());
+            assertThat(audit).containsExactly(principal.toString());
             mvc.perform(get("/v1/platform/tenants/directory").header("Authorization", personnel)).andExpect(status().isForbidden());
             mvc.perform(get("/v1/platform-admin/capabilities").header("Authorization", personnel)).andExpect(status().isOk()).andExpect(jsonPath("$.managePlatform").value(false));
           } finally {
