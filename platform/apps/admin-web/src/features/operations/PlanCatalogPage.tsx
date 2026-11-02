@@ -22,7 +22,7 @@ type Plan = z.infer<typeof planSchema>;
 function quotaInput(raw: string): Record<string, string> {
   const value: unknown = JSON.parse(raw);
   const quotas = z.record(z.string().regex(/^[a-z][a-z0-9_.]{1,63}$/), z.string().regex(/^(0|[1-9][0-9]*)$/)).parse(value);
-  if (Object.values(quotas).some((entry) => BigInt(entry) > 9223372036854775807n)) throw new Error('额度超出范围');
+  if (Object.values(quotas).some((entry) => entry.length > 19 || BigInt(entry) > 9223372036854775807n)) throw new Error('额度超出范围');
   return quotas;
 }
 
@@ -67,7 +67,9 @@ function PlanCatalogContent() {
   const fail = (error: Error) => {
     setConfirmPublish(false); setConfirmOnboard(false); setEditing(null); setSelected(null);
     if (error instanceof ApiError && (error.status === 401 || error.status === 403)) { setDenied(true); return; }
-    setNotice(error instanceof ApiError && error.status === 409 ? '数据已变化，请刷新后核对' : '操作结果未确认，请刷新核对后再试');
+    setNotice(error instanceof ApiError && error.status === 409 ? '数据已变化，请刷新后核对'
+      : error instanceof ApiError && error.status === 422 ? '套餐席位不足或开通条件不满足，未开通'
+      : error instanceof ApiError && error.status === 400 ? '提交内容无效，未修改' : '操作结果未确认，请刷新核对后再试');
     void queryClient.invalidateQueries({ queryKey: ['platform-plan-catalog'] });
     void queryClient.invalidateQueries({ queryKey: ['platform-plan-history'] });
   };
@@ -131,7 +133,7 @@ function PlanCatalogContent() {
         {history.data && !history.isError && !history.isFetching ? <>{history.data.items.map((version) => <div key={version.id}><p>版本 {version.version} · {version.publishedAt}</p>
           <p>能力：{version.capabilities.join('、') || '无'}</p><p>导出窗口：{version.exportWindowDays} 天</p>
           <ul>{Object.entries(version.quotas).map(([key, value]) => <li key={key}>{key}: {value}</li>)}</ul>
-          <button type="button" disabled={confirmOnboard || publish.isPending || onboard.isPending} onClick={() => { setSelected(version); setConfirmOnboard(false); setNotice(''); }}>选择版本 {version.version} 开通租户</button></div>)}
+          <button type="button" disabled={confirmPublish || confirmOnboard || publish.isPending || onboard.isPending} onClick={() => { setSelected(version); setConfirmOnboard(false); setNotice(''); }}>选择版本 {version.version} 开通租户</button></div>)}
           {historyAfter ? <button type="button" onClick={() => setHistoryAfter(0)}>返回版本首页</button> : null}
           {history.data.nextCursor ? <button type="button" onClick={() => setHistoryAfter(history.data.nextCursor!)}>下一页版本</button> : null}</> : null}
       </section> : null}
@@ -149,7 +151,7 @@ function PlanCatalogContent() {
         <label>所有者标识<input value={owner} disabled={confirmOnboard} onChange={(e) => setOwner(e.target.value)} /></label>
         <label>订阅类型<select value={kind} disabled={confirmOnboard} onChange={(e) => setKind(e.target.value)}><option value="TRIAL">试用</option><option value="PAID">付费</option></select></label>
         <label>有效天数<input value={days} disabled={confirmOnboard} onChange={(e) => setDays(e.target.value)} /></label>
-        <button type="button" disabled={onboard.isPending} onClick={() => setConfirmOnboard(true)}>检查开通内容</button>
+        <button type="button" disabled={confirmPublish || onboard.isPending || publish.isPending} onClick={() => setConfirmOnboard(true)}>检查开通内容</button>
         {confirmOnboard ? <div><p>将为指定租户创建订阅和所有者，请核对版本及租户。</p><button type="button" disabled={onboard.isPending} onClick={submitOnboard}>确认开通租户</button><button type="button" onClick={() => setConfirmOnboard(false)}>取消开通</button></div> : null}
       </section> : null}
       {notice ? <p role="status">{notice}</p> : null}

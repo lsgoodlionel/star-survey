@@ -6,6 +6,7 @@ import cn.mjy.platform.entitlement.PlanVersion;
 import cn.mjy.platform.shared.TenantContext;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,7 +27,11 @@ public class PlanPublishingService {
                 .param("code", definition.planCode()).query(Integer.class).single();
         if (expectedVersion != null && latest != expectedVersion)
             throw new OnboardingException(HttpStatus.CONFLICT, "plan_version_conflict", "plan version changed, reload before publishing");
-        PlanVersion plan = plans.publish(definition);
+        PlanVersion plan;
+        try { plan = plans.publish(definition); }
+        catch (DuplicateKeyException conflict) {
+            throw new OnboardingException(HttpStatus.CONFLICT, "plan_version_conflict", "plan version changed, reload before publishing");
+        }
         jdbc.sql("""
                 INSERT INTO platform_plan_audit(actor_tenant, actor_subject, plan_id, plan_code, plan_version, trace_id)
                 VALUES (:tenant, :subject, :id, :code, :version, :trace)

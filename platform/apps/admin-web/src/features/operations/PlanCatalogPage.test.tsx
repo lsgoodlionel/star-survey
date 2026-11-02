@@ -124,3 +124,20 @@ test('rejects numeric or out-of-range quota input without a write', async () => 
   }
   expect(calls).toBe(0);
 });
+
+test('seat failure reports no onboarding and closes the stale confirmation', async () => {
+  let calls = 0;
+  server.use(http.get('/v1/platform/plan-catalog', () => HttpResponse.json({ items: [plan], nextCursor: null })),
+    http.get('/v1/platform/plan-catalog/:code/versions', () => HttpResponse.json({ items: [plan], nextCursor: null })),
+    http.post('/v1/platform/tenants/:tenantId/onboarding', () => { calls++; return new HttpResponse(null, { status: 422 }); }));
+  renderPage();
+  await userEvent.click(await screen.findByRole('button', { name: '查看 standard 版本' }));
+  await userEvent.click(await screen.findByRole('button', { name: '选择版本 2 开通租户' }));
+  await userEvent.type(screen.getByLabelText('租户 ID'), '20000000-0000-4000-8000-000000000001');
+  await userEvent.type(screen.getByLabelText('所有者标识'), 'owner-1');
+  await userEvent.click(screen.getByRole('button', { name: '检查开通内容' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认开通租户' }));
+  expect(await screen.findByText('套餐席位不足或开通条件不满足，未开通')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '确认开通租户' })).not.toBeInTheDocument();
+  expect(calls).toBe(1);
+});

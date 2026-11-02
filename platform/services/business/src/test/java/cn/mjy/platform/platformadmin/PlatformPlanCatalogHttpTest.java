@@ -78,9 +78,17 @@ class PlatformPlanCatalogHttpTest {
                     audit.setString(1, principal.toString()); audit.setString(2, concurrentCode);
                     try (var result = audit.executeQuery()) { result.next(); assertThat(result.getLong(1)).isEqualTo(1); }
                 }
+                assertThatThrownBy(() -> jdbc.sql("UPDATE platform_plan_audit SET actor_subject='forged'").update())
+                        .isInstanceOf(org.springframework.dao.DataAccessException.class);
                 mvc.perform(get("/v1/platform/plan-catalog/" + concurrentCode + "/versions").header("Authorization", personnel))
                         .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].version").value(1))
                         .andExpect(jsonPath("$.items[0].quotas['response.valid_completed']").value("9223372036854775807"));
+                mvc.perform(post("/v1/platform/plans").header("Authorization", personnel).contentType(MediaType.APPLICATION_JSON)
+                                .content(publish.replace("9223372036854775807", "9007199254740993").replace("\"expectedVersion\":0", "\"expectedVersion\":1")))
+                        .andExpect(status().isCreated()).andExpect(jsonPath("$.version").value(2));
+                mvc.perform(get("/v1/platform/plan-catalog/" + concurrentCode + "/versions").param("after", "1").header("Authorization", personnel))
+                        .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].version").value(2))
+                        .andExpect(jsonPath("$.items[0].quotas['response.valid_completed']").value("9007199254740993"));
                 var target = fixtures.provisionedTenant();
                 String onboard = """
                         {"planVersionId":"%s","kind":"TRIAL","days":30,"ownerActorId":"owner-1"}
@@ -126,7 +134,8 @@ class PlatformPlanCatalogHttpTest {
                 }
                 try {
                     assertThatThrownBy(() -> mvc.perform(post("/v1/platform/plans").header("Authorization", personnel)
-                            .contentType(MediaType.APPLICATION_JSON).content(publish.replace(concurrentCode, failureCode)))).isInstanceOf(Exception.class);
+                            .contentType(MediaType.APPLICATION_JSON).content(publish.replace(concurrentCode, failureCode))))
+                            .isInstanceOf(Exception.class).hasStackTraceContaining("injected");
                     assertThat(plans.versionsOf(failureCode)).isEmpty();
                 } finally {
                     try (var statement = owner.createStatement()) {

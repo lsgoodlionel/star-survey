@@ -91,8 +91,10 @@ public class PlanCatalog {
     public List<DefinitionLabel> meterLabels() { return labels("meter_definition"); }
 
     private List<DefinitionLabel> labels(String table) {
-        return jdbc.sql("SELECT code, description FROM " + table + " ORDER BY code LIMIT 1000")
+        List<DefinitionLabel> rows = jdbc.sql("SELECT code, description FROM " + table + " ORDER BY code LIMIT 1001")
                 .query((rs, row) -> new DefinitionLabel(rs.getString("code"), rs.getString("description"))).list();
+        if (rows.size() > 1000) throw new IllegalStateException("plan definition registry exceeds supported size");
+        return rows;
     }
 
     public record DefinitionLabel(String code, String description) { }

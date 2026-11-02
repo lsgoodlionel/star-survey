@@ -45,6 +45,10 @@ public class OnboardingController {
     @ResponseStatus(HttpStatus.CREATED)
     public PlanView publishPlan(@RequestBody PublishPlan request) {
         guard.requireOperator();
+        if (request.planCode() == null || request.capabilities() == null || request.quotas() == null
+                || request.capabilities().stream().anyMatch(java.util.Objects::isNull)
+                || request.quotas().entrySet().stream().anyMatch(e -> e.getKey() == null || e.getValue() == null))
+            throw new IllegalArgumentException("invalid plan definition");
         PlanVersion plan = publishing.publish(new PlanDefinition(request.planCode(), Set.copyOf(request.capabilities()),
                 Map.copyOf(request.quotas()), request.exportWindowDays()), request.expectedVersion(), currentTenant.require());
         return new PlanView(plan.id().toString(), plan.planCode(), plan.version());
