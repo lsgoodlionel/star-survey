@@ -42,4 +42,3 @@ class CIOrchestrationTest(unittest.TestCase):
         text = str(images)
         self.assertNotIn('docker/login-action', text)
         self.assertNotIn("'push': True", text)
-

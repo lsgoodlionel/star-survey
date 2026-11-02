@@ -81,4 +81,3 @@ jobs:
           set -euo pipefail
           test -s "/tmp/${{ matrix.id }}.tar"
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-
