@@ -42,7 +42,15 @@ test('live personnel grant controls tenant status and revocation takes effect', 
     headers: { Authorization: `Bearer ${token}` }, data: { status: 'active' },
   });
   expect(denied.status()).toBe(403);
+  const catalogDenied = await request.get('/v1/platform/plan-catalog', { headers: { Authorization: `Bearer ${token}` } });
+  expect(catalogDenied.status()).toBe(403);
   await page.getByRole('link', { name: '返回租户列表' }).click();
   await expect(page.getByRole('heading', { name: '需要平台运营权限' })).toBeVisible();
   await expect(page.getByText('人员状态验收租户')).toHaveCount(0);
+  await page.evaluate(() => {
+    window.history.pushState({}, '', '/operations/plans');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page.getByRole('heading', { name: '需要平台运营权限' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '发布新套餐' })).toHaveCount(0);
 });

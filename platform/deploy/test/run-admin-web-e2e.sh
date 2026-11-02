@@ -269,6 +269,7 @@ run_personnel_status_test() {
   wait_healthy platform "$PLATFORM_URL/actuator/health" "$PLATFORM_HEALTH_ATTEMPTS" "$PLATFORM_CONTAINER"
   "${COMPOSE[@]}" up -d --no-deps --force-recreate admin-web >/dev/null
   wait_healthy admin-web "$ADMIN_WEB_BASE_URL/actuator/health" "$SERVICE_HEALTH_ATTEMPTS" "$ADMIN_WEB_CONTAINER"
+  (cd "$ADMIN_WEB_DIR" && npm run e2e -- --project=chromium-personnel-plans --reporter=line)
   (cd "$ADMIN_WEB_DIR" && npm run e2e -- --project=chromium-personnel-status --reporter=line)
   sanitize_test_artifacts false
 }

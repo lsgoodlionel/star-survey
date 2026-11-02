@@ -11,6 +11,7 @@ import { usePlatformCapabilities } from '../features/operations/usePlatformCapab
 const MembersPage = lazy(() => import('../features/members/MembersPage').then((module) => ({ default: module.MembersPage })));
 const TenantDirectoryPage = lazy(() => import('../features/operations/TenantDirectoryPage').then((module) => ({ default: module.TenantDirectoryPage })));
 const TenantDetailPage = lazy(() => import('../features/operations/TenantDirectoryPage').then((module) => ({ default: module.TenantDetailPage })));
+const PlanCatalogPage = lazy(() => import('../features/operations/PlanCatalogPage').then((module) => ({ default: module.PlanCatalogPage })));
 
 const OrgConnectionsPage = lazy(() => import('../features/organization/OrgConnectionsPage').then((module) => ({ default: module.OrgConnectionsPage })));
 
@@ -113,6 +114,7 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
         { index: true, element: <HomeRoute /> },
         { path: 'operations/tenants', element: <Suspense fallback={<p>正在加载租户</p>}><TenantDirectoryPage /></Suspense> },
         { path: 'operations/tenants/:tenantId', element: <Suspense fallback={<p>正在加载租户</p>}><TenantDetailPage /></Suspense> },
+        { path: 'operations/plans', element: <Suspense fallback={<p>正在加载套餐</p>}><PlanCatalogPage /></Suspense> },
         {
           element: <AppShell />,
           children: [
