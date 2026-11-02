@@ -65,6 +65,10 @@ class PlatformPlanCatalogHttpTest {
                 String publish = """
                         {"planCode":"%s","capabilities":["survey.read"],"quotas":{"member.seats":"5","response.valid_completed":"9223372036854775807"},"exportWindowDays":30,"expectedVersion":0}
                         """.formatted(concurrentCode);
+                mvc.perform(post("/v1/platform/plans").header("Authorization", personnel).contentType(MediaType.APPLICATION_JSON)
+                                .content(publish.replace(",\"expectedVersion\":0", "")))
+                        .andExpect(status().isBadRequest());
+                assertThat(plans.versionsOf(concurrentCode)).isEmpty();
                 try (var executor = Executors.newFixedThreadPool(2)) {
                     var start = new CountDownLatch(1);
                     var first = executor.submit(() -> { start.await(); return mvc.perform(post("/v1/platform/plans").header("Authorization", personnel)

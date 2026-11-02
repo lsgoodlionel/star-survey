@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -31,20 +32,25 @@ public class OnboardingController {
     private final OnboardingService onboarding;
     private final PlanPublishingService publishing;
     private final CurrentTenant currentTenant;
+    private final boolean enforcePersonnel;
 
     public OnboardingController(PlatformOperatorGuard guard, PlanCatalog plans, OnboardingService onboarding,
-                                PlanPublishingService publishing, CurrentTenant currentTenant) {
+                                PlanPublishingService publishing, CurrentTenant currentTenant,
+                                @Value("${platform.admin.enforce-personnel:false}") boolean enforcePersonnel) {
         this.guard = guard;
         this.plans = plans;
         this.onboarding = onboarding;
         this.publishing = publishing;
         this.currentTenant = currentTenant;
+        this.enforcePersonnel = enforcePersonnel;
     }
 
     @PostMapping("/v1/platform/plans")
     @ResponseStatus(HttpStatus.CREATED)
     public PlanView publishPlan(@RequestBody PublishPlan request) {
         guard.requireOperator();
+        if (enforcePersonnel && request.expectedVersion() == null)
+            throw new IllegalArgumentException("expected plan version is required");
         if (request.planCode() == null || request.capabilities() == null || request.quotas() == null
                 || request.capabilities().stream().anyMatch(java.util.Objects::isNull)
                 || request.quotas().entrySet().stream().anyMatch(e -> e.getKey() == null || e.getValue() == null))
