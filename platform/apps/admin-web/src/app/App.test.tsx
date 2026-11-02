@@ -5,13 +5,15 @@ import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { expect, test, vi } from 'vitest';
 import { AppShell } from './App';
 
-const authState = vi.hoisted(() => ({ visibleSections: ['data'] as string[] }));
+const authState = vi.hoisted(() => ({ visibleSections: ['data'] as string[], subscriptionAllowed: true }));
 
 vi.mock('../features/auth/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => ({
     api: {
-      request: vi.fn().mockImplementation(() => Promise.resolve({
+      request: vi.fn().mockImplementation(({ path }: { path: string }) => path === '/v1/subscription'
+        ? authState.subscriptionAllowed ? Promise.resolve({ planCode: 'standard' }) : Promise.reject(new Error('forbidden'))
+        : Promise.resolve({
         generatedAt: '2026-10-30T08:00:00Z',
         visibleSections: authState.visibleSections,
         summary: { pendingApprovals: 0, publishExceptions: 0, activePreviews: 0, activeExports: 0 },
@@ -74,8 +76,9 @@ test('rendersOnlyAvailableProductNavigationAndKeepsTechnicalIdentityDetailsSepar
   expect(within(navigation).getByRole('link', { name: '投放' })).toHaveAttribute('href', '/delivery');
   expect(await within(navigation).findByRole('link', { name: '数据' })).toHaveAttribute('href', '/data');
   expect(within(navigation).getByRole('link', { name: '邮件服务' })).toHaveAttribute('href', '/settings/email');
+  expect(await within(navigation).findByRole('link', { name: '当前订阅' })).toHaveAttribute('href', '/settings/subscription');
   expect(new Set(within(navigation).getAllByRole('link').map((link) => link.getAttribute('href'))).size)
-    .toBe(6);
+    .toBe(7);
   expect(within(navigation).queryByText('待审批')).not.toBeInTheDocument();
   expect(within(navigation).queryByRole('link', { name: /admin/i })).not.toBeInTheDocument();
 
@@ -88,6 +91,14 @@ test('rendersOnlyAvailableProductNavigationAndKeepsTechnicalIdentityDetailsSepar
   expect(technicalDetails).not.toBeNull();
   expect(within(technicalDetails!).getAllByText('author-7')).toHaveLength(2);
   expect(within(technicalDetails!).getByText('tenant-a')).toBeInTheDocument();
+});
+
+test('hides subscription navigation when the server denies access', async () => {
+  authState.subscriptionAllowed = false;
+  renderAppShell();
+  expect(await screen.findByRole('link', { name: '数据' })).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: '当前订阅' })).not.toBeInTheDocument();
+  authState.subscriptionAllowed = true;
 });
 
 test('hidesDataNavigationWhenTheServerDoesNotGrantTheDataSection', async () => {

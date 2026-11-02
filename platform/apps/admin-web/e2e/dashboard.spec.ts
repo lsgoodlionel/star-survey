@@ -61,6 +61,14 @@ test('login lands on dashboard and real actions preserve recent work across relo
   await expect(page.getByRole('link', { name: '继续查看答卷' }).and(page.locator(`a[href="/surveys/${result.surveyId}/responses"]`))).toBeVisible();
 });
 
+test('tenant owner can view the current subscription in the real stack', async ({ page }) => {
+  const metadata = await readMetadata();
+  await login(page, await readPrivateToken('ADMIN_WEB_JWT_FILE'), metadata.actorId, metadata.tenantId);
+  await page.getByRole('link', { name: '当前订阅' }).click();
+  await expect(page.getByRole('heading', { name: '当前订阅' })).toBeVisible();
+  await expect(page.getByText('成员席位')).toBeVisible();
+});
+
 test('pending approval is visible only to a real publish reviewer', async ({ browser }) => {
   const metadata = await readMetadata();
   const result = await readResult();
