@@ -7,7 +7,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import { createAppRoutes } from '../../app/router';
 import { server } from '../../test/server';
 
-const auth = vi.hoisted(() => ({ roles: ['platform_operator'] as string[] }));
+const auth = vi.hoisted(() => ({ roles: [] as string[], allowed: true }));
 vi.mock('../auth/AuthProvider', async () => {
   const { createApiClient } = await import('../../shared/api/http');
   return { useAuth: () => ({ api: createApiClient(), logout: vi.fn(), session: { me: { tenantId: 't', actorId: 'a', roles: auth.roles } } }) };
@@ -17,8 +17,12 @@ function renderPage(path = '/operations/tenants') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter(createAppRoutes(false), { initialEntries: [path] });
   render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
+  return client;
 }
-beforeEach(() => { auth.roles = ['platform_operator']; });
+beforeEach(() => {
+  auth.roles = []; auth.allowed = true;
+  server.use(http.get('/v1/platform-admin/capabilities', () => HttpResponse.json({ managePlatform: auth.allowed })));
+});
 
 test('operator browses a bounded directory and opens a tenant detail', async () => {
   server.use(http.get('/v1/platform/tenants/directory', () => HttpResponse.json({ items: [tenant], nextCursor: null })),
@@ -31,6 +35,7 @@ test('operator browses a bounded directory and opens a tenant detail', async () 
 
 test('tenant administrator cannot fetch the directory by direct navigation', async () => {
   auth.roles = ['tenant_owner'];
+  auth.allowed = false;
   let requests = 0;
   server.use(http.get('/v1/platform/tenants/directory', () => { requests++; return HttpResponse.json({ items: [], nextCursor: null }); }));
   renderPage();
@@ -64,4 +69,15 @@ test('operator can reach the existing platform template management journey from 
   server.use(http.get('/v1/platform/tenants/directory', () => HttpResponse.json({ items: [tenant], nextCursor: null })));
   renderPage();
   expect(await screen.findByRole('link', { name: '模板中心' })).toHaveAttribute('href', '/templates');
+});
+
+test('removes directory rows when same-page platform capability is revoked', async () => {
+  server.use(http.get('/v1/platform/tenants/directory', () => HttpResponse.json({ items: [tenant], nextCursor: null })));
+  const client = renderPage();
+  expect(await screen.findByRole('link', { name: /示例租户/ })).toBeInTheDocument();
+  auth.allowed = false;
+  await client.invalidateQueries({ queryKey: ['platform-capabilities'] });
+  expect(await screen.findByRole('heading', { name: '需要平台运营权限' })).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /示例租户/ })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '退出登录' })).toBeInTheDocument();
 });

@@ -46,6 +46,23 @@ class ProductionComposeTest(unittest.TestCase):
         )
         self.assertNotIn("admin-web", services["platform"].get("depends_on", {}))
 
+    def test_platform_mounts_dedicated_probe_key_and_enforces_personnel_mode(self):
+        service = self.render_compose()["services"]["platform"]
+        self.assertEqual("true", service["environment"]["PLATFORM_ADMIN_ENFORCE_PERSONNEL"])
+        self.assertEqual("00000000-0000-4000-8000-000000000001", service["environment"]["PLATFORM_PROBE_INSTALLATION_ID"])
+        self.assertIn("platform_probe_hmac_secret", {entry["source"] for entry in service["secrets"]})
+        self.assertIn("PLATFORM_PROBE_HMAC_SECRET=/run/secrets/platform_probe_hmac_secret", service["command"])
+
+    def test_platform_compose_rejects_missing_machine_configuration(self):
+        lines = [line for line in FIXTURE_ENV.read_text().splitlines()
+                 if not line.startswith(("PLATFORM_PROBE_HMAC_SECRET_FILE=", "PLATFORM_PROBE_INSTALLATION_ID="))]
+        with tempfile.TemporaryDirectory() as temporary:
+            env_file = Path(temporary) / "missing.env"
+            env_file.write_text("\n".join(lines) + "\n")
+            result = subprocess.run(["docker", "compose", "--env-file", str(env_file), "-f", str(COMPOSE_FILE), "config"],
+                                    cwd=PRODUCTION_DIR, env={"PATH": os.environ.get("PATH", "")}, capture_output=True, text=True)
+        self.assertNotEqual(0, result.returncode)
+
     def adapt_caddy(self):
         fixture = dict(
             line.split("=", 1)

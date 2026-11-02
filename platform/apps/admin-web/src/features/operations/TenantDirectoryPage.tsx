@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { z } from 'zod';
 import { useAuth } from '../auth/AuthProvider';
+import { usePlatformCapabilities } from './usePlatformCapabilities';
 
 const tenantSchema = z.object({
   id: z.string().uuid(), code: z.string(), name: z.string(), status: z.string(),
@@ -20,13 +21,15 @@ export function TenantDirectoryPage() {
   const { api, session } = useAuth();
   const [params, setParams] = useSearchParams();
   const after = params.get('after') ?? '';
-  const allowed = session?.me.roles.includes('platform_operator') === true;
+  const capability = usePlatformCapabilities();
+  const allowed = !capability.isError && !capability.isFetching && capability.data?.managePlatform === true;
   const query = useQuery({
     queryKey: ['platform-tenant-directory', session?.me.tenantId, session?.me.actorId, after],
     queryFn: ({ signal }) => api.request({ path: `/v1/platform/tenants/directory?after=${encodeURIComponent(after)}`, schema: directorySchema, signal }),
     enabled: allowed, retry: false, staleTime: 0,
   });
-  if (!allowed) return <main><h1>需要平台运营权限</h1></main>;
+  if (capability.isPending || capability.isFetching) return <OperationsLayout><p>正在检查平台权限</p></OperationsLayout>;
+  if (!allowed) return <OperationsLayout><h1>需要平台运营权限</h1></OperationsLayout>;
   return <OperationsLayout><h1>平台租户</h1>
     {query.isPending ? <p>正在加载租户</p> : null}
     {query.isError ? <div role="alert"><p>无法加载租户，请确认权限后重试</p><button type="button" onClick={() => void query.refetch()}>重试</button></div> : null}
@@ -43,13 +46,15 @@ export function TenantDirectoryPage() {
 export function TenantDetailPage() {
   const { tenantId = '' } = useParams();
   const { api, session } = useAuth();
-  const allowed = session?.me.roles.includes('platform_operator') === true;
+  const capability = usePlatformCapabilities();
+  const allowed = !capability.isError && !capability.isFetching && capability.data?.managePlatform === true;
   const query = useQuery({
     queryKey: ['platform-tenant', session?.me.tenantId, session?.me.actorId, tenantId],
     queryFn: ({ signal }) => api.request({ path: `/v1/platform/tenants/${encodeURIComponent(tenantId)}`, schema: tenantSchema, signal }),
     enabled: allowed, retry: false, staleTime: 0,
   });
-  if (!allowed) return <main><h1>需要平台运营权限</h1></main>;
+  if (capability.isPending || capability.isFetching) return <OperationsLayout><p>正在检查平台权限</p></OperationsLayout>;
+  if (!allowed) return <OperationsLayout><h1>需要平台运营权限</h1></OperationsLayout>;
   return <OperationsLayout><Link to="/operations/tenants">返回租户列表</Link>
     {query.isPending ? <p>正在加载租户</p> : null}
     {query.isError ? <div role="alert"><p>租户不存在或无法访问</p><button type="button" onClick={() => void query.refetch()}>重试</button></div> : null}

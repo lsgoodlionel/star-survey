@@ -136,6 +136,68 @@ class BackupRestoreTest(unittest.TestCase):
         for name, digest in manifest["files"].items():
             self.assertEqual(digest, hashlib.sha256((output / name).read_bytes()).hexdigest())
 
+    def test_direct_restore_rejects_legacy_backup_before_starting_services(self):
+        output = self.create_backup()
+        source = self.target / "releases" / "0.2.0"
+        release = self.target / "releases" / "0.3.0"
+        release.mkdir()
+        (release / "compose.yml").write_text((source / "compose.yml").read_text())
+        (release / ".env").write_text("PLATFORM_ADMIN_ENFORCE_PERSONNEL=true\n")
+        manifest = json.loads((source / "release.json").read_text())
+        manifest["version"] = "0.3.0"
+        manifest["securityCapabilities"] = {"platform-admin-session-v1": manifest["images"]["PLATFORM_IMAGE"]}
+        (release / "release.json").write_text(json.dumps(manifest))
+        (self.target / "current").write_text("0.3.0\n")
+        floor = self.target / ".surveyctl" / "auth-security-floor"
+        floor.parent.mkdir()
+        floor.write_text("platform-admin-session-v1\n")
+        runner = FakeRunner()
+        with self.assertRaisesRegex(self.restore.RestoreIntegrityError, "predates.*security"):
+            self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+        self.assertEqual([], runner.calls)
+
+    def test_restore_invalidates_personnel_before_any_application_start(self):
+        release = self.target / "releases" / "0.2.0"
+        manifest = json.loads((release / "release.json").read_text())
+        manifest["securityCapabilities"] = {"platform-admin-session-v1": manifest["images"]["PLATFORM_IMAGE"]}
+        (release / "release.json").write_text(json.dumps(manifest))
+        (release / ".env").write_text("PLATFORM_ADMIN_ENFORCE_PERSONNEL=true\n")
+        floor = self.target / ".surveyctl" / "auth-security-floor"
+        floor.parent.mkdir()
+        floor.write_text("platform-admin-session-v1\n")
+        output = self.create_backup()
+        runner = FakeRunner()
+        self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+        commands = [call[0] for call in runner.calls]
+        restores = [i for i, command in enumerate(commands) if "pg_restore" in command]
+        scrubs = [i for i, command in enumerate(commands) if "psql" in command]
+        starts = [i for i, command in enumerate(commands) if i > restores[0] and "up" in command and ("platform" in command or "--remove-orphans" in command)]
+        self.assertEqual(2, len(restores))
+        self.assertEqual(2, len(scrubs))
+        for restore, scrub in zip(restores, scrubs):
+            self.assertLess(restore, scrub)
+            self.assertFalse(any(restore < start < scrub for start in starts))
+            self.assertTrue(any(start > scrub for start in starts))
+            sql = runner.calls[scrub][1]["input"]
+            self.assertIn("UPDATE public.platform_admin_grant", sql)
+            self.assertIn("UPDATE public.org_login_session", sql)
+            self.assertIn("platform_security_restore_audit", sql)
+
+    def test_failed_personnel_invalidation_never_starts_candidate_apps(self):
+        release = self.target / "releases" / "0.2.0"
+        manifest = json.loads((release / "release.json").read_text())
+        manifest["securityCapabilities"] = {"platform-admin-session-v1": manifest["images"]["PLATFORM_IMAGE"]}
+        (release / "release.json").write_text(json.dumps(manifest))
+        (release / ".env").write_text("PLATFORM_ADMIN_ENFORCE_PERSONNEL=true\n")
+        floor = self.target / ".surveyctl" / "auth-security-floor"
+        floor.parent.mkdir()
+        floor.write_text("platform-admin-session-v1\n")
+        output = self.create_backup()
+        runner = FakeRunner(fail_when=lambda command: "psql" in command)
+        with self.assertRaisesRegex(self.restore.RestoreRuntimeError, "invalidation failed"):
+            self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+        self.assertFalse(any("up" in command and "platform" in command for command, _ in runner.calls))
+
     def test_control_metadata_and_checksums_are_authenticated(self):
         for name, mutation in (
             ("manifest.json", lambda value: value.replace(b'"version":"0.2.0"', b'"version":"9.9.9"')),

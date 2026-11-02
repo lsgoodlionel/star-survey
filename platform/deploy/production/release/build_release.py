@@ -63,6 +63,8 @@ SCHEMA = re.compile(r"[A-Za-z0-9._-]{1,64}")
 NUMERIC_SCHEMA = re.compile(r"[0-9]+")
 SEMVER_SCHEMA = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)")
 IMAGE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
+# The reviewed source boundary must be an ancestor of a release that claims it.
+PERSONNEL_SECURITY_BASE = "ddc7c1a973fda79626198e1ba768ab4827730a4e"
 
 
 class ReleaseBuildError(ValueError):
@@ -312,9 +314,25 @@ def validate_args(args: argparse.Namespace) -> tuple[str, dict[str, str], list[s
     return version, parse_images(args.image), compatible
 
 
+def verify_personnel_image(reference: str, commit: str, source_ref: str, trusted_root: Path) -> None:
+    if re.fullmatch(r"refs/tags/v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+", source_ref) is None:
+        raise ReleaseBuildError("platform attestation source ref is invalid")
+    try:
+        subprocess.run(["git", "merge-base", "--is-ancestor", PERSONNEL_SECURITY_BASE, commit],
+                       cwd=trusted_root, check=True, capture_output=True)
+        subprocess.run(["gh", "attestation", "verify", "oci://" + reference,
+                        "--repo", "lsgoodlionel/star-survey", "--signer-workflow",
+                        "lsgoodlionel/star-survey/.github/workflows/release.yml",
+                        "--source-ref", source_ref, "--source-digest", commit], check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ReleaseBuildError("platform image source or provenance verification failed") from exc
+
+
 def build_release(args: argparse.Namespace) -> None:
     version, images, compatible_schemas = validate_args(args)
     trusted_root = args.trusted_root or discover_trusted_root()
+    if args.platform_attestation_source_ref:
+        verify_personnel_image(images["PLATFORM_IMAGE"], args.commit, args.platform_attestation_source_ref, trusted_root)
     runtime = collect_runtime(args.source, trusted_root)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{args.output.name}-", dir=args.output.parent))
@@ -344,6 +362,8 @@ def build_release(args: argparse.Namespace) -> None:
             "images": images,
             "assets": {"bundles": bundles},
         }
+        if args.platform_attestation_source_ref:
+            manifest["securityCapabilities"] = {"platform-admin-session-v1": images["PLATFORM_IMAGE"]}
         if args.native_acceptance_profile:
             manifest["nativeAcceptance"] = {
                 "profile": "github-actions-native-v1",
@@ -379,6 +399,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--compatible-source-schema", action="append", default=[], required=True)
     result.add_argument("--source-date-epoch", type=int, required=True)
     result.add_argument("--image", action="append", default=[], required=True)
+    result.add_argument("--platform-attestation-source-ref")
     result.add_argument("--native-acceptance-profile", choices=("github-actions-native-v1",))
     return result
 

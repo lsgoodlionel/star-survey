@@ -371,6 +371,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Docker Buildx for manifest resolution
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -488,6 +490,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.policy.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
           CADDY_SOURCE_IMAGE: caddy:2.11.6-alpine
           POSTGRES_SOURCE_IMAGE: postgres:16.10-alpine
           MARIADB_SOURCE_IMAGE: mariadb:10.11.14
@@ -535,6 +538,7 @@ jobs:
             --image "POSTGRES_IMAGE=$postgres_image"
             --image "MARIADB_IMAGE=$mariadb_image"
             --native-acceptance-profile github-actions-native-v1
+            --platform-attestation-source-ref "refs/tags/$GITHUB_REF_NAME"
           )
           channel=stable
           [[ "$CANDIDATE_VERSION" == *-rc.* ]] && channel=candidate

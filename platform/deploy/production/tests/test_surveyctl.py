@@ -12,6 +12,8 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 
@@ -34,7 +36,7 @@ def write_fake_backup(output, version="0.2.0", schema="920"):
     (output / "CONTROL-HMAC").write_text("0" * 64 + "\n")
 
 
-def write_test_release(root, version="0.2.0", rollback="compatible", **updates):
+def write_test_release(root, version="0.2.0", rollback="compatible", restore_source=None, **updates):
     bundle = Path(root) / f"survey-{version}-linux-arm64.tar.gz"
     files = {
         "compose.yml": b"name: verified-bundle\nservices: {}\n",
@@ -42,7 +44,7 @@ def write_test_release(root, version="0.2.0", rollback="compatible", **updates):
         "surveyctl": b"#!/bin/sh\n",
         "surveyctl.py": b"# verified controller\n",
         "backup.py": b"# verified backup helper\n",
-        "restore.py": b"# verified restore helper\n",
+        "restore.py": restore_source or b"# verified restore helper\n",
         "doctor.py": b"# verified doctor helper\n",
         "release.schema.json": b"{}\n",
         "env.example": b"PUBLIC_HOST=example.invalid\n",
@@ -64,6 +66,7 @@ def write_test_release(root, version="0.2.0", rollback="compatible", **updates):
             archive.addfile(info, io.BytesIO(value))
     data = json.loads(FIXTURE_MANIFEST.read_text())
     data["version"] = version
+    data["securityCapabilities"] = {"platform-admin-session-v1": data["images"]["PLATFORM_IMAGE"]}
     data["database"]["rollback"] = rollback
     data["supportedHosts"]["architectures"] = ["arm64"]
     data["assets"]["bundles"] = {
@@ -962,6 +965,16 @@ class SurveyctlTest(unittest.TestCase):
 
     def test_setup_probe_creates_least_privilege_identity_without_logging_secrets(self):
         self.install()
+        # Simulate an older installation that predates the separate probe credential.
+        (self.target / "shared" / "secrets" / "platform_probe_hmac_secret").unlink()
+        (self.target / "shared" / "probe-installation.json").unlink()
+        release = self.target / "releases" / "0.2.0"
+        env = release / ".env"
+        env.write_text("\n".join(line for line in env.read_text().splitlines() if not line.startswith("PLATFORM_ADMIN_ENFORCE_PERSONNEL=")) + "\n")
+        integrity = release / "deployment-integrity.json"
+        metadata = json.loads(integrity.read_text())
+        metadata["generatedFiles"][".env"] = hashlib.sha256(env.read_bytes()).hexdigest()
+        integrity.write_text(json.dumps(metadata))
         calls = []
 
         def api_call(token, method, path, body=None):
@@ -984,6 +997,15 @@ class SurveyctlTest(unittest.TestCase):
             raise AssertionError(path)
 
         self.manager().setup_probe(api_call=api_call)
+        tenant_id = "11111111-1111-4111-8111-111111111111"
+        self.assertEqual([
+            ("POST", "/v1/platform/tenants"),
+            ("POST", "/v1/platform/plans"),
+            ("POST", f"/v1/platform/tenants/{tenant_id}/onboarding"),
+            ("POST", f"/v1/platform/tenants/{tenant_id}/status"),
+            ("POST", f"/v1/platform/tenants/{tenant_id}/engine-instances"),
+            ("POST", "/v1/platform/engine-instances/production-engine-01/event-secret"),
+        ], [(method, path) for method, path, _, _ in calls])
         probe = self.target / "shared" / "product-probe.json"
         self.assertEqual(0o600, stat.S_IMODE(probe.stat().st_mode))
         self.assertEqual(
@@ -995,20 +1017,154 @@ class SurveyctlTest(unittest.TestCase):
             {"survey.read", "survey.write", "response.collect", "response.export"},
             set(plan["capabilities"]),
         )
+        self.assertEqual({"member.seats": 1, "response.valid_completed": 100}, plan["quotas"])
         secrets_on_disk = [path.read_text().strip() for path in (self.target / "shared" / "secrets").iterdir()]
         self.assertTrue(all(secret not in "\n".join(" ".join(map(str, call[:3])) for call in calls) for secret in secrets_on_disk))
 
-    def test_helper_exit_codes_are_preserved_by_real_cli_without_traceback(self):
+    def test_install_stages_distinct_machine_identity_and_personnel_guard_configuration(self):
         self.install()
+        root = self.target / "shared"
+        probe = (root / "secrets" / "platform_probe_hmac_secret").read_bytes().strip()
+        personnel = (root / "secrets" / "platform_jwt_hmac_secret").read_bytes().strip()
+        self.assertGreaterEqual(len(probe), 32)
+        self.assertNotEqual(probe, personnel)
+        config = json.loads((root / "probe-installation.json").read_text())
+        self.assertEqual(set(config), {"installationId"})
+        self.assertEqual(str(__import__('uuid').UUID(config['installationId'])), config['installationId'])
+        env = (self.target / "releases" / "0.2.0" / ".env").read_text()
+        self.assertIn("PLATFORM_PROBE_INSTALLATION_ID=" + config["installationId"], env)
+        self.assertIn("PLATFORM_PROBE_HMAC_SECRET_FILE=", env)
+        self.assertNotIn(probe.decode(), env)
+
+    def test_upgrade_and_rollback_preserve_legacy_probe_without_auto_adoption(self):
+        self.install()
+        root = self.target / "shared"
+        legacy = {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner"}
+        product = root / "product-probe.json"
+        product.write_text(json.dumps(legacy) + "\n")
+        before = product.read_bytes()
+        (root / "secrets" / "platform_probe_hmac_secret").unlink()
+        (root / "probe-installation.json").unlink()
+        self.manager().upgrade(self.manifest(version="0.3.0", minimumSourceVersion="0.2.0"))
+        self.assertEqual(product.read_bytes(), before)
+        with self.assertRaisesRegex(self.module.RuntimeHealthError, "legacy probe retained; run doctor"):
+            self.manager().setup_probe(api_call=lambda *_args: self.fail("legacy probe must not be adopted"))
+        self.assertFalse((root / "probe-run.json").exists())
+        self.manager().rollback("0.2.0")
+        self.assertEqual(product.read_bytes(), before)
+
+    def test_setup_probe_uses_independent_machine_identity_and_retries_the_same_run(self):
+        self.install()
+        probe_key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
+        probe_key.write_text("isolated-probe-key-for-tests-only-000000000000")
+        probe_key.chmod(0o600)
+        installation = "10000000-0000-4000-8000-000000000001"
+        (self.target / "shared" / "probe-installation.json").write_text(json.dumps({"installationId": installation}))
+        seen = []
+
+        def api_call(token, method, path, body=None):
+            import base64
+            self.assertEqual((method, path, body), ("POST", "/v1/setup-probe", None))
+            payload = token.split(".")[1]
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+            signed, signature = token.rsplit(".", 1)
+            expected = hmac.new(probe_key.read_bytes().strip(), signed.encode("ascii"), hashlib.sha256).digest()
+            self.assertTrue(hmac.compare_digest(base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4)), expected))
+            self.assertEqual(claims["aud"], ["survey-setup-probe"])
+            self.assertEqual(claims["iss"], "survey-probe")
+            self.assertEqual(claims["scope"], ["probe.setup"])
+            self.assertEqual(claims["installation_id"], installation)
+            seen.append(claims["run_id"])
+            return 200, {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner",
+                         "engineSecret": (self.target / "shared" / "secrets" / "engine_instance_events_secret").read_text().strip()}
+
+        self.manager().setup_probe(api_call=api_call)
+        self.manager().setup_probe(api_call=api_call)
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[0], seen[1])
+        self.assertEqual(0o600, stat.S_IMODE((self.target / "shared" / "probe-run.json").stat().st_mode))
+
+    def test_setup_probe_rejects_partial_or_shared_machine_credentials_without_fallback(self):
+        self.install()
+        probe_key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
+        probe_key.write_text((self.target / "shared" / "secrets" / "platform_jwt_hmac_secret").read_text())
+        probe_key.chmod(0o600)
+        (self.target / "shared" / "probe-installation.json").unlink()
+        calls = []
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().setup_probe(api_call=lambda *args: calls.append(args))
+        (self.target / "shared" / "probe-installation.json").write_text(json.dumps({"installationId": "10000000-0000-4000-8000-000000000001"}))
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().setup_probe(api_call=lambda *args: calls.append(args))
+        probe_key.write_text((self.target / "shared" / "secrets" / "platform_engine_events_secret").read_text())
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().setup_probe(api_call=lambda *args: calls.append(args))
+        self.assertEqual(calls, [])
+
+    def test_personnel_mode_never_falls_back_to_legacy_when_machine_config_is_missing(self):
+        self.install()
+        (self.target / "shared" / "secrets" / "platform_probe_hmac_secret").unlink()
+        (self.target / "shared" / "probe-installation.json").unlink()
+        calls = []
+        with self.assertRaisesRegex(self.module.IntegrityError, "machine configuration"):
+            self.manager().setup_probe(api_call=lambda *args: calls.append(args))
+        self.assertEqual(calls, [])
+
+    def test_setup_probe_does_not_commit_state_when_machine_handler_secret_disagrees(self):
+        self.install()
+        key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
+        key.write_text("isolated-probe-key-for-tests-only-000000000000")
+        key.chmod(0o600)
+        (self.target / "shared" / "probe-installation.json").write_text(json.dumps({"installationId": "10000000-0000-4000-8000-000000000001"}))
+        def rejected(*_args):
+            return 200, {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner", "engineSecret": "incorrect"}
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().setup_probe(api_call=rejected)
+        self.assertFalse((self.target / "shared" / "product-probe.json").exists())
+        self.assertTrue((self.target / "shared" / "probe-run.json").exists())
+
+    def test_concurrent_first_machine_setup_uses_one_persisted_run(self):
+        import base64
+        import uuid
+        self.install()
+        key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
+        key.write_text("isolated-probe-key-for-tests-only-000000000000")
+        key.chmod(0o600)
+        (self.target / "shared" / "probe-installation.json").write_text(json.dumps({"installationId": "10000000-0000-4000-8000-000000000001"}))
+        barrier = threading.Barrier(2)
+        generated = iter([uuid.UUID("10000000-0000-4000-8000-000000000010"), uuid.UUID("10000000-0000-4000-8000-000000000011")])
+        def new_uuid():
+            value = next(generated)
+            barrier.wait(timeout=5)
+            return value
+        seen = []
+        def api_call(token, method, path, body=None):
+            payload = token.split(".")[1]
+            seen.append(json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["run_id"])
+            return 200, {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner",
+                         "engineSecret": (self.target / "shared" / "secrets" / "engine_instance_events_secret").read_text().strip()}
+        with mock.patch.object(self.module.uuid, "uuid4", side_effect=new_uuid), ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(self.manager().setup_probe, api_call) for _ in range(2)]
+            for future in futures:
+                future.result(timeout=10)
+        persisted = json.loads((self.target / "shared" / "probe-run.json").read_text())["runId"]
+        self.assertEqual(seen, [persisted, persisted])
+
+    def test_helper_exit_codes_are_preserved_by_real_cli_without_traceback(self):
+        helper_source = ("import pathlib,sys\n"
+                         "target=pathlib.Path(sys.argv[sys.argv.index('--target')+1])\n"
+                         "sys.exit(0 if 'verify' in sys.argv and (target/'allow-verify').exists() else (5 if 'verify' in sys.argv else 4))\n")
+        manifest, _ = write_test_release(self.root, restore_source=helper_source.encode())
+        self.install(manifest)
         backup = self.target / "backups" / "sample"
         write_fake_backup(backup)
-        helper = self.target / "releases" / "0.2.0" / "restore.py"
-        for operation, helper_source, expected in (
-            ("verify", "import sys\nsys.exit(5)\n", 5),
-            ("restore", "import sys\nsys.exit(0 if 'verify' in sys.argv else 4)\n", 4),
+        for operation, expected in (
+            ("verify", 5),
+            ("restore", 4),
         ):
             with self.subTest(operation=operation):
-                helper.write_text(helper_source)
+                if operation == "restore":
+                    (self.target / "allow-verify").touch()
                 result = subprocess.run(
                     [sys.executable, str(MODULE_PATH), "--target", str(self.target), "restore", "sample"],
                     capture_output=True, text=True,
@@ -1084,8 +1240,83 @@ class SurveyctlTest(unittest.TestCase):
         current_data = json.loads(current.read_text())
         current_data["database"]["rollback"] = "restore-only"
         current.write_text(json.dumps(current_data))
+        integrity = current.parent / "deployment-integrity.json"
+        integrity_data = json.loads(integrity.read_text())
+        integrity_data["manifestSha256"] = hashlib.sha256(current.read_bytes()).hexdigest()
+        integrity.write_text(json.dumps(integrity_data))
         with self.assertRaises(self.module.InputError):
             manager.rollback("0.2.0")
+
+    def test_personnel_guard_blocks_rollback_to_legacy_before_changing_running_stack(self):
+        self.install()
+        manager = self.manager()
+        legacy = self.manifest(version="0.1.5", securityCapabilities={})
+        manager._stage_release(self.module.load_manifest(legacy), "arm64", "survey.example.com", "operations", "operations@example.com")
+        before = (self.target / ".surveyctl" / "state.json").read_bytes()
+        self.runner.commands.clear()
+        with self.assertRaisesRegex(self.module.InputError, "personnel.*security"):
+            manager.rollback("0.1.5")
+        self.assertEqual([], self.runner.commands)
+        self.assertEqual(before, (self.target / ".surveyctl" / "state.json").read_bytes())
+        self.assertEqual("0.2.0", (self.target / "current").read_text().strip())
+
+    def test_personnel_guard_allows_capable_rollback(self):
+        self.install()
+        manager = self.manager()
+        capable = self.manifest(version="0.1.5")
+        manager._stage_release(self.module.load_manifest(capable), "arm64", "survey.example.com", "operations", "operations@example.com")
+        manager.rollback("0.1.5")
+        self.assertEqual("0.1.5", (self.target / "current").read_text().strip())
+
+    def test_historical_unenforced_install_can_rollback_without_security_capability(self):
+        self.install()
+        (self.target / ".surveyctl" / "auth-security-floor").unlink()
+        release = self.target / "releases" / "0.2.0"
+        env = release / ".env"
+        env.write_text(env.read_text().replace("PLATFORM_ADMIN_ENFORCE_PERSONNEL=true", "PLATFORM_ADMIN_ENFORCE_PERSONNEL=false"))
+        integrity = release / "deployment-integrity.json"
+        data = json.loads(integrity.read_text())
+        data["generatedFiles"][".env"] = hashlib.sha256(env.read_bytes()).hexdigest()
+        integrity.write_text(json.dumps(data))
+        legacy = self.manifest(version="0.1.5", securityCapabilities={})
+        manager = self.manager()
+        manager._stage_release(self.module.load_manifest(legacy), "arm64", "survey.example.com", "operations", "operations@example.com")
+        manager.rollback("0.1.5")
+        self.assertEqual("0.1.5", (self.target / "current").read_text().strip())
+
+    def test_personnel_guard_rejects_capability_bound_to_another_image(self):
+        self.install()
+        manager = self.manager()
+        other = "ghcr.io/example/platform@sha256:" + "f" * 64
+        candidate = self.manifest(version="0.1.5", securityCapabilities={"platform-admin-session-v1": other})
+        manager._stage_release(self.module.load_manifest(candidate), "arm64", "survey.example.com", "operations", "operations@example.com")
+        self.runner.commands.clear()
+        with self.assertRaisesRegex(self.module.InputError, "personnel.*security"):
+            manager.rollback("0.1.5")
+        self.assertEqual([], self.runner.commands)
+
+    def test_failed_security_upgrade_does_not_restart_unenforced_predecessor(self):
+        self.install()
+        (self.target / ".surveyctl" / "auth-security-floor").unlink()
+        release = self.target / "releases" / "0.2.0"
+        env = release / ".env"
+        env.write_text(env.read_text().replace("PLATFORM_ADMIN_ENFORCE_PERSONNEL=true", "PLATFORM_ADMIN_ENFORCE_PERSONNEL=false"))
+        old_manifest = release / "release.json"
+        data = json.loads(old_manifest.read_text())
+        data["securityCapabilities"] = {}
+        old_manifest.write_text(json.dumps(data))
+        integrity = release / "deployment-integrity.json"
+        data = json.loads(integrity.read_text())
+        data["generatedFiles"][".env"] = hashlib.sha256(env.read_bytes()).hexdigest()
+        data["manifestSha256"] = hashlib.sha256(old_manifest.read_bytes()).hexdigest()
+        integrity.write_text(json.dumps(data))
+        failing = FakeRunner(fail_when=lambda command: "up" in command and "0.3.0" in " ".join(command))
+        candidate = self.manifest(version="0.3.0", minimumSourceVersion="0.2.0")
+        with self.assertRaisesRegex(self.module.RuntimeHealthError, "services stopped"):
+            self.manager(runner=failing).upgrade(candidate)
+        self.assertEqual("recovery_required", json.loads((self.target / ".surveyctl" / "state.json").read_text())["status"])
+        self.assertFalse(any("up" in command and "releases/0.2.0/compose.yml" in " ".join(command) for command in failing.commands))
+        self.assertTrue((self.target / ".surveyctl" / "auth-security-floor").is_file())
 
     def test_restore_status_doctor_and_logs_delegate_without_exposing_secrets(self):
         self.install()
@@ -1106,6 +1337,8 @@ class SurveyctlTest(unittest.TestCase):
 
     def test_restore_accepts_only_release_declared_source_schemas(self):
         self.install()
+        source = self.manifest(version="0.1.9")
+        self.manager()._stage_release(self.module.load_manifest(source), "arm64", "survey.example.com", "operations", "operations@example.com")
         backup = self.target / "backups" / "older-compatible"
         write_fake_backup(backup, "0.1.9", "919")
         self.runner.commands.clear()

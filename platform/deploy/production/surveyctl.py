@@ -49,7 +49,7 @@ ONE_SHOT_SERVICES = {"engine-init"}
 SECRET_NAMES = (
     "engine_admin_password_hash", "engine_admin_password", "engine_db_password",
     "engine_db_root_password", "platform_db_superuser_password", "platform_db_owner_password",
-    "platform_db_app_password", "platform_jwt_hmac_secret", "platform_engine_events_secret",
+    "platform_db_app_password", "platform_jwt_hmac_secret", "platform_probe_hmac_secret", "platform_engine_events_secret",
     "platform_pubgw_secret", "pubgw_engine_admin_password", "backup_encryption_key",
     "platform_delivery_secret",
     "engine_instance_events_secret", "pubgw_engine_channel_secret",
@@ -581,6 +581,31 @@ class SurveyManager:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
+    def _atomic_create_once(self, path: Path, content: str) -> None:
+        path = self._managed(path.relative_to(self.target))
+        parent = self._mkdir(path.parent.relative_to(self.target))
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=parent)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, path, follow_symlinks=False)
+            except FileExistsError:
+                pass  # A concurrent process published a complete winner.
+            # Both the publisher and any concurrent reader must persist the
+            # directory entry before using its identity in a remote request.
+            directory = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
     def _write_state(self, **values) -> None:
         state = self._read_state() if self.state_path.exists() else {}
         state.update(values)
@@ -603,6 +628,35 @@ class SurveyManager:
         if manifest.version != version:
             raise IntegrityError("release directory and manifest versions do not match")
         return manifest
+
+    def _personnel_guard_enabled(self, version: str, require_floor: bool = False) -> bool:
+        release = self._release_dir(version)
+        self._verify_staged_release(release, version)
+        values = [line.split("=", 1)[1] for line in (release / ".env").read_text(encoding="utf-8").splitlines()
+                  if line.startswith("PLATFORM_ADMIN_ENFORCE_PERSONNEL=")]
+        if len(values) > 1 or (values and values[0] not in {"true", "false"}):
+            raise IntegrityError("personnel guard configuration is invalid")
+        enabled = values == ["true"]
+        floor = self._managed(".surveyctl/auth-security-floor")
+        if require_floor and enabled and not (floor.exists() or floor.is_symlink()):
+            raise IntegrityError("personnel security floor is missing")
+        if floor.exists() or floor.is_symlink():
+            _regular_file(floor, "authentication security floor")
+            if floor.read_text(encoding="ascii").strip() != "platform-admin-session-v1":
+                raise IntegrityError("authentication security floor is invalid")
+            if not enabled:
+                raise IntegrityError("personnel security boundary cannot be disabled after activation")
+        return enabled
+
+    def _activate_personnel_floor(self, version: str) -> None:
+        if self._personnel_guard_enabled(version):
+            self._require_personnel_capability(self._release_manifest(version))
+            self._atomic_create_once(self._managed(".surveyctl/auth-security-floor"), "platform-admin-session-v1\n")
+
+    @staticmethod
+    def _require_personnel_capability(manifest: ReleaseManifest) -> None:
+        if manifest.raw.get("securityCapabilities", {}).get("platform-admin-session-v1") != manifest.raw["images"]["PLATFORM_IMAGE"]:
+            raise InputError("personnel security boundary is unsupported by the target release")
 
     def _compose(self, version: str) -> list[str]:
         release = self._release_dir(version)
@@ -952,6 +1006,18 @@ class SurveyManager:
             path = secret_dir / name
             if not path.exists() and name not in derived_secrets:
                 self._atomic_write(path, secrets.token_urlsafe(48) + "\n")
+        probe_installation = self._managed("shared/probe-installation.json")
+        if not probe_installation.exists() and not probe_installation.is_symlink():
+            self._atomic_create_once(probe_installation, json.dumps({"installationId": str(uuid.uuid4())}, sort_keys=True) + "\n")
+        if probe_installation.is_symlink():
+            raise IntegrityError("probe installation identity is unsafe")
+        try:
+            probe_config = json.loads(probe_installation.read_text(encoding="utf-8"))
+            installation_id = probe_config["installationId"]
+            if set(probe_config) != {"installationId"} or str(uuid.UUID(installation_id)) != installation_id:
+                raise ValueError("invalid installation")
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise IntegrityError("probe installation identity is invalid") from exc
         engine_instance_id = "production-engine-01"
         master = (secret_dir / "platform_engine_events_secret").read_bytes().strip()
         instance_secret = hmac.new(
@@ -968,6 +1034,7 @@ class SurveyManager:
         lines += [
             f"ENGINE_INSTANCE_ID={engine_instance_id}", f"ENGINE_ADMIN_USER={admin_user}",
             f"ENGINE_ADMIN_EMAIL={admin_email}", f"ENGINES_CONFIG_FILE={release / 'engines.json'}",
+            f"PLATFORM_PROBE_INSTALLATION_ID={installation_id}", "PLATFORM_ADMIN_ENFORCE_PERSONNEL=true",
         ]
         if self._native_acceptance_profile(manifest):
             lines.append("CADDY_TLS_DIRECTIVE=tls internal")
@@ -976,6 +1043,7 @@ class SurveyManager:
             "ENGINE_DB_PASSWORD_FILE": "engine_db_password", "ENGINE_DB_ROOT_PASSWORD_FILE": "engine_db_root_password",
             "PLATFORM_DB_SUPERUSER_PASSWORD_FILE": "platform_db_superuser_password", "PLATFORM_DB_OWNER_PASSWORD_FILE": "platform_db_owner_password",
             "PLATFORM_DB_APP_PASSWORD_FILE": "platform_db_app_password", "PLATFORM_JWT_HMAC_SECRET_FILE": "platform_jwt_hmac_secret",
+            "PLATFORM_PROBE_HMAC_SECRET_FILE": "platform_probe_hmac_secret",
             "PLATFORM_ENGINE_EVENTS_SECRET_FILE": "platform_engine_events_secret", "PLATFORM_PUBGW_SECRET_FILE": "platform_pubgw_secret",
             "PLATFORM_DELIVERY_SECRET_FILE": "platform_delivery_secret",
             "ENGINE_INSTANCE_EVENTS_SECRET_FILE": "engine_instance_events_secret",
@@ -1041,6 +1109,7 @@ class SurveyManager:
         values = self.preflight(manifest, public_host)
         self._mkdir(".")
         self._stage_release(manifest, values["architecture"], public_host, admin_user, admin_email, bundle_path, asset_loader)
+        self._activate_personnel_floor(manifest.version)
         self._write_state(
             status="installing",
             version=manifest.version,
@@ -1196,6 +1265,8 @@ class SurveyManager:
         state = self._read_state(require_current=True)
         backup = self._backup_path(name)
         metadata = self._verify_backup(backup)
+        if self._personnel_guard_enabled(state["version"], require_floor=True):
+            self._require_personnel_capability(self._release_manifest(metadata["version"]))
         release = self._release_manifest(state["version"])
         compatible_schemas = set(release.compatible_source_schemas) | {release.database_schema}
         if metadata["databaseSchema"] not in compatible_schemas:
@@ -1214,15 +1285,32 @@ class SurveyManager:
         signed = f"{header}.{claims}".encode("ascii")
         return signed.decode("ascii") + "." + encode(hmac.new(secret, signed, hashlib.sha256).digest())
 
+    @staticmethod
+    def _probe_jwt(secret: bytes, installation: str, run: str) -> str:
+        encode = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+        now = int(time.time())
+        header = encode(b'{"alg":"HS256","typ":"JWT"}')
+        claims = encode(json.dumps({"iss": "survey-probe", "aud": ["survey-setup-probe"], "sub": "setup-probe",
+            "installation_id": installation, "run_id": run, "engine_id": "production-engine-01",
+            "scope": ["probe.setup"], "iat": now, "exp": now + 300}, separators=(",", ":")).encode("utf-8"))
+        signed = f"{header}.{claims}".encode("ascii")
+        return signed.decode("ascii") + "." + encode(hmac.new(secret, signed, hashlib.sha256).digest())
+
     def setup_probe(self, api_call=None) -> None:
         state = self._read_state(require_current=True)
+        release = self._release_dir(state["version"])
+        self._verify_staged_release(release, state["version"])
+        guard_values = [line.split("=", 1)[1] for line in (release / ".env").read_text(encoding="utf-8").splitlines()
+                        if line.startswith("PLATFORM_ADMIN_ENFORCE_PERSONNEL=")]
+        if len(guard_values) > 1 or (guard_values and guard_values[0] not in {"true", "false"}):
+            raise IntegrityError("personnel guard configuration is invalid")
+        personnel_enforced = guard_values == ["true"]
         host = state["publicHost"]
         jwt_path = self._managed("shared/secrets/platform_jwt_hmac_secret", must_exist=True)
         event_path = self._managed("shared/secrets/engine_instance_events_secret", must_exist=True)
         jwt_secret = jwt_path.read_bytes().strip()
         if jwt_path.is_symlink() or event_path.is_symlink() or len(jwt_secret) < 32:
             raise IntegrityError("probe setup secrets are unavailable or unsafe")
-        token = self._jwt(jwt_secret, "production-probe-operator", str(uuid.uuid4()), ["platform_operator"])
 
         def request(call_token, method, path, body=None):
             payload = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
@@ -1238,6 +1326,56 @@ class SurveyManager:
                 raise RuntimeHealthError("probe setup API request failed") from exc
 
         call = api_call or request
+        probe_key = self._managed("shared/secrets/platform_probe_hmac_secret")
+        probe_installation = self._managed("shared/probe-installation.json")
+        if personnel_enforced and not (probe_key.exists() or probe_key.is_symlink() or probe_installation.exists() or probe_installation.is_symlink()):
+            raise IntegrityError("probe machine configuration is required in personnel mode")
+        if probe_key.exists() or probe_installation.exists() or probe_key.is_symlink() or probe_installation.is_symlink():
+            if probe_key.is_symlink() or probe_installation.is_symlink() or not probe_key.is_file() or not probe_installation.is_file():
+                raise IntegrityError("probe machine configuration is incomplete or unsafe")
+            machine_secret = probe_key.read_bytes().strip()
+            engine_master_path = self._managed("shared/secrets/platform_engine_events_secret", must_exist=True)
+            if (engine_master_path.is_symlink() or (probe_key.stat().st_mode & 0o077) or len(machine_secret) < 32
+                    or secrets.compare_digest(machine_secret, jwt_secret)
+                    or secrets.compare_digest(machine_secret, event_path.read_bytes().strip())
+                    or secrets.compare_digest(machine_secret, engine_master_path.read_bytes().strip())):
+                raise IntegrityError("probe machine secret is invalid or not independent")
+            try:
+                config = json.loads(probe_installation.read_text(encoding="utf-8"))
+                installation = config["installationId"]
+                if set(config) != {"installationId"} or str(uuid.UUID(installation)) != installation:
+                    raise ValueError("invalid installation")
+                run_path = self._managed("shared/probe-run.json")
+                legacy_probe = self._managed("shared/product-probe.json")
+                if (legacy_probe.exists() or legacy_probe.is_symlink()) and not run_path.exists() and not run_path.is_symlink():
+                    raise RuntimeHealthError("legacy probe retained; run doctor, and use a controlled rebuild if needed")
+                proposed = str(uuid.uuid4())
+                self._atomic_create_once(run_path, json.dumps({"installationId": installation, "runId": proposed}, sort_keys=True) + "\n")
+                if run_path.is_symlink():
+                    raise ValueError("unsafe run state")
+                run_state = json.loads(run_path.read_text(encoding="utf-8"))
+                run = run_state["runId"]
+                if set(run_state) != {"installationId", "runId"} or run_state["installationId"] != installation or str(uuid.UUID(run)) != run:
+                    raise ValueError("invalid run state")
+            except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                raise IntegrityError("probe machine configuration is invalid") from exc
+            token = self._probe_jwt(machine_secret, installation, run)
+            status, result = call(token, "POST", "/v1/setup-probe", None)
+            if status != 200 or not isinstance(result, dict) or result.get("actorId") != "production-probe-owner":
+                raise RuntimeHealthError("probe setup API rejected the machine request")
+            try:
+                tenant_id = result["tenantId"]
+                if str(uuid.UUID(tenant_id)) != tenant_id:
+                    raise ValueError("invalid tenant")
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                raise RuntimeHealthError("probe setup returned an invalid tenant identity") from exc
+            expected_secret = event_path.read_text(encoding="ascii").strip()
+            if not isinstance(result.get("engineSecret"), str) or not secrets.compare_digest(result["engineSecret"], expected_secret):
+                raise IntegrityError("issued engine event secret does not match the configured engine")
+            self._atomic_write(self._managed("shared/product-probe.json"), json.dumps({"tenantId": tenant_id, "actorId": "production-probe-owner"}, sort_keys=True) + "\n")
+            return
+
+        token = self._jwt(jwt_secret, "production-probe-operator", str(uuid.uuid4()), ["platform_operator"])
         suffix = uuid.uuid4().hex[:12]
 
         def expect(method, path, body, status):
@@ -1278,6 +1416,8 @@ class SurveyManager:
     def upgrade(self, manifest_path, expected_sha256=None, bundle_path=None, asset_loader=None) -> None:
         state = self._read_state(require_current=True)
         previous, manifest = state["version"], load_manifest(manifest_path, expected_sha256)
+        if self._personnel_guard_enabled(previous, require_floor=True):
+            self._require_personnel_capability(manifest)
         if _version_key(manifest.version) <= _version_key(previous):
             raise InputError("upgrade target must be newer than the installed version")
         if _version_key(previous) < _version_key(manifest.raw["minimumSourceVersion"]):
@@ -1294,6 +1434,7 @@ class SurveyManager:
         self._verify_backup(backup, previous, state["databaseSchema"])
         compose = self._compose(manifest.version)
         try:
+            self._activate_personnel_floor(manifest.version)
             self._write_state(status="upgrading", previousVersion=previous, recoveryBackup=backup_name)
             self._run(compose + ["pull"], "upgrade image pull failed")
             self._run(compose + ["up", "-d", "--remove-orphans"], "upgrade migration or start failed")
@@ -1306,6 +1447,13 @@ class SurveyManager:
 
     def _recover_failed_upgrade(self, manifest, previous, backup_name, failure) -> None:
         new_compose = self._compose(manifest.version)
+        if self._personnel_guard_enabled(manifest.version):
+            try:
+                self._require_personnel_capability(self._release_manifest(previous))
+                if not self._personnel_guard_enabled(previous):
+                    raise InputError("personnel security boundary must remain enabled in the recovery release")
+            except SurveyctlError as unsafe:
+                self._stop_after_failed_recovery(new_compose, previous, backup_name, unsafe)
         if manifest.rollback == "compatible":
             try:
                 old_compose = self._compose(previous)
@@ -1352,6 +1500,10 @@ class SurveyManager:
             raise InputError("no rollback version is recorded")
         _validate_semver(target_version, "rollback version")
         manifest, current_manifest = self._release_manifest(target_version), self._release_manifest(state["version"])
+        if self._personnel_guard_enabled(state["version"], require_floor=True):
+            self._require_personnel_capability(manifest)
+            if not self._personnel_guard_enabled(target_version):
+                raise InputError("personnel security boundary must remain enabled in the target release")
         if current_manifest.rollback != "compatible" or state["databaseSchema"] not in manifest.compatible_source_schemas:
             raise InputError("database compatibility requires restore from backup; image rollback is blocked")
         compose = self._compose(target_version)

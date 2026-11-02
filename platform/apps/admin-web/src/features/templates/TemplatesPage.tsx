@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
+import { usePlatformCapabilities } from '../operations/usePlatformCapabilities';
 import {
   listManagedTemplates, listPendingTemplates, listPlatformTemplates, listTemplates,
   platformTemplateListQueryKey, templateListQueryKey, templateManagedQueryKey, templatePendingQueryKey,
@@ -23,7 +24,8 @@ export function TemplatesPage() {
   const modeParam = params.get('mode');
   const mode: ListMode = modeParam === 'managed' || modeParam === 'pending' || modeParam === 'platform'
     ? modeParam : 'library';
-  const isOperator = session?.me.roles.includes('platform_operator') === true;
+  const platformCapability = usePlatformCapabilities();
+  const isOperator = !platformCapability.isError && !platformCapability.isFetching && platformCapability.data?.managePlatform === true;
   const scopeValue = params.get('scope');
   const scope: TemplateScopeFilter = scopeValue === 'tenant' || scopeValue === 'platform' ? scopeValue : 'all';
   const viewValue = params.get('view');
@@ -58,7 +60,8 @@ export function TemplatesPage() {
       <Link to="/templates?mode=pending" aria-current={mode === 'pending' ? 'page' : undefined}>待审核</Link>
       {isOperator ? <Link to="/templates?mode=platform" aria-current={mode === 'platform' ? 'page' : undefined}>平台模板管理</Link> : null}
     </nav>
-    {mode === 'platform' && !isOperator ? <p role="alert">无权查看平台模板管理</p> : null}
+    {mode === 'platform' && platformCapability.isFetching ? <p>正在检查平台权限</p> : null}
+    {mode === 'platform' && !platformCapability.isFetching && !isOperator ? <p role="alert">无权查看平台模板管理</p> : null}
     {mode !== 'platform' || isOperator ? <>
     <div className="templates-filters">
       {mode === 'library' ? <label>模板范围 <select aria-label="模板范围" value={scope} onChange={(event) => setFilter('scope', event.target.value)}>

@@ -6,6 +6,7 @@ import { AuthCallbackPage } from '../features/auth/AuthCallbackPage';
 import { useAuth } from '../features/auth/AuthProvider';
 import { WorkspacePage } from '../features/workspace/WorkspacePage';
 import { EditorRoutePage } from '../features/editor/EditorPage';
+import { usePlatformCapabilities } from '../features/operations/usePlatformCapabilities';
 
 const MembersPage = lazy(() => import('../features/members/MembersPage').then((module) => ({ default: module.MembersPage })));
 const TenantDirectoryPage = lazy(() => import('../features/operations/TenantDirectoryPage').then((module) => ({ default: module.TenantDirectoryPage })));
@@ -67,8 +68,9 @@ function ProtectedRoute() {
 }
 
 function HomeRoute() {
-  const { session } = useAuth();
-  return <Navigate to={session?.me.roles.includes('platform_operator') ? '/operations/tenants' : '/dashboard'} replace />;
+  const capability = usePlatformCapabilities();
+  if (capability.isPending || capability.isFetching) return <p>正在检查平台权限</p>;
+  return <Navigate to={!capability.isError && capability.data?.managePlatform ? '/operations/tenants' : '/dashboard'} replace />;
 }
 
 function LoginPage() {
