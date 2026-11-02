@@ -32,7 +32,7 @@ function MembersWorkspace() {
     onError: (error) => { setMessage(error instanceof ApiError && error.status === 409 ? '操作未完成：席位不足或最后一名所有者不能移除' : '操作未完成，请确认权限后重试'); void client.invalidateQueries({ queryKey: key }); },
   });
   const forbidden = query.error instanceof ApiError && query.error.status === 403;
-  return <main className="workspace-page"><h1>成员管理</h1>
+  return <main className="settings-page"><h1>成员管理</h1>
     {query.isPending ? <p>正在加载成员</p> : null}
     {query.isError ? <div role="alert"><p>{forbidden ? '无权管理成员' : '成员加载失败，请重试'}</p><button type="button" onClick={() => void query.refetch()}>重试</button> <Link to="/dashboard">返回工作台</Link></div> : null}
     {query.data && !query.isError && !query.isFetching ? <>
