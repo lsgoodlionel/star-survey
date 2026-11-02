@@ -40,11 +40,17 @@ public class MemberGrantController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, UUID> grant(@RequestBody GrantRequest request) {
-        return Map.of("id", grants.grant(current.require(), request));
+        var ctx = current.require();
+        access.require(ctx, Permission.MANAGE_MEMBERS, null);
+        return Map.of("id", grants.grant(ctx, request));
     }
     @PostMapping("/{id}/revoke")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void revoke(@PathVariable UUID id) { grants.revoke(current.require(), id); }
+    public void revoke(@PathVariable UUID id) {
+        var ctx = current.require();
+        access.require(ctx, Permission.MANAGE_MEMBERS, null);
+        grants.revoke(ctx, id);
+    }
     @ExceptionHandler(IllegalStateException.class)
     ResponseEntity<Map<String, String>> conflict(IllegalStateException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "grant_conflict"));

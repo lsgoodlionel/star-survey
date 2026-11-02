@@ -95,6 +95,11 @@ class MemberManagementApiTest {
         TenantContext viewer = fixture.activeMember(other, "viewer");
         mvc.perform(get("/v1/members").header("Authorization", bearer(viewer))).andExpect(status().isForbidden());
         invite(viewer, "target", 403);
+        mvc.perform(post("/v1/member-grants").header("Authorization", bearer(viewer)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"actorId\":\"unknown\",\"roleCode\":\"unknown\",\"resourceId\":null,\"expiresAt\":null}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/v1/member-grants/" + java.util.UUID.randomUUID() + "/revoke")
+                .header("Authorization", bearer(viewer))).andExpect(status().isForbidden());
         mvc.perform(get("/v1/members")).andExpect(status().isUnauthorized());
     }
 }
