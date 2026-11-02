@@ -984,6 +984,15 @@ class SurveyctlTest(unittest.TestCase):
             raise AssertionError(path)
 
         self.manager().setup_probe(api_call=api_call)
+        tenant_id = "11111111-1111-4111-8111-111111111111"
+        self.assertEqual([
+            ("POST", "/v1/platform/tenants"),
+            ("POST", "/v1/platform/plans"),
+            ("POST", f"/v1/platform/tenants/{tenant_id}/onboarding"),
+            ("POST", f"/v1/platform/tenants/{tenant_id}/status"),
+            ("POST", f"/v1/platform/tenants/{tenant_id}/engine-instances"),
+            ("POST", "/v1/platform/engine-instances/production-engine-01/event-secret"),
+        ], [(method, path) for method, path, _, _ in calls])
         probe = self.target / "shared" / "product-probe.json"
         self.assertEqual(0o600, stat.S_IMODE(probe.stat().st_mode))
         self.assertEqual(
@@ -995,6 +1004,7 @@ class SurveyctlTest(unittest.TestCase):
             {"survey.read", "survey.write", "response.collect", "response.export"},
             set(plan["capabilities"]),
         )
+        self.assertEqual({"member.seats": 1, "response.valid_completed": 100}, plan["quotas"])
         secrets_on_disk = [path.read_text().strip() for path in (self.target / "shared" / "secrets").iterdir()]
         self.assertTrue(all(secret not in "\n".join(" ".join(map(str, call[:3])) for call in calls) for secret in secrets_on_disk))
 

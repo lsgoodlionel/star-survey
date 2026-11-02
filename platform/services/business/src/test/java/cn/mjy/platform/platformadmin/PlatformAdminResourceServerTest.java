@@ -63,6 +63,9 @@ class PlatformAdminResourceServerTest {
     }
 
     @Test void verifiedSessionIsRequiredEvenForASyntheticActiveGrant() throws Exception {
+        org.assertj.core.api.Assertions.assertThat(jdbc.sql("SELECT current_user").query(String.class).single()).isEqualTo("platform_app");
+        org.assertj.core.api.Assertions.assertThat(jdbc.sql("SELECT has_table_privilege(current_user, 'platform_admin_grant', 'INSERT,UPDATE,DELETE')")
+                .query(Boolean.class).single()).isFalse();
         TenantId tenant = fixtures.activeTenant();
         UUID principal = UUID.randomUUID(), target = UUID.randomUUID(), connection = UUID.randomUUID(), session = UUID.randomUUID(), expiredSession = UUID.randomUUID();
         scope.run(tenant, () -> {
