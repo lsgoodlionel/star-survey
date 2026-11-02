@@ -19,6 +19,7 @@ CREATE TABLE platform_admin_audit (
     action text NOT NULL CHECK (action IN ('bootstrap', 'grant', 'revoke', 'identity_invalidated', 'recovery')),
     trace_id text NOT NULL,
     operator_db_user text NOT NULL,
+    operator_asserted text,
     reason text NOT NULL CHECK (length(reason) BETWEEN 1 AND 1000),
     occurred_at timestamptz NOT NULL DEFAULT now()
 );
@@ -124,7 +125,7 @@ CREATE TRIGGER platform_admin_binding_revoked AFTER INSERT OR UPDATE ON identity
     FOR EACH ROW EXECUTE FUNCTION platform_admin_invalidate_unusable();
 
 -- Only the database owner can run the initial bootstrap; it cannot add a second identity.
-CREATE FUNCTION platform_admin_bootstrap(p_tenant uuid, p_subject uuid, p_trace text, p_reason text) RETURNS boolean
+CREATE FUNCTION platform_admin_bootstrap(p_tenant uuid, p_subject uuid, p_trace text, p_reason text, p_operator text) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
     IF p_tenant IS NULL OR p_subject IS NULL OR p_trace IS NULL OR btrim(p_trace) = ''
@@ -142,15 +143,19 @@ BEGIN
         RAISE EXCEPTION 'bootstrap already completed';
     END IF;
     INSERT INTO public.platform_admin_grant(identity_tenant, subject) VALUES (p_tenant, p_subject);
-    INSERT INTO public.platform_admin_audit(target_tenant, target_subject, action, trace_id, operator_db_user, reason)
-        VALUES (p_tenant, p_subject, 'bootstrap', p_trace, session_user, p_reason);
+    INSERT INTO public.platform_admin_audit(target_tenant, target_subject, action, trace_id, operator_db_user, operator_asserted, reason)
+        VALUES (p_tenant, p_subject, 'bootstrap', p_trace, session_user, p_operator, p_reason);
     RETURN true;
 END $$;
+REVOKE ALL ON FUNCTION platform_admin_bootstrap(uuid, uuid, text, text, text) FROM PUBLIC, platform_app;
+CREATE FUNCTION platform_admin_bootstrap(p_tenant uuid, p_subject uuid, p_trace text, p_reason text) RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$ SELECT public.platform_admin_bootstrap(p_tenant, p_subject, p_trace, p_reason, NULL) $$;
 REVOKE ALL ON FUNCTION platform_admin_bootstrap(uuid, uuid, text, text) FROM PUBLIC, platform_app;
 
 -- Owner-only recovery after all identities became unusable. This is not bootstrap:
 -- an earlier grant must exist, and no currently usable grant may remain.
-CREATE FUNCTION platform_admin_recover(p_tenant uuid, p_subject uuid, p_trace text, p_reason text) RETURNS boolean
+CREATE FUNCTION platform_admin_recover(p_tenant uuid, p_subject uuid, p_trace text, p_reason text, p_operator text) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
     IF p_tenant IS NULL OR p_subject IS NULL OR p_trace IS NULL OR btrim(p_trace) = ''
@@ -172,11 +177,44 @@ BEGIN
     INSERT INTO public.platform_admin_grant(identity_tenant, subject, active)
         VALUES (p_tenant, p_subject, true)
         ON CONFLICT (identity_source, identity_tenant, subject) DO UPDATE SET active = true, updated_at = now();
-    INSERT INTO public.platform_admin_audit(target_tenant, target_subject, action, trace_id, operator_db_user, reason)
-        VALUES (p_tenant, p_subject, 'recovery', p_trace, session_user, p_reason);
+    INSERT INTO public.platform_admin_audit(target_tenant, target_subject, action, trace_id, operator_db_user, operator_asserted, reason)
+        VALUES (p_tenant, p_subject, 'recovery', p_trace, session_user, p_operator, p_reason);
     RETURN true;
 END $$;
+REVOKE ALL ON FUNCTION platform_admin_recover(uuid, uuid, text, text, text) FROM PUBLIC, platform_app;
+CREATE FUNCTION platform_admin_recover(p_tenant uuid, p_subject uuid, p_trace text, p_reason text) RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$ SELECT public.platform_admin_recover(p_tenant, p_subject, p_trace, p_reason, NULL) $$;
 REVOKE ALL ON FUNCTION platform_admin_recover(uuid, uuid, text, text) FROM PUBLIC, platform_app;
+
+-- A deployer login can be granted only these wrappers by a deployment DBA.
+-- session_user is database-authenticated; operator_asserted is an explicit claim,
+-- whose mapping to a person must be verified by the deployment's identity process.
+CREATE FUNCTION platform_admin_bootstrap_attributed(p_tenant uuid, p_subject uuid, p_trace text,
+        p_reason text, p_operator text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE changed boolean;
+BEGIN
+    IF p_operator IS NULL OR p_operator !~ '^[A-Za-z0-9][A-Za-z0-9@._:-]{1,127}$' THEN
+        RAISE EXCEPTION 'explicit deployment operator required';
+    END IF;
+    changed := public.platform_admin_bootstrap(p_tenant, p_subject, p_trace, p_reason, p_operator);
+    RETURN changed;
+END $$;
+REVOKE ALL ON FUNCTION platform_admin_bootstrap_attributed(uuid, uuid, text, text, text) FROM PUBLIC, platform_app;
+
+CREATE FUNCTION platform_admin_recover_attributed(p_tenant uuid, p_subject uuid, p_trace text,
+        p_reason text, p_operator text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE changed boolean;
+BEGIN
+    IF p_operator IS NULL OR p_operator !~ '^[A-Za-z0-9][A-Za-z0-9@._:-]{1,127}$' THEN
+        RAISE EXCEPTION 'explicit deployment operator required';
+    END IF;
+    changed := public.platform_admin_recover(p_tenant, p_subject, p_trace, p_reason, p_operator);
+    RETURN changed;
+END $$;
+REVOKE ALL ON FUNCTION platform_admin_recover_attributed(uuid, uuid, text, text, text) FROM PUBLIC, platform_app;
 
 -- Application must pass the independently authenticated actor, never request-supplied actor fields.
 CREATE FUNCTION platform_admin_change(p_actor_tenant uuid, p_actor uuid, p_target_tenant uuid,

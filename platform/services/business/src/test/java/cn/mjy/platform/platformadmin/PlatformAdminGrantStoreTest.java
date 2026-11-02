@@ -68,8 +68,17 @@ class PlatformAdminGrantStoreTest {
                         invalid.setObject(1, tenant); invalid.setObject(2, first); invalid.setString(3, "test"); invalid.setString(4, " "); invalid.execute();
                     }
                 }).isInstanceOf(java.sql.SQLException.class);
-                try (var statement = owner.prepareStatement("SELECT platform_admin_bootstrap(?, ?, ?, ?)") ) {
+                assertThatThrownBy(() -> jdbc.sql("SELECT platform_admin_bootstrap_attributed(:tenant,:subject,'trace','reason','person')")
+                        .param("tenant", tenant).param("subject", first).query(Boolean.class).single()).isInstanceOf(DataAccessException.class);
+                assertThatThrownBy(() -> {
+                    try (var invalid = owner.prepareStatement("SELECT platform_admin_bootstrap_attributed(?,?,?,?,?)")) {
+                        invalid.setObject(1, tenant); invalid.setObject(2, first); invalid.setString(3, "trace");
+                        invalid.setString(4, "reason"); invalid.setString(5, "  "); invalid.execute();
+                    }
+                }).isInstanceOf(java.sql.SQLException.class);
+                try (var statement = owner.prepareStatement("SELECT platform_admin_bootstrap_attributed(?, ?, ?, ?, ?)") ) {
                     statement.setObject(1, tenant); statement.setObject(2, first); statement.setString(3, "test-bootstrap"); statement.setString(4, "initial setup");
+                    statement.setString(5, "deploy-test-person");
                     statement.execute();
                 }
                 try (var check = owner.prepareStatement("SELECT platform_admin_identity_usable(?, ?), current_setting('app.tenant_id', true)")) {
@@ -222,16 +231,24 @@ class PlatformAdminGrantStoreTest {
                 assertThatThrownBy(() -> jdbc.sql("SELECT platform_admin_recover(:tenant,:subject,'trace','test')")
                         .param("tenant", tenant).param("subject", second).query(Boolean.class).single())
                         .isInstanceOf(DataAccessException.class);
-                try (var recover = owner.prepareStatement("SELECT platform_admin_recover(?,?,?,?)")) {
+                assertThatThrownBy(() -> jdbc.sql("SELECT platform_admin_recover_attributed(:tenant,:subject,'trace','test','person')")
+                        .param("tenant", tenant).param("subject", second).query(Boolean.class).single())
+                        .isInstanceOf(DataAccessException.class);
+                try (var recover = owner.prepareStatement("SELECT platform_admin_recover_attributed(?,?,?,?,?)")) {
                     recover.setObject(1, tenant); recover.setObject(2, second);
                     recover.setString(3, "test-recover"); recover.setString(4, "restore after identity outage");
+                    recover.setString(5, "deploy-test-person");
                     try (var result = recover.executeQuery()) { result.next(); assertThat(result.getBoolean(1)).isTrue(); }
                 }
                 assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
                         .param("subject", second).query(Boolean.class).single()).isTrue();
-                try (var audit = owner.prepareStatement("SELECT operator_db_user, reason FROM platform_admin_audit WHERE target_tenant = ? AND action = 'bootstrap'")) {
+                try (var audit = owner.prepareStatement("SELECT operator_db_user, reason, operator_asserted FROM platform_admin_audit WHERE target_tenant = ? AND action = 'bootstrap'")) {
                     audit.setObject(1, tenant);
-                    try (var result = audit.executeQuery()) { result.next(); assertThat(result.getString(1)).isEqualTo(ownerUser); assertThat(result.getString(2)).isEqualTo("initial setup"); }
+                    try (var result = audit.executeQuery()) { result.next(); assertThat(result.getString(1)).isEqualTo(ownerUser); assertThat(result.getString(2)).isEqualTo("initial setup"); assertThat(result.getString(3)).isEqualTo("deploy-test-person"); }
+                }
+                try (var audit = owner.prepareStatement("SELECT operator_db_user, reason, operator_asserted FROM platform_admin_audit WHERE target_tenant = ? AND action = 'recovery'")) {
+                    audit.setObject(1, tenant);
+                    try (var result = audit.executeQuery()) { assertThat(result.next()).isTrue(); assertThat(result.getString(1)).isEqualTo(ownerUser); assertThat(result.getString(2)).isEqualTo("restore after identity outage"); assertThat(result.getString(3)).isEqualTo("deploy-test-person"); }
                 }
                 try (var query = owner.prepareStatement("SELECT count(*) FROM platform_admin_audit WHERE target_tenant = ?")) {
                     query.setObject(1, tenant);
