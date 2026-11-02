@@ -37,12 +37,17 @@ jobs:
           mkdir evidence
           image=ghcr.io/lsgoodlionel/star-survey-admin@sha256:c7d09de4625bbdf1b366c7f8fa6b3f009688bb77d85b9196867b241f247aab2a
           docker image inspect "$image" --format '{{json .Config.Healthcheck}}' > evidence/image-healthcheck.json
-          docker run -d --name admin-health --cpus 0.50 --memory 128m --security-opt no-new-privileges:true \
+          docker network create admin-health
+          docker create --name platform --network admin-health --entrypoint /bin/sh "$image" -c 'sleep 120'
+          docker run -d --name admin-health --network admin-health --restart unless-stopped --cpus 0.50 --memory 128m --security-opt no-new-privileges:true \
             --health-cmd 'wget -q -O /dev/null http://127.0.0.1/' --health-interval 10s --health-timeout 3s --health-retries 3 "$image"
+          # Production creates platform before admin but starts it after database readiness.
+          (sleep 6; docker start platform) &
           for sample in $(seq 1 45); do
-            docker inspect admin-health --format '{{json .State.Health}}' >> evidence/health-timeline.jsonl
+            docker inspect admin-health --format '{{json .State}}' >> evidence/health-timeline.jsonl
             sleep 1
           done
+          docker logs admin-health > evidence/nginx.log 2>&1
           test "$(docker inspect admin-health --format '{{.State.Health.Status}}')" = healthy
       - name: Preserve diagnostic evidence
         if: always()
@@ -53,4 +58,6 @@ jobs:
           if-no-files-found: error
       - name: Clean up isolated container
         if: always()
-        run: docker rm -f admin-health || true
+        run: |
+          docker rm -f admin-health platform || true
+          docker network rm admin-health || true
