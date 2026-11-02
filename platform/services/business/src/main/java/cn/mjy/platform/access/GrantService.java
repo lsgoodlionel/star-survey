@@ -84,6 +84,17 @@ public class GrantService {
         });
     }
 
+    public GrantPage page(TenantContext ctx, UUID after, int limit) {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("invalid limit");
+        return tenantScope.call(ctx.tenantId(), () -> {
+            access.require(ctx, Permission.MANAGE_MEMBERS, null);
+            List<GrantView> rows = grants.listPage(ctx.tenantId(), after, limit + 1);
+            List<GrantView> items = rows.stream().limit(limit).toList();
+            return new GrantPage(items, rows.size() > limit ? items.getLast().id() : null);
+        });
+    }
+    public record GrantPage(List<GrantView> items, UUID nextCursor) { }
+
     /** 撤销某成员的全部授权（移除成员时使用）。调用方须已在租户作用域内并持有租户成员锁。 */
     void revokeAllForLocked(TenantContext ctx, String actorId) {
         grants.listForActor(ctx.tenantId(), actorId).forEach(grant -> revokeLocked(ctx, grant));

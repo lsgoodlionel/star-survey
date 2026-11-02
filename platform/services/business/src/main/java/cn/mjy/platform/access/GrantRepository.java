@@ -104,6 +104,14 @@ class GrantRepository {
                 .list();
     }
 
+    List<GrantView> listPage(TenantId tenant, UUID after, int limit) {
+        String cursor = after == null ? "" : " AND id > :after";
+        JdbcClient.StatementSpec query = jdbc.sql("SELECT " + COLUMNS + " FROM access_grant WHERE tenant_id = :tenant" + cursor + " ORDER BY id LIMIT :limit")
+                .param("tenant", tenant.value()).param("limit", limit);
+        if (after != null) query = query.param("after", after);
+        return query.query(GrantRepository::toView).list();
+    }
+
     List<GrantView> listForActor(TenantId tenant, String actorId) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM access_grant WHERE tenant_id = :tenant AND actor_id = :actor")
                 .param("tenant", tenant.value())
