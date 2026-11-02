@@ -127,7 +127,7 @@ public class SurveyPublishService {
         approvalGate.authorizeFreshAttempt(ctx, clearance, row, requestId);
         String instance = activeEngineInstance(ctx.tenantId());
         ObjectNode normalized = definitions.normalize(definitions.parse(row.draftDefinition()), row.id());
-        ObjectNode pinned = pinDictionaries(normalized);
+        ObjectNode pinned = definitions.pinDictionaries(normalized, dictionaries);
         ObjectNode withAssets = materializeAssets(ctx, row.id(), row.draftVersion(), pinned);
         ObjectNode finalDefinition = materializeParticipants(ctx, row.id(), withAssets);
         String definition = definitions.serialize(finalDefinition);
@@ -151,24 +151,6 @@ public class SurveyPublishService {
         }
         List<UUID> refs = participants.map(source -> source.audienceOf(ctx, surveyId)).orElseGet(List::of);
         return definitions.withParticipants(definition, refs);
-    }
-
-    /**
-     * 引用了字典的问卷（多级下拉，R02-03）把每本字典固化成<b>发布这一刻</b>的当前版本，
-     * 连同节点快照写进定义（ADR 0019 决定 2）。定义快照不可变，所以这一版从此跟着这一版问卷走：
-     * 字典之后再更新，已发布的问卷仍按当初那一版判定路径，老答卷不会变成非法路径。
-     *
-     * <p>改版再发布（ADR 0012）＝新的引擎问卷，那时才会重新固化到新的当前版本——那是一次显式的动作。
-     */
-    private ObjectNode pinDictionaries(ObjectNode definition) {
-        List<String> codes = SurveyDictionaryRefs.codesIn(definition);
-        if (codes.isEmpty()) {
-            return definition;
-        }
-        SurveyDictionarySource source = dictionaries.orElseThrow(() -> new InvalidDefinitionException(
-                List.of("this definition references dictionaries " + codes
-                        + " but no dictionary service is available")));
-        return definitions.withDictionaries(definition, source.pin(codes));
     }
 
     /**

@@ -12,6 +12,8 @@ import cn.mjy.platform.survey.PublishUnavailableException;
 import cn.mjy.platform.survey.SurveyAccessDeniedException;
 import cn.mjy.platform.survey.SurveyConflictException;
 import cn.mjy.platform.survey.SurveyAssetSource;
+import cn.mjy.platform.survey.SurveyDefinitions;
+import cn.mjy.platform.survey.SurveyDictionarySource;
 import cn.mjy.platform.survey.SurveyNotFoundException;
 import cn.mjy.platform.survey.gateway.GatewayRequest;
 import cn.mjy.platform.tenant.engine.EngineInstance;
@@ -59,11 +61,14 @@ public class PreviewSessionService {
     private final JdbcClient jdbc;
     private final JsonMapper json;
     private final Optional<SurveyAssetSource> assets;
+    private final Optional<SurveyDictionarySource> dictionaries;
+    private final SurveyDefinitions definitions;
     private final Clock clock = Clock.systemUTC();
 
     PreviewSessionService(TenantScope tenantScope, AccessDecisionService access,
             PreviewSessionRepository sessions, EngineInstanceService engines, PreviewGatewayClient gateway,
-            JdbcClient jdbc, JsonMapper json, Optional<SurveyAssetSource> assets) {
+            JdbcClient jdbc, JsonMapper json, Optional<SurveyAssetSource> assets,
+            Optional<SurveyDictionarySource> dictionaries, SurveyDefinitions definitions) {
         this.tenantScope = tenantScope;
         this.access = access;
         this.sessions = sessions;
@@ -72,6 +77,8 @@ public class PreviewSessionService {
         this.jdbc = jdbc;
         this.json = json;
         this.assets = assets;
+        this.dictionaries = dictionaries;
+        this.definitions = definitions;
     }
 
     public record Created(PreviewSessionView session, boolean fresh) {
@@ -159,8 +166,8 @@ public class PreviewSessionService {
         }
         PreviewSessionRepository.DraftSnapshot draft = sessions.draft(surveyId)
                 .orElseThrow(() -> new SurveyNotFoundException("survey not found: " + surveyId));
-        ObjectNode materialized = materializeAssets(ctx, surveyId, draft.version(),
-                (ObjectNode) json.readTree(draft.definition()));
+        ObjectNode pinned = definitions.pinDictionaries((ObjectNode) json.readTree(draft.definition()), dictionaries);
+        ObjectNode materialized = materializeAssets(ctx, surveyId, draft.version(), pinned);
         String definition = json.writeValueAsString(materialized);
         List<GatewayRequest.BrandAsset> brandAssets = brandAssets(ctx.tenantId(), materialized);
         String instance = activeEngine(ctx.tenantId());
