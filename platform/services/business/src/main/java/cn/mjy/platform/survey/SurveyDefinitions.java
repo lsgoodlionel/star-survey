@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
@@ -110,6 +111,19 @@ public class SurveyDefinitions {
                     + MAX_DEFINITION_BYTES + " byte limit"));
         }
         return copy;
+    }
+
+    /**
+     * 预览与发布固化当时已发布的字典版本和节点快照（ADR 0019），以便该次操作使用不可变定义。
+     * 之后的字典更新不会改变已保存的发布或预览快照；无引用时不访问字典服务。
+     */
+    public ObjectNode pinDictionaries(ObjectNode definition, Optional<SurveyDictionarySource> dictionaries) {
+        List<String> codes = SurveyDictionaryRefs.codesIn(definition);
+        if (codes.isEmpty()) return definition;
+        SurveyDictionarySource source = dictionaries.orElseThrow(() -> new InvalidDefinitionException(
+                List.of("this definition references dictionaries " + codes
+                        + " but no dictionary service is available")));
+        return withDictionaries(definition, source.pin(codes));
     }
 
     public String title(JsonNode definition) {

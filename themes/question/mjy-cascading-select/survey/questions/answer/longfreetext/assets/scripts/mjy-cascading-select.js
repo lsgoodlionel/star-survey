@@ -12,7 +12,13 @@
 
     var ENVELOPE_VERSION = 1;
     var PAGE_SIZE = 200;
-    var ENDPOINT = 'index.php/plugins/direct';
+    function endpoint() {
+        // 问卷 URL 常为 /prefix/index.php/<sid>；直接拼相对地址会重复 index.php。
+        var path = window.location.pathname;
+        var match = path.match(/^(.*\/)index\.php(?:\/|$)/);
+        var base = match ? match[1] : path.slice(0, path.lastIndexOf('/') + 1);
+        return base + 'index.php/plugins/direct';
+    }
     var PLUGIN = 'MjyQuestionExtensions';
     var FUNCTION = 'dictionaryNodes';
 
@@ -42,7 +48,10 @@
         this.editor = root.querySelector('.mjy-cascading-select__editor');
         this.container = root.querySelector('.mjy-cascading-select__levels');
         this.status = root.querySelector('.mjy-cascading-select__status');
-        this.sid = root.getAttribute('data-mjy-sid');
+        // 某些引擎版本的题型模板上下文不提供 surveyid；运行表单中的 sid 才是稳定来源。
+        var form = root.closest('form');
+        var sidField = form && form.querySelector('input[name="sid"]');
+        this.sid = root.getAttribute('data-mjy-sid') || (sidField && sidField.value) || '';
         this.dictionary = root.getAttribute('data-mjy-dictionary');
         this.version = root.getAttribute('data-mjy-version');
         this.labels = parseJson(root.getAttribute('data-mjy-levels'), []);
@@ -128,6 +137,11 @@
         this.fetchNodes(parent, function (nodes) {
             select.innerHTML = '';
             select.appendChild(self.placeholder());
+            if (!Array.isArray(nodes)) {
+                select.disabled = true;
+                self.say('选项载入失败，请稍后重试');
+                return;
+            }
             nodes.forEach(function (node) {
                 var option = document.createElement('option');
                 option.value = node.code;
@@ -168,18 +182,17 @@
         ].join('&');
 
         var request = new XMLHttpRequest();
-        request.open('GET', ENDPOINT + '?' + query, true);
+        request.open('GET', endpoint() + '?' + query, true);
         request.onreadystatechange = function () {
             if (request.readyState !== 4) {
                 return;
             }
             if (request.status !== 200) {
-                self.say('选项载入失败，请稍后重试');
-                done([]);
+                done(null);
                 return;
             }
             var payload = parseJson(request.responseText, null);
-            done(payload && Array.isArray(payload.nodes) ? payload.nodes : []);
+            done(payload && Array.isArray(payload.nodes) ? payload.nodes : null);
         };
         request.send();
     };

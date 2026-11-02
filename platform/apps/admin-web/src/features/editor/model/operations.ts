@@ -11,8 +11,35 @@ export interface DefinitionValidationIssue {
 }
 
 type QuestionUpdate = Partial<
-  Pick<EditableQuestion, 'answers' | 'code' | 'mandatory' | 'other' | 'text'>
+  Pick<EditableQuestion, 'answers' | 'code' | 'mandatory' | 'other' | 'text' | 'themeOptions' | 'slideIds'>
 >;
+
+/** 保留服务端保存前后仍对应同一选项的会话身份；重新载入则有意生成新身份。 */
+export function preserveCarouselSlideIds(saved: EditableSurveyDefinition, current: EditableSurveyDefinition): EditableSurveyDefinition {
+  const byUuid = new Map(current.groups.flatMap((group) => group.questions).map((question) => [question.uuid, question]));
+  return { ...saved, groups: saved.groups.map((group) => ({ ...group, questions: group.questions.map((question) => {
+    const previous = byUuid.get(question.uuid);
+    const oldSlides = previous?.themeOptions?.slides;
+    const newSlides = question.themeOptions?.slides;
+    if (question.source.theme !== 'mjy-carousel' || previous?.source.theme !== 'mjy-carousel'
+      || !Array.isArray(oldSlides) || !Array.isArray(newSlides) || oldSlides.length !== newSlides.length
+      || previous.slideIds?.length !== oldSlides.length
+      || !oldSlides.every((slide, i) => slide && typeof slide === 'object' && !Array.isArray(slide)
+        && newSlides[i] && typeof newSlides[i] === 'object' && !Array.isArray(newSlides[i])
+        && (slide as Record<string, unknown>).code === (newSlides[i] as Record<string, unknown>).code)) return question;
+    return { ...question, slideIds: [...previous.slideIds] };
+  }) })) };
+}
+
+export function setCarouselSlideAsset(definition: EditableSurveyDefinition, questionUuid: string, slideId: string, assetId: string): EditableSurveyDefinition {
+  const question = definition.groups.flatMap((group) => group.questions).find((item) => item.uuid === questionUuid);
+  const index = question?.slideIds?.indexOf(slideId) ?? -1;
+  const slides = question?.themeOptions?.slides;
+  if (!question?.editable || question.source.theme !== 'mjy-carousel' || index < 0 || !Array.isArray(slides)
+    || !slides[index] || typeof slides[index] !== 'object' || Array.isArray(slides[index])) return definition;
+  return updateQuestion(definition, questionUuid, { themeOptions: { ...question.themeOptions,
+    slides: slides.map((slide, i) => i === index ? { ...slide, assetId } : slide) } });
+}
 
 export function updateQuestion(
   definition: EditableSurveyDefinition,
@@ -115,6 +142,8 @@ function ownedQuestionUpdate(update: QuestionUpdate): QuestionUpdate {
   if (update.mandatory !== undefined) owned.mandatory = update.mandatory;
   if (update.other !== undefined) owned.other = update.other;
   if (update.answers !== undefined) owned.answers = update.answers.map(copyChoice);
+  if (update.themeOptions !== undefined) owned.themeOptions = structuredClone(update.themeOptions);
+  if (update.slideIds !== undefined) owned.slideIds = [...update.slideIds];
   return owned;
 }
 

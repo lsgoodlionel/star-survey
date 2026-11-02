@@ -300,6 +300,12 @@ class AdminWebGateTest(unittest.TestCase):
         engine_db = {"active": "Y", "surveyCount": 1}
 
         gate.validate_evidence(metadata, result, api, platform_db, engine_db, gateway_publish_calls=3)
+        # Wave 5 adds one real publish; the full suite still requires an exact count.
+        gate.validate_evidence(metadata, result, api, platform_db, engine_db,
+                               gateway_publish_calls=4, expected_gateway_publish_calls=4)
+        with self.assertRaises(gate.StepFailed):
+            gate.validate_evidence(metadata, result, api, platform_db, engine_db,
+                                   gateway_publish_calls=3, expected_gateway_publish_calls=4)
 
         with self.assertRaises(gate.StepFailed):
             gate.validate_evidence(metadata, result, api, platform_db, engine_db, gateway_publish_calls=1)

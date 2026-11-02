@@ -13,6 +13,8 @@ import cn.mjy.platform.asset.AssetFixture;
 import cn.mjy.platform.asset.AssetService;
 import cn.mjy.platform.asset.AssetUpload;
 import cn.mjy.platform.asset.AssetView;
+import cn.mjy.platform.dictionary.DictionaryService;
+import cn.mjy.platform.dictionary.DictionaryNodeDraft;
 import cn.mjy.platform.engine.EngineEvent;
 import cn.mjy.platform.engine.EngineEventType;
 import cn.mjy.platform.engine.EngineEventInbox;
@@ -68,6 +70,7 @@ class PreviewSessionApiTest {
     @Autowired PreviewSessionService previewService;
     @Autowired ResponseProjectionRepository projections;
     @Autowired EngineEventInbox inbox;
+    @Autowired DictionaryService dictionaries;
 
     private Workspace ws;
     private SurveyView survey;
@@ -77,6 +80,34 @@ class PreviewSessionApiTest {
         gateway.reset();
         ws = fixture.workspace();
         survey = fixture.newSurvey(ws);
+    }
+
+    @Test
+    void previewPinsPublishedDictionaryWithoutChangingDraft() throws Exception {
+        String code = "w5-" + UUID.randomUUID().toString().substring(0, 8);
+        dictionaries.createDictionary("tester", "test", code, "测试字典", 1);
+        dictionaries.createDraft("tester", "test", code, "v1");
+        dictionaries.loadNodes("tester", "test", code, "v1", List.of(new DictionaryNodeDraft("R1", null, "地区")));
+        dictionaries.publishVersion("tester", "test", code, "v1");
+        ObjectNode definition = fixture.definition();
+        ObjectNode question = (ObjectNode) definition.withArray("groups").get(0).withArray("questions").get(0);
+        question.put("type", "T");
+        question.put("theme", "mjy-cascading-select");
+        ObjectNode options = question.putObject("themeOptions");
+        options.put("structureVersion", "r1");
+        options.put("dictionary", code);
+        options.putArray("levels").add("地区");
+        SurveyView cascading = surveys.create(ws.owner(), ws.project(), definition);
+        create(ws.owner(), cascading.id(), UUID.randomUUID()).andExpect(status().isCreated());
+        var pinned = json.readTree(gateway.creates.get(0).definitionJson());
+        assertThat(pinned.get("dictionaries").get(0).get("code").asString()).isEqualTo(code);
+        var pinnedOptions = pinned.get("groups").get(0).get("questions").get(0).get("themeOptions");
+        assertThat(pinnedOptions.get("dictionaryVersion").asString()).isEqualTo("v1");
+        assertThat(pinnedOptions.get("dictionaryDigest").asString()).startsWith("dg1:");
+        var savedDraft = surveys.draft(ws.owner(), cascading.id()).definition();
+        assertThat(savedDraft.get("dictionaries")).isNull();
+        assertThat(savedDraft.get("groups").get(0).get("questions").get(0)
+                .get("themeOptions").get("dictionaryVersion")).isNull();
     }
 
     @Test

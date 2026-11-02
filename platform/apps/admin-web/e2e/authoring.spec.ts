@@ -315,6 +315,136 @@ test('author filters stable resources, restores archive, and publishes the same 
   }, token);
 });
 
+test('Wave 5 advanced questions survive authoring, isolated preview and published response', async ({ page, request }) => {
+  test.setTimeout(480_000);
+  const metadata = await readMetadata();
+  const owner = await readToken();
+  const operator = (await readFile(requiredEnv('ADMIN_WEB_OPERATOR_JWT_FILE'), 'utf8')).trim();
+  const dictionary = `wave5-${Date.now().toString(36)}`;
+  const auth = { Authorization: `Bearer ${operator}` };
+  for (const [path, data] of [
+    ['/v1/platform/dictionaries', { code: dictionary, name: 'Wave 5 测试字典', maxDepth: 2 }],
+    [`/v1/platform/dictionaries/${dictionary}/versions`, { version: 'v1' }],
+    [`/v1/platform/dictionaries/${dictionary}/versions/v1/nodes`, { nodes: [
+      { code: 'R1', parentCode: null, label: '甲地区' }, { code: 'C1', parentCode: 'R1', label: '甲下级' },
+      { code: 'R2', parentCode: null, label: '乙地区' }, { code: 'C2', parentCode: 'R2', label: '乙下级' },
+    ] }],
+    [`/v1/platform/dictionaries/${dictionary}/versions/v1/publish`, {}],
+  ] as const) {
+    const response = await request.post(path, { headers: auth, data });
+    expect(response.ok(), `dictionary setup ${path}: ${response.status()}`).toBeTruthy();
+  }
+  const result = await readResult();
+  const me = await login(page, owner, metadata);
+  await navigateWithinApp(page, `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`);
+  await createResource(page, '新建问卷', '创建问卷', 'Wave 5 高级题型验收');
+  const surveyId = surveyIdFrom(page.url());
+  await page.getByLabel('添加题型').selectOption('mjy-collapsible');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByRole('group', { name: '折叠栏目' })).toBeVisible();
+  await fillAction(page.getByLabel('栏目标题'), '栏目标题验收');
+  await fillAction(page.getByLabel('题目文本'), '栏目正文验收');
+  await page.getByLabel('添加题型').selectOption('mjy-cascading-select');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByRole('group', { name: '多级下拉' })).toBeVisible();
+  await fillAction(page.getByLabel('题目文本'), '请选择地区');
+  await expect(page.getByRole('option', { name: 'Wave 5 测试字典' })).toBeAttached();
+  await page.getByLabel('字典').selectOption(dictionary);
+  await fillAction(page.getByLabel('第 1 级标题'), '地区');
+  await clickAction(page.getByRole('button', { name: '添加级别' }));
+  await fillAction(page.getByLabel('第 2 级标题'), '下级地区');
+  await page.getByLabel('添加题型').selectOption('mjy-carousel');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByRole('group', { name: '轮播图' })).toBeVisible();
+  await fillAction(page.getByLabel('题目文本'), '请选择图片');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/WZkAAAAASUVORK5CYII=', 'base64');
+  await page.getByLabel('上传图片 1').setInputFiles({ name: 'wave5.png', mimeType: 'image/png', buffer: png });
+  await expect(page.getByLabel('图片 1', { exact: true })).not.toHaveValue('');
+  await fillAction(page.getByLabel('替代文本 1'), '验收图片');
+  const imageId = await page.getByLabel('图片 1', { exact: true }).inputValue();
+  await clickAction(page.getByRole('button', { name: '添加选项' }));
+  await page.getByLabel('图片 2', { exact: true }).selectOption(imageId);
+  await fillAction(page.getByLabel('替代文本 2'), '第二张验收图片');
+  await saveAndReloadDraft(page, surveyId);
+  await clickAction(page.getByRole('button', { name: /请选择图片$/ }));
+  await expect(page.getByLabel('替代文本 1')).toHaveValue('验收图片');
+
+  const before = await readPreviewIsolationSnapshot(surveyId, me.tenantId);
+  await clickAction(page.getByRole('link', { name: '快速预览' }));
+  await clickAction(page.getByRole('button', { name: '创建真实预览' }));
+  await expect(page.getByText('真实预览已就绪')).toBeVisible({ timeout: 210_000 });
+  const popup = page.context().waitForEvent('page');
+  await clickAction(page.getByRole('button', { name: '在新窗口打开真实预览' }));
+  const preview = await popup;
+  await answerAdvancedQuestions(preview);
+  await preview.close();
+  await clickAction(page.getByRole('button', { name: '结束真实预览' }));
+  await expect(page.getByText('真实预览已结束')).toBeVisible({ timeout: 210_000 });
+  expect(await readPreviewIsolationSnapshot(surveyId, me.tenantId)).toEqual(before);
+
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
+  await clickAction(page.getByRole('button', { name: '提交审批' }));
+  await clickAction(page.getByRole('button', { name: '批准申请' }));
+  await clickAction(page.getByRole('button', { name: '发布问卷' }));
+  await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+  await fillAction(page.getByLabel('链接名称'), 'Wave 5 正式链接');
+  const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`) && response.request().method() === 'POST');
+  await clickAction(page.getByRole('button', { name: '创建链接' }));
+  const link = await readCreatedDeliveryLink(await linkResponse);
+  const respondent = await page.context().newPage();
+  await respondent.goto(link.url);
+  await answerAdvancedQuestions(respondent);
+  await respondent.close();
+  await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '答卷与导出' }));
+  await expect(async () => {
+    await clickAction(page.getByRole('button', { name: '刷新答卷数据' }));
+    await expect(page.getByLabel('已完成 1')).toBeVisible();
+  }).toPass({ timeout: 60_000, intervals: [1000, 2000, 5000] });
+  await expect(page.locator('.response-answers')).toContainText('A2');
+  await expect(page.locator('.response-answers')).toContainText('R2');
+  await expect(page.locator('.response-answers')).toContainText('C2');
+});
+
+async function answerAdvancedQuestions(page: Page) {
+  await expect(page.locator('[data-mjy-collapsible]')).toBeAttached({ timeout: 30_000 });
+  await clickAction(page.getByText('栏目标题验收', { exact: true }));
+  const cascading = page.locator('[data-mjy-cascading-select]');
+  await expect(cascading).toBeVisible();
+  const probe = await cascading.evaluate(async (root) => {
+    const form = root.closest('form');
+    const sid = root.getAttribute('data-mjy-sid') || form?.querySelector<HTMLInputElement>('input[name="sid"]')?.value || '';
+    const query = new URLSearchParams({ plugin: 'MjyQuestionExtensions', function: 'dictionaryNodes', sid,
+      dictionary: root.getAttribute('data-mjy-dictionary') ?? '', version: root.getAttribute('data-mjy-version') ?? '', parent: '', limit: '200' });
+    const match = location.pathname.match(/^(.*\/)index\.php(?:\/|$)/);
+    const base = match ? match[1] : location.pathname.slice(0, location.pathname.lastIndexOf('/') + 1);
+    const url = new URL(`${base}index.php/plugins/direct?${query}`, location.origin);
+    const response = await fetch(url);
+    const contentType = response.headers.get('content-type') ?? '';
+    const body = contentType.includes('json') ? await response.json() : null;
+    return { path: url.pathname, status: response.status, contentType, nodes: Array.isArray(body?.nodes) ? body.nodes.length : -1 };
+  });
+  expect(probe, `dictionary endpoint probe ${JSON.stringify(probe)}`).toMatchObject({ status: 200, nodes: 2 });
+  const select = cascading.locator('select').first();
+  await expect(select.locator('option[value="R1"]')).toBeAttached({ timeout: 30_000 });
+  await select.selectOption('R1');
+  const child = cascading.locator('select').nth(1);
+  await expect(child.locator('option[value="C1"]')).toBeAttached({ timeout: 30_000 });
+  await child.selectOption('C1');
+  await select.selectOption('R2');
+  await expect(child).toHaveValue('');
+  await expect(child.locator('option[value="C2"]')).toBeAttached({ timeout: 30_000 });
+  await child.selectOption('C2');
+  const carousel = page.locator('[data-mjy-carousel]');
+  await expect(carousel.getByAltText('验收图片', { exact: true })).toBeVisible();
+  await expect.poll(() => carousel.getByAltText('验收图片', { exact: true }).evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+  await clickAction(carousel.getByRole('button', { name: '下一张' }));
+  await expect(carousel.getByAltText('第二张验收图片')).toBeVisible();
+  await carousel.locator('input[type="radio"][value="A2"]').check();
+  const advance = limeSurveyAdvanceButton(page);
+  await advance.click();
+  await expect(carousel).toHaveCount(0, { timeout: 30_000 });
+}
+
 async function completeLimeSurvey(enginePage: Page) {
   await enginePage.waitForLoadState('domcontentloaded');
   const visibleChoices = enginePage.locator('input[type="radio"]:visible');
@@ -596,7 +726,7 @@ test('desktop breakpoints keep workspace, breadcrumbs, dialogs and editor contro
   const token = await readToken();
   const result = await readResult();
 
-  for (const width of [768, 819, 820, 1024, 1440]) {
+  for (const width of [768, 819, 820, 1024, 1179, 1180, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await login(page, token, metadata);
     await navigateWithinApp(
@@ -641,6 +771,18 @@ test('desktop breakpoints keep workspace, breadcrumbs, dialogs and editor contro
       await expect(page.getByRole('tablist', { name: '编辑区域' })).toBeVisible();
     } else {
       await expect(page.getByRole('tablist', { name: '编辑区域' })).toBeHidden();
+    }
+    if (width >= 820 && width < 1180) {
+      const openInspector = page.getByRole('button', { name: '打开属性检查器' });
+      await assertTouchTarget(openInspector);
+      await clickAction(openInspector);
+      const inspector = page.getByRole('dialog', { name: '问卷属性' });
+      await expect(inspector).toBeVisible();
+      await expect(inspector.getByLabel('标题')).toBeVisible();
+      await assertTouchTarget(inspector.getByRole('button', { name: '关闭属性检查器' }));
+      await page.keyboard.press('Escape');
+      await expect(inspector).toBeHidden();
+      await expect(openInspector).toBeFocused();
     }
     await expectNoHorizontalOverflow(page);
   }
@@ -714,8 +856,10 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
     const panel = page.getByRole('tabpanel', { name });
     await expect(panel).toBeVisible();
     await assertUsable(tab);
+    await assertTouchTarget(tab);
     await assertUsable(panel);
     await assertUsable(control);
+    await assertTouchTarget(control);
     await page.keyboard.press('Tab');
     expect(await page.locator(':focus').evaluate((element) => getComputedStyle(element).outlineStyle))
       .not.toBe('none');
