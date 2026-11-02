@@ -7,9 +7,12 @@ import jakarta.validation.constraints.Size;
 import java.sql.SQLException;
 import java.util.Map;
 import java.util.UUID;
+import cn.mjy.platform.tenant.PlatformOperatorGuard;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -17,7 +20,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 class PlatformAdminGrantController {
     private final PlatformAdminGrantService grants;
-    PlatformAdminGrantController(PlatformAdminGrantService grants) { this.grants = grants; }
+    private final PlatformOperatorGuard operator;
+    PlatformAdminGrantController(PlatformAdminGrantService grants, PlatformOperatorGuard operator) { this.grants = grants; this.operator = operator; }
+
+    @GetMapping("/v1/platform-admin/capabilities")
+    Map<String, Boolean> capabilities() {
+        try { operator.requireOperator(); return Map.of("managePlatform", true); }
+        catch (AccessDeniedException rejected) { return Map.of("managePlatform", false); }
+    }
 
     @PostMapping("/v1/platform-admin/grants/change")
     Map<String, Boolean> change(@Valid @RequestBody Change request) {

@@ -8,8 +8,11 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import { createAppRoutes } from '../../app/router';
 import { server } from '../../test/server';
 
-const authRoles = vi.hoisted(() => ({ roles: ['editor'] as string[] }));
-beforeEach(() => { authRoles.roles = ['editor']; });
+const authRoles = vi.hoisted(() => ({ roles: ['editor'] as string[], allowed: false }));
+beforeEach(() => {
+  authRoles.roles = ['editor']; authRoles.allowed = false;
+  server.use(http.get('/v1/platform-admin/capabilities', () => HttpResponse.json({ managePlatform: authRoles.allowed })));
+});
 
 vi.mock('../auth/AuthProvider', async () => {
   const { createApiClient } = await import('../../shared/api/http');
@@ -128,7 +131,7 @@ test('review queue reads the authoritative pending endpoint', async () => {
   expect(await screen.findByRole('link', { name: /待审模板/ })).toBeInTheDocument();
 });
 
-test('platform import is visible only to an exact platform_operator role', async () => {
+test('platform import is hidden when the server denies platform capability', async () => {
   server.use(http.get('/v1/platform/survey-templates', () => HttpResponse.json([])));
   authRoles.roles = ['platform_operator_extra'];
   renderPage('/templates?mode=platform');
@@ -159,7 +162,7 @@ test('shows tenant lifecycle actions only when capabilities authorize them', asy
 });
 
 test('operator explicitly selects and confirms a platform version for publication', async () => {
-  authRoles.roles = ['platform_operator'];
+  authRoles.roles = []; authRoles.allowed = true;
   let publishes = 0;
   server.use(
     http.get('/v1/platform/survey-templates/:id', () => HttpResponse.json({
@@ -181,4 +184,18 @@ test('operator explicitly selects and confirms a platform version for publicatio
   await user.click(screen.getByRole('button', { name: '确认上架版本 1' }));
   expect(await screen.findByText('平台模板已上架')).toBeInTheDocument();
   expect(publishes).toBe(1);
+});
+
+test('hides platform template details after a same-page capability revocation', async () => {
+  authRoles.roles = []; authRoles.allowed = true;
+  server.use(http.get('/v1/platform/survey-templates/:id', () => HttpResponse.json({
+    template: { ...template, scope: 'platform', status: 'draft', publishedVersion: null },
+    versions: [], history: [],
+  })));
+  const { client } = renderPage(`/templates/${id}?mode=platform`);
+  expect(await screen.findByRole('heading', { name: '客户满意度' })).toBeInTheDocument();
+  authRoles.allowed = false;
+  await client.invalidateQueries({ queryKey: ['platform-capabilities'] });
+  expect(await screen.findByRole('alert')).toHaveTextContent('无权查看平台模板管理');
+  expect(screen.queryByRole('heading', { name: '客户满意度' })).not.toBeInTheDocument();
 });

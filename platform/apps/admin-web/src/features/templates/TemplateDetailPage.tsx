@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
+import { usePlatformCapabilities } from '../operations/usePlatformCapabilities';
 import { dashboardQueryKey } from '../../shared/api/dashboard';
 import { getResourceCapabilities, listResources } from '../../shared/api/resources';
 import type { ResourceView } from '../../shared/api/resources';
@@ -28,7 +29,8 @@ export function TemplateDetailPage() {
   const modeParam = params.get('mode');
   const mode = modeParam === 'managed' || modeParam === 'pending' || modeParam === 'platform'
     ? modeParam : null;
-  const isOperator = session?.me.roles.includes('platform_operator') === true;
+  const platformCapability = usePlatformCapabilities();
+  const isOperator = !platformCapability.isError && !platformCapability.isFetching && platformCapability.data?.managePlatform === true;
   const platformMode = mode === 'platform' && isOperator;
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -78,12 +80,13 @@ export function TemplateDetailPage() {
     },
     onSettled: () => { submitLock.current = false; },
   });
-  const template = detail.data?.template;
+  const template = mode === 'platform' && !isOperator ? undefined : detail.data?.template;
   const canCopy = template?.status === 'published' && template.publishedVersion !== null;
 
   return <main className="templates-page">
     <Link to={mode ? `/templates?mode=${mode}` : '/templates'}>返回模板中心</Link>
-    {mode === 'platform' && !isOperator ? <p role="alert">无权查看平台模板管理</p> : null}
+    {mode === 'platform' && platformCapability.isFetching ? <p>正在检查平台权限</p> : null}
+    {mode === 'platform' && !platformCapability.isFetching && !isOperator ? <p role="alert">无权查看平台模板管理</p> : null}
     {detail.isPending && (mode !== 'platform' || isOperator) ? <p role="status">正在加载模板详情</p> : null}
     {detail.isError ? <div role="alert"><p>{'status' in detail.error && detail.error.status === 403 ? '无权查看模板' : '模板详情加载失败'}</p><button type="button" onClick={() => void detail.refetch()}>重试</button></div> : null}
     {template ? <>
