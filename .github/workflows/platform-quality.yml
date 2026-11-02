@@ -1,20 +1,19 @@
-name: MJY 平台 - 质量闸门
+name: Survey quality · 可复用产品质量
 
-# 上游 LimeSurvey 自带的几条 workflow 只在 master / develop-* 上触发，而本仓库的
-# 工作分支是 main，所以本土化部分的检查单独一条。
-#
-# 主要 job 的分工：
-#   parity-tables      秒级，只要 Python；三端一致性对照表与对账脚本自己的用例
-#   admin-web          Node 22；管理端静态检查、单测、生产构建与产物断言
-#   admin-web-e2e      重；真实浏览器串起管理端、平台、发布网关与引擎
-#   gateway-parity-e2e 重，要起引擎栈；WP-03.4 双执行比对，mysql 与 pgsql 各跑一遍
+# PR/main are orchestrated by ci.yml; Release explicitly requests full quality.
+# The policy profile only skips business jobs for baseline-policy-only PRs.
 on:
   workflow_call:
-  pull_request:
-  push:
-    branches:
-      - main
+    inputs:
+      profile:
+        type: string
+        default: full
   workflow_dispatch:
+    inputs:
+      profile:
+        type: choice
+        default: full
+        options: [full, policy]
 
 permissions:
   contents: read
@@ -25,6 +24,7 @@ concurrency:
 
 jobs:
   parity-tables:
+    if: inputs.profile != 'policy'
     name: 跨端一致性与对账（单测）
     runs-on: ubuntu-22.04
     steps:
@@ -90,6 +90,7 @@ jobs:
           --exclude-file test_install_upgrade.py
 
   admin-web:
+    if: inputs.profile != 'policy'
     name: 管理端前端质量闸门
     runs-on: ubuntu-22.04
     steps:
@@ -126,6 +127,7 @@ jobs:
         run: npm run assert:production-bundle
 
   admin-web-e2e:
+    if: inputs.profile != 'policy'
     name: 管理端真实浏览器纵向验收
     runs-on: ubuntu-22.04
     needs: [admin-web, parity-tables]
@@ -171,6 +173,7 @@ jobs:
           retention-days: 7
 
   gateway-parity-e2e:
+    if: inputs.profile != 'policy'
     name: 双执行比对 (${{ matrix.db }})
     runs-on: ubuntu-22.04
     needs: parity-tables
@@ -204,6 +207,7 @@ jobs:
         run: docker compose -f docker-compose.dev.yml --profile test down -v --remove-orphans
 
   platform-java:
+    if: inputs.profile != 'policy'
     name: 平台 Java 全套
     runs-on: ubuntu-22.04
     needs: parity-tables
@@ -269,6 +273,7 @@ jobs:
           if-no-files-found: warn
 
   access-policy-e2e:
+    if: inputs.profile != 'policy'
     name: 访问策略端到端 (${{ matrix.db }})
     runs-on: ubuntu-22.04
     needs: parity-tables
@@ -307,6 +312,7 @@ jobs:
         run: docker compose -f docker-compose.dev.yml --profile test down -v --remove-orphans
 
   p1-e2e:
+    if: inputs.profile != 'policy'
     name: P1 纵切端到端
     runs-on: ubuntu-22.04
     needs: parity-tables

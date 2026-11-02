@@ -1,8 +1,11 @@
 # 自治执行进度
 
+2026-11-02 PR #28 合并接续：用户直接授权合并后，因 main 已合入 PR #29，先普通合入 main `7eb63e59fb82d7fe64ba5175d537f1dbb68c1dac`；唯一冲突为本文件顶部新增记录，已保留策略登记与 CI 优化双方内容。相对最新 main 的业务差异仍仅 `0.3.7-rc.1: bootstrap` 及本进度记录。更新后 Release 全套与 CI 待复核；不创建标签或 RC。
+
 2026-11-02 下一候选策略登记：基于远端 main `14e4005b35cddf1786dd5e3eb002f36bfabde67c` 建立独立分支 `codex/wave2-rc7-policy`，本地与远端均未发现 `v0.3.7-rc.1` 标签，基线文件无同名策略后，新增 `.github/release/baseline-policy.json` 的 `0.3.7-rc.1: bootstrap`。只登记策略，未创建标签或 RC，未修改旧策略或功能。Release 全套 60/60、`git diff --check` 通过。bootstrap 不代表升级验证通过或稳定版可推广，完整原生生命周期仍待发布后独立验收。推送前 main 精确提交的 [质量 run 41390926881](https://github.com/lsgoodlionel/star-survey/actions/runs/41390926881) 成功，10/10 作业通过；本分支 CI 尚未触发，推送后核验，不自动合并。
 
 2026-11-02 PR #27 主线最终结果补记（覆盖下方历史待查状态）：PR 已普通合并至 `14e4005b35cddf1786dd5e3eb002f36bfabde67c`，main 质量 10/10 成功；合并前 head `3cce221e68` 的质量与 Release 只读构建均成功，四节点有序启动诊断成功。修复包含 edge 有限等待和 admin→platform 健康依赖；主线质量与启动诊断不能替代正式四节点完整生命周期及 Release readiness。
+2026-11-02 CI 优化候选：按用户确认的顺序，在独立分支 `codex/ci-streamline` 基于 main `14e4005b35cddf1786dd5e3eb002f36bfabde67c` 实施 PR/main 单一 CI 入口，正式 Release 不再监听 PR；质量及四镜像只读构建保留可复用模块。仅 Markdown 文档和 baseline-policy PR 允许轻量分流，未知或不完整证据回退完整检查，main/正式 Release 保留完整质量门。名称已区分 CI、Release、质量模块与 PR 标签管理；标签流程合并为一个作业并适配 main。稳定汇总 `Survey CI required` 核对成功与合法跳过，未修改分支保护、发布安全门或业务功能。新增分流、分页/改名、失败阻断、标签未知状态回归先红后绿；Release 全套 74/74、生产 115 项中 114 通过/1 原生生命周期按前置条件跳过、actionlint 1.7.12（官方 SHA-256 校验，五工作流）、Python 编译、diff 检查通过。GitHub 推送/PR 验证待完成，不能据此宣称线上优化已验收；原工作区既有改动保留，未合并或创建标签、RC。
 
 2026-11-02 PR [#27](https://github.com/lsgoodlionel/star-survey/pull/27) 原生诊断补证：首轮诊断缺少 platform DNS，四节点失败；修正为延迟启动 platform 的生产时序后，[第二轮 41382574536](https://github.com/lsgoodlionel/star-survey/actions/runs/41382574536) 四节点通过并捕获 nginx `host not found in upstream platform`，随后自动重启恢复 healthy。该复现机制与旧 ARM64 快照一致，但旧节点未保存 nginx 日志，不能断言旧失败的完全归因。新增 admin→platform service_healthy 依赖，保持所有探针参数；回归先红后绿，生产 115 项中 114 通过、1 原生生命周期按前置条件跳过。PR 原生诊断改验有序启动、无重启、无 DNS 错误。前提交质量/构建因新推送取消；eccb9ca48a 的质量与构建仍进行中；新修复推送后需以精确 HEAD 查询，不将诊断等同 Release readiness。
 

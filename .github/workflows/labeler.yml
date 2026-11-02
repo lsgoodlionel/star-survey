@@ -1,122 +1,88 @@
-name: Label PR Conflicts
+name: PR · 标签与冲突管理
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches:
-      - master
-      - develop-major
-      - develop-minor
+    branches: [main]
 
 permissions:
   pull-requests: write
   issues: write
   contents: read
 
+concurrency:
+  group: pr-labels-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  # ---------------------------------------------------------
-  # 0. Add default labels to new PRs
-  # ---------------------------------------------------------
-  label-new-pr:
-    if: >
-      github.event_name == 'pull_request'
-      && !github.event.pull_request.draft
-      && (github.event.action == 'opened' || github.event.action == 'ready_for_review')
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+  labels:
+    name: 更新待办与冲突标签
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - name: Add default labels
-        run: |
-          pr=${{ github.event.pull_request.number }}
-          repo=${{ github.repository }}
-          gh api "repos/${repo}/issues/${pr}/labels" -f "labels[]=Needs code review" -f "labels[]=Needs testing" --method POST
-
-  # ---------------------------------------------------------
-  # 1. Handle PR-triggered events (single PR)
-  # ---------------------------------------------------------
-  label-single-pr:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    steps:
-      - name: Check and label PR
-        run: |
-          pr=${{ github.event.pull_request.number }}
-          repo=${{ github.repository }}
-
-          # Poll until mergeable_state is computed (max 60s)
-          for i in $(seq 1 12); do
-            state=$(gh api "repos/${repo}/pulls/${pr}" --jq '.mergeable_state')
-            echo "Attempt ${i}: mergeable_state=${state}"
-            if [ "$state" != "unknown" ] && [ -n "$state" ] && [ "$state" != "null" ]; then
-              break
-            fi
-            sleep 5
-          done
-
-          if [ "$state" = "dirty" ]; then
-            echo "PR #${pr} has conflicts, adding label"
-            gh api "repos/${repo}/issues/${pr}/labels" -f "labels[]=Has conflicts" --method POST || true
-          else
-            echo "PR #${pr} state is '${state}', removing label if present"
-            gh api "repos/${repo}/issues/${pr}/labels/Has%20conflicts" --method DELETE || true
-          fi
-
-  # ---------------------------------------------------------
-  # 2. Handle base-branch pushes (loop through all PRs)
-  # ---------------------------------------------------------
-  get-pr-list:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    outputs:
-      pr_numbers: ${{ steps.collect.outputs.pr_numbers }}
-
-    steps:
-      - name: Collect PR numbers
-        id: collect
+      # No checkout: PR code must not run with the label-writing token.
+      - name: 同步标签（状态未知时保留原冲突标签）
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          branch="${GITHUB_REF#refs/heads/}"
-          pr_numbers=$(gh api "repos/${{ github.repository }}/pulls?state=open&base=${branch}&per_page=100" --paginate --jq '.[].number' | jq -sc '.')
-          echo "pr_numbers=$pr_numbers" >> $GITHUB_OUTPUT
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import time
+          import urllib.error
+          import urllib.request
 
-  label-all-prs:
-    needs: get-pr-list
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          def api(path, method='GET', data=None):
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/' + path,
+                  data=json.dumps(data).encode() if data is not None else None,
+                  method=method,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'})
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      body = response.read()
+                      return json.loads(body) if body else None
+              except urllib.error.HTTPError as error:
+                  if method == 'DELETE' and error.code == 404:
+                      return None  # Already absent; other permission/API errors remain failures.
+                  raise RuntimeError(f'Label API failed: HTTP {error.code}') from None
 
-    strategy:
-      matrix:
-        pr: ${{ fromJson(needs.get-pr-list.outputs.pr_numbers) }}
+          def sync(number):
+              number = int(number)
+              for attempt in range(12):
+                  state = api(f'pulls/{number}').get('mergeable_state')
+                  if state not in {None, '', 'unknown'}:
+                      break
+                  time.sleep(5)
+              if state == 'dirty':
+                  api(f'issues/{number}/labels', 'POST', {'labels': ['Has conflicts']})
+              elif state in {'clean', 'unstable', 'blocked', 'behind', 'has_hooks'}:
+                  api(f'issues/{number}/labels/Has%20conflicts', 'DELETE')
+              else:
+                  print(f'PR #{number}: mergeability unknown; preserving conflict label')
 
-    steps:
-      - name: Check and label PR
-        run: |
-          pr=${{ matrix.pr }}
-          repo=${{ github.repository }}
+          def main():
+              event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+              if os.environ['GITHUB_EVENT_NAME'] == 'pull_request':
+                  pr = event['pull_request']
+                  number = int(pr['number'])
+                  if not pr['draft'] and event['action'] in {'opened', 'ready_for_review'}:
+                      api(f'issues/{number}/labels', 'POST',
+                          {'labels': ['Needs code review', 'Needs testing']})
+                  sync(number)
+              else:
+                  page = 1
+                  while True:
+                      prs = api(f'pulls?state=open&base=main&per_page=100&page={page}')
+                      for pr in prs:
+                          sync(pr['number'])
+                      if len(prs) < 100:
+                          break
+                      page += 1
 
-          # Poll until mergeable_state is computed (max 60s)
-          for i in $(seq 1 12); do
-            state=$(gh api "repos/${repo}/pulls/${pr}" --jq '.mergeable_state')
-            echo "Attempt ${i}: mergeable_state=${state}"
-            if [ "$state" != "unknown" ] && [ -n "$state" ] && [ "$state" != "null" ]; then
-              break
-            fi
-            sleep 5
-          done
-
-          if [ "$state" = "dirty" ]; then
-            echo "PR #${pr} has conflicts, adding label"
-            gh api "repos/${repo}/issues/${pr}/labels" -f "labels[]=Has conflicts" --method POST || true
-          else
-            echo "PR #${pr} state is '${state}', removing label if present"
-            gh api "repos/${repo}/issues/${pr}/labels/Has%20conflicts" --method DELETE || true
-          fi
+          if __name__ == '__main__':
+              main()
+          PY
