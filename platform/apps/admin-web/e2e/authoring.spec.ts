@@ -323,9 +323,12 @@ test('Wave 5 advanced questions survive authoring, isolated preview and publishe
   const dictionary = `wave5-${Date.now().toString(36)}`;
   const auth = { Authorization: `Bearer ${operator}` };
   for (const [path, data] of [
-    ['/v1/platform/dictionaries', { code: dictionary, name: 'Wave 5 测试字典', maxDepth: 1 }],
+    ['/v1/platform/dictionaries', { code: dictionary, name: 'Wave 5 测试字典', maxDepth: 2 }],
     [`/v1/platform/dictionaries/${dictionary}/versions`, { version: 'v1' }],
-    [`/v1/platform/dictionaries/${dictionary}/versions/v1/nodes`, { nodes: [{ code: 'R1', parentCode: null, label: '测试地区' }] }],
+    [`/v1/platform/dictionaries/${dictionary}/versions/v1/nodes`, { nodes: [
+      { code: 'R1', parentCode: null, label: '甲地区' }, { code: 'C1', parentCode: 'R1', label: '甲下级' },
+      { code: 'R2', parentCode: null, label: '乙地区' }, { code: 'C2', parentCode: 'R2', label: '乙下级' },
+    ] }],
     [`/v1/platform/dictionaries/${dictionary}/versions/v1/publish`, {}],
   ] as const) {
     const response = await request.post(path, { headers: auth, data });
@@ -348,6 +351,8 @@ test('Wave 5 advanced questions survive authoring, isolated preview and publishe
   await expect(page.getByRole('option', { name: 'Wave 5 测试字典' })).toBeAttached();
   await page.getByLabel('字典').selectOption(dictionary);
   await fillAction(page.getByLabel('第 1 级标题'), '地区');
+  await clickAction(page.getByRole('button', { name: '添加级别' }));
+  await fillAction(page.getByLabel('第 2 级标题'), '下级地区');
   await page.getByLabel('添加题型').selectOption('mjy-carousel');
   await clickAction(page.getByRole('button', { name: '添加题目' }));
   await expect(page.getByRole('group', { name: '轮播图' })).toBeVisible();
@@ -396,7 +401,8 @@ test('Wave 5 advanced questions survive authoring, isolated preview and publishe
     await expect(page.getByLabel('已完成 1')).toBeVisible();
   }).toPass({ timeout: 60_000, intervals: [1000, 2000, 5000] });
   await expect(page.locator('.response-answers')).toContainText('A2');
-  await expect(page.locator('.response-answers')).toContainText('R1');
+  await expect(page.locator('.response-answers')).toContainText('R2');
+  await expect(page.locator('.response-answers')).toContainText('C2');
 });
 
 async function answerAdvancedQuestions(page: Page) {
@@ -417,10 +423,17 @@ async function answerAdvancedQuestions(page: Page) {
     const body = contentType.includes('json') ? await response.json() : null;
     return { path: url.pathname, status: response.status, contentType, nodes: Array.isArray(body?.nodes) ? body.nodes.length : -1 };
   });
-  expect(probe, `dictionary endpoint probe ${JSON.stringify(probe)}`).toMatchObject({ status: 200, nodes: 1 });
+  expect(probe, `dictionary endpoint probe ${JSON.stringify(probe)}`).toMatchObject({ status: 200, nodes: 2 });
   const select = cascading.locator('select').first();
   await expect(select.locator('option[value="R1"]')).toBeAttached({ timeout: 30_000 });
   await select.selectOption('R1');
+  const child = cascading.locator('select').nth(1);
+  await expect(child.locator('option[value="C1"]')).toBeAttached({ timeout: 30_000 });
+  await child.selectOption('C1');
+  await select.selectOption('R2');
+  await expect(child).toHaveValue('');
+  await expect(child.locator('option[value="C2"]')).toBeAttached({ timeout: 30_000 });
+  await child.selectOption('C2');
   const carousel = page.locator('[data-mjy-carousel]');
   await expect(carousel.getByAltText('验收图片', { exact: true })).toBeVisible();
   await expect.poll(() => carousel.getByAltText('验收图片', { exact: true }).evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
