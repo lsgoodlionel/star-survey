@@ -153,3 +153,7 @@ PR #18 接续：原 [只读构建 40991736075](https://github.com/lsgoodlionel/s
 PR #24 合并提交 `25dd9e186d0bad8a8dacec7f58dee0e9743b01e7` 的 [main 质量闸门 41286125561](https://github.com/lsgoodlionel/star-survey/actions/runs/41286125561) 以 failure 完成：MySQL、PostgreSQL 的 W2 均把当前时刻前一小时换算为纽约夏令时回拨的歧义本地时间，按产品契约被 `E_POLICY_LOCAL_TIME` 拒绝，其余 8 个作业成功。本次只修正 W2 测试夹具为纽约前一天中午，保留纽约时区、真实截止拒绝、UTC 换算及伪造客户端时间断言；新增春秋 DST 回归并纳入端到端入口。生产时间校验不变。
 
 回归测试 2/2、PostgreSQL 与 MySQL 串行完整端到端均通过。首次本地并发双库共用运行时配置，MySQL 在 W2 前遇到数据库连接错误，保留日志 `/private/tmp/survey-dst-mysql.log`；PostgreSQL 结束后串行复测通过。当前 GitHub main 仍为上述合并提交，新分支 CI 尚未触发。原生四节点验收及新 RC 仍需后续授权。
+
+## Wave 2 `v0.3.6-rc.1` 策略准备（2026-11-02，同步前）
+
+PR #25 已合并至登记仓库 `lsgoodlionel/star-survey` 的 `main` @ `f33eeaf2a65869309563835596d63142e38aab31`；合并后质量闸门 run 41295603448 的 10/10 作业成功。当前分支 `codex/wave2-rc6-policy` 仅为下一不可变候选登记 `0.3.6-rc.1` bootstrap baseline policy，不修改产品功能、生产校验或发行门禁。同步前 Release 策略测试与 GitHub CI/CD 尚待核对；不得据此宣称四节点原生生命周期或 Wave 2 Accepted 已完成，也不得在分支合并和主线全绿前创建标签。
