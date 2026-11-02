@@ -9,6 +9,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import cn.mjy.platform.shared.TenantId;
+import cn.mjy.platform.access.AccessFixture;
+import org.springframework.beans.factory.annotation.Autowired;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -16,6 +18,37 @@ import org.springframework.http.MediaType;
 
 /** 组织连接的管理：只有租户级 manage-settings 能建与改；别的租户看不到、改不了；响应里没有密钥。 */
 class OrgConnectionApiTest extends OrgLoginTestSupport {
+    @Autowired AccessFixture accessFixture;
+
+    @Test
+    void capabilitiesSeparateSettingsFromMemberAdministration() throws Exception {
+        TenantId tenant = newTenant();
+        var owner = AccessFixture.context(tenant, OWNER);
+        accessFixture.member(owner, "member-manager", "project_manager", null);
+        accessFixture.member(owner, "editor", "editor", null);
+        mvc.perform(get("/v1/org-connections/capabilities").header("Authorization", ownerBearer(tenant)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.canManageSettings").value(true))
+                .andExpect(jsonPath("$.canManageMembers").value(true));
+        mvc.perform(get("/v1/org-connections/capabilities").header("Authorization", bearer(tenant, "member-manager")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.canManageSettings").value(false))
+                .andExpect(jsonPath("$.canManageMembers").value(true));
+        Org org = connect(tenant, "wecom", null);
+        mvc.perform(get("/v1/org-connections").header("Authorization", bearer(tenant, "member-manager")))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/v1/org-connections/" + org.connectionId())
+                        .header("Authorization", bearer(tenant, "member-manager"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":false}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/v1/org-connections/" + org.connectionId() + "/authorized-users")
+                        .header("Authorization", bearer(tenant, "member-manager"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"externalId\":\"synthetic-user\"}"))
+                .andExpect(status().isCreated());
+        mvc.perform(get("/v1/org-connections/capabilities").header("Authorization", bearer(tenant, "editor")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.canManageSettings").value(false))
+                .andExpect(jsonPath("$.canManageMembers").value(false));
+        mvc.perform(get("/v1/org-connections/capabilities")).andExpect(status().isUnauthorized());
+    }
+
 
     @Test
     void aTenantAdminCreatesAConnectionAndItIsAudited() throws Exception {
