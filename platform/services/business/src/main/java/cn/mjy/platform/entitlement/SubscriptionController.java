@@ -36,11 +36,12 @@ class SubscriptionController {
                     .orElseThrow(() -> new IllegalStateException("subscription plan version missing"));
             return ResponseEntity.ok(new SubscriptionView(plan.id(), plan.planCode(), plan.version(),
                     subscription.statusAt(Instant.now()), subscription.startsAt(), subscription.endsAt(),
-                    plan.capabilities(), plan.quotas(), plan.exportWindowDays()));
+                    plan.capabilities(), plan.quotas(), plan.exportWindowDays(), plan.quotas().entrySet().stream()
+                    .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> Long.toString(e.getValue())))));
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     record SubscriptionView(UUID planVersionId, String planCode, int planVersion, SubscriptionStatus status,
                             Instant startsAt, Instant endsAt, Set<String> capabilities, Map<String, Long> quotas,
-                            int exportWindowDays) { }
+                            int exportWindowDays, Map<String, String> quotasExact) { }
 }

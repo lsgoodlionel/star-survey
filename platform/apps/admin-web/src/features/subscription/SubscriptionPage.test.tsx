@@ -26,6 +26,20 @@ test('shows the actual subscription version and quotas', async () => {
   expect(screen.getByText('5')).toBeInTheDocument();
 });
 
+test('shows exact quota strings when a legacy numeric field cannot be represented precisely', async () => {
+  server.use(http.get('/v1/subscription', () => HttpResponse.json({ planVersionId: '10000000-0000-4000-8000-000000000001', planCode: 'standard', planVersion: 2, status: 'ACTIVE', startsAt: '2026-11-02T00:00:00Z', endsAt: '2026-12-02T00:00:00Z', capabilities: [], quotas: { 'response.valid_completed': 9223372036854776000 }, quotasExact: { 'response.valid_completed': '9223372036854775807' }, exportWindowDays: 30 })));
+  renderPage();
+  expect(await screen.findByText('9223372036854775807')).toBeInTheDocument();
+  expect(screen.queryByText('9223372036854776000')).not.toBeInTheDocument();
+});
+
+test('rejects unsafe legacy numeric quotas when exact values are unavailable', async () => {
+  server.use(http.get('/v1/subscription', () => HttpResponse.json({ planVersionId: '10000000-0000-4000-8000-000000000001', planCode: 'standard', planVersion: 2, status: 'ACTIVE', startsAt: '2026-11-02T00:00:00Z', endsAt: '2026-12-02T00:00:00Z', capabilities: [], quotas: { 'response.valid_completed': 9007199254740992 }, exportWindowDays: 30 })));
+  renderPage();
+  expect(await screen.findByRole('alert')).toHaveTextContent('无法查看订阅');
+  expect(screen.queryByText('9007199254740992')).not.toBeInTheDocument();
+});
+
 test('removes previously displayed data when a same-page permission check is denied', async () => {
   let allowed = true;
   server.use(http.get('/v1/subscription', () => allowed ? HttpResponse.json({ planVersionId: '10000000-0000-4000-8000-000000000001', planCode: 'standard', planVersion: 2, status: 'ACTIVE', startsAt: '2026-11-02T00:00:00Z', endsAt: '2026-12-02T00:00:00Z', capabilities: [], quotas: {}, exportWindowDays: 30 }) : new HttpResponse(null, { status: 403 })));

@@ -62,5 +62,10 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
       testMatch: /template-branding\.spec\.ts/,
     },
+    {
+      name: 'chromium-personnel-plans',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /personnel-plans\.spec\.ts/,
+    },
   ],
 });

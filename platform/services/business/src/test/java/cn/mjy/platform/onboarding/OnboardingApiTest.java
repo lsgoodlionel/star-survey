@@ -56,7 +56,7 @@ class OnboardingApiTest {
     void tenantOwnerCanOnlyReadTheirOwnCurrentSubscription() throws Exception {
         Tenant tenant = fixtures.provisionedTenant();
         Tenant other = fixtures.provisionedTenant();
-        String body = planBody(5);
+        String body = planBody(5).replace("100000", "9223372036854775807");
         String code = JsonPath.read(body, "$.planCode");
         String plan = planId(publishPlan(body));
         onboard(tenant.id(), plan, "owner-1").andExpect(status().isOk());
@@ -71,6 +71,7 @@ class OnboardingApiTest {
                 .andExpect(jsonPath("$.planVersionId").value(plan))
                 .andExpect(jsonPath("$.planVersion").value(1))
                 .andExpect(jsonPath("$.quotas['member.seats']").value(5))
+                .andExpect(jsonPath("$.quotasExact['response.valid_completed']").value("9223372036854775807"))
                 .andExpect(jsonPath("$.status").value("TRIAL"));
         mvc.perform(get("/v1/subscription").header("Authorization", fixtures.userBearer(tenant.id())))
                 .andExpect(status().isForbidden());
@@ -106,6 +107,35 @@ class OnboardingApiTest {
                 .andExpect(jsonPath("$.version").value(2));
         mvc.perform(get(PLANS + "/missing-plan").header("Authorization", fixtures.operatorBearer()))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void operatorCanBrowseBoundedLatestPlanVersionsWithoutExposingThemToTenants() throws Exception {
+        String body = planBody(5).replace("100000", "9223372036854775807");
+        String code = JsonPath.read(body, "$.planCode");
+        String nextCode = code + "z";
+        publishPlan(body).andExpect(status().isCreated());
+        publishPlan(body).andExpect(status().isCreated());
+        publishPlan(body.replace(code, nextCode).replace("9223372036854775807", "9007199254740993")).andExpect(status().isCreated());
+        mvc.perform(get("/v1/platform/plan-catalog").param("after", code.substring(0, code.length() - 1)).param("limit", "1")
+                        .header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].planCode").value(code))
+                .andExpect(jsonPath("$.items[0].version").value(2))
+                .andExpect(jsonPath("$.items[0].quotas['member.seats']").value("5"))
+                .andExpect(jsonPath("$.items[0].quotas['response.valid_completed']").value("9223372036854775807"))
+                .andExpect(jsonPath("$.items[0].exportWindowDays").value(30))
+                .andExpect(jsonPath("$.nextCursor").value(code));
+        mvc.perform(get("/v1/platform/plan-catalog").param("after", code).param("limit", "1")
+                        .header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].planCode").value(nextCode))
+                .andExpect(jsonPath("$.items[0].quotas['response.valid_completed']").value("9007199254740993"));
+        mvc.perform(get("/v1/platform/plan-catalog").header("Authorization", fixtures.userBearer(fixtures.activeTenant())))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/v1/platform/plan-catalog")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/platform/plan-catalog").param("limit", "101").header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/platform/plan-catalog").param("after", "bad/cursor").header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
