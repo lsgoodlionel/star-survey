@@ -211,3 +211,44 @@ BEGIN
     RETURN true;
 END $$;
 REVOKE ALL ON FUNCTION platform_admin_change(uuid, uuid, uuid, uuid, boolean, text, text) FROM PUBLIC, platform_app;
+
+-- Isolated owner-only prototype: grant and session are checked inside the same
+-- transaction. The database still cannot authenticate caller-supplied actor/sid,
+-- so this function MUST NOT be exposed to the runtime account.
+CREATE FUNCTION platform_admin_change_session(p_actor_tenant uuid, p_actor uuid, p_session uuid,
+        p_target_tenant uuid, p_target uuid, p_grant boolean, p_trace text, p_reason text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE previous_tenant text; session_live boolean; changed boolean;
+BEGIN
+    IF p_actor_tenant IS NULL OR p_actor IS NULL OR p_session IS NULL THEN
+        RAISE EXCEPTION 'verified session required' USING ERRCODE = '42501';
+    END IF;
+    PERFORM pg_advisory_xact_lock(1979110201);
+    previous_tenant := current_setting('app.tenant_id', true);
+    PERFORM set_config('app.tenant_id', p_actor_tenant::text, true);
+    SELECT true INTO session_live FROM public.org_login_session s
+       WHERE s.id = p_session AND s.tenant_id = p_actor_tenant AND s.principal_id = p_actor
+         AND s.revoked_at IS NULL AND s.expires_at > clock_timestamp()
+         AND NOT EXISTS (SELECT 1 FROM public.identity_binding_revocation r
+             WHERE r.tenant_id = p_actor_tenant AND r.principal_id = p_actor AND r.reinstated_at IS NULL)
+       FOR UPDATE OF s;
+    IF NOT coalesce(session_live, false) THEN
+        RAISE EXCEPTION 'verified session unavailable' USING ERRCODE = '42501';
+    END IF;
+    -- A row lock may have waited across the expiry instant; check wall time again.
+    SELECT s.revoked_at IS NULL AND s.expires_at > clock_timestamp() INTO session_live
+      FROM public.org_login_session s WHERE s.id = p_session AND s.tenant_id = p_actor_tenant
+        AND s.principal_id = p_actor;
+    IF NOT coalesce(session_live, false) THEN
+        RAISE EXCEPTION 'verified session unavailable' USING ERRCODE = '42501';
+    END IF;
+    changed := public.platform_admin_change(p_actor_tenant, p_actor, p_target_tenant, p_target,
+                                            p_grant, p_trace, p_reason);
+    PERFORM set_config('app.tenant_id', coalesce(previous_tenant, ''), true);
+    RETURN changed;
+EXCEPTION WHEN OTHERS THEN
+    PERFORM set_config('app.tenant_id', coalesce(previous_tenant, ''), true);
+    RAISE;
+END $$;
+REVOKE ALL ON FUNCTION platform_admin_change_session(uuid, uuid, uuid, uuid, uuid, boolean, text, text)
+    FROM PUBLIC, platform_app;
