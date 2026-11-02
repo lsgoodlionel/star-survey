@@ -12,6 +12,8 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 
@@ -962,6 +964,16 @@ class SurveyctlTest(unittest.TestCase):
 
     def test_setup_probe_creates_least_privilege_identity_without_logging_secrets(self):
         self.install()
+        # Simulate an older installation that predates the separate probe credential.
+        (self.target / "shared" / "secrets" / "platform_probe_hmac_secret").unlink()
+        (self.target / "shared" / "probe-installation.json").unlink()
+        release = self.target / "releases" / "0.2.0"
+        env = release / ".env"
+        env.write_text("\n".join(line for line in env.read_text().splitlines() if not line.startswith("PLATFORM_ADMIN_ENFORCE_PERSONNEL=")) + "\n")
+        integrity = release / "deployment-integrity.json"
+        metadata = json.loads(integrity.read_text())
+        metadata["generatedFiles"][".env"] = hashlib.sha256(env.read_bytes()).hexdigest()
+        integrity.write_text(json.dumps(metadata))
         calls = []
 
         def api_call(token, method, path, body=None):
@@ -1008,6 +1020,38 @@ class SurveyctlTest(unittest.TestCase):
         secrets_on_disk = [path.read_text().strip() for path in (self.target / "shared" / "secrets").iterdir()]
         self.assertTrue(all(secret not in "\n".join(" ".join(map(str, call[:3])) for call in calls) for secret in secrets_on_disk))
 
+    def test_install_stages_distinct_machine_identity_and_personnel_guard_configuration(self):
+        self.install()
+        root = self.target / "shared"
+        probe = (root / "secrets" / "platform_probe_hmac_secret").read_bytes().strip()
+        personnel = (root / "secrets" / "platform_jwt_hmac_secret").read_bytes().strip()
+        self.assertGreaterEqual(len(probe), 32)
+        self.assertNotEqual(probe, personnel)
+        config = json.loads((root / "probe-installation.json").read_text())
+        self.assertEqual(set(config), {"installationId"})
+        self.assertEqual(str(__import__('uuid').UUID(config['installationId'])), config['installationId'])
+        env = (self.target / "releases" / "0.2.0" / ".env").read_text()
+        self.assertIn("PLATFORM_PROBE_INSTALLATION_ID=" + config["installationId"], env)
+        self.assertIn("PLATFORM_PROBE_HMAC_SECRET_FILE=", env)
+        self.assertNotIn(probe.decode(), env)
+
+    def test_upgrade_and_rollback_preserve_legacy_probe_without_auto_adoption(self):
+        self.install()
+        root = self.target / "shared"
+        legacy = {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner"}
+        product = root / "product-probe.json"
+        product.write_text(json.dumps(legacy) + "\n")
+        before = product.read_bytes()
+        (root / "secrets" / "platform_probe_hmac_secret").unlink()
+        (root / "probe-installation.json").unlink()
+        self.manager().upgrade(self.manifest(version="0.3.0", minimumSourceVersion="0.2.0"))
+        self.assertEqual(product.read_bytes(), before)
+        with self.assertRaisesRegex(self.module.RuntimeHealthError, "legacy probe retained; run doctor"):
+            self.manager().setup_probe(api_call=lambda *_args: self.fail("legacy probe must not be adopted"))
+        self.assertFalse((root / "probe-run.json").exists())
+        self.manager().rollback("0.2.0")
+        self.assertEqual(product.read_bytes(), before)
+
     def test_setup_probe_uses_independent_machine_identity_and_retries_the_same_run(self):
         self.install()
         probe_key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
@@ -1044,6 +1088,7 @@ class SurveyctlTest(unittest.TestCase):
         probe_key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
         probe_key.write_text((self.target / "shared" / "secrets" / "platform_jwt_hmac_secret").read_text())
         probe_key.chmod(0o600)
+        (self.target / "shared" / "probe-installation.json").unlink()
         calls = []
         with self.assertRaises(self.module.IntegrityError):
             self.manager().setup_probe(api_call=lambda *args: calls.append(args))
@@ -1052,6 +1097,15 @@ class SurveyctlTest(unittest.TestCase):
             self.manager().setup_probe(api_call=lambda *args: calls.append(args))
         probe_key.write_text((self.target / "shared" / "secrets" / "platform_engine_events_secret").read_text())
         with self.assertRaises(self.module.IntegrityError):
+            self.manager().setup_probe(api_call=lambda *args: calls.append(args))
+        self.assertEqual(calls, [])
+
+    def test_personnel_mode_never_falls_back_to_legacy_when_machine_config_is_missing(self):
+        self.install()
+        (self.target / "shared" / "secrets" / "platform_probe_hmac_secret").unlink()
+        (self.target / "shared" / "probe-installation.json").unlink()
+        calls = []
+        with self.assertRaisesRegex(self.module.IntegrityError, "machine configuration"):
             self.manager().setup_probe(api_call=lambda *args: calls.append(args))
         self.assertEqual(calls, [])
 
@@ -1067,6 +1121,33 @@ class SurveyctlTest(unittest.TestCase):
             self.manager().setup_probe(api_call=rejected)
         self.assertFalse((self.target / "shared" / "product-probe.json").exists())
         self.assertTrue((self.target / "shared" / "probe-run.json").exists())
+
+    def test_concurrent_first_machine_setup_uses_one_persisted_run(self):
+        import base64
+        import uuid
+        self.install()
+        key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
+        key.write_text("isolated-probe-key-for-tests-only-000000000000")
+        key.chmod(0o600)
+        (self.target / "shared" / "probe-installation.json").write_text(json.dumps({"installationId": "10000000-0000-4000-8000-000000000001"}))
+        barrier = threading.Barrier(2)
+        generated = iter([uuid.UUID("10000000-0000-4000-8000-000000000010"), uuid.UUID("10000000-0000-4000-8000-000000000011")])
+        def new_uuid():
+            value = next(generated)
+            barrier.wait(timeout=5)
+            return value
+        seen = []
+        def api_call(token, method, path, body=None):
+            payload = token.split(".")[1]
+            seen.append(json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["run_id"])
+            return 200, {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner",
+                         "engineSecret": (self.target / "shared" / "secrets" / "engine_instance_events_secret").read_text().strip()}
+        with mock.patch.object(self.module.uuid, "uuid4", side_effect=new_uuid), ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(self.manager().setup_probe, api_call) for _ in range(2)]
+            for future in futures:
+                future.result(timeout=10)
+        persisted = json.loads((self.target / "shared" / "probe-run.json").read_text())["runId"]
+        self.assertEqual(seen, [persisted, persisted])
 
     def test_helper_exit_codes_are_preserved_by_real_cli_without_traceback(self):
         self.install()

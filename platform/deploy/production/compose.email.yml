@@ -7,6 +7,7 @@ services:
       - PLATFORM_DB_APP_PASSWORD=/run/secrets/platform_db_app_password
       - PLATFORM_DB_OWNER_PASSWORD=/run/secrets/platform_db_owner_password
       - PLATFORM_JWT_HMAC_SECRET=/run/secrets/platform_jwt_hmac_secret
+      - PLATFORM_PROBE_HMAC_SECRET=/run/secrets/platform_probe_hmac_secret
       - PLATFORM_ENGINE_EVENTS_SECRET=/run/secrets/platform_engine_events_secret
       - PLATFORM_PUBGW_SECRET=/run/secrets/platform_pubgw_secret
       - PLATFORM_DELIVERY_EMAIL_CREDENTIAL=/run/secrets/platform_delivery_email_credential
@@ -25,6 +26,7 @@ services:
       - platform_db_app_password
       - platform_db_owner_password
       - platform_jwt_hmac_secret
+      - platform_probe_hmac_secret
       - platform_engine_events_secret
       - platform_pubgw_secret
       - platform_delivery_email_credential

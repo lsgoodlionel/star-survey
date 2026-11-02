@@ -49,7 +49,7 @@ ONE_SHOT_SERVICES = {"engine-init"}
 SECRET_NAMES = (
     "engine_admin_password_hash", "engine_admin_password", "engine_db_password",
     "engine_db_root_password", "platform_db_superuser_password", "platform_db_owner_password",
-    "platform_db_app_password", "platform_jwt_hmac_secret", "platform_engine_events_secret",
+    "platform_db_app_password", "platform_jwt_hmac_secret", "platform_probe_hmac_secret", "platform_engine_events_secret",
     "platform_pubgw_secret", "pubgw_engine_admin_password", "backup_encryption_key",
     "platform_delivery_secret",
     "engine_instance_events_secret", "pubgw_engine_channel_secret",
@@ -581,6 +581,31 @@ class SurveyManager:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
+    def _atomic_create_once(self, path: Path, content: str) -> None:
+        path = self._managed(path.relative_to(self.target))
+        parent = self._mkdir(path.parent.relative_to(self.target))
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=parent)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, path, follow_symlinks=False)
+            except FileExistsError:
+                pass  # A concurrent process published a complete winner.
+            # Both the publisher and any concurrent reader must persist the
+            # directory entry before using its identity in a remote request.
+            directory = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
     def _write_state(self, **values) -> None:
         state = self._read_state() if self.state_path.exists() else {}
         state.update(values)
@@ -952,6 +977,18 @@ class SurveyManager:
             path = secret_dir / name
             if not path.exists() and name not in derived_secrets:
                 self._atomic_write(path, secrets.token_urlsafe(48) + "\n")
+        probe_installation = self._managed("shared/probe-installation.json")
+        if not probe_installation.exists() and not probe_installation.is_symlink():
+            self._atomic_create_once(probe_installation, json.dumps({"installationId": str(uuid.uuid4())}, sort_keys=True) + "\n")
+        if probe_installation.is_symlink():
+            raise IntegrityError("probe installation identity is unsafe")
+        try:
+            probe_config = json.loads(probe_installation.read_text(encoding="utf-8"))
+            installation_id = probe_config["installationId"]
+            if set(probe_config) != {"installationId"} or str(uuid.UUID(installation_id)) != installation_id:
+                raise ValueError("invalid installation")
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise IntegrityError("probe installation identity is invalid") from exc
         engine_instance_id = "production-engine-01"
         master = (secret_dir / "platform_engine_events_secret").read_bytes().strip()
         instance_secret = hmac.new(
@@ -968,6 +1005,7 @@ class SurveyManager:
         lines += [
             f"ENGINE_INSTANCE_ID={engine_instance_id}", f"ENGINE_ADMIN_USER={admin_user}",
             f"ENGINE_ADMIN_EMAIL={admin_email}", f"ENGINES_CONFIG_FILE={release / 'engines.json'}",
+            f"PLATFORM_PROBE_INSTALLATION_ID={installation_id}", "PLATFORM_ADMIN_ENFORCE_PERSONNEL=true",
         ]
         if self._native_acceptance_profile(manifest):
             lines.append("CADDY_TLS_DIRECTIVE=tls internal")
@@ -976,6 +1014,7 @@ class SurveyManager:
             "ENGINE_DB_PASSWORD_FILE": "engine_db_password", "ENGINE_DB_ROOT_PASSWORD_FILE": "engine_db_root_password",
             "PLATFORM_DB_SUPERUSER_PASSWORD_FILE": "platform_db_superuser_password", "PLATFORM_DB_OWNER_PASSWORD_FILE": "platform_db_owner_password",
             "PLATFORM_DB_APP_PASSWORD_FILE": "platform_db_app_password", "PLATFORM_JWT_HMAC_SECRET_FILE": "platform_jwt_hmac_secret",
+            "PLATFORM_PROBE_HMAC_SECRET_FILE": "platform_probe_hmac_secret",
             "PLATFORM_ENGINE_EVENTS_SECRET_FILE": "platform_engine_events_secret", "PLATFORM_PUBGW_SECRET_FILE": "platform_pubgw_secret",
             "PLATFORM_DELIVERY_SECRET_FILE": "platform_delivery_secret",
             "ENGINE_INSTANCE_EVENTS_SECRET_FILE": "engine_instance_events_secret",
@@ -1227,6 +1266,13 @@ class SurveyManager:
 
     def setup_probe(self, api_call=None) -> None:
         state = self._read_state(require_current=True)
+        release = self._release_dir(state["version"])
+        self._verify_staged_release(release, state["version"])
+        guard_values = [line.split("=", 1)[1] for line in (release / ".env").read_text(encoding="utf-8").splitlines()
+                        if line.startswith("PLATFORM_ADMIN_ENFORCE_PERSONNEL=")]
+        if len(guard_values) > 1 or (guard_values and guard_values[0] not in {"true", "false"}):
+            raise IntegrityError("personnel guard configuration is invalid")
+        personnel_enforced = guard_values == ["true"]
         host = state["publicHost"]
         jwt_path = self._managed("shared/secrets/platform_jwt_hmac_secret", must_exist=True)
         event_path = self._managed("shared/secrets/engine_instance_events_secret", must_exist=True)
@@ -1250,6 +1296,8 @@ class SurveyManager:
         call = api_call or request
         probe_key = self._managed("shared/secrets/platform_probe_hmac_secret")
         probe_installation = self._managed("shared/probe-installation.json")
+        if personnel_enforced and not (probe_key.exists() or probe_key.is_symlink() or probe_installation.exists() or probe_installation.is_symlink()):
+            raise IntegrityError("probe machine configuration is required in personnel mode")
         if probe_key.exists() or probe_installation.exists() or probe_key.is_symlink() or probe_installation.is_symlink():
             if probe_key.is_symlink() or probe_installation.is_symlink() or not probe_key.is_file() or not probe_installation.is_file():
                 raise IntegrityError("probe machine configuration is incomplete or unsafe")
@@ -1266,16 +1314,17 @@ class SurveyManager:
                 if set(config) != {"installationId"} or str(uuid.UUID(installation)) != installation:
                     raise ValueError("invalid installation")
                 run_path = self._managed("shared/probe-run.json")
-                if run_path.exists() or run_path.is_symlink():
-                    if run_path.is_symlink():
-                        raise ValueError("unsafe run state")
-                    run_state = json.loads(run_path.read_text(encoding="utf-8"))
-                    run = run_state["runId"]
-                    if set(run_state) != {"installationId", "runId"} or run_state["installationId"] != installation or str(uuid.UUID(run)) != run:
-                        raise ValueError("invalid run state")
-                else:
-                    run = str(uuid.uuid4())
-                    self._atomic_write(run_path, json.dumps({"installationId": installation, "runId": run}, sort_keys=True) + "\n")
+                legacy_probe = self._managed("shared/product-probe.json")
+                if (legacy_probe.exists() or legacy_probe.is_symlink()) and not run_path.exists() and not run_path.is_symlink():
+                    raise RuntimeHealthError("legacy probe retained; run doctor, and use a controlled rebuild if needed")
+                proposed = str(uuid.uuid4())
+                self._atomic_create_once(run_path, json.dumps({"installationId": installation, "runId": proposed}, sort_keys=True) + "\n")
+                if run_path.is_symlink():
+                    raise ValueError("unsafe run state")
+                run_state = json.loads(run_path.read_text(encoding="utf-8"))
+                run = run_state["runId"]
+                if set(run_state) != {"installationId", "runId"} or run_state["installationId"] != installation or str(uuid.UUID(run)) != run:
+                    raise ValueError("invalid run state")
             except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
                 raise IntegrityError("probe machine configuration is invalid") from exc
             token = self._probe_jwt(machine_secret, installation, run)
