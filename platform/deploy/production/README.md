@@ -33,6 +33,8 @@ SMTP 服务端接受仅表示“已提交 SMTP”，不表示进入收件箱或�
 
 ## 生命周期
 
+admin-web 的 nginx 在启动时解析 platform；Compose 要求 platform 健康后才启动 admin-web，避免上游 DNS 尚未注册导致反复退出。原健康探针和参数保持不变。
+
 安装、升级和回滚启动后，对仍处于 running/starting 的服务最多等待 120 秒；只有全部既有健康检查通过且 engine-init 成功退出才继续。unhealthy、缺失服务或初始化异常仍阻断，status 保持即时检查。本次修复的四节点完整生产生命周期尚待独立验收；原生 admin 探针诊断不能替代 readiness。
 
 ```bash

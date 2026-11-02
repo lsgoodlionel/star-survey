@@ -39,15 +39,17 @@ jobs:
           docker image inspect "$image" --format '{{json .Config.Healthcheck}}' > evidence/image-healthcheck.json
           docker network create admin-health
           docker create --name platform --network admin-health --entrypoint /bin/sh "$image" -c 'sleep 120'
+          # Match the new production dependency: resolve a ready upstream before admin starts.
+          docker start platform
           docker run -d --name admin-health --network admin-health --restart unless-stopped --cpus 0.50 --memory 128m --security-opt no-new-privileges:true \
             --health-cmd 'wget -q -O /dev/null http://127.0.0.1/' --health-interval 10s --health-timeout 3s --health-retries 3 "$image"
-          # Production creates platform before admin but starts it after database readiness.
-          (sleep 6; docker start platform) &
           for sample in $(seq 1 45); do
             docker inspect admin-health --format '{{json .State}}' >> evidence/health-timeline.jsonl
             sleep 1
           done
           docker logs admin-health > evidence/nginx.log 2>&1
+          test "$(docker inspect admin-health --format '{{.RestartCount}}')" = 0
+          ! grep -q 'host not found in upstream' evidence/nginx.log
           test "$(docker inspect admin-health --format '{{.State.Health.Status}}')" = healthy
       - name: Preserve diagnostic evidence
         if: always()

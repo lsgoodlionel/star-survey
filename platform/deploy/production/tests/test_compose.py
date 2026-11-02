@@ -38,6 +38,14 @@ class ProductionComposeTest(unittest.TestCase):
         self.assertNotIn("variable is not set", result.stderr)
         return json.loads(result.stdout)
 
+    def test_admin_starts_only_after_its_nginx_upstream_is_healthy(self):
+        services = self.render_compose()["services"]
+        self.assertEqual(
+            "service_healthy",
+            services["admin-web"].get("depends_on", {}).get("platform", {}).get("condition"),
+        )
+        self.assertNotIn("admin-web", services["platform"].get("depends_on", {}))
+
     def adapt_caddy(self):
         fixture = dict(
             line.split("=", 1)
