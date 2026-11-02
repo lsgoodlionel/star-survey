@@ -174,7 +174,7 @@ class ReleasePublicationWorkflowTest(unittest.TestCase):
             name for name, job in self.workflow["jobs"].items()
             if job.get("permissions", {}).get("contents") == "write"
         }
-        self.assertEqual({"publication"}, writers)
+        self.assertEqual({"publication", "manual-promotion"}, writers)
         condition = str(self.workflow["jobs"]["publication"]["if"])
         self.assertIn("needs.policy.outputs.release == 'true'", condition)
         self.assertIn("needs.quality.result == 'success'", condition)
