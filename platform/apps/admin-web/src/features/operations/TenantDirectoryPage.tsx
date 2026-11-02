@@ -1,8 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import type { ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { z } from 'zod';
 import { useAuth } from '../auth/AuthProvider';
+import { ApiError } from '../../shared/api/errors';
 import { usePlatformCapabilities } from './usePlatformCapabilities';
 
 const tenantSchema = z.object({
@@ -11,6 +12,8 @@ const tenantSchema = z.object({
 });
 const directorySchema = z.object({ items: z.array(tenantSchema), nextCursor: z.string().nullable() });
 const statusLabels: Record<string, string> = { provisioning: '开通中', active: '启用', suspended: '暂停', closed: '关闭' };
+const transitions: Record<string, string[]> = { provisioning: ['active', 'closed'], active: ['suspended', 'closed'], suspended: ['active', 'closed'], closed: [] };
+const actionLabels: Record<string, string> = { active: '启用租户', suspended: '暂停租户', closed: '关闭租户' };
 
 function OperationsLayout({ children }: { children: ReactNode }) {
   const { logout } = useAuth();
@@ -45,19 +48,51 @@ export function TenantDirectoryPage() {
 
 export function TenantDetailPage() {
   const { tenantId = '' } = useParams();
+  const { session } = useAuth();
+  return <TenantDetailContent key={`${session?.me.tenantId}:${session?.me.actorId}:${tenantId}`} tenantId={tenantId} />;
+}
+
+function TenantDetailContent({ tenantId }: { tenantId: string }) {
   const { api, session } = useAuth();
   const capability = usePlatformCapabilities();
-  const allowed = !capability.isError && !capability.isFetching && capability.data?.managePlatform === true;
+  const [denied, setDenied] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const lock = useRef(false);
+  const allowed = !denied && !capability.isError && !capability.isFetching && capability.data?.managePlatform === true;
   const query = useQuery({
     queryKey: ['platform-tenant', session?.me.tenantId, session?.me.actorId, tenantId],
     queryFn: ({ signal }) => api.request({ path: `/v1/platform/tenants/${encodeURIComponent(tenantId)}`, schema: tenantSchema, signal }),
     enabled: allowed, retry: false, staleTime: 0,
   });
+  const change = useMutation({
+    mutationFn: (status: string) => api.request({ path: `/v1/platform/tenants/${encodeURIComponent(tenantId)}/status`, method: 'POST', body: { status }, schema: tenantSchema }),
+    onSuccess: async () => { setSelected(null); setNotice('租户状态已更新'); await query.refetch(); },
+    onError: async (error) => {
+      setSelected(null);
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) { setDenied(true); return; }
+      setNotice(error instanceof ApiError && error.status === 409 ? '状态已变化，请核对最新状态' : '操作结果未确认，请核对最新状态后再试');
+      await query.refetch();
+    },
+    onSettled: () => { lock.current = false; },
+  });
+  function confirm() {
+    if (!selected || lock.current || !allowed || !query.data || !(transitions[query.data.status] ?? []).includes(selected)) return;
+    lock.current = true;
+    setNotice(null);
+    change.mutate(selected);
+  }
   if (capability.isPending || capability.isFetching) return <OperationsLayout><p>正在检查平台权限</p></OperationsLayout>;
   if (!allowed) return <OperationsLayout><h1>需要平台运营权限</h1></OperationsLayout>;
   return <OperationsLayout><Link to="/operations/tenants">返回租户列表</Link>
     {query.isPending ? <p>正在加载租户</p> : null}
     {query.isError ? <div role="alert"><p>租户不存在或无法访问</p><button type="button" onClick={() => void query.refetch()}>重试</button></div> : null}
-    {query.data && !query.isError && !query.isFetching ? <><h1>{query.data.name}</h1><dl><dt>编码</dt><dd>{query.data.code}</dd><dt>状态</dt><dd>{statusLabels[query.data.status] ?? query.data.status}</dd><dt>创建时间</dt><dd>{query.data.createdAt}</dd></dl></> : null}
+    {query.data && !query.isError && !query.isFetching ? <><h1>{query.data.name}</h1><dl><dt>编码</dt><dd>{query.data.code}</dd><dt>状态</dt><dd>{statusLabels[query.data.status] ?? query.data.status}</dd><dt>创建时间</dt><dd>{query.data.createdAt}</dd></dl>
+      <section aria-label="租户状态管理"><h2>租户状态管理</h2>
+        {query.data.status === 'closed' ? <p>关闭为终态，无法重新启用</p> : null}
+        {(transitions[query.data.status] ?? []).map((target) => <button key={target} type="button" disabled={change.isPending} onClick={() => setSelected(target)}>{actionLabels[target]}</button>)}
+        {selected ? <div><p>{selected === 'closed' ? '关闭为终态，无法重新启用。' : '请确认变更租户状态。'}</p><button type="button" disabled={change.isPending} onClick={confirm}>确认{actionLabels[selected]}</button><button type="button" disabled={change.isPending} onClick={() => setSelected(null)}>取消</button></div> : null}
+        {notice ? <p role="status">{notice}</p> : null}
+      </section></> : null}
   </OperationsLayout>;
 }

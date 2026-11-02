@@ -153,6 +153,9 @@ sanitize_test_artifacts() {
   if [[ -n "${ADMIN_WEB_OPERATOR_JWT_FILE:-}" ]]; then
     jwt_files+=("$ADMIN_WEB_OPERATOR_JWT_FILE")
   fi
+  if [[ -n "${ADMIN_WEB_PERSONNEL_JWT_FILE:-}" && -f "$ADMIN_WEB_PERSONNEL_JWT_FILE" ]]; then
+    jwt_files+=("$ADMIN_WEB_PERSONNEL_JWT_FILE")
+  fi
   for jwt_file in "${jwt_files[@]}"; do
     arguments=(
       --base-url "${PLATFORM_URL:-http://127.0.0.1}"
@@ -249,6 +252,25 @@ verify_and_archive_run_root() {
     --jwt-file "$ADMIN_WEB_JWT_FILE" \
     --root-id-file "$root_id_file"
   ok "successful real-stack gate archived its run root"
+}
+
+run_personnel_status_test() {
+  export ADMIN_WEB_PERSONNEL_HELPER="$REPO_ROOT/platform/tests/e2e/personnel_status_gate.py"
+  export ADMIN_WEB_PERSONNEL_JWT_FILE="$WORK_DIR/personnel.jwt"
+  export ADMIN_WEB_PERSONNEL_METADATA_FILE="$WORK_DIR/personnel.json"
+  python3 "$ADMIN_WEB_PERSONNEL_HELPER" seed
+  [[ "$(private_mode "$ADMIN_WEB_PERSONNEL_JWT_FILE")" == "600" ]] || fail "personnel JWT file is not private"
+  export ADMIN_WEB_PERSONNEL_MODE=true
+  export ADMIN_WEB_PERSONNEL_PROBE_SECRET ADMIN_WEB_PERSONNEL_INSTALLATION_ID
+  ADMIN_WEB_PERSONNEL_PROBE_SECRET="$(random_secret)"
+  ADMIN_WEB_PERSONNEL_INSTALLATION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  "${COMPOSE[@]}" up -d --no-deps --force-recreate platform >/dev/null
+  PLATFORM_URL="$(service_url platform 8080)"
+  wait_healthy platform "$PLATFORM_URL/actuator/health" "$PLATFORM_HEALTH_ATTEMPTS" "$PLATFORM_CONTAINER"
+  "${COMPOSE[@]}" up -d --no-deps --force-recreate admin-web >/dev/null
+  wait_healthy admin-web "$ADMIN_WEB_BASE_URL/actuator/health" "$SERVICE_HEALTH_ATTEMPTS" "$ADMIN_WEB_CONTAINER"
+  (cd "$ADMIN_WEB_DIR" && npm run e2e -- --project=chromium-personnel-status --reporter=line)
+  sanitize_test_artifacts false
 }
 
 main() {
@@ -375,6 +397,11 @@ run_browser_tests
 
 step "gate: platform API, platform DB, gateway and engine DB"
 verify_and_archive_run_root
+
+if [[ "$E2E_SUITE" == "full" ]]; then
+  step "browser: personnel grant, tenant status and revocation under enforced guard"
+  run_personnel_status_test
+fi
 
 echo "Admin web real-stack e2e passed ($TEST_DB); private credentials and temporary results will now be removed" >&2
 }

@@ -81,3 +81,60 @@ test('removes directory rows when same-page platform capability is revoked', asy
   expect(screen.queryByRole('link', { name: /示例租户/ })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '退出登录' })).toBeInTheDocument();
 });
+
+test('confirms an allowed status change and refreshes the authoritative tenant', async () => {
+  let current = { ...tenant }, calls = 0;
+  server.use(http.get('/v1/platform/tenants/:id', () => HttpResponse.json(current)),
+    http.post('/v1/platform/tenants/:id/status', async ({ request }) => {
+      calls++;
+      expect(await request.json()).toEqual({ status: 'suspended' });
+      current = { ...current, status: 'suspended' };
+      return HttpResponse.json(current);
+    }));
+  renderPage(`/operations/tenants/${tenant.id}`);
+  await userEvent.click(await screen.findByRole('button', { name: '暂停租户' }));
+  expect(calls).toBe(0);
+  await userEvent.click(screen.getByRole('button', { name: '确认暂停租户' }));
+  expect(await screen.findByText('租户状态已更新')).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: '启用租户' })).toBeInTheDocument();
+  expect(calls).toBe(1);
+});
+
+test('closed tenant is terminal and offers no status action', async () => {
+  server.use(http.get('/v1/platform/tenants/:id', () => HttpResponse.json({ ...tenant, status: 'closed' })));
+  renderPage(`/operations/tenants/${tenant.id}`);
+  expect(await screen.findByText('关闭为终态，无法重新启用')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /暂停租户|启用租户|关闭租户/ })).not.toBeInTheDocument();
+});
+
+test('closing requires a separate confirmation and explains the terminal state', async () => {
+  let calls = 0;
+  server.use(http.get('/v1/platform/tenants/:id', () => HttpResponse.json(tenant)),
+    http.post('/v1/platform/tenants/:id/status', () => { calls++; return HttpResponse.json({ ...tenant, status: 'closed' }); }));
+  renderPage(`/operations/tenants/${tenant.id}`);
+  await userEvent.click(await screen.findByRole('button', { name: '关闭租户' }));
+  expect(screen.getByText('关闭为终态，无法重新启用。')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '取消' }));
+  expect(calls).toBe(0);
+});
+
+test('a forbidden status change clears tenant details after permission loss', async () => {
+  server.use(http.get('/v1/platform/tenants/:id', () => HttpResponse.json(tenant)),
+    http.post('/v1/platform/tenants/:id/status', () => new HttpResponse(null, { status: 403 })));
+  renderPage(`/operations/tenants/${tenant.id}`);
+  await userEvent.click(await screen.findByRole('button', { name: '暂停租户' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认暂停租户' }));
+  expect(await screen.findByRole('heading', { name: '需要平台运营权限' })).toBeInTheDocument();
+  expect(screen.queryByText('acme')).not.toBeInTheDocument();
+});
+
+test('a conflict reloads current status and does not retry the mutation', async () => {
+  let calls = 0, reads = 0;
+  server.use(http.get('/v1/platform/tenants/:id', () => HttpResponse.json({ ...tenant, status: ++reads === 1 ? 'active' : 'closed' })),
+    http.post('/v1/platform/tenants/:id/status', () => { calls++; return new HttpResponse(null, { status: 409 }); }));
+  renderPage(`/operations/tenants/${tenant.id}`);
+  await userEvent.click(await screen.findByRole('button', { name: '暂停租户' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认暂停租户' }));
+  expect(await screen.findByText('关闭为终态，无法重新启用')).toBeInTheDocument();
+  expect(calls).toBe(1);
+});
