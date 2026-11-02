@@ -106,6 +106,25 @@ class RestoreManager:
             compatible = {str(value) for value in database.get("compatibleSourceSchemas", [])}
         except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise RestoreIntegrityError("release compatibility metadata is invalid") from exc
+        floor = self.target / ".surveyctl" / "auth-security-floor"
+        try:
+            guard = [line for line in (release_dir / ".env").read_text(encoding="utf-8").splitlines()
+                     if line.startswith("PLATFORM_ADMIN_ENFORCE_PERSONNEL=")]
+        except (OSError, UnicodeError) as exc:
+            raise RestoreIntegrityError("personnel configuration is unreadable") from exc
+        if guard == ["PLATFORM_ADMIN_ENFORCE_PERSONNEL=true"] and not (floor.exists() or floor.is_symlink()):
+            raise RestoreIntegrityError("personnel security floor is missing")
+        if floor.exists() or floor.is_symlink():
+            if floor.is_symlink() or not floor.is_file():
+                raise RestoreIntegrityError("authentication security floor is unsafe")
+            try:
+                floor_value = floor.read_text(encoding="ascii").strip()
+            except (OSError, UnicodeError) as exc:
+                raise RestoreIntegrityError("authentication security floor is unreadable") from exc
+            if floor_value != "platform-admin-session-v1" or guard != ["PLATFORM_ADMIN_ENFORCE_PERSONNEL=true"] \
+                    or not release.get("images", {}).get("PLATFORM_IMAGE") \
+                    or release.get("securityCapabilities", {}).get(floor_value) != release.get("images", {}).get("PLATFORM_IMAGE"):
+                raise RestoreIntegrityError("current release does not meet the personnel security floor")
         compatible.add(target_schema)
         minimum = release.get("minimumSourceVersion")
         if not isinstance(minimum, str) or re.fullmatch(r"\d+\.\d+\.\d+", minimum) is None:
@@ -178,6 +197,9 @@ class RestoreManager:
         if not secrets.compare_digest(hashlib.sha256(source_bytes).hexdigest(), release_digest) \
                 or source_release.get("images") != images:
             raise RestoreIntegrityError("backup release identity does not match the installed source release")
+        floor = self.target / ".surveyctl" / "auth-security-floor"
+        if floor.exists() and (not source_release.get("images", {}).get("PLATFORM_IMAGE") or source_release.get("securityCapabilities", {}).get("platform-admin-session-v1") != source_release.get("images", {}).get("PLATFORM_IMAGE")):
+            raise RestoreIntegrityError("backup predates the personnel security boundary; controlled recovery is required")
         files = metadata["files"]
         if not isinstance(files, dict) or set(files) != EXPECTED_PAYLOADS:
             raise RestoreIntegrityError("backup payload inventory is incomplete")
@@ -342,10 +364,42 @@ class RestoreManager:
         self._run(compose + ["up", "-d", "platform-db", "engine-db"], "restore database startup failed", capture_output=True, text=True)
         with decrypted["postgres.dump"].open("rb") as source:
             self._run(compose + ["exec", "-T", "platform-db", "pg_restore", "-U", "postgres", "-d", "platform", "--clean", "--if-exists", "--no-owner"], "PostgreSQL restore failed", stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if (self.target / ".surveyctl" / "auth-security-floor").exists():
+            self._invalidate_restored_personnel(compose)
         with decrypted["mariadb.sql"].open("rb") as source:
             self._run(compose + ["exec", "-T", "engine-db", "sh", "-c", "exec mariadb -u root --password=\"$(cat /run/secrets/engine_db_root_password)\" limesurvey"], "MariaDB restore failed", stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         for name, (service, destination) in VOLUME_SOURCES.items():
             self._copy_archive(decrypted[name], compose, service, destination)
+
+    def _invalidate_restored_personnel(self, compose):
+        trace = "restore-" + secrets.token_hex(16)
+        sql = """
+BEGIN;
+SELECT pg_advisory_xact_lock(1979110201);
+CREATE TABLE IF NOT EXISTS public.platform_security_restore_audit (
+  id bigserial PRIMARY KEY, trace_id text NOT NULL, operator_db_user text NOT NULL,
+  occurred_at timestamptz NOT NULL DEFAULT now(), reason text NOT NULL
+);
+REVOKE ALL ON public.platform_security_restore_audit FROM PUBLIC, platform_app;
+ALTER TABLE public.org_login_session DROP CONSTRAINT IF EXISTS org_login_session_revoke_reason_check;
+ALTER TABLE public.org_login_session ADD CONSTRAINT org_login_session_revoke_reason_check
+  CHECK (revoke_reason IN ('departed', 'logout', 'binding_revoked', 'restore'));
+UPDATE public.org_login_session s SET revoked_at = now(), revoke_reason = 'restore'
+  WHERE s.revoked_at IS NULL AND EXISTS (SELECT 1 FROM public.platform_admin_grant g
+    WHERE g.identity_tenant = s.tenant_id AND g.subject = s.principal_id);
+WITH invalidated AS (
+  UPDATE public.platform_admin_grant SET active = false, updated_at = now() WHERE active
+  RETURNING identity_source, identity_tenant, subject
+)
+INSERT INTO public.platform_admin_audit(target_source, target_tenant, target_subject, action, trace_id, operator_db_user, reason)
+SELECT identity_source, identity_tenant, subject, 'identity_invalidated', :'trace', current_user,
+  'authorization invalidated after database restore' FROM invalidated;
+INSERT INTO public.platform_security_restore_audit(trace_id, operator_db_user, reason)
+VALUES (:'trace', current_user, 'personnel grants and sessions invalidated after database restore');
+COMMIT;
+"""
+        self._run(compose + ["exec", "-T", "platform-db", "psql", "-v", "ON_ERROR_STOP=1", "-v", f"trace={trace}", "-U", "postgres", "-d", "platform"],
+                  "restored personnel invalidation failed", input=sql, capture_output=True, text=True)
 
     def _assert_healthy(self, compose):
         result = self._run(compose + ["ps", "--format", "json"], "restore health query failed", capture_output=True, text=True)

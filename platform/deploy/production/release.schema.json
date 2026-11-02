@@ -20,6 +20,7 @@
       }
     },
     "minimumSourceVersion": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "securityCapabilities": {"type": "object", "additionalProperties": false, "properties": {"platform-admin-session-v1": {"type": "string", "minLength": 1}}},
     "nativeAcceptance": {
       "type": "object",
       "additionalProperties": false,

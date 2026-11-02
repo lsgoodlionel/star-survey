@@ -629,6 +629,35 @@ class SurveyManager:
             raise IntegrityError("release directory and manifest versions do not match")
         return manifest
 
+    def _personnel_guard_enabled(self, version: str, require_floor: bool = False) -> bool:
+        release = self._release_dir(version)
+        self._verify_staged_release(release, version)
+        values = [line.split("=", 1)[1] for line in (release / ".env").read_text(encoding="utf-8").splitlines()
+                  if line.startswith("PLATFORM_ADMIN_ENFORCE_PERSONNEL=")]
+        if len(values) > 1 or (values and values[0] not in {"true", "false"}):
+            raise IntegrityError("personnel guard configuration is invalid")
+        enabled = values == ["true"]
+        floor = self._managed(".surveyctl/auth-security-floor")
+        if require_floor and enabled and not (floor.exists() or floor.is_symlink()):
+            raise IntegrityError("personnel security floor is missing")
+        if floor.exists() or floor.is_symlink():
+            _regular_file(floor, "authentication security floor")
+            if floor.read_text(encoding="ascii").strip() != "platform-admin-session-v1":
+                raise IntegrityError("authentication security floor is invalid")
+            if not enabled:
+                raise IntegrityError("personnel security boundary cannot be disabled after activation")
+        return enabled
+
+    def _activate_personnel_floor(self, version: str) -> None:
+        if self._personnel_guard_enabled(version):
+            self._require_personnel_capability(self._release_manifest(version))
+            self._atomic_create_once(self._managed(".surveyctl/auth-security-floor"), "platform-admin-session-v1\n")
+
+    @staticmethod
+    def _require_personnel_capability(manifest: ReleaseManifest) -> None:
+        if manifest.raw.get("securityCapabilities", {}).get("platform-admin-session-v1") != manifest.raw["images"]["PLATFORM_IMAGE"]:
+            raise InputError("personnel security boundary is unsupported by the target release")
+
     def _compose(self, version: str) -> list[str]:
         release = self._release_dir(version)
         self._verify_staged_release(release, version)
@@ -1080,6 +1109,7 @@ class SurveyManager:
         values = self.preflight(manifest, public_host)
         self._mkdir(".")
         self._stage_release(manifest, values["architecture"], public_host, admin_user, admin_email, bundle_path, asset_loader)
+        self._activate_personnel_floor(manifest.version)
         self._write_state(
             status="installing",
             version=manifest.version,
@@ -1235,6 +1265,8 @@ class SurveyManager:
         state = self._read_state(require_current=True)
         backup = self._backup_path(name)
         metadata = self._verify_backup(backup)
+        if self._personnel_guard_enabled(state["version"], require_floor=True):
+            self._require_personnel_capability(self._release_manifest(metadata["version"]))
         release = self._release_manifest(state["version"])
         compatible_schemas = set(release.compatible_source_schemas) | {release.database_schema}
         if metadata["databaseSchema"] not in compatible_schemas:
@@ -1384,6 +1416,8 @@ class SurveyManager:
     def upgrade(self, manifest_path, expected_sha256=None, bundle_path=None, asset_loader=None) -> None:
         state = self._read_state(require_current=True)
         previous, manifest = state["version"], load_manifest(manifest_path, expected_sha256)
+        if self._personnel_guard_enabled(previous, require_floor=True):
+            self._require_personnel_capability(manifest)
         if _version_key(manifest.version) <= _version_key(previous):
             raise InputError("upgrade target must be newer than the installed version")
         if _version_key(previous) < _version_key(manifest.raw["minimumSourceVersion"]):
@@ -1400,6 +1434,7 @@ class SurveyManager:
         self._verify_backup(backup, previous, state["databaseSchema"])
         compose = self._compose(manifest.version)
         try:
+            self._activate_personnel_floor(manifest.version)
             self._write_state(status="upgrading", previousVersion=previous, recoveryBackup=backup_name)
             self._run(compose + ["pull"], "upgrade image pull failed")
             self._run(compose + ["up", "-d", "--remove-orphans"], "upgrade migration or start failed")
@@ -1412,6 +1447,13 @@ class SurveyManager:
 
     def _recover_failed_upgrade(self, manifest, previous, backup_name, failure) -> None:
         new_compose = self._compose(manifest.version)
+        if self._personnel_guard_enabled(manifest.version):
+            try:
+                self._require_personnel_capability(self._release_manifest(previous))
+                if not self._personnel_guard_enabled(previous):
+                    raise InputError("personnel security boundary must remain enabled in the recovery release")
+            except SurveyctlError as unsafe:
+                self._stop_after_failed_recovery(new_compose, previous, backup_name, unsafe)
         if manifest.rollback == "compatible":
             try:
                 old_compose = self._compose(previous)
@@ -1458,6 +1500,10 @@ class SurveyManager:
             raise InputError("no rollback version is recorded")
         _validate_semver(target_version, "rollback version")
         manifest, current_manifest = self._release_manifest(target_version), self._release_manifest(state["version"])
+        if self._personnel_guard_enabled(state["version"], require_floor=True):
+            self._require_personnel_capability(manifest)
+            if not self._personnel_guard_enabled(target_version):
+                raise InputError("personnel security boundary must remain enabled in the target release")
         if current_manifest.rollback != "compatible" or state["databaseSchema"] not in manifest.compatible_source_schemas:
             raise InputError("database compatibility requires restore from backup; image rollback is blocked")
         compose = self._compose(target_version)

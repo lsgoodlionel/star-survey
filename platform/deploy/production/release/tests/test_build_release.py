@@ -13,6 +13,7 @@ import tarfile
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 
 PRODUCTION_DIR = Path(__file__).resolve().parents[2]
@@ -62,6 +63,26 @@ class ReleaseBuilderTest(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_personnel_capability_requires_matching_verified_image_and_source(self):
+        builder = load_builder()
+        image = "ghcr.io/example/platform@sha256:" + "a" * 64
+        ref = "refs/tags/v0.3.0-rc.1"
+        with mock.patch.object(builder.subprocess, "run") as run:
+            builder.verify_personnel_image(image, COMMIT, ref, self.root)
+            self.assertEqual(["git", "merge-base", "--is-ancestor", builder.PERSONNEL_SECURITY_BASE, COMMIT], run.call_args_list[0].args[0])
+            verify = run.call_args_list[1].args[0]
+            self.assertIn("oci://" + image, verify)
+            self.assertEqual(COMMIT, verify[verify.index("--source-digest") + 1])
+            self.assertEqual(ref, verify[verify.index("--source-ref") + 1])
+        for failure_at in (0, 1):
+            calls = [subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0)]
+            calls[failure_at] = subprocess.CalledProcessError(1, "verification")
+            with mock.patch.object(builder.subprocess, "run", side_effect=calls):
+                with self.assertRaises(builder.ReleaseBuildError):
+                    builder.verify_personnel_image(image, COMMIT, ref, self.root)
+        with self.assertRaises(builder.ReleaseBuildError):
+            builder.verify_personnel_image(image, COMMIT, "refs/heads/main", self.root)
 
     def build(
         self,
