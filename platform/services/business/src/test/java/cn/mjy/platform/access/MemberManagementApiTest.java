@@ -1,11 +1,13 @@
 package cn.mjy.platform.access;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import cn.mjy.platform.shared.TenantContext;
+import cn.mjy.platform.shared.tenant.TenantScope;
 import cn.mjy.platform.support.FakeSeatAllowance;
 import cn.mjy.platform.support.TestTokens;
 import java.util.List;
@@ -15,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest
@@ -24,6 +27,8 @@ class MemberManagementApiTest {
     @Autowired AccessFixture fixture;
     @Autowired TestTokens tokens;
     @Autowired FakeSeatAllowance seats;
+    @Autowired TenantScope scope;
+    @Autowired JdbcClient jdbc;
     TenantContext owner;
     TenantContext other;
 
@@ -49,6 +54,14 @@ class MemberManagementApiTest {
         invite(owner, "over-limit", 409);
         mvc.perform(post("/v1/members/remove").header("Authorization", bearer(owner)).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"actorId\":\"owner\"}")).andExpect(status().isConflict());
+        long auditsBefore = scope.call(owner.tenantId(), () -> jdbc.sql("SELECT count(*) FROM audit_log WHERE action = 'access.grant.create'").query(Long.class).single());
+        String expiry = java.time.Instant.now().plusSeconds(3600).toString();
+        mvc.perform(post("/v1/member-grants").header("Authorization", bearer(owner)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"actorId\":\"owner\",\"roleCode\":\"tenant_owner\",\"resourceId\":null,\"expiresAt\":\"" + expiry + "\"}"))
+                .andExpect(status().isBadRequest());
+        assertThat(scope.call(owner.tenantId(), () -> jdbc.sql("SELECT count(*) FROM audit_log WHERE action = 'access.grant.create'").query(Long.class).single())).isEqualTo(auditsBefore);
+        assertThat(fixture.grants().list(owner)).filteredOn(g -> g.actorId().equals("owner") && g.roleCode().equals("tenant_owner"))
+                .singleElement().satisfies(g -> assertThat(g.expiresAt()).isNull());
         mvc.perform(post("/v1/members/remove").header("Authorization", bearer(owner)).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"actorId\":\"member-a\"}")).andExpect(status().isNoContent());
         invite(owner, "replacement", 201);
@@ -90,6 +103,16 @@ class MemberManagementApiTest {
         mvc.perform(post("/v1/member-grants").header("Authorization", bearer(admin)).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"actorId\":\"employee\",\"roleCode\":\"tenant_owner\",\"resourceId\":null,\"expiresAt\":null}"))
                 .andExpect(status().isForbidden());
+    }
+    @Test void otherTenantGrantAndResourceCannotBeChanged() throws Exception {
+        java.util.UUID foreignGrant = fixture.grants().list(other).getFirst().id();
+        java.util.UUID foreignProject = fixture.project(other.tenantId());
+        mvc.perform(post("/v1/member-grants/" + foreignGrant + "/revoke")
+                .header("Authorization", bearer(owner))).andExpect(status().isBadRequest());
+        mvc.perform(post("/v1/member-grants").header("Authorization", bearer(owner)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"actorId\":\"owner\",\"roleCode\":\"editor\",\"resourceId\":\"" + foreignProject + "\",\"expiresAt\":null}"))
+                .andExpect(status().isBadRequest());
+        assertThat(fixture.grants().list(other)).anyMatch(g -> g.id().equals(foreignGrant));
     }
     @Test void memberWithoutManageMembersAndAnonymousAreDenied() throws Exception {
         TenantContext viewer = fixture.activeMember(other, "viewer");

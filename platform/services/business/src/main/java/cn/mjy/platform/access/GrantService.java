@@ -120,7 +120,10 @@ public class GrantService {
         boolean live = grant.expiresAt() == null || grant.expiresAt().isAfter(clock.instant());
         boolean activeMember = members.find(tenant, grant.actorId())
                 .map(MemberRepository.Member::isActive).orElse(false);
-        return ownerGrant && live && activeMember && grants.activeOwners(tenant) <= 1;
+        if (!ownerGrant || !live || !activeMember) return false;
+        return grant.expiresAt() == null
+                ? grants.permanentActiveOwners(tenant) <= 1
+                : grants.activeOwners(tenant) <= 1;
     }
 
     private void requireCanDelegate(TenantContext ctx, RoleDefinition role, UUID resourceId) {
@@ -147,6 +150,10 @@ public class GrantService {
     }
 
     private void validateExpiry(RoleDefinition role, Instant expiresAt) {
+        // A tenant must not lose its final owner merely because a grant expires.
+        if (GrantRepository.OWNER_ROLE.equals(role.code()) && expiresAt != null) {
+            throw new IllegalArgumentException("tenant owner grants cannot expire");
+        }
         Instant now = clock.instant();
         if (expiresAt != null && !expiresAt.isAfter(now)) {
             throw new IllegalArgumentException("expiresAt must be in the future");
