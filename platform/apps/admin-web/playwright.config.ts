@@ -21,6 +21,11 @@ export default defineConfig({
   },
   projects: [
     {
+      name: 'chromium-personnel-status',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /personnel-status\.spec\.ts/,
+    },
+    {
       name: 'chromium-desktop',
       use: { ...devices['Desktop Chrome'] },
       testMatch: [/authoring\.spec\.ts/, /redaction\.spec\.ts/],
