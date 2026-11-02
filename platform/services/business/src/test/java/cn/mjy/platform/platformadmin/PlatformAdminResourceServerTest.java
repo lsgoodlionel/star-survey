@@ -56,6 +56,10 @@ class PlatformAdminResourceServerTest {
             var actor = new PlatformAdminActorResolver(new PlatformAdminAuthorization(new JdbcPlatformAdminGrantLookup(jdbc))).require();
             return Map.of("tenant", actor.tenant().toString(), "subject", actor.subject().toString());
         }
+        @GetMapping("/v1/test-platform-capabilities")
+        Map<String, Boolean> capabilities() {
+            return new PlatformCapabilityResolver(new PlatformAdminAuthorization(new JdbcPlatformAdminGrantLookup(jdbc))).current();
+        }
     }
 
     @Test void verifiedSessionIsRequiredEvenForASyntheticActiveGrant() throws Exception {
@@ -81,6 +85,11 @@ class PlatformAdminResourceServerTest {
             }
         String valid = token(principal, tenant, Map.of("iss", "mjy-platform", "sid", session.toString()));
         getCheck(valid, 200);
+        mvc.perform(get("/v1/test-platform-capabilities").header("Authorization", "Bearer " + valid))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.managePlatform").value(true));
+        String machine = token(principal, tenant, Map.of("iss", "mjy-platform", "roles", java.util.List.of("platform_operator")));
+        mvc.perform(get("/v1/test-platform-capabilities").header("Authorization", "Bearer " + machine))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.managePlatform").value(false));
         mvc.perform(post("/v1/test-platform-admin-actor").header("Authorization", "Bearer " + valid)
                         .contentType("application/json").content("{\"actor\":\"forged-actor\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.tenant").value(tenant.toString()))
@@ -95,6 +104,8 @@ class PlatformAdminResourceServerTest {
         scope.run(tenant, () -> jdbc.sql("UPDATE access_member SET status='removed' WHERE actor_id=:actor")
                 .param("actor", principal.toString()).update());
         getCheck(valid, 403);
+        mvc.perform(get("/v1/test-platform-capabilities").header("Authorization", "Bearer " + valid))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.managePlatform").value(false));
         mvc.perform(post("/v1/test-platform-admin-actor").header("Authorization", "Bearer " + valid)
                         .contentType("application/json").content("{\"actor\":\"forged-actor\"}"))
                 .andExpect(status().isForbidden());
