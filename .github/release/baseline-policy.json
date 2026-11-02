@@ -21,6 +21,9 @@
     },
     "0.3.6-rc.1": {
       "mode": "bootstrap"
+    },
+    "0.3.7-rc.1": {
+      "mode": "bootstrap"
     }
   }
 }
