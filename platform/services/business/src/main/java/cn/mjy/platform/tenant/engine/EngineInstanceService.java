@@ -3,14 +3,13 @@ package cn.mjy.platform.tenant.engine;
 import cn.mjy.platform.audit.AuditLogRepository;
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
-import cn.mjy.platform.tenant.Tenant;
-import cn.mjy.platform.tenant.TenantRepository;
 import cn.mjy.platform.tenant.TenantStatus;
 import cn.mjy.platform.tenant.api.ConflictException;
 import cn.mjy.platform.tenant.api.NotFoundException;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 /** 引擎实例登记与状态管理。所有读写都在所属租户的 {@link TenantScope} 内完成，写操作留审计。 */
 @Service
@@ -20,14 +19,14 @@ public class EngineInstanceService {
     private static final String ACTION_STATUS = "engine_instance.status:";
 
     private final TenantScope tenantScope;
-    private final TenantRepository tenants;
+    private final JdbcClient jdbc;
     private final EngineInstanceRepository instances;
     private final AuditLogRepository audit;
 
-    public EngineInstanceService(TenantScope tenantScope, TenantRepository tenants,
+    public EngineInstanceService(TenantScope tenantScope, JdbcClient jdbc,
                                  EngineInstanceRepository instances, AuditLogRepository audit) {
         this.tenantScope = tenantScope;
-        this.tenants = tenants;
+        this.jdbc = jdbc;
         this.instances = instances;
         this.audit = audit;
     }
@@ -35,9 +34,13 @@ public class EngineInstanceService {
     /** 为租户登记一套新实例（初始 active）。租户必须存在且未关闭；实例标识全局唯一。 */
     public EngineInstance register(TenantId tenant, String instanceId, String baseUrl, String actorId, String traceId) {
         return tenantScope.call(tenant, () -> {
-            Tenant owner = tenants.findById(tenant)
+            // V952 takes this lock before tenant status rows. Keep that order so
+            // a concurrent close cannot commit between the check and registration.
+            jdbc.sql("SELECT pg_advisory_xact_lock(1979110201)").query().singleRow();
+            String status = jdbc.sql("SELECT status FROM tenant WHERE id=:id FOR UPDATE")
+                    .param("id", tenant.value()).query(String.class).optional()
                     .orElseThrow(() -> new NotFoundException("tenant not found: " + tenant));
-            if (owner.status() == TenantStatus.CLOSED) {
+            if (TenantStatus.fromCode(status) == TenantStatus.CLOSED) {
                 throw new ConflictException("tenant is closed: " + tenant);
             }
             instances.insert(tenant, instanceId, baseUrl);
