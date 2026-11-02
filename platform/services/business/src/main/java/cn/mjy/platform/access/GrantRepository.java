@@ -104,6 +104,14 @@ class GrantRepository {
                 .list();
     }
 
+    List<GrantView> listPage(TenantId tenant, UUID after, int limit) {
+        String cursor = after == null ? "" : " AND id > :after";
+        JdbcClient.StatementSpec query = jdbc.sql("SELECT " + COLUMNS + " FROM access_grant WHERE tenant_id = :tenant" + cursor + " ORDER BY id LIMIT :limit")
+                .param("tenant", tenant.value()).param("limit", limit);
+        if (after != null) query = query.param("after", after);
+        return query.query(GrantRepository::toView).list();
+    }
+
     List<GrantView> listForActor(TenantId tenant, String actorId) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM access_grant WHERE tenant_id = :tenant AND actor_id = :actor")
                 .param("tenant", tenant.value())
@@ -117,6 +125,16 @@ class GrantRepository {
                 .param("tenant", tenant.value())
                 .param("id", grantId)
                 .update();
+    }
+
+    /** 在职且无到期时间的租户所有者人数；历史有限期授权不能替代最后永久所有者。 */
+    long permanentActiveOwners(TenantId tenant) {
+        return jdbc.sql("""
+                SELECT COUNT(DISTINCT g.actor_id) FROM access_grant g
+                JOIN access_member m ON m.tenant_id = g.tenant_id AND m.actor_id = g.actor_id
+                WHERE g.tenant_id = :tenant AND g.role_code = :owner AND g.resource_id IS NULL
+                  AND m.status = 'active' AND g.expires_at IS NULL
+                """).param("tenant", tenant.value()).param("owner", OWNER_ROLE).query(Long.class).single();
     }
 
     /** 在职、未过期的租户所有者人数（整租户范围的 tenant_owner 授权）。 */

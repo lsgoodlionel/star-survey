@@ -61,6 +61,35 @@ test('login lands on dashboard and real actions preserve recent work across relo
   await expect(page.getByRole('link', { name: '继续查看答卷' }).and(page.locator(`a[href="/surveys/${result.surveyId}/responses"]`))).toBeVisible();
 });
 
+test('tenant owner manages a member and an authorization in the real stack', async ({ page }) => {
+  const metadata = await readMetadata();
+  await login(page, await readPrivateToken('ADMIN_WEB_JWT_FILE'), metadata.actorId, metadata.tenantId);
+  await page.getByRole('link', { name: '成员管理' }).click();
+  await expect(page.getByRole('heading', { name: '成员管理' })).toBeVisible();
+  console.log('[member-e2e] management page ready');
+  const actor = `e2e-member-${randomUUID()}`;
+  await page.getByLabel('成员标识').fill(actor);
+  await page.getByRole('button', { name: '邀请成员' }).click();
+  await expect(page.getByRole('cell', { name: actor })).toBeVisible();
+  console.log('[member-e2e] invitation visible');
+  await page.getByLabel('授权成员').selectOption(actor);
+  await page.getByLabel('角色', { exact: true }).selectOption('editor');
+  console.log('[member-e2e] member and role selected');
+  await page.getByRole('button', { name: '授予角色' }).click();
+  const grant = page.getByRole('table', { name: '授权列表' }).locator('tr').filter({ hasText: actor });
+  await expect(grant).toContainText('editor');
+  console.log('[member-e2e] grant visible');
+  await grant.getByRole('button', { name: '撤销' }).click();
+  await page.getByRole('button', { name: '确认撤销' }).click();
+  await expect(grant).toHaveCount(0);
+  console.log('[member-e2e] grant revoked');
+  const member = page.getByRole('table', { name: '成员列表' }).locator('tr').filter({ hasText: actor });
+  await member.getByRole('button', { name: '移除' }).click();
+  await page.getByRole('button', { name: '确认移除' }).click();
+  await expect(member).toHaveCount(0);
+  console.log('[member-e2e] member removed');
+});
+
 test('pending approval is visible only to a real publish reviewer', async ({ browser }) => {
   const metadata = await readMetadata();
   const result = await readResult();
