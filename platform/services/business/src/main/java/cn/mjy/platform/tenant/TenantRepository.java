@@ -36,6 +36,13 @@ public class TenantRepository {
                 .optional();
     }
 
+    /** Use the same lock order as V952 identity changes before taking a tenant row lock. */
+    public Optional<Tenant> lockForOnboarding(TenantId id) {
+        jdbc.sql("SELECT pg_advisory_xact_lock(1979110201)").query().singleRow();
+        return jdbc.sql("SELECT id, code, name, status, created_at FROM tenant WHERE id=:id FOR UPDATE")
+                .param("id", id.value()).query(TenantRepository::map).optional();
+    }
+
     public Optional<Tenant> findByCode(String code) {
         return jdbc.sql("SELECT id, code, name, status, created_at FROM tenant WHERE code = :code")
                 .param("code", code)

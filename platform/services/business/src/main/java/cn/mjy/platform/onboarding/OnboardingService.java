@@ -49,18 +49,18 @@ public class OnboardingService {
     }
 
     public void onboard(TenantId tenantId, OnboardingRequest request, String operator, String traceId) {
-        Tenant tenant = tenants.find(tenantId)
-                .orElseThrow(() -> new OnboardingException(HttpStatus.NOT_FOUND, "unknown_tenant", "no such tenant"));
-        if (tenant.status() != TenantStatus.PROVISIONING) {
-            throw new OnboardingException(HttpStatus.CONFLICT, "tenant_not_provisioning",
-                    "only a tenant in provisioning can be onboarded");
-        }
-        PlanVersion plan = plans.find(request.planVersionId())
-                .orElseThrow(() -> new OnboardingException(HttpStatus.NOT_FOUND, "unknown_plan", "no such plan version"));
-        if (plan.quotaFor(Meters.MEMBER_SEATS).orElse(0) < 1) {
-            throw noSeats();
-        }
-        tenantScope.run(tenantId, () -> startAndBootstrap(tenantId, request, operator, traceId));
+        tenantScope.run(tenantId, () -> {
+            Tenant tenant = tenants.lockForOnboarding(tenantId)
+                    .orElseThrow(() -> new OnboardingException(HttpStatus.NOT_FOUND, "unknown_tenant", "no such tenant"));
+            if (tenant.status() != TenantStatus.PROVISIONING) {
+                throw new OnboardingException(HttpStatus.CONFLICT, "tenant_not_provisioning",
+                        "only a tenant in provisioning can be onboarded");
+            }
+            PlanVersion plan = plans.find(request.planVersionId())
+                    .orElseThrow(() -> new OnboardingException(HttpStatus.NOT_FOUND, "unknown_plan", "no such plan version"));
+            if (plan.quotaFor(Meters.MEMBER_SEATS).orElse(0) < 1) throw noSeats();
+            startAndBootstrap(tenantId, request, operator, traceId);
+        });
     }
 
     private void startAndBootstrap(TenantId tenant, OnboardingRequest request, String operator, String traceId) {

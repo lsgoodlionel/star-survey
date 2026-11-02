@@ -43,6 +43,11 @@ public class TenantService {
         return tenantScope.call(id, () -> tenants.findById(id));
     }
 
+    /** Must be used within the onboarding transaction so the row lock survives the check. */
+    public Optional<Tenant> lockForOnboarding(TenantId id) {
+        return tenantScope.call(id, () -> tenants.lockForOnboarding(id));
+    }
+
     public Optional<Tenant> findByCode(String code) {
         return tenants.findByCode(code);
     }

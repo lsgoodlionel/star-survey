@@ -82,6 +82,21 @@ public class PlanCatalog {
                 .query(this::mapPlan).list();
     }
 
+    public List<PlanVersion> versionsAfter(String code, int after, int limit) {
+        return jdbc.sql("SELECT " + PLAN_COLUMNS + " FROM plan_version WHERE plan_code=:code AND version>:after ORDER BY version LIMIT :limit")
+                .param("code", code).param("after", after).param("limit", limit).query(this::mapPlan).list();
+    }
+
+    public List<DefinitionLabel> capabilityLabels() { return labels("capability_definition"); }
+    public List<DefinitionLabel> meterLabels() { return labels("meter_definition"); }
+
+    private List<DefinitionLabel> labels(String table) {
+        return jdbc.sql("SELECT code, description FROM " + table + " ORDER BY code LIMIT 1000")
+                .query((rs, row) -> new DefinitionLabel(rs.getString("code"), rs.getString("description"))).list();
+    }
+
+    public record DefinitionLabel(String code, String description) { }
+
     public Optional<CapabilityDefinition> capability(String code) {
         return jdbc.sql("SELECT code, access, meter_code FROM capability_definition WHERE code = :code")
                 .param("code", code)

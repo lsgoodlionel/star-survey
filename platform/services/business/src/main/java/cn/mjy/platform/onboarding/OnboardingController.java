@@ -5,6 +5,7 @@ import cn.mjy.platform.entitlement.PlanDefinition;
 import cn.mjy.platform.entitlement.PlanVersion;
 import cn.mjy.platform.entitlement.SubscriptionKind;
 import cn.mjy.platform.shared.TenantId;
+import cn.mjy.platform.shared.security.CurrentTenant;
 import cn.mjy.platform.tenant.PlatformOperatorGuard;
 import java.util.List;
 import java.util.Map;
@@ -28,20 +29,36 @@ public class OnboardingController {
     private final PlatformOperatorGuard guard;
     private final PlanCatalog plans;
     private final OnboardingService onboarding;
+    private final PlanPublishingService publishing;
+    private final CurrentTenant currentTenant;
 
-    public OnboardingController(PlatformOperatorGuard guard, PlanCatalog plans, OnboardingService onboarding) {
+    public OnboardingController(PlatformOperatorGuard guard, PlanCatalog plans, OnboardingService onboarding,
+                                PlanPublishingService publishing, CurrentTenant currentTenant) {
         this.guard = guard;
         this.plans = plans;
         this.onboarding = onboarding;
+        this.publishing = publishing;
+        this.currentTenant = currentTenant;
     }
 
     @PostMapping("/v1/platform/plans")
     @ResponseStatus(HttpStatus.CREATED)
     public PlanView publishPlan(@RequestBody PublishPlan request) {
         guard.requireOperator();
-        PlanVersion plan = plans.publish(new PlanDefinition(request.planCode(), Set.copyOf(request.capabilities()),
-                Map.copyOf(request.quotas()), request.exportWindowDays()));
+        PlanVersion plan = publishing.publish(new PlanDefinition(request.planCode(), Set.copyOf(request.capabilities()),
+                Map.copyOf(request.quotas()), request.exportWindowDays()), request.expectedVersion(), currentTenant.require());
         return new PlanView(plan.id().toString(), plan.planCode(), plan.version());
+    }
+
+    @GetMapping("/v1/platform/plan-catalog/{planCode}/versions")
+    public PlanHistory history(@PathVariable String planCode, @RequestParam(defaultValue = "0") int after,
+                               @RequestParam(defaultValue = "50") int limit) {
+        guard.requireOperator();
+        if (!planCode.matches("[a-z][a-z0-9_.-]{1,63}") || after < 0 || limit < 1 || limit > 100)
+            throw new IllegalArgumentException("invalid plan history cursor or limit");
+        List<PlanVersion> rows = plans.versionsAfter(planCode, after, limit + 1);
+        List<PlanDetail> items = rows.stream().limit(limit).map(PlanDetail::of).toList();
+        return new PlanHistory(items, rows.size() > limit ? items.getLast().version() : null);
     }
 
     @GetMapping("/v1/platform/plans/{planCode}")
@@ -67,6 +84,12 @@ public class OnboardingController {
         return new PlanDirectory(items, rows.size() > limit ? items.getLast().planCode() : null);
     }
 
+    @GetMapping("/v1/platform/plan-catalog/definitions")
+    public PlanDefinitions definitions() {
+        guard.requireOperator();
+        return new PlanDefinitions(plans.capabilityLabels(), plans.meterLabels());
+    }
+
     @PostMapping("/v1/platform/tenants/{tenantId}/onboarding")
     public OnboardingView onboard(@PathVariable String tenantId, @RequestBody Onboard request) {
         String operator = guard.requireOperator();
@@ -88,19 +111,23 @@ public class OnboardingController {
     }
 
     public record PublishPlan(String planCode, List<String> capabilities, Map<String, Long> quotas,
-                              int exportWindowDays) {
+                              int exportWindowDays, Integer expectedVersion) {
     }
 
     public record PlanView(String id, String planCode, int version) {
     }
 
     public record PlanDirectory(List<PlanDetail> items, String nextCursor) { }
+    public record PlanDefinitions(List<PlanCatalog.DefinitionLabel> capabilities, List<PlanCatalog.DefinitionLabel> meters) { }
+    public record PlanHistory(List<PlanDetail> items, Integer nextCursor) { }
 
     public record PlanDetail(String id, String planCode, int version, Set<String> capabilities,
-                             Map<String, Long> quotas, int exportWindowDays, java.time.Instant publishedAt) {
+                             Map<String, String> quotas, int exportWindowDays, java.time.Instant publishedAt) {
         static PlanDetail of(PlanVersion plan) {
+            Map<String, String> quotas = plan.quotas().entrySet().stream().collect(
+                    java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> Long.toString(entry.getValue())));
             return new PlanDetail(plan.id().toString(), plan.planCode(), plan.version(), plan.capabilities(),
-                    plan.quotas(), plan.exportWindowDays(), plan.publishedAt());
+                    quotas, plan.exportWindowDays(), plan.publishedAt());
         }
     }
 
