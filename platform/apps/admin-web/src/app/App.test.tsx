@@ -5,14 +5,16 @@ import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { expect, test, vi } from 'vitest';
 import { AppShell } from './App';
 
-const authState = vi.hoisted(() => ({ visibleSections: ['data'] as string[], subscriptionAllowed: true }));
+const authState = vi.hoisted(() => ({ visibleSections: ['data'] as string[], subscriptionAllowed: true, subscriptionMissing: false }));
 
-vi.mock('../features/auth/AuthProvider', () => ({
+vi.mock('../features/auth/AuthProvider', async () => {
+  const { ApiError } = await import('../shared/api/errors');
+  return ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => ({
     api: {
       request: vi.fn().mockImplementation(({ path }: { path: string }) => path === '/v1/subscription'
-        ? authState.subscriptionAllowed ? Promise.resolve({ planCode: 'standard' }) : Promise.reject(new Error('forbidden'))
+        ? authState.subscriptionMissing ? Promise.reject(new ApiError('not_found', 'missing', 404)) : authState.subscriptionAllowed ? Promise.resolve({ planCode: 'standard' }) : Promise.reject(new Error('forbidden'))
         : Promise.resolve({
         generatedAt: '2026-10-30T08:00:00Z',
         visibleSections: authState.visibleSections,
@@ -31,7 +33,8 @@ vi.mock('../features/auth/AuthProvider', () => ({
       },
     },
   }),
-}));
+  });
+});
 
 function renderAppShell() {
   const router = createMemoryRouter(
@@ -99,6 +102,13 @@ test('hides subscription navigation when the server denies access', async () => 
   expect(await screen.findByRole('link', { name: '数据' })).toBeInTheDocument();
   expect(screen.queryByRole('link', { name: '当前订阅' })).not.toBeInTheDocument();
   authState.subscriptionAllowed = true;
+});
+
+test('keeps subscription navigation when the authorized tenant has no subscription', async () => {
+  authState.subscriptionMissing = true;
+  renderAppShell();
+  expect(await screen.findByRole('link', { name: '当前订阅' })).toHaveAttribute('href', '/settings/subscription');
+  authState.subscriptionMissing = false;
 });
 
 test('hidesDataNavigationWhenTheServerDoesNotGrantTheDataSection', async () => {

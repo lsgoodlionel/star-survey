@@ -60,6 +60,8 @@ class OnboardingApiTest {
         String code = JsonPath.read(body, "$.planCode");
         String plan = planId(publishPlan(body));
         onboard(tenant.id(), plan, "owner-1").andExpect(status().isOk());
+        publishPlan(body.replace("\"member.seats\":5", "\"member.seats\":9"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.version").value(2));
         String ownerToken = "Bearer " + tokens.issue("owner-1", tenant.id().value(), List.of());
 
         mvc.perform(get("/v1/subscription").param("tenantId", other.id().toString())
@@ -67,6 +69,8 @@ class OnboardingApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.planCode").value(code))
                 .andExpect(jsonPath("$.planVersionId").value(plan))
+                .andExpect(jsonPath("$.planVersion").value(1))
+                .andExpect(jsonPath("$.quotas['member.seats']").value(5))
                 .andExpect(jsonPath("$.status").value("TRIAL"));
         mvc.perform(get("/v1/subscription").header("Authorization", fixtures.userBearer(tenant.id())))
                 .andExpect(status().isForbidden());

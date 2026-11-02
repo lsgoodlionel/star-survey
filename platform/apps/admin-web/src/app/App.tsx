@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from '../features/auth/AuthProvider';
 import { captureEditorRecovery } from '../features/editor/recovery';
 import { getDashboard } from '../shared/api/dashboard';
 import { useSubscription } from '../features/subscription/SubscriptionPage';
+import { ApiError } from '../shared/api/errors';
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -38,6 +39,8 @@ export function AppShell() {
   });
   const canOpenDataWorkspace = navigationCapabilities.data?.visibleSections.includes('data') ?? false;
   const subscription = useSubscription();
+  const canViewSubscription = Boolean(subscription.data && !subscription.isError)
+    || (subscription.error instanceof ApiError && subscription.error.kind === 'not_found');
 
   return (
     <div className="app-shell">
@@ -88,7 +91,7 @@ export function AppShell() {
             <Mail aria-hidden="true" />
             邮件服务
           </NavLink>
-          {subscription.data && !subscription.isError && !subscription.isFetching ? (
+          {canViewSubscription && !subscription.isFetching ? (
             <NavLink to="/settings/subscription" onClick={() => setNavigationOpen(false)}>当前订阅</NavLink>
           ) : null}
         </nav>

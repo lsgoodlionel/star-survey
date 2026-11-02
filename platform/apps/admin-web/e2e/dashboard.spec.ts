@@ -67,6 +67,7 @@ test('tenant owner can view the current subscription in the real stack', async (
   await page.getByRole('link', { name: '当前订阅' }).click();
   await expect(page.getByRole('heading', { name: '当前订阅' })).toBeVisible();
   await expect(page.getByText('成员席位')).toBeVisible();
+  await expect(page.getByRole('main').getByText('5', { exact: true })).toBeVisible();
 });
 
 test('pending approval is visible only to a real publish reviewer', async ({ browser }) => {

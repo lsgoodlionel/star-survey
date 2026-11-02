@@ -19,7 +19,9 @@ test('shows the actual subscription version and quotas', async () => {
   server.use(http.get('/v1/subscription', () => HttpResponse.json({ planVersionId: '10000000-0000-4000-8000-000000000001', planCode: 'standard', planVersion: 2, status: 'TRIAL', startsAt: '2026-11-02T00:00:00Z', endsAt: '2026-12-02T00:00:00Z', capabilities: ['survey.read'], quotas: { 'member.seats': 5 }, exportWindowDays: 30 })));
   renderPage();
   expect(await screen.findByText('standard')).toBeInTheDocument();
+  expect(screen.getByText('2', { exact: true })).toBeInTheDocument();
   expect(screen.getByText('试用')).toBeInTheDocument();
+  expect(screen.getByText('2026-12-02T00:00:00Z')).toBeInTheDocument();
   expect(screen.getByText('成员席位')).toBeInTheDocument();
   expect(screen.getByText('5')).toBeInTheDocument();
 });
@@ -40,4 +42,11 @@ test('does not expose subscription data when access is denied', async () => {
   renderPage();
   expect(await screen.findByRole('alert')).toHaveTextContent('无法查看订阅');
   expect(screen.queryByText('standard')).not.toBeInTheDocument();
+});
+
+test('explains when the authorized tenant has no subscription', async () => {
+  server.use(http.get('/v1/subscription', () => new HttpResponse(null, { status: 404 })));
+  renderPage();
+  expect(await screen.findByText('当前租户尚未开通订阅')).toBeInTheDocument();
+  expect(screen.queryByText('无法查看订阅，请确认权限或联系管理员')).not.toBeInTheDocument();
 });
