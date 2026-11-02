@@ -11,6 +11,8 @@ const MembersPage = lazy(() => import('../features/members/MembersPage').then((m
 const TenantDirectoryPage = lazy(() => import('../features/operations/TenantDirectoryPage').then((module) => ({ default: module.TenantDirectoryPage })));
 const TenantDetailPage = lazy(() => import('../features/operations/TenantDirectoryPage').then((module) => ({ default: module.TenantDetailPage })));
 
+const OrgConnectionsPage = lazy(() => import('../features/organization/OrgConnectionsPage').then((module) => ({ default: module.OrgConnectionsPage })));
+
 const DashboardPage = lazy(() =>
   import('../features/dashboard/DashboardPage').then((module) => ({ default: module.DashboardPage })),
 );
@@ -121,6 +123,7 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
             },
             { path: 'workspace', element: <WorkspacePage /> },
             { path: 'data', element: <Suspense fallback={<p>正在加载数据工作区</p>}><DataWorkspacePage /></Suspense> },
+            { path: 'settings/organization', element: <Suspense fallback={<p>正在加载组织连接</p>}><OrgConnectionsPage /></Suspense> },
             { path: 'settings/members', element: <Suspense fallback={<p>正在加载成员</p>}><MembersPage /></Suspense> },
             { path: 'settings/email', element: <Suspense fallback={<p>正在加载邮件服务设置</p>}><EmailSettingsPage /></Suspense> },
             { path: 'delivery', element: <Suspense fallback={<p>正在加载投放工作区</p>}><DeliveryWorkspacePage /></Suspense> },

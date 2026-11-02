@@ -1,6 +1,8 @@
 package cn.mjy.platform.identity.org;
 
 import cn.mjy.platform.identity.IdentityBinding;
+import cn.mjy.platform.access.AccessDecisionService;
+import cn.mjy.platform.access.Permission;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.security.CurrentTenant;
 import jakarta.validation.Valid;
@@ -35,15 +37,26 @@ public class OrgConnectionController {
     private final OrgLoginService login;
     private final OrgEventService events;
     private final CurrentTenant currentTenant;
+    private final AccessDecisionService access;
 
     OrgConnectionController(OrgConnectionService connections, OrgDirectorySyncService sync, OrgLoginService login,
-            OrgEventService events, CurrentTenant currentTenant) {
+            OrgEventService events, CurrentTenant currentTenant, AccessDecisionService access) {
         this.connections = connections;
         this.sync = sync;
         this.login = login;
         this.events = events;
         this.currentTenant = currentTenant;
+        this.access = access;
     }
+
+    @GetMapping("/capabilities")
+    Capabilities capabilities() {
+        TenantContext ctx = currentTenant.require();
+        return new Capabilities(access.canInTenant(ctx, Permission.MANAGE_SETTINGS).allowed(),
+                access.canInTenant(ctx, Permission.MANAGE_MEMBERS).allowed());
+    }
+
+    record Capabilities(boolean canManageSettings, boolean canManageMembers) { }
 
     @PostMapping
     ResponseEntity<ConnectionView> create(@Valid @RequestBody CreateRequest request) {

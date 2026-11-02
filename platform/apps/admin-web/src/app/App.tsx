@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { Database, FileText, LayoutDashboard, LayoutTemplate, LogOut, Mail, Menu, Send, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
+import { orgCapabilitiesSchema } from '../shared/api/organization';
 import { z } from 'zod';
 import { AuthProvider, useAuth } from '../features/auth/AuthProvider';
 import { captureEditorRecovery } from '../features/editor/recovery';
@@ -36,6 +37,12 @@ export function AppShell() {
     retry: false,
     staleTime: 30_000,
   });
+  const organizationCapabilities = useQuery({
+    queryKey: ['organization-capabilities', session?.me.tenantId, session?.me.actorId],
+    queryFn: ({ signal }) => api.request({ path: '/v1/org-connections/capabilities', schema: orgCapabilitiesSchema, signal }),
+    enabled: Boolean(session), retry: false, staleTime: 0,
+  });
+  const canManageOrganization = !organizationCapabilities.isError && !organizationCapabilities.isFetching && organizationCapabilities.data?.canManageSettings === true;
   const memberCapabilities = useQuery({
     queryKey: ['member-capabilities', session?.me.tenantId, session?.me.actorId],
     queryFn: ({ signal }) => api.request({ path: '/v1/members/capabilities', schema: z.object({ canManageMembers: z.boolean() }), signal }),
@@ -89,6 +96,7 @@ export function AppShell() {
               数据
             </NavLink>
           ) : null}
+          {canManageOrganization ? <NavLink to="/settings/organization" onClick={() => setNavigationOpen(false)}>组织连接</NavLink> : null}
           {canManageMembers ? <NavLink to="/settings/members" onClick={() => setNavigationOpen(false)}>成员管理</NavLink> : null}
           <NavLink to="/settings/email" onClick={() => setNavigationOpen(false)}>
             <Mail aria-hidden="true" />
