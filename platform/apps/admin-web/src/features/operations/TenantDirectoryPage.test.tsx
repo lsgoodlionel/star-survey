@@ -59,3 +59,9 @@ test('operator signs in to the separate operations entry', async () => {
   expect(await screen.findByRole('heading', { name: '平台租户' })).toBeInTheDocument();
   expect(screen.queryByRole('navigation', { name: '全局导航' })).not.toBeInTheDocument();
 });
+
+test('operator can reach the existing platform template management journey from operations', async () => {
+  server.use(http.get('/v1/platform/tenants/directory', () => HttpResponse.json({ items: [tenant], nextCursor: null })));
+  renderPage();
+  expect(await screen.findByRole('link', { name: '模板中心' })).toHaveAttribute('href', '/templates');
+});

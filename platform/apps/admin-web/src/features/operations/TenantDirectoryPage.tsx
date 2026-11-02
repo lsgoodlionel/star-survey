@@ -13,7 +13,7 @@ const statusLabels: Record<string, string> = { provisioning: '开通中', active
 
 function OperationsLayout({ children }: { children: ReactNode }) {
   const { logout } = useAuth();
-  return <main className="auth-page"><button type="button" onClick={() => void logout()}>退出登录</button>{children}</main>;
+  return <main className="auth-page"><Link to="/templates">模板中心</Link> <button type="button" onClick={() => void logout()}>退出登录</button>{children}</main>;
 }
 
 export function TenantDirectoryPage() {
