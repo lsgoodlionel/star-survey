@@ -1,6 +1,8 @@
 package cn.mjy.platform.platformadmin;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import cn.mjy.platform.shared.TenantId;
@@ -22,6 +24,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.Authentication;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /** Test-only endpoint proves the policy is reached through the real JWT resource-server filter and sid validator. */
@@ -46,6 +50,11 @@ class PlatformAdminResourceServerTest {
         ResponseEntity<Void> check(Authentication auth) {
             return new PlatformAdminAuthorization(new JdbcPlatformAdminGrantLookup(jdbc)).isAdmin(auth)
                     ? ResponseEntity.ok().build() : ResponseEntity.status(403).build();
+        }
+        @PostMapping("/v1/test-platform-admin-actor")
+        Map<String, String> actor(@RequestBody Map<String, String> ignored) {
+            var actor = new PlatformAdminActorResolver(new PlatformAdminAuthorization(new JdbcPlatformAdminGrantLookup(jdbc))).require();
+            return Map.of("tenant", actor.tenant().toString(), "subject", actor.subject().toString());
         }
     }
 
@@ -72,6 +81,10 @@ class PlatformAdminResourceServerTest {
             }
         String valid = token(principal, tenant, Map.of("iss", "mjy-platform", "sid", session.toString()));
         getCheck(valid, 200);
+        mvc.perform(post("/v1/test-platform-admin-actor").header("Authorization", "Bearer " + valid)
+                        .contentType("application/json").content("{\"actor\":\"forged-actor\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.tenant").value(tenant.toString()))
+                .andExpect(jsonPath("$.subject").value(principal.toString()));
         getCheck(token(principal, tenant, Map.of("iss", "wrong-issuer", "sid", session.toString())), 403);
         getCheck(token(principal, tenant, Map.of("iss", "mjy-platform", "roles", java.util.List.of("platform_operator"))), 403);
         getCheck(token(principal, tenant, Map.of("iss", "mjy-platform", "sid", UUID.randomUUID().toString())), 401);
@@ -82,6 +95,9 @@ class PlatformAdminResourceServerTest {
         scope.run(tenant, () -> jdbc.sql("UPDATE access_member SET status='removed' WHERE actor_id=:actor")
                 .param("actor", principal.toString()).update());
         getCheck(valid, 403);
+        mvc.perform(post("/v1/test-platform-admin-actor").header("Authorization", "Bearer " + valid)
+                        .contentType("application/json").content("{\"actor\":\"forged-actor\"}"))
+                .andExpect(status().isForbidden());
         scope.run(tenant, () -> jdbc.sql("UPDATE access_member SET status='active' WHERE actor_id=:actor")
                 .param("actor", principal.toString()).update());
         getCheck(valid, 403);
