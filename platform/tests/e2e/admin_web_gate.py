@@ -632,6 +632,7 @@ def validate_evidence(
     platform_db: Dict[str, Any],
     engine_db: Dict[str, Any],
     gateway_publish_calls: int,
+    expected_gateway_publish_calls: int = 3,
 ) -> None:
     survey = api.get("survey") or {}
     versions = api.get("versions") or []
@@ -674,7 +675,8 @@ def validate_evidence(
         engine_db.get("active") == "Y" and engine_db.get("surveyCount") == 1,
         "engine database confirms the bound survey is active",
     )
-    expect(gateway_publish_calls == 3, "gateway handled the baseline and both branded version publishes")
+    expect(gateway_publish_calls == expected_gateway_publish_calls,
+           "gateway handled the exact expected number of real publishes")
 
 
 def cmd_prepare(args: argparse.Namespace) -> None:
@@ -881,6 +883,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
         platform_db,
         engine_db,
         _gateway_publish_calls(args.gateway_container),
+        args.expected_gateway_publish_calls,
     )
 
 
@@ -929,6 +932,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     verify.add_argument("--engine-db-container", required=True)
     verify.add_argument("--engine-db-kind", choices=("mysql", "pgsql"), required=True)
     verify.add_argument("--gateway-container", required=True)
+    verify.add_argument("--expected-gateway-publish-calls", type=int, choices=(3, 4), default=3)
     verify.set_defaults(handler=cmd_verify)
     return parser.parse_args(argv)
 

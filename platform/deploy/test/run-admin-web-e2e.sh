@@ -228,6 +228,8 @@ run_browser_tests() {
 verify_and_archive_run_root() {
   local success_marker="$ADMIN_WEB_TEST_RESULTS_DIR/playwright-suite-success.txt"
   local root_id_file="$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
+  local expected_publish_calls=4
+  if [[ "$E2E_SUITE" == "wave3" ]]; then expected_publish_calls=3; fi
   [[ -f "$success_marker" && "$(<"$success_marker")" == "passed" ]] \
     || fail "Playwright did not write a valid suite success marker"
   [[ -f "$root_id_file" ]] || fail "Playwright did not write run root evidence"
@@ -240,7 +242,8 @@ verify_and_archive_run_root() {
     --platform-db-name platform \
     --engine-db-container "$TEST_PREFIX-$DB_SERVICE" \
     --engine-db-kind "$TEST_DB" \
-    --gateway-container "$GATEWAY_CONTAINER"
+    --gateway-container "$GATEWAY_CONTAINER" \
+    --expected-gateway-publish-calls "$expected_publish_calls"
 
   python3 "$GATE" --base-url "$PLATFORM_URL" archive-run-root \
     --jwt-file "$ADMIN_WEB_JWT_FILE" \
@@ -350,6 +353,7 @@ db_query "DELETE FROM lime_plugins WHERE name = 'MjyQuestionExtensions'" >/dev/n
 db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
           VALUES ('MjyQuestionExtensions', 'user', 1, 0, '0.1.0', 0)" >/dev/null
 docker exec "$CONTAINER" php platform/tools/engine-theme/install-survey-theme.php zh-business >/dev/null
+docker exec "$CONTAINER" php platform/tests/e2e/install_question_themes.php mjy-collapsible mjy-cascading-select mjy-carousel >/dev/null
 ok "engine installed and RemoteControl enabled"
 
 step "gateway and same-origin admin web: build and start"

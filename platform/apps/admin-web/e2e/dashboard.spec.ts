@@ -41,7 +41,7 @@ test('login lands on dashboard and real actions preserve recent work across relo
 
   await page.getByRole('link', { name: '工作台', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByRole('link', { name: '继续发布' })).toBeVisible();
+  await expect(page.getByRole('link', { name: '继续发布' }).and(page.locator(`a[href="/surveys/${result.surveyId}/publish"]`))).toBeVisible();
 
   const currentSurveyRow = page.getByRole('table', { name: '问卷运行情况' }).locator('tr').filter({
     has: page.locator(`a[href="/surveys/${result.surveyId}/responses"]`),
@@ -52,13 +52,13 @@ test('login lands on dashboard and real actions preserve recent work across relo
   await expect(page.getByLabel('已完成 1')).toBeVisible();
 
   await page.getByRole('link', { name: '工作台', exact: true }).click();
-  await expect(page.getByRole('link', { name: '继续查看答卷' })).toBeVisible();
+  await expect(page.getByRole('link', { name: '继续查看答卷' }).and(page.locator(`a[href="/surveys/${result.surveyId}/responses"]`))).toBeVisible();
   await page.reload();
   await expect(page).toHaveURL(/\/dev\/token$/);
   await login(page, await readPrivateToken('ADMIN_WEB_JWT_FILE'), metadata.actorId, metadata.tenantId);
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByRole('link', { name: '继续发布' })).toBeVisible();
-  await expect(page.getByRole('link', { name: '继续查看答卷' })).toBeVisible();
+  await expect(page.getByRole('link', { name: '继续发布' }).and(page.locator(`a[href="/surveys/${result.surveyId}/publish"]`))).toBeVisible();
+  await expect(page.getByRole('link', { name: '继续查看答卷' }).and(page.locator(`a[href="/surveys/${result.surveyId}/responses"]`))).toBeVisible();
 });
 
 test('pending approval is visible only to a real publish reviewer', async ({ browser }) => {
