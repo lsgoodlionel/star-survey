@@ -19,8 +19,9 @@ final class PlatformAdminActorResolver {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
         if (!authorization.isAdmin(authentication)) throw new AccessDeniedException("platform administrator required");
         Jwt jwt = (Jwt) authentication.getPrincipal();
-        return new Actor(UUID.fromString(jwt.getClaimAsString("tenant_id")), UUID.fromString(jwt.getSubject()));
+        return new Actor(UUID.fromString(jwt.getClaimAsString("tenant_id")), UUID.fromString(jwt.getSubject()),
+                UUID.fromString(jwt.getClaimAsString("sid")));
     }
 
-    record Actor(UUID tenant, UUID subject) { }
+    record Actor(UUID tenant, UUID subject, UUID session) { }
 }

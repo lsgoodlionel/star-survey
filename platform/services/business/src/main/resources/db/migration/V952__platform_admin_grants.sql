@@ -212,9 +212,8 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION platform_admin_change(uuid, uuid, uuid, uuid, boolean, text, text) FROM PUBLIC, platform_app;
 
--- Isolated owner-only prototype: grant and session are checked inside the same
--- transaction. The database still cannot authenticate caller-supplied actor/sid,
--- so this function MUST NOT be exposed to the runtime account.
+-- The trusted application authenticates actor/sid from SecurityContext; the
+-- database serializes and rechecks the current session, grant and target.
 CREATE FUNCTION platform_admin_change_session(p_actor_tenant uuid, p_actor uuid, p_session uuid,
         p_target_tenant uuid, p_target uuid, p_grant boolean, p_trace text, p_reason text) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
@@ -252,3 +251,5 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 REVOKE ALL ON FUNCTION platform_admin_change_session(uuid, uuid, uuid, uuid, uuid, boolean, text, text)
     FROM PUBLIC, platform_app;
+GRANT EXECUTE ON FUNCTION platform_admin_change_session(uuid, uuid, uuid, uuid, uuid, boolean, text, text)
+    TO platform_app;

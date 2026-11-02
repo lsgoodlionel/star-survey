@@ -64,7 +64,7 @@ class PlatformAdminResourceServerTest {
 
     @Test void verifiedSessionIsRequiredEvenForASyntheticActiveGrant() throws Exception {
         TenantId tenant = fixtures.activeTenant();
-        UUID principal = UUID.randomUUID(), connection = UUID.randomUUID(), session = UUID.randomUUID(), expiredSession = UUID.randomUUID();
+        UUID principal = UUID.randomUUID(), target = UUID.randomUUID(), connection = UUID.randomUUID(), session = UUID.randomUUID(), expiredSession = UUID.randomUUID();
         scope.run(tenant, () -> {
             jdbc.sql("INSERT INTO identity_binding(principal_id, tenant_id, provider, app_id, external_id) VALUES (:id,:tenant,'wecom','corp',:ext)")
                     .param("id", principal).param("tenant", tenant.value()).param("ext", principal.toString()).update();
@@ -76,6 +76,10 @@ class PlatformAdminResourceServerTest {
                     .param("id", session).param("tenant", tenant.value()).param("principal", principal).param("connection", connection).update();
             jdbc.sql("INSERT INTO org_login_session(id,tenant_id,principal_id,connection_id,expires_at) VALUES (:id,:tenant,:principal,:connection,now()-interval '5 minutes')")
                     .param("id", expiredSession).param("tenant", tenant.value()).param("principal", principal).param("connection", connection).update();
+            jdbc.sql("INSERT INTO identity_binding(principal_id,tenant_id,provider,app_id,external_id) VALUES (:id,:tenant,'wecom','corp',:ext)")
+                    .param("id", target).param("tenant", tenant.value()).param("ext", target.toString()).update();
+            jdbc.sql("INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by) VALUES (:tenant,:actor,'active',true,'test')")
+                    .param("tenant", tenant.value()).param("actor", target.toString()).update();
         });
         try (var owner = DriverManager.getConnection(url, ownerUser, ownerPassword)) {
           try {
@@ -94,6 +98,35 @@ class PlatformAdminResourceServerTest {
                         .contentType("application/json").content("{\"actor\":\"forged-actor\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.tenant").value(tenant.toString()))
                 .andExpect(jsonPath("$.subject").value(principal.toString()));
+        String mutation = "{\"targetTenant\":\"" + tenant + "\",\"targetSubject\":\"" + target
+                + "\",\"grant\":true,\"reason\":\"isolated test\",\"actor\":\"forged\"}";
+        mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + valid)
+                        .contentType("application/json").content(mutation))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.changed").value(true));
+        mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + valid)
+                        .contentType("application/json").content(mutation))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.changed").value(false));
+        try (var audit = owner.prepareStatement("SELECT actor_subject FROM platform_admin_audit WHERE target_subject=? AND action='grant'")) {
+            audit.setObject(1, target);
+            try (var result = audit.executeQuery()) {
+                org.assertj.core.api.Assertions.assertThat(result.next()).isTrue();
+                org.assertj.core.api.Assertions.assertThat(result.getObject(1, UUID.class)).isEqualTo(principal);
+                org.assertj.core.api.Assertions.assertThat(result.next()).isFalse();
+            }
+        }
+        mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + valid)
+                        .contentType("application/json").content(mutation.replace("\"grant\":true", "\"grant\":false")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.changed").value(true));
+        mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + machine)
+                        .contentType("application/json").content(mutation)).andExpect(status().isForbidden());
+        mvc.perform(post("/v1/platform-admin/grants/change").contentType("application/json").content(mutation))
+                .andExpect(status().isUnauthorized());
+        String selfRevoke = mutation.replace(target.toString(), principal.toString()).replace("\"grant\":true", "\"grant\":false");
+        mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + valid)
+                        .contentType("application/json").content(selfRevoke)).andExpect(status().isConflict());
+        String unknownTarget = mutation.replace(target.toString(), UUID.randomUUID().toString());
+        mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + valid)
+                        .contentType("application/json").content(unknownTarget)).andExpect(status().isConflict());
         getCheck(token(principal, tenant, Map.of("iss", "wrong-issuer", "sid", session.toString())), 403);
         getCheck(token(principal, tenant, Map.of("iss", "mjy-platform", "roles", java.util.List.of("platform_operator"))), 403);
         getCheck(token(principal, tenant, Map.of("iss", "mjy-platform", "sid", UUID.randomUUID().toString())), 401);
@@ -104,6 +137,8 @@ class PlatformAdminResourceServerTest {
         scope.run(tenant, () -> jdbc.sql("UPDATE access_member SET status='removed' WHERE actor_id=:actor")
                 .param("actor", principal.toString()).update());
         getCheck(valid, 403);
+        mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + valid)
+                        .contentType("application/json").content(mutation)).andExpect(status().isForbidden());
         mvc.perform(get("/v1/test-platform-capabilities").header("Authorization", "Bearer " + valid))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.managePlatform").value(false));
         mvc.perform(post("/v1/test-platform-admin-actor").header("Authorization", "Bearer " + valid)

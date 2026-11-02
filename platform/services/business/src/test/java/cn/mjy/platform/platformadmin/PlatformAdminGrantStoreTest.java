@@ -100,9 +100,8 @@ class PlatformAdminGrantStoreTest {
                 assertThatThrownBy(() -> jdbc.sql("INSERT INTO platform_admin_grant(identity_tenant,subject) VALUES (:tenant,:subject)")
                         .param("tenant", tenant).param("subject", second).update()).isInstanceOf(DataAccessException.class);
                 assertThatThrownBy(() -> change(tenant, first, tenant, second, true)).isInstanceOf(DataAccessException.class);
-                assertThatThrownBy(() -> jdbc.sql("SELECT platform_admin_change_session(:tenant,:actor,:sid,:tenant,:target,true,'trace','test')")
-                        .param("tenant", tenant).param("actor", first).param("sid", session).param("target", second).query(Boolean.class).single())
-                        .isInstanceOf(DataAccessException.class);
+                assertThat(jdbc.sql("SELECT has_function_privilege(current_user, 'platform_admin_change_session(uuid,uuid,uuid,uuid,uuid,boolean,text,text)', 'EXECUTE')")
+                        .query(Boolean.class).single()).isTrue();
                 for (UUID bad : new UUID[] { UUID.randomUUID(), expired, revoked }) {
                     assertThatThrownBy(() -> ownerSessionChange(owner, tenant, first, bad, second, true))
                             .isInstanceOf(java.sql.SQLException.class);
