@@ -56,6 +56,26 @@ AS $$ SELECT EXISTS (SELECT 1 FROM public.platform_admin_grant WHERE identity_so
 REVOKE ALL ON FUNCTION platform_admin_active(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION platform_admin_active(uuid, uuid) TO platform_app;
 
+-- Take the shared grant lock before PostgreSQL acquires any affected identity rows.
+-- In particular, an AFTER ROW trigger alone would invert the order under concurrency.
+CREATE FUNCTION platform_admin_lock_identity_change() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(1979110201);
+    RETURN NULL;
+END $$;
+REVOKE ALL ON FUNCTION platform_admin_lock_identity_change() FROM PUBLIC, platform_app;
+CREATE TRIGGER platform_admin_tenant_identity_lock BEFORE UPDATE OF status ON tenant
+    FOR EACH STATEMENT EXECUTE FUNCTION platform_admin_lock_identity_change();
+CREATE TRIGGER platform_admin_member_identity_lock BEFORE UPDATE OF status OR DELETE ON access_member
+    FOR EACH STATEMENT EXECUTE FUNCTION platform_admin_lock_identity_change();
+CREATE TRIGGER platform_admin_connection_identity_lock BEFORE UPDATE OF enabled, provider, corp_id OR DELETE ON org_connection
+    FOR EACH STATEMENT EXECUTE FUNCTION platform_admin_lock_identity_change();
+CREATE TRIGGER platform_admin_binding_identity_lock BEFORE UPDATE ON identity_binding
+    FOR EACH STATEMENT EXECUTE FUNCTION platform_admin_lock_identity_change();
+CREATE TRIGGER platform_admin_revocation_identity_lock BEFORE INSERT OR UPDATE ON identity_binding_revocation
+    FOR EACH STATEMENT EXECUTE FUNCTION platform_admin_lock_identity_change();
+
 -- Identity changes and grant changes share one transaction lock. Invalid grants remain
 -- inactive after an identity is restored; an explicit new grant is required.
 CREATE FUNCTION platform_admin_invalidate_unusable() RETURNS trigger

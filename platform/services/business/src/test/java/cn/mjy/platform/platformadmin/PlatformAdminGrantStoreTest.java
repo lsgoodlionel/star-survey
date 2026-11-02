@@ -209,6 +209,42 @@ class PlatformAdminGrantStoreTest {
                 }
                 assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
                         .param("subject", second).query(Boolean.class).single()).isTrue();
+                try (Connection blocker = DriverManager.getConnection(url, ownerUser, ownerPassword);
+                     Connection probe = DriverManager.getConnection(url, ownerUser, ownerPassword);
+                     var pool = Executors.newSingleThreadExecutor()) {
+                    blocker.setAutoCommit(false);
+                    try (var lock = blocker.createStatement()) { lock.execute("SELECT pg_advisory_xact_lock(1979110201)"); }
+                    try {
+                        var started = new CountDownLatch(1);
+                        var update = pool.submit(() -> {
+                            try (Connection conn = DriverManager.getConnection(url, ownerUser, ownerPassword)) {
+                                try (var scope = conn.prepareStatement("SELECT set_config('app.tenant_id', ?, false)")) {
+                                    scope.setString(1, tenant.toString()); scope.execute();
+                                }
+                                try (var disable = conn.prepareStatement("UPDATE org_connection SET enabled=false WHERE tenant_id=? AND corp_id=?")) {
+                                    disable.setObject(1, tenant); disable.setString(2, first.toString());
+                                    started.countDown(); return disable.executeUpdate();
+                                }
+                            }
+                        });
+                        assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+                        assertThatThrownBy(() -> update.get(1, TimeUnit.SECONDS)).isInstanceOf(java.util.concurrent.TimeoutException.class);
+                        probe.setAutoCommit(false);
+                        try (var scope = probe.prepareStatement("SELECT set_config('app.tenant_id', ?, false)")) {
+                            scope.setString(1, tenant.toString()); scope.execute();
+                        }
+                        try (var row = probe.prepareStatement("SELECT id FROM org_connection WHERE tenant_id=? AND corp_id=? FOR UPDATE NOWAIT")) {
+                            row.setObject(1, tenant); row.setString(2, first.toString());
+                            try (var result = row.executeQuery()) { assertThat(result.next()).isTrue(); }
+                        }
+                        probe.rollback();
+                        blocker.rollback();
+                        assertThat(update.get(15, TimeUnit.SECONDS)).isEqualTo(1);
+                    } finally { probe.rollback(); blocker.rollback(); }
+                }
+                try (var enable = owner.prepareStatement("UPDATE org_connection SET enabled=true WHERE tenant_id=? AND corp_id=?")) {
+                    enable.setObject(1, tenant); enable.setString(2, first.toString()); enable.executeUpdate();
+                }
                 var race = new CountDownLatch(1);
                 try (var pool = Executors.newFixedThreadPool(2)) {
                     var grant = pool.submit(() -> {
@@ -242,6 +278,19 @@ class PlatformAdminGrantStoreTest {
                 }
                 assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
                         .param("subject", first).query(Boolean.class).single()).isFalse();
+                assertThat(ownerChange(owner, tenant, second, tenant, first, true)).isTrue();
+                try (var remove = owner.prepareStatement("UPDATE access_member SET status='removed' WHERE tenant_id=? AND actor_id IN (?,?)")) {
+                    remove.setObject(1, tenant); remove.setString(2, first.toString()); remove.setString(3, second.toString());
+                    assertThat(remove.executeUpdate()).isEqualTo(2);
+                }
+                try (var restore = owner.prepareStatement("UPDATE access_member SET status='active' WHERE tenant_id=? AND actor_id IN (?,?)")) {
+                    restore.setObject(1, tenant); restore.setString(2, first.toString()); restore.setString(3, second.toString());
+                    assertThat(restore.executeUpdate()).isEqualTo(2);
+                }
+                for (UUID subject : new UUID[] { first, second }) {
+                    assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
+                            .param("subject", subject).query(Boolean.class).single()).isFalse();
+                }
             } finally {
                 try (var cleanup = owner.prepareStatement("DELETE FROM platform_admin_audit WHERE target_tenant = ?")) {
                     cleanup.setObject(1, tenant); cleanup.executeUpdate();
