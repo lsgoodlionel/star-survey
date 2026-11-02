@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import cn.mjy.platform.access.AccessDecisionService;
 import cn.mjy.platform.access.Permission;
 import cn.mjy.platform.entitlement.SubscriptionService;
+import cn.mjy.platform.entitlement.SubscriptionKind;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.tenant.Tenant;
@@ -17,6 +18,7 @@ import cn.mjy.platform.support.TestTokens;
 import com.jayway.jsonpath.JsonPath;
 import java.util.List;
 import java.util.UUID;
+import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -73,6 +75,11 @@ class OnboardingApiTest {
         mvc.perform(get("/v1/subscription").header("Authorization", ownerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("CANCELLED"));
+        Instant ended = Instant.now();
+        subscriptions.start(tenant.id(), UUID.fromString(plan), SubscriptionKind.PAID, ended, ended);
+        mvc.perform(get("/v1/subscription").header("Authorization", ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("EXPIRED"));
     }
 
     @Test
