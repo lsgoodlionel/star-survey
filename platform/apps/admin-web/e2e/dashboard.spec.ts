@@ -192,6 +192,23 @@ test('data export faults cancel safely, expose terminal state, and reauthorize e
   }
 });
 
+test('tenant settings manages a synthetic organisation connection without contacting a provider', async ({ page }) => {
+  const metadata = await readMetadata();
+  await login(page, await readPrivateToken('ADMIN_WEB_JWT_FILE'), metadata.actorId, metadata.tenantId);
+  await page.getByRole('link', { name: '组织连接' }).click();
+  await expect(page.getByRole('heading', { name: '组织连接' })).toBeVisible();
+  const corp = `ci-${randomUUID()}`;
+  await page.getByLabel('组织标识', { exact: true }).fill(corp);
+  await page.getByLabel('应用标识', { exact: true }).fill('ci-app');
+  await page.getByLabel('密钥引用名', { exact: true }).fill('CI_UNUSED_REF');
+  await page.getByRole('button', { name: '创建连接' }).click();
+  const row = page.locator('li').filter({ has: page.getByText(corp, { exact: true }) });
+  await expect(row).toBeVisible();
+  await row.getByRole('button', { name: '停用连接' }).click();
+  await row.getByRole('button', { name: '确认操作' }).click();
+  await expect(row.getByText('已停用', { exact: true })).toBeVisible();
+});
+
 test('dashboard breakpoints and mobile navigation keep primary actions usable', async ({ page }) => {
   const metadata = await readMetadata();
   await login(page, await readPrivateToken('ADMIN_WEB_JWT_FILE'), metadata.actorId, metadata.tenantId);
