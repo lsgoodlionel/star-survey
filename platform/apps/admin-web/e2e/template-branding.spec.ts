@@ -81,7 +81,8 @@ test('tenant template lifecycle copies a real survey and preserves brand draft c
   await page.getByRole('button', { name: '保存品牌与语言' }).click();
   await expect(page.getByText(/已保存，草稿版本/)).toBeVisible();
   await page.getByRole('link', { name: '工作台', exact: true }).click();
-  await page.getByRole('link', { name: '继续设置品牌与语言' }).click();
+  await page.getByRole('link', { name: '继续设置品牌与语言' })
+    .and(page.locator(`a[href="/surveys/${copiedSurveyId}/branding"]`)).click();
   await expect(page.getByRole('textbox', { name: '主色', exact: true })).toHaveValue('#1464A0');
   await expect(page.getByRole('textbox', { name: 'en 问卷标题' })).toHaveValue('Branded survey');
   scenarios.add('brand-save-refresh');
@@ -452,7 +453,7 @@ async function login(page: Page, tokenName: string) {
   try {
     await page.getByLabel('测试令牌').fill(token);
     await page.getByRole('button', { name: '登录' }).click();
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page).toHaveURL(tokenName === 'ADMIN_WEB_OPERATOR_JWT_FILE' ? /\/operations\/tenants$/ : /\/dashboard$/);
   } finally {
     if (!page.isClosed()) await redactSensitiveInputs(page);
   }

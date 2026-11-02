@@ -8,6 +8,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
+import cn.mjy.platform.support.TestTokens;
+import java.util.UUID;
 import com.jayway.jsonpath.JsonPath;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -37,6 +39,9 @@ class TenantLifecycleApiTest {
 
     @Autowired
     private JdbcClient jdbc;
+
+    @Autowired
+    private TestTokens tokens;
 
     private ResultActions createTenant(String bearer, String code, String name) throws Exception {
         return mvc.perform(post(TENANTS)
@@ -93,6 +98,33 @@ class TenantLifecycleApiTest {
         mvc.perform(get(TENANTS).param("code", "missing-tenant")
                         .header("Authorization", fixtures.operatorBearer()))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void directoryIsBoundedAndOnlyAvailableToPlatformOperators() throws Exception {
+        String code = TenantFixtures.uniqueCode("directory");
+        String id = JsonPath.read(createTenant(fixtures.operatorBearer(), code, "Directory")
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+        createTenant(fixtures.operatorBearer(), code + "-next", "Next").andExpect(status().isCreated());
+        mvc.perform(get(TENANTS + "/directory").param("after", code.substring(0, code.length() - 1))
+                        .param("limit", "1").header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].code").value(code))
+                .andExpect(jsonPath("$.nextCursor").value(code));
+        mvc.perform(get(TENANTS + "/directory").param("after", code).param("limit", "1")
+                        .header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].code").value(code + "-next"));
+        String tenantOwner = "Bearer " + tokens.issue("owner", UUID.fromString(id), List.of("tenant_owner"));
+        mvc.perform(get(TENANTS + "/directory").header("Authorization", tenantOwner))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(TENANTS + "/" + id).header("Authorization", tenantOwner))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(TENANTS + "/directory").header("Authorization", fixtures.userBearer(TenantId.of(id))))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(TENANTS + "/directory")).andExpect(status().isUnauthorized());
+        mvc.perform(get(TENANTS + "/directory").param("limit", "101")
+                .header("Authorization", fixtures.operatorBearer())).andExpect(status().isBadRequest());
     }
 
     @Test

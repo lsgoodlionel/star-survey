@@ -7,6 +7,9 @@ import { useAuth } from '../features/auth/AuthProvider';
 import { WorkspacePage } from '../features/workspace/WorkspacePage';
 import { EditorRoutePage } from '../features/editor/EditorPage';
 
+const TenantDirectoryPage = lazy(() => import('../features/operations/TenantDirectoryPage').then((module) => ({ default: module.TenantDirectoryPage })));
+const TenantDetailPage = lazy(() => import('../features/operations/TenantDirectoryPage').then((module) => ({ default: module.TenantDetailPage })));
+
 const DashboardPage = lazy(() =>
   import('../features/dashboard/DashboardPage').then((module) => ({ default: module.DashboardPage })),
 );
@@ -59,6 +62,11 @@ function ProtectedRoute() {
   return <Outlet />;
 }
 
+function HomeRoute() {
+  const { session } = useAuth();
+  return <Navigate to={session?.me.roles.includes('platform_operator') ? '/operations/tenants' : '/dashboard'} replace />;
+}
+
 function LoginPage() {
   return (
     <main className="auth-page">
@@ -96,10 +104,12 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
     {
       element: <ProtectedRoute />,
       children: [
+        { index: true, element: <HomeRoute /> },
+        { path: 'operations/tenants', element: <Suspense fallback={<p>正在加载租户</p>}><TenantDirectoryPage /></Suspense> },
+        { path: 'operations/tenants/:tenantId', element: <Suspense fallback={<p>正在加载租户</p>}><TenantDetailPage /></Suspense> },
         {
           element: <AppShell />,
           children: [
-            { index: true, element: <Navigate to="/dashboard" replace /> },
             {
               path: 'dashboard',
               element: (
