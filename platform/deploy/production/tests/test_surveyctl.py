@@ -881,6 +881,37 @@ class SurveyctlTest(unittest.TestCase):
             (self.target / "releases" / "0.2.0" / ".env").read_text(),
         )
 
+    def test_starting_health_deadline_fails_closed(self):
+        manager = self.manager()
+        with unittest.mock.patch.object(manager, "_assert_healthy", side_effect=self.module.StartupPending("starting")):
+            with self.assertRaisesRegex(self.module.RuntimeHealthError, "deadline exceeded"):
+                manager._wait_healthy(["docker", "compose"], "installation", timeout=0)
+
+    def test_startup_does_not_retry_unhealthy_or_invalid_status(self):
+        manager = self.manager()
+        with unittest.mock.patch.object(manager, "_assert_healthy", side_effect=self.module.RuntimeHealthError("unhealthy")) as check:
+            with self.assertRaisesRegex(self.module.RuntimeHealthError, "unhealthy"):
+                manager._wait_healthy(["docker", "compose"], "installation")
+            check.assert_called_once()
+
+    def test_install_waits_for_edge_health_before_recording_success(self):
+        class StartingEdgeRunner(FakeRunner):
+            def run(self, command, **kwargs):
+                result = super().run(command, **kwargs)
+                if "ps" in command and "--format" in command:
+                    records = json.loads(result.stdout)
+                    if sum("ps" in call for call in self.commands) == 1:
+                        next(record for record in records if record["Service"] == "edge")["Health"] = "starting"
+                    result.stdout = json.dumps(records)
+                return result
+
+        runner = StartingEdgeRunner()
+        self.manager(runner=runner).install(
+            self.base_manifest, "survey.example.com", "operations", "operations@example.com"
+        )
+        self.assertGreaterEqual(sum("ps" in call for call in runner.commands), 2)
+        self.assertEqual("0.2.0", (self.target / "current").read_text().strip())
+
     def test_channel_secret_derivation_matches_plugin_contract_vector(self):
         self.assertEqual(
             "204745a72bcb796d18bf2df097af7efea324f61077971e41b50189196036ff31",

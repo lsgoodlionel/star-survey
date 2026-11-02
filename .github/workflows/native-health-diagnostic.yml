@@ -1,0 +1,56 @@
+name: Native startup health diagnostic
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-health-diagnostic.yml'
+      - 'platform/deploy/production/surveyctl.py'
+      - 'platform/deploy/production/tests/test_surveyctl.py'
+permissions:
+  contents: read
+  packages: read
+jobs:
+  admin-health:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 8
+    steps:
+      - name: Measure registry availability
+        run: |
+          # The candidate digest is published only to GHCR; no verified mirror is registered.
+          curl --max-time 10 -sS -o /dev/null -w 'GHCR registry HTTP %{http_code}, connect %{time_connect}s, total %{time_total}s\n' https://ghcr.io/v2/
+      - name: Authenticate candidate image read
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull immutable candidate admin image
+        run: |
+          docker pull ghcr.io/lsgoodlionel/star-survey-admin@sha256:c7d09de4625bbdf1b366c7f8fa6b3f009688bb77d85b9196867b241f247aab2a
+      - name: Observe original admin probe under production limits
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          image=ghcr.io/lsgoodlionel/star-survey-admin@sha256:c7d09de4625bbdf1b366c7f8fa6b3f009688bb77d85b9196867b241f247aab2a
+          docker image inspect "$image" --format '{{json .Config.Healthcheck}}' > evidence/image-healthcheck.json
+          docker run -d --name admin-health --cpus 0.50 --memory 128m --security-opt no-new-privileges:true \
+            --health-cmd 'wget -q -O /dev/null http://127.0.0.1/' --health-interval 10s --health-timeout 3s --health-retries 3 "$image"
+          for sample in $(seq 1 45); do
+            docker inspect admin-health --format '{{json .State.Health}}' >> evidence/health-timeline.jsonl
+            sleep 1
+          done
+          test "$(docker inspect admin-health --format '{{.State.Health.Status}}')" = healthy
+      - name: Preserve diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: admin-health-${{ matrix.runner }}
+          path: evidence
+          if-no-files-found: error
+      - name: Clean up isolated container
+        if: always()
+        run: docker rm -f admin-health || true
