@@ -6,8 +6,9 @@ import type { EditableQuestion, JsonObject } from './model/definition';
 
 const dictionarySchema = z.array(z.object({ code: z.string(), name: z.string(), maxDepth: z.number(), currentVersion: z.string().nullable() }));
 
-export function AdvancedQuestionOptions({ api, tenantId, question, disabled, onChange }: {
-  api: ApiClient; tenantId: string; question: EditableQuestion; disabled: boolean; onChange(options: JsonObject): void;
+export function AdvancedQuestionOptions({ api, tenantId, question, disabled, onChange, onSlideAssetChange }: {
+  api: ApiClient; tenantId: string; question: EditableQuestion; disabled: boolean; onChange(options: JsonObject, slideIds?: string[]): void;
+  onSlideAssetChange(questionUuid: string, slideId: string, assetId: string): void;
 }) {
   const options = question.themeOptions ?? {};
   const isDictionary = question.source.theme === 'mjy-cascading-select';
@@ -37,12 +38,12 @@ export function AdvancedQuestionOptions({ api, tenantId, question, disabled, onC
   const slides = Array.isArray(options.slides) ? options.slides.filter((item): item is JsonObject => Boolean(item && typeof item === 'object' && !Array.isArray(item))) : [];
   return <fieldset disabled={disabled}><legend>轮播图</legend>
     {(question.answers ?? []).filter((answer) => !slides.some((slide) => slide.code === answer.code)).map((answer, index) =>
-      <button key={`${answer.code}-${index}`} type="button" onClick={() => onChange({ ...options, slides: [...slides, { code: answer.code, assetId: '', alt: '' }] })}>为选项 {answer.code} 添加图片</button>)}
-    {slides.map((slide, index) => <div key={index}>
+      <button key={`${answer.code}-${index}`} type="button" onClick={() => onChange({ ...options, slides: [...slides, { code: answer.code, assetId: '', alt: '' }] }, [...(question.slideIds ?? []), crypto.randomUUID()])}>为选项 {answer.code} 添加图片</button>)}
+    {slides.map((slide, index) => <div key={`${question.uuid}:${question.slideIds?.[index]}`}>
       <p>选项 {String(slide.code ?? '')}</p>
-      {!(question.answers ?? []).some((answer) => answer.code === slide.code) ? <button type="button" onClick={() => onChange({ ...options, slides: slides.filter((_, i) => i !== index) })}>删除无对应选项的图片 {index + 1}</button> : null}
+      {!(question.answers ?? []).some((answer) => answer.code === slide.code) ? <button type="button" onClick={() => onChange({ ...options, slides: slides.filter((_, i) => i !== index) }, question.slideIds?.filter((_, i) => i !== index))}>删除无对应选项的图片 {index + 1}</button> : null}
       <AssetPicker api={api} tenantId={tenantId} label={`图片 ${index + 1}`} assetId={typeof slide.assetId === 'string' ? slide.assetId : ''} disabled={disabled}
-        onChange={(assetId) => onChange({ ...options, slides: slides.map((item, i) => i === index ? { ...item, assetId } : item) })} />
+        onChange={(assetId) => { const id = question.slideIds?.[index]; if (id) onSlideAssetChange(question.uuid, id, assetId); }} />
       <label>替代文本 {index + 1}<input value={typeof slide.alt === 'string' ? slide.alt : ''}
         onChange={(event) => onChange({ ...options, slides: slides.map((item, i) => i === index ? { ...item, alt: event.target.value } : item) })} /></label>
     </div>)}

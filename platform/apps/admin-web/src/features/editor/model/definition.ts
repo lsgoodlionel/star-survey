@@ -18,6 +18,8 @@ export interface EditableQuestion {
   other?: boolean;
   answers?: EditableChoice[];
   themeOptions?: JsonObject;
+  /** 会话内幻灯片身份，不写入问卷定义。 */
+  slideIds?: string[];
 }
 
 export interface EditableGroup {
@@ -132,6 +134,8 @@ function parseQuestion(value: unknown): EditableQuestion {
     answers,
     themeOptions: ['mjy-collapsible', 'mjy-cascading-select', 'mjy-carousel'].includes(String(source.theme)) && source.themeOptions && typeof source.themeOptions === 'object' && !Array.isArray(source.themeOptions)
       ? cloneJson(source.themeOptions as JsonObject) : undefined,
+    slideIds: source.theme === 'mjy-carousel' && source.themeOptions && typeof source.themeOptions === 'object' && !Array.isArray(source.themeOptions) && Array.isArray((source.themeOptions as JsonObject).slides)
+      ? ((source.themeOptions as JsonObject).slides as unknown[]).map(() => crypto.randomUUID()) : undefined,
   };
 }
 

@@ -103,6 +103,51 @@ afterEach(() => {
 });
 
 describe('EditorPage', () => {
+  test.each(['switch', 'remove_before', 'remove_target', 'save_during_upload'] as const)('keeps a delayed carousel upload bound to its original slide: %s', async (scenario) => {
+    const source = structuredClone(gatewayFixture);
+    const questions = source.groups[0].questions as Array<Record<string, unknown>>;
+    questions[0] = { ...questions[0], uuid: singleUuid, code: 'QFIRST', text: '第一道轮播', type: 'L', theme: 'mjy-carousel',
+      answers: [{ code: 'A1', text: '甲' }, { code: 'A2', text: '乙' }], themeOptions: { slides: [{ code: 'A1', alt: '甲' }, { code: 'A2', alt: '乙' }], future: '保留' } };
+    questions[1] = { ...questions[1], uuid: textUuid, code: 'QSECOND', text: '第二道轮播', type: 'L', theme: 'mjy-carousel',
+      answers: [{ code: 'A1', text: '另一项' }], themeOptions: { slides: [{ code: 'A1', alt: '另一项' }] } };
+    const upload = createDeferred<{ id: string }>();
+    let saved: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      'GET /v1/assets': () => [], 'POST /v1/assets': () => upload.promise,
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => { const body = request.body as { definition: typeof source; expectedVersion: number }; saved = body.definition; return { surveyId, version: body.expectedVersion + 1, definition: saved }; },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    const input = await screen.findByLabelText('上传图片 2');
+    fireEvent.change(input, { target: { files: [new File(['image'], 'image.png', { type: 'image/png' })] } });
+    await screen.findByText('正在上传图片，完成时间视文件大小而定');
+    if (scenario === 'switch') {
+      fireEvent.click(screen.getByRole('button', { name: 'QSECOND 第二道轮播' }));
+      fireEvent.change(screen.getByLabelText('题目文本'), { target: { value: '切换后的修改' } });
+    } else if (scenario === 'remove_before') {
+      fireEvent.click(screen.getByRole('button', { name: '删除选项 1' }));
+      fireEvent.change(screen.getByLabelText('替代文本 1'), { target: { value: '移动后的修改' } });
+    } else if (scenario === 'remove_target') {
+      fireEvent.click(screen.getByRole('button', { name: '删除选项 2' }));
+      fireEvent.click(screen.getByRole('button', { name: '添加选项' }));
+    } else {
+      fireEvent.change(screen.getByLabelText('题目文本'), { target: { value: '上传时先保存' } });
+      fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+      await screen.findByText('已保存版本 5');
+    }
+    await act(async () => { upload.resolve({ id: '60000000-0000-4000-8000-000000000001' }); await upload.promise; });
+    await waitFor(() => expect(screen.queryByText('正在上传图片，完成时间视文件大小而定')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText(`已保存版本 ${scenario === 'save_during_upload' ? 6 : 5}`);
+    const result = saved!.groups[0].questions as Array<Record<string, unknown>>;
+    const first = (result[0].themeOptions as { slides: Array<Record<string, unknown>> }).slides;
+    const second = (result[1].themeOptions as { slides: Array<Record<string, unknown>> }).slides;
+    expect(second[0].assetId).toBeUndefined();
+    if (scenario === 'remove_target') expect(first.find((slide) => slide.code === 'A2')?.assetId).toBe('');
+    else expect(first.find((slide) => slide.code === 'A2')?.assetId).toBe('60000000-0000-4000-8000-000000000001');
+    if (scenario === 'switch') expect(result[1].text).toBe('切换后的修改');
+    if (scenario === 'remove_before') expect(first[0].alt).toBe('移动后的修改');
+  });
   test('adds a basic question from the question palette', async () => {
     renderEditor(editorApi(), `/surveys/${surveyId}/edit?question=${singleUuid}`);
     await screen.findByLabelText('题目文本');

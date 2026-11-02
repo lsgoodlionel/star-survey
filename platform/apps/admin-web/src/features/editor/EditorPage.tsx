@@ -36,7 +36,7 @@ import {
   type BasicQuestionType,
   type EditableSurveyDefinition,
 } from './model/definition';
-import { moveGroup, moveQuestion, updateQuestion, validateDefinition } from './model/operations';
+import { moveGroup, moveQuestion, preserveCarouselSlideIds, setCarouselSlideAsset, updateQuestion, validateDefinition } from './model/operations';
 import {
   clearActiveEditorRecovery,
   discardEditorRecovery,
@@ -116,6 +116,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
     };
   });
   const [definition, setDefinition] = useState(initialState.definition);
+  const definitionRef = useRef(definition);
   const [version, setVersion] = useState(initialState.version);
   const [dirty, setDirty] = useState(initialState.dirty);
   const [savedVersion, setSavedVersion] = useState<number | null>(null);
@@ -207,12 +208,13 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       return { saved, submittedRevision };
     },
     onSuccess: ({ saved, submittedRevision }) => {
-      const savedDefinition = parseDefinition(saved.definition);
+      const savedDefinition = preserveCarouselSlideIds(parseDefinition(saved.definition), definitionRef.current);
       synchronizeDraftCache(saved, savedDefinition.title);
       setVersion(saved.version);
       setSavedVersion(saved.version);
       setSavedAt(new Date());
       if (revisionRef.current === submittedRevision) {
+        definitionRef.current = savedDefinition;
         setDefinition(savedDefinition);
         setDirty(false);
       }
@@ -257,6 +259,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   }
 
   function changeDefinition(next: EditableSurveyDefinition) {
+    definitionRef.current = next;
     revisionRef.current += 1;
     setDefinition(next);
     setDirty(true);
@@ -269,7 +272,9 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
     synchronizeDraftCache(result);
     discardEditorRecovery(tenantId, surveyId);
     revisionRef.current += 1;
-    setDefinition(parseDefinition(result.definition));
+    const reloaded = parseDefinition(result.definition);
+    definitionRef.current = reloaded;
+    setDefinition(reloaded);
     setVersion(result.version);
     setDirty(false);
     setConflict(false);
@@ -315,6 +320,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
         if (newQuestionType === 'mjy-carousel') {
           question.source.theme = newQuestionType;
           question.themeOptions = { slides: [{ code: 'A1', assetId: '', alt: '' }], autoplay: false };
+          question.slideIds = [crypto.randomUUID()];
         }
         changeDefinition({ ...definition, groups: definition.groups.map((group) => group.uuid === target.uuid ? { ...group, questions: [...group.questions, question] } : group) });
         setSearchParams({ question: uuid }, { replace: true });
@@ -335,11 +341,17 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   );
   const questionEditor = selectedQuestion ? (
     <QuestionEditor
+      key={selectedQuestion.uuid}
       api={api}
       tenantId={tenantId}
       question={selectedQuestion}
       disabled={!canEdit}
       onChange={(update) => changeDefinition(updateQuestion(definition, selectedQuestion.uuid, update))}
+      onSlideAssetChange={(questionUuid, slideId, assetId) => {
+        const current = definitionRef.current;
+        const next = setCarouselSlideAsset(current, questionUuid, slideId, assetId);
+        if (next !== current) changeDefinition(next);
+      }}
     />
   ) : (
     <p>请选择题目</p>

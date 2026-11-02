@@ -8,6 +8,7 @@ import {
 import {
   moveGroup,
   moveQuestion,
+  setCarouselSlideAsset,
   updateQuestion,
   validateDefinition,
 } from './operations';
@@ -36,6 +37,21 @@ function sourceWithExtensions() {
 }
 
 describe('lossless survey definition model', () => {
+  test('applies a delayed upload to the same slide after reordering and ignores a removed identity', () => {
+    const source = sourceWithExtensions();
+    const questions = (source.groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions;
+    questions[0].theme = 'mjy-carousel';
+    questions[0].themeOptions = { slides: [{ code: 'A1', future: 1 }, { code: 'A2', future: 2 }] };
+    const original = parseDefinition(source);
+    const question = original.groups[0].questions[0];
+    const ids = question.slideIds!;
+    const slides = question.themeOptions!.slides as Array<Record<string, unknown>>;
+    const reordered = updateQuestion(original, singleUuid, { themeOptions: { ...question.themeOptions, slides: [slides[1], slides[0]] }, slideIds: [ids[1], ids[0]] });
+    const updated = setCarouselSlideAsset(reordered, singleUuid, ids[1], 'asset-2');
+    expect((updated.groups[0].questions[0].themeOptions!.slides as Array<Record<string, unknown>>)[0]).toEqual({ code: 'A2', future: 2, assetId: 'asset-2' });
+    const removed = updateQuestion(updated, singleUuid, { themeOptions: { ...question.themeOptions, slides: [slides[0]] }, slideIds: [ids[0]] });
+    expect(setCarouselSlideAsset(removed, singleUuid, ids[1], 'late')).toBe(removed);
+  });
   test.each(['mjy-collapsible', 'mjy-cascading-select', 'mjy-carousel'])('retains unknown theme fields after editing %s', (theme) => {
     const source = sourceWithExtensions();
     const groups = source.groups as Array<{ questions: Array<Record<string, unknown>> }>;

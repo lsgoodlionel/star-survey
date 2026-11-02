@@ -8,10 +8,11 @@ interface QuestionEditorProps {
   api: ApiClient;
   tenantId: string;
   disabled: boolean;
-  onChange(update: Partial<Pick<EditableQuestion, 'answers' | 'code' | 'mandatory' | 'other' | 'text' | 'themeOptions'>>): void;
+  onChange(update: Partial<Pick<EditableQuestion, 'answers' | 'code' | 'mandatory' | 'other' | 'text' | 'themeOptions' | 'slideIds'>>): void;
+  onSlideAssetChange(questionUuid: string, slideId: string, assetId: string): void;
 }
 
-export function QuestionEditor({ question, api, tenantId, disabled, onChange }: QuestionEditorProps) {
+export function QuestionEditor({ question, api, tenantId, disabled, onChange, onSlideAssetChange }: QuestionEditorProps) {
   if (!question.editable) return <ReadOnlyQuestion question={question} />;
   if (question.source.theme === 'mjy-carousel' && (!Array.isArray(question.themeOptions?.slides)
     || question.themeOptions.slides.some((slide) => !slide || typeof slide !== 'object' || Array.isArray(slide)))) {
@@ -62,7 +63,7 @@ export function QuestionEditor({ question, api, tenantId, disabled, onChange }: 
       ) : null}
       {question.themeOptions && (question.source.theme === 'mjy-cascading-select' || question.source.theme === 'mjy-carousel') ? (
         <AdvancedQuestionOptions api={api} tenantId={tenantId} question={question} disabled={disabled}
-          onChange={(themeOptions) => onChange({ themeOptions })} />
+          onChange={(themeOptions, slideIds) => onChange({ themeOptions, slideIds })} onSlideAssetChange={onSlideAssetChange} />
       ) : null}
       {question.type !== 'X' ? (
         <label className="editor-checkbox-row">
@@ -111,7 +112,11 @@ export function QuestionEditor({ question, api, tenantId, disabled, onChange }: 
                   answers: question.answers?.filter((_, i) => i !== index),
                   ...(question.source.theme === 'mjy-carousel' && question.themeOptions && Array.isArray(question.themeOptions.slides)
                     ? { themeOptions: { ...question.themeOptions, slides: question.themeOptions.slides.filter((slide: unknown) =>
-                      !(slide && typeof slide === 'object' && !Array.isArray(slide) && (slide as Record<string, unknown>).code === answer.code)) } } : {}),
+                      !(slide && typeof slide === 'object' && !Array.isArray(slide) && (slide as Record<string, unknown>).code === answer.code)) },
+                      slideIds: question.slideIds?.filter((_, i) => {
+                        const slide = (question.themeOptions!.slides as unknown[])[i];
+                        return !(slide && typeof slide === 'object' && !Array.isArray(slide) && (slide as Record<string, unknown>).code === answer.code);
+                      }) } : {}),
                 })}>删除</button>
             </div>
           ))}
@@ -124,7 +129,8 @@ export function QuestionEditor({ question, api, tenantId, disabled, onChange }: 
             const choice = { code, text: `选项 ${answers.length + 1}` };
             onChange({ answers: [...answers, { ...choice, source: choice }],
               ...(question.source.theme === 'mjy-carousel' && question.themeOptions && Array.isArray(question.themeOptions.slides)
-                ? { themeOptions: { ...question.themeOptions, slides: [...question.themeOptions.slides, { code, assetId: '', alt: '' }] } } : {}) });
+                ? { themeOptions: { ...question.themeOptions, slides: [...question.themeOptions.slides, { code, assetId: '', alt: '' }] },
+                  slideIds: [...(question.slideIds ?? []), crypto.randomUUID()] } : {}) });
           }}>添加选项</button>
           <label className="editor-checkbox-row">
             <input
