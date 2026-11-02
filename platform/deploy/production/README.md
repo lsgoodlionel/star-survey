@@ -94,6 +94,12 @@ platform/deploy/production/surveyctl --target /opt/survey uninstall
 
 ## 验证
 
+日常 PR 和 main 由 `.github/workflows/ci.yml`（Survey CI）统一编排，完整质量门只调用一次。四镜像 AMD64/ARM64 只读验证抽取为 `build-images.yml`，供 CI 与手动 Release 验证复用；`release.yml`（Survey Release）只接受标签或手动入口，正式发布始终要求完整质量门，并保留扫描、签名、原生生命周期及 readiness 准出。
+
+PR 的轻量范围使用明确白名单：根 README 与 docs/platform/docs 下的 Markdown 仅运行分流回归；仅 baseline-policy（可附带上述文档）运行产品化与生产发布门禁，跳过业务重型作业和镜像构建。其余文件均运行完整质量门与四镜像验证。改名同时考虑旧路径；文件 API 不可用、列表截断、提交身份变化或空列表均回退完整检查。main 始终执行完整质量门；是否试构建镜像仍按变更判断，手动 CI 执行完整检查和镜像验证。
+
+稳定汇总检查名为 `Survey CI required`，始终核对变更计划、质量门与镜像构建的实际结果；失败、取消或非计划跳过都会阻断。该名称可供分支保护引用，本次编排变更不修改仓库保护规则。PR 标签只表示待办或冲突状态，不代表测试通过；main 推送会重新检查开放 PR，状态未知保留原冲突标签，权限/API 错误会明确失败。
+
 ```bash
 PYTHONPYCACHEPREFIX=/tmp/survey-pyc \
   python3 -m unittest discover -s platform/deploy/production/tests
