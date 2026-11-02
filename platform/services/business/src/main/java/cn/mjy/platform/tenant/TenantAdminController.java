@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,6 +44,22 @@ public class TenantAdminController {
         guard.requireOperator();
         return tenants.findByCode(code).map(TenantView::of)
                 .orElseThrow(() -> new NotFoundException("tenant not found: " + code));
+    }
+
+    @GetMapping("/directory")
+    public TenantDirectory directory(@RequestParam(defaultValue = "") String after,
+            @RequestParam(defaultValue = "50") int limit) {
+        guard.requireOperator();
+        if (limit < 1 || limit > 100 || after.length() > 40 || !after.matches("[a-z0-9-]*")) {
+            throw new InvalidRequestException("invalid directory cursor or limit");
+        }
+        List<Tenant> rows = tenants.listAfter(after, limit + 1);
+        boolean hasMore = rows.size() > limit;
+        List<TenantView> items = rows.stream().limit(limit).map(TenantView::of).toList();
+        return new TenantDirectory(items, hasMore ? items.getLast().code() : null);
+    }
+
+    public record TenantDirectory(List<TenantView> items, String nextCursor) {
     }
 
     @GetMapping("/{tenantId}")

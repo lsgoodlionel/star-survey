@@ -5,6 +5,7 @@ import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.shared.tenant.TenantScope;
 import cn.mjy.platform.tenant.api.ConflictException;
 import cn.mjy.platform.tenant.api.NotFoundException;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
 
@@ -44,6 +45,10 @@ public class TenantService {
 
     public Optional<Tenant> findByCode(String code) {
         return tenants.findByCode(code);
+    }
+
+    public List<Tenant> listAfter(String after, int limit) {
+        return tenants.listAfter(after, limit);
     }
 
     /** 按状态机迁移；非法迁移抛 409，不写审计。 */

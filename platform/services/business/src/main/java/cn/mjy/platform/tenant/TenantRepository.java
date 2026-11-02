@@ -4,6 +4,7 @@ import cn.mjy.platform.shared.TenantId;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -40,6 +41,14 @@ public class TenantRepository {
                 .param("code", code)
                 .query(TenantRepository::map)
                 .optional();
+    }
+
+    public List<Tenant> listAfter(String after, int limit) {
+        return jdbc.sql("SELECT id, code, name, status, created_at FROM tenant WHERE code > :after ORDER BY code LIMIT :limit")
+                .param("after", after)
+                .param("limit", limit)
+                .query(TenantRepository::map)
+                .list();
     }
 
     /** 带前置状态的条件更新：并发下只有一个迁移能成功，返回是否更新到了行。 */
