@@ -1214,6 +1214,17 @@ class SurveyManager:
         signed = f"{header}.{claims}".encode("ascii")
         return signed.decode("ascii") + "." + encode(hmac.new(secret, signed, hashlib.sha256).digest())
 
+    @staticmethod
+    def _probe_jwt(secret: bytes, installation: str, run: str) -> str:
+        encode = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+        now = int(time.time())
+        header = encode(b'{"alg":"HS256","typ":"JWT"}')
+        claims = encode(json.dumps({"iss": "survey-probe", "aud": ["survey-setup-probe"], "sub": "setup-probe",
+            "installation_id": installation, "run_id": run, "engine_id": "production-engine-01",
+            "scope": ["probe.setup"], "iat": now, "exp": now + 300}, separators=(",", ":")).encode("utf-8"))
+        signed = f"{header}.{claims}".encode("ascii")
+        return signed.decode("ascii") + "." + encode(hmac.new(secret, signed, hashlib.sha256).digest())
+
     def setup_probe(self, api_call=None) -> None:
         state = self._read_state(require_current=True)
         host = state["publicHost"]
@@ -1222,7 +1233,6 @@ class SurveyManager:
         jwt_secret = jwt_path.read_bytes().strip()
         if jwt_path.is_symlink() or event_path.is_symlink() or len(jwt_secret) < 32:
             raise IntegrityError("probe setup secrets are unavailable or unsafe")
-        token = self._jwt(jwt_secret, "production-probe-operator", str(uuid.uuid4()), ["platform_operator"])
 
         def request(call_token, method, path, body=None):
             payload = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
@@ -1238,6 +1248,53 @@ class SurveyManager:
                 raise RuntimeHealthError("probe setup API request failed") from exc
 
         call = api_call or request
+        probe_key = self._managed("shared/secrets/platform_probe_hmac_secret")
+        probe_installation = self._managed("shared/probe-installation.json")
+        if probe_key.exists() or probe_installation.exists() or probe_key.is_symlink() or probe_installation.is_symlink():
+            if probe_key.is_symlink() or probe_installation.is_symlink() or not probe_key.is_file() or not probe_installation.is_file():
+                raise IntegrityError("probe machine configuration is incomplete or unsafe")
+            machine_secret = probe_key.read_bytes().strip()
+            engine_master_path = self._managed("shared/secrets/platform_engine_events_secret", must_exist=True)
+            if (engine_master_path.is_symlink() or (probe_key.stat().st_mode & 0o077) or len(machine_secret) < 32
+                    or secrets.compare_digest(machine_secret, jwt_secret)
+                    or secrets.compare_digest(machine_secret, event_path.read_bytes().strip())
+                    or secrets.compare_digest(machine_secret, engine_master_path.read_bytes().strip())):
+                raise IntegrityError("probe machine secret is invalid or not independent")
+            try:
+                config = json.loads(probe_installation.read_text(encoding="utf-8"))
+                installation = config["installationId"]
+                if set(config) != {"installationId"} or str(uuid.UUID(installation)) != installation:
+                    raise ValueError("invalid installation")
+                run_path = self._managed("shared/probe-run.json")
+                if run_path.exists() or run_path.is_symlink():
+                    if run_path.is_symlink():
+                        raise ValueError("unsafe run state")
+                    run_state = json.loads(run_path.read_text(encoding="utf-8"))
+                    run = run_state["runId"]
+                    if set(run_state) != {"installationId", "runId"} or run_state["installationId"] != installation or str(uuid.UUID(run)) != run:
+                        raise ValueError("invalid run state")
+                else:
+                    run = str(uuid.uuid4())
+                    self._atomic_write(run_path, json.dumps({"installationId": installation, "runId": run}, sort_keys=True) + "\n")
+            except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                raise IntegrityError("probe machine configuration is invalid") from exc
+            token = self._probe_jwt(machine_secret, installation, run)
+            status, result = call(token, "POST", "/v1/setup-probe", None)
+            if status != 200 or not isinstance(result, dict) or result.get("actorId") != "production-probe-owner":
+                raise RuntimeHealthError("probe setup API rejected the machine request")
+            try:
+                tenant_id = result["tenantId"]
+                if str(uuid.UUID(tenant_id)) != tenant_id:
+                    raise ValueError("invalid tenant")
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                raise RuntimeHealthError("probe setup returned an invalid tenant identity") from exc
+            expected_secret = event_path.read_text(encoding="ascii").strip()
+            if not isinstance(result.get("engineSecret"), str) or not secrets.compare_digest(result["engineSecret"], expected_secret):
+                raise IntegrityError("issued engine event secret does not match the configured engine")
+            self._atomic_write(self._managed("shared/product-probe.json"), json.dumps({"tenantId": tenant_id, "actorId": "production-probe-owner"}, sort_keys=True) + "\n")
+            return
+
+        token = self._jwt(jwt_secret, "production-probe-operator", str(uuid.uuid4()), ["platform_operator"])
         suffix = uuid.uuid4().hex[:12]
 
         def expect(method, path, body, status):

@@ -1008,6 +1008,66 @@ class SurveyctlTest(unittest.TestCase):
         secrets_on_disk = [path.read_text().strip() for path in (self.target / "shared" / "secrets").iterdir()]
         self.assertTrue(all(secret not in "\n".join(" ".join(map(str, call[:3])) for call in calls) for secret in secrets_on_disk))
 
+    def test_setup_probe_uses_independent_machine_identity_and_retries_the_same_run(self):
+        self.install()
+        probe_key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
+        probe_key.write_text("isolated-probe-key-for-tests-only-000000000000")
+        probe_key.chmod(0o600)
+        installation = "10000000-0000-4000-8000-000000000001"
+        (self.target / "shared" / "probe-installation.json").write_text(json.dumps({"installationId": installation}))
+        seen = []
+
+        def api_call(token, method, path, body=None):
+            import base64
+            self.assertEqual((method, path, body), ("POST", "/v1/setup-probe", None))
+            payload = token.split(".")[1]
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+            signed, signature = token.rsplit(".", 1)
+            expected = hmac.new(probe_key.read_bytes().strip(), signed.encode("ascii"), hashlib.sha256).digest()
+            self.assertTrue(hmac.compare_digest(base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4)), expected))
+            self.assertEqual(claims["aud"], ["survey-setup-probe"])
+            self.assertEqual(claims["iss"], "survey-probe")
+            self.assertEqual(claims["scope"], ["probe.setup"])
+            self.assertEqual(claims["installation_id"], installation)
+            seen.append(claims["run_id"])
+            return 200, {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner",
+                         "engineSecret": (self.target / "shared" / "secrets" / "engine_instance_events_secret").read_text().strip()}
+
+        self.manager().setup_probe(api_call=api_call)
+        self.manager().setup_probe(api_call=api_call)
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[0], seen[1])
+        self.assertEqual(0o600, stat.S_IMODE((self.target / "shared" / "probe-run.json").stat().st_mode))
+
+    def test_setup_probe_rejects_partial_or_shared_machine_credentials_without_fallback(self):
+        self.install()
+        probe_key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
+        probe_key.write_text((self.target / "shared" / "secrets" / "platform_jwt_hmac_secret").read_text())
+        probe_key.chmod(0o600)
+        calls = []
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().setup_probe(api_call=lambda *args: calls.append(args))
+        (self.target / "shared" / "probe-installation.json").write_text(json.dumps({"installationId": "10000000-0000-4000-8000-000000000001"}))
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().setup_probe(api_call=lambda *args: calls.append(args))
+        probe_key.write_text((self.target / "shared" / "secrets" / "platform_engine_events_secret").read_text())
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().setup_probe(api_call=lambda *args: calls.append(args))
+        self.assertEqual(calls, [])
+
+    def test_setup_probe_does_not_commit_state_when_machine_handler_secret_disagrees(self):
+        self.install()
+        key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
+        key.write_text("isolated-probe-key-for-tests-only-000000000000")
+        key.chmod(0o600)
+        (self.target / "shared" / "probe-installation.json").write_text(json.dumps({"installationId": "10000000-0000-4000-8000-000000000001"}))
+        def rejected(*_args):
+            return 200, {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner", "engineSecret": "incorrect"}
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().setup_probe(api_call=rejected)
+        self.assertFalse((self.target / "shared" / "product-probe.json").exists())
+        self.assertTrue((self.target / "shared" / "probe-run.json").exists())
+
     def test_helper_exit_codes_are_preserved_by_real_cli_without_traceback(self):
         self.install()
         backup = self.target / "backups" / "sample"

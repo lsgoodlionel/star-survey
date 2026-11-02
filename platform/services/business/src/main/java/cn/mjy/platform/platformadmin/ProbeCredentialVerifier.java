@@ -16,7 +16,7 @@ import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 /** Isolated verifier only: not registered as a bean or connected to any endpoint. */
 final class ProbeCredentialVerifier {
     private static final Set<String> ALLOWED = Set.of("probe.tenant.create", "probe.plan.create", "probe.onboard",
-            "probe.tenant.activate", "probe.engine.register", "probe.engine.secret.read");
+            "probe.tenant.activate", "probe.engine.register", "probe.engine.secret.read", "probe.setup");
     private final JwtDecoder decoder;
 
     ProbeCredentialVerifier(byte[] independentKey) {
@@ -42,11 +42,13 @@ final class ProbeCredentialVerifier {
             UUID tenant = tenantClaim == null ? null : canonical(tenantClaim);
             String engine = jwt.getClaimAsString("engine_id");
             if (engine != null && !engine.matches("[A-Za-z0-9_-]{1,64}")) return Optional.empty();
+            if (scopes.contains("probe.setup") && (!scopes.equals(List.of("probe.setup"))
+                    || tenant != null || !"production-engine-01".equals(engine))) return Optional.empty();
             if ((scopes.contains("probe.onboard") || scopes.contains("probe.tenant.activate")
                     || scopes.contains("probe.engine.register") || scopes.contains("probe.engine.secret.read")) && tenant == null)
                 return Optional.empty();
             if (scopes.contains("probe.engine.secret.read") && engine == null) return Optional.empty();
-            return Optional.of(new Credential(installation, run, tenant, engine, Set.copyOf(scopes)));
+            return Optional.of(new Credential(installation, run, tenant, engine, Set.copyOf(scopes), expires));
         } catch (RuntimeException rejected) {
             return Optional.empty();
         }
@@ -58,5 +60,5 @@ final class ProbeCredentialVerifier {
         return parsed;
     }
 
-    record Credential(UUID installation, UUID run, UUID tenant, String engine, Set<String> scopes) { }
+    record Credential(UUID installation, UUID run, UUID tenant, String engine, Set<String> scopes, Instant expiresAt) { }
 }
