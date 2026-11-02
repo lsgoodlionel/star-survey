@@ -196,7 +196,7 @@ test('tenant settings manages a synthetic organisation connection without contac
   const metadata = await readMetadata();
   await login(page, await readPrivateToken('ADMIN_WEB_JWT_FILE'), metadata.actorId, metadata.tenantId);
   await page.getByRole('link', { name: '组织连接' }).click();
-  await expect(page.getByRole('heading', { name: '组织连接' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '组织连接', exact: true })).toBeVisible();
   const corp = `ci-${randomUUID()}`;
   await page.getByLabel('组织标识', { exact: true }).fill(corp);
   await page.getByLabel('应用标识', { exact: true }).fill('ci-app');
