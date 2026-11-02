@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-02 原生启动修复：操作前登记 origin/main 与不可变 v0.3.6-rc.1 均为 `62e071d029a847a2b0b8a06cd0320aa0fa386bdd`。Release run 41377811981 四节点 install 失败。独立分支 `codex/wave2-native-health` 修复 running/starting 健康汇总竞态，最多等待 120 秒；unhealthy、服务缺失、异常退出仍阻断，status 保持即时检查。回归测试先红后绿；生产测试 114 项中 113 通过、1 项真实原生验收按前置条件跳过。隔离 Docker 容器真实 starting→healthy 等待通过，其余服务建模，不代表完整栈验收。22.04 ARM64 admin-web 短暂 unhealthy 原因仍未知，PR 四节点诊断使用原 admin digest 保存探针历史，不能替代 readiness。推送前分支无 CI；推送后结果待查。不合并 PR、不创建或移动标签、不创建 RC。
+
 计划：`docs/superpowers/plans/2026-10-11-template-branding-wave2.md`
 
 分支：`main`（全分支合并见 PR #13）
