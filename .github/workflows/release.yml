@@ -970,10 +970,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Disabled until explicit, independently verified human promotion is implemented.
+  # A successful tag build must never publish a GitHub Release by itself.
   publication:
     name: Publish the independently verified GitHub Release
     if: >-
-      always() && !cancelled() && needs.policy.outputs.release == 'true' &&
+      false && always() && !cancelled() && needs.policy.outputs.release == 'true' &&
       needs.quality.result == 'success' &&
       ((needs.policy.outputs.channel == 'candidate' && needs.publish-images.result == 'success' &&
         needs.secure-images.result == 'success' && needs.candidate-assets.result == 'success' &&

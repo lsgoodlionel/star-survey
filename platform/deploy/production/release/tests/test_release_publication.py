@@ -164,6 +164,10 @@ class ReleasePublicationWorkflowTest(unittest.TestCase):
             self.assertIn(required, text)
         self.assertNotIn("contents\": \"write", text)
 
+    def test_candidate_cannot_publish_before_explicit_promotion_is_implemented(self):
+        condition = str(self.workflow["jobs"]["publication"]["if"]).strip()
+        self.assertTrue(condition.startswith("false &&"), condition)
+
     def test_publication_is_tag_only_fail_closed_and_idempotent_without_clobber(self):
         assert_publication_contract(self, self.workflow)
         writers = {
