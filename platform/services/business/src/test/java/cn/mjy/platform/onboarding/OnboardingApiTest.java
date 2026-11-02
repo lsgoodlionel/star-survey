@@ -9,13 +9,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import cn.mjy.platform.access.AccessDecisionService;
 import cn.mjy.platform.access.Permission;
 import cn.mjy.platform.entitlement.SubscriptionService;
+import cn.mjy.platform.entitlement.SubscriptionKind;
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.TenantId;
 import cn.mjy.platform.tenant.Tenant;
 import cn.mjy.platform.tenant.TenantFixtures;
+import cn.mjy.platform.support.TestTokens;
 import com.jayway.jsonpath.JsonPath;
 import java.util.List;
 import java.util.UUID;
+import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -45,6 +48,43 @@ class OnboardingApiTest {
 
     @Autowired
     private SubscriptionService subscriptions;
+
+    @Autowired
+    private TestTokens tokens;
+
+    @Test
+    void tenantOwnerCanOnlyReadTheirOwnCurrentSubscription() throws Exception {
+        Tenant tenant = fixtures.provisionedTenant();
+        Tenant other = fixtures.provisionedTenant();
+        String body = planBody(5);
+        String code = JsonPath.read(body, "$.planCode");
+        String plan = planId(publishPlan(body));
+        onboard(tenant.id(), plan, "owner-1").andExpect(status().isOk());
+        publishPlan(body.replace("\"member.seats\":5", "\"member.seats\":9"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.version").value(2));
+        String ownerToken = "Bearer " + tokens.issue("owner-1", tenant.id().value(), List.of());
+
+        mvc.perform(get("/v1/subscription").param("tenantId", other.id().toString())
+                        .header("Authorization", ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.planCode").value(code))
+                .andExpect(jsonPath("$.planVersionId").value(plan))
+                .andExpect(jsonPath("$.planVersion").value(1))
+                .andExpect(jsonPath("$.quotas['member.seats']").value(5))
+                .andExpect(jsonPath("$.status").value("TRIAL"));
+        mvc.perform(get("/v1/subscription").header("Authorization", fixtures.userBearer(tenant.id())))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/v1/subscription")).andExpect(status().isUnauthorized());
+        subscriptions.cancel(tenant.id());
+        mvc.perform(get("/v1/subscription").header("Authorization", ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELLED"));
+        Instant ended = Instant.now();
+        subscriptions.start(tenant.id(), UUID.fromString(plan), SubscriptionKind.PAID, ended, ended);
+        mvc.perform(get("/v1/subscription").header("Authorization", ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("EXPIRED"));
+    }
 
     @Test
     void anOperatorPublishesAPlanVersion() throws Exception {
