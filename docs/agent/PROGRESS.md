@@ -168,3 +168,7 @@ PR #24 合并提交 `25dd9e186d0bad8a8dacec7f58dee0e9743b01e7` 的 [main 质量�
 ## Wave 2 `v0.3.6-rc.1` 策略准备（2026-11-02，同步前）
 
 PR #25 已合并至登记仓库 `lsgoodlionel/star-survey` 的 `main` @ `f33eeaf2a65869309563835596d63142e38aab31`；合并后质量闸门 run 41295603448 的 10/10 作业成功。当前分支 `codex/wave2-rc6-policy` 仅为下一不可变候选登记 `0.3.6-rc.1` bootstrap baseline policy，不修改产品功能、生产校验或发行门禁。同步前 Release 策略测试与 GitHub CI/CD 尚待核对；不得据此宣称四节点原生生命周期或 Wave 2 Accepted 已完成，也不得在分支合并和主线全绿前创建标签。
+
+## Wave 6 候选发布保护（2026-11-02，待审）
+
+候选标签现有工作流会在检查成功后自动发布 GitHub Release。已临时关闭 publication 作业并增加回归测试；候选构建及证据生成不变。后续增量加入同仓库指定 Actions 制品的前代校验，以及绑定候选与 #41 人工记录的手动晋升入口；实现和 CI 待独立复审，真实读屏、原生候选验收及发布授权尚未完成，不能视为发布准出。仅候选组装新增作业级 actions:read，人工晋升使用原发布所需的只读 Actions、包读取与 contents 写入范围。未创建标签、发布镜像或 Release。
