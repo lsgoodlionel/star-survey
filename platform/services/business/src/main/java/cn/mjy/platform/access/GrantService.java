@@ -84,6 +84,17 @@ public class GrantService {
         });
     }
 
+    public GrantPage page(TenantContext ctx, UUID after, int limit) {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("invalid limit");
+        return tenantScope.call(ctx.tenantId(), () -> {
+            access.require(ctx, Permission.MANAGE_MEMBERS, null);
+            List<GrantView> rows = grants.listPage(ctx.tenantId(), after, limit + 1);
+            List<GrantView> items = rows.stream().limit(limit).toList();
+            return new GrantPage(items, rows.size() > limit ? items.getLast().id() : null);
+        });
+    }
+    public record GrantPage(List<GrantView> items, UUID nextCursor) { }
+
     /** 撤销某成员的全部授权（移除成员时使用）。调用方须已在租户作用域内并持有租户成员锁。 */
     void revokeAllForLocked(TenantContext ctx, String actorId) {
         grants.listForActor(ctx.tenantId(), actorId).forEach(grant -> revokeLocked(ctx, grant));
@@ -109,7 +120,10 @@ public class GrantService {
         boolean live = grant.expiresAt() == null || grant.expiresAt().isAfter(clock.instant());
         boolean activeMember = members.find(tenant, grant.actorId())
                 .map(MemberRepository.Member::isActive).orElse(false);
-        return ownerGrant && live && activeMember && grants.activeOwners(tenant) <= 1;
+        if (!ownerGrant || !live || !activeMember) return false;
+        return grant.expiresAt() == null
+                ? grants.permanentActiveOwners(tenant) <= 1
+                : grants.activeOwners(tenant) <= 1;
     }
 
     private void requireCanDelegate(TenantContext ctx, RoleDefinition role, UUID resourceId) {
@@ -136,6 +150,10 @@ public class GrantService {
     }
 
     private void validateExpiry(RoleDefinition role, Instant expiresAt) {
+        // A tenant must not lose its final owner merely because a grant expires.
+        if (GrantRepository.OWNER_ROLE.equals(role.code()) && expiresAt != null) {
+            throw new IllegalArgumentException("tenant owner grants cannot expire");
+        }
         Instant now = clock.instant();
         if (expiresAt != null && !expiresAt.isAfter(now)) {
             throw new IllegalArgumentException("expiresAt must be in the future");

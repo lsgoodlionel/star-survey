@@ -7,6 +7,7 @@ import { useAuth } from '../features/auth/AuthProvider';
 import { WorkspacePage } from '../features/workspace/WorkspacePage';
 import { EditorRoutePage } from '../features/editor/EditorPage';
 
+const MembersPage = lazy(() => import('../features/members/MembersPage').then((module) => ({ default: module.MembersPage })));
 const TenantDirectoryPage = lazy(() => import('../features/operations/TenantDirectoryPage').then((module) => ({ default: module.TenantDirectoryPage })));
 const TenantDetailPage = lazy(() => import('../features/operations/TenantDirectoryPage').then((module) => ({ default: module.TenantDetailPage })));
 
@@ -121,6 +122,7 @@ export function createAppRoutes(isDevelopment: boolean, isE2E = false): RouteObj
             },
             { path: 'workspace', element: <WorkspacePage /> },
             { path: 'data', element: <Suspense fallback={<p>正在加载数据工作区</p>}><DataWorkspacePage /></Suspense> },
+            { path: 'settings/members', element: <Suspense fallback={<p>正在加载成员</p>}><MembersPage /></Suspense> },
             { path: 'settings/email', element: <Suspense fallback={<p>正在加载邮件服务设置</p>}><EmailSettingsPage /></Suspense> },
             { path: 'settings/subscription', element: <Suspense fallback={<p>正在加载订阅</p>}><SubscriptionPage /></Suspense> },
             { path: 'delivery', element: <Suspense fallback={<p>正在加载投放工作区</p>}><DeliveryWorkspacePage /></Suspense> },

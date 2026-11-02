@@ -167,6 +167,23 @@ public class MemberService {
         });
     }
 
+    public MemberPage list(TenantContext ctx, String after, int limit) {
+        if (after.length() > 200 || limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("invalid cursor or limit");
+        }
+        return tenantScope.call(ctx.tenantId(), () -> {
+            access.require(ctx, Permission.MANAGE_MEMBERS, null);
+            List<MemberRepository.Member> rows = members.listAfter(ctx.tenantId(), after, limit + 1);
+            List<MemberView> items = rows.stream().limit(limit)
+                    .map(m -> new MemberView(m.actorId(), m.status(), m.usesSeat())).toList();
+            return new MemberPage(items, rows.size() > limit ? items.getLast().actorId() : null,
+                    members.seatsInUse(ctx.tenantId()));
+        });
+    }
+
+    public record MemberView(String actorId, String status, boolean usesSeat) { }
+    public record MemberPage(List<MemberView> items, String nextCursor, long seatsInUse) { }
+
     /** 当前占用的席位数（含邀请中）；需要租户级"管理成员"权限。 */
     public long seatsInUse(TenantContext ctx) {
         return tenantScope.call(ctx.tenantId(), () -> {
