@@ -1,6 +1,7 @@
 package cn.mjy.platform.access;
 
 import cn.mjy.platform.shared.TenantId;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -36,6 +37,13 @@ class MemberRepository {
                 .param("actor", actorId)
                 .query((rs, n) -> new Member(rs.getString("actor_id"), rs.getString("status"), rs.getBoolean("uses_seat")))
                 .optional();
+    }
+
+    List<Member> listAfter(TenantId tenant, String after, int limit) {
+        return jdbc.sql("SELECT actor_id, status, uses_seat FROM access_member WHERE tenant_id = :tenant AND actor_id > :after AND status <> 'removed' ORDER BY actor_id LIMIT :limit")
+                .param("tenant", tenant.value()).param("after", after).param("limit", limit)
+                .query((rs, n) -> new Member(rs.getString("actor_id"), rs.getString("status"), rs.getBoolean("uses_seat")))
+                .list();
     }
 
     boolean hasAnyMember(TenantId tenant) {

@@ -9,6 +9,9 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -142,6 +145,55 @@ class GrantAdministrationTest {
 
         assertThatThrownBy(() -> grants.revoke(owner, ownerGrant)).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> members.remove(owner, AccessFixture.OWNER)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void ownerGrantsCannotBeMadeTemporaryEvenByUpsert() {
+        assertThatThrownBy(() -> grants.grant(owner, new GrantRequest(AccessFixture.OWNER, "tenant_owner", null,
+                Instant.now().plus(1, ChronoUnit.HOURS))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(grants.list(owner)).filteredOn(g -> g.actorId().equals(AccessFixture.OWNER)
+                && g.roleCode().equals("tenant_owner")).singleElement().satisfies(g -> assertThat(g.expiresAt()).isNull());
+        fixture.activeMember(owner, "second-owner");
+        assertThatThrownBy(() -> grants.grant(owner, new GrantRequest("second-owner", "tenant_owner", null,
+                Instant.now().plus(1, ChronoUnit.HOURS)))).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void aLegacyTemporaryOwnerCannotReplaceTheOnlyPermanentOwner() {
+        fixture.member(owner, "legacy-owner", "tenant_owner", null);
+        tenantScope.run(owner.tenantId(), () -> jdbc.sql("UPDATE access_grant SET expires_at = now() + interval '1 hour' WHERE actor_id = :actor AND role_code = 'tenant_owner'")
+                .param("actor", "legacy-owner").update());
+        assertThatThrownBy(() -> members.remove(owner, AccessFixture.OWNER)).isInstanceOf(IllegalStateException.class);
+        assertThat(grants.list(owner)).filteredOn(g -> g.actorId().equals(AccessFixture.OWNER)
+                && g.roleCode().equals("tenant_owner")).singleElement().satisfies(g -> assertThat(g.expiresAt()).isNull());
+    }
+
+    @Test
+    void concurrentOwnerRemovalAndTemporaryOwnerUpdateKeepAPermanentOwner() throws Exception {
+        fixture.member(owner, "second-owner", "tenant_owner", null);
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var temporaryUpdateRejected = pool.submit(() -> {
+                start.await();
+                try {
+                    grants.grant(owner, new GrantRequest(AccessFixture.OWNER, "tenant_owner", null,
+                            Instant.now().plus(1, ChronoUnit.HOURS)));
+                    return false;
+                } catch (IllegalArgumentException expected) {
+                    return true;
+                }
+            });
+            var removal = pool.submit(() -> { start.await(); members.remove(owner, "second-owner"); return true; });
+            start.countDown();
+            assertThat(temporaryUpdateRejected.get(15, TimeUnit.SECONDS)).isTrue();
+            assertThat(removal.get(15, TimeUnit.SECONDS)).isTrue();
+        }
+        assertThat(grants.list(owner)).filteredOn(g -> g.roleCode().equals("tenant_owner"))
+                .singleElement().satisfies(g -> {
+                    assertThat(g.actorId()).isEqualTo(AccessFixture.OWNER);
+                    assertThat(g.expiresAt()).isNull();
+                });
     }
 
     @Test
