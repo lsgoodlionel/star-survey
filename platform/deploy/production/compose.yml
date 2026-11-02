@@ -49,6 +49,9 @@ services:
   admin-web:
     <<: *runtime-defaults
     image: ${ADMIN_IMAGE:?set ADMIN_IMAGE to a fixed version or digest}
+    depends_on:
+      platform:
+        condition: service_healthy
     networks:
       - edge
     healthcheck:

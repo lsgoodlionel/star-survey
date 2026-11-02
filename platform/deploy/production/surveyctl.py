@@ -76,6 +76,10 @@ class RuntimeHealthError(SurveyctlError):
     exit_code = EXIT_RUNTIME
 
 
+class StartupPending(RuntimeHealthError):
+    """All remaining services are running with healthchecks still starting."""
+
+
 class IntegrityError(SurveyctlError):
     exit_code = EXIT_INTEGRITY
 
@@ -686,6 +690,18 @@ class SurveyManager:
         except OSError as exc:
             raise RuntimeHealthError(runtime_message) from exc
 
+    def _wait_healthy(self, compose: list[str], message: str, timeout: float = 120) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                self._assert_healthy(compose, message)
+                return
+            except StartupPending as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeHealthError(f"{message}: startup health deadline exceeded") from exc
+                time.sleep(min(1, remaining))
+
     def _assert_healthy(self, compose: list[str], message: str) -> None:
         result = self._run(compose + ["ps", "--all", "--format", "json"], message, capture_output=True)
         try:
@@ -712,6 +728,12 @@ class SurveyManager:
             raise RuntimeHealthError(f"{message}: engine-init status is invalid")
         exit_code = int(raw_exit_code)
         init_ok = init.get("State") in {"exited", "completed"} and exit_code == 0
+        if unhealthy and init_ok and all(
+            by_service[service].get("State") == "running"
+            and by_service[service].get("Health") == "starting"
+            for service in unhealthy
+        ):
+            raise StartupPending(f"{message}: healthchecks still starting")
         if unhealthy or not init_ok:
             raise RuntimeHealthError(f"{message}: unhealthy={sorted(unhealthy)}, engine-init-ok={init_ok}")
 
@@ -1033,7 +1055,7 @@ class SurveyManager:
             self._run(compose + ["pull"], "image pull failed")
             self._ensure_admin_password_hash(manifest.raw["images"]["CADDY_IMAGE"])
             self._run(compose + ["up", "-d", "--remove-orphans"], "installation start failed")
-            self._assert_healthy(compose, "installation health check failed")
+            self._wait_healthy(compose, "installation health check failed")
             self._verify_public_tls(public_host)
         except SurveyctlError:
             self._write_state(status="install_failed")
@@ -1275,7 +1297,7 @@ class SurveyManager:
             self._write_state(status="upgrading", previousVersion=previous, recoveryBackup=backup_name)
             self._run(compose + ["pull"], "upgrade image pull failed")
             self._run(compose + ["up", "-d", "--remove-orphans"], "upgrade migration or start failed")
-            self._assert_healthy(compose, "upgrade health check failed")
+            self._wait_healthy(compose, "upgrade health check failed")
             self._verify_public_tls(state["publicHost"])
             self._atomic_write(self.current_path, manifest.version + "\n")
             self._write_state(status="healthy", version=manifest.version, databaseSchema=manifest.database_schema, previousVersion=previous)
@@ -1288,7 +1310,7 @@ class SurveyManager:
             try:
                 old_compose = self._compose(previous)
                 self._run(old_compose + ["up", "-d", "--remove-orphans"], "compatible rollback start failed")
-                self._assert_healthy(old_compose, "compatible rollback health check failed")
+                self._wait_healthy(old_compose, "compatible rollback health check failed")
                 self._verify_public_tls(self._read_state()["publicHost"])
                 self._atomic_write(self.current_path, previous + "\n")
                 self._write_state(status="upgrade_failed", version=previous)
@@ -1300,7 +1322,7 @@ class SurveyManager:
                 self.restore(backup_name)
                 old_compose = self._compose(previous)
                 self._run(old_compose + ["up", "-d", "--remove-orphans"], "restored rollback start failed")
-                self._assert_healthy(old_compose, "restored rollback health check failed")
+                self._wait_healthy(old_compose, "restored rollback health check failed")
                 self._verify_public_tls(self._read_state()["publicHost"])
                 self._atomic_write(self.current_path, previous + "\n")
                 self._write_state(status="restored_after_failed_upgrade", version=previous)
@@ -1334,7 +1356,7 @@ class SurveyManager:
             raise InputError("database compatibility requires restore from backup; image rollback is blocked")
         compose = self._compose(target_version)
         self._run(compose + ["up", "-d", "--remove-orphans"], "rollback start failed")
-        self._assert_healthy(compose, "rollback health check failed")
+        self._wait_healthy(compose, "rollback health check failed")
         self._verify_public_tls(state["publicHost"])
         previous = state["version"]
         self._atomic_write(self.current_path, target_version + "\n")
