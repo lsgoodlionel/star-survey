@@ -128,11 +128,15 @@ jobs:
 
   admin-web-e2e:
     if: inputs.profile != 'policy'
-    name: 管理端真实浏览器纵向验收
+    name: 管理端真实浏览器纵向验收 (${{ matrix.db }})
     runs-on: ubuntu-22.04
     needs: [admin-web, parity-tables]
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [mysql, pgsql]
     env:
-      TEST_DB: mysql
+      TEST_DB: ${{ matrix.db }}
       SURVEY_TEST_PREFIX: adminweb-ci
       COMPOSE_PROJECT_NAME: adminweb-ci
       ADMIN_WEB_CI_ARTIFACT_DIR: platform/apps/admin-web/test-results/ci-artifacts
@@ -167,7 +171,7 @@ jobs:
         if: "${{ failure() && steps.admin_web_e2e.outcome == 'failure' }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: admin-web-e2e-sanitized-failure
+          name: admin-web-e2e-sanitized-failure-${{ matrix.db }}
           path: platform/apps/admin-web/test-results/ci-artifacts/
           if-no-files-found: warn
           retention-days: 7

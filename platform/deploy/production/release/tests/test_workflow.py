@@ -57,6 +57,12 @@ def job_text(job: dict) -> str:
 
 
 class ReleaseWorkflowPolicyTest(unittest.TestCase):
+    def test_admin_browser_gate_runs_against_both_engine_databases(self):
+        job = self.quality["jobs"]["admin-web-e2e"]
+        self.assertEqual(["mysql", "pgsql"], job["strategy"]["matrix"]["db"])
+        self.assertEqual("${{ matrix.db }}", job["env"]["TEST_DB"])
+        artifact = next(step for step in job["steps"] if step.get("name") == "上传脱敏失败证据")
+        self.assertIn("${{ matrix.db }}", artifact["with"]["name"])
     @classmethod
     def setUpClass(cls):
         cls.workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
