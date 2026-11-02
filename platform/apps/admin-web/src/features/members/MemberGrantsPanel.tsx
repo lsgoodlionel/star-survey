@@ -34,8 +34,8 @@ export function MemberGrantsPanel({ members }: { members: { actorId: string }[] 
     {grants.data.nextCursor ? <button type="button" onClick={() => setAfter(grants.data.nextCursor!)}>下一页授权</button> : null}
     {revoke ? <div><p>确认撤销该授权？</p><button type="button" disabled={mutation.isPending} onClick={() => mutation.mutate({ action: 'revoke', id: revoke })}>确认撤销</button><button type="button" onClick={() => setRevoke(null)}>取消</button></div> : null}
     <form onSubmit={(event) => { event.preventDefault(); if (actor && role) mutation.mutate({ action: 'grant' }); }}>
-      <label>授权成员<select required value={actor} onChange={(e) => setActor(e.target.value)}><option value="">请选择</option>{members.map((member) => <option key={member.actorId} value={member.actorId}>{member.actorId}</option>)}</select></label>
-      <label>角色<select required value={role} onChange={(e) => setRole(e.target.value)}><option value="">请选择</option>{roles.data.map((item) => <option key={item.code} value={item.code}>{item.code}{item.maxGrantHours ? `（最长 ${item.maxGrantHours} 小时）` : ''}</option>)}</select></label>
+      <label htmlFor="grant-member">授权成员</label><select id="grant-member" required value={actor} onChange={(e) => setActor(e.target.value)}><option value="">请选择</option>{members.map((member) => <option key={member.actorId} value={member.actorId}>{member.actorId}</option>)}</select>
+      <label htmlFor="grant-role">角色</label><select id="grant-role" required value={role} onChange={(e) => setRole(e.target.value)}><option value="">请选择</option>{roles.data.map((item) => <option key={item.code} value={item.code}>{item.code}{item.maxGrantHours ? `（最长 ${item.maxGrantHours} 小时）` : ''}</option>)}</select>
       <label>资源标识（留空为整个租户）<input value={resource} onChange={(e) => setResource(e.target.value)} /></label>
       <label>到期时间（可选）<input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} /></label>
       <button type="submit" disabled={mutation.isPending}>授予角色</button>

@@ -42,7 +42,7 @@ test('manager can assign a tenant role to a member', async () => {
     http.post('/v1/member-grants', async ({ request }) => { grant = await request.json(); return HttpResponse.json({ id: '10000000-0000-4000-8000-000000000001' }, { status: 201 }); }));
   renderPage();
   await userEvent.selectOptions(await screen.findByLabelText('授权成员'), 'member-a');
-  await userEvent.selectOptions(screen.getByLabelText('角色'), 'editor');
+  await userEvent.selectOptions(screen.getByLabelText('角色', { exact: true }), 'editor');
   await userEvent.click(screen.getByRole('button', { name: '授予角色' }));
   expect(grant).toEqual({ actorId: 'member-a', roleCode: 'editor', resourceId: null, expiresAt: null });
 });
