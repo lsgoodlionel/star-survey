@@ -1215,3 +1215,5 @@ jobs:
           platform/deploy/production/release/publish_release.sh
           --assets publication-assets --metadata publication-metadata/expected.json
           --body publication-metadata/body.md --repository "$GITHUB_REPOSITORY"
+          --run-id "$CANDIDATE_RUN_ID" --manifest-sha256 "$CANDIDATE_MANIFEST_SHA256"
+          --approval-comment-id "$APPROVAL_COMMENT_ID" --evidence-comment-id "$EVIDENCE_COMMENT_ID"

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 usage() {
-  printf 'Usage: %s --assets DIR --metadata FILE --body FILE --repository OWNER/REPO\n' "$0" >&2
+  printf 'Usage: %s --assets DIR --metadata FILE --body FILE --repository OWNER/REPO --run-id ID --manifest-sha256 SHA --approval-comment-id ID --evidence-comment-id ID\n' "$0" >&2
   exit 2
 }
 
@@ -10,17 +10,27 @@ assets=""
 metadata_file=""
 body_file=""
 repository=""
+run_id=""
+manifest_sha256=""
+approval_comment_id=""
+evidence_comment_id=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --assets) assets="${2:-}"; shift 2 ;;
     --metadata) metadata_file="${2:-}"; shift 2 ;;
     --body) body_file="${2:-}"; shift 2 ;;
     --repository) repository="${2:-}"; shift 2 ;;
+    --run-id) run_id="${2:-}"; shift 2 ;;
+    --manifest-sha256) manifest_sha256="${2:-}"; shift 2 ;;
+    --approval-comment-id) approval_comment_id="${2:-}"; shift 2 ;;
+    --evidence-comment-id) evidence_comment_id="${2:-}"; shift 2 ;;
     *) usage ;;
   esac
 done
 [[ -d "$assets" && -f "$metadata_file" && -f "$body_file" ]] || usage
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || usage
+[[ "$run_id" =~ ^[1-9][0-9]*$ && "$manifest_sha256" =~ ^[0-9a-f]{64}$ &&
+   "$approval_comment_id" =~ ^[1-9][0-9]*$ && "$evidence_comment_id" =~ ^[1-9][0-9]*$ ]] || usage
 
 release_dir="$(cd "$(dirname "$0")" && pwd -P)"
 assets="$(cd "$assets" && pwd -P)"
@@ -156,6 +166,12 @@ import sys
 print("true" if json.loads(Path(sys.argv[1]).read_text())["isDraft"] is True else "false")
 PY
 )" == true ]]; then
+  # Revalidate remote tag, current issue, evidence and approval after all uploads.
+  # The GitHub API does not provide an atomic check-and-publish operation.
+  python3 "$release_dir/candidate_provenance.py" \
+    --repository "$repository" --run-id "$run_id" --tag "$tag" --commit "$target_commit" \
+    --manifest-sha256 "$manifest_sha256" --assets "$assets" \
+    --approval-comment-id "$approval_comment_id" --evidence-comment-id "$evidence_comment_id"
   gh release edit "$tag" --repo "$repository" --draft=false
 fi
 query_release

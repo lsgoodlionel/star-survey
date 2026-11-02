@@ -9,6 +9,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import unittest
 import unicodedata
@@ -370,6 +371,9 @@ if args[:2] == ['release', 'edit']:
 raise SystemExit('unsupported fake gh command: ' + repr(args))
 """, encoding="utf-8")
         gh.chmod(0o755)
+        python = fake_bin / "python3"
+        python.write_text("#!/bin/sh\ncase \"$1\" in *candidate_provenance.py) printf 'gate-check\\n' >> \"$GH_LOG\"; [ -z \"${GATE_FAIL_REASON:-}\" ] && exit 0; exit 1;; esac\nexec " + sys.executable + " \"$@\"\n", encoding="utf-8")
+        python.chmod(0o755)
         return {
             "PATH": f"{fake_bin}:{os.environ['PATH']}", "GH_STATE": str(state),
             "GH_REMOTE": str(remote), "GH_LOG": str(log),
@@ -378,7 +382,8 @@ raise SystemExit('unsupported fake gh command: ' + repr(args))
     def run_publisher(self, body: Path, metadata: Path, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run([
             str(PUBLISH_RELEASE_PATH), "--assets", str(self.assets), "--metadata", str(metadata),
-            "--body", str(body), "--repository", "example/project",
+            "--body", str(body), "--repository", "example/project", "--run-id", "123",
+            "--manifest-sha256", "a" * 64, "--approval-comment-id", "124", "--evidence-comment-id", "125",
         ], text=True, capture_output=True, check=False, env={**os.environ, **environment})
 
     def test_existing_draft_repairs_reviewed_metadata_then_publishes(self):
@@ -414,6 +419,20 @@ raise SystemExit('unsupported fake gh command: ' + repr(args))
                 self.assertNotEqual(0, result.returncode)
                 self.assertNotIn("release\", \"edit", log.read_text())
 
+    def test_revocation_or_tag_move_during_upload_leaves_draft_private(self):
+        body, metadata, _ = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")
+        for reason in ("approval-revoked", "tag-moved"):
+            with self.subTest(reason=reason):
+                environment, state, log = self.make_fake_gh(None)
+                environment["GATE_FAIL_REASON"] = reason
+                result = self.run_publisher(body, metadata, environment)
+                self.assertNotEqual(0, result.returncode)
+                draft = json.loads(state.read_text())["release"]
+                self.assertTrue(draft["isDraft"])
+                self.assertEqual(len(list(self.assets.iterdir())), len(draft["assets"]))
+                self.assertIn("gate-check", log.read_text())
+                self.assertNotIn("--draft=false", log.read_text())
+
     def test_unknown_create_outcome_is_reconciled_without_clobber(self):
         body, metadata, expected = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")
         environment, state, log = self.make_fake_gh(None, create_unknown=True)
@@ -422,6 +441,7 @@ raise SystemExit('unsupported fake gh command: ' + repr(args))
         final = json.loads(state.read_text())["release"]
         self.assertFalse(final["isDraft"])
         self.assertEqual(expected["name"], final["name"])
+        self.assertLess(log.read_text().index("gate-check"), log.read_text().index("--draft=false"))
         self.assertNotIn("--clobber", log.read_text())
 
 

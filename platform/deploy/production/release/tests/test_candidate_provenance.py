@@ -123,3 +123,24 @@ class ManualPromotionWorkflowTest(unittest.TestCase):
             self.assertNotIn('continue-on-error', step)
             if 'run' in step:
                 self.assertNotIn('|| true', step['run'])
+
+class LiveTagTest(unittest.TestCase):
+    def test_live_lightweight_and_annotated_tags_are_peeled(self):
+        commit = 'a' * 40
+        tag_object = 'b' * 40
+        def api(path):
+            if path.endswith('/git/ref/tags/v1.2.3-rc.1'):
+                return {'object': {'type': 'tag', 'sha': tag_object}}
+            if path.endswith('/git/tags/' + tag_object):
+                return {'object': {'type': 'commit', 'sha': commit}}
+            raise AssertionError(path)
+        self.assertEqual(commit, module.resolve_live_tag(api, 'lsgoodlionel/star-survey', 'v1.2.3-rc.1'))
+        self.assertEqual(commit, module.resolve_live_tag(lambda _: {'object': {'type': 'commit', 'sha': commit}}, 'lsgoodlionel/star-survey', 'v1.2.3-rc.1'))
+        for value in ({'object': {'type': 'blob', 'sha': commit}}, {'object': {'type': 'commit', 'sha': 'bad'}}, {}):
+            with self.assertRaises(ValueError):
+                module.resolve_live_tag(lambda _: value, 'lsgoodlionel/star-survey', 'v1.2.3-rc.1')
+
+    def test_moved_tag_does_not_match_approved_commit(self):
+        with self.assertRaises(ValueError):
+            module.verify_live_tag(lambda _: {'object': {'type': 'commit', 'sha': 'b'*40}},
+                                   'lsgoodlionel/star-survey', 'v1.2.3-rc.1', 'a'*40)

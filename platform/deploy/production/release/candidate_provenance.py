@@ -76,6 +76,30 @@ def verify_human_approval(issue, approval, evidence, owner, run_id, tag, commit,
         raise ValueError('human records do not match the exact candidate and required acceptance')
 
 
+
+def resolve_live_tag(api, repository, tag):
+    if not REPO.fullmatch(repository) or not RC_TAG.fullmatch(tag):
+        raise ValueError('invalid remote tag identity')
+    record = api(f'repos/{repository}/git/ref/tags/{tag}')
+    seen = set()
+    for _ in range(8):
+        obj = record.get('object') if isinstance(record, dict) else None
+        if not isinstance(obj, dict) or not isinstance(obj.get('sha'), str) or not SHA.fullmatch(obj['sha']):
+            raise ValueError('invalid remote tag object')
+        if obj.get('type') == 'commit':
+            return obj['sha']
+        if obj.get('type') != 'tag' or obj['sha'] in seen:
+            raise ValueError('invalid or cyclic annotated tag')
+        seen.add(obj['sha'])
+        record = api(f'repos/{repository}/git/tags/{obj["sha"]}')
+    raise ValueError('annotated tag nesting exceeds limit')
+
+
+def verify_live_tag(api, repository, tag, commit):
+    if not SHA.fullmatch(commit) or resolve_live_tag(api, repository, tag) != commit:
+        raise ValueError('live tag differs from approved commit')
+
+
 def main():
     import argparse
     import json
@@ -97,13 +121,10 @@ def main():
     workflow = api(f'repos/{args.repository}/actions/workflows/release.yml')
     run = api(f'repos/{args.repository}/actions/runs/{args.run_id}')
     verify_run(run, args.run_id, workflow.get('id'), args.repository, args.tag, args.commit)
-    actual = subprocess.check_output(['git', 'rev-parse', f'refs/tags/{args.tag}^{{commit}}'], text=True).strip()
-    if actual != args.commit:
-        raise SystemExit('candidate tag does not point to candidate commit')
+    verify_live_tag(api, args.repository, args.tag, args.commit)
     if any((args.manifest_sha256, args.assets, args.approval_comment_id, args.evidence_comment_id)):
         import hashlib
         from pathlib import Path
-        import urllib.request
         if args.repository != 'lsgoodlionel/star-survey' or not args.assets or not args.manifest_sha256:
             raise SystemExit('invalid promotion identity')
         if not args.approval_comment_id or not args.evidence_comment_id or args.approval_comment_id <= 0 or args.evidence_comment_id <= 0:
@@ -115,15 +136,10 @@ def main():
         readiness = json.loads((assets / 'release-readiness.json').read_text())
         if readiness.get('promotable') is not True or readiness.get('reason') != 'upgrade-verified':
             raise SystemExit('bootstrap and unverified upgrades cannot be promoted')
-        def public_api(path):
-            request = urllib.request.Request('https://api.github.com/' + path,
-                                             headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'survey-release-gate'})
-            with urllib.request.urlopen(request, timeout=30) as response:
-                return json.load(response)
         prefix = f'repos/{args.repository}/issues'
-        issue = public_api(prefix + '/41')
-        approval = public_api(prefix + f'/comments/{args.approval_comment_id}')
-        evidence = public_api(prefix + f'/comments/{args.evidence_comment_id}')
+        issue = api(prefix + '/41')
+        approval = api(prefix + f'/comments/{args.approval_comment_id}')
+        evidence = api(prefix + f'/comments/{args.evidence_comment_id}')
         expected_url = f'https://api.github.com/repos/{args.repository}/issues/41'
         if approval.get('id') != args.approval_comment_id or approval.get('issue_url') != expected_url or evidence.get('id') != args.evidence_comment_id:
             raise SystemExit('human record is not on the acceptance issue')
