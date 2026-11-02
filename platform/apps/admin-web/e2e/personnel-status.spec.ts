@@ -27,6 +27,39 @@ test('live personnel grant controls tenant status and revocation takes effect', 
     await expect(page).toHaveURL(/\/operations\/tenants$/);
   } finally { await redactSensitiveInputs(page); }
 
+  // The platform operator has a signed live session and independent grant;
+  // these writes never use the legacy no-session operator credential.
+  const fixture = await readFile(new URL('../../../tests/fixtures/surveys/publish-gateway.json', import.meta.url));
+  await page.getByRole('link', { name: '模板中心' }).click();
+  await page.getByRole('link', { name: '平台模板管理' }).click();
+  await page.getByRole('textbox', { name: '平台模板名称' }).fill('人员权限验收模板');
+  await page.getByLabel('定义 JSON 文件').setInputFiles({ name: 'template.json', mimeType: 'application/json', buffer: fixture });
+  await page.getByRole('button', { name: '导入平台模板' }).click();
+  const templateLink = page.getByRole('link', { name: '查看平台模板' });
+  await expect(templateLink).toBeVisible();
+  const templateId = new URL((await templateLink.getAttribute('href'))!, 'http://local').pathname.split('/').at(-1)!;
+  expect(templateId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  await templateLink.click();
+  await expect(page.getByRole('heading', { name: '版本记录' })).toBeVisible();
+  await page.getByLabel('定义 JSON 文件').setInputFiles({ name: 'template-v2.json', mimeType: 'application/json', buffer: fixture });
+  const versionResponse = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().endsWith(`/v1/platform/survey-templates/${templateId}/versions`));
+  await page.getByRole('button', { name: '导入新版本' }).click();
+  expect((await versionResponse).status()).toBe(200);
+  await expect(page.getByRole('heading', { name: '版本记录' }).locator('..').getByText('版本 2', { exact: false })).toBeVisible();
+  await page.getByRole('combobox', { name: '上架版本' }).selectOption('2');
+  await page.getByRole('button', { name: '上架所选版本' }).click();
+  await page.getByRole('button', { name: '确认上架版本 2' }).click();
+  await expect(page.getByText('平台模板已上架')).toBeVisible();
+  await expect(page.locator('dl.template-facts').getByText('2', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '下架平台模板' }).click();
+  await expect(page.getByText('平台模板已下架')).toBeVisible();
+  const templateAuditQuery = `SELECT
+    (SELECT count(*) FROM audit_log WHERE actor_id='${metadata.principal}' AND resource LIKE 'platform-survey-template/${templateId}%' AND action IN ('platform.template.create','platform.template.version','platform.template.publish','platform.template.unpublish')),
+    (SELECT count(*) FROM audit_log WHERE actor_id='${metadata.principal}' AND resource='platform-survey-template/${templateId} version=2' AND action='platform.template.publish'),
+    (SELECT count(*) FROM platform_survey_template WHERE id='${templateId}' AND status='unpublished' AND published_version IS NULL AND current_version=2)`;
+  const templateAudit = execFileSync('docker', ['exec', '-i', db, 'psql', '-U', 'postgres', '-d', 'platform', '-At', '-v', 'ON_ERROR_STOP=1'], { input: templateAuditQuery, encoding: 'utf8' }).trim();
+  expect(templateAudit).toBe('4|1|1');
+
   await page.evaluate((id) => {
     window.history.pushState({}, '', `/operations/tenants/${id}`);
     window.dispatchEvent(new PopStateEvent('popstate'));
@@ -63,6 +96,8 @@ test('live personnel grant controls tenant status and revocation takes effect', 
   });
   const engineDenied = await request.get(`/v1/platform/tenants/${metadata.targetId}/engine-instances`, { headers: { Authorization: `Bearer ${token}` } });
   expect(engineDenied.status()).toBe(403);
+  const templateDenied = await request.post(`/v1/platform/survey-templates/${templateId}/publish`, { headers: { Authorization: `Bearer ${token}` }, data: { versionNo: 2 } });
+  expect(templateDenied.status()).toBe(403);
   expect(denied.status()).toBe(403);
   await page.getByRole('link', { name: '返回租户列表' }).click();
   await expect(page.getByRole('heading', { name: '需要平台运营权限' })).toBeVisible();
@@ -72,5 +107,11 @@ test('live personnel grant controls tenant status and revocation takes effect', 
   }, metadata.targetId);
   await expect(page.getByRole('heading', { name: '需要平台运营权限' })).toBeVisible();
   await expect(page.getByText(engineId)).toHaveCount(0);
+  await page.evaluate((id) => {
+    window.history.pushState({}, '', `/templates/${id}?mode=platform`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, templateId);
+  await expect(page.getByRole('alert')).toHaveText('无权查看平台模板管理');
+  await expect(page.getByRole('heading', { name: '人员权限验收模板' })).toHaveCount(0);
   await expect(page.getByText('人员状态验收租户')).toHaveCount(0);
 });
