@@ -11,7 +11,7 @@ export interface DefinitionValidationIssue {
 }
 
 type QuestionUpdate = Partial<
-  Pick<EditableQuestion, 'answers' | 'code' | 'mandatory' | 'other' | 'text'>
+  Pick<EditableQuestion, 'answers' | 'code' | 'mandatory' | 'other' | 'text' | 'themeOptions'>
 >;
 
 export function updateQuestion(
@@ -115,6 +115,7 @@ function ownedQuestionUpdate(update: QuestionUpdate): QuestionUpdate {
   if (update.mandatory !== undefined) owned.mandatory = update.mandatory;
   if (update.other !== undefined) owned.other = update.other;
   if (update.answers !== undefined) owned.answers = update.answers.map(copyChoice);
+  if (update.themeOptions !== undefined) owned.themeOptions = structuredClone(update.themeOptions);
   return owned;
 }
 

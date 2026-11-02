@@ -36,6 +36,18 @@ function sourceWithExtensions() {
 }
 
 describe('lossless survey definition model', () => {
+  test.each(['mjy-collapsible', 'mjy-cascading-select', 'mjy-carousel'])('retains unknown theme fields after editing %s', (theme) => {
+    const source = sourceWithExtensions();
+    const groups = source.groups as Array<{ questions: Array<Record<string, unknown>> }>;
+    const question = groups[0].questions[0];
+    question.theme = theme;
+    question.themeOptions = { known: 'before', future: { nested: [1, { keep: true }] } };
+    const definition = parseDefinition(source);
+    const updated = updateQuestion(definition, singleUuid, { themeOptions: { ...definition.groups[0].questions[0].themeOptions, known: 'after' } });
+    const output = serializeDefinition(updated) as typeof source;
+    const saved = (output.groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions[0];
+    expect(saved.themeOptions).toEqual({ known: 'after', future: { nested: [1, { keep: true }] } });
+  });
   test('roundTripsEveryFieldTheEditorDoesNotOwn', () => {
     const source = sourceWithExtensions();
 

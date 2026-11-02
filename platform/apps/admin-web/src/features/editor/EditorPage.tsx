@@ -32,6 +32,8 @@ import { QuestionEditor } from './QuestionEditor';
 import {
   parseDefinition,
   serializeDefinition,
+  createBasicQuestion,
+  type BasicQuestionType,
   type EditableSurveyDefinition,
 } from './model/definition';
 import { moveGroup, moveQuestion, updateQuestion, validateDefinition } from './model/operations';
@@ -50,6 +52,7 @@ interface EditorPageProps {
 }
 
 type MobilePanel = 'outline' | 'editor' | 'properties';
+type PaletteType = BasicQuestionType | 'mjy-collapsible' | 'mjy-cascading-select' | 'mjy-carousel';
 
 export function EditorPage({ api, surveyId, tenantId }: EditorPageProps) {
   const surveyQuery = useQuery({
@@ -116,17 +119,32 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   const [version, setVersion] = useState(initialState.version);
   const [dirty, setDirty] = useState(initialState.dirty);
   const [savedVersion, setSavedVersion] = useState<number | null>(null);
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [conflict, setConflict] = useState(false);
   const [validationMessages, setValidationMessages] = useState<string[]>([]);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>('outline');
+  const [newQuestionType, setNewQuestionType] = useState<PaletteType>('L');
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const inspectorButton = useRef<HTMLButtonElement>(null);
+  const inspectorClose = useRef<HTMLButtonElement>(null);
   const revisionRef = useRef(0);
   const narrow = useNarrowViewport();
+  const medium = useMediaQuery('(min-width: 820px) and (max-width: 1179px)');
+  useEffect(() => {
+    if (inspectorOpen && medium) inspectorClose.current?.focus();
+  }, [inspectorOpen, medium]);
+  function closeInspector() {
+    setInspectorOpen(false);
+    inspectorButton.current?.focus();
+  }
   const leaveBlocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
       dirty &&
       !isAuthenticationPath(nextLocation.pathname) &&
       !isQuestionSelectionNavigation(currentLocation, nextLocation),
   );
+  const conflictDialog = useDialogFocus(conflict);
+  const leaveDialog = useDialogFocus(leaveBlocker.state === 'blocked');
   const requestedQuestionUuid = searchParams.get('question');
   const selectedQuestionUuid =
     (requestedQuestionUuid && hasQuestion(definition, requestedQuestionUuid)
@@ -192,6 +210,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       synchronizeDraftCache(saved, savedDefinition.title);
       setVersion(saved.version);
       setSavedVersion(saved.version);
+      setSavedAt(new Date());
       if (revisionRef.current === submittedRevision) {
         setDefinition(savedDefinition);
         setDirty(false);
@@ -269,7 +288,38 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   }
 
   const outline = (
-    <Outline
+    <><div className="editor-question-palette">
+      <label>添加题型 <select aria-label="添加题型" value={newQuestionType} disabled={!canEdit || !definition.groups.length} onChange={(event) => setNewQuestionType(event.target.value as PaletteType)}>
+        <option value="L">单选题</option><option value="M">多选题</option><option value="S">短文本题</option><option value="T">长文本题</option><option value="X">说明文字</option>
+        <option value="mjy-collapsible">折叠栏目</option>
+        <option value="mjy-cascading-select">多级下拉</option><option value="mjy-carousel">轮播图</option>
+      </select></label>
+      <button type="button" disabled={!canEdit || !definition.groups.length} onClick={() => {
+        const target = definition.groups.find((group) => group.questions.some((item) => item.uuid === selectedQuestionUuid)) ?? definition.groups[0];
+        if (!target) return;
+        const codes = new Set(definition.groups.flatMap((group) => group.questions.map((item) => item.code.toUpperCase())));
+        let index = 1;
+        while (codes.has(`Q${index}`)) index++;
+        const uuid = crypto.randomUUID();
+        const baseType: BasicQuestionType = newQuestionType === 'mjy-collapsible' ? 'X' : newQuestionType === 'mjy-cascading-select' ? 'T' : newQuestionType === 'mjy-carousel' ? 'L' : newQuestionType;
+        const question = createBasicQuestion(baseType, uuid, `Q${index}`);
+        if (newQuestionType === 'mjy-collapsible') {
+          question.source.theme = 'mjy-collapsible';
+          question.themeOptions = { summary: '新栏目', collapsed: true };
+        }
+        if (newQuestionType === 'mjy-cascading-select') {
+          question.source.theme = newQuestionType;
+          question.themeOptions = { structureVersion: 'r1', dictionary: '', levels: [''] };
+        }
+        if (newQuestionType === 'mjy-carousel') {
+          question.source.theme = newQuestionType;
+          question.themeOptions = { slides: [{ code: 'A1', assetId: '', alt: '' }], autoplay: false };
+        }
+        changeDefinition({ ...definition, groups: definition.groups.map((group) => group.uuid === target.uuid ? { ...group, questions: [...group.questions, question] } : group) });
+        setSearchParams({ question: uuid }, { replace: true });
+        if (narrow) setMobilePanel('editor');
+      }}>添加题目</button>
+    </div><Outline
       definition={definition}
       selectedQuestionUuid={selectedQuestionUuid}
       disabled={!canEdit}
@@ -280,10 +330,12 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       onMoveQuestion={(uuid, groupUuid, targetIndex) => {
         changeDefinition(moveQuestion(definition, uuid, groupUuid, targetIndex));
       }}
-    />
+    /></>
   );
   const questionEditor = selectedQuestion ? (
     <QuestionEditor
+      api={api}
+      tenantId={tenantId}
       question={selectedQuestion}
       disabled={!canEdit}
       onChange={(update) => changeDefinition(updateQuestion(definition, selectedQuestion.uuid, update))}
@@ -327,6 +379,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
           ) : null}
           <div className="survey-editor-save">
             {!canEdit ? <span>当前账号仅可查看此问卷</span> : null}
+            <span role="status" aria-label="保存状态">版本 {version} · {saveMutation.isPending ? '正在保存' : dirty ? '未保存' : savedAt ? `保存完成 ${savedAt.toLocaleTimeString()}` : '草稿已载入'}</span>
             {savedVersion ? <span>已保存版本 {savedVersion}</span> : null}
             <button
               type="button"
@@ -360,31 +413,56 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
                 key={panel}
                 type="button"
                 role="tab"
+                id={`editor-tab-${panel}`}
                 aria-selected={mobilePanel === panel}
+                aria-controls={`editor-panel-${panel}`}
+                tabIndex={mobilePanel === panel ? 0 : -1}
+                onKeyDown={(event) => {
+                  const panels: MobilePanel[] = ['outline', 'editor', 'properties'];
+                  const current = panels.indexOf(panel);
+                  const next = event.key === 'ArrowRight' ? (current + 1) % panels.length
+                    : event.key === 'ArrowLeft' ? (current + panels.length - 1) % panels.length
+                    : event.key === 'Home' ? 0 : event.key === 'End' ? panels.length - 1 : -1;
+                  if (next < 0) return;
+                  event.preventDefault();
+                  setMobilePanel(panels[next]);
+                  document.getElementById(`editor-tab-${panels[next]}`)?.focus();
+                }}
                 onClick={() => setMobilePanel(panel)}
               >
                 {panelLabel(panel)}
               </button>
             ))}
           </div>
-          <section role="tabpanel" aria-label={panelLabel(mobilePanel)} className="editor-mobile-panel">
-            {mobilePanel === 'outline' ? outline : mobilePanel === 'editor' ? questionEditor : properties}
-          </section>
+          {(['outline', 'editor', 'properties'] as const).map((panel) => (
+            <section key={panel} role="tabpanel" id={`editor-panel-${panel}`} aria-labelledby={`editor-tab-${panel}`} hidden={mobilePanel !== panel} className="editor-mobile-panel">
+              {mobilePanel === panel ? panel === 'outline' ? outline : panel === 'editor' ? questionEditor : properties : null}
+            </section>
+          ))}
         </div>
       ) : (
-        <div className="editor-desktop-grid">
+        <div className={`editor-desktop-grid${medium ? ' editor-medium-grid' : ''}`}>
           <aside aria-label="问卷大纲">{outline}</aside>
-          <section aria-label="题目编辑">{questionEditor}</section>
-          <aside aria-label="问卷属性">{properties}</aside>
+          <section aria-label="题目编辑">
+            {medium ? <button ref={inspectorButton} type="button" className="editor-inspector-open" onClick={() => setInspectorOpen(true)}>打开属性检查器</button> : null}
+            {questionEditor}
+          </section>
+          {medium ? inspectorOpen && (
+            <aside role="dialog" aria-label="问卷属性" className="editor-inspector" onKeyDown={(event) => { if (event.key === 'Escape') closeInspector(); }}>
+              <button ref={inspectorClose} type="button" onClick={closeInspector}>关闭属性检查器</button>
+              {properties}
+            </aside>
+          ) : <aside aria-label="问卷属性">{properties}</aside>}
         </div>
       )}
 
       {conflict ? (
         <div className="editor-dialog-backdrop">
-          <div role="dialog" aria-modal="true" aria-label="草稿版本冲突" className="editor-dialog">
+          <div ref={conflictDialog} role="dialog" aria-modal="true" aria-label="草稿版本冲突" className="editor-dialog" onKeyDown={trapDialogFocus}>
             <h2>草稿版本冲突</h2>
             <p>服务器上的草稿已更新。你的本地修改仍在当前页面中。</p>
             <div className="editor-dialog-actions">
+              <button type="button" onClick={() => setConflict(false)}>继续编辑</button>
               <button type="button" onClick={() => void reloadDraft()}>
                 <RefreshCw aria-hidden="true" />
                 重新载入
@@ -400,7 +478,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
 
       {leaveBlocker.state === 'blocked' ? (
         <div className="editor-dialog-backdrop">
-          <div role="dialog" aria-modal="true" aria-label="未保存的修改" className="editor-dialog">
+          <div ref={leaveDialog} role="dialog" aria-modal="true" aria-label="未保存的修改" className="editor-dialog" onKeyDown={trapDialogFocus}>
             <h2>未保存的修改</h2>
             <p>当前草稿尚未保存，离开后这些修改将被放弃。</p>
             <div className="editor-dialog-actions">
@@ -475,15 +553,41 @@ function normalizedSearch(params: URLSearchParams) {
 }
 
 function useNarrowViewport() {
-  const [narrow, setNarrow] = useState(
-    () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 819px)').matches,
+  return useMediaQuery('(max-width: 819px)');
+}
+
+function useDialogFocus(active: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!active) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    ref.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
+    return () => previous?.focus();
+  }, [active]);
+  return ref;
+}
+
+function trapDialogFocus(event: React.KeyboardEvent<HTMLDivElement>) {
+  if (event.key !== 'Tab') return;
+  const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+  if (!buttons.length) return;
+  const first = buttons[0];
+  const last = buttons[buttons.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
+
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(
+    () => typeof window.matchMedia === 'function' && window.matchMedia(query).matches,
   );
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return;
-    const media = window.matchMedia('(max-width: 819px)');
-    const update = () => setNarrow(media.matches);
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
-  }, []);
-  return narrow;
+  }, [query]);
+  return matches;
 }

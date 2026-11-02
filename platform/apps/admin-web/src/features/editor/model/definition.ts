@@ -17,6 +17,7 @@ export interface EditableQuestion {
   mandatory?: boolean;
   other?: boolean;
   answers?: EditableChoice[];
+  themeOptions?: JsonObject;
 }
 
 export interface EditableGroup {
@@ -129,6 +130,8 @@ function parseQuestion(value: unknown): EditableQuestion {
     mandatory: editable && typeof source.mandatory === 'boolean' ? source.mandatory : undefined,
     other: editable && typeof source.other === 'boolean' ? source.other : undefined,
     answers,
+    themeOptions: ['mjy-collapsible', 'mjy-cascading-select', 'mjy-carousel'].includes(String(source.theme)) && source.themeOptions && typeof source.themeOptions === 'object' && !Array.isArray(source.themeOptions)
+      ? cloneJson(source.themeOptions as JsonObject) : undefined,
   };
 }
 
@@ -158,6 +161,7 @@ function serializeQuestion(question: EditableQuestion): JsonObject {
   serialized.text = question.text;
   setOptional(serialized, 'mandatory', question.mandatory);
   setOptional(serialized, 'other', question.other);
+  if (question.themeOptions !== undefined) serialized.themeOptions = cloneJson(question.themeOptions);
   if (question.answers !== undefined) {
     serialized.answers = question.answers.map((answer) => ({
       ...cloneJson(answer.source),

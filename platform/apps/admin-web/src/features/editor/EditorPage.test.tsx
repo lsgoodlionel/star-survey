@@ -103,6 +103,130 @@ afterEach(() => {
 });
 
 describe('EditorPage', () => {
+  test('adds a basic question from the question palette', async () => {
+    renderEditor(editorApi(), `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    await screen.findByLabelText('题目文本');
+    fireEvent.change(screen.getByLabelText('添加题型'), { target: { value: 'S' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加题目' }));
+    expect(screen.getByLabelText('题目文本')).toHaveValue('短文本题');
+    expect(screen.getByRole('status', { name: '保存状态' })).toHaveTextContent('未保存');
+  });
+
+  test('adds a collapsible section from the palette', async () => {
+    renderEditor(editorApi(), `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    await screen.findByLabelText('题目文本');
+    fireEvent.change(screen.getByLabelText('添加题型'), { target: { value: 'mjy-collapsible' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加题目' }));
+    expect(screen.getByLabelText('栏目标题')).toHaveValue('新栏目');
+    expect(screen.getByLabelText('默认折叠')).toBeChecked();
+  });
+
+  test('adds and configures a cascading select using a published dictionary', async () => {
+    const api = editorApi({ 'GET /v1/dictionaries': () => [{ code: 'regions', name: '地区', maxDepth: 1, currentVersion: 'v1' }] });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    await screen.findByLabelText('题目文本');
+    fireEvent.change(screen.getByLabelText('添加题型'), { target: { value: 'mjy-cascading-select' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加题目' }));
+    await screen.findByRole('option', { name: '地区' });
+    fireEvent.change(screen.getByLabelText('字典'), { target: { value: 'regions' } });
+    fireEvent.change(screen.getByLabelText('第 1 级标题'), { target: { value: '省' } });
+    expect(screen.getByLabelText('字典')).toHaveValue('regions');
+    expect(screen.getByRole('button', { name: '添加级别' })).toBeDisabled();
+  });
+  test('keeps carousel slides aligned when answer codes change and options are added', async () => {
+    const assetId = '60000000-0000-4000-8000-000000000001';
+    let saved: Record<string, unknown> | undefined;
+    const api = editorApi({
+      'GET /v1/assets': () => [{ id: assetId, name: '图片', kind: 'image', status: 'active', currentVersion: 1, contentType: 'image/png', byteSize: 1, sha256: 'a'.repeat(64), createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }],
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => { saved = (request.body as { definition: Record<string, unknown> }).definition; return { surveyId, version: 5, definition: saved }; },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    await screen.findByLabelText('题目文本');
+    fireEvent.change(screen.getByLabelText('添加题型'), { target: { value: 'mjy-carousel' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加题目' }));
+    await screen.findByRole('option', { name: '图片' });
+    expect(screen.getByLabelText('允许填写其他答案')).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('图片 1'), { target: { value: assetId } });
+    fireEvent.change(screen.getByLabelText('替代文本 1'), { target: { value: '示例图片' } });
+    fireEvent.change(screen.getByLabelText('选项 1 编码'), { target: { value: 'FIRST' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加选项' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除选项 2' }));
+    expect(screen.queryByLabelText('图片 2')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '添加选项' }));
+    fireEvent.change(screen.getByLabelText('图片 2'), { target: { value: assetId } });
+    fireEvent.change(screen.getByLabelText('替代文本 2'), { target: { value: '另一张图片' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const groups = saved!.groups as Array<{ questions: Array<Record<string, unknown>> }>;
+    expect((groups[0].questions.at(-1)!.themeOptions as { slides: unknown }).slides).toEqual([{ code: 'FIRST', assetId, alt: '示例图片' }, { code: 'A2', assetId, alt: '另一张图片' }]);
+  });
+  test('does not rewrite malformed carousel extension data', async () => {
+    const source = structuredClone(gatewayFixture);
+    const question = source.groups[0].questions[0] as Record<string, unknown>;
+    question.theme = 'mjy-carousel';
+    question.themeOptions = { slides: [{ code: 'A1', future: 'keep' }, 'unknown-extension'], future: true };
+    renderEditor(editorApi({ [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }) }), `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    expect(await screen.findByRole('alert')).toHaveTextContent('轮播图配置格式无法可视化编辑');
+    expect(screen.queryByRole('button', { name: '添加选项' })).not.toBeInTheDocument();
+  });
+  test('can repair a missing carousel slide without altering other slide metadata', async () => {
+    const source = structuredClone(gatewayFixture);
+    const question = source.groups[0].questions[0] as Record<string, unknown>;
+    question.theme = 'mjy-carousel';
+    question.themeOptions = { slides: [], future: 'keep' };
+    const api = editorApi({ [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }), 'GET /v1/assets': () => [] });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    fireEvent.click(await screen.findByRole('button', { name: '为选项 A1 添加图片' }));
+    expect(screen.getByLabelText('图片 1')).toBeInTheDocument();
+  });
+  test('retains malformed cascading levels instead of normalizing unknown data', async () => {
+    const source = structuredClone(gatewayFixture);
+    const question = source.groups[0].questions[1] as Record<string, unknown>;
+    question.theme = 'mjy-cascading-select';
+    question.themeOptions = { dictionary: 'regions', levels: ['地区', { future: true }] };
+    renderEditor(editorApi({ [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }) }), `/surveys/${surveyId}/edit?question=${textUuid}`);
+    expect(await screen.findByRole('alert')).toHaveTextContent('多级下拉配置格式无法可视化编辑');
+    expect(screen.queryByRole('button', { name: '添加级别' })).not.toBeInTheDocument();
+  });
+  test('shows an unavailable dictionary without clearing its stored reference', async () => {
+    const source = structuredClone(gatewayFixture);
+    const question = source.groups[0].questions[1] as Record<string, unknown>;
+    question.theme = 'mjy-cascading-select';
+    question.themeOptions = { dictionary: 'retired', structureVersion: 'r1', levels: ['地区'] };
+    const api = editorApi({ [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }), 'GET /v1/dictionaries': () => [] });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    expect(await screen.findByRole('option', { name: '当前字典不可用：retired' })).toBeInTheDocument();
+    expect(screen.getByLabelText('字典')).toHaveValue('retired');
+  });
+  test('shows a Chinese question type and current save state', async () => {
+    renderEditor(editorApi({ [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: { ...gatewayFixture, language: 'zh-Hans' } }) }), `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    expect(await screen.findByText('单选题', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: '保存状态' })).toHaveTextContent('版本 4');
+    fireEvent.change(screen.getByLabelText('题目文本'), { target: { value: '未保存修改' } });
+    expect(screen.getByRole('status', { name: '保存状态' })).toHaveTextContent('未保存');
+    expect(screen.getByText('简体中文')).toBeInTheDocument();
+  });
+  test('configures a collapsible section while preserving unknown options', async () => {
+    const source = structuredClone(gatewayFixture);
+    const question = source.groups[0].questions.find((item) => item.uuid === noteUuid)! as Record<string, unknown>;
+    question.theme = 'mjy-collapsible';
+    question.themeOptions = { summary: '原栏目', collapsed: true, future: { keep: true } };
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${noteUuid}`);
+    fireEvent.change(await screen.findByLabelText('栏目标题'), { target: { value: '新栏目' } });
+    fireEvent.click(screen.getByLabelText('默认折叠'));
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === noteUuid)! as Record<string, unknown>;
+    expect(saved.themeOptions).toEqual({ summary: '新栏目', collapsed: false, future: { keep: true } });
+  });
   test('linksTheEditorToolbarToTheAuthoringWorkflow', async () => {
     renderEditor();
 
@@ -515,6 +639,9 @@ describe('EditorPage', () => {
     expect(screen.getByLabelText('题目文本')).toHaveValue('必须保留的本地题目');
     expect(screen.getByRole('button', { name: '重新载入' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '导出本地草稿' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '继续编辑' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('dialog', { name: '草稿版本冲突' }), { key: 'Tab', shiftKey: true });
+    expect(screen.getByRole('button', { name: '导出本地草稿' })).toHaveFocus();
     expect(createObjectUrl).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: '导出本地草稿' }));
@@ -696,10 +823,31 @@ describe('EditorPage', () => {
     }
     expect(screen.getByRole('tablist', { name: '编辑区域' })).toBeInTheDocument();
     expect(screen.getByRole('tabpanel', { name: '大纲' })).toBeInTheDocument();
+    const outlineTab = screen.getByRole('tab', { name: '大纲' });
+    outlineTab.focus();
+    fireEvent.keyDown(outlineTab, { key: 'ArrowRight' });
+    expect(screen.getByRole('tab', { name: '编辑' })).toHaveFocus();
+    expect(screen.getByRole('tabpanel', { name: '编辑' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: '编辑' }));
     expect(screen.getByRole('tabpanel', { name: '编辑' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: '属性' }));
     expect(screen.getByRole('tabpanel', { name: '属性' })).toBeInTheDocument();
+  });
+
+  test.each([820, 1179])('opens and closes the properties inspector at %ipx', async (width) => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(min-width: 820px) and (max-width: 1179px)' && width >= 820 && width <= 1179,
+      media: query, onchange: null, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
+    }));
+    renderEditor(editorApi(), `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    const open = await screen.findByRole('button', { name: '打开属性检查器' });
+    expect(screen.queryByRole('dialog', { name: '问卷属性' })).not.toBeInTheDocument();
+    fireEvent.click(open);
+    expect(screen.getByRole('dialog', { name: '问卷属性' })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('dialog', { name: '问卷属性' }), { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: '问卷属性' })).not.toBeInTheDocument();
+    expect(open).toHaveFocus();
   });
 
   test('gatesEditingAndSavingWithAuthoritativeResourceCapabilities', async () => {

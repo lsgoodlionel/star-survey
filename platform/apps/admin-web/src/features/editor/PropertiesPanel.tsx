@@ -39,9 +39,11 @@ export function PropertiesPanel({ definition, disabled, onChange }: PropertiesPa
           }
         />
       </label>
-      <label>
-        语言
-        <input
+      <div>
+        <p>语言：<span>{languageLabel(definition.language)}</span></p>
+        <details>
+          <summary>技术信息</summary>
+          <label>语言代码 <input
           value={definition.language}
           disabled={disabled}
           onChange={(event) =>
@@ -51,8 +53,14 @@ export function PropertiesPanel({ definition, disabled, onChange }: PropertiesPa
               language: event.target.value,
             })
           }
-        />
-      </label>
+          /></label>
+        </details>
+      </div>
     </div>
   );
+}
+
+function languageLabel(language: string) {
+  const labels: Record<string, string> = { 'zh-Hans': '简体中文', 'zh-Hant': '繁体中文', en: '英语' };
+  return labels[language] ?? language;
 }
