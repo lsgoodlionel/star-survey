@@ -1,5 +1,9 @@
 # 自治执行进度
 
+2026-11-02 下一候选策略登记：基于远端 main `14e4005b35cddf1786dd5e3eb002f36bfabde67c` 建立独立分支 `codex/wave2-rc7-policy`，本地与远端均未发现 `v0.3.7-rc.1` 标签，基线文件无同名策略后，新增 `.github/release/baseline-policy.json` 的 `0.3.7-rc.1: bootstrap`。只登记策略，未创建标签或 RC，未修改旧策略或功能。Release 全套 60/60、`git diff --check` 通过。bootstrap 不代表升级验证通过或稳定版可推广，完整原生生命周期仍待发布后独立验收。推送前 main 精确提交的 [质量 run 41390926881](https://github.com/lsgoodlionel/star-survey/actions/runs/41390926881) 成功，10/10 作业通过；本分支 CI 尚未触发，推送后核验，不自动合并。
+
+2026-11-02 PR #27 主线最终结果补记（覆盖下方历史待查状态）：PR 已普通合并至 `14e4005b35cddf1786dd5e3eb002f36bfabde67c`，main 质量 10/10 成功；合并前 head `3cce221e68` 的质量与 Release 只读构建均成功，四节点有序启动诊断成功。修复包含 edge 有限等待和 admin→platform 健康依赖；主线质量与启动诊断不能替代正式四节点完整生命周期及 Release readiness。
+
 2026-11-02 PR [#27](https://github.com/lsgoodlionel/star-survey/pull/27) 原生诊断补证：首轮诊断缺少 platform DNS，四节点失败；修正为延迟启动 platform 的生产时序后，[第二轮 41382574536](https://github.com/lsgoodlionel/star-survey/actions/runs/41382574536) 四节点通过并捕获 nginx `host not found in upstream platform`，随后自动重启恢复 healthy。该复现机制与旧 ARM64 快照一致，但旧节点未保存 nginx 日志，不能断言旧失败的完全归因。新增 admin→platform service_healthy 依赖，保持所有探针参数；回归先红后绿，生产 115 项中 114 通过、1 原生生命周期按前置条件跳过。PR 原生诊断改验有序启动、无重启、无 DNS 错误。前提交质量/构建因新推送取消；eccb9ca48a 的质量与构建仍进行中；新修复推送后需以精确 HEAD 查询，不将诊断等同 Release readiness。
 
 2026-11-02 原生启动修复：操作前登记 origin/main 与不可变 v0.3.6-rc.1 均为 `62e071d029a847a2b0b8a06cd0320aa0fa386bdd`。Release run 41377811981 四节点 install 失败。独立分支 `codex/wave2-native-health` 修复 running/starting 健康汇总竞态，最多等待 120 秒；unhealthy、服务缺失、异常退出仍阻断，status 保持即时检查。回归测试先红后绿；生产测试 114 项中 113 通过、1 项真实原生验收按前置条件跳过。隔离 Docker 容器真实 starting→healthy 等待通过，其余服务建模，不代表完整栈验收。22.04 ARM64 admin-web 短暂 unhealthy 原因仍未知，PR 四节点诊断使用原 admin digest 保存探针历史，不能替代 readiness。推送前分支无 CI；推送后结果待查。不合并 PR、不创建或移动标签、不创建 RC。
