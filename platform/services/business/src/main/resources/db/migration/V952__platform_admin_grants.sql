@@ -16,7 +16,7 @@ CREATE TABLE platform_admin_audit (
     target_source text NOT NULL DEFAULT 'org-session-v1' CHECK (target_source = 'org-session-v1'),
     target_tenant uuid NOT NULL,
     target_subject uuid NOT NULL,
-    action text NOT NULL CHECK (action IN ('bootstrap', 'grant', 'revoke')),
+    action text NOT NULL CHECK (action IN ('bootstrap', 'grant', 'revoke', 'identity_invalidated', 'recovery')),
     trace_id text NOT NULL,
     operator_db_user text NOT NULL,
     reason text NOT NULL CHECK (length(reason) BETWEEN 1 AND 1000),
@@ -56,6 +56,53 @@ AS $$ SELECT EXISTS (SELECT 1 FROM public.platform_admin_grant WHERE identity_so
 REVOKE ALL ON FUNCTION platform_admin_active(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION platform_admin_active(uuid, uuid) TO platform_app;
 
+-- Identity changes and grant changes share one transaction lock. Invalid grants remain
+-- inactive after an identity is restored; an explicit new grant is required.
+CREATE FUNCTION platform_admin_invalidate_unusable() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE affected_tenant uuid; g record;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        affected_tenant := OLD.tenant_id;
+    ELSIF TG_TABLE_NAME = 'tenant' THEN
+        affected_tenant := NEW.id;
+    ELSE
+        affected_tenant := NEW.tenant_id;
+    END IF;
+    PERFORM pg_advisory_xact_lock(1979110201);
+    FOR g IN SELECT identity_source, identity_tenant, subject FROM public.platform_admin_grant
+             WHERE identity_tenant = affected_tenant AND active
+    LOOP
+        IF NOT public.platform_admin_identity_usable(g.identity_tenant, g.subject) THEN
+            UPDATE public.platform_admin_grant SET active = false, updated_at = now()
+              WHERE identity_source = g.identity_source AND identity_tenant = g.identity_tenant AND subject = g.subject AND active;
+            IF FOUND THEN
+                INSERT INTO public.platform_admin_audit(target_source, target_tenant, target_subject, action,
+                    trace_id, operator_db_user, reason)
+                  VALUES (g.identity_source, g.identity_tenant, g.subject, 'identity_invalidated',
+                    'identity-state-change', session_user, TG_TABLE_NAME || ' identity became unavailable');
+            END IF;
+        END IF;
+    END LOOP;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION platform_admin_invalidate_unusable() FROM PUBLIC, platform_app;
+CREATE TRIGGER platform_admin_tenant_identity_change AFTER UPDATE OF status ON tenant
+    FOR EACH ROW WHEN (OLD.status IS DISTINCT FROM NEW.status) EXECUTE FUNCTION platform_admin_invalidate_unusable();
+CREATE TRIGGER platform_admin_member_identity_change AFTER UPDATE OF status ON access_member
+    FOR EACH ROW WHEN (OLD.status IS DISTINCT FROM NEW.status) EXECUTE FUNCTION platform_admin_invalidate_unusable();
+CREATE TRIGGER platform_admin_member_deleted AFTER DELETE ON access_member
+    FOR EACH ROW EXECUTE FUNCTION platform_admin_invalidate_unusable();
+CREATE TRIGGER platform_admin_connection_identity_change AFTER UPDATE OF enabled, provider, corp_id ON org_connection
+    FOR EACH ROW EXECUTE FUNCTION platform_admin_invalidate_unusable();
+CREATE TRIGGER platform_admin_connection_deleted AFTER DELETE ON org_connection
+    FOR EACH ROW EXECUTE FUNCTION platform_admin_invalidate_unusable();
+CREATE TRIGGER platform_admin_binding_identity_change AFTER UPDATE ON identity_binding
+    FOR EACH ROW EXECUTE FUNCTION platform_admin_invalidate_unusable();
+CREATE TRIGGER platform_admin_binding_revoked AFTER INSERT OR UPDATE ON identity_binding_revocation
+    FOR EACH ROW EXECUTE FUNCTION platform_admin_invalidate_unusable();
+
 -- Only the database owner can run the initial bootstrap; it cannot add a second identity.
 CREATE FUNCTION platform_admin_bootstrap(p_tenant uuid, p_subject uuid, p_trace text, p_reason text) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
@@ -80,6 +127,36 @@ BEGIN
     RETURN true;
 END $$;
 REVOKE ALL ON FUNCTION platform_admin_bootstrap(uuid, uuid, text, text) FROM PUBLIC, platform_app;
+
+-- Owner-only recovery after all identities became unusable. This is not bootstrap:
+-- an earlier grant must exist, and no currently usable grant may remain.
+CREATE FUNCTION platform_admin_recover(p_tenant uuid, p_subject uuid, p_trace text, p_reason text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+    IF p_tenant IS NULL OR p_subject IS NULL OR p_trace IS NULL OR btrim(p_trace) = ''
+        OR p_reason IS NULL OR btrim(p_reason) = '' OR length(p_reason) > 1000 THEN
+        RAISE EXCEPTION 'invalid recovery';
+    END IF;
+    PERFORM pg_advisory_xact_lock(1979110201);
+    IF NOT EXISTS (SELECT 1 FROM public.platform_admin_grant) THEN
+        RAISE EXCEPTION 'bootstrap not completed';
+    END IF;
+    IF public.platform_admin_active(p_tenant, p_subject) THEN RETURN false; END IF;
+    IF EXISTS (SELECT 1 FROM public.platform_admin_grant g WHERE g.active
+               AND public.platform_admin_identity_usable(g.identity_tenant, g.subject)) THEN
+        RAISE EXCEPTION 'recovery requires zero usable administrators';
+    END IF;
+    IF NOT public.platform_admin_identity_usable(p_tenant, p_subject) THEN
+        RAISE EXCEPTION 'recovery identity unavailable';
+    END IF;
+    INSERT INTO public.platform_admin_grant(identity_tenant, subject, active)
+        VALUES (p_tenant, p_subject, true)
+        ON CONFLICT (identity_source, identity_tenant, subject) DO UPDATE SET active = true, updated_at = now();
+    INSERT INTO public.platform_admin_audit(target_tenant, target_subject, action, trace_id, operator_db_user, reason)
+        VALUES (p_tenant, p_subject, 'recovery', p_trace, session_user, p_reason);
+    RETURN true;
+END $$;
+REVOKE ALL ON FUNCTION platform_admin_recover(uuid, uuid, text, text) FROM PUBLIC, platform_app;
 
 -- Application must pass the independently authenticated actor, never request-supplied actor fields.
 CREATE FUNCTION platform_admin_change(p_actor_tenant uuid, p_actor uuid, p_target_tenant uuid,

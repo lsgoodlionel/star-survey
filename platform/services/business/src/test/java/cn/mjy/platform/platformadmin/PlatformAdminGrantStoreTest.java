@@ -93,6 +93,13 @@ class PlatformAdminGrantStoreTest {
                         .param("tenant", tenant).param("subject", second).update()).isInstanceOf(DataAccessException.class);
                 assertThatThrownBy(() -> change(tenant, first, tenant, second, true)).isInstanceOf(DataAccessException.class);
                 assertThat(ownerChange(owner, tenant, first, tenant, second, true)).isTrue();
+                assertThatThrownBy(() -> {
+                    try (var recover = owner.prepareStatement("SELECT platform_admin_recover(?,?,?,?)")) {
+                        recover.setObject(1, tenant); recover.setObject(2, UUID.randomUUID());
+                        recover.setString(3, "bad-recover"); recover.setString(4, "should not be permitted");
+                        recover.execute();
+                    }
+                }).isInstanceOf(java.sql.SQLException.class).hasMessageContaining("zero usable administrators");
                 var start = new CountDownLatch(1);
                 try (var pool = Executors.newFixedThreadPool(2)) {
                     var firstAttempt = pool.submit(() -> concurrentSelfRevoke(tenant, first, start));
@@ -126,6 +133,9 @@ class PlatformAdminGrantStoreTest {
                 try (var enable = owner.prepareStatement("UPDATE org_connection SET enabled=true WHERE tenant_id=? AND corp_id=?")) {
                     enable.setObject(1, tenant); enable.setString(2, second.toString()); enable.executeUpdate();
                 }
+                assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
+                        .param("subject", second).query(Boolean.class).single()).isFalse();
+                assertThat(ownerChange(owner, tenant, first, tenant, second, true)).isTrue();
                 try (var remove = owner.prepareStatement("UPDATE access_member SET status='removed' WHERE tenant_id=? AND actor_id=?")) {
                     remove.setObject(1, tenant); remove.setString(2, second.toString()); remove.executeUpdate();
                 }
@@ -134,6 +144,9 @@ class PlatformAdminGrantStoreTest {
                 try (var restore = owner.prepareStatement("UPDATE access_member SET status='active' WHERE tenant_id=? AND actor_id=?")) {
                     restore.setObject(1, tenant); restore.setString(2, second.toString()); restore.executeUpdate();
                 }
+                assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
+                        .param("subject", second).query(Boolean.class).single()).isFalse();
+                assertThat(ownerChange(owner, tenant, first, tenant, second, true)).isTrue();
                 try (var revoke = owner.prepareStatement("INSERT INTO identity_binding_revocation(tenant_id,principal_id,reason,revoked_by) VALUES (?,?,'admin','test')")) {
                     revoke.setObject(1, tenant); revoke.setObject(2, second); revoke.executeUpdate();
                 }
@@ -148,6 +161,9 @@ class PlatformAdminGrantStoreTest {
                 try (var restore = owner.prepareStatement("UPDATE identity_binding_revocation SET reinstated_at=now(),reinstated_by='test' WHERE tenant_id=? AND principal_id=?")) {
                     restore.setObject(1, tenant); restore.setObject(2, second); restore.executeUpdate();
                 }
+                assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
+                        .param("subject", second).query(Boolean.class).single()).isFalse();
+                assertThat(ownerChange(owner, tenant, first, tenant, second, true)).isTrue();
                 assertThat(ownerChange(owner, tenant, first, tenant, first, false)).isTrue();
                 assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
                         .param("subject", first).query(Boolean.class).single()).isFalse();
@@ -156,14 +172,76 @@ class PlatformAdminGrantStoreTest {
                 tenants.changeStatus(new TenantId(tenant), TenantStatus.SUSPENDED, "test", "test-suspend");
                 assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
                         .param("subject", second).query(Boolean.class).single()).isFalse();
+                tenants.changeStatus(new TenantId(tenant), TenantStatus.ACTIVE, "test", "test-restore");
+                assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
+                        .param("subject", second).query(Boolean.class).single()).isFalse();
+                assertThatThrownBy(() -> jdbc.sql("SELECT platform_admin_recover(:tenant,:subject,'trace','test')")
+                        .param("tenant", tenant).param("subject", second).query(Boolean.class).single())
+                        .isInstanceOf(DataAccessException.class);
+                try (var recover = owner.prepareStatement("SELECT platform_admin_recover(?,?,?,?)")) {
+                    recover.setObject(1, tenant); recover.setObject(2, second);
+                    recover.setString(3, "test-recover"); recover.setString(4, "restore after identity outage");
+                    try (var result = recover.executeQuery()) { result.next(); assertThat(result.getBoolean(1)).isTrue(); }
+                }
+                assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
+                        .param("subject", second).query(Boolean.class).single()).isTrue();
                 try (var audit = owner.prepareStatement("SELECT operator_db_user, reason FROM platform_admin_audit WHERE target_tenant = ? AND action = 'bootstrap'")) {
                     audit.setObject(1, tenant);
                     try (var result = audit.executeQuery()) { result.next(); assertThat(result.getString(1)).isEqualTo(ownerUser); assertThat(result.getString(2)).isEqualTo("initial setup"); }
                 }
                 try (var query = owner.prepareStatement("SELECT count(*) FROM platform_admin_audit WHERE target_tenant = ?")) {
                     query.setObject(1, tenant);
-                    try (var result = query.executeQuery()) { result.next(); assertThat(result.getLong(1)).isEqualTo(5); }
+                    try (var result = query.executeQuery()) { result.next(); assertThat(result.getLong(1)).isEqualTo(13); }
                 }
+                owner.setAutoCommit(false);
+                try {
+                    try (var fault = owner.createStatement()) {
+                        fault.execute("CREATE FUNCTION pg_temp.fail_identity_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected audit failure'; END $$");
+                        fault.execute("CREATE TRIGGER test_identity_audit_failure BEFORE INSERT ON platform_admin_audit FOR EACH ROW EXECUTE FUNCTION pg_temp.fail_identity_audit()");
+                    }
+                    assertThatThrownBy(() -> {
+                        try (var disable = owner.prepareStatement("UPDATE org_connection SET enabled=false WHERE tenant_id=? AND corp_id=?")) {
+                            disable.setObject(1, tenant); disable.setString(2, second.toString()); disable.executeUpdate();
+                        }
+                    }).isInstanceOf(java.sql.SQLException.class);
+                } finally {
+                    owner.rollback(); owner.setAutoCommit(true);
+                }
+                assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
+                        .param("subject", second).query(Boolean.class).single()).isTrue();
+                var race = new CountDownLatch(1);
+                try (var pool = Executors.newFixedThreadPool(2)) {
+                    var grant = pool.submit(() -> {
+                        try (Connection conn = DriverManager.getConnection(url, ownerUser, ownerPassword)) {
+                            race.await();
+                            try { return ownerChange(conn, tenant, second, tenant, first, true); }
+                            catch (java.sql.SQLException rejected) {
+                                assertThat(rejected.getMessage()).contains("target identity unavailable");
+                                return false;
+                            }
+                        }
+                    });
+                    var disable = pool.submit(() -> {
+                        try (Connection conn = DriverManager.getConnection(url, ownerUser, ownerPassword)) {
+                            try (var scope = conn.prepareStatement("SELECT set_config('app.tenant_id', ?, false)")) {
+                                scope.setString(1, tenant.toString()); scope.execute();
+                            }
+                            race.await();
+                            try (var update = conn.prepareStatement("UPDATE org_connection SET enabled=false WHERE tenant_id=? AND corp_id=?")) {
+                                update.setObject(1, tenant); update.setString(2, first.toString());
+                                return update.executeUpdate();
+                            }
+                        }
+                    });
+                    race.countDown();
+                    grant.get(15, TimeUnit.SECONDS);
+                    assertThat(disable.get(15, TimeUnit.SECONDS)).isEqualTo(1);
+                }
+                try (var enable = owner.prepareStatement("UPDATE org_connection SET enabled=true WHERE tenant_id=? AND corp_id=?")) {
+                    enable.setObject(1, tenant); enable.setString(2, first.toString()); enable.executeUpdate();
+                }
+                assertThat(jdbc.sql("SELECT platform_admin_active(:tenant,:subject)").param("tenant", tenant)
+                        .param("subject", first).query(Boolean.class).single()).isFalse();
             } finally {
                 try (var cleanup = owner.prepareStatement("DELETE FROM platform_admin_audit WHERE target_tenant = ?")) {
                     cleanup.setObject(1, tenant); cleanup.executeUpdate();
