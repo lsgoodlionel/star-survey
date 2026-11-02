@@ -62,6 +62,9 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         cls.workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
         cls.workflow = load_yaml(WORKFLOW_PATH)
         cls.quality = load_yaml(QUALITY_PATH)
+        cls.ci = load_yaml(ROOT / '.github/workflows/ci.yml')
+        cls.images = load_yaml(ROOT / '.github/workflows/build-images.yml')
+        cls.local_build = cls.images['jobs']['build']
         cls.policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
 
     def run_event_policy(self, event_name: str, ref: str) -> subprocess.CompletedProcess[str]:
@@ -103,11 +106,11 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
 
     def test_triggers_are_review_or_manual_builds_and_release_tags(self):
         triggers = self.workflow["on"]
-        self.assertIn("pull_request", triggers)
+        self.assertNotIn("pull_request", triggers)
         self.assertIn("workflow_dispatch", triggers)
         self.assertIn("push", triggers)
-        self.assertTrue(triggers["pull_request"].get("paths"))
-        self.assertFalse(triggers["pull_request"].get("branches"))
+        self.assertIn('pull_request', self.ci['on'])
+        self.assertFalse((self.ci['on']['pull_request'] or {}).get('branches'))
         self.assertEqual(["v*"], triggers["push"].get("tags"))
         self.assertNotIn("branches", triggers["push"])
 
@@ -154,7 +157,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("workflow_call", self.quality["on"])
 
     def test_quality_ci_runs_for_stacked_pull_requests_without_control_plane(self):
-        triggers = self.quality["on"]
+        triggers = self.ci["on"]
         self.assertIn("pull_request", triggers)
         self.assertFalse((triggers["pull_request"] or {}).get("branches"))
         self.assertIn("github.workflow", self.quality["concurrency"]["group"])
@@ -215,7 +218,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn("docker/login-action@", job_text(jobs["build-local"]))
 
         local_build = next(
-            step for step in jobs["build-local"]["steps"]
+            step for step in self.local_build["steps"]
             if str(step.get("uses", "")).startswith("docker/build-push-action@")
         )
         publish_build = next(
@@ -227,7 +230,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
 
     def test_both_build_paths_cover_three_multiarch_images_with_attestations(self):
         for job_name in ("build-local", "publish-images"):
-            job = self.workflow["jobs"][job_name]
+            job = self.local_build if job_name == "build-local" else self.workflow["jobs"][job_name]
             matrix = job["strategy"]["matrix"]["include"]
             self.assertEqual(IMAGE_NAMES, {entry["id"] for entry in matrix})
             build = next(
@@ -275,7 +278,7 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn("--clobber", publisher)
 
     def test_every_external_action_is_allowlisted_and_pinned_to_a_full_sha(self):
-        for workflow_name, workflow in (("release", self.workflow), ("quality", self.quality)):
+        for workflow_name, workflow in (("release", self.workflow), ("quality", self.quality), ("ci", self.ci), ("images", self.images)):
             for job_name, uses in action_uses(workflow):
                 if uses.startswith("./"):
                     continue
