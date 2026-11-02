@@ -84,9 +84,15 @@ class PlatformAdminResourceServerTest {
         getCheck(valid, 403);
         scope.run(tenant, () -> jdbc.sql("UPDATE access_member SET status='active' WHERE actor_id=:actor")
                 .param("actor", principal.toString()).update());
+        getCheck(valid, 403);
+        recover(owner, tenant, principal);
+        getCheck(valid, 200);
         scope.run(tenant, () -> jdbc.sql("UPDATE org_connection SET enabled=false WHERE id=:id").param("id", connection).update());
         getCheck(valid, 403);
         scope.run(tenant, () -> jdbc.sql("UPDATE org_connection SET enabled=true WHERE id=:id").param("id", connection).update());
+        getCheck(valid, 403);
+        recover(owner, tenant, principal);
+        getCheck(valid, 200);
         scope.run(tenant, () -> jdbc.sql("UPDATE org_login_session SET revoked_at=now(), revoke_reason='logout' WHERE id=:id").param("id", session).update());
         getCheck(valid, 401);
           } finally {
@@ -97,6 +103,13 @@ class PlatformAdminResourceServerTest {
                 cleanup.setObject(1, tenant.value()); cleanup.executeUpdate();
             }
           }
+        }
+    }
+    private void recover(java.sql.Connection owner, TenantId tenant, UUID principal) throws Exception {
+        try (var statement = owner.prepareStatement("SELECT platform_admin_recover(?,?,?,?)")) {
+            statement.setObject(1, tenant.value()); statement.setObject(2, principal);
+            statement.setString(3, "test-recovery"); statement.setString(4, "isolated test");
+            statement.execute();
         }
     }
     private String token(UUID principal, TenantId tenant, Map<String, Object> claims) {
