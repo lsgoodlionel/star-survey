@@ -4,8 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.mjy.platform.shared.TenantContext;
 import cn.mjy.platform.shared.tenant.TenantScope;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -40,7 +38,8 @@ class MemberSystemRemovalTest {
     @Test
     void aDepartedMemberWhoseOwnerGrantExpiredIsRemovedWhileAnotherOwnerIsActive() {
         TenantContext owner = fixture.newTenant();
-        fixture.member(owner, "departed", "tenant_owner", null, Instant.now().plus(1, ChronoUnit.HOURS));
+        // Model historical expired data directly; new owner grants may no longer expire.
+        fixture.member(owner, "departed", "tenant_owner", null);
         expireGrantsOf(owner, "departed");
         long seatsBefore = members.seatsInUse(owner);
 
