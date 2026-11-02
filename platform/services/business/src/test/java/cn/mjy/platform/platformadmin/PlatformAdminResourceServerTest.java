@@ -102,7 +102,8 @@ class PlatformAdminResourceServerTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.tenant").value(tenant.toString()))
                 .andExpect(jsonPath("$.subject").value(principal.toString()));
         String mutation = "{\"targetTenant\":\"" + tenant + "\",\"targetSubject\":\"" + target
-                + "\",\"grant\":true,\"reason\":\"isolated test\",\"actor\":\"forged\"}";
+                + "\",\"grant\":true,\"reason\":\"isolated test\",\"actor\":\"forged\","
+                + "\"actorTenant\":\"" + UUID.randomUUID() + "\",\"sid\":\"" + UUID.randomUUID() + "\"}";
         mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + valid)
                         .contentType("application/json").content(mutation))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.changed").value(true));
@@ -124,6 +125,14 @@ class PlatformAdminResourceServerTest {
                         .contentType("application/json").content(mutation)).andExpect(status().isForbidden());
         mvc.perform(post("/v1/platform-admin/grants/change").contentType("application/json").content(mutation))
                 .andExpect(status().isUnauthorized());
+        for (String bad : java.util.List.of(
+                token(principal, tenant, Map.of("iss", "mjy-platform", "sid", UUID.randomUUID().toString())),
+                token(principal, tenant, Map.of("iss", "mjy-platform", "sid", expiredSession.toString())),
+                token(UUID.randomUUID(), tenant, Map.of("iss", "mjy-platform", "sid", session.toString())),
+                token(principal, fixtures.activeTenant(), Map.of("iss", "mjy-platform", "sid", session.toString())))) {
+            mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + bad)
+                            .contentType("application/json").content(mutation)).andExpect(status().isUnauthorized());
+        }
         String selfRevoke = mutation.replace(target.toString(), principal.toString()).replace("\"grant\":true", "\"grant\":false");
         mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + valid)
                         .contentType("application/json").content(selfRevoke)).andExpect(status().isConflict());
@@ -160,6 +169,8 @@ class PlatformAdminResourceServerTest {
         getCheck(valid, 200);
         scope.run(tenant, () -> jdbc.sql("UPDATE org_login_session SET revoked_at=now(), revoke_reason='logout' WHERE id=:id").param("id", session).update());
         getCheck(valid, 401);
+        mvc.perform(post("/v1/platform-admin/grants/change").header("Authorization", "Bearer " + valid)
+                        .contentType("application/json").content(mutation)).andExpect(status().isUnauthorized());
           } finally {
             try (var cleanup = owner.prepareStatement("DELETE FROM platform_admin_audit WHERE target_tenant = ?")) {
                 cleanup.setObject(1, tenant.value()); cleanup.executeUpdate();

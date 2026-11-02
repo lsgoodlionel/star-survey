@@ -9,16 +9,17 @@ class ProbeRequestScopeTest {
     @Test void permitsOnlyExactScopedMethodsAndTheBoundTenantAndEngine() {
         UUID tenant = UUID.randomUUID(), other = UUID.randomUUID();
         var all = Set.of("probe.tenant.create", "probe.plan.create", "probe.onboard", "probe.tenant.activate", "probe.engine.register", "probe.engine.secret.read");
-        assertThat(ProbeRequestScope.allows(all, "POST", "/v1/platform/tenants", tenant, "engine-01")).isTrue();
-        assertThat(ProbeRequestScope.allows(all, "POST", "/v1/platform/plans", tenant, "engine-01")).isTrue();
-        assertThat(ProbeRequestScope.allows(all, "POST", "/v1/platform/tenants/" + tenant + "/onboarding", tenant, "engine-01")).isTrue();
-        assertThat(ProbeRequestScope.allows(all, "POST", "/v1/platform/tenants/" + tenant + "/status", tenant, "engine-01")).isTrue();
-        assertThat(ProbeRequestScope.allows(all, "POST", "/v1/platform/tenants/" + tenant + "/engine-instances", tenant, "engine-01")).isTrue();
-        assertThat(ProbeRequestScope.allows(all, "POST", "/v1/platform/engine-instances/engine-01/event-secret", tenant, "engine-01")).isTrue();
-        assertThat(ProbeRequestScope.allows(all, "POST", "/v1/platform/tenants/" + other + "/onboarding", tenant, "engine-01")).isFalse();
-        assertThat(ProbeRequestScope.allows(all, "POST", "/v1/platform/engine-instances/other/event-secret", tenant, "engine-01")).isFalse();
-        assertThat(ProbeRequestScope.allows(all, "GET", "/v1/platform/tenants", tenant, "engine-01")).isFalse();
-        assertThat(ProbeRequestScope.allows(Set.of("probe.tenant.create"), "POST", "/v1/platform/plans", tenant, "engine-01")).isFalse();
-        assertThat(ProbeRequestScope.allows(all, "POST", "/v1/platform-admin/grants/change", tenant, "engine-01")).isFalse();
+        var credential = new ProbeCredentialVerifier.Credential(UUID.randomUUID(), UUID.randomUUID(), tenant, "engine-01", all);
+        assertThat(ProbeRequestScope.allows(credential, "POST", "/v1/platform/tenants")).isTrue();
+        assertThat(ProbeRequestScope.allows(credential, "POST", "/v1/platform/plans")).isTrue();
+        assertThat(ProbeRequestScope.allows(credential, "POST", "/v1/platform/tenants/" + tenant + "/onboarding")).isTrue();
+        assertThat(ProbeRequestScope.allows(credential, "POST", "/v1/platform/tenants/" + tenant + "/status")).isTrue();
+        assertThat(ProbeRequestScope.allows(credential, "POST", "/v1/platform/tenants/" + tenant + "/engine-instances")).isTrue();
+        assertThat(ProbeRequestScope.allows(credential, "POST", "/v1/platform/engine-instances/engine-01/event-secret")).isTrue();
+        assertThat(ProbeRequestScope.allows(credential, "POST", "/v1/platform/tenants/" + other + "/onboarding")).isFalse();
+        assertThat(ProbeRequestScope.allows(credential, "POST", "/v1/platform/engine-instances/other/event-secret")).isFalse();
+        assertThat(ProbeRequestScope.allows(credential, "GET", "/v1/platform/tenants")).isFalse();
+        assertThat(ProbeRequestScope.allows(new ProbeCredentialVerifier.Credential(UUID.randomUUID(), UUID.randomUUID(), tenant, "engine-01", Set.of("probe.tenant.create")), "POST", "/v1/platform/plans")).isFalse();
+        assertThat(ProbeRequestScope.allows(credential, "POST", "/v1/platform-admin/grants/change")).isFalse();
     }
 }

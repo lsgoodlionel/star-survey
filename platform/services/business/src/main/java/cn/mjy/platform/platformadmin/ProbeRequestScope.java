@@ -1,13 +1,13 @@
 package cn.mjy.platform.platformadmin;
 
-import java.util.Set;
-import java.util.UUID;
-
 /** Route check only; creation payloads and resource ownership need separate server-side validation. */
 final class ProbeRequestScope {
     private ProbeRequestScope() { }
-    static boolean allows(Set<String> scopes, String method, String path, UUID boundTenant, String boundEngine) {
-        if (scopes == null || !"POST".equals(method) || path == null) return false;
+    static boolean allows(ProbeCredentialVerifier.Credential credential, String method, String path) {
+        if (credential == null || !"POST".equals(method) || path == null) return false;
+        var scopes = credential.scopes();
+        var boundTenant = credential.tenant();
+        var boundEngine = credential.engine();
         if (path.equals("/v1/platform/tenants")) return scopes.contains("probe.tenant.create");
         if (path.equals("/v1/platform/plans")) return scopes.contains("probe.plan.create");
         if (boundTenant != null) {
