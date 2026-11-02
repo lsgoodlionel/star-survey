@@ -30,7 +30,7 @@ export function TenantDirectoryPage() {
   });
   if (capability.isPending || capability.isFetching) return <OperationsLayout><p>正在检查平台权限</p></OperationsLayout>;
   if (!allowed) return <OperationsLayout><h1>需要平台运营权限</h1></OperationsLayout>;
-  return <OperationsLayout><h1>平台租户</h1>
+  return <OperationsLayout><h1>平台租户</h1><Link to="/operations/plans">套餐目录</Link>
     {query.isPending ? <p>正在加载租户</p> : null}
     {query.isError ? <div role="alert"><p>无法加载租户，请确认权限后重试</p><button type="button" onClick={() => void query.refetch()}>重试</button></div> : null}
     {query.data && !query.isError && !query.isFetching ? <>

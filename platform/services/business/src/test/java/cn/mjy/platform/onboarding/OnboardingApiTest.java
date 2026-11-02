@@ -109,6 +109,33 @@ class OnboardingApiTest {
     }
 
     @Test
+    void operatorCanBrowseBoundedLatestPlanVersionsWithoutExposingThemToTenants() throws Exception {
+        String body = planBody(5);
+        String code = JsonPath.read(body, "$.planCode");
+        String nextCode = code + "z";
+        publishPlan(body).andExpect(status().isCreated());
+        publishPlan(body).andExpect(status().isCreated());
+        publishPlan(body.replace(code, nextCode)).andExpect(status().isCreated());
+        mvc.perform(get("/v1/platform/plan-catalog").param("after", code.substring(0, code.length() - 1)).param("limit", "1")
+                        .header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].planCode").value(code))
+                .andExpect(jsonPath("$.items[0].version").value(2))
+                .andExpect(jsonPath("$.items[0].quotas['member.seats']").value(5))
+                .andExpect(jsonPath("$.items[0].exportWindowDays").value(30))
+                .andExpect(jsonPath("$.nextCursor").value(code));
+        mvc.perform(get("/v1/platform/plan-catalog").param("after", code).param("limit", "1")
+                        .header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].planCode").value(nextCode));
+        mvc.perform(get("/v1/platform/plan-catalog").header("Authorization", fixtures.userBearer(fixtures.activeTenant())))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/v1/platform/plan-catalog")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/platform/plan-catalog").param("limit", "101").header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/v1/platform/plan-catalog").param("after", "bad/cursor").header("Authorization", fixtures.operatorBearer()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void onlyOperatorsMayPublishPlans() throws Exception {
         TenantId tenant = fixtures.activeTenant();
 

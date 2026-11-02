@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -54,6 +55,18 @@ public class OnboardingController {
         return ResponseEntity.ok(new PlanView(plan.id().toString(), plan.planCode(), plan.version()));
     }
 
+    @GetMapping("/v1/platform/plan-catalog")
+    public PlanDirectory catalog(@RequestParam(defaultValue = "") String after,
+                                 @RequestParam(defaultValue = "50") int limit) {
+        guard.requireOperator();
+        if (limit < 1 || limit > 100 || after.length() > 64 || !after.matches("[a-z0-9_.-]*")) {
+            throw new IllegalArgumentException("invalid plan catalog cursor or limit");
+        }
+        List<PlanVersion> rows = plans.latestAfter(after, limit + 1);
+        List<PlanDetail> items = rows.stream().limit(limit).map(PlanDetail::of).toList();
+        return new PlanDirectory(items, rows.size() > limit ? items.getLast().planCode() : null);
+    }
+
     @PostMapping("/v1/platform/tenants/{tenantId}/onboarding")
     public OnboardingView onboard(@PathVariable String tenantId, @RequestBody Onboard request) {
         String operator = guard.requireOperator();
@@ -79,6 +92,16 @@ public class OnboardingController {
     }
 
     public record PlanView(String id, String planCode, int version) {
+    }
+
+    public record PlanDirectory(List<PlanDetail> items, String nextCursor) { }
+
+    public record PlanDetail(String id, String planCode, int version, Set<String> capabilities,
+                             Map<String, Long> quotas, int exportWindowDays, java.time.Instant publishedAt) {
+        static PlanDetail of(PlanVersion plan) {
+            return new PlanDetail(plan.id().toString(), plan.planCode(), plan.version(), plan.capabilities(),
+                    plan.quotas(), plan.exportWindowDays(), plan.publishedAt());
+        }
     }
 
     public record Onboard(String planVersionId, String kind, int days, String ownerActorId) {

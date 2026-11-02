@@ -70,6 +70,18 @@ public class PlanCatalog {
                 .list();
     }
 
+    /** Latest immutable version of each plan, bounded and ordered by plan code. */
+    public List<PlanVersion> latestAfter(String after, int limit) {
+        return jdbc.sql("""
+                SELECT DISTINCT ON (plan_code) id, plan_code, version,
+                       array_to_string(capabilities, ',') AS capabilities, export_window_days, published_at
+                FROM plan_version WHERE plan_code > :after
+                ORDER BY plan_code, version DESC LIMIT :limit
+                """)
+                .param("after", after).param("limit", limit)
+                .query(this::mapPlan).list();
+    }
+
     public Optional<CapabilityDefinition> capability(String code) {
         return jdbc.sql("SELECT code, access, meter_code FROM capability_definition WHERE code = :code")
                 .param("code", code)
