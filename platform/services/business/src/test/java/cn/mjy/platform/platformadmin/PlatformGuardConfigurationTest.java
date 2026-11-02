@@ -15,5 +15,7 @@ class PlatformGuardConfigurationTest {
                 .isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> new PlatformOperatorGuard(personnel, true, key, "invalid", "personnel", "engine"))
                 .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> new PlatformOperatorGuard(personnel, true, key, "10000000-0000-4000-8000-000000000001", "personnel", ""))
+                .isInstanceOf(IllegalStateException.class);
     }
 }

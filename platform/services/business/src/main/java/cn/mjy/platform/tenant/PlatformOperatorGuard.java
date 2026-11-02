@@ -52,8 +52,9 @@ public class PlatformOperatorGuard {
 
     private static boolean probeReady(String probe, String installation, String personnel, String engine) {
         byte[] key = probe.getBytes(StandardCharsets.UTF_8);
-        if (key.length < 32 || MessageDigest.isEqual(key, personnel.getBytes(StandardCharsets.UTF_8))
-                || MessageDigest.isEqual(key, engine.getBytes(StandardCharsets.UTF_8))) return false;
+        byte[] engineKey = engine.getBytes(StandardCharsets.UTF_8);
+        if (key.length < 32 || engineKey.length < 32 || MessageDigest.isEqual(key, personnel.getBytes(StandardCharsets.UTF_8))
+                || MessageDigest.isEqual(key, engineKey)) return false;
         try { return UUID.fromString(installation).toString().equals(installation); }
         catch (IllegalArgumentException rejected) { return false; }
     }
