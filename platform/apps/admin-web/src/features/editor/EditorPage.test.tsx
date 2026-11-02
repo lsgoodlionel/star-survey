@@ -668,10 +668,13 @@ describe('EditorPage', () => {
     fireEvent.change(await screen.findByLabelText('题目文本'), {
       target: { value: '触发冲突' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    const save = screen.getByRole('button', { name: '保存草稿' });
+    save.focus();
+    fireEvent.click(save);
     fireEvent.click(await screen.findByRole('button', { name: '重新载入' }));
 
     expect(await screen.findByLabelText('题目文本')).toHaveValue('服务器重新载入的题目');
+    expect(screen.getByRole('main')).toHaveFocus();
     expect(rendered.queryClient.getQueryData(surveyDraftQueryKey('tenant-a', surveyId))).toEqual({
       surveyId,
       version: 9,

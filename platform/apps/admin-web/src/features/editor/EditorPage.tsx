@@ -125,6 +125,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>('outline');
   const [newQuestionType, setNewQuestionType] = useState<PaletteType>('L');
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const editorRoot = useRef<HTMLElement>(null);
   const inspectorButton = useRef<HTMLButtonElement>(null);
   const inspectorClose = useRef<HTMLButtonElement>(null);
   const revisionRef = useRef(0);
@@ -143,8 +144,8 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       !isAuthenticationPath(nextLocation.pathname) &&
       !isQuestionSelectionNavigation(currentLocation, nextLocation),
   );
-  const conflictDialog = useDialogFocus(conflict);
-  const leaveDialog = useDialogFocus(leaveBlocker.state === 'blocked');
+  const conflictDialog = useDialogFocus(conflict, editorRoot);
+  const leaveDialog = useDialogFocus(leaveBlocker.state === 'blocked', editorRoot);
   const requestedQuestionUuid = searchParams.get('question');
   const selectedQuestionUuid =
     (requestedQuestionUuid && hasQuestion(definition, requestedQuestionUuid)
@@ -352,7 +353,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   );
 
   return (
-    <main className="survey-editor">
+    <main ref={editorRoot} tabIndex={-1} className="survey-editor">
       <header className="survey-editor-header">
         {!surveyShell ? (
           <div>
@@ -556,14 +557,18 @@ function useNarrowViewport() {
   return useMediaQuery('(max-width: 819px)');
 }
 
-function useDialogFocus(active: boolean) {
+function useDialogFocus(active: boolean, fallback: React.RefObject<HTMLElement | null>) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!active) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const fallbackElement = fallback.current;
     ref.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
-    return () => previous?.focus();
-  }, [active]);
+    return () => {
+      if (previous && previous !== document.body && previous.isConnected && !previous.matches(':disabled')) previous.focus();
+      else fallbackElement?.focus();
+    };
+  }, [active, fallback]);
   return ref;
 }
 
