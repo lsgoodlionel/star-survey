@@ -144,6 +144,19 @@ def main():
         manager._write_state(status='healthy')
         stage = 'machine-setup'
         manager.setup_probe()
+        stage = 'gateway-rpc-authentication'
+        rpc_check = '''import os,sys
+from pubgw.engines import load_engines
+from pubgw.rpc import HttpTransport,RemoteControlClient
+e=load_engines(os.environ['PUBGW_ENGINES_CONFIG'],os.environ)['production-engine-01']
+c=RemoteControlClient(HttpTransport(e.rpc_url,rpc_path=''))
+try:
+ c.login(e.user,e.password)
+ c.logout()
+except Exception:
+ sys.exit(1)
+'''
+        run(compose + ['exec', '-T', 'publish-gateway', 'python', '-c', rpc_check])
         stage = 'doctor'
         report = Doctor(target).run()
         secrets = [(target / 'shared/secrets' / p).read_text().strip() for p in os.listdir(target / 'shared/secrets')]

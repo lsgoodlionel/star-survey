@@ -999,13 +999,20 @@ class SurveyManager:
             engines = json.loads(example.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise IntegrityError("verified engine configuration template is invalid") from exc
+        if not isinstance(engines, dict) or not isinstance(engines.get('production-engine-01'), dict):
+            raise IntegrityError('production engine configuration is missing')
+        engines['production-engine-01']['user'] = admin_user
         self._atomic_write(release / "engines.json", json.dumps(engines, indent=2) + "\n", mode=0o644)
         secret_dir = self._mkdir("shared/secrets")
-        derived_secrets = {"engine_admin_password_hash", "engine_instance_events_secret", "pubgw_engine_channel_secret"}
+        derived_secrets = {"engine_admin_password_hash", "engine_instance_events_secret", "pubgw_engine_channel_secret", "pubgw_engine_admin_password"}
         for name in SECRET_NAMES:
             path = secret_dir / name
             if not path.exists() and name not in derived_secrets:
                 self._atomic_write(path, secrets.token_urlsafe(48) + "\n")
+        # RemoteControl authenticates the same account initialized by engine-init.
+        # Keep a separate per-service projection, with the canonical engine secret.
+        self._atomic_write(secret_dir / 'pubgw_engine_admin_password',
+                           (secret_dir / 'engine_admin_password').read_text(encoding='utf-8'))
         probe_installation = self._managed("shared/probe-installation.json")
         if not probe_installation.exists() and not probe_installation.is_symlink():
             self._atomic_create_once(probe_installation, json.dumps({"installationId": str(uuid.uuid4())}, sort_keys=True) + "\n")

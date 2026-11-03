@@ -48,7 +48,7 @@ def write_test_release(root, version="0.2.0", rollback="compatible", restore_sou
         "doctor.py": b"# verified doctor helper\n",
         "release.schema.json": b"{}\n",
         "env.example": b"PUBLIC_HOST=example.invalid\n",
-        "engines.example.json": b"{}\n",
+        "engines.example.json": (PRODUCTION_DIR / 'engines.example.json').read_bytes(),
         "init/marker.txt": b"verified init\n",
     }
     metadata = {
@@ -581,6 +581,19 @@ class SurveyctlAdversarialTest(unittest.TestCase):
             manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
         state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
         self.assertEqual("install_failed", state["status"])
+
+    def test_staged_gateway_rpc_identity_matches_initialized_engine(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        release = manager._stage_release(self.module.load_manifest(manifest), 'arm64',
+                                         'survey.example.com', 'chosen-operator', 'operations@example.com')
+        config = json.loads((release / 'engines.json').read_text())
+        with self.subTest(binding='username'):
+            self.assertEqual('chosen-operator', config['production-engine-01']['user'])
+        private = self.target / 'shared/secrets'
+        with self.subTest(binding='password'):
+            self.assertTrue((private / 'engine_admin_password').read_bytes() ==
+                            (private / 'pubgw_engine_admin_password').read_bytes(), 'RPC credential must match engine identity')
 
     def test_failed_install_can_uninstall_without_current_pointer(self):
         manifest, _ = self.write_bundle_manifest()
