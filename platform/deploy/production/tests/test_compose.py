@@ -581,7 +581,7 @@ class ProductionComposeTest(unittest.TestCase):
         script = policy + r"""
 $cases = [
  $trustedGatewayRequest('172.20.0.7', '/index.php/admin/remotecontrol', 'POST', ['172.20.0.7']),
- $trustedGatewayRequest('172.20.0.7', '/index.php/plugins/direct?plugin=Mjy', 'GET', ['172.20.0.7']),
+ $trustedGatewayRequest('172.20.0.7', '/index.php/plugins/direct?plugin=MjyRuntimePolicy&function=policyStatus', 'GET', ['172.20.0.7']),
  $trustedGatewayRequest('172.20.0.8', '/index.php/admin/remotecontrol', 'POST', ['172.20.0.7']),
  $trustedGatewayRequest('172.20.0.7', '/index.php/admin/remotecontrol', 'GET', ['172.20.0.7']),
  $trustedGatewayRequest('172.20.0.7', '/index.php/admin/remotecontrol/extra', 'POST', ['172.20.0.7']),
@@ -596,7 +596,38 @@ echo json_encode($cases);
         self.assertEqual([True, True, False, False, False, False, False, False], json.loads(result.stdout))
         self.assertIn("gethostbynamel('publish-gateway')", config)
         self.assertIn("$trustedGatewayRequest(", config[end:])
-        self.assertIn("$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https'", config[end:])
+        self.assertIn("$applyTrustedScheme($_SERVER", config[end:])
+
+    def test_forwarded_scheme_policy_rejects_spoofing_and_restricts_plugins(self):
+        config = (PRODUCTION_DIR / 'init' / 'config.production.php').read_text(encoding='utf-8')
+        start = config.index('$applyTrustedScheme = static function')
+        end = config.index('\n};', start) + len('\n};')
+        policy_start = config.index("$trustedGatewayRequest = static function")
+        policy_end = config.index("\n};", policy_start) + len("\n};")
+        script = config[policy_start:policy_end] + "\n" + config[start:end] + r'''
+$run = static function ($ip, $uri, $method, $edge, $gateway, $scheme = 'https') use ($applyTrustedScheme) {
+    $server = ['REMOTE_ADDR'=>$ip, 'REQUEST_URI'=>$uri, 'REQUEST_METHOD'=>$method,
+               'HTTP_X_FORWARDED_PROTO'=>$scheme, 'HTTP_FORWARDED_PROTO'=>'https'];
+    $applyTrustedScheme($server, $edge, $gateway);
+    return [$server['HTTP_X_FORWARDED_PROTO'] ?? null, $server['HTTP_FORWARDED_PROTO'] ?? null];
+};
+echo json_encode([
+ $run('10.0.0.2','/index.php/admin/remotecontrol','POST',['10.0.0.1'],['10.0.0.3']),
+ $run('10.0.0.1','/survey/','GET',['10.0.0.1'],[], 'https'),
+ $run('10.0.0.1','/survey/','GET',['10.0.0.1'],[], 'http'),
+ $run('10.0.0.3','/index.php/plugins/direct?plugin=MjyRuntimePolicy&function=policyStatus&sid=1','GET',[],['10.0.0.4','10.0.0.3']),
+ $run('10.0.0.3','/index.php/plugins/direct?plugin=MjyRuntimePolicy&function=examStatus','GET',[],['10.0.0.3']),
+ $run('10.0.0.3','/index.php/plugins/direct?plugin=MjyQuestionExtensions&function=extensionAnswers','POST',[],['10.0.0.3']),
+ $run('10.0.0.3','/index.php/admin/remotecontrol','POST',[],[]),
+ $run('10.0.0.3','/index.php/plugins/direct/plugin/MjyQuestionExtensions/function/brandAssetsV1','POST',[],['10.0.0.3']),
+ $run('10.0.0.3','/index.php/plugins/direct?plugin=MjyRuntimePolicy&function=examStatus&function=policyStatus','GET',[],['10.0.0.3']),
+ $run('10.0.0.3','/index.php/plugins/direct?plugin=MjyRuntimePolicy&function=policyStatus&r=admin/index','GET',[],['10.0.0.3']),
+ $run('10.0.0.3','/index.php/plugins/direct/plugin/MjyQuestionExtensions/function/brandAssetsV1?plugin=Other&function=other','POST',[],['10.0.0.3']),
+]);
+'''
+        result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([[None,None],['https',None],[None,None],['https',None],[None,None],[None,None],[None,None],['https',None],[None,None],[None,None],[None,None]], json.loads(result.stdout))
 
     def test_engine_config_uses_real_survey_prefix_and_https_settings(self):
         config = (PRODUCTION_DIR / "init" / "config.production.php").read_text(

@@ -16,9 +16,8 @@ $productionSecret = static function ($environmentName) {
     return rtrim($value, "\r\n");
 };
 
-// The publish gateway reaches the engine over the isolated Docker network.
-// Preserve force_ssl for every other caller and every other route; the gateway's
-// RemoteControl credentials and plugin signatures remain mandatory.
+// Docker DNS/IP is trusted only within the managed same-host network. It is
+// not cryptographic identity and does not protect against Docker-host control.
 $trustedGatewayRequest = static function ($remoteAddress, $requestUri, $method, $gatewayAddresses) {
     if (!is_string($remoteAddress) || filter_var($remoteAddress, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false
         || !is_array($gatewayAddresses) || !in_array($remoteAddress, $gatewayAddresses, true)
@@ -26,15 +25,51 @@ $trustedGatewayRequest = static function ($remoteAddress, $requestUri, $method, 
         return false;
     }
     $path = parse_url($requestUri, PHP_URL_PATH);
-    return ($method === 'POST' && $path === '/index.php/admin/remotecontrol')
-        || ($method === 'GET' && $path === '/index.php/plugins/direct');
+    $query = parse_url($requestUri, PHP_URL_QUERY);
+    $params = array();
+    $seen = array();
+    if (is_string($query)) {
+        foreach (explode('&', $query) as $part) {
+            $key = urldecode(explode('=', $part, 2)[0]);
+            $normalized = str_replace(array(' ', '.'), '_', $key);
+            $base = explode('[', $normalized, 2)[0];
+            if (in_array($base, array('plugin', 'function', 'r'), true)) {
+                if ($key !== $base || isset($seen[$base])) return false;
+                $seen[$base] = true;
+            }
+        }
+        parse_str($query, $params);
+    }
+    if (isset($params['r'])) return false;
+    if ($method === 'POST' && $path === '/index.php/admin/remotecontrol') {
+        return true;
+    }
+    if ($method === 'POST' && $path === '/index.php/plugins/direct/plugin/MjyQuestionExtensions/function/brandAssetsV1') {
+        return (!isset($params['plugin']) || $params['plugin'] === 'MjyQuestionExtensions')
+            && (!isset($params['function']) || $params['function'] === 'brandAssetsV1');
+    }
+    if ($method !== 'GET' || $path !== '/index.php/plugins/direct') {
+        return false;
+    }
+    if (!is_string($query)) return false;
+    $plugin = $params['plugin'] ?? null;
+    $function = $params['function'] ?? null;
+    return ($plugin === 'MjyRuntimePolicy' && $function === 'policyStatus')
+        || ($plugin === 'MjyQuestionExtensions' && in_array($function, array('extensionAnswers', 'attachmentFile'), true));
+};
+$applyTrustedScheme = static function (&$server, $edgeAddresses, $gatewayAddresses) use ($trustedGatewayRequest) {
+    $scheme = $server['HTTP_X_FORWARDED_PROTO'] ?? null;
+    unset($server['HTTP_X_FORWARDED_PROTO'], $server['HTTP_FORWARDED_PROTO']);
+    $remote = $server['REMOTE_ADDR'] ?? '';
+    if (is_string($remote) && filter_var($remote, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false
+        && is_array($edgeAddresses) && in_array($remote, $edgeAddresses, true) && $scheme === 'https') {
+        $server['HTTP_X_FORWARDED_PROTO'] = 'https';
+    } elseif ($trustedGatewayRequest($remote, $server['REQUEST_URI'] ?? '', $server['REQUEST_METHOD'] ?? '', $gatewayAddresses)) {
+        $server['HTTP_X_FORWARDED_PROTO'] = 'https';
+    }
 };
 if (!empty($_SERVER['REMOTE_ADDR'])) {
-    $gatewayAddresses = gethostbynamel('publish-gateway') ?: array();
-    if ($trustedGatewayRequest($_SERVER['REMOTE_ADDR'], $_SERVER['REQUEST_URI'] ?? '',
-        $_SERVER['REQUEST_METHOD'] ?? '', $gatewayAddresses)) {
-        $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
-    }
+    $applyTrustedScheme($_SERVER, @gethostbynamel('edge') ?: array(), @gethostbynamel('publish-gateway') ?: array());
 }
 
 $baseUrl = '/survey';
