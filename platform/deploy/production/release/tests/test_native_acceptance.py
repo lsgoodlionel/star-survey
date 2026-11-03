@@ -156,7 +156,7 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn("CANDIDATE_IDENTITY", text)
         self.assertIn("CANDIDATE_MANIFEST_SHA256", text)
         self.assertIn("CANDIDATE_BUNDLE_SHA256", text)
-        for image_path in ("images.admin", "images.platform", 'images[\\"publish-gateway\\"]'):
+        for image_path in ("images.admin", "images.platform", "images.engine", 'images[\\"publish-gateway\\"]'):
             self.assertIn(image_path, text)
         self.assertNotIn("docker/build-push-action@", text)
         self.assertNotIn("build_release.py", text)
@@ -357,7 +357,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         env = {'EXPECTED_UBUNTU': '22.04', 'EXPECTED_ARCHITECTURE': 'amd64',
                'CANDIDATE_MANIFEST_SHA256': 'a' * 64, 'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
                'ADMIN_IMAGE_DIGEST': 'sha256:' + 'c' * 64, 'PLATFORM_IMAGE_DIGEST': 'sha256:' + 'd' * 64,
-               'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + 'e' * 64, 'BASELINE_MODE': 'bootstrap'}
+               'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + 'e' * 64, 'ENGINE_IMAGE_DIGEST': 'sha256:' + '2' * 64, 'BASELINE_MODE': 'bootstrap'}
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, env):
             path = Path(temporary) / 'summary.json'
             self.module.write_summary_evidence(path, 'failed', 4, 'install', False)
@@ -542,6 +542,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                             "admin": "sha256:" + "c" * 64,
                             "platform": "sha256:" + "d" * 64,
                             "publish-gateway": "sha256:" + "e" * 64,
+                            "engine": "sha256:" + "2" * 64,
                         },
                     },
                     "baselineMode": mode,
@@ -566,6 +567,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                     "admin": {"digest": "sha256:" + "c" * 64},
                     "platform": {"digest": "sha256:" + "d" * 64},
                     "publish-gateway": {"digest": "sha256:" + "e" * 64},
+                    "engine": {"digest": "sha256:" + "2" * 64},
                 },
                 "baseline": {"mode": mode},
             }
@@ -605,7 +607,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             self.assertEqual({
                 "schemaVersion", "candidateVersion", "candidateCommit", "manifestSha256",
                 "amd64BundleSha256", "arm64BundleSha256", "adminManifestDigest",
-                "platformManifestDigest", "gatewayManifestDigest", "matrixEvidenceSha256",
+                "platformManifestDigest", "gatewayManifestDigest", "engineManifestDigest", "matrixEvidenceSha256",
                 "baselineMode", "nativeMatrixCount", "promotable", "reason",
             }, set(stable))
             self.assertEqual("1" * 40, stable["candidateCommit"])
@@ -620,6 +622,10 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             bootstrap = json.loads(output.read_text(encoding="utf-8"))
             self.assertFalse(bootstrap["promotable"])
             self.assertEqual("bootstrap-not-promotable", bootstrap["reason"])
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.write_release_readiness(
+                    identity("0.3.0-rc.1", "bootstrap"), summaries("bootstrap", True), evidence_hashes(), output,
+                )
 
     def test_downloaded_assets_are_recomputed_before_readiness_is_trusted(self):
         runners = (("22.04", "amd64"), ("24.04", "amd64"), ("22.04", "arm64"), ("24.04", "arm64"))
@@ -642,6 +648,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                 "admin": "sha256:" + "c" * 64,
                 "platform": "sha256:" + "d" * 64,
                 "publish-gateway": "sha256:" + "e" * 64,
+                "engine": "sha256:" + "2" * 64,
             }
             manifest = {
                 "version": "1.0.0", "commit": "1" * 40,
@@ -650,6 +657,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                     "ADMIN_IMAGE": "ghcr.io/example/admin@" + image_digests["admin"],
                     "PLATFORM_IMAGE": "ghcr.io/example/platform@" + image_digests["platform"],
                     "PUBLISH_GATEWAY_IMAGE": "ghcr.io/example/gateway@" + image_digests["publish-gateway"],
+                    "ENGINE_IMAGE": "ghcr.io/example/engine@" + image_digests["engine"],
                 },
             }
             manifest_path = candidate / "release.json"
@@ -660,7 +668,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                 "bundles": bundles, "baseline": {"mode": "predecessor"},
                 "images": {
                     name: {"reference": manifest["images"][key], "digest": image_digests[name]}
-                    for name, key in (("admin", "ADMIN_IMAGE"), ("platform", "PLATFORM_IMAGE"), ("publish-gateway", "PUBLISH_GATEWAY_IMAGE"))
+                    for name, key in (("admin", "ADMIN_IMAGE"), ("platform", "PLATFORM_IMAGE"), ("publish-gateway", "PUBLISH_GATEWAY_IMAGE"), ("engine", "ENGINE_IMAGE"))
                 },
             }
             identity_path = root / "identity.json"
@@ -685,6 +693,32 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
 
             original = readiness_path.read_text(encoding="utf-8")
+            self.assertEqual(image_digests["engine"], json.loads(original)["engineManifestDigest"])
+            for mutation in ("missing-engine", "wrong-engine", "wrong-reference", "extra-image"):
+                altered = json.loads(json.dumps(identity))
+                if mutation == "missing-engine":
+                    del altered["images"]["engine"]
+                elif mutation == "wrong-engine":
+                    altered["images"]["engine"] = {"reference": "ghcr.io/example/engine@sha256:" + "9" * 64,
+                                                     "digest": "sha256:" + "9" * 64}
+                elif mutation == "wrong-reference":
+                    altered["images"]["engine"]["reference"] = "ghcr.io/example/engine:mutable"
+                else:
+                    altered["images"]["unexpected"] = altered["images"]["engine"]
+                with self.subTest(identity=mutation), self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_candidate_assets(altered, candidate)
+            summary_path = evidence / "native-acceptance-22.04-amd64" / "summary.json"
+            original_summary = summary_path.read_text()
+            for mutation in ("missing-engine", "wrong-engine"):
+                altered = json.loads(original_summary)
+                if mutation == "missing-engine":
+                    del altered["candidate"]["images"]["engine"]
+                else:
+                    altered["candidate"]["images"]["engine"] = "sha256:" + "9" * 64
+                summary_path.write_text(json.dumps(altered))
+                with self.subTest(summary=mutation), self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+            summary_path.write_text(original_summary)
             mutations = {
                 "candidateVersion": "1.0.1", "candidateCommit": "2" * 40,
                 "manifestSha256": "9" * 64, "amd64BundleSha256": "9" * 64,
@@ -692,6 +726,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                 "adminManifestDigest": "sha256:" + "9" * 64,
                 "platformManifestDigest": "sha256:" + "9" * 64,
                 "gatewayManifestDigest": "sha256:" + "9" * 64,
+                "engineManifestDigest": "sha256:" + "9" * 64,
             }
             for field, replacement in mutations.items():
                 mutated = json.loads(original)
