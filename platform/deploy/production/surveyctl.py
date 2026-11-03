@@ -1534,7 +1534,26 @@ class SurveyManager:
     def doctor(self) -> None:
         state = self._read_state(require_current=True)
         helper = self._release_dir(state["version"]) / "doctor.py"
-        result = self._run([sys.executable, str(helper), "--target", str(self.target), "--redact"], "doctor checks failed", capture_output=True)
+        try:
+            result = self._run([sys.executable, str(helper), "--target", str(self.target), "--redact"], "doctor checks failed", capture_output=True)
+        except RuntimeHealthError as exc:
+            cause = exc.__cause__
+            if isinstance(cause, subprocess.CalledProcessError) and isinstance(cause.stdout, str):
+                try:
+                    report = json.loads(cause.stdout)
+                    if not isinstance(report, dict) or not isinstance(report.get("checks"), list):
+                        raise ValueError("invalid doctor report")
+                    checks = []
+                    for check in report["checks"]:
+                        if not isinstance(check, dict) or not all(isinstance(check.get(k), str) for k in ("id", "status", "summary")):
+                            raise ValueError("invalid doctor check")
+                        checks.append({k: self._redact(check[k]) for k in ("id", "status", "summary")})
+                    if not isinstance(report.get("status"), str):
+                        raise ValueError("invalid doctor status")
+                    print(json.dumps({"status": self._redact(report["status"]), "checks": checks}))
+                except (ValueError, TypeError):
+                    pass
+            raise
         if result.stdout:
             print(self._redact(result.stdout), end="")
         if result.stderr:

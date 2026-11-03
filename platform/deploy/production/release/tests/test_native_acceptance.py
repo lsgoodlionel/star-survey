@@ -292,7 +292,7 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
             self.assertIn(required, self.text)
 
     def test_script_executes_full_lifecycle_and_restores_into_second_project(self):
-        calls = re.findall(r"^\s*run_ctl\s+([a-z-]+)", self.text, re.MULTILINE)
+        calls = re.findall(r"^\s*(?:if\s+)?run_ctl\s+([a-z-]+)", self.text, re.MULTILINE)
         self.assertEqual(1, calls.count("setup-probe"))
         for command in ("install", "setup-probe", "doctor", "backup", "restore", "uninstall"):
             self.assertIn(command, calls)
@@ -322,6 +322,27 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         cls.module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = cls.module
         spec.loader.exec_module(cls.module)
+
+    def test_failed_doctor_is_sanitized_and_preserves_nonzero_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            secret_dir = root / "secrets"
+            secret_dir.mkdir()
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
+            (secret_dir / "test").write_text("unique-test-secret")
+            script = SCRIPT_PATH.read_text(encoding="utf-8")
+            function = script[script.index("write_doctor_evidence() {"):script.index("\nwrite_summary() {")]
+            fake = "run_ctl() { printf '%s\\n' '{\"status\":\"error\",\"checks\":[{\"id\":\"tls\",\"status\":\"error\",\"summary\":\"token=unique-test-secret\"}]}'; return 4; }\n"
+            fake += "evidence_secret_args() { printf '%s\\n' --secrets-dir \"$secret_dir\"; }\n"
+            result = subprocess.run(["bash", "-c", "set -e\n" + fake + function + "\nwrite_doctor_evidence doctor-installed"],
+                                    capture_output=True, text=True, env={**os.environ, "work_root": str(root),
+                                    "evidence_root": str(evidence_dir), "secret_dir": str(secret_dir),
+                                    "evidence_helper": str(EVIDENCE_HELPER_PATH)})
+            self.assertNotEqual(0, result.returncode)
+            evidence = (evidence_dir / "doctor-installed.json").read_text()
+            self.assertEqual("error", json.loads(evidence)["status"])
+            self.assertNotIn("unique-test-secret", evidence)
 
     def test_nested_keys_authorization_uris_multiline_and_encoded_variants_are_redacted(self):
         payload = {
