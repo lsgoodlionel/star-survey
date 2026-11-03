@@ -40,6 +40,17 @@ def verify(image):
         return command(['docker', 'exec', '-i', container, 'psql', '-v', 'ON_ERROR_STOP=1',
                         '-U', 'postgres', '-d', 'platform', '-qAt'], input=statement.encode())
 
+    # Force host SCRAM in this fixture: image defaults may trust localhost,
+    # which would let positive TCP tests pass without checking any password.
+    def tcp_sql(container, role, credential, statement):
+        if (role, credential) not in {('platform_owner', 'owner'), ('platform_app', 'app'),
+                                      ('platform_owner', 'app')}:
+            raise RuntimeError('unexpected fixture credential mapping')
+        shell = ('PGPASSWORD="$(cat /fixture/' + credential + ')"; export PGPASSWORD; '
+                 'exec psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -U ' + role + ' -d platform -qAt')
+        return command(['docker', 'exec', '--user', 'postgres', '-i', container,
+                        'sh', '-ec', shell], input=statement.encode())
+
     try:
         if command(['docker', 'image', 'inspect', image]).returncode != 0:
             if command(['docker', 'pull', image], timeout=180).returncode != 0:
@@ -56,13 +67,19 @@ def verify(image):
             try:
                 created = command([
                     'docker', 'create', '--name', name, '--label', ownership_label, '--network', 'none',
+                    '--tmpfs', '/fixture:rw,noexec,nosuid,size=1048576', '--entrypoint', '/bin/sh',
                     '-e', 'POSTGRES_USER=postgres', '-e', 'POSTGRES_DB=postgres',
+                    '-e', 'POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust',
                     '-e', 'POSTGRES_PASSWORD_FILE=/fixture/super',
                     '-e', 'PLATFORM_DB_OWNER_PASSWORD_FILE=/fixture/owner',
                     '-e', 'PLATFORM_DB_APP_PASSWORD_FILE=/fixture/app',
-                    '-v', str(work) + ':/fixture:ro',
+                    '-v', str(work) + ':/fixture-input:ro',
                     '-v', str(PRODUCTION / 'init/init-platform-db.sh') +
-                    ':/docker-entrypoint-initdb.d/10-platform-roles.sh:ro', image,
+                    ':/docker-entrypoint-initdb.d/10-platform-roles.sh:ro', image, '-ec',
+                    'chmod 700 /fixture; chown postgres:postgres /fixture; '
+                    'for key in super owner app; do cp /fixture-input/$key /fixture/$key; '
+                    'chmod 600 /fixture/$key; chown postgres:postgres /fixture/$key; done; '
+                    'exec /usr/local/bin/docker-entrypoint.sh postgres',
                 ])
             except subprocess.SubprocessError:
                 creation_uncertain = True
@@ -85,6 +102,27 @@ def verify(image):
                 if time.monotonic() >= deadline:
                     raise RuntimeError('fixture readiness failed')
                 time.sleep(.5)
+        result['credentialsReadableByPostgres'] = True
+        result['ownerTcpPasswordVerified'] = True
+        result['appTcpPasswordVerified'] = True
+        result['wrongTcpPasswordRejected'] = True
+        for identifier in containers:
+            readable = command(['docker', 'exec', '--user', 'postgres', identifier, 'sh', '-ec',
+                'test "$(stat -c %a /fixture)" = 700; '
+                'for key in super owner app; do test -r /fixture/$key; '
+                'test "$(stat -c %a /fixture/$key)" = 600; '
+                'test "$(stat -c %u /fixture/$key)" = "$(id -u)"; done'])
+            result['credentialsReadableByPostgres'] &= readable.returncode == 0
+            owner_login = tcp_sql(identifier, 'platform_owner', 'owner', 'SELECT current_user;')
+            app_login = tcp_sql(identifier, 'platform_app', 'app', 'SELECT current_user;')
+            wrong_login = tcp_sql(identifier, 'platform_owner', 'app', 'SELECT 1;')
+            result['ownerTcpPasswordVerified'] &= owner_login.returncode == 0 and owner_login.stdout.strip() == b'platform_owner'
+            result['appTcpPasswordVerified'] &= app_login.returncode == 0 and app_login.stdout.strip() == b'platform_app'
+            result['wrongTcpPasswordRejected'] &= (wrong_login.returncode != 0
+                and b'password authentication failed' in wrong_login.stderr)
+        if not all(result[key] for key in ('credentialsReadableByPostgres', 'ownerTcpPasswordVerified',
+                                          'appTcpPasswordVerified', 'wrongTcpPasswordRejected')):
+            raise RuntimeError('fixture password authentication failed')
         source, target = containers
         seed = sql(source, """
 SET ROLE platform_owner;
@@ -126,9 +164,9 @@ GRANT EXECUTE ON FUNCTION fixture_definer() TO platform_app;
         else:
             raise RuntimeError('fixture stop boundary was not reached')
         owner = sql(target, "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname='flyway_schema_history';")
-        migrate = sql(target, 'SET ROLE platform_owner; SELECT count(*) FROM flyway_schema_history;')
-        definer = sql(target, 'SET ROLE platform_app; SELECT fixture_definer();')
-        app_write = sql(target, 'SET ROLE platform_app; INSERT INTO flyway_schema_history VALUES(2);')
+        migrate = tcp_sql(target, 'platform_owner', 'owner', 'SELECT count(*) FROM flyway_schema_history;')
+        definer = tcp_sql(target, 'platform_app', 'app', 'SELECT fixture_definer();')
+        app_write = tcp_sql(target, 'platform_app', 'app', 'INSERT INTO flyway_schema_history VALUES(2);')
         result['historyOwnerPreserved'] = owner.returncode == 0 and owner.stdout.strip() == b'platform_owner'
         result['migrationRoleCanReadHistory'] = migrate.returncode == 0 and migrate.stdout.strip() == b'1'
         result['securityDefinerOwnerPreserved'] = definer.returncode == 0 and definer.stdout.strip() == b'platform_owner'
