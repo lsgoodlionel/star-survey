@@ -267,6 +267,36 @@ class DoctorAndCleanHostTest(unittest.TestCase):
         self.assertEqual("warning", check["status"])
         self.assertEqual([backup], calls)
 
+    def test_probe_definition_passes_real_gateway_validation(self):
+        gateway = PRODUCTION_DIR.parents[1] / "tools" / "publish-gateway"
+        sys.path.insert(0, str(gateway))
+        self.addCleanup(lambda: sys.path.remove(str(gateway)))
+        from pubgw.model import SurveyDefinition
+        from pubgw.validate import validate_definition
+
+        (self.target / "shared" / "secrets" / "platform_jwt_hmac_secret").write_text("x" * 48 + "\n")
+        (self.target / "shared" / "product-probe.json").write_text(json.dumps({
+            "tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner"}))
+        captured = []
+        outer = self
+        class Probe(self.doctor.ProductProbe):
+            def _api(probe, token, method, path, body=None, raw=False):
+                if path.startswith("/v1/resources"):
+                    return 200, {"items": []}
+                if path == "/v1/projects":
+                    return 201, {"id": "project-id"}
+                if path == "/v1/surveys":
+                    captured.append(body["definition"])
+                    raise outer.doctor.DoctorRuntimeError("stop after definition capture")
+                if path.endswith("/archive"):
+                    return 200, {}
+                raise AssertionError(path)
+        with self.assertRaises(self.doctor.DoctorRuntimeError):
+            Probe(self.target, "survey.example.com", [], DoctorRunner()).run()
+        self.assertEqual(1, len(captured))
+        report = validate_definition(SurveyDefinition.from_dict(captured[0]))
+        self.assertTrue(report.is_valid, [(issue.code, issue.path) for issue in report.issues])
+
     def test_product_probe_runs_complete_journey_and_cleans_up(self):
         (self.target / "shared" / "secrets" / "platform_jwt_hmac_secret").write_text("x" * 48 + "\n")
         (self.target / "shared" / "product-probe.json").write_text(json.dumps({

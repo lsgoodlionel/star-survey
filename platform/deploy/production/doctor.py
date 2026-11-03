@@ -247,7 +247,11 @@ class ProductProbe:
             project_id = project.get("id")
             definition = {
                 "definitionVersion": 1, "uuid": str(uuid.uuid4()), "title": "Production probe " + suffix,
-                "language": "en", "settings": {"anonymized": "N", "datestamp": "Y", "format": "G"},
+                "language": "en", "settings": {
+                    "anonymized": "N", "datestamp": "Y", "format": "G", "savetimings": "N",
+                    "ipaddr": "N", "refurl": "N", "allowsave": "Y", "allowprev": "Y",
+                    "alloweditaftercompletion": "Y", "questionindex": "0",
+                },
                 "groups": [{"uuid": str(uuid.uuid4()), "title": "Probe", "questions": [{
                     "uuid": str(uuid.uuid4()), "code": "PROBE", "type": "S", "text": "Probe response",
                     "mandatory": True,
