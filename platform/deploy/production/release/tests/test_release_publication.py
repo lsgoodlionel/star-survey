@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import hashlib
 import os
 from pathlib import Path
@@ -494,21 +495,36 @@ class VerifyReleaseScriptTest(unittest.TestCase):
         (assets / "SHA256SUMS").write_text("".join(
             f"{hashlib.sha256((assets / name).read_bytes()).hexdigest()}  {name}\n" for name in internal_names
         ), encoding="ascii")
-        readiness = {
-            "schemaVersion": 1, "candidateVersion": version, "candidateCommit": "a" * 40,
-            "manifestSha256": hashlib.sha256((assets / "release.json").read_bytes()).hexdigest(),
-            "amd64BundleSha256": bundles["amd64"]["sha256"], "arm64BundleSha256": bundles["arm64"]["sha256"],
-            "adminManifestDigest": image_digest, "platformManifestDigest": image_digest,
-            "gatewayManifestDigest": image_digest,
-            "engineManifestDigest": image_digest,
-            "matrixEvidenceSha256": {
-                "ubuntu-22-04-amd64": "5" * 64, "ubuntu-24-04-amd64": "6" * 64,
-                "ubuntu-22-04-arm64": "7" * 64, "ubuntu-24-04-arm64": "8" * 64,
-            },
-            "baselineMode": "predecessor" if promotable else "bootstrap", "nativeMatrixCount": 4,
-            "promotable": promotable, "reason": "upgrade-verified" if promotable else "bootstrap-not-promotable",
-        }
-        (assets / "release-readiness.json").write_text(json.dumps(readiness) + "\n", encoding="utf-8")
+        # Feed the real readiness producer into the final verifier. Keeping a
+        # second hand-written schema here hid the matrix-key contract mismatch.
+        helper_path = ROOT / "platform/deploy/production/release/native_acceptance_evidence.py"
+        spec = importlib.util.spec_from_file_location("publication_native_evidence", helper_path)
+        native = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(native)
+        manifest_sha = hashlib.sha256((assets / "release.json").read_bytes()).hexdigest()
+        image_keys = {"admin": "ADMIN_IMAGE", "platform": "PLATFORM_IMAGE",
+                      "publish-gateway": "PUBLISH_GATEWAY_IMAGE", "engine": "ENGINE_IMAGE"}
+        mode = "predecessor" if promotable else "bootstrap"
+        identity = {"version": version, "commit": "a" * 40, "manifestSha256": manifest_sha,
+                    "bundles": bundles, "baseline": {"mode": mode},
+                    "images": {name: {"reference": images[key], "digest": image_digest}
+                               for name, key in image_keys.items()}}
+        summaries = []
+        hashes = {}
+        for ubuntu, architecture in sorted(native.RUNNERS):
+            summary = {
+                "schemaVersion": 1, "status": "passed", "exitCode": 0, "lastStep": "uninstall",
+                "runner": {"ubuntu": ubuntu, "architecture": architecture},
+                "candidate": {"manifestSha256": manifest_sha, "bundleSha256": bundles[architecture]["sha256"],
+                              "images": {name: image_digest for name in image_keys}},
+                "baselineMode": mode, "upgradeVerified": promotable,
+                "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": True, "publicAcmeVerified": False},
+                "preflightDisk": "separately-tested", "completedAt": "2026-11-03T00:00:00+00:00",
+            }
+            summaries.append(summary)
+            hashes[native.MATRIX_EVIDENCE_KEYS[(ubuntu, architecture)]] = hashlib.sha256(
+                json.dumps(summary, sort_keys=True).encode()).hexdigest()
+        native.write_release_readiness(identity, summaries, hashes, assets / "release-readiness.json")
         for name in ("admin", "platform", "publish-gateway", "engine"):
             (assets / f"sbom-{name}.spdx.json").write_text(
                 json.dumps({"spdxVersion": "SPDX-2.3", "SPDXID": "SPDXRef-DOCUMENT"}) + "\n", encoding="utf-8"
@@ -595,6 +611,27 @@ class VerifyReleaseScriptTest(unittest.TestCase):
         stable = self.run_verifier(assets, environment, target="v1.2.3")
         self.assertNotEqual(0, stable.returncode)
         self.assertIn("stable promotion requires upgrade-verified native readiness", stable.stderr)
+
+    def test_matrix_identity_requires_exact_producer_keys_and_hashes(self):
+        for mutation in ("hyphen-alias", "missing", "extra", "invalid-hash"):
+            with self.subTest(mutation=mutation):
+                assets, environment = self.make_fixture()
+                path = assets / "release-readiness.json"
+                report = json.loads(path.read_text())
+                hashes = report["matrixEvidenceSha256"]
+                if mutation == "hyphen-alias":
+                    report["matrixEvidenceSha256"] = {key.replace(".", "-"): value for key, value in hashes.items()}
+                elif mutation == "missing":
+                    del hashes["ubuntu-22.04-amd64"]
+                elif mutation == "extra":
+                    hashes["ubuntu-20.04-amd64"] = "9" * 64
+                else:
+                    hashes["ubuntu-22.04-amd64"] = "not-a-sha256"
+                path.write_text(json.dumps(report))
+                rejected = self.run_verifier(assets, environment)
+                self.assertNotEqual(0, rejected.returncode)
+                self.assertIn("native readiness evidence identity is incomplete", rejected.stderr)
+                shutil.rmtree(assets)
 
     def test_engine_inventory_and_readiness_are_required(self):
         for mutation in ("missing-sbom", "missing-signature", "missing-readiness-digest", "wrong-readiness-digest"):

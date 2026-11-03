@@ -147,7 +147,7 @@ if set(readiness) != readiness_keys or readiness.get("schemaVersion") != 1:
     fail("native readiness schema is not fail closed")
 matrix_hashes = readiness.get("matrixEvidenceSha256")
 if not isinstance(matrix_hashes, dict) or set(matrix_hashes) != {
-    "ubuntu-22-04-amd64", "ubuntu-24-04-amd64", "ubuntu-22-04-arm64", "ubuntu-24-04-arm64",
+    "ubuntu-22.04-amd64", "ubuntu-24.04-amd64", "ubuntu-22.04-arm64", "ubuntu-24.04-arm64",
 } or any(not isinstance(value, str) or sha.fullmatch(value) is None for value in matrix_hashes.values()):
     fail("native readiness evidence identity is incomplete")
 manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()

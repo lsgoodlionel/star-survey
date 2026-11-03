@@ -329,3 +329,12 @@ PR69已合并719a325175cf5e5b27ec441d6b2f3dd51ff96279，实际main CI41718115566
 只读核实现有入口：直接重跑旧run仍使用旧commit及校验和绑定包；包内helper仍是旧三镜像版本，与新合并修复不同。workflow_dispatch candidate_run_id可下载旧candidate复验，但原生脚本/helper仍从旧包提取；policy为build，release-ready及attest-release-assets限定release=true/channel=candidate，因而不会完成新的汇总和最终签名。当前新校验器对原始旧三镜像summary实际拒绝；不补写engine字段，不替换包内代码，不更改旧校验和或标签，不引入额外签名权限或新复验架构。
 
 因此选择现有受支持的同run新bootstrap构建/原生验收/汇总/签名流程。核对v0.3.15-rc.1未占用，仅登记mode=bootstrap及回归；失败rc.14不作前代，bootstrap仍不可晋升、不证明升级。27项native策略/证据测试先因缺登记失败，再通过。本切片仅3文件策略/测试/记录，无运行代码或权限改动；需父任务独立审查、PR CI与实际合并提交检查后重新核对tag，最终只能绑定实际通过的合并SHA。当前不创建标签、不发布镜像/Release、不触碰生产。
+
+
+## Wave 6 rc.15 创建前的矩阵交接预检（2026-11-03，待审）
+
+PR70已合并3bef74a6858d97ab895d2d4f37e125dd08141278，已启动其main CI41722091711与实际main smoke41722210068；v0.3.15-rc.1尚未创建。在等待门禁期间补做生成器→最终资产校验器的直接交接检查，发现native_acceptance_evidence.py生成规范矩阵键ubuntu-22.04-amd64等（保留版本点号），verify_release.sh却要求ubuntu-22-04-amd64等。旧发布单测手写了错误连字符夹具，两个模块各自测试通过但实际交接必然失败，若此时触发候选会在最终资产校验再次被阻断。
+
+先改测试夹具为真实native.write_release_readiness生成完整报告（真实四摘要数据结构与四镜像identity），在未改运行校验器时复现候选RC和bootstrap正例都失败native readiness evidence identity is incomplete。运行修复仅将最终校验器的一行四个期望键改为生成器规范；不做别名归一化，不兼容错误连字符键，不减少四平台数量或SHA256校验。新增缺项、多项、错误别名及非法哈希负例均拒绝；21项资产/发布校验及27项原生证据测试通过。
+
+本次3文件独立修复/回归/记录，不改候选注册、原始证据、签名权限、发布开关或生产。rc.15仍未创建，不需要消耗新版本号；父任务审查合并后，须将标签绑定包含本修复、实际检查成功的新合并SHA，不能仍指向3bef74。旧main门禁成功不能替代该跨模块失败回归，保持不发布Release、不触碰生产。
