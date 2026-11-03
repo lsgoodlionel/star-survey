@@ -780,9 +780,66 @@ class BackupRestoreTest(unittest.TestCase):
         commands = [" ".join(call[0]) for call in runner.calls]
         production_pg_restore = [command for command in commands if "survey-production" in command and "pg_restore" in command]
         self.assertEqual(2, len(production_pg_restore))
-        self.assertTrue(any("survey-production" in command and "up -d --remove-orphans" in command for command in commands))
+        recovery_starts = [command for command, _ in runner.calls
+                           if "survey-production" in command and "up" in command
+                           and "--wait" in command and "--remove-orphans" in command]
+        self.assertEqual(1, len(recovery_starts))
+        command = recovery_starts[0]
+        self.assertEqual(("up", "-d", "--wait", "--wait-timeout", "120", "--remove-orphans"),
+                         command[command.index("up"):])
         safety = list((self.target / "backups").glob("pre-restore-safety-*"))
         self.assertEqual(1, len(safety))
+
+    def test_production_application_wait_failure_recovers_safety_and_reports_failure(self):
+        output = self.create_backup(name="switch-app-wait-fails")
+
+        class FailFirstSwitchedApplicationWait(FakeRunner):
+            def __init__(self):
+                super().__init__()
+                self.production_waits = []
+            def run(self, command, **kwargs):
+                result = super().run(command, **kwargs)
+                if ("survey-production" in command and "up" in command
+                        and "--wait" in command and "--remove-orphans" in command):
+                    self.production_waits.append(tuple(command))
+                    if len(self.production_waits) == 1:
+                        raise subprocess.CalledProcessError(1, command, stderr="fixture application wait failed")
+                return result
+
+        runner = FailFirstSwitchedApplicationWait()
+        manager = self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher())
+        with mock.patch.object(manager, "verify_backup", wraps=manager.verify_backup) as verified:
+            with self.assertRaisesRegex(
+                self.restore.RestoreRuntimeError,
+                "^production restore failed; previous stack recovered from safety backup$",
+            ) as failure:
+                manager.restore(output)
+        self.assertIsInstance(failure.exception.__cause__, self.restore.RestoreRuntimeError)
+        self.assertEqual("restored production startup failed", str(failure.exception.__cause__))
+        self.assertIsInstance(failure.exception.__cause__.__cause__, subprocess.CalledProcessError)
+        safety = list((self.target / "backups").glob("pre-restore-safety-*"))
+        self.assertEqual(1, len(safety))
+        self.assertEqual([output, output, safety[0]], [call.args[0] for call in verified.call_args_list])
+        self.assertEqual(2, len(runner.production_waits))
+        for command in runner.production_waits:
+            self.assertEqual(("up", "-d", "--wait", "--wait-timeout", "120", "--remove-orphans"),
+                             command[command.index("up"):])
+        commands = [command for command, _ in runner.calls]
+        production_downs = [index for index, command in enumerate(commands)
+                            if "survey-production" in command and "down" in command]
+        production_restores = [index for index, command in enumerate(commands)
+                               if "survey-production" in command and "pg_restore" in command]
+        production_waits = [index for index, command in enumerate(commands)
+                            if command in runner.production_waits]
+        self.assertEqual(3, len(production_downs))
+        self.assertEqual(2, len(production_restores))
+        self.assertLess(production_restores[0], production_waits[0])
+        self.assertLess(production_waits[0], production_downs[1])
+        self.assertLess(production_downs[1], production_downs[2])
+        self.assertLess(production_downs[2], production_restores[1])
+        self.assertLess(production_restores[1], production_waits[1])
+        self.assertTrue(any("survey-production" in command and "ps" in command and "--format" in command
+                            for command in commands[production_waits[1] + 1:]))
 
     def test_restore_rejects_database_schema_incompatible_with_release(self):
         output = self.create_backup()
