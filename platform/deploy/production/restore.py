@@ -382,7 +382,9 @@ class RestoreManager:
             raise RestoreRuntimeError("volume restore payload is unreadable") from exc
 
     def _restore_payload(self, decrypted, compose):
-        self._run(compose + ["up", "-d", "platform-db", "engine-db"], "restore database startup failed", capture_output=True, text=True)
+        # A created container may not yet expose the database socket. Require
+        # both configured health checks before sending either database dump.
+        self._run(compose + ["up", "-d", "--wait", "--wait-timeout", "120", "platform-db", "engine-db"], "restore database startup failed", capture_output=True, text=True)
         with decrypted["postgres.dump"].open("rb") as source:
             self._run(compose + ["exec", "-T", "platform-db", "pg_restore", "-U", "postgres", "-d", "platform", "--clean", "--if-exists", "--no-owner"], "PostgreSQL restore failed", stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if (self.target / ".surveyctl" / "auth-security-floor").exists():
@@ -456,7 +458,7 @@ COMMIT;
                 self._run(candidate + ["create"], "isolated restore project creation failed", capture_output=True, text=True)
                 candidate_created = True
                 self._restore_payload(decrypted, candidate)
-                self._run(candidate + ["up", "-d", *APP_SERVICES], "isolated restored stack startup failed", capture_output=True, text=True)
+                self._run(candidate + ["up", "-d", "--wait", "--wait-timeout", "120", *APP_SERVICES], "isolated restored stack startup failed", capture_output=True, text=True)
                 self._assert_healthy(candidate)
             try:
                 BackupManager(self.target, runner=self.runner, cipher=self.cipher).create(safety, version)
@@ -484,7 +486,7 @@ COMMIT;
             self._run(compose + ["down", "--remove-orphans"], "production stack could not enter restore mode", capture_output=True, text=True)
             self._run(compose + ["create"], "production restore project creation failed", capture_output=True, text=True)
             self._restore_payload(decrypted, compose)
-            self._run(compose + ["up", "-d", "--remove-orphans"], "restored production startup failed", capture_output=True, text=True)
+            self._run(compose + ["up", "-d", "--wait", "--wait-timeout", "120", "--remove-orphans"], "restored production startup failed", capture_output=True, text=True)
             self._assert_healthy(compose)
 
 

@@ -645,6 +645,98 @@ class BackupRestoreTest(unittest.TestCase):
         commands = [" ".join(call[0]) for call in runner.calls]
         self.assertFalse(any("survey-production" in command and " down" in command for command in commands))
 
+    def test_restore_waits_for_databases_before_import_in_both_projects(self):
+        output = self.create_backup(name="database-readiness")
+
+        class StartingDatabases(FakeRunner):
+            def __init__(self):
+                super().__init__()
+                self.ready = set()
+            def run(self, command, **kwargs):
+                if "up" in command and "platform-db" in command and "engine-db" in command:
+                    project = command[command.index("-p") + 1]
+                    if "--wait" in command and "--wait-timeout" in command:
+                        self.ready.add(project)
+                if "pg_restore" in command:
+                    project = command[command.index("-p") + 1]
+                    if project not in self.ready:
+                        raise subprocess.CalledProcessError(1, command, stderr="fixture database starting")
+                return super().run(command, **kwargs)
+
+        runner = StartingDatabases()
+        self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+        self.assertEqual(2, len(runner.ready))
+        self.assertIn("survey-production", runner.ready)
+        waits = [command for command, _ in runner.calls
+                 if "up" in command and "platform-db" in command and "engine-db" in command]
+        self.assertEqual(2, len(waits))
+        for command in waits:
+            self.assertEqual("120", command[command.index("--wait-timeout") + 1])
+
+    def test_restore_database_readiness_failure_never_imports_or_switches(self):
+        output = self.create_backup(name="database-never-ready")
+
+        class FailedReadiness(FakeRunner):
+            def run(self, command, **kwargs):
+                result = super().run(command, **kwargs)
+                if "up" in command and "--wait" in command and "platform-db" in command:
+                    raise subprocess.CalledProcessError(1, command, stderr="fixture health timeout")
+                return result
+
+        runner = FailedReadiness()
+        with self.assertRaisesRegex(self.restore.RestoreRuntimeError, "restore database startup failed"):
+            self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+        commands = [command for command, _ in runner.calls]
+        self.assertFalse(any("pg_restore" in command or any("mariadb" in str(part) for part in command)
+                             for command in commands))
+        self.assertFalse(any("survey-production" in command for command in commands))
+        self.assertTrue(any("down" in command and "--volumes" in command for command in commands))
+
+    def test_restore_waits_for_apps_before_checking_both_restored_projects(self):
+        output = self.create_backup(name="application-readiness")
+
+        class StartingApps(FakeRunner):
+            def __init__(self):
+                super().__init__()
+                self.ready = {"survey-production"}
+            def run(self, command, **kwargs):
+                project = command[command.index("-p") + 1] if "-p" in command else None
+                if "down" in command:
+                    self.ready.discard(project)
+                if "up" in command and ("engine-init" in command or "--remove-orphans" in command):
+                    if "--wait" in command and "--wait-timeout" in command:
+                        self.ready.add(project)
+                result = super().run(command, **kwargs)
+                if "ps" in command and "--format" in command and project not in self.ready:
+                    rows = json.loads(result.stdout)
+                    for row in rows:
+                        if row["Service"] == "publish-gateway":
+                            row["Health"] = "starting"
+                    return subprocess.CompletedProcess(command, 0, stdout=json.dumps(rows), stderr="")
+                return result
+
+        runner = StartingApps()
+        self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+        commands = [command for command, _ in runner.calls]
+        candidate_up = next(command for command in commands if "up" in command and "engine-init" in command)
+        production_down = next(index for index, command in enumerate(commands)
+                               if "survey-production" in command and "down" in command)
+        production_up = next(command for command in commands[production_down + 1:]
+                             if "up" in command and "--remove-orphans" in command)
+        for command in (candidate_up, production_up):
+            self.assertIn("--wait", command)
+            self.assertEqual("120", command[command.index("--wait-timeout") + 1])
+
+    def test_restore_application_readiness_failure_never_switches_production(self):
+        output = self.create_backup(name="applications-never-ready")
+        runner = FakeRunner(fail_when=lambda command: "up" in command and "--wait" in command
+                            and "engine-init" in command)
+        with self.assertRaisesRegex(self.restore.RestoreRuntimeError, "isolated restored stack startup failed"):
+            self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+        commands = [command for command, _ in runner.calls]
+        self.assertFalse(any("survey-production" in command for command in commands))
+        self.assertTrue(any("down" in command and "--volumes" in command for command in commands))
+
     def test_successful_restore_clears_volume_contents_before_extracting_archives(self):
         output = self.create_backup(name="successful")
         runner = FakeRunner()
