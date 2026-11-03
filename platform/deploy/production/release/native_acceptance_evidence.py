@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 from typing import Any, Iterable
 from urllib.parse import quote, quote_plus
 
@@ -213,7 +214,7 @@ def validate_summary(value: Any) -> None:
         raise EvidenceError("summary TLS scope is invalid")
     boolean(tls["httpsMarkerVerified"], "summary httpsMarkerVerified")
     boolean(tls["publicAcmeVerified"], "summary publicAcmeVerified")
-    if not tls["httpsMarkerVerified"] or tls["publicAcmeVerified"]:
+    if (summary['status'] == 'passed' and not tls["httpsMarkerVerified"]) or tls["publicAcmeVerified"]:
         raise EvidenceError("summary TLS assertions are invalid")
     if summary["preflightDisk"] != "separately-tested":
         raise EvidenceError("summary preflight disk assertion is invalid")
@@ -273,12 +274,37 @@ def validate_readiness(value: Any) -> None:
         raise EvidenceError("release readiness promotion fields disagree")
 
 
+def validate_engine_health(value: Any) -> None:
+    report = exact_keys(value, {'schemaVersion', 'status', 'probeExitCodes', 'probeCategories'}, 'engine health')
+    if report['schemaVersion'] != 1 or report['status'] not in {'healthy', 'unhealthy', 'starting', 'unknown'}:
+        raise EvidenceError('engine health status is invalid')
+    if not isinstance(report['probeExitCodes'], list) or len(report['probeExitCodes']) > 5:
+        raise EvidenceError('engine health probe list is invalid')
+    for code in report['probeExitCodes']:
+        integer(code, 'engine health probe exit code', -1, 255)
+    categories = report['probeCategories']
+    if not isinstance(categories, list) or len(categories) != len(report['probeExitCodes']) or any(
+        category not in {'timeout', 'php-error', 'unknown'} for category in categories
+    ):
+        raise EvidenceError('engine health probe categories are invalid')
+
+
+def validate_gateway_diagnostic(value: Any) -> None:
+    report = exact_keys(value, {'schemaVersion', 'observedCategories'}, 'gateway diagnostic')
+    allowed = {'connection-refused', 'connection-timeout', 'tls-failure', 'unknown'}
+    categories = report['observedCategories']
+    if report['schemaVersion'] != 1 or not isinstance(categories, list) or not categories or len(categories) > len(allowed) or any(c not in allowed for c in categories):
+        raise EvidenceError('gateway diagnostic categories are invalid')
+
+
 VALIDATORS = {
     "doctor": validate_doctor,
     "services": validate_services,
     "summary": validate_summary,
     "preflight": validate_preflight,
     "readiness": validate_readiness,
+    "engine-health": validate_engine_health,
+    "gateway-diagnostic": validate_gateway_diagnostic,
 }
 
 
@@ -353,7 +379,52 @@ def write_service_evidence(lines: str, output: Path, secret_values: Iterable[str
     write_evidence(output, "services", {"schemaVersion": 1, "services": services}, secret_values)
 
 
-def write_summary_evidence(output: Path, status: str, exit_code: int, last_step: str, upgrade_verified: bool) -> None:
+def tls_marker_from_doctor(report: Any) -> bool:
+    return isinstance(report, dict) and isinstance(report.get('checks'), list) and any(
+        isinstance(item, dict) and item.get('id') == 'tls' and item.get('status') == 'ok'
+        for item in report['checks'])
+
+
+def write_gateway_diagnostic_evidence(log: str, output: Path) -> None:
+    # Record only fixed classes observed anywhere in this disposable gateway's
+    # output. These are diagnostic observations, not proof of root cause.
+    categories = set()
+    lowered = log.lower()
+    for marker, category in [('connection refused', 'connection-refused'),
+                             ('timed out', 'connection-timeout'),
+                             ('certificate verify failed', 'tls-failure')]:
+        if marker in lowered:
+            categories.add(category)
+    write_evidence(output, 'gateway-diagnostic', {'schemaVersion': 1,
+                   'observedCategories': sorted(categories or {'unknown'})})
+
+
+def write_engine_health_evidence(health: Any, output: Path) -> None:
+    if not isinstance(health, dict):
+        raise EvidenceError('engine health is not an object')
+    status = health.get('Status')
+    if status not in {'healthy', 'unhealthy', 'starting'}:
+        status = 'unknown'
+    logs = health.get('Log', [])
+    if not isinstance(logs, list):
+        raise EvidenceError('engine health log is invalid')
+    codes = [entry.get('ExitCode') for entry in logs[-5:] if isinstance(entry, dict)]
+    categories = []
+    for entry in logs[-5:]:
+        if not isinstance(entry, dict):
+            continue
+        output_text = entry.get('Output', '')
+        if isinstance(output_text, str) and 'Health check exceeded timeout' in output_text:
+            categories.append('timeout')
+        elif isinstance(output_text, str) and re.search(r'CException|CDbException|Fatal error|Parse error', output_text):
+            categories.append('php-error')
+        else:
+            categories.append('unknown')
+    write_evidence(output, 'engine-health', {'schemaVersion': 1, 'status': status,
+                   'probeExitCodes': codes, 'probeCategories': categories})
+
+
+def write_summary_evidence(output: Path, status: str, exit_code: int, last_step: str, upgrade_verified: bool, doctor: Any = None) -> None:
     write_evidence(output, "summary", {
         "schemaVersion": 1,
         "status": status,
@@ -371,7 +442,7 @@ def write_summary_evidence(output: Path, status: str, exit_code: int, last_step:
         },
         "baselineMode": os.environ["BASELINE_MODE"],
         "upgradeVerified": upgrade_verified,
-        "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": True, "publicAcmeVerified": False},
+        "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": tls_marker_from_doctor(doctor), "publicAcmeVerified": False},
         "preflightDisk": "separately-tested",
         "completedAt": datetime.now(timezone.utc).isoformat(),
     })
@@ -554,7 +625,7 @@ def verify_release_readiness_assets(
 def evidence_kind(path: Path) -> str:
     if DOCTOR_FILE.fullmatch(path.name):
         return "doctor"
-    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services"}
+    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services", "engine-health.json": "engine-health", "gateway-diagnostic.json": "gateway-diagnostic"}
     try:
         return kinds[path.name]
     except KeyError as exc:
@@ -588,12 +659,18 @@ def parser() -> argparse.ArgumentParser:
     services = sub.add_parser("services")
     services.add_argument("--input", type=Path, required=True)
     services.add_argument("--output", type=Path, required=True)
+    health = sub.add_parser('engine-health')
+    health.add_argument('--input', type=Path, required=True)
+    health.add_argument('--output', type=Path, required=True)
+    gateway = sub.add_parser('gateway-diagnostic')
+    gateway.add_argument('--output', type=Path, required=True)
     summary = sub.add_parser("summary")
     summary.add_argument("--output", type=Path, required=True)
     summary.add_argument("--status", choices=("passed", "failed"), required=True)
     summary.add_argument("--exit-code", type=int, required=True)
     summary.add_argument("--last-step", required=True)
     summary.add_argument("--upgrade-verified", choices=("true", "false"), required=True)
+    summary.add_argument('--doctor-evidence', type=Path)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("--output", type=Path, required=True)
     preflight.add_argument("--actual-free-bytes", type=int, required=True)
@@ -621,9 +698,14 @@ def main() -> int:
             write_doctor_evidence(load_json(args.input), args.output, secrets)
         elif args.command == "services":
             write_service_evidence(args.input.read_text(encoding="utf-8"), args.output, secrets)
+        elif args.command == 'engine-health':
+            write_engine_health_evidence(load_json(args.input), args.output)
+        elif args.command == 'gateway-diagnostic':
+            write_gateway_diagnostic_evidence(sys.stdin.read(1024 * 1024), args.output)
         elif args.command == "summary":
             write_summary_evidence(
                 args.output, args.status, args.exit_code, args.last_step, args.upgrade_verified == "true",
+                load_json(args.doctor_evidence) if args.doctor_evidence and args.doctor_evidence.exists() else None,
             )
         elif args.command == "preflight":
             write_preflight_evidence(args.output, args.actual_free_bytes, args.required_free_bytes)

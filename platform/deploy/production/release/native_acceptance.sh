@@ -86,7 +86,8 @@ write_summary() {
     --status "$acceptance_status" \
     --exit-code "$1" \
     --last-step "$last_step" \
-    --upgrade-verified "$upgrade_verified"
+    --upgrade-verified "$upgrade_verified" \
+    --doctor-evidence "$evidence_root/doctor-installed.json"
 }
 
 collect_evidence() {
@@ -105,6 +106,17 @@ collect_evidence() {
     acceptance_status="failed"
   fi
   rm -f "$work_root/services.jsonl"
+  if [[ "$result" -ne 0 ]] && docker inspect --format '{{json .State.Health}}' survey-production-engine-1 >"$work_root/engine-health.json" 2>/dev/null; then
+    if ! python3 "$evidence_helper" engine-health --input "$work_root/engine-health.json" --output "$evidence_root/engine-health.json"; then
+      result=5
+    fi
+  fi
+  rm -f "$work_root/engine-health.json"
+  if [[ "$result" -ne 0 ]] && docker inspect survey-production-publish-gateway-1 >/dev/null 2>&1; then
+    if ! docker logs --tail 200 survey-production-publish-gateway-1 2>&1 | python3 "$evidence_helper" gateway-diagnostic --output "$evidence_root/gateway-diagnostic.json"; then
+      result=5
+    fi
+  fi
   write_summary "$result"
   local summary_result=$?
   if [[ "$summary_result" -ne 0 ]]; then result=5; fi
