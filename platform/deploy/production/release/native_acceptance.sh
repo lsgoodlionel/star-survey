@@ -55,11 +55,19 @@ evidence_secret_args() {
 write_doctor_evidence() {
   local label="$1"
   local raw="$work_root/${label}.json"
-  run_ctl doctor >"$raw"
+  local doctor_status=0
+  if run_ctl doctor >"$raw"; then
+    doctor_status=0
+  else
+    doctor_status=$?
+  fi
   local args=()
   while IFS= read -r item; do args+=("$item"); done < <(evidence_secret_args)
   python3 "$evidence_helper" "${args[@]}" doctor --input "$raw" --output "$evidence_root/${label}.json"
   rm -f "$raw"
+  if [[ "$doctor_status" -ne 0 ]]; then
+    return "$doctor_status"
+  fi
   python3 - "$evidence_root/${label}.json" <<'PY'
 import json
 from pathlib import Path
