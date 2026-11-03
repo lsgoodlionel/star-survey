@@ -645,6 +645,29 @@ echo json_encode([$calls, isset($server['HTTP_X_FORWARDED_PROTO']), isset($serve
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([[], False, False], json.loads(result.stdout))
 
+    def test_real_yii_form_urls_keep_the_production_proxy_prefix(self):
+        import base64
+        config = (PRODUCTION_DIR / 'init' / 'config.production.php').read_bytes()
+        yii = os.environ.get('TEST_YII_ROOT', str(PRODUCTION_DIR.parents[2])) + '/vendor/yiisoft/yii/framework/yii.php'
+        script = r'''
+define('BASEPATH', '/var/www/html');
+$secret=tempnam('/tmp','test-secret-'); file_put_contents($secret,'fixture-only');
+putenv('ENGINE_DB_PASSWORD_FILE='.$secret);
+$_SERVER=['REMOTE_ADDR'=>'127.0.0.1','SCRIPT_NAME'=>'/index.php','PHP_SELF'=>'/index.php/123','REQUEST_URI'=>'/index.php/123','REQUEST_METHOD'=>'GET','HTTP_X_FORWARDED_PREFIX'=>'/survey','HTTP_HOST'=>'survey.example','SERVER_NAME'=>'survey.example','SERVER_PORT'=>80];
+$config=eval('?>'.base64_decode(''' + "'" + base64.b64encode(config).decode() + "'" + r'''));
+$yii=base64_decode(''' + "'" + base64.b64encode(yii.encode()).decode() + "'" + r''');
+$_SERVER['SCRIPT_FILENAME']=dirname($yii,5).'/index.php';
+require $yii;
+$app=Yii::createWebApplication(['basePath'=>'/tmp','components'=>['request'=>$config['components']['request'],'urlManager'=>$config['components']['urlManager']]]);
+echo json_encode(['url'=>$app->createUrl('survey/index',['sid'=>123]),'path'=>$app->request->getPathInfo()]);
+unlink($secret);
+'''
+        result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+        generated = json.loads(result.stdout)
+        self.assertTrue(generated['url'].startswith('/survey/index.php/'), generated['url'])
+        self.assertEqual('123', generated['path'])
+
     def test_engine_config_uses_real_survey_prefix_and_https_settings(self):
         config = (PRODUCTION_DIR / "init" / "config.production.php").read_text(
             encoding="utf-8"

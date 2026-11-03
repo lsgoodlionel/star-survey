@@ -115,6 +115,9 @@ return array(
             ),
         ),
         'urlManager' => array(
+            // Caddy strips the external prefix before forwarding. Keep request
+            // parsing internal, but generate form actions under the public URL.
+            'baseUrl' => $baseUrl . '/index.php',
             'urlFormat' => 'path',
             'rules' => array(),
             'showScriptName' => true,
