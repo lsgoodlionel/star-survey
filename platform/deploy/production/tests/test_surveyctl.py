@@ -48,7 +48,7 @@ def write_test_release(root, version="0.2.0", rollback="compatible", restore_sou
         "doctor.py": b"# verified doctor helper\n",
         "release.schema.json": b"{}\n",
         "env.example": b"PUBLIC_HOST=example.invalid\n",
-        "engines.example.json": b"{}\n",
+        "engines.example.json": (PRODUCTION_DIR / 'engines.example.json').read_bytes(),
         "init/marker.txt": b"verified init\n",
     }
     metadata = {
@@ -582,6 +582,76 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
         self.assertEqual("install_failed", state["status"])
 
+    def test_staged_gateway_rpc_identity_matches_initialized_engine(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        release = manager._stage_release(self.module.load_manifest(manifest), 'arm64',
+                                         'survey.example.com', 'chosen-operator', 'operations@example.com')
+        config = json.loads((release / 'engines.json').read_text())
+        with self.subTest(binding='username'):
+            self.assertEqual('chosen-operator', config['production-engine-01']['user'])
+        private = self.target / 'shared/secrets'
+        with self.subTest(binding='password'):
+            self.assertTrue((private / 'engine_admin_password').read_bytes() ==
+                            (private / 'pubgw_engine_admin_password').read_bytes(), 'RPC credential must match engine identity')
+
+    def test_existing_rpc_mismatch_refuses_upgrade_without_shared_changes(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        (self.target / 'shared/secrets/pubgw_engine_admin_password').write_text('legacy-different-test-value\n')
+        def snapshot():
+            paths = [*self.target.joinpath('shared').rglob('*'), manager.state_path, manager.current_path]
+            return {str(p.relative_to(self.target)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.is_file()}
+        before = snapshot()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaisesRegex(self.module.IntegrityError, 'controlled.*RPC'):
+            manager.upgrade(next_manifest)
+        self.assertTrue(before == snapshot(), 'existing credentials, projections and state must remain unchanged')
+
+    def test_backup_failure_preserves_matching_rpc_credentials_and_runtime(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        paths = [p for p in (self.target / 'shared').rglob('*') if p.is_file()]
+        paths += [manager.state_path, manager.current_path]
+        before = {p: p.read_bytes() for p in paths}
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with mock.patch.object(manager, 'backup', side_effect=self.module.RuntimeHealthError('fixture backup failure')):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                manager.upgrade(next_manifest)
+        self.assertTrue(all(p.read_bytes() == content for p, content in before.items()), 'backup failure must preserve existing runtime')
+
+    def test_legacy_gateway_username_requires_controlled_reconciliation(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        current = self.target / 'releases/0.2.0'
+        engines = json.loads((current / 'engines.json').read_text())
+        engines['production-engine-01']['user'] = 'legacy-rpc-user'
+        (current / 'engines.json').write_text(json.dumps(engines))
+        integrity = json.loads((current / 'deployment-integrity.json').read_text())
+        integrity['generatedFiles']['engines.json'] = hashlib.sha256((current / 'engines.json').read_bytes()).hexdigest()
+        (current / 'deployment-integrity.json').write_text(json.dumps(integrity))
+        before = manager.state_path.read_bytes(), manager.current_path.read_bytes(), (current / 'engines.json').read_bytes()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaisesRegex(self.module.IntegrityError, 'controlled RPC identity'):
+            manager.upgrade(next_manifest)
+        self.assertTrue(before == (manager.state_path.read_bytes(), manager.current_path.read_bytes(), (current / 'engines.json').read_bytes()))
+
+    def test_staging_failure_preserves_rpc_secrets_and_runtime(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        paths = [p for p in (self.target / 'shared').rglob('*') if p.is_file()]
+        paths += [manager.state_path, manager.current_path]
+        before = {p: p.read_bytes() for p in paths}
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with mock.patch.object(manager, '_sync_runtime_secrets', side_effect=self.module.RuntimeHealthError('fixture stage failure')):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                manager.upgrade(next_manifest)
+        self.assertTrue(all(p.read_bytes() == content for p, content in before.items()), 'staging failure must preserve existing runtime')
+
     def test_failed_install_can_uninstall_without_current_pointer(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager(probe=FakeHostProbe(tls_valid=False))
@@ -590,6 +660,95 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.assertFalse(manager.current_path.exists())
         manager.uninstall(purge_data=False, confirmation=None)
         self.assertEqual('uninstalled', json.loads(manager.state_path.read_text())['status'])
+
+    def test_failed_first_install_can_retry_new_version_without_rotating_credentials(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertFalse(manager.current_path.exists())
+        private = self.target / 'shared/secrets'
+        before = {p.name: p.read_bytes() for p in private.iterdir() if p.is_file()}
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertEqual('0.3.0', manager.current_path.read_text().strip())
+        self.assertTrue(all((private / name).read_bytes() == value for name, value in before.items()))
+
+    def test_pointerless_failed_install_uninstall_then_reinstall_preserves_identity(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(False, None)
+        self.assertFalse(manager.current_path.exists())
+        private = self.target / 'shared/secrets'
+        before = {p.name: p.read_bytes() for p in private.iterdir() if p.is_file()}
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertTrue(all((private / name).read_bytes() == value for name, value in before.items()))
+        self.assertEqual('0.3.0', manager.current_path.read_text().strip())
+
+    def test_pointerless_uninstall_lineage_still_rejects_tampered_release(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(False, None)
+        state_before = manager.state_path.read_bytes()
+        (self.target / 'releases/0.2.0/engines.json').write_text('{}')
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertTrue(state_before == manager.state_path.read_bytes())
+        self.assertFalse(manager.current_path.exists())
+
+    def test_ordinary_uninstall_with_removed_current_is_not_failed_install_lineage(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(False, None)
+        manager.current_path.unlink()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaises(self.module.InputError):
+            manager.install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+
+    def test_successful_purge_allows_fresh_new_version_install(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(True, f'PURGE {self.target.resolve()}')
+        self.assertFalse((self.target / 'shared').exists())
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        manager.install(next_manifest, 'survey.example.com', 'new-operations', 'operations@example.com')
+        self.assertEqual('healthy', json.loads(manager.state_path.read_text())['status'])
+        self.assertEqual('new-operations', json.loads((self.target / 'releases/0.3.0/engines.json').read_text())['production-engine-01']['user'])
+
+    def test_failed_first_install_with_mismatched_credentials_still_refuses_retry(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        gateway = self.target / 'shared/secrets/pubgw_engine_admin_password'
+        gateway.write_text('legacy-test-credential\n')
+        before = gateway.read_bytes(), manager.state_path.read_bytes()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaisesRegex(self.module.IntegrityError, 'controlled RPC credential'):
+            self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertTrue(before == (gateway.read_bytes(), manager.state_path.read_bytes()))
+
+    def test_uninstall_without_purge_does_not_allow_missing_credentials_to_be_recreated(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(False, None)
+        private = self.target / 'shared/secrets'
+        (private / 'engine_admin_password').unlink()
+        (private / 'pubgw_engine_admin_password').unlink()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaisesRegex(self.module.IntegrityError, 'controlled RPC credential'):
+            manager.install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertFalse((private / 'engine_admin_password').exists())
+        self.assertFalse((private / 'pubgw_engine_admin_password').exists())
 
     def test_tls_probe_requires_the_deployment_specific_marker(self):
         class Response:

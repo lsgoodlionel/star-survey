@@ -4,6 +4,9 @@ set -eu
 php_bin="${PHP_BIN:-php}"
 console="${ENGINE_CONSOLE:-application/commands/console.php}"
 
+# Existing completed installations also need new runtime directories.
+"$php_bin" "$console" productionInit directories
+
 if "$php_bin" "$console" productionInit status; then
     exit 0
 else

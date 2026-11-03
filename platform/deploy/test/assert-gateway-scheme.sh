@@ -6,13 +6,16 @@
 # It is not currently invoked by GitHub Actions; test_compose.py separately
 # covers the scheme predicate on the existing quality gate.
 set -euo pipefail
-docker exec -i "$GATEWAY_CONTAINER" python - <<'PY'
-import urllib.request,urllib.error,json
+engine_host="${SCHEME_ENGINE_HOST:-test-web}"
+network="${SCHEME_NETWORK:-${COMPOSE_PROJECT_NAME:-}_default}"
+client_image="${SCHEME_CLIENT_IMAGE:-survey-publish-gateway:${SURVEY_TEST_PREFIX:-}}"
+docker exec -i -e "SCHEME_ENGINE_HOST=$engine_host" "$GATEWAY_CONTAINER" python - <<'PY'
+import urllib.request,urllib.error,json,os
 class NoRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*a,**k): return None
 op=urllib.request.build_opener(NoRedirect())
 def call(path,data=None):
- req=urllib.request.Request('http://test-web'+path,data=data,headers={'X-Forwarded-Proto':'https','Content-Type':'application/json'})
+ req=urllib.request.Request('http://'+os.environ['SCHEME_ENGINE_HOST']+path,data=data,headers={'X-Forwarded-Proto':'https','Content-Type':'application/json'})
  try:
   with op.open(req,timeout=10) as r:return r.status,r.read()
  except urllib.error.HTTPError as e:return e.code,e.read()
@@ -27,13 +30,13 @@ assert isinstance(result,dict) and result.get('error_code')=='ERR_INVALID_CREDEN
 assert isinstance(result.get('status'),str) and result['status']
 print('bad RPC credentials rejected with ERR_INVALID_CREDENTIALS')
 PY
-docker run --rm -i --network "${COMPOSE_PROJECT_NAME}_default" --entrypoint python "survey-publish-gateway:${SURVEY_TEST_PREFIX}" - <<'PY'
-import urllib.request,urllib.error
+docker run --rm -i --network "$network" -e "SCHEME_ENGINE_HOST=$engine_host" --entrypoint python "$client_image" - <<'PY'
+import urllib.request,urllib.error,os
 class NoRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*a,**k): return None
 op=urllib.request.build_opener(NoRedirect())
 for header in ('X-Forwarded-Proto','Forwarded-Proto'):
- req=urllib.request.Request('http://test-web/index.php/admin/remotecontrol',data=b'{}',headers={header:'https','Content-Type':'application/json'})
+ req=urllib.request.Request('http://'+os.environ['SCHEME_ENGINE_HOST']+'/index.php/admin/remotecontrol',data=b'{}',headers={header:'https','Content-Type':'application/json'})
  try:
   with op.open(req,timeout=10) as r:status=r.status
  except urllib.error.HTTPError as e:status=e.code

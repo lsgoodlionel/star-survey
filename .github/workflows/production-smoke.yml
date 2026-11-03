@@ -1,0 +1,29 @@
+name: Production topology smoke (amd64)
+on:
+  workflow_dispatch:
+  # The engine build context is the repository root, so every PR can affect it.
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Guard and summary regressions
+        run: python3 -m unittest discover -s platform/deploy/production/tests -p test_production_smoke.py
+      - name: Source-built production images and real topology journey
+        env:
+          SMOKE_EVIDENCE_DIR: ${{ github.workspace }}/smoke-evidence
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_ARCH,SMOKE_EVIDENCE_DIR python3 platform/deploy/production/production_smoke.py
+      - name: Preserve bounded failure and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: source-production-smoke-amd64
+          path: smoke-evidence/*.json
+          if-no-files-found: error

@@ -12,6 +12,18 @@ class ProductionInitCommand extends CConsoleCommand
         'MjyQuestionExtensions',
     );
 
+    /** Needed by Survey theme resolution during CLI completion scanning. */
+    public function actionDirectories()
+    {
+        $directory = Yii::app()->getConfig('userthemerootdir');
+        if (!is_string($directory) || $directory === '' || is_link($directory)
+            || (!is_dir($directory) && !@mkdir($directory, 0755, true) && !is_dir($directory))
+            || !is_readable($directory)) {
+            throw new CException('Production user theme directory is unavailable.');
+        }
+        return 0;
+    }
+
     public function actionStatus()
     {
         $prefix = Yii::app()->db->tablePrefix;

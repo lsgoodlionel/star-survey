@@ -532,6 +532,10 @@ class SurveyManager:
             raise IntegrityError("installation state is corrupt") from exc
         if not isinstance(state, dict):
             raise IntegrityError("installation state must be an object")
+        if 'dataPurged' in state and not isinstance(state['dataPurged'], bool):
+            raise IntegrityError('installation purge state is invalid')
+        if 'pointerlessUninstall' in state and not isinstance(state['pointerlessUninstall'], bool):
+            raise IntegrityError('installation uninstall lineage is invalid')
         for key in ("status", "version", "databaseSchema", "publicHost", "adminUser", "adminEmail"):
             if not isinstance(state.get(key), str) or not state[key]:
                 raise IntegrityError(f"installation state field is invalid: {key}")
@@ -993,19 +997,57 @@ class SurveyManager:
         return final
 
     def _configure_release(self, release: Path, manifest: ReleaseManifest, architecture: str, host: str, admin_user: str, admin_email: str) -> None:
+        existing = self.state_path.exists() or self.state_path.is_symlink()
+        if existing:
+            state = self._read_state()
+            purged = state['status'] == 'uninstalled' and state.get('dataPurged') is True and not os.path.lexists(self.target / 'shared')
+            if purged:
+                existing = False
+            elif not os.path.lexists(self.current_path) and (state['status'] == 'install_failed' or (
+                state['status'] == 'uninstalled' and state.get('pointerlessUninstall') is True)):
+                pass  # First startup failed after verified staging, before current.
+            else:
+                state = self._read_state(require_current=True)
+        if existing:
+            current = self._release_dir(state['version'])
+            self._verify_staged_release(current, state['version'])
+            old_engines = json.loads((current / 'engines.json').read_text(encoding='utf-8'))
+            old_engine = old_engines.get('production-engine-01') if isinstance(old_engines, dict) else None
+            if not isinstance(old_engine, dict) or old_engine.get('user') != admin_user:
+                raise IntegrityError('controlled RPC identity reconciliation is required before staging')
+        canonical = self._managed('shared/secrets/engine_admin_password')
+        gateway = self._managed('shared/secrets/pubgw_engine_admin_password')
+        if existing or gateway.exists() or gateway.is_symlink():
+            for path in (canonical, gateway):
+                if not path.exists() or path.is_symlink():
+                    raise IntegrityError('controlled RPC credential reconciliation is required before staging')
+                _regular_file(path, 'RPC credential')
+                self._reject_symlink_components(path)
+            if not secrets.compare_digest(canonical.read_bytes().rstrip(b'\r\n'), gateway.read_bytes().rstrip(b'\r\n')):
+                raise IntegrityError('controlled RPC credential reconciliation is required before staging')
         example = release / "engines.example.json"
         _regular_file(example, "engine configuration template")
         try:
             engines = json.loads(example.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise IntegrityError("verified engine configuration template is invalid") from exc
+        if not isinstance(engines, dict) or not isinstance(engines.get('production-engine-01'), dict):
+            raise IntegrityError('production engine configuration is missing')
+        engines['production-engine-01']['user'] = admin_user
         self._atomic_write(release / "engines.json", json.dumps(engines, indent=2) + "\n", mode=0o644)
         secret_dir = self._mkdir("shared/secrets")
-        derived_secrets = {"engine_admin_password_hash", "engine_instance_events_secret", "pubgw_engine_channel_secret"}
+        derived_secrets = {"engine_admin_password_hash", "engine_instance_events_secret", "pubgw_engine_channel_secret", "pubgw_engine_admin_password"}
         for name in SECRET_NAMES:
             path = secret_dir / name
             if not path.exists() and name not in derived_secrets:
                 self._atomic_write(path, secrets.token_urlsafe(48) + "\n")
+        # RemoteControl authenticates the same account initialized by engine-init.
+        # Keep a separate per-service projection, with the canonical engine secret.
+        if not gateway.exists():
+            self._atomic_create_once(gateway, canonical.read_text(encoding='utf-8'))
+        _regular_file(gateway, 'RPC credential')
+        if not secrets.compare_digest(canonical.read_bytes().rstrip(b'\r\n'), gateway.read_bytes().rstrip(b'\r\n')):
+            raise IntegrityError('controlled RPC credential reconciliation is required before staging')
         probe_installation = self._managed("shared/probe-installation.json")
         if not probe_installation.exists() and not probe_installation.is_symlink():
             self._atomic_create_once(probe_installation, json.dumps({"installationId": str(uuid.uuid4())}, sort_keys=True) + "\n")
@@ -1118,6 +1160,8 @@ class SurveyManager:
             adminUser=admin_user,
             adminEmail=admin_email,
             expectedPublicAddresses=self.expected_public_addresses,
+            dataPurged=False,
+            pointerlessUninstall=False,
         )
         compose = self._compose(manifest.version)
         try:
@@ -1577,7 +1621,8 @@ class SurveyManager:
         # A first install can fail after starting Compose but before writing its
         # current pointer. The recorded release is still integrity checked by
         # _compose; all other states retain the current-pointer invariant.
-        if state['status'] != 'install_failed' or os.path.lexists(self.current_path):
+        pointerless = state['status'] == 'install_failed' and not os.path.lexists(self.current_path)
+        if not pointerless:
             state = self._read_state(require_current=True)
         command = self._compose(state["version"]) + ["down", "--remove-orphans"]
         purge_paths = [self.target / "shared", self.target / "backups"]
@@ -1610,7 +1655,7 @@ class SurveyManager:
                 self._write_state(status="purge_failed")
                 remaining = [str(path.relative_to(self.target)) for path in purge_paths if path.exists() or path.is_symlink()]
                 raise RuntimeHealthError(f"purge failed; managed data remains: {', '.join(remaining)}") from exc
-        self._write_state(status="uninstalled")
+        self._write_state(status="uninstalled", dataPurged=bool(purge_data), pointerlessUninstall=pointerless)
 
 
 def _parse_tool_version(value: Any) -> tuple[int, int, int]:
