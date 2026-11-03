@@ -582,6 +582,15 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
         self.assertEqual("install_failed", state["status"])
 
+    def test_failed_install_can_uninstall_without_current_pointer(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+        self.assertFalse(manager.current_path.exists())
+        manager.uninstall(purge_data=False, confirmation=None)
+        self.assertEqual('uninstalled', json.loads(manager.state_path.read_text())['status'])
+
     def test_tls_probe_requires_the_deployment_specific_marker(self):
         class Response:
             status = 200

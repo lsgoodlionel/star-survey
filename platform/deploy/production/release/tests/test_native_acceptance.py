@@ -326,6 +326,43 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         sys.modules[spec.name] = cls.module
         spec.loader.exec_module(cls.module)
 
+    def test_engine_health_evidence_never_copies_probe_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / 'health.json'
+            self.module.write_engine_health_evidence({'Status': 'unhealthy', 'FailingStreak': 3,
+                'Log': [{'ExitCode': 1, 'Output': 'password=unique-secret'}, {'ExitCode': -1, 'Output': 'private'}]}, output)
+            result = json.loads(output.read_text())
+            self.assertEqual({'schemaVersion': 1, 'status': 'unhealthy', 'probeExitCodes': [1, -1],
+                              'probeCategories': ['unknown', 'unknown']}, result)
+            self.assertNotIn('unique-secret', output.read_text())
+
+    def test_gateway_diagnostic_retains_only_fixed_categories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / 'gateway-diagnostic.json'
+            self.module.write_gateway_diagnostic_evidence('request secret=private: connection refused\n', output)
+            self.assertEqual({'schemaVersion': 1, 'observedCategories': ['connection-refused']},
+                             json.loads(output.read_text()))
+            self.assertNotIn('private', output.read_text())
+
+    def test_failed_summary_tls_marker_is_not_claimed_as_verified(self):
+        self.assertFalse(self.module.tls_marker_from_doctor({'checks': []}))
+        self.assertFalse(self.module.tls_marker_from_doctor({'checks': [{'id': 'tls', 'status': 'blocked'}]}))
+        self.assertTrue(self.module.tls_marker_from_doctor({'checks': [{'id': 'tls', 'status': 'ok'}]}))
+
+    def test_summary_reports_missing_marker_without_making_failure_look_successful(self):
+        env = {'EXPECTED_UBUNTU': '22.04', 'EXPECTED_ARCHITECTURE': 'amd64',
+               'CANDIDATE_MANIFEST_SHA256': 'a' * 64, 'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
+               'ADMIN_IMAGE_DIGEST': 'sha256:' + 'c' * 64, 'PLATFORM_IMAGE_DIGEST': 'sha256:' + 'd' * 64,
+               'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + 'e' * 64, 'BASELINE_MODE': 'bootstrap'}
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, env):
+            path = Path(temporary) / 'summary.json'
+            self.module.write_summary_evidence(path, 'failed', 4, 'install', False)
+            result = json.loads(path.read_text())
+            self.assertFalse(result['tls']['httpsMarkerVerified'])
+            self.assertEqual(('failed', 4), (result['status'], result['exitCode']))
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.write_summary_evidence(path, 'passed', 0, 'uninstall', False)
+
     def test_failed_doctor_is_sanitized_and_preserves_nonzero_exit(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

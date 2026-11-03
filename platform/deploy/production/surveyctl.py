@@ -1573,7 +1573,12 @@ class SurveyManager:
         self._run(command, "log collection failed")
 
     def uninstall(self, purge_data, confirmation) -> None:
-        state = self._read_state(require_current=True)
+        state = self._read_state()
+        # A first install can fail after starting Compose but before writing its
+        # current pointer. The recorded release is still integrity checked by
+        # _compose; all other states retain the current-pointer invariant.
+        if state['status'] != 'install_failed' or os.path.lexists(self.current_path):
+            state = self._read_state(require_current=True)
         command = self._compose(state["version"]) + ["down", "--remove-orphans"]
         purge_paths = [self.target / "shared", self.target / "backups"]
         if purge_data:
