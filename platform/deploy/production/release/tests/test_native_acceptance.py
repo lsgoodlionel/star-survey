@@ -380,10 +380,65 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                                     capture_output=True, text=True, env={**os.environ, "work_root": str(root),
                                     "evidence_root": str(evidence_dir), "secret_dir": str(secret_dir),
                                     "evidence_helper": str(EVIDENCE_HELPER_PATH)})
-            self.assertNotEqual(0, result.returncode)
+            self.assertEqual(4, result.returncode)
             evidence = (evidence_dir / "doctor-installed.json").read_text()
             self.assertEqual("error", json.loads(evidence)["status"])
             self.assertNotIn("unique-test-secret", evidence)
+
+    def test_real_shell_gate_accepts_only_expected_first_install_backup_warning(self):
+        import copy
+        production = SCRIPT_PATH.parent.parent
+        sys.path.insert(0, str(production))
+        try:
+            from doctor import Doctor
+        finally:
+            sys.path.pop(0)
+        script = SCRIPT_PATH.read_text()
+        function = script[script.index('write_doctor_evidence() {'):script.index('\nwrite_summary() {')]
+        ids = ['ports', 'internal-exposure', 'runtime-exposure', 'tls', 'containers',
+               'migrations', 'volumes', 'backups', 'minimal-probe']
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            doctor = object.__new__(Doctor)
+            doctor.target = root
+            report = {'status': 'warning', 'checks': [
+                doctor._backup_check() if name == 'backups' else
+                {'id': name, 'status': 'ok', 'summary': 'fixture passed'} for name in ids]}
+            cases = [('doctor-installed', report, True), ('doctor-upgraded', report, False),
+                     ('doctor-restored', report, False)]
+            for name in ('tls', 'minimal-probe', 'migrations', 'backups'):
+                invalid = copy.deepcopy(report)
+                next(item for item in invalid['checks'] if item['id'] == name)['status'] = 'blocked'
+                invalid['status'] = 'blocked'
+                cases.append(('doctor-installed', invalid, False))
+            invalid = copy.deepcopy(report)
+            next(item for item in invalid['checks'] if item['id'] == 'backups')['summary'] = 'no readable verified backup exists'
+            cases.append(('doctor-installed', invalid, False))
+            invalid = copy.deepcopy(report)
+            invalid['checks'][0]['status'] = 'warning'
+            cases.append(('doctor-installed', invalid, False))
+            healthy = copy.deepcopy(report)
+            healthy['status'] = 'ok'
+            next(item for item in healthy['checks'] if item['id'] == 'backups').update(status='ok', summary='1 verified backup(s) available')
+            cases.extend((label, healthy, True) for label in ('doctor-installed', 'doctor-upgraded', 'doctor-restored'))
+            for shape in ('missing', 'duplicate'):
+                invalid = copy.deepcopy(healthy)
+                if shape == 'missing': invalid['checks'].pop(0)
+                else: invalid['checks'].append(copy.deepcopy(invalid['checks'][0]))
+                cases.append(('doctor-installed', invalid, False))
+            for index, (label, payload, accepted) in enumerate(cases):
+                with self.subTest(case=index, label=label):
+                    evidence = root / str(index)
+                    evidence.mkdir()
+                    fixture = root / 'report.json'
+                    fixture.write_text(json.dumps(payload))
+                    fake = 'run_ctl() { cat "$fixture_report"; }\nevidence_secret_args() { :; }\n'
+                    result = subprocess.run(['bash', '-c', 'set -e\n' + fake + function + '\nwrite_doctor_evidence ' + label],
+                        capture_output=True, text=True, env={**os.environ, 'work_root': str(root),
+                        'evidence_root': str(evidence), 'fixture_report': str(fixture),
+                        'evidence_helper': str(EVIDENCE_HELPER_PATH)})
+                    self.assertEqual(accepted, result.returncode == 0, result.stderr)
+                    self.assertTrue((evidence / (label + '.json')).exists())
 
     def test_nested_keys_authorization_uris_multiline_and_encoded_variants_are_redacted(self):
         payload = {
