@@ -385,8 +385,11 @@ class RestoreManager:
         # A created container may not yet expose the database socket. Require
         # both configured health checks before sending either database dump.
         self._run(compose + ["up", "-d", "--wait", "--wait-timeout", "120", "platform-db", "engine-db"], "restore database startup failed", capture_output=True, text=True)
+        # The target initializes the same maintenance/application roles. Keep
+        # dump ownership so Flyway and SECURITY DEFINER functions retain the
+        # source privilege boundary; unknown source roles must fail closed.
         with decrypted["postgres.dump"].open("rb") as source:
-            self._run(compose + ["exec", "-T", "platform-db", "pg_restore", "-U", "postgres", "-d", "platform", "--clean", "--if-exists", "--no-owner"], "PostgreSQL restore failed", stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self._run(compose + ["exec", "-T", "platform-db", "pg_restore", "-U", "postgres", "-d", "platform", "--clean", "--if-exists"], "PostgreSQL restore failed", stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if (self.target / ".surveyctl" / "auth-security-floor").exists():
             self._invalidate_restored_personnel(compose)
         with decrypted["mariadb.sql"].open("rb") as source:

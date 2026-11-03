@@ -16,6 +16,8 @@ jobs:
           python-version: '3.11'
       - name: Guard and summary regressions
         run: python3 -m unittest discover -s platform/deploy/production/tests -p test_production_smoke.py
+      - name: Real PostgreSQL restore owner contract
+        run: python3 platform/deploy/production/tests/check_restore_owner_contract.py --evidence smoke-evidence/restore-owner-contract.json
       - name: Source-built production images and real topology journey
         env:
           SMOKE_EVIDENCE_DIR: ${{ github.workspace }}/smoke-evidence
