@@ -204,6 +204,99 @@ unlink($dir.'/application.log');rmdir($dir);
                 with self.assertRaises(ValueError):
                     self.module.require_bridge_evidence(path)
 
+    def test_source_backup_integrity_never_grants_restore_eligibility(self):
+        import json, shutil, sys, tempfile
+        from unittest import mock
+        sys.path.insert(0, str(SOURCE.parent))
+        try:
+            import backup
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                target = root / 'target'
+                version = '0.0.0-rc.1'
+                release = target / 'releases' / version
+                release.mkdir(parents=True)
+                (target / 'current').write_text(version)
+                (release / 'compose.yml').write_text('services: {}\n')
+                env = 'PLATFORM_ADMIN_ENFORCE_PERSONNEL=true\n'
+                (release / '.env').write_text(env)
+                images = {name: 'fixture/image@sha256:' + '1' * 64 for name in backup.IMAGE_KEYS}
+                raw = {'version': version, 'database': {'schema': '952'}, 'images': images,
+                       'minimumSourceVersion': '0.0.0'}
+                (release / 'release.json').write_text(json.dumps(raw))
+                key = target / 'shared/secrets/backup_encryption_key'
+                key.parent.mkdir(parents=True)
+                key.write_text('fixture-only-backup-key-' + 'x' * 40)
+                key.chmod(0o600)
+                directory = target / 'backups/source-smoke'
+                directory.mkdir(parents=True)
+                cipher = backup.AuthenticatedOpenSSLCipher()
+                for name in ['postgres.dump', 'mariadb.sql', *backup.VOLUME_SOURCES]:
+                    plain = root / name
+                    plain.write_bytes(b'fixture authenticated bytes')
+                    cipher.encrypt(plain, directory / (name + '.enc'), key)
+                metadata = {'schemaVersion': 2, 'version': version, 'databaseSchema': '952',
+                            'releaseManifestSha256': backup.sha256(release / 'release.json'), 'images': images}
+                backup.rewrite_authenticated_control(directory, key, metadata)
+                proof = self.module.verify_source_backup(target, directory, version)
+                self.assertTrue(proof['integrityVerified'])
+                self.assertEqual(9, proof['authenticatedPayloads'])
+                self.assertFalse(proof['restorationEligible'])
+                self.assertFalse(proof['releaseAcceptance'])
+                self.assertEqual('rejected-missing-personnel-floor', proof['restoreEligibility'])
+                self.assertEqual(env, (release / '.env').read_text())
+                self.assertFalse((target / '.surveyctl/auth-security-floor').exists())
+                self.assertNotIn('securityCapabilities', json.loads((release / 'release.json').read_text()))
+                for index, mutation in enumerate(('control', 'cipher-auth', 'missing', 'extra', 'symlink', 'source-identity')):
+                    with self.subTest(mutation=mutation):
+                        damaged = target / 'backups' / str(index)
+                        shutil.copytree(directory, damaged)
+                        if mutation == 'control': (damaged / 'CONTROL-HMAC').write_text('0' * 64)
+                        elif mutation == 'cipher-auth':
+                            path = damaged / 'postgres.dump.enc'
+                            data = path.read_bytes()
+                            path.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+                            backup.rewrite_authenticated_control(damaged, key)
+                        elif mutation == 'missing': (damaged / 'postgres.dump.enc').unlink()
+                        elif mutation == 'extra': (damaged / 'unexpected').write_text('fixture')
+                        elif mutation == 'symlink':
+                            path = damaged / 'postgres.dump.enc'; path.unlink(); path.symlink_to(directory / path.name)
+                        else:
+                            altered = json.loads((damaged / 'manifest.json').read_text())
+                            altered['releaseManifestSha256'] = '0' * 64
+                            backup.rewrite_authenticated_control(damaged, key, altered)
+                        with self.assertRaises((ValueError, backup.BackupError)):
+                            self.module.verify_source_backup(target, damaged, version)
+                with mock.patch('restore.RestoreManager.verify_backup', return_value=({}, {})):
+                    with self.assertRaises(ValueError):
+                        self.module.verify_source_backup(target, directory, version)
+        finally:
+            sys.path.pop(0)
+
+    def test_source_doctor_preserves_exact_unqualified_backup_warning(self):
+        import copy
+        required = ['ports', 'internal-exposure', 'runtime-exposure', 'tls', 'containers',
+                    'migrations', 'volumes', 'backups', 'minimal-probe']
+        proof = {'scope': 'source-backup-integrity-only', 'integrityVerified': True,
+                 'restorationEligible': False, 'releaseAcceptance': False,
+                 'restoreEligibility': 'rejected-missing-personnel-floor', 'encryptedPayloads': 9, 'authenticatedPayloads': 9}
+        report = {'status': 'warning', 'checks': [{'id': name, 'status': 'ok', 'summary': 'fixture'} for name in required]}
+        next(item for item in report['checks'] if item['id'] == 'backups').update(
+            status='warning', summary='no readable verified backup exists')
+        self.module.require_source_doctor(report, proof)
+        self.assertEqual('warning', report['status'])
+        for mutation in ('no-proof', 'eligible', 'other-warning', 'blocked', 'missing', 'duplicate', 'unexpected-ok'):
+            with self.subTest(mutation=mutation):
+                invalid = copy.deepcopy(report); evidence = copy.deepcopy(proof)
+                if mutation == 'no-proof': evidence = {}
+                elif mutation == 'eligible': evidence['restorationEligible'] = True
+                elif mutation == 'other-warning': invalid['checks'][0]['status'] = 'warning'
+                elif mutation == 'blocked': invalid['checks'][3]['status'] = 'blocked'
+                elif mutation == 'missing': invalid['checks'].pop(0)
+                elif mutation == 'duplicate': invalid['checks'].append(dict(invalid['checks'][0]))
+                else: invalid['status'] = 'ok'
+                with self.assertRaises(ValueError): self.module.require_source_doctor(invalid, evidence)
+
     def test_real_yii_console_discovers_bridge_command(self):
         import base64
         import os

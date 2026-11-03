@@ -229,4 +229,9 @@ PR #60 已合并为 967a903b3f96d1f3b50bf2e14ea56664d7d30638，修订首次 doct
 
 修复在 unpause 后、原 compose up 前进行有界真实健康轮询（最多30次、间隔2秒，每次查询最多10秒）：五个写服务必须唯一、齐全且 running/healthy，支持 Compose JSON数组和逐行JSON。持续 unhealthy、缺失、重复或仍 paused 均不能通过；恢复失败删除未验证备份输出，保留非零失败。先建立“旧健康状态导致依赖对账失败”和“持续不健康拒绝”的失败回归，再实现。24项备份/恢复、27项native门禁、15项smoke安全测试通过。
 
-自建随机项目、无宿主端口的七服务栈实际执行修订 BackupManager：真实 PostgreSQL/MariaDB dump、七目录归档、九个加密载荷与数据库dump解密检查通过，所有写服务恢复healthy，容器/网络/卷清理成功。此实验使用合成数据库和轻量写服务，仅证明备份机械路径，不冒充完整生产native或升级验收。现有生产拓扑 smoke 新增实际 manager.backup（含restore-grade验证），再运行完整doctor且要求总状态OK，随后继续网关负测；不上传备份载荷。精确head线上CI/smoke和独立审查仍待，失败rc.12不可作为升级前代，不重建候选或发布Release。
+自建随机项目、无宿主端口的七服务栈实际执行修订 BackupManager：真实 PostgreSQL/MariaDB dump、七目录归档、九个加密载荷与数据库dump解密检查通过，所有写服务恢复healthy，容器/网络/卷清理成功。此实验使用合成数据库和轻量写服务，仅证明备份机械路径，不冒充完整生产native或升级验收。生产拓扑 smoke 的 source-only 验证现限定为实际备份生成、加密完整性与服务恢复；恢复级资格仍只由签名候选验收，不上传备份载荷。精确head线上CI/smoke和独立审查仍待，失败rc.12不可作为升级前代，不重建候选或发布Release。
+
+
+PR #62 source smoke 41643463444 已越过备份写服务恢复，但恢复级校验正确拒绝未签名源码夹具：personnel security floor is missing。父任务已选择只验证 source 备份机械路径，不增加签名权限或伪造floor。现直接使用现有 BackupManager 生成实际备份，核验源release绑定、完整载荷库存、控制HMAC、密文校验和和九份解密认证；随后调用未修改的生产恢复验证器，并要求它仍精确拒绝 missing floor。证据scope=source-backup-integrity-only、restorationEligible=false、releaseAcceptance=false；人员守卫必须保持true，floor不得被创建，不能制造securityCapabilities声明。备份后完整doctor原始warning保留，只在已获得上述完整性证据、唯一warning为该源码备份不具备恢复资格、其余八项全部OK时继续，并再次验证实际业务投递和网关拒绝。没有改变生产backup/restore或签名native门禁。
+
+新增防误判回归覆盖控制HMAC篡改、密文认证损坏（即使重新签控制文件）、缺失/额外/链接载荷、源身份不匹配、意外取得恢复资格及doctor缺项/重复/其他warning或blocked。先失败后通过，smoke共17项通过；另将查询超时/非零/畸形JSON删除已形成备份输出的3类检查固化，备份/恢复共25项通过；native门禁27项通过。自建真实双库备份实验返回9个密文完整性通过、恢复资格false、写服务healthy、全部资源清理成功。该source测试不证明数据库恢复执行、兼容性或原生四平台通过；最终仍须独立审查和新head线上CI/smoke，不创建新候选或Release。

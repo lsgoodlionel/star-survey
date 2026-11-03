@@ -399,6 +399,31 @@ class BackupRestoreTest(unittest.TestCase):
         self.assertLess(runner.health_checks, 100)
         self.assertFalse(any('up' in command for command, _ in runner.calls))
 
+    def test_backup_query_failures_delete_complete_output(self):
+        for mode in ('timeout', 'nonzero', 'malformed-json'):
+            with self.subTest(mode=mode):
+                output = self.target / 'backups' / mode
+                class Runner(FakeRunner):
+                    def __init__(self):
+                        super().__init__()
+                        self.resumed = False
+                        self.complete_output_existed = False
+                    def run(self, command, **kwargs):
+                        if 'unpause' in command:
+                            self.resumed = True
+                        if self.resumed and 'ps' in command and '--format' in command:
+                            self.complete_output_existed = output.exists()
+                            if mode == 'timeout': raise subprocess.TimeoutExpired(command, 10)
+                            if mode == 'nonzero': raise subprocess.CalledProcessError(1, command)
+                            return subprocess.CompletedProcess(command, 0, stdout='{invalid', stderr='')
+                        return super().run(command, **kwargs)
+                runner = Runner()
+                with mock.patch('time.sleep'), self.assertRaises(self.backup.BackupError):
+                    self.backup.BackupManager(self.target, runner=runner, cipher=FakeCipher()).create(output, '0.2.0')
+                self.assertTrue(runner.complete_output_existed)
+                self.assertFalse(output.exists())
+                self.assertFalse(any('up' in command for command, _ in runner.calls))
+
     def test_backup_resume_accepts_line_delimited_health(self):
         runner = FakeRunner(line_delimited_health=True)
         self.backup.BackupManager(self.target, runner=runner)._wait_writers_healthy(['docker', 'compose', '-f', 'fixture'])
