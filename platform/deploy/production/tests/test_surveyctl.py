@@ -667,6 +667,21 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.assertEqual("error", json.loads(output.getvalue())["checks"][0]["status"])
         self.assertNotIn(secret, output.getvalue())
 
+    def test_failed_doctor_runtime_error_is_reported_safely(self):
+        manifest, _ = self.write_bundle_manifest()
+        runner = FakeRunner()
+        manager = self.manager(runner=runner)
+        manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+        report = json.dumps({"schemaVersion": 1, "status": "blocked", "error": "docker inspect failed token=unsafe-value"})
+        runner.run = mock.Mock(side_effect=subprocess.CalledProcessError(4, ["doctor"], output=report, stderr=""))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(self.module.RuntimeHealthError):
+            manager.doctor()
+        check = json.loads(output.getvalue())["checks"][0]
+        self.assertEqual("doctor-runtime", check["id"])
+        self.assertIn("docker inspect failed", check["summary"])
+        self.assertNotIn("unsafe-value", output.getvalue())
+
     def test_backup_restore_paths_reject_absolute_parent_and_symlink(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager()

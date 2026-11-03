@@ -1541,7 +1541,11 @@ class SurveyManager:
             if isinstance(cause, subprocess.CalledProcessError) and isinstance(cause.stdout, str):
                 try:
                     report = json.loads(cause.stdout)
-                    if not isinstance(report, dict) or not isinstance(report.get("checks"), list):
+                    if not isinstance(report, dict):
+                        raise ValueError("invalid doctor report")
+                    if "checks" not in report and isinstance(report.get("error"), str):
+                        report["checks"] = [{"id": "doctor-runtime", "status": "blocked", "summary": report["error"]}]
+                    if not isinstance(report.get("checks"), list):
                         raise ValueError("invalid doctor report")
                     checks = []
                     for check in report["checks"]:
