@@ -235,3 +235,8 @@ PR #60 已合并为 967a903b3f96d1f3b50bf2e14ea56664d7d30638，修订首次 doct
 PR #62 source smoke 41643463444 已越过备份写服务恢复，但恢复级校验正确拒绝未签名源码夹具：personnel security floor is missing。父任务已选择只验证 source 备份机械路径，不增加签名权限或伪造floor。现直接使用现有 BackupManager 生成实际备份，核验源release绑定、完整载荷库存、控制HMAC、密文校验和和九份解密认证；随后调用未修改的生产恢复验证器，并要求它仍精确拒绝 missing floor。证据scope=source-backup-integrity-only、restorationEligible=false、releaseAcceptance=false；人员守卫必须保持true，floor不得被创建，不能制造securityCapabilities声明。备份后完整doctor原始warning保留，只在已获得上述完整性证据、唯一warning为该源码备份不具备恢复资格、其余八项全部OK时继续，并再次验证实际业务投递和网关拒绝。没有改变生产backup/restore或签名native门禁。
 
 新增防误判回归覆盖控制HMAC篡改、密文认证损坏（即使重新签控制文件）、缺失/额外/链接载荷、源身份不匹配、意外取得恢复资格及doctor缺项/重复/其他warning或blocked。先失败后通过，smoke共17项通过；另将查询超时/非零/畸形JSON删除已形成备份输出的3类检查固化，备份/恢复共25项通过；native门禁27项通过。自建真实双库备份实验返回9个密文完整性通过、恢复资格false、写服务healthy、全部资源清理成功。该source测试不证明数据库恢复执行、兼容性或原生四平台通过；最终仍须独立审查和新head线上CI/smoke，不创建新候选或Release。
+
+
+## Wave 6 rc.13 bootstrap 准备（2026-11-03，待审）
+
+PR #62 已合并为 7ac22e2c7cfe7cd77ab2a98c8548675ee8151fbd，包含暂停后健康恢复等待和source-only备份完整性烟测。登记未占用的0.3.13-rc.1 bootstrap，下一候选包须包含该代码及现有严格原生验收脚本；失败rc.12不作为已验收前代。现有构建/原生工作流未改变，复用旧candidate_run_id会提取旧包内脚本与backup.py，不能验证新修复；因此不引入来源替换、声明例外或新权限，沿用受支持同run候选流程。当前仅最小策略、回归和记录；最终标签必须绑定本策略实际合并并检查成功的commit，再次确认未占用后另行触发。bootstrap不能晋升或证明升级验收，不创建标签、镜像、Release或生产操作。
