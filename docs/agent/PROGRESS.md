@@ -221,3 +221,12 @@ Doctor 的首次无备份 warning 与 native_acceptance.sh 的“总状态必须
 ## Wave 6 rc.12 bootstrap 准备（2026-11-03，待审）
 
 PR #60 已合并为 967a903b3f96d1f3b50bf2e14ea56664d7d30638，修订首次 doctor 无备份 warning 的精确阶段契约。现有 workflow_dispatch candidate_run_id 入口会从旧候选的 checksum-bound bundle 提取 native_acceptance.sh/native_acceptance_evidence.py，不能验证新编排脚本；直接换成 main 脚本会改变被测包字节绑定。故不新增替换/签名权限或重构来源策略，沿用既有候选构建→同 run 原生验收机制，登记未占用的 0.3.12-rc.1 bootstrap。它须包含实际合并后的 PR60 修复，最终标签只能绑定本策略实际合并且精确提交检查通过的 commit。rc.11 四平台业务旅程已通过但在首次 doctor 总状态断言失败，不是已验收前代；新 bootstrap 也不代表升级通过或可晋升。当前只提交策略/回归/记录，不创建标签、发布镜像、GitHub Release 或触碰生产。
+
+
+## Wave 6 rc.12 备份恢复写服务根因修复（2026-11-03，待审）
+
+候选 run 41636028440 的四平台均越过首次 doctor warning，安装、迁移、TLS 与真实业务旅程 OK；共同失败点已推进至 backup/exit5。四份失败日志一致为 services could not be resumed after backup，快照显示五个被暂停的写服务均 unhealthy、两数据库 healthy，尚未进入 restore 或升级。隔离 Compose 实验确认 pause 后状态为 unhealthy，unpause 成功，但立即 compose up 因缓存的 unhealthy 依赖状态失败；生产相同10秒健康周期复现该错误，并未修改健康检查。
+
+修复在 unpause 后、原 compose up 前进行有界真实健康轮询（最多30次、间隔2秒，每次查询最多10秒）：五个写服务必须唯一、齐全且 running/healthy，支持 Compose JSON数组和逐行JSON。持续 unhealthy、缺失、重复或仍 paused 均不能通过；恢复失败删除未验证备份输出，保留非零失败。先建立“旧健康状态导致依赖对账失败”和“持续不健康拒绝”的失败回归，再实现。24项备份/恢复、27项native门禁、15项smoke安全测试通过。
+
+自建随机项目、无宿主端口的七服务栈实际执行修订 BackupManager：真实 PostgreSQL/MariaDB dump、七目录归档、九个加密载荷与数据库dump解密检查通过，所有写服务恢复healthy，容器/网络/卷清理成功。此实验使用合成数据库和轻量写服务，仅证明备份机械路径，不冒充完整生产native或升级验收。现有生产拓扑 smoke 新增实际 manager.backup（含restore-grade验证），再运行完整doctor且要求总状态OK，随后继续网关负测；不上传备份载荷。精确head线上CI/smoke和独立审查仍待，失败rc.12不可作为升级前代，不重建候选或发布Release。

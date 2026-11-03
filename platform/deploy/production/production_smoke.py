@@ -223,6 +223,14 @@ def main():
             raise ValueError('production doctor blocked')
         stage = 'bridge-evidence'
         require_bridge_evidence(evidence)
+        stage = 'backup'
+        manager.backup('source-smoke')
+        stage = 'doctor-backed-up'
+        report = Doctor(target, product_probe=lambda host, commands: observed(target, host, commands, CommandRunner()).run()).run()
+        write_doctor_evidence(report, evidence / 'doctor-backed-up.json', secrets)
+        if report['status'] != 'ok':
+            raise ValueError('production doctor after backup did not pass')
+        require_bridge_evidence(evidence)
         stage = 'gateway-negative-requests'
         gateway = run(compose + ['ps', '-q', 'publish-gateway']).stdout.strip()
         env = dict(os.environ, GATEWAY_CONTAINER=gateway, SCHEME_ENGINE_HOST='engine',

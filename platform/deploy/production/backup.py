@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 MIN_FREE_BYTES = 512 * 1024**2
@@ -261,6 +262,34 @@ class BackupManager:
         value = (result.stdout or "").strip()
         return value or service
 
+    def _wait_writers_healthy(self, compose: list[str]) -> None:
+        # Paused containers retain an unhealthy status until their next real
+        # health probe. Compose dependency reconciliation rejects that stale
+        # state immediately; wait for actual recovery without changing probes.
+        for attempt in range(30):
+            result = self.runner.run(compose + ["ps", "--all", "--format", "json"],
+                                     capture_output=True, text=True, timeout=10)
+            raw = (result.stdout or "").strip()
+            try:
+                try:
+                    rows = json.loads(raw)
+                except json.JSONDecodeError:
+                    rows = [json.loads(line) for line in raw.splitlines() if line.strip()]
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise BackupError("writer health report is invalid") from exc
+            if isinstance(rows, dict):
+                rows = [rows]
+            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                raise BackupError("writer health report is invalid")
+            writers = [row for row in rows if row.get("Service") in WRITER_SERVICES]
+            if (len(writers) == len(WRITER_SERVICES)
+                    and {row["Service"] for row in writers} == set(WRITER_SERVICES)
+                    and all(row.get("State") == "running" and row.get("Health") == "healthy" for row in writers)):
+                return
+            if attempt < 29:
+                time.sleep(2)
+        raise BackupError("writer health did not recover after unpause")
+
     def create(self, output, version: str) -> Path:
         if not isinstance(version, str) or re.fullmatch(r"\d+\.\d+\.\d+(?:-rc\.\d+)?", version) is None:
             raise BackupError("backup version is invalid")
@@ -320,8 +349,9 @@ class BackupManager:
             if paused:
                 try:
                     self.runner.run(compose + ["unpause", *WRITER_SERVICES], capture_output=True, text=True)
+                    self._wait_writers_healthy(compose)
                     self.runner.run(compose + ["up", "-d", "--remove-orphans"], capture_output=True, text=True)
-                except (OSError, subprocess.CalledProcessError) as exc:
+                except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, BackupError) as exc:
                     if output.exists():
                         shutil.rmtree(output, ignore_errors=True)
                     raise BackupError("services could not be resumed after backup") from exc

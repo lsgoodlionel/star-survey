@@ -8,6 +8,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import unicodedata
 from collections import namedtuple
 
@@ -55,7 +56,7 @@ class FakeRunner:
         if command[:3] == ("docker", "compose", "-f") and "ps" in command:
             payload = [
                 {"Service": name, "State": "running", "Health": "healthy"}
-                for name in ("platform-db", "engine-db", "platform", "publish-gateway", "engine", "admin-web")
+                for name in ("platform-db", "engine-db", "platform", "publish-gateway", "engine", "admin-web", "edge")
             ]
             stdout = "\n".join(json.dumps(row) for row in payload) if self.line_delimited_health else json.dumps(payload)
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
@@ -337,6 +338,82 @@ class BackupRestoreTest(unittest.TestCase):
         commands = [call[0] for call in runner.calls]
         self.assertTrue(any("pause" in command for command in commands))
         self.assertTrue(any("up" in command for command in commands))
+
+    def test_backup_waits_for_real_health_after_unpause_before_compose_up(self):
+        class StaleHealthRunner(FakeRunner):
+            def __init__(self):
+                super().__init__()
+                self.resumed = False
+                self.health_checks = 0
+                self.ready = False
+            def run(self, command, **kwargs):
+                if 'unpause' in command:
+                    self.resumed = True
+                if self.resumed and 'ps' in command and '--format' in command:
+                    self.health_checks += 1
+                    self.ready = self.health_checks >= 2
+                    self.calls.append((tuple(command), kwargs))
+                    rows = [{'Service': name, 'State': 'running',
+                             'Health': 'healthy' if self.ready else 'unhealthy'}
+                            for name in self_writer_services]
+                    return subprocess.CompletedProcess(command, 0, stdout=json.dumps(rows), stderr='')
+                if self.resumed and 'up' in command and not self.ready:
+                    raise subprocess.CalledProcessError(1, command, stderr='dependency is unhealthy')
+                return super().run(command, **kwargs)
+        self_writer_services = self.backup.WRITER_SERVICES
+        runner = StaleHealthRunner()
+        with mock.patch('time.sleep'):
+            output = self.create_backup(runner)
+        self.assertTrue((output / 'CONTROL-HMAC').is_file())
+        self.assertGreaterEqual(runner.health_checks, 2)
+        commands = [call[0] for call in runner.calls]
+        unpause = next(i for i, command in enumerate(commands) if 'unpause' in command)
+        checks = [i for i, command in enumerate(commands) if '--format' in command and i > unpause]
+        up = next(i for i, command in enumerate(commands) if 'up' in command)
+        self.assertTrue(all(unpause < check < up for check in checks))
+
+    def test_backup_permanent_unhealthy_resume_removes_output_and_does_not_reconcile(self):
+        class UnhealthyRunner(FakeRunner):
+            def __init__(self):
+                super().__init__()
+                self.resumed = False
+                self.health_checks = 0
+            def run(self, command, **kwargs):
+                if 'unpause' in command:
+                    self.resumed = True
+                if self.resumed and 'ps' in command and '--format' in command:
+                    self.health_checks += 1
+                    self.calls.append((tuple(command), kwargs))
+                    rows = [{'Service': name, 'State': 'running', 'Health': 'unhealthy'}
+                            for name in self_writer_services]
+                    return subprocess.CompletedProcess(command, 0, stdout=json.dumps(rows), stderr='')
+                return super().run(command, **kwargs)
+        self_writer_services = self.backup.WRITER_SERVICES
+        runner = UnhealthyRunner()
+        output = self.target / 'backups' / 'unhealthy'
+        with mock.patch('time.sleep'):
+            with self.assertRaises(self.backup.BackupError):
+                self.backup.BackupManager(self.target, runner=runner, cipher=FakeCipher()).create(output, '0.2.0')
+        self.assertFalse(output.exists())
+        self.assertGreater(runner.health_checks, 0)
+        self.assertLess(runner.health_checks, 100)
+        self.assertFalse(any('up' in command for command, _ in runner.calls))
+
+    def test_backup_resume_accepts_line_delimited_health(self):
+        runner = FakeRunner(line_delimited_health=True)
+        self.backup.BackupManager(self.target, runner=runner)._wait_writers_healthy(['docker', 'compose', '-f', 'fixture'])
+
+    def test_backup_resume_rejects_incomplete_duplicate_and_paused_health(self):
+        rows = [{'Service': name, 'State': 'running', 'Health': 'healthy'}
+                for name in self.backup.WRITER_SERVICES]
+        paused = [dict(row, State='paused') for row in rows]
+        for payload in (rows[:-1], rows + [rows[0]], paused):
+            with self.subTest(payload=payload):
+                class Runner:
+                    def run(self, command, **kwargs):
+                        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr='')
+                with mock.patch('time.sleep'), self.assertRaises(self.backup.BackupError):
+                    self.backup.BackupManager(self.target, runner=Runner())._wait_writers_healthy([])
 
     def test_backup_rejects_insufficient_disk_before_pausing_services(self):
         Usage = namedtuple("Usage", "total used free")
