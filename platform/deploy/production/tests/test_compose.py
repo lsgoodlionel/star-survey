@@ -565,6 +565,36 @@ class ProductionComposeTest(unittest.TestCase):
                 self.assertEqual(1, calls.count("productionInit complete"))
                 self.assertNotIn("fixture-admin-password", "\n".join(calls))
 
+    def test_engine_init_prepares_theme_directory_before_completed_status(self):
+        source = (PRODUCTION_DIR / 'init' / 'engine-init.sh').read_text()
+        self.assertLess(source.index('productionInit directories'), source.index('productionInit status'))
+
+    def test_real_php_theme_directory_preparation_is_idempotent_and_fails_on_file(self):
+        import base64
+        source = (PRODUCTION_DIR / 'init' / 'ProductionInitCommand.php').read_bytes()
+        helper = (PRODUCTION_DIR.parents[2] / 'application/helpers/SurveyThemeHelper.php').read_bytes()
+        script = r'''class CConsoleCommand {}
+class CException extends Exception {}
+class Yii {public static $path;public static function import($v){}public static function app(){return new self;}public function getConfig($key){return self::$path;}}
+eval('?>'.base64_decode(''' + "'" + base64.b64encode(source).decode() + "'" + r'''));
+$root=sys_get_temp_dir().'/theme-init-'.bin2hex(random_bytes(8));mkdir($root);
+Yii::$path=$root.'/themes/survey';$command=new ProductionInitCommand;
+eval('?>'.base64_decode(''' + "'" + base64.b64encode(helper).decode() + "'" + r'''));
+set_error_handler(function(){throw new RuntimeException('missing-theme-directory');});
+try{SurveyThemeHelper::getTemplateInFolder(Yii::$path);exit(14);}catch(RuntimeException $expected){}
+restore_error_handler();
+if($command->actionDirectories()!==0 || !is_dir(Yii::$path))exit(10);
+if(SurveyThemeHelper::getTemplateInFolder(Yii::$path)!==[])exit(15);
+file_put_contents(Yii::$path.'/sentinel','fixture');
+if($command->actionDirectories()!==0 || file_get_contents(Yii::$path.'/sentinel')!=='fixture')exit(11);
+unlink(Yii::$path.'/sentinel');rmdir(Yii::$path);file_put_contents(Yii::$path,'fixture-file');
+try{$command->actionDirectories();exit(12);}catch(CException $expected){}
+if(file_get_contents(Yii::$path)!=='fixture-file')exit(13);
+unlink(Yii::$path);rmdir($root.'/themes');rmdir($root);echo 'DIRECTORIES_OK';'''
+        result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('DIRECTORIES_OK', result.stdout)
+
     def test_engine_init_distinguishes_empty_database_from_partial_schema(self):
         source = (PRODUCTION_DIR / "init" / "ProductionInitCommand.php").read_text(
             encoding="utf-8"
@@ -594,9 +624,10 @@ echo json_encode($cases);
         result = subprocess.run([os.environ.get("TEST_PHP", "php"), "-r", script], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([True, True, False, False, False, False, False, False], json.loads(result.stdout))
-        self.assertIn("gethostbynamel('publish-gateway')", config)
+        self.assertIn("$resolve('publish-gateway')", config)
         self.assertIn("$trustedGatewayRequest(", config[end:])
-        self.assertIn("$applyTrustedScheme($_SERVER", config[end:])
+        self.assertIn("$resolveTrustedScheme($_SERVER", config[end:])
+        self.assertIn("$applyTrustedScheme($server", config[end:])
 
     def test_forwarded_scheme_policy_rejects_spoofing_and_restricts_plugins(self):
         config = (PRODUCTION_DIR / 'init' / 'config.production.php').read_text(encoding='utf-8')
@@ -628,6 +659,44 @@ echo json_encode([
         result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([[None,None],['https',None],[None,None],['https',None],[None,None],[None,None],[None,None],['https',None],[None,None],[None,None],[None,None]], json.loads(result.stdout))
+
+    def test_loopback_health_does_not_resolve_not_yet_started_edge(self):
+        config = (PRODUCTION_DIR / 'init' / 'config.production.php').read_text()
+        start = config.index('$trustedGatewayRequest = static function')
+        end = config.index('\n};', config.index('$resolveTrustedScheme = static function')) + len('\n};')
+        script = config[start:end] + r'''
+$calls = [];
+$resolver = static function ($name) use (&$calls) { $calls[] = $name; throw new RuntimeException('must not query startup DNS'); };
+$server = ['REMOTE_ADDR'=>'127.0.0.1','REQUEST_URI'=>'/production-health.php','REQUEST_METHOD'=>'GET','HTTP_X_FORWARDED_PROTO'=>'https','HTTP_FORWARDED_PROTO'=>'https'];
+$resolveTrustedScheme($server, $resolver);
+echo json_encode([$calls, isset($server['HTTP_X_FORWARDED_PROTO']), isset($server['HTTP_FORWARDED_PROTO'])]);
+'''
+        result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([[], False, False], json.loads(result.stdout))
+
+    def test_real_yii_form_urls_keep_the_production_proxy_prefix(self):
+        import base64
+        config = (PRODUCTION_DIR / 'init' / 'config.production.php').read_bytes()
+        yii = os.environ.get('TEST_YII_ROOT', str(PRODUCTION_DIR.parents[2])) + '/vendor/yiisoft/yii/framework/yii.php'
+        script = r'''
+define('BASEPATH', '/var/www/html');
+$secret=tempnam('/tmp','test-secret-'); file_put_contents($secret,'fixture-only');
+putenv('ENGINE_DB_PASSWORD_FILE='.$secret);
+$_SERVER=['REMOTE_ADDR'=>'127.0.0.1','SCRIPT_NAME'=>'/index.php','PHP_SELF'=>'/index.php/123','REQUEST_URI'=>'/index.php/123','REQUEST_METHOD'=>'GET','HTTP_X_FORWARDED_PREFIX'=>'/survey','HTTP_HOST'=>'survey.example','SERVER_NAME'=>'survey.example','SERVER_PORT'=>80];
+$config=eval('?>'.base64_decode(''' + "'" + base64.b64encode(config).decode() + "'" + r'''));
+$yii=base64_decode(''' + "'" + base64.b64encode(yii.encode()).decode() + "'" + r''');
+$_SERVER['SCRIPT_FILENAME']=dirname($yii,5).'/index.php';
+require $yii;
+$app=Yii::createWebApplication(['basePath'=>'/tmp','components'=>['request'=>$config['components']['request'],'urlManager'=>$config['components']['urlManager']]]);
+echo json_encode(['url'=>$app->createUrl('survey/index',['sid'=>123]),'path'=>$app->request->getPathInfo()]);
+unlink($secret);
+'''
+        result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+        generated = json.loads(result.stdout)
+        self.assertTrue(generated['url'].startswith('/survey/index.php/'), generated['url'])
+        self.assertEqual('123', generated['path'])
 
     def test_engine_config_uses_real_survey_prefix_and_https_settings(self):
         config = (PRODUCTION_DIR / "init" / "config.production.php").read_text(

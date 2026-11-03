@@ -206,6 +206,8 @@ class ProductProbe:
                     url = response.geturl()
                 if "completed-wrapper" in html:
                     return
+        except urllib.error.HTTPError as exc:
+            raise ProbeHttpError(exc.code) from None
         except (OSError, urllib.error.URLError) as exc:
             raise DoctorRuntimeError("product probe public answer failed") from exc
         raise DoctorRuntimeError("product probe public answer did not complete")
@@ -272,7 +274,8 @@ class ProductProbe:
             self._answer(sid)
             phase = "response-projection"
             for _ in range(30):
-                self.runner.run(self.compose + ["exec", "-T", "engine", "php",
+                self.runner.run(self.compose + ["exec", "-T", "engine", '/bin/sh', '/opt/survey/run-with-secrets.sh',
+                                                'MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret', '--', 'php',
                                                 "application/commands/console.php", "plugin", "cron"],
                                 check=True, capture_output=True, text=True)
                 status, responses = self._api(

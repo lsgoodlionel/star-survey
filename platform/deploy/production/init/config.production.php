@@ -68,8 +68,19 @@ $applyTrustedScheme = static function (&$server, $edgeAddresses, $gatewayAddress
         $server['HTTP_X_FORWARDED_PROTO'] = 'https';
     }
 };
+$resolveTrustedScheme = static function (&$server, $resolve) use ($applyTrustedScheme) {
+    $remote = $server['REMOTE_ADDR'] ?? '';
+    // Loopback readiness must not depend on edge DNS: edge itself waits for
+    // engine health. Clear forwarded scheme headers without any trust lookup.
+    if (!is_string($remote) || filter_var($remote, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false
+        || strncmp($remote, '127.', 4) === 0) {
+        $applyTrustedScheme($server, array(), array());
+        return;
+    }
+    $applyTrustedScheme($server, $resolve('edge') ?: array(), $resolve('publish-gateway') ?: array());
+};
 if (!empty($_SERVER['REMOTE_ADDR'])) {
-    $applyTrustedScheme($_SERVER, @gethostbynamel('edge') ?: array(), @gethostbynamel('publish-gateway') ?: array());
+    $resolveTrustedScheme($_SERVER, static function ($name) { return @gethostbynamel($name); });
 }
 
 $baseUrl = '/survey';
@@ -104,6 +115,9 @@ return array(
             ),
         ),
         'urlManager' => array(
+            // Caddy strips the external prefix before forwarding. Keep request
+            // parsing internal, but generate form actions under the public URL.
+            'baseUrl' => $baseUrl . '/index.php',
             'urlFormat' => 'path',
             'rules' => array(),
             'showScriptName' => true,

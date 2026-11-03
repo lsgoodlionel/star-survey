@@ -110,6 +110,18 @@ class DoctorRunner:
 
 
 class DoctorAndCleanHostTest(unittest.TestCase):
+    def test_public_answer_http_failure_preserves_only_status(self):
+        module = load_doctor()
+        probe = module.ProductProbe('.', 'fixture.invalid', [], DoctorRunner())
+        failure = urllib.error.HTTPError('https://fixture.invalid/?token=private-test', 403,
+                                         'private-response-detail', {}, None)
+        with mock.patch.object(module.urllib.request, 'build_opener') as factory:
+            factory.return_value.open.side_effect = failure
+            with self.assertRaises(module.ProbeHttpError) as caught:
+                probe._answer(123)
+        self.assertEqual(403, caught.exception.status)
+        self.assertNotIn('private', str(caught.exception))
+
     def setUp(self):
         self.doctor = load_doctor()
         self.tmp = tempfile.TemporaryDirectory()
@@ -304,6 +316,15 @@ class DoctorAndCleanHostTest(unittest.TestCase):
         }))
         runner = DoctorRunner()
         events = []
+
+        original_run = runner.run
+        def secret_aware_run(command, **kwargs):
+            if 'plugin' in command and 'cron' in command and '/opt/survey/run-with-secrets.sh' not in command:
+                raise subprocess.CalledProcessError(1, command)
+            if 'plugin' in command and 'cron' in command:
+                self.assertIn('MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret', command)
+            return original_run(command, **kwargs)
+        runner.run = secret_aware_run
 
         class Probe(self.doctor.ProductProbe):
             def _api(probe, token, method, path, body=None, raw=False):
