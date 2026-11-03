@@ -362,6 +362,81 @@ class BackupRestoreTest(unittest.TestCase):
                         ).restore(output)
                     self.assertEqual([], runner.calls)
 
+    def _tar_entries(self, entries):
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w") as archive:
+            for name, kind in entries:
+                member = tarfile.TarInfo(name)
+                member.type = kind
+                member.size = 1 if kind == tarfile.REGTYPE else 0
+                archive.addfile(member, io.BytesIO(b"x") if member.size else None)
+        return stream.getvalue()
+
+    def test_docker_dot_prefix_archives_verify_without_rewriting(self):
+        # docker cp container:/volume/. - emits a '.' directory and './child'.
+        payload = self._tar_entries([
+            (".", tarfile.DIRTYPE), ("./nested", tarfile.DIRTYPE),
+            ("./nested/value", tarfile.REGTYPE), ("./empty", tarfile.DIRTYPE),
+        ])
+        output = self.create_backup(name="docker-dot-paths")
+        for volume in self.backup.VOLUME_SOURCES:
+            plain = self.root / volume
+            plain.write_bytes(payload)
+            FakeCipher().encrypt(plain, output / f"{volume}.enc", self.key_file)
+        self.backup.rewrite_authenticated_control(output, self.key_file)
+        runner = FakeRunner()
+        with tempfile.TemporaryDirectory() as temporary:
+            _, decrypted = self.restore.RestoreManager(
+                self.target, runner=runner, cipher=FakeCipher()
+            ).verify_backup(output, Path(temporary))
+            for volume in self.backup.VOLUME_SOURCES:
+                self.assertEqual(payload, decrypted[volume].read_bytes())
+        self.assertEqual([], runner.calls)
+
+    def test_dot_prefix_does_not_hide_unsafe_paths_or_aliases(self):
+        bad = [
+            [(name, tarfile.REGTYPE)] for name in (
+                "./../escape", "./dir/../escape", ".//absolute", "././repeat",
+                "./dir//file", "./dir/./file", "./dir\\file", "./", ".",
+            )
+        ]
+        bad += [
+            [("././", tarfile.DIRTYPE)], [("./.", tarfile.DIRTYPE)],
+            [("./same", tarfile.REGTYPE), ("same", tarfile.REGTYPE)],
+            [(".", tarfile.DIRTYPE), ("./", tarfile.DIRTYPE)],
+            [("./Parent/child", tarfile.REGTYPE), ("parent", tarfile.DIRTYPE)],
+            [("./parent", tarfile.REGTYPE), ("parent/child", tarfile.REGTYPE)],
+            [("parent/child", tarfile.REGTYPE), ("./parent", tarfile.REGTYPE)],
+            [("./caf\u00e9", tarfile.REGTYPE), ("cafe\u0301", tarfile.REGTYPE)],
+        ]
+        for index, entries in enumerate(bad):
+            with self.subTest(entries=entries):
+                archive = self.root / f"bad-dot-{index}.tar"
+                archive.write_bytes(self._tar_entries(entries))
+                with self.assertRaises(self.restore.RestoreIntegrityError):
+                    self.restore.RestoreManager(self.target)._validate_archive(archive)
+
+    def test_dot_prefix_keeps_entry_type_and_resource_limits(self):
+        for attack in ("symlink", "hardlink", "fifo", "device", "socket", "duplicate",
+                       "count-limit", "size-limit", "decompression-bomb"):
+            with self.subTest(attack=attack):
+                original = self._malicious_tar(attack)
+                stream = io.BytesIO()
+                with tarfile.open(fileobj=io.BytesIO(original)) as source, tarfile.open(
+                    fileobj=stream, mode="w:gz" if attack == "decompression-bomb" else "w"
+                ) as destination:
+                    for member in source:
+                        member.name = "./" + member.name
+                        destination.addfile(member, source.extractfile(member) if member.isfile() else None)
+                archive = self.root / f"dot-{attack}.tar"
+                archive.write_bytes(stream.getvalue())
+                limits = {"max_members": 3, "max_file_bytes": 8, "max_total_bytes": 64}
+                if attack == "decompression-bomb":
+                    limits = {"max_file_bytes": 8192, "max_total_bytes": 8192,
+                              "max_expansion_ratio": 2, "expansion_slack_bytes": 0}
+                with self.assertRaises(self.restore.RestoreIntegrityError):
+                    self.restore.RestoreManager(self.target, archive_limits=limits)._validate_archive(archive)
+
     def test_real_cipher_round_trip_authenticates_before_decryption(self):
         source = self.root / "plain.bin"
         encrypted = self.root / "payload.enc"

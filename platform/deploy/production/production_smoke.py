@@ -182,6 +182,7 @@ def verify_source_backup(target, directory, version):
         raise ValueError('source backup control authentication failed')
     cipher = AuthenticatedOpenSSLCipher()
     dump_format = None
+    volumes_validated = 0
     with tempfile.TemporaryDirectory() as temporary:
         for name, digest in files.items():
             encrypted = directory / name
@@ -191,6 +192,12 @@ def verify_source_backup(target, directory, version):
             cipher.decrypt(encrypted, plain, key)
             if not plain.stat().st_size:
                 raise ValueError('source backup payload is empty')
+            if name.removesuffix('.enc') in VOLUME_SOURCES:
+                try:
+                    RestoreManager(target)._validate_archive(plain)
+                except RestoreIntegrityError as error:
+                    raise ValueError('source volume archive format is invalid') from error
+                volumes_validated += 1
             if name == 'mariadb.sql.enc':
                 dump_format = mariadb_dump_format(plain.read_bytes())
                 if dump_format is None:
@@ -204,7 +211,7 @@ def verify_source_backup(target, directory, version):
             raise ValueError('unsigned source backup unexpectedly qualified for restoration')
     return {'schemaVersion': 1, 'scope': 'source-backup-integrity-only', 'integrityVerified': True,
             'encryptedPayloads': len(payloads), 'authenticatedPayloads': len(payloads),
-            'mariadbDumpFormat': dump_format,
+            'mariadbDumpFormat': dump_format, 'volumeArchivesValidated': volumes_validated,
             'restoreEligibility': 'rejected-missing-personnel-floor', 'restorationEligible': False,
             'serviceRecoveryVerified': False, 'releaseAcceptance': False}
 
@@ -223,6 +230,7 @@ def require_source_doctor(report, proof):
             or proof.get('restorationEligible') is not False or proof.get('releaseAcceptance') is not False
             or proof.get('restoreEligibility') != 'rejected-missing-personnel-floor'
             or proof.get('encryptedPayloads') != 9 or proof.get('authenticatedPayloads') != 9
+            or proof.get('volumeArchivesValidated') != 7
             or proof.get('mariadbDumpFormat') not in {'legacy-comment', 'mariadb-sandbox'}
             or proof.get('mariadbDumpClientVersion') != MARIADB_SOURCE_VERSION):
         raise ValueError('source backup integrity evidence is missing or qualified')

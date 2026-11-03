@@ -216,7 +216,7 @@ unlink($dir.'/application.log');rmdir($dir);
                 self.module.mariadb_dump_client_version([], lambda *args, **kwargs: SimpleNamespace(stdout=output))
 
     def test_source_backup_integrity_never_grants_restore_eligibility(self):
-        import json, shutil, sys, tempfile
+        import io, json, shutil, sys, tarfile, tempfile
         from unittest import mock
         sys.path.insert(0, str(SOURCE.parent))
         try:
@@ -244,8 +244,14 @@ unlink($dir.'/application.log');rmdir($dir);
                 cipher = backup.AuthenticatedOpenSSLCipher()
                 for name in ['postgres.dump', 'mariadb.sql', *backup.VOLUME_SOURCES]:
                     plain = root / name
-                    plain.write_bytes(b'/*M!999999\\- enable the sandbox mode */ \n-- MariaDB dump fixture\n'
-                                      if name == 'mariadb.sql' else b'fixture authenticated bytes')
+                    if name in backup.VOLUME_SOURCES:
+                        with tarfile.open(plain, 'w') as archive:
+                            member = tarfile.TarInfo('./value')
+                            member.size = 1
+                            archive.addfile(member, io.BytesIO(b'x'))
+                    else:
+                        plain.write_bytes(b'/*M!999999\\- enable the sandbox mode */ \n-- MariaDB dump fixture\n'
+                                          if name == 'mariadb.sql' else b'fixture authenticated bytes')
                     cipher.encrypt(plain, directory / (name + '.enc'), key)
                 metadata = {'schemaVersion': 2, 'version': version, 'databaseSchema': '952',
                             'releaseManifestSha256': backup.sha256(release / 'release.json'), 'images': images}
@@ -254,13 +260,14 @@ unlink($dir.'/application.log');rmdir($dir);
                 self.assertTrue(proof['integrityVerified'])
                 self.assertEqual('mariadb-sandbox', proof['mariadbDumpFormat'])
                 self.assertEqual(9, proof['authenticatedPayloads'])
+                self.assertEqual(7, proof['volumeArchivesValidated'])
                 self.assertFalse(proof['restorationEligible'])
                 self.assertFalse(proof['releaseAcceptance'])
                 self.assertEqual('rejected-missing-personnel-floor', proof['restoreEligibility'])
                 self.assertEqual(env, (release / '.env').read_text())
                 self.assertFalse((target / '.surveyctl/auth-security-floor').exists())
                 self.assertNotIn('securityCapabilities', json.loads((release / 'release.json').read_text()))
-                for index, mutation in enumerate(('control', 'cipher-auth', 'missing', 'extra', 'symlink', 'source-identity')):
+                for index, mutation in enumerate(('control', 'cipher-auth', 'missing', 'extra', 'symlink', 'source-identity', 'archive-path')):
                     with self.subTest(mutation=mutation):
                         damaged = target / 'backups' / str(index)
                         shutil.copytree(directory, damaged)
@@ -274,6 +281,16 @@ unlink($dir.'/application.log');rmdir($dir);
                         elif mutation == 'extra': (damaged / 'unexpected').write_text('fixture')
                         elif mutation == 'symlink':
                             path = damaged / 'postgres.dump.enc'; path.unlink(); path.symlink_to(directory / path.name)
+                        elif mutation == 'archive-path':
+                            plain = root / 'malicious.tar'
+                            with tarfile.open(plain, 'w') as archive:
+                                member = tarfile.TarInfo('./../escape')
+                                member.size = 1
+                                archive.addfile(member, io.BytesIO(b'x'))
+                            encrypted = damaged / (next(iter(backup.VOLUME_SOURCES)) + '.enc')
+                            encrypted.unlink()
+                            cipher.encrypt(plain, encrypted, key)
+                            backup.rewrite_authenticated_control(damaged, key)
                         else:
                             altered = json.loads((damaged / 'manifest.json').read_text())
                             altered['releaseManifestSha256'] = '0' * 64
@@ -292,17 +309,19 @@ unlink($dir.'/application.log');rmdir($dir);
                     'migrations', 'volumes', 'backups', 'minimal-probe']
         proof = {'scope': 'source-backup-integrity-only', 'integrityVerified': True,
                  'restorationEligible': False, 'releaseAcceptance': False,
-                 'restoreEligibility': 'rejected-missing-personnel-floor', 'encryptedPayloads': 9, 'authenticatedPayloads': 9,
+                 'restoreEligibility': 'rejected-missing-personnel-floor', 'encryptedPayloads': 9,
+                 'authenticatedPayloads': 9, 'volumeArchivesValidated': 7,
                  'mariadbDumpFormat': 'mariadb-sandbox', 'mariadbDumpClientVersion': '10.11.14'}
         report = {'status': 'warning', 'checks': [{'id': name, 'status': 'ok', 'summary': 'fixture'} for name in required]}
         next(item for item in report['checks'] if item['id'] == 'backups').update(
             status='warning', summary='no readable verified backup exists')
         self.module.require_source_doctor(report, proof)
         self.assertEqual('warning', report['status'])
-        for mutation in ('no-proof', 'eligible', 'other-warning', 'blocked', 'missing', 'duplicate', 'unexpected-ok'):
+        for mutation in ('no-proof', 'eligible', 'other-warning', 'blocked', 'missing', 'duplicate', 'unexpected-ok', 'archive-evidence'):
             with self.subTest(mutation=mutation):
                 invalid = copy.deepcopy(report); evidence = copy.deepcopy(proof)
-                if mutation == 'no-proof': evidence = {}
+                if mutation == 'archive-evidence': evidence['volumeArchivesValidated'] = 0
+                elif mutation == 'no-proof': evidence = {}
                 elif mutation == 'eligible': evidence['restorationEligible'] = True
                 elif mutation == 'other-warning': invalid['checks'][0]['status'] = 'warning'
                 elif mutation == 'blocked': invalid['checks'][3]['status'] = 'blocked'
