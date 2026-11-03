@@ -84,23 +84,50 @@ except Exception:
            'PUBGW_ENGINE_CHANNEL_SECRET=/run/secrets/pubgw_engine_channel_secret', '--', 'python', '-c', script])
 
 
-def bridge_diagnostic(compose, runner=run):
+def bridge_diagnostic(compose, sid, runner=run):
+    if type(sid) is not int or not 0 < sid <= 2147483647:
+        raise ValueError('bridge diagnostic scope is invalid')
     result = runner(compose + ['exec', '-T', '-e',
-        'YII_CONSOLE_COMMANDS=/var/www/html/platform/deploy/production/smoke-commands', 'engine',
-        '/bin/sh', '/opt/survey/run-with-secrets.sh',
-        'MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret', '--',
-        'php', 'application/commands/console.php', 'smokeBridge'])
-    value = json.loads(result.stdout)
+        'YII_CONSOLE_COMMANDS=/var/www/html/platform/deploy/production/smoke-commands',
+        '-e', 'SMOKE_SURVEY_ID=' + str(sid), 'engine', 'php', 'application/commands/console.php', 'smokeBridge'])
+    lines = [line[len('SMOKE_BRIDGE_JSON:'):] for line in result.stdout.splitlines() if line.startswith('SMOKE_BRIDGE_JSON:')]
+    if len(lines) != 1:
+        raise ValueError('bridge diagnostic marker is missing or ambiguous')
+    value = json.loads(lines[0])
     counts = {'completedResponses', 'recordedEvents', 'pendingEvents', 'deliveredEvents'}
     if not isinstance(value, dict) or set(value) != counts | {'phase', 'errorCategory', 'httpStatus'}:
         raise ValueError('bridge diagnostic fields are invalid')
     if any(type(value[k]) is not int or not 0 <= value[k] <= 1000000 for k in counts):
         raise ValueError('bridge diagnostic counts are invalid')
-    if value['phase'] not in {'inspect', 'completed'} or value['errorCategory'] not in {None, 'RuntimeException', 'CDbException', 'CException', 'other', 'relay-rejected'}:
+    if value['phase'] not in {'inspect', 'completed'} or value['errorCategory'] not in {None, 'RuntimeException', 'CDbException', 'CException', 'other'}:
         raise ValueError('bridge diagnostic classes are invalid')
-    if value['httpStatus'] is not None and (type(value['httpStatus']) is not int or not 100 <= value['httpStatus'] <= 599):
+    if value['httpStatus'] is not None:
         raise ValueError('bridge diagnostic status is invalid')
-    return {'schemaVersion': 1, **value}
+    return {'schemaVersion': 1, 'scope': 'current-probe-before-cleanup', 'diagnosticStatus': 'captured', **value}
+
+
+def observed_probe_class(base, evidence, collector=bridge_diagnostic):
+    class ObservedProbe(base):
+        def _close_engine_survey(self, instance, sid):
+            try:
+                report = collector(self.compose, sid)
+            except Exception as exc:
+                category = 'command-failed' if isinstance(exc, subprocess.CalledProcessError) else 'invalid-report' if isinstance(exc, (ValueError, TypeError)) else 'other'
+                report = {'schemaVersion': 1, 'scope': 'current-probe-before-cleanup',
+                          'diagnosticStatus': 'unavailable', 'errorCategory': category}
+            try:
+                (evidence / 'bridge-diagnostic.json').write_text(json.dumps(report, indent=2) + '\n')
+            finally:
+                super()._close_engine_survey(instance, sid)
+    return ObservedProbe
+
+
+def require_bridge_evidence(evidence):
+    value = json.loads((evidence / 'bridge-diagnostic.json').read_text())
+    if (value.get('diagnosticStatus') != 'captured' or value.get('phase') != 'completed'
+            or value.get('errorCategory') is not None or value.get('completedResponses', 0) < 1
+            or value.get('deliveredEvents', 0) < 1):
+        raise ValueError('current probe bridge evidence did not verify completion and delivery')
 
 
 def main():
@@ -110,7 +137,7 @@ def main():
     sys.path.insert(0, str(production))
     sys.path.insert(0, str(production / 'release'))
     from surveyctl import SurveyManager, load_manifest
-    from doctor import Doctor
+    from doctor import Doctor, ProductProbe, CommandRunner
     from native_acceptance_evidence import write_doctor_evidence, write_engine_health_evidence, write_gateway_diagnostic_evidence
 
     evidence = Path(os.environ['SMOKE_EVIDENCE_DIR']).resolve()
@@ -184,11 +211,14 @@ def main():
         stage = 'gateway-rpc-authentication'
         check_gateway_rpc(compose)
         stage = 'doctor'
-        report = Doctor(target).run()
+        observed = observed_probe_class(ProductProbe, evidence)
+        report = Doctor(target, product_probe=lambda host, commands: observed(target, host, commands, CommandRunner()).run()).run()
         secrets = [(target / 'shared/secrets' / p).read_text().strip() for p in os.listdir(target / 'shared/secrets')]
         write_doctor_evidence(report, evidence / 'doctor-installed.json', secrets)
         if report['status'] == 'blocked':
             raise ValueError('production doctor blocked')
+        stage = 'bridge-evidence'
+        require_bridge_evidence(evidence)
         stage = 'gateway-negative-requests'
         gateway = run(compose + ['ps', '-q', 'publish-gateway']).stdout.strip()
         env = dict(os.environ, GATEWAY_CONTAINER=gateway, SCHEME_ENGINE_HOST='engine',
@@ -198,10 +228,6 @@ def main():
     except Exception as exc:
         error = type(exc).__name__
         if compose:
-            try:
-                (evidence / 'bridge-diagnostic.json').write_text(json.dumps(bridge_diagnostic(compose), indent=2) + '\n')
-            except Exception:
-                pass  # Diagnostic unavailable; original journey remains failed.
             try:
                 engine = run(compose + ['ps', '-aq', 'engine']).stdout.strip()
                 health = json.loads(run(['docker', 'inspect', '--format', '{{json .State.Health}}', engine]).stdout)

@@ -72,18 +72,18 @@ class ProductionSmokeTest(unittest.TestCase):
     def test_bridge_diagnostic_rejects_extra_response_data(self):
         from types import SimpleNamespace
         def runner(command):
-            return SimpleNamespace(stdout='{"rawBody":"private-fixture"}')
+            return SimpleNamespace(stdout='SMOKE_BRIDGE_JSON:{"rawBody":"private-fixture"}')
         with self.assertRaises(ValueError):
-            self.module.bridge_diagnostic(['docker', 'compose'], runner=runner)
+            self.module.bridge_diagnostic(['docker', 'compose'], 123, runner=runner)
 
     def test_bridge_diagnostic_retains_counts_and_status_without_payload(self):
         from types import SimpleNamespace
         def runner(command):
-            self.assertIn('/opt/survey/run-with-secrets.sh', command)
-            self.assertIn('MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret', command)
-            return SimpleNamespace(stdout='{"completedResponses":1,"recordedEvents":2,"pendingEvents":2,"deliveredEvents":0,"phase":"completed","errorCategory":"relay-rejected","httpStatus":403}')
-        result = self.module.bridge_diagnostic(['docker', 'compose'], runner=runner)
-        self.assertEqual(403, result['httpStatus'])
+            self.assertIn('SMOKE_SURVEY_ID=123', command)
+            self.assertNotIn('/opt/survey/run-with-secrets.sh', command)
+            return SimpleNamespace(stdout='SMOKE_BRIDGE_JSON:{"completedResponses":1,"recordedEvents":2,"pendingEvents":2,"deliveredEvents":0,"phase":"completed","errorCategory":null,"httpStatus":null}')
+        result = self.module.bridge_diagnostic(['docker', 'compose'], 123, runner=runner)
+        self.assertIsNone(result['httpStatus'])
         self.assertEqual(1, result['completedResponses'])
 
     def test_actual_php_bridge_report_drops_log_payload(self):
@@ -95,10 +95,10 @@ class ProductionSmokeTest(unittest.TestCase):
         script = r'''
 class CConsoleCommand {}
 class Yii { public static $app; public static function app(){return self::$app;} }
-class Survey { public static function model(){return new self;} public function findAllByAttributes($a){return [];} }
+putenv('SMOKE_SURVEY_ID=123');
 class FixtureDb {
- public $tablePrefix='lime_'; public function quoteTableName($t){return $t;}
- public function createCommand($q){return new class($q){private $q;public function __construct($q){$this->q=$q;}public function queryScalar(){return strpos($this->q,'IS NOT NULL')!==false?0:2;}};}
+ public $tablePrefix='lime_'; public function quoteTableName($t){return $t;} public function getSchema(){return $this;} public function getTable($t){return new stdClass;}
+ public function createCommand($q){return new class($q){private $q;public function __construct($q){$this->q=$q;}public function bindValue($k,$v){return $this;}public function queryScalar(){return strpos($this->q,'submitdate')!==false?1:(strpos($this->q,'IS NOT NULL')!==false?0:2);}};}
 }
 class FixtureApp { public $runtimePath; public function getDb(){return new FixtureDb;} }
 $dir=sys_get_temp_dir().'/bridge-fixture-'.bin2hex(random_bytes(8));mkdir($dir);
@@ -110,9 +110,55 @@ unlink($dir.'/application.log');rmdir($dir);
 '''
         result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
-        report = json.loads(result.stdout)
-        self.assertEqual(403, report['httpStatus'])
+        report = json.loads(result.stdout.strip().removeprefix('SMOKE_BRIDGE_JSON:'))
+        self.assertIsNone(report['httpStatus'])
         self.assertEqual(2, report['pendingEvents'])
         self.assertEqual(0, report['deliveredEvents'])
         self.assertNotIn('private-fixture', result.stdout)
         self.assertNotIn('sensitive response', result.stdout)
+
+    def test_scoped_observation_runs_before_cleanup_and_unavailable_is_explicit(self):
+        import json
+        import tempfile
+        calls = []
+        class Base:
+            compose = ['docker', 'compose']
+            def _close_engine_survey(self, instance, sid):
+                calls.append('close')
+        def collector(compose, sid):
+            calls.append(sid)
+            raise ValueError('fixture invalid report')
+        with tempfile.TemporaryDirectory() as temporary:
+            observed = self.module.observed_probe_class(Base, Path(temporary), collector)
+            observed()._close_engine_survey('fixture', 123)
+            report = json.loads(Path(temporary, 'bridge-diagnostic.json').read_text())
+        self.assertEqual([123, 'close'], calls)
+        self.assertEqual('unavailable', report['diagnosticStatus'])
+        self.assertEqual('current-probe-before-cleanup', report['scope'])
+        self.assertNotIn('123', str(report))
+
+    def test_unavailable_or_incomplete_bridge_evidence_never_passes(self):
+        import json
+        import tempfile
+        for value in ({'diagnosticStatus': 'unavailable'},
+                      {'diagnosticStatus': 'captured', 'phase': 'completed', 'errorCategory': None,
+                       'completedResponses': 0, 'deliveredEvents': 0}):
+            with tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary)
+                (path / 'bridge-diagnostic.json').write_text(json.dumps(value))
+                with self.assertRaises(ValueError):
+                    self.module.require_bridge_evidence(path)
+
+    def test_real_yii_console_discovers_bridge_command(self):
+        import base64
+        import os
+        import subprocess
+        root = os.environ.get('TEST_YII_ROOT', str(SOURCE.parents[3]))
+        encode = lambda value: base64.b64encode(value.encode()).decode()
+        script = "require base64_decode('" + encode(root + '/vendor/yiisoft/yii/framework/yii.php') + "');"
+        script += "$app=Yii::createConsoleApplication(['basePath'=>'/tmp']);"
+        script += "$app->commandRunner->addCommands(base64_decode('" + encode(root + '/platform/deploy/production/smoke-commands') + "'));"
+        script += "$app->commandRunner->run(['console','smokeBridge']);"
+        result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(1, sum(line.startswith('SMOKE_BRIDGE_JSON:') for line in result.stdout.splitlines()))
