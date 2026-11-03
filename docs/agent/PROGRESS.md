@@ -216,3 +216,8 @@ run 41607123060 在真实作答后的 response-projection 阶段失败；清理�
 `v0.3.11-rc.1` run 41622779286 的 Ubuntu 22.04/24.04 × amd64/arm64 四份脱敏报告一致：端口、内部/运行时隔离、TLS、容器、迁移、卷、真实最小业务旅程全部 OK；仅 backups 为首次安装预期的 warning（no completed backup exists yet）。四份失败步骤日志均为同一条 doctor 总状态断言，退出 1、lastStep=doctor-installed，尚未执行 backup、升级或恢复。既有业务/cron修复已在四平台实际候选旅程中通过，但失败候选仍不可当作已验收或升级前代。
 
 Doctor 的首次无备份 warning 与 native_acceptance.sh 的“总状态必须 ok”契约冲突，导致脚本在创建第一份备份前拒绝。修复仅允许 doctor-installed 阶段出现这一项确切 warning，要求 9 项必需检查唯一且齐全、其余 8 项均 OK；doctor-upgraded/restored 仍要求全部 OK，其他 warning/blocked、缺项、重复项与非零 CLI 均拒绝。原始脱敏报告继续落盘，不将 warning 改写为 OK。永久测试从实际 Doctor._backup_check 生成预期首次 warning 并执行实际 shell 函数；27 项定向测试通过，其中覆盖 14 个状态/阶段组合及 exit4 原样保留。四份本轮报告回放均验证“首次可继续、恢复同报告拒绝”。不执行候选重建、不移动旧标签、不发布 Release；修订需独立审查与 GitHub CI，后续真实备份/恢复与完整四平台生命周期仍未验收。
+
+
+## Wave 6 rc.12 bootstrap 准备（2026-11-03，待审）
+
+PR #60 已合并为 967a903b3f96d1f3b50bf2e14ea56664d7d30638，修订首次 doctor 无备份 warning 的精确阶段契约。现有 workflow_dispatch candidate_run_id 入口会从旧候选的 checksum-bound bundle 提取 native_acceptance.sh/native_acceptance_evidence.py，不能验证新编排脚本；直接换成 main 脚本会改变被测包字节绑定。故不新增替换/签名权限或重构来源策略，沿用既有候选构建→同 run 原生验收机制，登记未占用的 0.3.12-rc.1 bootstrap。它须包含实际合并后的 PR60 修复，最终标签只能绑定本策略实际合并且精确提交检查通过的 commit。rc.11 四平台业务旅程已通过但在首次 doctor 总状态断言失败，不是已验收前代；新 bootstrap 也不代表升级通过或可晋升。当前只提交策略/回归/记录，不创建标签、发布镜像、GitHub Release 或触碰生产。
