@@ -204,6 +204,17 @@ unlink($dir.'/application.log');rmdir($dir);
                 with self.assertRaises(ValueError):
                     self.module.require_bridge_evidence(path)
 
+    def test_mariadb_dynamic_version_requires_exact_requested_client(self):
+        from types import SimpleNamespace
+        def runner(command, **kwargs):
+            self.assertEqual(['exec', '-T', 'engine-db', 'mariadb-dump', '--version'], command[-5:])
+            return SimpleNamespace(stdout='mariadb-dump Ver 10.19 Distrib 10.11.14-MariaDB, for linux\n')
+        self.assertEqual('10.11.14', self.module.mariadb_dump_client_version(['docker', 'compose'], runner))
+        for output in ('mariadb-dump Ver 10.19 Distrib 10.11.19-MariaDB', 'unknown version',
+                       'Distrib 10.11.14-MariaDB Distrib 10.11.14-MariaDB'):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                self.module.mariadb_dump_client_version([], lambda *args, **kwargs: SimpleNamespace(stdout=output))
+
     def test_source_backup_integrity_never_grants_restore_eligibility(self):
         import json, shutil, sys, tempfile
         from unittest import mock
@@ -233,13 +244,15 @@ unlink($dir.'/application.log');rmdir($dir);
                 cipher = backup.AuthenticatedOpenSSLCipher()
                 for name in ['postgres.dump', 'mariadb.sql', *backup.VOLUME_SOURCES]:
                     plain = root / name
-                    plain.write_bytes(b'fixture authenticated bytes')
+                    plain.write_bytes(b'/*M!999999\\- enable the sandbox mode */ \n-- MariaDB dump fixture\n'
+                                      if name == 'mariadb.sql' else b'fixture authenticated bytes')
                     cipher.encrypt(plain, directory / (name + '.enc'), key)
                 metadata = {'schemaVersion': 2, 'version': version, 'databaseSchema': '952',
                             'releaseManifestSha256': backup.sha256(release / 'release.json'), 'images': images}
                 backup.rewrite_authenticated_control(directory, key, metadata)
                 proof = self.module.verify_source_backup(target, directory, version)
                 self.assertTrue(proof['integrityVerified'])
+                self.assertEqual('mariadb-sandbox', proof['mariadbDumpFormat'])
                 self.assertEqual(9, proof['authenticatedPayloads'])
                 self.assertFalse(proof['restorationEligible'])
                 self.assertFalse(proof['releaseAcceptance'])
@@ -279,7 +292,8 @@ unlink($dir.'/application.log');rmdir($dir);
                     'migrations', 'volumes', 'backups', 'minimal-probe']
         proof = {'scope': 'source-backup-integrity-only', 'integrityVerified': True,
                  'restorationEligible': False, 'releaseAcceptance': False,
-                 'restoreEligibility': 'rejected-missing-personnel-floor', 'encryptedPayloads': 9, 'authenticatedPayloads': 9}
+                 'restoreEligibility': 'rejected-missing-personnel-floor', 'encryptedPayloads': 9, 'authenticatedPayloads': 9,
+                 'mariadbDumpFormat': 'mariadb-sandbox', 'mariadbDumpClientVersion': '10.11.14'}
         report = {'status': 'warning', 'checks': [{'id': name, 'status': 'ok', 'summary': 'fixture'} for name in required]}
         next(item for item in report['checks'] if item['id'] == 'backups').update(
             status='warning', summary='no readable verified backup exists')

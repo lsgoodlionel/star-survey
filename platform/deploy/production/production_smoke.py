@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 
+MARIADB_SOURCE_VERSION = "10.11.14"
+
 
 def require_disposable_runner(env):
     if any(env.get(k) != v for k, v in {'GITHUB_ACTIONS': 'true',
@@ -138,7 +140,7 @@ def verify_source_backup(target, directory, version):
     """Authenticate source-test bytes; never confer restoration eligibility."""
     from backup import (AuthenticatedOpenSSLCipher, IMAGE_KEYS, VOLUME_SOURCES,
                         canonical_manifest, control_authenticator, safe_absolute, sha256)
-    from restore import RestoreIntegrityError, RestoreManager
+    from restore import RestoreIntegrityError, RestoreManager, mariadb_dump_format
     import secrets
 
     target = safe_absolute(target, 'source target')
@@ -179,6 +181,7 @@ def verify_source_backup(target, directory, version):
             (directory / 'CONTROL-HMAC').read_text(encoding='ascii').strip(), control_authenticator(raw, sums, key)):
         raise ValueError('source backup control authentication failed')
     cipher = AuthenticatedOpenSSLCipher()
+    dump_format = None
     with tempfile.TemporaryDirectory() as temporary:
         for name, digest in files.items():
             encrypted = directory / name
@@ -188,6 +191,10 @@ def verify_source_backup(target, directory, version):
             cipher.decrypt(encrypted, plain, key)
             if not plain.stat().st_size:
                 raise ValueError('source backup payload is empty')
+            if name == 'mariadb.sql.enc':
+                dump_format = mariadb_dump_format(plain.read_bytes())
+                if dump_format is None:
+                    raise ValueError('source MariaDB dump format is invalid')
         try:
             RestoreManager(target).verify_backup(directory, Path(temporary))
         except RestoreIntegrityError as error:
@@ -197,15 +204,27 @@ def verify_source_backup(target, directory, version):
             raise ValueError('unsigned source backup unexpectedly qualified for restoration')
     return {'schemaVersion': 1, 'scope': 'source-backup-integrity-only', 'integrityVerified': True,
             'encryptedPayloads': len(payloads), 'authenticatedPayloads': len(payloads),
+            'mariadbDumpFormat': dump_format,
             'restoreEligibility': 'rejected-missing-personnel-floor', 'restorationEligible': False,
             'serviceRecoveryVerified': False, 'releaseAcceptance': False}
+
+
+
+def mariadb_dump_client_version(compose, runner=run):
+    result = runner(compose + ['exec', '-T', 'engine-db', 'mariadb-dump', '--version'])
+    versions = re.findall(r'\bDistrib ([0-9]+\.[0-9]+\.[0-9]+)(?:[-\s]|$)', result.stdout)
+    if versions != [MARIADB_SOURCE_VERSION]:
+        raise ValueError('source MariaDB dump client version is unexpected or ambiguous')
+    return versions[0]
 
 
 def require_source_doctor(report, proof):
     if (proof.get('scope') != 'source-backup-integrity-only' or proof.get('integrityVerified') is not True
             or proof.get('restorationEligible') is not False or proof.get('releaseAcceptance') is not False
             or proof.get('restoreEligibility') != 'rejected-missing-personnel-floor'
-            or proof.get('encryptedPayloads') != 9 or proof.get('authenticatedPayloads') != 9):
+            or proof.get('encryptedPayloads') != 9 or proof.get('authenticatedPayloads') != 9
+            or proof.get('mariadbDumpFormat') not in {'legacy-comment', 'mariadb-sandbox'}
+            or proof.get('mariadbDumpClientVersion') != MARIADB_SOURCE_VERSION):
         raise ValueError('source backup integrity evidence is missing or qualified')
     required = {'ports', 'internal-exposure', 'runtime-exposure', 'tls', 'containers',
                 'migrations', 'volumes', 'backups', 'minimal-probe'}
@@ -259,7 +278,7 @@ def main():
             run(['docker', 'build', '--platform', 'linux/amd64', '-f', str(root / dockerfile), '-t', tag, str(root / context)])
             run(['docker', 'push', tag])
             images[name] = json.loads(run(['docker', 'image', 'inspect', tag]).stdout)[0]['RepoDigests'][0]
-        for key, tag in [('CADDY_IMAGE', 'caddy:2.11.6-alpine'), ('POSTGRES_IMAGE', 'postgres:16.10-alpine'), ('MARIADB_IMAGE', 'mariadb:10.11.14')]:
+        for key, tag in [('CADDY_IMAGE', 'caddy:2.11.6-alpine'), ('POSTGRES_IMAGE', 'postgres:16.10-alpine'), ('MARIADB_IMAGE', f'mariadb:{MARIADB_SOURCE_VERSION}')]:
             stage = 'pull-' + key.lower().replace('_image', '')
             run(['docker', 'pull', '--platform', 'linux/amd64', tag])
             images[key] = json.loads(run(['docker', 'image', 'inspect', tag]).stdout)[0]['RepoDigests'][0]
@@ -315,6 +334,8 @@ def main():
         stage = 'backup'
         backup_directory = BackupManager(target).create(target / 'backups/source-smoke', manifest.version)
         backup_evidence = verify_source_backup(target, backup_directory, manifest.version)
+        backup_evidence['mariadbDumpClientVersion'] = mariadb_dump_client_version(compose)
+        backup_evidence['mariadbDumpImage'] = images['MARIADB_IMAGE']
         (evidence / 'source-backup.json').write_text(json.dumps(backup_evidence, indent=2) + '\n')
         stage = 'doctor-backed-up'
         report = Doctor(target, product_probe=lambda host, commands: observed(target, host, commands, CommandRunner()).run()).run()

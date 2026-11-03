@@ -137,6 +137,53 @@ class BackupRestoreTest(unittest.TestCase):
         for name, digest in manifest["files"].items():
             self.assertEqual(digest, hashlib.sha256((output / name).read_bytes()).hexdigest())
 
+    def replace_mariadb_dump(self, output, payload):
+        plain = self.root / 'vendor-mariadb.sql'
+        plain.write_bytes(payload)
+        FakeCipher().encrypt(plain, output / 'mariadb.sql.enc', self.key_file)
+        self.backup.rewrite_authenticated_control(output, self.key_file)
+
+    def test_official_mariadb_sandbox_preamble_is_verified_without_rewriting(self):
+        output = self.create_backup()
+        payload = b'/*M!999999\\- enable the sandbox mode */ \n-- MariaDB dump fixture\n'
+        self.replace_mariadb_dump(output, payload)
+        with tempfile.TemporaryDirectory() as temporary:
+            _, decrypted = self.restore.RestoreManager(self.target, cipher=FakeCipher()).verify_backup(output, Path(temporary))
+            self.assertEqual(payload, decrypted['mariadb.sql'].read_bytes())
+        legacy = b'-- MariaDB dump legacy fixture\n'
+        self.replace_mariadb_dump(output, legacy)
+        with tempfile.TemporaryDirectory() as temporary:
+            _, decrypted = self.restore.RestoreManager(self.target, cipher=FakeCipher()).verify_backup(output, Path(temporary))
+            self.assertEqual(legacy, decrypted['mariadb.sql'].read_bytes())
+
+    def test_mariadb_sandbox_preamble_rejects_malformed_and_injected_variants(self):
+        output = self.create_backup()
+        header = b'/*M!999999\\- enable the sandbox mode */'
+        invalid = [header, header + b' SELECT 1;\n-- fixture\n', header + b'\nSELECT 1;\n',
+                   header + b'\n' + header + b'\n-- fixture\n',
+                   b'/*M!999998\\- enable the sandbox mode */\n-- fixture\n',
+                   b'/*M!999999- enable the sandbox mode */\n-- fixture\n',
+                   b'/*M!999999\\! system command */\n-- fixture\n',
+                   b'/* arbitrary comment */\n-- fixture\n']
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                self.replace_mariadb_dump(output, payload)
+                with tempfile.TemporaryDirectory() as temporary, self.assertRaisesRegex(
+                        self.restore.RestoreIntegrityError, 'MariaDB dump format is invalid'):
+                    self.restore.RestoreManager(self.target, cipher=FakeCipher()).verify_backup(output, Path(temporary))
+
+    def test_mariadb_vendor_header_never_bypasses_authentication_or_floor(self):
+        output = self.create_backup()
+        self.replace_mariadb_dump(output, b'/*M!999999\\- enable the sandbox mode */ \n-- MariaDB dump fixture\n')
+        (output / 'CONTROL-HMAC').write_text('0' * 64)
+        with tempfile.TemporaryDirectory() as temporary, self.assertRaises(self.restore.RestoreIntegrityError):
+            self.restore.RestoreManager(self.target, cipher=FakeCipher()).verify_backup(output, Path(temporary))
+        self.backup.rewrite_authenticated_control(output, self.key_file)
+        (self.target / 'releases/0.2.0/.env').write_text('PLATFORM_ADMIN_ENFORCE_PERSONNEL=true\n')
+        with tempfile.TemporaryDirectory() as temporary, self.assertRaisesRegex(
+                self.restore.RestoreIntegrityError, 'personnel security floor is missing'):
+            self.restore.RestoreManager(self.target, cipher=FakeCipher()).verify_backup(output, Path(temporary))
+
     def test_direct_restore_rejects_legacy_backup_before_starting_services(self):
         output = self.create_backup()
         source = self.target / "releases" / "0.2.0"

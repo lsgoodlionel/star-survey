@@ -70,6 +70,18 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def mariadb_dump_format(payload: bytes):
+    """Recognize supported preambles; the original SQL is never rewritten."""
+    data = payload.lstrip()
+    if data.startswith(b"--"):
+        return "legacy-comment"
+    first, newline, remaining = data.partition(b"\n")
+    if (newline and first.rstrip(b" \t\r") == b"/*M!999999\\- enable the sandbox mode */"
+            and remaining.lstrip().startswith(b"--")):
+        return "mariadb-sandbox"
+    return None
+
+
 class RestoreManager:
     def __init__(self, target, runner=None, cipher=None, archive_limits=None):
         try:
@@ -313,7 +325,7 @@ class RestoreManager:
             decrypted[plain.name] = plain
         if not decrypted["postgres.dump"].read_bytes().startswith(b"PGDMP"):
             raise RestoreIntegrityError("PostgreSQL dump format is invalid")
-        if not decrypted["mariadb.sql"].read_bytes().lstrip().startswith(b"--"):
+        if mariadb_dump_format(decrypted["mariadb.sql"].read_bytes()) is None:
             raise RestoreIntegrityError("MariaDB dump format is invalid")
         for name in VOLUME_SOURCES:
             self._validate_archive(decrypted[name])
