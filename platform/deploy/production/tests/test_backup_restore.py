@@ -790,6 +790,18 @@ class BackupRestoreTest(unittest.TestCase):
         safety = list((self.target / "backups").glob("pre-restore-safety-*"))
         self.assertEqual(1, len(safety))
 
+    def test_restore_preserves_recorded_postgres_owners_in_both_projects(self):
+        output = self.create_backup(name="preserve-postgres-owners")
+        runner = FakeRunner()
+        self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+        imports = [command for command, _ in runner.calls if "pg_restore" in command]
+        self.assertEqual(2, len(imports))
+        for command in imports:
+            self.assertNotIn("--no-owner", command)
+            self.assertNotIn("--no-acl", command)
+            self.assertEqual(("pg_restore", "-U", "postgres", "-d", "platform", "--clean", "--if-exists"),
+                             command[command.index("pg_restore"):])
+
     def test_production_application_wait_failure_recovers_safety_and_reports_failure(self):
         output = self.create_backup(name="switch-app-wait-fails")
 

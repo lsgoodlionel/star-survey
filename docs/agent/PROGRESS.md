@@ -277,3 +277,22 @@ PR65 已合并为 e5036935baddbbfc0b0341cbbe8e2045a6844937，候选v0.3.13-rc.1�
 PR66复审补证：加入实际切换后首个应用健康等待失败的直接回归，验证安全备份确被验证并用于回滚、回滚后进行健康查询、原恢复失败继续向外报告且保留启动失败cause；精确断言首次启动和回滚启动均为up -d --wait --wait-timeout 120 --remove-orphans。原pg_restore失败回滚测试也收紧为回滚应用启动的精确参数，避免误匹配备份后的普通up命令。36项恢复测试通过，本增量只改测试与记录。
 
 清理证据边界：当前RestoreManager候选finally会吞掉OSError/CalledProcessError，成功返回不能证明清理成功。上述隔离试验清理结论来自外层夹具另行清理与检查：源及第二恢复项目无容器残留，候选项目另外down --volumes返回成功，不是产品返回值的保证。120秒只配置每个Compose健康等待；备份、导入、复制、拉取/创建和清理及完整流程没有据此获得整体硬时限。未修改此清理异常处理或扩大本PR范围。
+
+
+## Wave 6 rc.13 四平台失败与 PostgreSQL 恢复所有者修复（2026-11-03，待审）
+
+v0.3.13-rc.1 精确绑定 ddae308c55e54452b3a9f9ea070bafd71754e4e0；候选41684324355现已全部结束，四个平台均exit4、lastStep=restore-target-survey-restore-project，helper固定错误均isolated restored stack startup failed。四份doctor-installed均迁移/容器/TLS及完整最小业务旅程OK，只有已允许的首次无备份warning；不是本轮安装或publish再次失败。原生报告未保存候选应用具体stderr/服务原因，也未单独证明清理结果，不能从上传证据成功推定清理成功；该失败候选不可作合格前代或发布Release。
+
+局部Docker实验否定“一次性初始化服务带healthcheck使Compose --wait失败”的假设，各变体正常退出0，未据此改代码。继续沿真实生产数据库角色契约复现：init-platform-db.sh创建platform_owner拥有的platform数据库，生产Flyway使用该owner角色；原pg_restore --no-owner则把历史表和SECURITY DEFINER函数改属postgres，owner无权SELECT历史表，函数执行身份也变成postgres。两个无网络临时真实PG容器、实际生产角色初始化和真实custom dump验证该结果；保留所有者后历史访问、原definer身份均正确，应用角色直接写仍拒绝，所有自建资源清理成功。
+
+最小运行修订只移除--no-owner，保留ACL、认证、floor、人员恢复失效及健康/回滚门禁；未知源owner不自动创建或降级，pg_restore非零继续阻断。37项恢复及27项native策略测试通过，新增直接使用RestoreManager._restore_payload实际pg_restore命令的真实PG组件回归先失败后通过，覆盖历史owner、Flyway读权限、definer身份、应用直接写拒绝及缺失owner失败。此组件在MariaDB阶段前明确停止，不是完整恢复或人员安全验收，restorationEligible/releaseAcceptance始终false。
+
+真实组件检查加入既有生产smoke工作流，默认postgres:16.10-alpine与当前生产pin一致，无权限增加；使用两个随机无网络无端口容器、实际初始化脚本和临时随机测试口令，固定脱敏JSON单列cleanup结果。缓存postgres:16-alpine的本地实验已通过，精确16.10的动态结果等待线上CI，不冒称已跑该版本。预计增量成本为两个PG容器启动及两次dump/两次restore，不重新发布镜像。
+
+证据边界：以上实验确定恢复所有权缺陷及生产Flyway访问必然失败的因果链；原生日志只直接证明隔离应用启动失败，不能声称已在原生日志看到permission denied、只有这一个原因，或签名候选已经通过。仅这5个相关文件交独立审查和CI，不创建/覆盖标签、不发布Release、不触碰生产。
+
+PR67审查补证（测试凭据与TCP认证）：旧head线上PG组件步骤虽成功，但本机UID501/Docker Desktop bind映射可读，不代表原生Linux可读；容器内非秘密权限实验显示postgres UID70不能读取UID1001持有的0700/0600目录和文件。加之初始化脚本export VAR="$(cat file)"可能掩盖读取失败、旧断言使用本地postgres SET ROLE，旧成功不能证明随机owner/app口令有效。
+
+测试夹具现保持宿主0700/0600不变，由容器原有root入口复制到私有tmpfs，再将目录0700/文件0600交给实际postgres UID；不把口令置于命令参数、持久容器env或日志。分别以owner和app自身口令真实TCP登录，再以另一角色口令验证明确认证失败。错误口令负例先捕获镜像默认localhost trust导致的假绿，故仅在无网络测试夹具设置host SCRAM；生产初始化脚本和数据库配置不改。恢复后历史读取、definer身份、应用直接写拒绝也改用真实TCP角色连接，缺失owner负例保留。
+
+本地缓存postgres:16-alpine定向组件全部通过：私有文件对postgres可读且模式/UID正确，owner/app密码验证成功，错误密码拒绝，四项恢复权限与未知owner拒绝成功，独立清理成功。精确16.10在线结果须以新head为准，整体安全复审仍等待；本增量不改恢复运行代码、不创建候选。
