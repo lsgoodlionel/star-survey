@@ -320,3 +320,12 @@ PR67已合并18570aa127a61f2414b13df8f9a47390265ee92d，当前main CI41696668299
 修复实现/测试限定5个相关文件：workflow传递ENGINE_IMAGE_DIGEST，摘要强制四镜像、readiness增加engineManifestDigest并与四镜像identity及manifest严格绑定；最终verify_release同时要求engine SBOM/cosign bundle、核对真正ENGINE_IMAGE OCI引用和SBOM attestation。后续校验器也残留三镜像库存，已同步修复以免只越过首个错误又失败。缺失/多余/错误engine身份、mutable ref、摘要或readiness篡改、缺签名/SBOM均拒绝，不删除engine字段或放宽完整性。bootstrap仍promotable=false、reason=bootstrap-not-promotable，稳定版必须真实upgrade-verified，自动Release关闭/人工批准保持不变。
 
 先用完整四镜像数据在旧校验器复现失败，再实现；27项native证据、20项发布资产校验和12项工作流回归通过。签名与attestation外部调用在发布单测中使用stub，仅证明调用和绑定契约，不能冒称实际新资产签名通过。旧三镜像摘要不被修写为四镜像；只读核对旧包内helper与原commit源码逐字一致，未执行未签跨run包代码，简单重跑旧作业不会加载新修复。当前只交draft PR与CI，无新tag/镜像/Release/生产操作；后续候选策略待父任务审查协调。
+
+
+## Wave 6 rc.15 bootstrap 准备（2026-11-03，待审）
+
+PR69已合并719a325175cf5e5b27ec441d6b2f3dd51ff96279，实际main CI41718115566运行中。rc.14四平台运行旅程完成，但汇总failure、无最终签名verified-release-assets，不能作为合格前代。
+
+只读核实现有入口：直接重跑旧run仍使用旧commit及校验和绑定包；包内helper仍是旧三镜像版本，与新合并修复不同。workflow_dispatch candidate_run_id可下载旧candidate复验，但原生脚本/helper仍从旧包提取；policy为build，release-ready及attest-release-assets限定release=true/channel=candidate，因而不会完成新的汇总和最终签名。当前新校验器对原始旧三镜像summary实际拒绝；不补写engine字段，不替换包内代码，不更改旧校验和或标签，不引入额外签名权限或新复验架构。
+
+因此选择现有受支持的同run新bootstrap构建/原生验收/汇总/签名流程。核对v0.3.15-rc.1未占用，仅登记mode=bootstrap及回归；失败rc.14不作前代，bootstrap仍不可晋升、不证明升级。27项native策略/证据测试先因缺登记失败，再通过。本切片仅3文件策略/测试/记录，无运行代码或权限改动；需父任务独立审查、PR CI与实际合并提交检查后重新核对tag，最终只能绑定实际通过的合并SHA。当前不创建标签、不发布镜像/Release、不触碰生产。
