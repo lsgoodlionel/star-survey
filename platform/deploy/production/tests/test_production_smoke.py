@@ -71,14 +71,15 @@ class ProductionSmokeTest(unittest.TestCase):
 
     def test_bridge_diagnostic_rejects_extra_response_data(self):
         from types import SimpleNamespace
-        def runner(command):
+        def runner(command, **kwargs):
             return SimpleNamespace(stdout='SMOKE_BRIDGE_JSON:{"rawBody":"private-fixture"}')
         with self.assertRaises(ValueError):
             self.module.bridge_diagnostic(['docker', 'compose'], 123, runner=runner)
 
     def test_bridge_diagnostic_retains_counts_and_status_without_payload(self):
         from types import SimpleNamespace
-        def runner(command):
+        def runner(command, **kwargs):
+            self.assertEqual(30, kwargs.get('timeout'))
             self.assertIn('SMOKE_SURVEY_ID=123', command)
             self.assertNotIn('/opt/survey/run-with-secrets.sh', command)
             return SimpleNamespace(stdout='SMOKE_BRIDGE_JSON:{"completedResponses":1,"recordedEvents":2,"pendingEvents":2,"deliveredEvents":0,"phase":"completed","errorCategory":null,"httpStatus":null}')
@@ -97,7 +98,7 @@ class CConsoleCommand {}
 class Yii { public static $app; public static function app(){return self::$app;} }
 putenv('SMOKE_SURVEY_ID=123');
 class FixtureDb {
- public $tablePrefix='lime_'; public function quoteTableName($t){return $t;} public function getSchema(){return $this;} public function getTable($t){return new stdClass;}
+ public $tablePrefix='lime_'; public function quoteTableName($t){return $t;} public function getSchema(){return $this;} public function getTable($t){return $t==='lime_responses_123'?new stdClass:null;}
  public function createCommand($q){return new class($q){private $q;public function __construct($q){$this->q=$q;}public function bindValue($k,$v){return $this;}public function queryScalar(){return strpos($this->q,'submitdate')!==false?1:(strpos($this->q,'IS NOT NULL')!==false?0:2);}};}
 }
 class FixtureApp { public $runtimePath; public function getDb(){return new FixtureDb;} }
@@ -112,6 +113,7 @@ unlink($dir.'/application.log');rmdir($dir);
         self.assertEqual(0, result.returncode, result.stderr)
         report = json.loads(result.stdout.strip().removeprefix('SMOKE_BRIDGE_JSON:'))
         self.assertIsNone(report['httpStatus'])
+        self.assertEqual(1, report['completedResponses'])
         self.assertEqual(2, report['pendingEvents'])
         self.assertEqual(0, report['deliveredEvents'])
         self.assertNotIn('private-fixture', result.stdout)
@@ -136,6 +138,38 @@ unlink($dir.'/application.log');rmdir($dir);
         self.assertEqual('unavailable', report['diagnosticStatus'])
         self.assertEqual('current-probe-before-cleanup', report['scope'])
         self.assertNotIn('123', str(report))
+
+    def test_diagnostic_write_failure_does_not_interrupt_full_cleanup(self):
+        from unittest.mock import patch
+        calls = []
+        class Base:
+            compose = []
+            def _close_engine_survey(self, instance, sid):
+                calls.append('engine-close')
+            def run(self):
+                self._close_engine_survey('fixture', 123)
+                calls.append('project-archive')
+        observed = self.module.observed_probe_class(Base, Path('/unused'), lambda *_: {})
+        with patch.object(Path, 'write_text', side_effect=OSError('fixture write failure')):
+            observed().run()
+        self.assertEqual(['engine-close', 'project-archive'], calls)
+
+    def test_diagnostic_timeout_still_allows_cleanup(self):
+        import subprocess
+        import tempfile
+        import json
+        calls = []
+        class Base:
+            compose = []
+            def _close_engine_survey(self, instance, sid):
+                calls.append('engine-close')
+        def collector(*_):
+            raise subprocess.TimeoutExpired('fixture', 30)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            self.module.observed_probe_class(Base, path, collector)()._close_engine_survey('fixture', 123)
+            self.assertEqual('unavailable', json.loads((path / 'bridge-diagnostic.json').read_text())['diagnosticStatus'])
+        self.assertEqual(['engine-close'], calls)
 
     def test_unavailable_or_incomplete_bridge_evidence_never_passes(self):
         import json

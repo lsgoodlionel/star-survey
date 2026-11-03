@@ -21,7 +21,7 @@ class SmokeBridgeCommand extends CConsoleCommand
             $report['recordedEvents'] = (int) $db->createCommand('SELECT COUNT(*) FROM ' . $table . ' WHERE survey_id = :sid')->bindValue(':sid', $sid)->queryScalar();
             $report['pendingEvents'] = (int) $db->createCommand('SELECT COUNT(*) FROM ' . $table . ' WHERE survey_id = :sid AND delivered_at IS NULL')->bindValue(':sid', $sid)->queryScalar();
             $report['deliveredEvents'] = (int) $db->createCommand('SELECT COUNT(*) FROM ' . $table . ' WHERE survey_id = :sid AND delivered_at IS NOT NULL')->bindValue(':sid', $sid)->queryScalar();
-            $responseTable = $db->tablePrefix . 'survey_' . $sid;
+            $responseTable = $db->tablePrefix . 'responses_' . $sid;
             if ($db->getSchema()->getTable($responseTable) === null) {
                 throw new RuntimeException('response table unavailable');
             }

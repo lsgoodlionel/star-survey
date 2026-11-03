@@ -89,7 +89,7 @@ def bridge_diagnostic(compose, sid, runner=run):
         raise ValueError('bridge diagnostic scope is invalid')
     result = runner(compose + ['exec', '-T', '-e',
         'YII_CONSOLE_COMMANDS=/var/www/html/platform/deploy/production/smoke-commands',
-        '-e', 'SMOKE_SURVEY_ID=' + str(sid), 'engine', 'php', 'application/commands/console.php', 'smokeBridge'])
+        '-e', 'SMOKE_SURVEY_ID=' + str(sid), 'engine', 'php', 'application/commands/console.php', 'smokeBridge'], timeout=30)
     lines = [line[len('SMOKE_BRIDGE_JSON:'):] for line in result.stdout.splitlines() if line.startswith('SMOKE_BRIDGE_JSON:')]
     if len(lines) != 1:
         raise ValueError('bridge diagnostic marker is missing or ambiguous')
@@ -117,6 +117,10 @@ def observed_probe_class(base, evidence, collector=bridge_diagnostic):
                           'diagnosticStatus': 'unavailable', 'errorCategory': category}
             try:
                 (evidence / 'bridge-diagnostic.json').write_text(json.dumps(report, indent=2) + '\n')
+            except OSError:
+                # Missing evidence still fails require_bridge_evidence; diagnostics
+                # must never interrupt the caller's engine/project cleanup.
+                pass
             finally:
                 super()._close_engine_survey(instance, sid)
     return ObservedProbe
