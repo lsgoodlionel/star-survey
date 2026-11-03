@@ -661,6 +661,57 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         manager.uninstall(purge_data=False, confirmation=None)
         self.assertEqual('uninstalled', json.loads(manager.state_path.read_text())['status'])
 
+    def test_failed_first_install_can_retry_new_version_without_rotating_credentials(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertFalse(manager.current_path.exists())
+        private = self.target / 'shared/secrets'
+        before = {p.name: p.read_bytes() for p in private.iterdir() if p.is_file()}
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertEqual('0.3.0', manager.current_path.read_text().strip())
+        self.assertTrue(all((private / name).read_bytes() == value for name, value in before.items()))
+
+    def test_successful_purge_allows_fresh_new_version_install(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(True, f'PURGE {self.target.resolve()}')
+        self.assertFalse((self.target / 'shared').exists())
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        manager.install(next_manifest, 'survey.example.com', 'new-operations', 'operations@example.com')
+        self.assertEqual('healthy', json.loads(manager.state_path.read_text())['status'])
+        self.assertEqual('new-operations', json.loads((self.target / 'releases/0.3.0/engines.json').read_text())['production-engine-01']['user'])
+
+    def test_failed_first_install_with_mismatched_credentials_still_refuses_retry(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        gateway = self.target / 'shared/secrets/pubgw_engine_admin_password'
+        gateway.write_text('legacy-test-credential\n')
+        before = gateway.read_bytes(), manager.state_path.read_bytes()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaisesRegex(self.module.IntegrityError, 'controlled RPC credential'):
+            self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertTrue(before == (gateway.read_bytes(), manager.state_path.read_bytes()))
+
+    def test_uninstall_without_purge_does_not_allow_missing_credentials_to_be_recreated(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(False, None)
+        private = self.target / 'shared/secrets'
+        (private / 'engine_admin_password').unlink()
+        (private / 'pubgw_engine_admin_password').unlink()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaisesRegex(self.module.IntegrityError, 'controlled RPC credential'):
+            manager.install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertFalse((private / 'engine_admin_password').exists())
+        self.assertFalse((private / 'pubgw_engine_admin_password').exists())
+
     def test_tls_probe_requires_the_deployment_specific_marker(self):
         class Response:
             status = 200

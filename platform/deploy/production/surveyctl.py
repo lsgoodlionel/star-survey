@@ -532,6 +532,8 @@ class SurveyManager:
             raise IntegrityError("installation state is corrupt") from exc
         if not isinstance(state, dict):
             raise IntegrityError("installation state must be an object")
+        if 'dataPurged' in state and not isinstance(state['dataPurged'], bool):
+            raise IntegrityError('installation purge state is invalid')
         for key in ("status", "version", "databaseSchema", "publicHost", "adminUser", "adminEmail"):
             if not isinstance(state.get(key), str) or not state[key]:
                 raise IntegrityError(f"installation state field is invalid: {key}")
@@ -995,7 +997,15 @@ class SurveyManager:
     def _configure_release(self, release: Path, manifest: ReleaseManifest, architecture: str, host: str, admin_user: str, admin_email: str) -> None:
         existing = self.state_path.exists() or self.state_path.is_symlink()
         if existing:
-            state = self._read_state(require_current=True)
+            state = self._read_state()
+            purged = state['status'] == 'uninstalled' and state.get('dataPurged') is True and not os.path.lexists(self.target / 'shared')
+            if purged:
+                existing = False
+            elif state['status'] == 'install_failed' and not os.path.lexists(self.current_path):
+                pass  # First startup failed after verified staging, before current.
+            else:
+                state = self._read_state(require_current=True)
+        if existing:
             current = self._release_dir(state['version'])
             self._verify_staged_release(current, state['version'])
             old_engines = json.loads((current / 'engines.json').read_text(encoding='utf-8'))
@@ -1147,6 +1157,7 @@ class SurveyManager:
             adminUser=admin_user,
             adminEmail=admin_email,
             expectedPublicAddresses=self.expected_public_addresses,
+            dataPurged=False,
         )
         compose = self._compose(manifest.version)
         try:
@@ -1639,7 +1650,7 @@ class SurveyManager:
                 self._write_state(status="purge_failed")
                 remaining = [str(path.relative_to(self.target)) for path in purge_paths if path.exists() or path.is_symlink()]
                 raise RuntimeHealthError(f"purge failed; managed data remains: {', '.join(remaining)}") from exc
-        self._write_state(status="uninstalled")
+        self._write_state(status="uninstalled", dataPurged=bool(purge_data))
 
 
 def _parse_tool_version(value: Any) -> tuple[int, int, int]:
