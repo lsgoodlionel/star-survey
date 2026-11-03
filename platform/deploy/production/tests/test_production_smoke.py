@@ -50,7 +50,7 @@ class ProductionSmokeTest(unittest.TestCase):
         def fake(command):
             if command[-1] == 'status':
                 raise subprocess.CalledProcessError(1, command, output='secret=fixture-private')
-            return SimpleNamespace(stdout='{"httpStatus":503,"requestCompleted":true,"edgeResolved":false,"gatewayResolved":true}')
+            return SimpleNamespace(stdout='{"httpStatus":503,"requestCompleted":true,"bodyHasError":false,"edgeResolved":false,"gatewayResolved":true}')
         result = self.module.engine_subprobes('fixture', runner=fake)
         self.assertEqual(503, result['httpStatus'])
         self.assertEqual(1, result['initStatusExitCode'])

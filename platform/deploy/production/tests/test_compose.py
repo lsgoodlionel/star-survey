@@ -594,9 +594,10 @@ echo json_encode($cases);
         result = subprocess.run([os.environ.get("TEST_PHP", "php"), "-r", script], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([True, True, False, False, False, False, False, False], json.loads(result.stdout))
-        self.assertIn("gethostbynamel('publish-gateway')", config)
+        self.assertIn("$resolve('publish-gateway')", config)
         self.assertIn("$trustedGatewayRequest(", config[end:])
-        self.assertIn("$applyTrustedScheme($_SERVER", config[end:])
+        self.assertIn("$resolveTrustedScheme($_SERVER", config[end:])
+        self.assertIn("$applyTrustedScheme($server", config[end:])
 
     def test_forwarded_scheme_policy_rejects_spoofing_and_restricts_plugins(self):
         config = (PRODUCTION_DIR / 'init' / 'config.production.php').read_text(encoding='utf-8')
@@ -628,6 +629,21 @@ echo json_encode([
         result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([[None,None],['https',None],[None,None],['https',None],[None,None],[None,None],[None,None],['https',None],[None,None],[None,None],[None,None]], json.loads(result.stdout))
+
+    def test_loopback_health_does_not_resolve_not_yet_started_edge(self):
+        config = (PRODUCTION_DIR / 'init' / 'config.production.php').read_text()
+        start = config.index('$trustedGatewayRequest = static function')
+        end = config.index('\n};', config.index('$resolveTrustedScheme = static function')) + len('\n};')
+        script = config[start:end] + r'''
+$calls = [];
+$resolver = static function ($name) use (&$calls) { $calls[] = $name; throw new RuntimeException('must not query startup DNS'); };
+$server = ['REMOTE_ADDR'=>'127.0.0.1','REQUEST_URI'=>'/production-health.php','REQUEST_METHOD'=>'GET','HTTP_X_FORWARDED_PROTO'=>'https','HTTP_FORWARDED_PROTO'=>'https'];
+$resolveTrustedScheme($server, $resolver);
+echo json_encode([$calls, isset($server['HTTP_X_FORWARDED_PROTO']), isset($server['HTTP_FORWARDED_PROTO'])]);
+'''
+        result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([[], False, False], json.loads(result.stdout))
 
     def test_engine_config_uses_real_survey_prefix_and_https_settings(self):
         config = (PRODUCTION_DIR / "init" / "config.production.php").read_text(

@@ -49,13 +49,14 @@ def attempt_cleanups(actions):
 
 def engine_subprobes(engine, runner=run):
     # Execute real checks but retain no response body, CLI output or addresses.
-    code = '''$c=stream_context_create(["http"=>["timeout"=>10,"follow_location"=>0,"ignore_errors"=>true]]);
+    code = '''$c=stream_context_create(["http"=>["timeout"=>2,"follow_location"=>0]]);
     $b=@file_get_contents("http://127.0.0.1/production-health.php",false,$c);
     $line=$http_response_header[0]??"";preg_match("#^HTTP/\\\\S+ ([0-9]{3})#",$line,$m);
     echo json_encode(["httpStatus"=>isset($m[1])?(int)$m[1]:0,"requestCompleted"=>$b!==false,
+    "bodyHasError"=>is_string($b)&&preg_match("/CException|CDbException|Fatal error|Parse error/i",$b)===1,
     "edgeResolved"=>@gethostbynamel("edge")!==false,"gatewayResolved"=>@gethostbynamel("publish-gateway")!==false]);'''
     value = json.loads(runner(['docker', 'exec', engine, 'php', '-r', code]).stdout)
-    if set(value) != {'httpStatus', 'requestCompleted', 'edgeResolved', 'gatewayResolved'} or type(value['httpStatus']) is not int or not 0 <= value['httpStatus'] <= 599 or any(type(value[k]) is not bool for k in ('requestCompleted', 'edgeResolved', 'gatewayResolved')):
+    if set(value) != {'httpStatus', 'requestCompleted', 'bodyHasError', 'edgeResolved', 'gatewayResolved'} or type(value['httpStatus']) is not int or not 0 <= value['httpStatus'] <= 599 or any(type(value[k]) is not bool for k in ('requestCompleted', 'bodyHasError', 'edgeResolved', 'gatewayResolved')):
         raise ValueError('engine subprobe output is invalid')
     try:
         runner(['docker', 'exec', engine, 'php', 'application/commands/console.php', 'productionInit', 'status'])
