@@ -274,7 +274,8 @@ class ProductProbe:
             self._answer(sid)
             phase = "response-projection"
             for _ in range(30):
-                self.runner.run(self.compose + ["exec", "-T", "engine", "php",
+                self.runner.run(self.compose + ["exec", "-T", "engine", '/bin/sh', '/opt/survey/run-with-secrets.sh',
+                                                'MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret', '--', 'php',
                                                 "application/commands/console.php", "plugin", "cron"],
                                 check=True, capture_output=True, text=True)
                 status, responses = self._api(

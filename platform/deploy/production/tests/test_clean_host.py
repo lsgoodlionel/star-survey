@@ -317,6 +317,15 @@ class DoctorAndCleanHostTest(unittest.TestCase):
         runner = DoctorRunner()
         events = []
 
+        original_run = runner.run
+        def secret_aware_run(command, **kwargs):
+            if 'plugin' in command and 'cron' in command and '/opt/survey/run-with-secrets.sh' not in command:
+                raise subprocess.CalledProcessError(1, command)
+            if 'plugin' in command and 'cron' in command:
+                self.assertIn('MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret', command)
+            return original_run(command, **kwargs)
+        runner.run = secret_aware_run
+
         class Probe(self.doctor.ProductProbe):
             def _api(probe, token, method, path, body=None, raw=False):
                 events.append((method, path))
