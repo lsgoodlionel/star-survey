@@ -42,6 +42,9 @@
     },
     "0.3.13-rc.1": {
       "mode": "bootstrap"
+    },
+    "0.3.14-rc.1": {
+      "mode": "bootstrap"
     }
   }
 }
