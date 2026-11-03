@@ -68,3 +68,51 @@ class ProductionSmokeTest(unittest.TestCase):
         self.assertIn('/opt/survey/run-with-secrets.sh', command)
         self.assertIn('PUBGW_ENGINE_ADMIN_PASSWORD=/run/secrets/pubgw_engine_admin_password', command)
         self.assertIn('PUBGW_ENGINE_CHANNEL_SECRET=/run/secrets/pubgw_engine_channel_secret', command)
+
+    def test_bridge_diagnostic_rejects_extra_response_data(self):
+        from types import SimpleNamespace
+        def runner(command):
+            return SimpleNamespace(stdout='{"rawBody":"private-fixture"}')
+        with self.assertRaises(ValueError):
+            self.module.bridge_diagnostic(['docker', 'compose'], runner=runner)
+
+    def test_bridge_diagnostic_retains_counts_and_status_without_payload(self):
+        from types import SimpleNamespace
+        def runner(command):
+            self.assertIn('/opt/survey/run-with-secrets.sh', command)
+            self.assertIn('MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret', command)
+            return SimpleNamespace(stdout='{"completedResponses":1,"recordedEvents":2,"pendingEvents":2,"deliveredEvents":0,"phase":"completed","errorCategory":"relay-rejected","httpStatus":403}')
+        result = self.module.bridge_diagnostic(['docker', 'compose'], runner=runner)
+        self.assertEqual(403, result['httpStatus'])
+        self.assertEqual(1, result['completedResponses'])
+
+    def test_actual_php_bridge_report_drops_log_payload(self):
+        import base64
+        import json
+        import os
+        import subprocess
+        source = SOURCE.parent.joinpath('smoke-commands/SmokeBridgeCommand.php').read_bytes()
+        script = r'''
+class CConsoleCommand {}
+class Yii { public static $app; public static function app(){return self::$app;} }
+class Survey { public static function model(){return new self;} public function findAllByAttributes($a){return [];} }
+class FixtureDb {
+ public $tablePrefix='lime_'; public function quoteTableName($t){return $t;}
+ public function createCommand($q){return new class($q){private $q;public function __construct($q){$this->q=$q;}public function queryScalar(){return strpos($this->q,'IS NOT NULL')!==false?0:2;}};}
+}
+class FixtureApp { public $runtimePath; public function getDb(){return new FixtureDb;} }
+$dir=sys_get_temp_dir().'/bridge-fixture-'.bin2hex(random_bytes(8));mkdir($dir);
+file_put_contents($dir.'/application.log','secret=private-fixture Event delivery rejected with HTTP 403: sensitive response');
+Yii::$app=new FixtureApp;Yii::$app->runtimePath=$dir;
+eval('?>'.base64_decode(''' + "'" + base64.b64encode(source).decode() + "'" + r'''));
+(new SmokeBridgeCommand)->actionIndex();
+unlink($dir.'/application.log');rmdir($dir);
+'''
+        result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(403, report['httpStatus'])
+        self.assertEqual(2, report['pendingEvents'])
+        self.assertEqual(0, report['deliveredEvents'])
+        self.assertNotIn('private-fixture', result.stdout)
+        self.assertNotIn('sensitive response', result.stdout)

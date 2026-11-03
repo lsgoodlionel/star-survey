@@ -84,6 +84,25 @@ except Exception:
            'PUBGW_ENGINE_CHANNEL_SECRET=/run/secrets/pubgw_engine_channel_secret', '--', 'python', '-c', script])
 
 
+def bridge_diagnostic(compose, runner=run):
+    result = runner(compose + ['exec', '-T', '-e',
+        'YII_CONSOLE_COMMANDS=/var/www/html/platform/deploy/production/smoke-commands', 'engine',
+        '/bin/sh', '/opt/survey/run-with-secrets.sh',
+        'MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret', '--',
+        'php', 'application/commands/console.php', 'smokeBridge'])
+    value = json.loads(result.stdout)
+    counts = {'completedResponses', 'recordedEvents', 'pendingEvents', 'deliveredEvents'}
+    if not isinstance(value, dict) or set(value) != counts | {'phase', 'errorCategory', 'httpStatus'}:
+        raise ValueError('bridge diagnostic fields are invalid')
+    if any(type(value[k]) is not int or not 0 <= value[k] <= 1000000 for k in counts):
+        raise ValueError('bridge diagnostic counts are invalid')
+    if value['phase'] not in {'inspect', 'completed'} or value['errorCategory'] not in {None, 'RuntimeException', 'CDbException', 'CException', 'other', 'relay-rejected'}:
+        raise ValueError('bridge diagnostic classes are invalid')
+    if value['httpStatus'] is not None and (type(value['httpStatus']) is not int or not 100 <= value['httpStatus'] <= 599):
+        raise ValueError('bridge diagnostic status is invalid')
+    return {'schemaVersion': 1, **value}
+
+
 def main():
     require_disposable_runner(os.environ)
     root = Path(__file__).resolve().parents[3]
@@ -179,6 +198,10 @@ def main():
     except Exception as exc:
         error = type(exc).__name__
         if compose:
+            try:
+                (evidence / 'bridge-diagnostic.json').write_text(json.dumps(bridge_diagnostic(compose), indent=2) + '\n')
+            except Exception:
+                pass  # Diagnostic unavailable; original journey remains failed.
             try:
                 engine = run(compose + ['ps', '-aq', 'engine']).stdout.strip()
                 health = json.loads(run(['docker', 'inspect', '--format', '{{json .State.Health}}', engine]).stdout)
