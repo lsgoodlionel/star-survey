@@ -68,15 +68,32 @@ write_doctor_evidence() {
   if [[ "$doctor_status" -ne 0 ]]; then
     return "$doctor_status"
   fi
-  python3 - "$evidence_root/${label}.json" <<'PY'
+  python3 - "$evidence_root/${label}.json" "$label" <<'PY'
 import json
 from pathlib import Path
 import sys
 
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-checks = {item.get("id"): item for item in report.get("checks", []) if isinstance(item, dict)}
-if report.get("status") != "ok" or checks.get("tls", {}).get("status") != "ok" or checks.get("minimal-probe", {}).get("status") != "ok":
-    raise SystemExit("doctor HTTPS marker or minimal product journey did not pass")
+required = {"ports", "internal-exposure", "runtime-exposure", "tls", "containers",
+            "migrations", "volumes", "backups", "minimal-probe"}
+items = report.get("checks", [])
+if (not isinstance(items, list) or len(items) != len(required)
+        or any(not isinstance(item, dict) or item.get("id") not in required for item in items)):
+    raise SystemExit("doctor required check set is invalid")
+checks = {item["id"]: item for item in items}
+if set(checks) != required:
+    raise SystemExit("doctor required check set is missing or duplicated")
+all_ok = report.get("status") == "ok" and all(item.get("status") == "ok" for item in items)
+# A clean installation has no backup before the next lifecycle step creates it.
+# This exception is exact and first-install-only; later checks must verify backup.
+initial_backup_warning = (
+    sys.argv[2] == "doctor-installed" and report.get("status") == "warning"
+    and checks["backups"].get("status") == "warning"
+    and checks["backups"].get("summary") == "no completed backup exists yet"
+    and all(checks[name].get("status") == "ok" for name in required - {"backups"})
+)
+if not (all_ok or initial_backup_warning):
+    raise SystemExit("doctor required health, TLS, product journey or backup checks did not pass")
 PY
 }
 

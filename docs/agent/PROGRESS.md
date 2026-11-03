@@ -209,3 +209,10 @@ run 41607123060 在真实作答后的 response-projection 阶段失败；清理�
 单变量补建目录后，未修改的真实 ProductProbe 完整通过发布、作答、投影、导出下载和清理，3 条事件全部 delivered。正式修复在 engine-init.sh 数据库状态判断前执行 productionInit directories，以配置中的 userthemerootdir 幂等准备目录；已完成安装也先修复目录再短路，已有文件不覆盖，路径冲突或不可用则失败。实际修订 engine-init.sh 连续执行两次后，真实旅程再次通过，目录存在、事件 3/3 delivered，全部自建容器/网络清理成功；未修改上游引擎源码。该隔离实验使用本机 ARM64 Alpine 旧构建镜像（CLI 入口三文件哈希与当前源码相同）、当前源码平台 JAR/插件和初始化配置；本地 LibreSSL 显式信任当次临时 Caddy CA。它不替代 PR amd64 source smoke、签名候选或原生四平台升级/恢复验收。
 
 永久回归实际调用未修改的 SurveyThemeHelper，确认缺目录失败、初始化后正常、重复调用保留已有文件、普通文件占位拒绝。Compose/初始化 24 项通过（新增真实 helper 用例随后单独再验证）；smoke 15 项通过。另修复诊断响应表名、30秒命令超时，以及诊断写盘 OSError 不得阻断实际 ProductProbe 的 engine close 与项目 archive；缺失证据仍不能通过 smoke。推送后需精确 head 的常规 CI、真实 amd64 smoke及独立审查通过，禁止提前标记生产或 Wave 6 accepted。未新建候选标签、发布镜像或 GitHub Release，人工读屏仍待。
+
+
+## Wave 6 rc.11 首次 doctor 验收状态契约修复（2026-11-03，待审）
+
+`v0.3.11-rc.1` run 41622779286 的 Ubuntu 22.04/24.04 × amd64/arm64 四份脱敏报告一致：端口、内部/运行时隔离、TLS、容器、迁移、卷、真实最小业务旅程全部 OK；仅 backups 为首次安装预期的 warning（no completed backup exists yet）。四份失败步骤日志均为同一条 doctor 总状态断言，退出 1、lastStep=doctor-installed，尚未执行 backup、升级或恢复。既有业务/cron修复已在四平台实际候选旅程中通过，但失败候选仍不可当作已验收或升级前代。
+
+Doctor 的首次无备份 warning 与 native_acceptance.sh 的“总状态必须 ok”契约冲突，导致脚本在创建第一份备份前拒绝。修复仅允许 doctor-installed 阶段出现这一项确切 warning，要求 9 项必需检查唯一且齐全、其余 8 项均 OK；doctor-upgraded/restored 仍要求全部 OK，其他 warning/blocked、缺项、重复项与非零 CLI 均拒绝。原始脱敏报告继续落盘，不将 warning 改写为 OK。永久测试从实际 Doctor._backup_check 生成预期首次 warning 并执行实际 shell 函数；27 项定向测试通过，其中覆盖 14 个状态/阶段组合及 exit4 原样保留。四份本轮报告回放均验证“首次可继续、恢复同报告拒绝”。不执行候选重建、不移动旧标签、不发布 Release；修订需独立审查与 GitHub CI，后续真实备份/恢复与完整四平台生命周期仍未验收。
