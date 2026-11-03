@@ -212,6 +212,7 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn("releases", policy)
         self.assertEqual({"mode": "bootstrap"}, policy["releases"].get("0.3.2-rc.1"))
         self.assertEqual({"mode": "bootstrap"}, policy["releases"].get("0.3.8-rc.1"))
+        self.assertEqual({"mode": "bootstrap"}, policy["releases"].get("0.3.9-rc.1"))
         for version, rule in policy["releases"].items():
             with self.subTest(version=version):
                 self.assertIn(rule["mode"], {"predecessor", "bootstrap"})
