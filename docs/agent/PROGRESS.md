@@ -240,3 +240,14 @@ PR #62 source smoke 41643463444 已越过备份写服务恢复，但恢复级校
 ## Wave 6 rc.13 bootstrap 准备（2026-11-03，待审）
 
 PR #62 已合并为 7ac22e2c7cfe7cd77ab2a98c8548675ee8151fbd，包含暂停后健康恢复等待和source-only备份完整性烟测。登记未占用的0.3.13-rc.1 bootstrap，下一候选包须包含该代码及现有严格原生验收脚本；失败rc.12不作为已验收前代。现有构建/原生工作流未改变，复用旧candidate_run_id会提取旧包内脚本与backup.py，不能验证新修复；因此不引入来源替换、声明例外或新权限，沿用受支持同run候选流程。当前仅最小策略、回归和记录；最终标签必须绑定本策略实际合并并检查成功的commit，再次确认未占用后另行触发。bootstrap不能晋升或证明升级验收，不创建标签、镜像、Release或生产操作。
+
+
+## Wave 6 MariaDB sandbox dump 头兼容（2026-11-03，待审）
+
+PR63 合并提交 ced520626f82fcc9e29c9df27193534f48c8bcd8 的 CI41658511395 全17成功、实际main smoke41658691114成功；v0.3.13-rc.1 尚未创建。候选前格式预检发现现有restore仅接受--开头，而固定MariaDB10.11.14官方源码 client/mysqldump.c:726 在非XML dump前写 sandbox 指令头（https://github.com/MariaDB/server/blob/mariadb-10.11.14/client/mysqldump.c#L726）。缓存10.11.19空库实际输出同类头，现有认证测试夹具实际复现 MariaDB dump format is invalid。
+
+最小修复只识别字节精确的官方 sandbox 首行（允许行尾空白），且后续仍须为既有-- dump头；原始SQL及安全sandbox指令不改写、不剥除。未知版本号/任意块注释、重复指令、缺失反斜线、同一行SQL/客户端命令、仅有头而无后续dump均拒绝。认证控制、floor、PostgreSQL和归档校验不变。先失败后通过；28项备份/恢复、18项smoke、27项native通过。真实10.11.19 dump经过现有测试夹具的实际验证器通过并原样保留，不冒称10.11.14动态结果。
+
+本机10.11.14镜像拉取仍未完成；既有生产smoke现将实际engine-db容器的mariadb-dump --version解析为精确版本，并与固定10.11.14匹配，拒绝10.11.19或模糊版本；证据记录实际客户端版本、镜像digest及实际解密SQL的头分类。该动态证据等待新head CI，source的restorationEligible/releaseAcceptance仍false。
+
+完整真实双库格式对照另发现现有docker cp目录归档产生./前缀，被未修改的归档规范拒绝 volume archive contains an unsafe path；独立无网络容器复现，非敏感合成归档保留于 /tmp/w6-docker-cp-format-fixture.tar。该规则本次不放宽，属于后续待父任务协调的格式契约问题；不能将本次头兼容或source smoke标为完整恢复通过，候选标签仍保持未创建。
