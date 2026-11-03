@@ -534,6 +534,8 @@ class SurveyManager:
             raise IntegrityError("installation state must be an object")
         if 'dataPurged' in state and not isinstance(state['dataPurged'], bool):
             raise IntegrityError('installation purge state is invalid')
+        if 'pointerlessUninstall' in state and not isinstance(state['pointerlessUninstall'], bool):
+            raise IntegrityError('installation uninstall lineage is invalid')
         for key in ("status", "version", "databaseSchema", "publicHost", "adminUser", "adminEmail"):
             if not isinstance(state.get(key), str) or not state[key]:
                 raise IntegrityError(f"installation state field is invalid: {key}")
@@ -1001,7 +1003,8 @@ class SurveyManager:
             purged = state['status'] == 'uninstalled' and state.get('dataPurged') is True and not os.path.lexists(self.target / 'shared')
             if purged:
                 existing = False
-            elif state['status'] == 'install_failed' and not os.path.lexists(self.current_path):
+            elif not os.path.lexists(self.current_path) and (state['status'] == 'install_failed' or (
+                state['status'] == 'uninstalled' and state.get('pointerlessUninstall') is True)):
                 pass  # First startup failed after verified staging, before current.
             else:
                 state = self._read_state(require_current=True)
@@ -1158,6 +1161,7 @@ class SurveyManager:
             adminEmail=admin_email,
             expectedPublicAddresses=self.expected_public_addresses,
             dataPurged=False,
+            pointerlessUninstall=False,
         )
         compose = self._compose(manifest.version)
         try:
@@ -1617,7 +1621,8 @@ class SurveyManager:
         # A first install can fail after starting Compose but before writing its
         # current pointer. The recorded release is still integrity checked by
         # _compose; all other states retain the current-pointer invariant.
-        if state['status'] != 'install_failed' or os.path.lexists(self.current_path):
+        pointerless = state['status'] == 'install_failed' and not os.path.lexists(self.current_path)
+        if not pointerless:
             state = self._read_state(require_current=True)
         command = self._compose(state["version"]) + ["down", "--remove-orphans"]
         purge_paths = [self.target / "shared", self.target / "backups"]
@@ -1650,7 +1655,7 @@ class SurveyManager:
                 self._write_state(status="purge_failed")
                 remaining = [str(path.relative_to(self.target)) for path in purge_paths if path.exists() or path.is_symlink()]
                 raise RuntimeHealthError(f"purge failed; managed data remains: {', '.join(remaining)}") from exc
-        self._write_state(status="uninstalled", dataPurged=bool(purge_data))
+        self._write_state(status="uninstalled", dataPurged=bool(purge_data), pointerlessUninstall=pointerless)
 
 
 def _parse_tool_version(value: Any) -> tuple[int, int, int]:

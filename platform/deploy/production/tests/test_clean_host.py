@@ -110,6 +110,18 @@ class DoctorRunner:
 
 
 class DoctorAndCleanHostTest(unittest.TestCase):
+    def test_public_answer_http_failure_preserves_only_status(self):
+        module = load_doctor()
+        probe = module.ProductProbe('.', 'fixture.invalid', [], DoctorRunner())
+        failure = urllib.error.HTTPError('https://fixture.invalid/?token=private-test', 403,
+                                         'private-response-detail', {}, None)
+        with mock.patch.object(module.urllib.request, 'build_opener') as factory:
+            factory.return_value.open.side_effect = failure
+            with self.assertRaises(module.ProbeHttpError) as caught:
+                probe._answer(123)
+        self.assertEqual(403, caught.exception.status)
+        self.assertNotIn('private', str(caught.exception))
+
     def setUp(self):
         self.doctor = load_doctor()
         self.tmp = tempfile.TemporaryDirectory()

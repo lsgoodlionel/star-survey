@@ -206,6 +206,8 @@ class ProductProbe:
                     url = response.geturl()
                 if "completed-wrapper" in html:
                     return
+        except urllib.error.HTTPError as exc:
+            raise ProbeHttpError(exc.code) from None
         except (OSError, urllib.error.URLError) as exc:
             raise DoctorRuntimeError("product probe public answer failed") from exc
         raise DoctorRuntimeError("product probe public answer did not complete")

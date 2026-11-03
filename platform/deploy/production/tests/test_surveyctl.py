@@ -674,6 +674,44 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.assertEqual('0.3.0', manager.current_path.read_text().strip())
         self.assertTrue(all((private / name).read_bytes() == value for name, value in before.items()))
 
+    def test_pointerless_failed_install_uninstall_then_reinstall_preserves_identity(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(False, None)
+        self.assertFalse(manager.current_path.exists())
+        private = self.target / 'shared/secrets'
+        before = {p.name: p.read_bytes() for p in private.iterdir() if p.is_file()}
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertTrue(all((private / name).read_bytes() == value for name, value in before.items()))
+        self.assertEqual('0.3.0', manager.current_path.read_text().strip())
+
+    def test_pointerless_uninstall_lineage_still_rejects_tampered_release(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(False, None)
+        state_before = manager.state_path.read_bytes()
+        (self.target / 'releases/0.2.0/engines.json').write_text('{}')
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertTrue(state_before == manager.state_path.read_bytes())
+        self.assertFalse(manager.current_path.exists())
+
+    def test_ordinary_uninstall_with_removed_current_is_not_failed_install_lineage(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        manager.uninstall(False, None)
+        manager.current_path.unlink()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaises(self.module.InputError):
+            manager.install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
+
     def test_successful_purge_allows_fresh_new_version_install(self):
         initial, _ = self.write_bundle_manifest()
         manager = self.manager()
