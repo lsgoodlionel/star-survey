@@ -565,6 +565,36 @@ class ProductionComposeTest(unittest.TestCase):
                 self.assertEqual(1, calls.count("productionInit complete"))
                 self.assertNotIn("fixture-admin-password", "\n".join(calls))
 
+    def test_engine_init_prepares_theme_directory_before_completed_status(self):
+        source = (PRODUCTION_DIR / 'init' / 'engine-init.sh').read_text()
+        self.assertLess(source.index('productionInit directories'), source.index('productionInit status'))
+
+    def test_real_php_theme_directory_preparation_is_idempotent_and_fails_on_file(self):
+        import base64
+        source = (PRODUCTION_DIR / 'init' / 'ProductionInitCommand.php').read_bytes()
+        helper = (PRODUCTION_DIR.parents[2] / 'application/helpers/SurveyThemeHelper.php').read_bytes()
+        script = r'''class CConsoleCommand {}
+class CException extends Exception {}
+class Yii {public static $path;public static function import($v){}public static function app(){return new self;}public function getConfig($key){return self::$path;}}
+eval('?>'.base64_decode(''' + "'" + base64.b64encode(source).decode() + "'" + r'''));
+$root=sys_get_temp_dir().'/theme-init-'.bin2hex(random_bytes(8));mkdir($root);
+Yii::$path=$root.'/themes/survey';$command=new ProductionInitCommand;
+eval('?>'.base64_decode(''' + "'" + base64.b64encode(helper).decode() + "'" + r'''));
+set_error_handler(function(){throw new RuntimeException('missing-theme-directory');});
+try{SurveyThemeHelper::getTemplateInFolder(Yii::$path);exit(14);}catch(RuntimeException $expected){}
+restore_error_handler();
+if($command->actionDirectories()!==0 || !is_dir(Yii::$path))exit(10);
+if(SurveyThemeHelper::getTemplateInFolder(Yii::$path)!==[])exit(15);
+file_put_contents(Yii::$path.'/sentinel','fixture');
+if($command->actionDirectories()!==0 || file_get_contents(Yii::$path.'/sentinel')!=='fixture')exit(11);
+unlink(Yii::$path.'/sentinel');rmdir(Yii::$path);file_put_contents(Yii::$path,'fixture-file');
+try{$command->actionDirectories();exit(12);}catch(CException $expected){}
+if(file_get_contents(Yii::$path)!=='fixture-file')exit(13);
+unlink(Yii::$path);rmdir($root.'/themes');rmdir($root);echo 'DIRECTORIES_OK';'''
+        result = subprocess.run([os.environ.get('TEST_PHP', 'php'), '-r', script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('DIRECTORIES_OK', result.stdout)
+
     def test_engine_init_distinguishes_empty_database_from_partial_schema(self):
         source = (PRODUCTION_DIR / "init" / "ProductionInitCommand.php").read_text(
             encoding="utf-8"

@@ -140,18 +140,39 @@ unlink($dir.'/application.log');rmdir($dir);
         self.assertNotIn('123', str(report))
 
     def test_diagnostic_write_failure_does_not_interrupt_full_cleanup(self):
+        import sys
+        from types import SimpleNamespace
         from unittest.mock import patch
+        sys.path.insert(0, str(SOURCE.parent))
+        try:
+            from doctor import ProductProbe, DoctorRuntimeError, ProbeStageError
+        finally:
+            sys.path.pop(0)
         calls = []
-        class Base:
-            compose = []
-            def _close_engine_survey(self, instance, sid):
-                calls.append('engine-close')
-            def run(self):
-                self._close_engine_survey('fixture', 123)
-                calls.append('project-archive')
-        observed = self.module.observed_probe_class(Base, Path('/unused'), lambda *_: {})
+        base = self.module.observed_probe_class(ProductProbe, Path('/unused'), lambda *_: {})
+        class Fixture(base):
+            def _configuration(self):
+                return {}
+            def _token(self, config):
+                return 'fixture-token'
+            def _api(self, token, method, path, body=None, raw=False):
+                if path.endswith('/archive'):
+                    calls.append('project-archive')
+                    return 200, {}
+                if path.endswith('/publish'):
+                    return 200, {'version': {'engineSid': 123, 'engineInstanceId': 'fixture-engine'}}
+                if path == '/v1/projects':
+                    return 201, {'id': 'fixture-project'}
+                if path == '/v1/surveys':
+                    return 201, {'id': 'fixture-survey'}
+                return 200, {}
+            def _answer(self, sid):
+                raise DoctorRuntimeError('fixture answer failure')
+        runner = SimpleNamespace(run=lambda *args, **kwargs: calls.append('engine-close'))
         with patch.object(Path, 'write_text', side_effect=OSError('fixture write failure')):
-            observed().run()
+            with self.assertRaises(ProbeStageError) as failure:
+                Fixture(Path('/unused'), 'fixture.invalid', [], runner).run()
+        self.assertEqual('answer', failure.exception.stage)
         self.assertEqual(['engine-close', 'project-archive'], calls)
 
     def test_diagnostic_timeout_still_allows_cleanup(self):

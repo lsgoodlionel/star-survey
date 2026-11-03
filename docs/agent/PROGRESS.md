@@ -200,3 +200,12 @@ PR #51 的 CI run 41553006902 中 `DeliveryRateLimitTest` 首轮预期 2 条、�
 `v0.3.9-rc.1` run 41571133456 的四平台迁移检查均 OK，唯一 blocked 是最小业务探针 publish HTTP 502。隔离真实网关与引擎在相同 `force_ssl=on` 下复现网关到引擎内部 HTTP 被重定向至不可用 HTTPS，发布导入返回 502；仅给已解析为 `publish-gateway` 的直连来源、指定方法与 RemoteControl/插件通道路径设置 HTTPS 上下文后发布 200，非网关请求仍重定向。隔离真实平台、网关、MySQL 引擎的探针发布、作答、投影、导出和清理旅程通过，测试以本地 HTTP 反向代理模拟边缘 TLS 终止，不代替原生四平台验收。临时容器、网络和镜像标签已清理。
 
 修改仅作用于引擎生产配置中的内部网关上下文，不关闭 force_ssl，不修改 RemoteControl 凭据或插件签名验证；其信任边界是单机 Docker 网络的服务发现与源地址，需要独立安全审查。生产 Compose 19 项、doctor 15 项、原生验收测试 22 项通过；PHP 边界测试覆盖来源、方法、路径和 DNS 无结果。仍须新的已授权候选验证，不将旧候选标为通过或前代。
+
+
+## Wave 6 生产 smoke 事件链根因修复（2026-11-03，PR #59 待审）
+
+run 41607123060 在真实作答后的 response-projection 阶段失败；清理前本轮事件 3 条均 pending，不能将错误响应表名产生的 completedResponses=0 解释为未提交。隔离当前源码平台 + PostgreSQL、生产 Alpine 引擎 + MariaDB、真实网关与原生产 Caddy 配置，使用真实 setup-probe 和原 ProductProbe，复现相同的 3 条事件未投递。直接合成事件/cron可投递，进一步定位实际 cron 在加载 Survey 的主题配置时退出：生产镜像排除 upload 内容，初始化未建立 upload/themes/survey，SurveyThemeHelper 的 opendir 在 CLI 严格错误路径失败，中继尚未执行。
+
+单变量补建目录后，未修改的真实 ProductProbe 完整通过发布、作答、投影、导出下载和清理，3 条事件全部 delivered。正式修复在 engine-init.sh 数据库状态判断前执行 productionInit directories，以配置中的 userthemerootdir 幂等准备目录；已完成安装也先修复目录再短路，已有文件不覆盖，路径冲突或不可用则失败。实际修订 engine-init.sh 连续执行两次后，真实旅程再次通过，目录存在、事件 3/3 delivered，全部自建容器/网络清理成功；未修改上游引擎源码。该隔离实验使用本机 ARM64 Alpine 旧构建镜像（CLI 入口三文件哈希与当前源码相同）、当前源码平台 JAR/插件和初始化配置；本地 LibreSSL 显式信任当次临时 Caddy CA。它不替代 PR amd64 source smoke、签名候选或原生四平台升级/恢复验收。
+
+永久回归实际调用未修改的 SurveyThemeHelper，确认缺目录失败、初始化后正常、重复调用保留已有文件、普通文件占位拒绝。Compose/初始化 24 项通过（新增真实 helper 用例随后单独再验证）；smoke 15 项通过。另修复诊断响应表名、30秒命令超时，以及诊断写盘 OSError 不得阻断实际 ProductProbe 的 engine close 与项目 archive；缺失证据仍不能通过 smoke。推送后需精确 head 的常规 CI、真实 amd64 smoke及独立审查通过，禁止提前标记生产或 Wave 6 accepted。未新建候选标签、发布镜像或 GitHub Release，人工读屏仍待。
