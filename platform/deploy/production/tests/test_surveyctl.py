@@ -595,6 +595,63 @@ class SurveyctlAdversarialTest(unittest.TestCase):
             self.assertTrue((private / 'engine_admin_password').read_bytes() ==
                             (private / 'pubgw_engine_admin_password').read_bytes(), 'RPC credential must match engine identity')
 
+    def test_existing_rpc_mismatch_refuses_upgrade_without_shared_changes(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        (self.target / 'shared/secrets/pubgw_engine_admin_password').write_text('legacy-different-test-value\n')
+        def snapshot():
+            paths = [*self.target.joinpath('shared').rglob('*'), manager.state_path, manager.current_path]
+            return {str(p.relative_to(self.target)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.is_file()}
+        before = snapshot()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaisesRegex(self.module.IntegrityError, 'controlled.*RPC'):
+            manager.upgrade(next_manifest)
+        self.assertTrue(before == snapshot(), 'existing credentials, projections and state must remain unchanged')
+
+    def test_backup_failure_preserves_matching_rpc_credentials_and_runtime(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        paths = [p for p in (self.target / 'shared').rglob('*') if p.is_file()]
+        paths += [manager.state_path, manager.current_path]
+        before = {p: p.read_bytes() for p in paths}
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with mock.patch.object(manager, 'backup', side_effect=self.module.RuntimeHealthError('fixture backup failure')):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                manager.upgrade(next_manifest)
+        self.assertTrue(all(p.read_bytes() == content for p, content in before.items()), 'backup failure must preserve existing runtime')
+
+    def test_legacy_gateway_username_requires_controlled_reconciliation(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        current = self.target / 'releases/0.2.0'
+        engines = json.loads((current / 'engines.json').read_text())
+        engines['production-engine-01']['user'] = 'legacy-rpc-user'
+        (current / 'engines.json').write_text(json.dumps(engines))
+        integrity = json.loads((current / 'deployment-integrity.json').read_text())
+        integrity['generatedFiles']['engines.json'] = hashlib.sha256((current / 'engines.json').read_bytes()).hexdigest()
+        (current / 'deployment-integrity.json').write_text(json.dumps(integrity))
+        before = manager.state_path.read_bytes(), manager.current_path.read_bytes(), (current / 'engines.json').read_bytes()
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with self.assertRaisesRegex(self.module.IntegrityError, 'controlled RPC identity'):
+            manager.upgrade(next_manifest)
+        self.assertTrue(before == (manager.state_path.read_bytes(), manager.current_path.read_bytes(), (current / 'engines.json').read_bytes()))
+
+    def test_staging_failure_preserves_rpc_secrets_and_runtime(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        paths = [p for p in (self.target / 'shared').rglob('*') if p.is_file()]
+        paths += [manager.state_path, manager.current_path]
+        before = {p: p.read_bytes() for p in paths}
+        next_manifest, _ = self.write_bundle_manifest('0.3.0')
+        with mock.patch.object(manager, '_sync_runtime_secrets', side_effect=self.module.RuntimeHealthError('fixture stage failure')):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                manager.upgrade(next_manifest)
+        self.assertTrue(all(p.read_bytes() == content for p, content in before.items()), 'staging failure must preserve existing runtime')
+
     def test_failed_install_can_uninstall_without_current_pointer(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager(probe=FakeHostProbe(tls_valid=False))

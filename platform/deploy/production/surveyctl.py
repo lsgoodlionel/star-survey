@@ -993,6 +993,25 @@ class SurveyManager:
         return final
 
     def _configure_release(self, release: Path, manifest: ReleaseManifest, architecture: str, host: str, admin_user: str, admin_email: str) -> None:
+        existing = self.state_path.exists() or self.state_path.is_symlink()
+        if existing:
+            state = self._read_state(require_current=True)
+            current = self._release_dir(state['version'])
+            self._verify_staged_release(current, state['version'])
+            old_engines = json.loads((current / 'engines.json').read_text(encoding='utf-8'))
+            old_engine = old_engines.get('production-engine-01') if isinstance(old_engines, dict) else None
+            if not isinstance(old_engine, dict) or old_engine.get('user') != admin_user:
+                raise IntegrityError('controlled RPC identity reconciliation is required before staging')
+        canonical = self._managed('shared/secrets/engine_admin_password')
+        gateway = self._managed('shared/secrets/pubgw_engine_admin_password')
+        if existing or gateway.exists() or gateway.is_symlink():
+            for path in (canonical, gateway):
+                if not path.exists() or path.is_symlink():
+                    raise IntegrityError('controlled RPC credential reconciliation is required before staging')
+                _regular_file(path, 'RPC credential')
+                self._reject_symlink_components(path)
+            if not secrets.compare_digest(canonical.read_bytes().rstrip(b'\r\n'), gateway.read_bytes().rstrip(b'\r\n')):
+                raise IntegrityError('controlled RPC credential reconciliation is required before staging')
         example = release / "engines.example.json"
         _regular_file(example, "engine configuration template")
         try:
@@ -1011,8 +1030,11 @@ class SurveyManager:
                 self._atomic_write(path, secrets.token_urlsafe(48) + "\n")
         # RemoteControl authenticates the same account initialized by engine-init.
         # Keep a separate per-service projection, with the canonical engine secret.
-        self._atomic_write(secret_dir / 'pubgw_engine_admin_password',
-                           (secret_dir / 'engine_admin_password').read_text(encoding='utf-8'))
+        if not gateway.exists():
+            self._atomic_create_once(gateway, canonical.read_text(encoding='utf-8'))
+        _regular_file(gateway, 'RPC credential')
+        if not secrets.compare_digest(canonical.read_bytes().rstrip(b'\r\n'), gateway.read_bytes().rstrip(b'\r\n')):
+            raise IntegrityError('controlled RPC credential reconciliation is required before staging')
         probe_installation = self._managed("shared/probe-installation.json")
         if not probe_installation.exists() and not probe_installation.is_symlink():
             self._atomic_create_once(probe_installation, json.dumps({"installationId": str(uuid.uuid4())}, sort_keys=True) + "\n")

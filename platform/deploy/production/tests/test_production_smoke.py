@@ -55,3 +55,16 @@ class ProductionSmokeTest(unittest.TestCase):
         self.assertEqual(503, result['httpStatus'])
         self.assertEqual(1, result['initStatusExitCode'])
         self.assertNotIn('fixture-private', str(result))
+
+    def test_rpc_precheck_uses_secret_file_wrapper_and_preserves_failure(self):
+        import subprocess
+        commands = []
+        def failing(command):
+            commands.append(command)
+            raise subprocess.CalledProcessError(1, command)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.module.check_gateway_rpc(['docker','compose'], runner=failing)
+        command = commands[0]
+        self.assertIn('/opt/survey/run-with-secrets.sh', command)
+        self.assertIn('PUBGW_ENGINE_ADMIN_PASSWORD=/run/secrets/pubgw_engine_admin_password', command)
+        self.assertIn('PUBGW_ENGINE_CHANNEL_SECRET=/run/secrets/pubgw_engine_channel_secret', command)
