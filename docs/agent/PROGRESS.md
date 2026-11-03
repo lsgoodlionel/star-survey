@@ -182,3 +182,9 @@ PR #51 的 CI run 41553006902 中 `DeliveryRateLimitTest` 首轮预期 2 条、�
 ## Wave 6 后续 bootstrap 策略（2026-11-03，待审）
 
 登记 `0.3.8-rc.1` 为包含 PR #51 doctor 诊断证据修复的下一测试 bootstrap；候选只允许在本策略合并且该合并提交 CI 通过后另行触发。先前 `v0.3.7-rc.1` 原生 doctor 失败，不能作为升级前代；bootstrap 不具有升级证据、不能晋升或发布。此策略不创建标签、发布镜像或 GitHub Release。
+
+## Wave 6 候选 doctor 双阻断调查（2026-11-03，待审）
+
+`v0.3.8-rc.1` run 41561527713 的四份脱敏 doctor 报告均显示 `migrations=blocked`、`minimal-probe=blocked`；端口、内部与运行时隔离、TLS、容器和卷均正常，未备份为 warning。引擎 `productionInit status` 的成功契约是退出码 0，可无 stdout；doctor 原先误要求输出文字。修复按退出码检查引擎且继续要求数据库 schema 精确匹配，失败时仅记录数字 schema 和状态。候选报告未包含两侧实际值，因此不能证明这已解释所有迁移阻断。
+
+业务探针原始报告只有泛化错误，无法判断发生在哪个步骤；新增固定阶段及 HTTP 状态码白名单，禁止保存 HTTP body、地址或凭据，失败和清理异常仍阻断。当前尚未确认业务探针根因，不得将此补丁或旧候选标记为生产通过或升级前代；下一步需独立评审并取得充分的具体阶段证据，不能仅凭假设盲目宣称修复。

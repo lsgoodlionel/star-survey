@@ -5,6 +5,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+import urllib.error
 
 
 PRODUCTION_DIR = Path(__file__).resolve().parents[1]
@@ -148,6 +150,30 @@ class DoctorAndCleanHostTest(unittest.TestCase):
         containers = next(item for item in report["checks"] if item["id"] == "containers")
         self.assertEqual("ok", containers["status"])
 
+    def test_migrations_accept_silent_successful_engine_status_and_require_exact_database_version(self):
+        class SilentEngineRunner(DoctorRunner):
+            def run(runner, command, **kwargs):
+                if "productionInit status" in " ".join(command):
+                    return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+                return super().run(command, **kwargs)
+
+        doctor = self.doctor.Doctor(self.target, runner=SilentEngineRunner(migration="953"))
+        self.assertEqual("ok", doctor._migration_check(["docker", "compose"], "953")["status"])
+        mismatch = doctor._migration_check(["docker", "compose"], "952")
+        self.assertEqual("blocked", mismatch["status"])
+        self.assertIn("expected=952", mismatch["summary"])
+        self.assertIn("actual=953", mismatch["summary"])
+        invalid = self.doctor.Doctor(self.target, runner=SilentEngineRunner(migration="sensitive-raw"))
+        self.assertNotIn("sensitive-raw", invalid._migration_check(["docker", "compose"], "952")["summary"])
+
+        class FailedEngineRunner(SilentEngineRunner):
+            def run(runner, command, **kwargs):
+                if "productionInit status" in " ".join(command):
+                    return subprocess.CompletedProcess(command, 20, stdout="completed", stderr="")
+                return super().run(command, **kwargs)
+        failed = self.doctor.Doctor(self.target, runner=FailedEngineRunner(migration="953"))
+        self.assertEqual("blocked", failed._migration_check(["docker", "compose"], "953")["status"])
+
     def test_doctor_checks_tls_ports_internal_exposure_volumes_backups_and_probe(self):
         runner = DoctorRunner()
         report = self.doctor.Doctor(self.target, runner=runner, tls_probe=lambda host: True,
@@ -186,6 +212,41 @@ class DoctorAndCleanHostTest(unittest.TestCase):
         check = next(item for item in report["checks"] if item["id"] == "minimal-probe")
         self.assertEqual("blocked", check["status"])
         self.assertEqual(["login", "create", "publish", "public-answer", "query", "export", "cleanup"], stages)
+
+    def test_probe_failure_reports_only_allowlisted_stage_and_http_status(self):
+        (self.target / "shared" / "secrets" / "platform_jwt_hmac_secret").write_text("x" * 48 + "\n")
+        (self.target / "shared" / "product-probe.json").write_text(json.dumps({
+            "tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner"}))
+        outer = self
+        class FailedProbe(self.doctor.ProductProbe):
+            def _api(probe, token, method, path, body=None, raw=False):
+                if path.startswith("/v1/resources"):
+                    return 200, {"items": []}
+                if path == "/v1/projects":
+                    return 201, {"id": "project-id"}
+                if path == "/v1/surveys":
+                    raise outer.doctor.ProbeHttpError(403)
+                if path.endswith("/archive"):
+                    return 200, {}
+                raise AssertionError(path)
+        probe = FailedProbe(self.target, "survey.example.com", [], DoctorRunner())
+        doctor = self.doctor.Doctor(self.target, runner=DoctorRunner(), product_probe=lambda *_: probe.run())
+        check = doctor._probe_check("survey.example.com", [])
+        self.assertEqual("blocked", check["status"])
+        self.assertIn("survey-create", check["summary"])
+        self.assertIn("403", check["summary"])
+        self.assertNotIn("project-id", check["summary"])
+        self.assertNotIn("production-probe-owner", check["summary"])
+
+    def test_probe_http_failure_keeps_only_status_not_url_or_body(self):
+        probe = self.doctor.ProductProbe(self.target, "survey.example.com", [], DoctorRunner())
+        failure = urllib.error.HTTPError("https://example.invalid/?token=secret-value", 403, "sensitive", {}, None)
+        with mock.patch("urllib.request.urlopen", side_effect=failure):
+            with self.assertRaises(self.doctor.ProbeHttpError) as raised:
+                probe._api("fake-token", "GET", "/v1/resources")
+        self.assertEqual(403, raised.exception.status)
+        self.assertNotIn("secret-value", str(raised.exception))
+        self.assertNotIn("fake-token", str(raised.exception))
 
     def test_doctor_backup_check_calls_the_restore_grade_verifier(self):
         backup = self.target / "backups" / "candidate"
