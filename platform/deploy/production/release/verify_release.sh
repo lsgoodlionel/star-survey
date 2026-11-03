@@ -140,7 +140,7 @@ readiness = load("release-readiness.json")
 readiness_keys = {
     "schemaVersion", "candidateVersion", "candidateCommit", "manifestSha256",
     "amd64BundleSha256", "arm64BundleSha256", "adminManifestDigest",
-    "platformManifestDigest", "gatewayManifestDigest", "matrixEvidenceSha256",
+    "platformManifestDigest", "gatewayManifestDigest", "engineManifestDigest", "matrixEvidenceSha256",
     "baselineMode", "nativeMatrixCount", "promotable", "reason",
 }
 if set(readiness) != readiness_keys or readiness.get("schemaVersion") != 1:
@@ -156,6 +156,7 @@ image_map = {
     "admin": ("ADMIN_IMAGE", "adminManifestDigest"),
     "platform": ("PLATFORM_IMAGE", "platformManifestDigest"),
     "publish-gateway": ("PUBLISH_GATEWAY_IMAGE", "gatewayManifestDigest"),
+    "engine": ("ENGINE_IMAGE", "engineManifestDigest"),
 }
 if readiness.get("candidateVersion") != version or readiness.get("candidateCommit") != manifest.get("commit"):
     fail("native readiness candidate identity differs from release manifest")
@@ -241,10 +242,11 @@ cosign verify-blob \
   --certificate-oidc-issuer "$issuer" \
   "$assets/RELEASE_SHA256SUMS"
 
-for name in admin platform publish-gateway; do
+for name in admin platform publish-gateway engine; do
   key="ADMIN_IMAGE"
   [[ "$name" == platform ]] && key="PLATFORM_IMAGE"
   [[ "$name" == publish-gateway ]] && key="PUBLISH_GATEWAY_IMAGE"
+  [[ "$name" == engine ]] && key="ENGINE_IMAGE"
   reference="$(jq -er --arg key "$key" '.images[$key]' "$assets/release.json")"
   cosign verify \
     --bundle "$assets/cosign-$name.sigstore.json" \
@@ -280,7 +282,7 @@ manifest = json.loads((root / "release.json").read_text(encoding="utf-8"))
 names = [record["name"] for record in manifest["assets"]["bundles"].values()]
 names.extend([
     "release.json", "SHA256SUMS", "RELEASE_SHA256SUMS", "release-readiness.json",
-    "sbom-admin.spdx.json", "sbom-platform.spdx.json", "sbom-publish-gateway.spdx.json",
+    "sbom-admin.spdx.json", "sbom-platform.spdx.json", "sbom-publish-gateway.spdx.json", "sbom-engine.spdx.json",
 ])
 print("\n".join(sorted(names)))
 PY

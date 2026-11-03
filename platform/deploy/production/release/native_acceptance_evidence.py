@@ -203,7 +203,7 @@ def validate_summary(value: Any) -> None:
     )
     string(candidate["manifestSha256"], "candidate manifestSha256", 64, SHA256)
     string(candidate["bundleSha256"], "candidate bundleSha256", 64, SHA256)
-    images = exact_keys(candidate["images"], {"admin", "platform", "publish-gateway"}, "summary images")
+    images = exact_keys(candidate["images"], {"admin", "platform", "publish-gateway", "engine"}, "summary images")
     for name, digest in images.items():
         string(digest, f"summary image {name}", 71, DIGEST)
     if summary["baselineMode"] not in {"bootstrap", "predecessor"}:
@@ -247,7 +247,7 @@ def validate_readiness(value: Any) -> None:
     report = exact_keys(value, {
         "schemaVersion", "candidateVersion", "candidateCommit", "manifestSha256",
         "amd64BundleSha256", "arm64BundleSha256", "adminManifestDigest",
-        "platformManifestDigest", "gatewayManifestDigest", "matrixEvidenceSha256",
+        "platformManifestDigest", "gatewayManifestDigest", "engineManifestDigest", "matrixEvidenceSha256",
         "baselineMode", "nativeMatrixCount", "promotable", "reason",
     }, "release readiness")
     if report["schemaVersion"] != 1:
@@ -256,7 +256,7 @@ def validate_readiness(value: Any) -> None:
     string(report["candidateCommit"], "release candidateCommit", 40, COMMIT)
     for field in ("manifestSha256", "amd64BundleSha256", "arm64BundleSha256"):
         string(report[field], f"release {field}", 64, SHA256)
-    for field in ("adminManifestDigest", "platformManifestDigest", "gatewayManifestDigest"):
+    for field in ("adminManifestDigest", "platformManifestDigest", "gatewayManifestDigest", "engineManifestDigest"):
         string(report[field], f"release {field}", 71, DIGEST)
     matrix_hashes = exact_keys(
         report["matrixEvidenceSha256"], set(MATRIX_EVIDENCE_KEYS.values()),
@@ -438,6 +438,7 @@ def write_summary_evidence(output: Path, status: str, exit_code: int, last_step:
                 "admin": os.environ["ADMIN_IMAGE_DIGEST"],
                 "platform": os.environ["PLATFORM_IMAGE_DIGEST"],
                 "publish-gateway": os.environ["PUBLISH_GATEWAY_IMAGE_DIGEST"],
+                "engine": os.environ["ENGINE_IMAGE_DIGEST"],
             },
         },
         "baselineMode": os.environ["BASELINE_MODE"],
@@ -489,8 +490,9 @@ def build_release_readiness(
     images = identity.get("images")
     if not isinstance(bundles, dict) or set(bundles) != {"amd64", "arm64"} or not isinstance(images, dict):
         raise EvidenceError("candidate identity does not contain the complete native release identity")
+    exact_keys(images, {"admin", "platform", "publish-gateway", "engine"}, "identity images")
     expected_images = {}
-    for name in ("admin", "platform", "publish-gateway"):
+    for name in ("admin", "platform", "publish-gateway", "engine"):
         image = images.get(name)
         if not isinstance(image, dict):
             raise EvidenceError(f"candidate identity image is missing: {name}")
@@ -529,6 +531,7 @@ def build_release_readiness(
         "adminManifestDigest": expected_images["admin"],
         "platformManifestDigest": expected_images["platform"],
         "gatewayManifestDigest": expected_images["publish-gateway"],
+        "engineManifestDigest": expected_images["engine"],
         "matrixEvidenceSha256": dict(sorted(evidence_hashes.items())),
         "baselineMode": mode,
         "nativeMatrixCount": 4,
@@ -587,10 +590,11 @@ def verify_candidate_assets(identity: dict[str, Any], candidate_directory: Path)
         if sha256_file(candidate_directory / name, f"candidate bundle {architecture}") != expected_sha:
             raise EvidenceError(f"downloaded candidate bundle checksum mismatch: {architecture}")
     images = identity.get("images")
-    if not isinstance(images, dict) or set(images) != {"admin", "platform", "publish-gateway"}:
+    if not isinstance(images, dict) or set(images) != {"admin", "platform", "publish-gateway", "engine"}:
         raise EvidenceError("candidate identity images are incomplete")
     manifest_keys = {
         "admin": "ADMIN_IMAGE", "platform": "PLATFORM_IMAGE", "publish-gateway": "PUBLISH_GATEWAY_IMAGE",
+        "engine": "ENGINE_IMAGE",
     }
     for name, manifest_key in manifest_keys.items():
         image = exact_keys(images[name], {"reference", "digest"}, f"identity image {name}")

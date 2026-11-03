@@ -706,6 +706,7 @@ jobs:
           printf 'admin-digest=%s\n' "$(jq -er '.images.admin.digest' "$identity")" >> "$GITHUB_OUTPUT"
           printf 'platform-digest=%s\n' "$(jq -er '.images.platform.digest' "$identity")" >> "$GITHUB_OUTPUT"
           printf 'gateway-digest=%s\n' "$(jq -er '.images["publish-gateway"].digest' "$identity")" >> "$GITHUB_OUTPUT"
+          printf 'engine-digest=%s\n' "$(jq -er '.images.engine.digest' "$identity")" >> "$GITHUB_OUTPUT"
           printf 'baseline-mode=%s\n' "$(jq -er '.baseline.mode' "$identity")" >> "$GITHUB_OUTPUT"
 
       - name: Extract the checksum-bound acceptance orchestrator
@@ -753,6 +754,7 @@ jobs:
           ADMIN_IMAGE_DIGEST: ${{ steps.identity.outputs.admin-digest }}
           PLATFORM_IMAGE_DIGEST: ${{ steps.identity.outputs.platform-digest }}
           PUBLISH_GATEWAY_IMAGE_DIGEST: ${{ steps.identity.outputs.gateway-digest }}
+          ENGINE_IMAGE_DIGEST: ${{ steps.identity.outputs.engine-digest }}
           EXPECTED_UBUNTU: ${{ matrix.ubuntu }}
           EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
           BASELINE_MODE: ${{ steps.identity.outputs.baseline-mode }}

@@ -469,7 +469,7 @@ class VerifyReleaseScriptTest(unittest.TestCase):
             "ADMIN_IMAGE": f"ghcr.io/example/admin@{image_digest}",
             "PLATFORM_IMAGE": f"ghcr.io/example/platform@{image_digest}",
             "PUBLISH_GATEWAY_IMAGE": f"ghcr.io/example/gateway@{image_digest}",
-            "ENGINE_IMAGE": "example.invalid/engine@sha256:" + "2" * 64,
+            "ENGINE_IMAGE": f"ghcr.io/example/engine@{image_digest}",
             "POSTGRES_IMAGE": "example.invalid/postgres@sha256:" + "3" * 64,
             "MARIADB_IMAGE": "example.invalid/mariadb@sha256:" + "4" * 64,
         }
@@ -500,15 +500,16 @@ class VerifyReleaseScriptTest(unittest.TestCase):
             "amd64BundleSha256": bundles["amd64"]["sha256"], "arm64BundleSha256": bundles["arm64"]["sha256"],
             "adminManifestDigest": image_digest, "platformManifestDigest": image_digest,
             "gatewayManifestDigest": image_digest,
+            "engineManifestDigest": image_digest,
             "matrixEvidenceSha256": {
                 "ubuntu-22-04-amd64": "5" * 64, "ubuntu-24-04-amd64": "6" * 64,
                 "ubuntu-22-04-arm64": "7" * 64, "ubuntu-24-04-arm64": "8" * 64,
             },
-            "baselineMode": "predecessor", "nativeMatrixCount": 4,
+            "baselineMode": "predecessor" if promotable else "bootstrap", "nativeMatrixCount": 4,
             "promotable": promotable, "reason": "upgrade-verified" if promotable else "bootstrap-not-promotable",
         }
         (assets / "release-readiness.json").write_text(json.dumps(readiness) + "\n", encoding="utf-8")
-        for name in ("admin", "platform", "publish-gateway"):
+        for name in ("admin", "platform", "publish-gateway", "engine"):
             (assets / f"sbom-{name}.spdx.json").write_text(
                 json.dumps({"spdxVersion": "SPDX-2.3", "SPDXID": "SPDXRef-DOCUMENT"}) + "\n", encoding="utf-8"
             )
@@ -575,9 +576,45 @@ class VerifyReleaseScriptTest(unittest.TestCase):
         stable = self.run_verifier(assets, environment, target="v1.2.3")
         self.assertEqual(0, stable.returncode, stable.stderr)
         commands = Path(environment["VERIFY_LOG"]).read_text(encoding="utf-8")
-        self.assertEqual(8, commands.count("cosign "))
-        self.assertEqual(30, commands.count("gh attestation verify"))
-        self.assertEqual(6, commands.count("docker buildx imagetools inspect"))
+        self.assertEqual(10, commands.count("cosign "))
+        self.assertEqual(36, commands.count("gh attestation verify"))
+        self.assertEqual(8, commands.count("docker buildx imagetools inspect"))
+        self.assertEqual(2, commands.count("docker buildx imagetools inspect ghcr.io/example/engine@"))
+        self.assertEqual(4, commands.count("gh attestation verify oci://ghcr.io/example/engine@"))
+        self.assertEqual(2, sum("gh attestation verify " in line and "sbom-engine.spdx.json" in line
+                                for line in commands.splitlines()))
+
+    def test_complete_bootstrap_assets_are_a_baseline_but_not_stable_promotion(self):
+        assets, environment = self.make_fixture(promotable=False)
+        candidate = self.run_verifier(assets, environment)
+        self.assertEqual(0, candidate.returncode, candidate.stderr)
+        report = json.loads((assets / "release-readiness.json").read_text())
+        self.assertEqual("bootstrap", report["baselineMode"])
+        self.assertFalse(report["promotable"])
+        self.assertEqual("bootstrap-not-promotable", report["reason"])
+        stable = self.run_verifier(assets, environment, target="v1.2.3")
+        self.assertNotEqual(0, stable.returncode)
+        self.assertIn("stable promotion requires upgrade-verified native readiness", stable.stderr)
+
+    def test_engine_inventory_and_readiness_are_required(self):
+        for mutation in ("missing-sbom", "missing-signature", "missing-readiness-digest", "wrong-readiness-digest"):
+            with self.subTest(mutation=mutation):
+                assets, environment = self.make_fixture()
+                if mutation == "missing-sbom":
+                    (assets / "sbom-engine.spdx.json").unlink()
+                elif mutation == "missing-signature":
+                    (assets / "cosign-engine.sigstore.json").unlink()
+                else:
+                    path = assets / "release-readiness.json"
+                    report = json.loads(path.read_text())
+                    if mutation == "missing-readiness-digest":
+                        del report["engineManifestDigest"]
+                    else:
+                        report["engineManifestDigest"] = "sha256:" + "9" * 64
+                    path.write_text(json.dumps(report))
+                result = self.run_verifier(assets, environment)
+                self.assertNotEqual(0, result.returncode)
+                shutil.rmtree(assets)
 
     def test_tampering_unknown_assets_and_unpromotable_stable_fail_closed(self):
         assets, environment = self.make_fixture()
