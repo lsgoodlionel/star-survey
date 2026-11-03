@@ -57,6 +57,16 @@ def job_text(job: dict) -> str:
 
 
 class ReleaseWorkflowPolicyTest(unittest.TestCase):
+    def test_scanner_install_uses_official_checksum_verified_asset(self):
+        job = self.workflow['jobs']['secure-images']
+        scan = next(step for step in job['steps'] if step.get('name') == 'Scan immutable image digest with Trivy')
+        self.assertEqual('true', scan['with']['skip-setup-trivy'])
+        self.assertEqual('1', scan['with']['exit-code'])
+        install = next(step for step in job['steps'] if 'install_trivy.py' in step.get('run', ''))
+        self.assertLess(job['steps'].index(install), job['steps'].index(scan))
+        self.assertIn('vulnerability-policy.outputs.trivy-version', install['env']['TRIVY_VERSION'])
+        self.assertIn('GITHUB_PATH', install['run'])
+
     def test_admin_browser_gate_runs_against_both_engine_databases(self):
         job = self.quality["jobs"]["admin-web-e2e"]
         self.assertEqual(["mysql", "pgsql"], job["strategy"]["matrix"]["db"])
