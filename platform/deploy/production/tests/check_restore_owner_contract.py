@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real PostgreSQL component test; confers no backup restoration eligibility."""
+"""Real PostgreSQL owner/personnel checks; confers no restoration eligibility."""
 import argparse
 import json
 from pathlib import Path
@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 PRODUCTION = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PRODUCTION))
@@ -32,7 +33,7 @@ def verify(image):
     containers = []
     creation_uncertain = False
     ownership_label = 'survey.restore-owner-fixture=' + secrets.token_hex(16)
-    result = {'schemaVersion': 1, 'scope': 'postgres-restore-owner-component',
+    result = {'schemaVersion': 1, 'scope': 'postgres-restore-owner-personnel-component',
               'status': 'failed', 'cleanupPassed': False, 'image': image,
               'restorationEligible': False, 'releaseAcceptance': False}
 
@@ -124,10 +125,44 @@ def verify(image):
                                           'appTcpPasswordVerified', 'wrongTcpPasswordRejected')):
             raise RuntimeError('fixture password authentication failed')
         source, target = containers
+        # Apply the actual SQL migrations as the real TCP-authenticated owner;
+        # this is not a synthetic approximation of the personnel tables.
+        migrations = PRODUCTION.parents[2] / 'platform/services/business/src/main/resources/db/migration'
+        files = sorted(migrations.glob('V*.sql'), key=lambda p: int(p.name.split('__')[0][1:]))
+        for migration in files:
+            applied = tcp_sql(source, 'platform_owner', 'owner', migration.read_text())
+            if applied.returncode:
+                result['failedMigration'] = migration.name
+                raise RuntimeError('migration fixture failed')
+        result['actualMigrationsApplied'] = len(files)
+        tenant, connection, first, second, normal, sid, second_sid, normal_sid, revoked_sid = [str(uuid.uuid4()) for _ in range(9)]
+        seeded = sql(source, f"""
+INSERT INTO tenant(id,code,name,status) VALUES('{tenant}','restore-fixture','restore fixture','provisioning');
+UPDATE tenant SET status='active' WHERE id='{tenant}';
+INSERT INTO org_connection(id,tenant_id,provider,corp_id,app_id,secret_ref,unknown_user_policy,enabled,created_by)
+VALUES('{connection}','{tenant}','wecom','fixture-corp','fixture-app','TEST','jit_staff',true,'fixture');
+INSERT INTO identity_binding(principal_id,tenant_id,provider,app_id,external_id)
+VALUES ('{first}','{tenant}','wecom','fixture-corp','first'),('{second}','{tenant}','wecom','fixture-corp','second'),('{normal}','{tenant}','wecom','fixture-corp','normal');
+INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by)
+VALUES('{tenant}','{first}','active',true,'fixture'),('{tenant}','{second}','active',true,'fixture'),('{tenant}','{normal}','active',true,'fixture');
+INSERT INTO org_login_session(id,tenant_id,principal_id,connection_id,expires_at)
+VALUES('{sid}','{tenant}','{first}','{connection}',now()+interval '1 hour'),
+('{second_sid}','{tenant}','{second}','{connection}',now()+interval '1 hour'),
+('{normal_sid}','{tenant}','{normal}','{connection}',now()+interval '1 hour');
+INSERT INTO org_login_session(id,tenant_id,principal_id,connection_id,expires_at,revoked_at,revoke_reason)
+VALUES('{revoked_sid}','{tenant}','{first}','{connection}',now()+interval '1 hour',now()-interval '5 minutes','logout');
+SELECT platform_admin_bootstrap_attributed('{tenant}','{first}','fixture-bootstrap','restore fixture','fixture-operator');
+SELECT platform_admin_change_session('{tenant}','{first}','{sid}','{tenant}','{second}',true,'fixture-grant','restore fixture');
+SELECT platform_admin_change_session('{tenant}','{first}','{sid}','{tenant}','{second}',false,'fixture-revoke','restore fixture');
+""")
+        if seeded.returncode:
+            result['seedFailed'] = True
+            raise RuntimeError('personnel fixture failed')
         seed = sql(source, """
 SET ROLE platform_owner;
 CREATE TABLE flyway_schema_history(installed_rank integer);
 INSERT INTO flyway_schema_history VALUES(1);
+REVOKE ALL ON flyway_schema_history FROM platform_app;
 CREATE FUNCTION fixture_definer() RETURNS name LANGUAGE sql SECURITY DEFINER AS 'SELECT current_user';
 GRANT EXECUTE ON FUNCTION fixture_definer() TO platform_app;
 """)
@@ -147,6 +182,11 @@ GRANT EXECUTE ON FUNCTION fixture_definer() TO platform_app;
                 if args == ['fixture-compose', 'up', '-d', '--wait', '--wait-timeout', '120',
                             'platform-db', 'engine-db']:
                     return subprocess.CompletedProcess(args, 0, stdout=b'', stderr=b'')
+                if 'psql' in args:
+                    actual = ['docker', 'exec', '-i', target, *args[args.index('psql'):]]
+                    kwargs.setdefault('check', True)
+                    kwargs.setdefault('timeout', 45)
+                    return subprocess.run(actual, **kwargs)
                 if 'pg_restore' in args:
                     actual = ['docker', 'exec', '-i', target, *args[args.index('pg_restore'):]]
                     kwargs.setdefault('check', True)
@@ -174,6 +214,63 @@ GRANT EXECUTE ON FUNCTION fixture_definer() TO platform_app;
         if not all(result[key] for key in ('historyOwnerPreserved', 'migrationRoleCanReadHistory',
                                           'securityDefinerOwnerPreserved', 'appDirectWriteRejected')):
             raise RuntimeError('restored owner contract failed')
+        def scalar(statement):
+            answer = sql(target, statement)
+            if answer.returncode:
+                raise RuntimeError('personnel query failed')
+            return answer.stdout.decode().splitlines()[-1]
+        # The invalidator is called directly as a component: no security floor
+        # or signed backup eligibility is fabricated by this test.
+        before = scalar('SELECT count(*) FROM platform_admin_audit;')
+        previous_revocation = scalar(f"SELECT revoked_at::text FROM org_login_session WHERE id='{revoked_sid}';")
+        if scalar(f"SELECT platform_admin_active('{tenant}','{first}');") != 't':
+            raise RuntimeError('restored grant fixture not active')
+        prepared = sql(target, """
+CREATE TABLE platform_security_restore_audit(id bigserial PRIMARY KEY,trace_id text NOT NULL,
+operator_db_user text NOT NULL,occurred_at timestamptz NOT NULL DEFAULT now(),reason text NOT NULL);
+CREATE FUNCTION fixture_reject_restore_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture audit rejection'; END $$;
+CREATE TRIGGER fixture_restore_audit_failure BEFORE INSERT ON platform_security_restore_audit
+FOR EACH ROW EXECUTE FUNCTION fixture_reject_restore_audit();
+""")
+        if prepared.returncode:
+            raise RuntimeError('audit fixture failed')
+        invalidator = RestoreManager(work, runner=Runner())
+        rejected = False
+        try:
+            invalidator._invalidate_restored_personnel(['fixture-compose'])
+        except RestoreRuntimeError as error:
+            rejected = str(error) == 'restored personnel invalidation failed'
+        result['auditFailureRollsBack'] = (rejected and scalar('SELECT count(*) FROM platform_admin_audit;') == before
+            and scalar(f"SELECT platform_admin_active('{tenant}','{first}');") == 't'
+            and scalar(f"SELECT revoked_at IS NULL FROM org_login_session WHERE id='{sid}';") == 't'
+            and scalar('SELECT count(*) FROM platform_security_restore_audit;') == '0')
+        sql(target,'DROP TRIGGER fixture_restore_audit_failure ON platform_security_restore_audit; DROP FUNCTION fixture_reject_restore_audit();')
+        invalidator._invalidate_restored_personnel(['fixture-compose'])
+        result['personnelGrantsInvalidated'] = scalar('SELECT count(*) FROM platform_admin_grant WHERE active;') == '0'
+        result['historicalPersonnelSessionsRevoked'] = scalar(f"SELECT count(*) FROM org_login_session WHERE id IN ('{sid}','{second_sid}') AND revoked_at IS NOT NULL AND revoke_reason='restore';") == '2'
+        result['ordinarySessionPreserved'] = scalar(f"SELECT revoked_at IS NULL FROM org_login_session WHERE id='{normal_sid}';") == 't'
+        result['restoreAuditRecorded'] = scalar('SELECT count(*) FROM platform_security_restore_audit;') == '1'
+        result['priorRevocationPreserved'] = (scalar(f"SELECT revoked_at::text FROM org_login_session WHERE id='{revoked_sid}';") == previous_revocation
+            and scalar(f"SELECT revoke_reason FROM org_login_session WHERE id='{revoked_sid}';") == 'logout')
+        result['restoreAuditLinked'] = scalar("SELECT count(*) FROM platform_security_restore_audit r JOIN platform_admin_audit a USING(trace_id) WHERE a.action='identity_invalidated' AND a.operator_db_user='postgres' AND r.operator_db_user='postgres';") == '1'
+        invalidator._invalidate_restored_personnel(['fixture-compose'])
+        result['repeatInvalidationDoesNotReactivate'] = scalar('SELECT count(*) FROM platform_admin_grant WHERE active;') == '0'
+        denied = tcp_sql(target,'platform_app','app',f"SELECT platform_admin_recover_attributed('{tenant}','{first}','fixture-forbidden','fixture recovery','fixture-operator');")
+        result['runtimeCannotRecover'] = denied.returncode != 0 and b'permission denied' in denied.stderr
+        if scalar(f"SELECT platform_admin_recover_attributed('{tenant}','{first}','fixture-controlled','fixture recovery','fixture-operator');") != 't':
+            raise RuntimeError('controlled recovery failed')
+        old = tcp_sql(target,'platform_app','app',f"SELECT platform_admin_change_session('{tenant}','{first}','{sid}','{tenant}','{second}',true,'fixture-old','fixture old session');")
+        result['oldSessionDeniedAfterExplicitRecovery'] = old.returncode != 0 and b'verified session unavailable' in old.stderr
+        fresh=str(uuid.uuid4())
+        if sql(target,f"INSERT INTO org_login_session(id,tenant_id,principal_id,connection_id,expires_at) VALUES('{fresh}','{tenant}','{first}','{connection}',now()+interval '1 hour');").returncode:
+            raise RuntimeError('new session fixture failed')
+        new = tcp_sql(target,'platform_app','app',f"SELECT platform_admin_change_session('{tenant}','{first}','{fresh}','{tenant}','{second}',true,'fixture-new','fixture new session');")
+        result['explicitRecoveryAndNewSessionRequired'] = new.returncode == 0 and new.stdout.strip() == b't'
+        for field in ['auditFailureRollsBack','personnelGrantsInvalidated','historicalPersonnelSessionsRevoked',
+                      'ordinarySessionPreserved','restoreAuditRecorded','priorRevocationPreserved','restoreAuditLinked','repeatInvalidationDoesNotReactivate',
+                      'runtimeCannotRecover','oldSessionDeniedAfterExplicitRecovery','explicitRecoveryAndNewSessionRequired']:
+            if not result[field]:
+                raise RuntimeError('personnel safety assertion failed')
         # pg_dump does not create global roles. A source-only owner must not
         # silently fall back to the privileged restore connection's identity.
         extra = sql(source, 'CREATE ROLE fixture_missing_owner; CREATE TABLE missing_owner_guard(value integer); '
