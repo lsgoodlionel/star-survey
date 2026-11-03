@@ -309,3 +309,14 @@ PR67已合并18570aa127a61f2414b13df8f9a47390265ee92d，当前main CI41696668299
 这些组件直接调用恢复载荷与人员失效函数，不制造floor/签名，不赋予真实账号权限；restorationEligible和releaseAcceptance始终false。Java签名HTTP路径和人员退出后的页面行为仍以既有及后续CI证据分别评估，不能把DB组件当完整身份验收。
 
 核对v0.3.14-rc.1未占用，登记新bootstrap且无前代；失败rc.13及更早候选不可作合格前代，bootstrap不可晋升、不证明升级。27项策略回归先缺登记失败、再通过。当前仅策略、持久检查与记录；需独立审查、PR CI及实际合并提交门禁，最终标签必须重新核对并绑定实际通过的合并SHA，暂不创建标签、镜像、Release或生产操作。
+
+
+## Wave 6 rc.14 四平台完成与汇总契约修复（2026-11-03，待审）
+
+候选41705277639精确提交25872af537ba7b4dc38c6e802b7ce43554007d96的四个原生作业均success。四份原始summary均status=passed、exitCode=0、lastStep=uninstall，baselineMode=bootstrap、upgradeVerified=false；doctor-restored九项全OK，含迁移、备份和完整最小业务旅程，doctor-installed仅已允许的首次无备份warning。实际执行了安装/doctor/业务/备份/恢复/恢复后doctor/安全卸载，没有执行升级或public ACME验收。
+
+独立下载同run candidate数据并只读核对：manifest SHA256为3951ff0f237b660946b8b8b0e2962d8a0091917fa7074eff4b11e7e050e91715，两架构包校验和及四报告绑定一致；identity真实包含admin/platform/publish-gateway/engine四镜像，engine digest为sha256:aae0cd5a2167edefbc60958d85d1e9dfd2bc7ff3c432b853f888cdad81ad8b8a。四份摘要仍只有旧三镜像字段。汇总作业126179860185明确失败native acceptance evidence failed: candidate identity images are incomplete：校验器错误只接受三镜像，拒绝了正确四镜像identity。失败发生在汇总数据契约，不是四个平台又执行失败；最终资产签名/attestation和Release均skipped，当前不能当签名合格前代或发布通过。
+
+修复实现/测试限定5个相关文件：workflow传递ENGINE_IMAGE_DIGEST，摘要强制四镜像、readiness增加engineManifestDigest并与四镜像identity及manifest严格绑定；最终verify_release同时要求engine SBOM/cosign bundle、核对真正ENGINE_IMAGE OCI引用和SBOM attestation。后续校验器也残留三镜像库存，已同步修复以免只越过首个错误又失败。缺失/多余/错误engine身份、mutable ref、摘要或readiness篡改、缺签名/SBOM均拒绝，不删除engine字段或放宽完整性。bootstrap仍promotable=false、reason=bootstrap-not-promotable，稳定版必须真实upgrade-verified，自动Release关闭/人工批准保持不变。
+
+先用完整四镜像数据在旧校验器复现失败，再实现；27项native证据、20项发布资产校验和12项工作流回归通过。签名与attestation外部调用在发布单测中使用stub，仅证明调用和绑定契约，不能冒称实际新资产签名通过。旧三镜像摘要不被修写为四镜像；只读核对旧包内helper与原commit源码逐字一致，未执行未签跨run包代码，简单重跑旧作业不会加载新修复。当前只交draft PR与CI，无新tag/镜像/Release/生产操作；后续候选策略待父任务审查协调。
