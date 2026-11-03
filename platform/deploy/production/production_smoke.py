@@ -134,6 +134,93 @@ def require_bridge_evidence(evidence):
         raise ValueError('current probe bridge evidence did not verify completion and delivery')
 
 
+def verify_source_backup(target, directory, version):
+    """Authenticate source-test bytes; never confer restoration eligibility."""
+    from backup import (AuthenticatedOpenSSLCipher, IMAGE_KEYS, VOLUME_SOURCES,
+                        canonical_manifest, control_authenticator, safe_absolute, sha256)
+    from restore import RestoreIntegrityError, RestoreManager
+    import secrets
+
+    target = safe_absolute(target, 'source target')
+    directory = safe_absolute(directory, 'source backup')
+    if not isinstance(version, str) or re.fullmatch(r'\d+\.\d+\.\d+(?:-rc\.\d+)?', version) is None:
+        raise ValueError('source backup version is invalid')
+    release = safe_absolute(target / 'releases' / version, 'source release')
+    manifest_path = safe_absolute(release / 'release.json', 'source manifest')
+    source = json.loads(manifest_path.read_text())
+    guard = [line for line in (release / '.env').read_text().splitlines()
+             if line.startswith('PLATFORM_ADMIN_ENFORCE_PERSONNEL=')]
+    floor = safe_absolute(target / '.surveyctl/auth-security-floor', 'source floor')
+    if guard != ['PLATFORM_ADMIN_ENFORCE_PERSONNEL=true'] or floor.exists() or source.get('securityCapabilities'):
+        raise ValueError('source fixture must retain its enforced, unqualified boundary')
+    key = safe_absolute(target / 'shared/secrets/backup_encryption_key', 'source backup key')
+    if not key.is_file() or key.stat().st_mode & 0o077:
+        raise ValueError('source backup key is unsafe')
+    payloads = {name + '.enc' for name in ('postgres.dump', 'mariadb.sql', *VOLUME_SOURCES)}
+    expected = payloads | {'manifest.json', 'SHA256SUMS', 'CONTROL-HMAC'}
+    if (not directory.is_dir() or {path.name for path in directory.iterdir()} != expected
+            or any(path.is_symlink() or not path.is_file() for path in directory.iterdir())):
+        raise ValueError('source backup inventory is invalid')
+    raw = (directory / 'manifest.json').read_bytes()
+    metadata = json.loads(raw)
+    if (not isinstance(metadata, dict) or metadata.get('schemaVersion') != 2
+            or metadata.get('version') != version or metadata.get('databaseSchema') != str(source['database']['schema'])
+            or metadata.get('releaseManifestSha256') != sha256(manifest_path)
+            or not isinstance(source.get('images'), dict) or set(source['images']) != IMAGE_KEYS
+            or metadata.get('images') != source['images'] or canonical_manifest(metadata) != raw
+            or not isinstance(metadata.get('files'), dict) or set(metadata['files']) != payloads):
+        raise ValueError('source backup identity is invalid')
+    files = metadata['files']
+    if any(not isinstance(digest, str) or re.fullmatch(r'[0-9a-f]{64}', digest) is None for digest in files.values()):
+        raise ValueError('source backup checksums are invalid')
+    sums = (directory / 'SHA256SUMS').read_bytes()
+    expected_sums = ''.join(f'{digest}  {name}\n' for name, digest in sorted(files.items())).encode('ascii')
+    if sums != expected_sums or not secrets.compare_digest(
+            (directory / 'CONTROL-HMAC').read_text(encoding='ascii').strip(), control_authenticator(raw, sums, key)):
+        raise ValueError('source backup control authentication failed')
+    cipher = AuthenticatedOpenSSLCipher()
+    with tempfile.TemporaryDirectory() as temporary:
+        for name, digest in files.items():
+            encrypted = directory / name
+            if not secrets.compare_digest(sha256(encrypted), digest):
+                raise ValueError('source backup payload checksum failed')
+            plain = Path(temporary) / name.removesuffix('.enc')
+            cipher.decrypt(encrypted, plain, key)
+            if not plain.stat().st_size:
+                raise ValueError('source backup payload is empty')
+        try:
+            RestoreManager(target).verify_backup(directory, Path(temporary))
+        except RestoreIntegrityError as error:
+            if str(error) != 'personnel security floor is missing':
+                raise ValueError('source backup restoration rejection is unexpected') from error
+        else:
+            raise ValueError('unsigned source backup unexpectedly qualified for restoration')
+    return {'schemaVersion': 1, 'scope': 'source-backup-integrity-only', 'integrityVerified': True,
+            'encryptedPayloads': len(payloads), 'authenticatedPayloads': len(payloads),
+            'restoreEligibility': 'rejected-missing-personnel-floor', 'restorationEligible': False,
+            'serviceRecoveryVerified': False, 'releaseAcceptance': False}
+
+
+def require_source_doctor(report, proof):
+    if (proof.get('scope') != 'source-backup-integrity-only' or proof.get('integrityVerified') is not True
+            or proof.get('restorationEligible') is not False or proof.get('releaseAcceptance') is not False
+            or proof.get('restoreEligibility') != 'rejected-missing-personnel-floor'
+            or proof.get('encryptedPayloads') != 9 or proof.get('authenticatedPayloads') != 9):
+        raise ValueError('source backup integrity evidence is missing or qualified')
+    required = {'ports', 'internal-exposure', 'runtime-exposure', 'tls', 'containers',
+                'migrations', 'volumes', 'backups', 'minimal-probe'}
+    rows = report.get('checks', [])
+    if (not isinstance(rows, list) or len(rows) != len(required)
+            or any(not isinstance(row, dict) or row.get('id') not in required for row in rows)):
+        raise ValueError('source doctor checks are invalid')
+    checks = {row['id']: row for row in rows}
+    if (set(checks) != required or report.get('status') != 'warning'
+            or checks['backups'].get('status') != 'warning'
+            or checks['backups'].get('summary') != 'no readable verified backup exists'
+            or any(checks[name].get('status') != 'ok' for name in required - {'backups'})):
+        raise ValueError('source doctor must retain only the unqualified-backup warning')
+
+
 def main():
     require_disposable_runner(os.environ)
     root = Path(__file__).resolve().parents[3]
@@ -142,6 +229,7 @@ def main():
     sys.path.insert(0, str(production / 'release'))
     from surveyctl import SurveyManager, load_manifest
     from doctor import Doctor, ProductProbe, CommandRunner
+    from backup import BackupManager
     from native_acceptance_evidence import write_doctor_evidence, write_engine_health_evidence, write_gateway_diagnostic_evidence
 
     evidence = Path(os.environ['SMOKE_EVIDENCE_DIR']).resolve()
@@ -152,6 +240,7 @@ def main():
     os.chmod(work, 0o700)
     target, assets = work / 'target', work / 'assets'
     compose = None
+    backup_evidence = None
     registry_started = False
     stage, error, journey, cleanup = 'build', None, False, False
     host, marker = 'survey-smoke.test', '# survey-production-smoke'
@@ -223,6 +312,17 @@ def main():
             raise ValueError('production doctor blocked')
         stage = 'bridge-evidence'
         require_bridge_evidence(evidence)
+        stage = 'backup'
+        backup_directory = BackupManager(target).create(target / 'backups/source-smoke', manifest.version)
+        backup_evidence = verify_source_backup(target, backup_directory, manifest.version)
+        (evidence / 'source-backup.json').write_text(json.dumps(backup_evidence, indent=2) + '\n')
+        stage = 'doctor-backed-up'
+        report = Doctor(target, product_probe=lambda host, commands: observed(target, host, commands, CommandRunner()).run()).run()
+        write_doctor_evidence(report, evidence / 'doctor-backed-up.json', secrets)
+        require_source_doctor(report, backup_evidence)
+        backup_evidence['serviceRecoveryVerified'] = True
+        (evidence / 'source-backup.json').write_text(json.dumps(backup_evidence, indent=2) + '\n')
+        require_bridge_evidence(evidence)
         stage = 'gateway-negative-requests'
         gateway = run(compose + ['ps', '-q', 'publish-gateway']).stdout.strip()
         env = dict(os.environ, GATEWAY_CONTAINER=gateway, SCHEME_ENGINE_HOST='engine',
@@ -267,7 +367,8 @@ def main():
             cleanup = False
         result = {'schemaVersion': 1, 'scope': 'source-built-amd64-production-smoke', 'status': overall_status(journey, cleanup),
                   'lastStep': stage, 'errorCategory': error, 'journeyPassed': journey, 'cleanupPassed': cleanup,
-                  'releaseAcceptance': False}
+                  'backupIntegrityVerified': bool(backup_evidence and backup_evidence.get('integrityVerified')),
+                  'restorationEligible': False, 'releaseAcceptance': False}
         (evidence / 'smoke-summary.json').write_text(json.dumps(result, indent=2) + '\n')
     return 0 if journey and cleanup else 1
 
