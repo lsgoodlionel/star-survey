@@ -276,11 +276,20 @@ class RestoreManager:
                     if count > limits["max_members"]:
                         raise RestoreIntegrityError("volume archive member count exceeds the safety limit")
                     raw = member.name
+                    # Docker cp of /volume/. emits one leading './'. Compare
+                    # identities after removing only that prefix; never rewrite
+                    # the authenticated archive or normalize arbitrary paths.
+                    if raw == "./" and member.isdir():
+                        raw = "."
+                    elif raw.startswith("./"):
+                        raw = raw[2:]
+                        if raw == "." or raw.startswith("./"):
+                            raise RestoreIntegrityError("volume archive contains an unsafe path")
                     path = PurePosixPath(raw)
                     if not raw or "\\" in raw or path.is_absolute() or ".." in path.parts \
                             or (raw != "." and path.as_posix() != raw.rstrip("/")):
                         raise RestoreIntegrityError("volume archive contains an unsafe path")
-                    if not (member.isfile() or member.isdir()):
+                    if not (member.isfile() or member.isdir()) or (not path.parts and not member.isdir()):
                         raise RestoreIntegrityError("volume archive contains an unsupported entry type")
                     normalized_parts = tuple(unicodedata.normalize("NFC", part) for part in path.parts)
                     identity = tuple(part.casefold() for part in normalized_parts)
