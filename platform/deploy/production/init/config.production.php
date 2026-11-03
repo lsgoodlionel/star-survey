@@ -16,6 +16,27 @@ $productionSecret = static function ($environmentName) {
     return rtrim($value, "\r\n");
 };
 
+// The publish gateway reaches the engine over the isolated Docker network.
+// Preserve force_ssl for every other caller and every other route; the gateway's
+// RemoteControl credentials and plugin signatures remain mandatory.
+$trustedGatewayRequest = static function ($remoteAddress, $requestUri, $method, $gatewayAddresses) {
+    if (!is_string($remoteAddress) || filter_var($remoteAddress, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false
+        || !is_array($gatewayAddresses) || !in_array($remoteAddress, $gatewayAddresses, true)
+        || !is_string($requestUri) || !is_string($method)) {
+        return false;
+    }
+    $path = parse_url($requestUri, PHP_URL_PATH);
+    return ($method === 'POST' && $path === '/index.php/admin/remotecontrol')
+        || ($method === 'GET' && $path === '/index.php/plugins/direct');
+};
+if (!empty($_SERVER['REMOTE_ADDR'])) {
+    $gatewayAddresses = gethostbynamel('publish-gateway') ?: array();
+    if ($trustedGatewayRequest($_SERVER['REMOTE_ADDR'], $_SERVER['REQUEST_URI'] ?? '',
+        $_SERVER['REQUEST_METHOD'] ?? '', $gatewayAddresses)) {
+        $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
+    }
+}
+
 $baseUrl = '/survey';
 $forwardedPrefix = $_SERVER['HTTP_X_FORWARDED_PREFIX'] ?? '';
 if (in_array($forwardedPrefix, array('/survey', '/engine-admin'), true)) {

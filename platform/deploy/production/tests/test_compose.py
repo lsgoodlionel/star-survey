@@ -573,6 +573,31 @@ class ProductionComposeTest(unittest.TestCase):
         self.assertIn("Partial LimeSurvey schema detected", source)
         self.assertIn("return 30", source)
 
+    def test_internal_gateway_https_context_is_limited_to_exact_source_and_routes(self):
+        config = (PRODUCTION_DIR / "init" / "config.production.php").read_text(encoding="utf-8")
+        start = config.index("$trustedGatewayRequest = static function")
+        end = config.index("\n};", start) + len("\n};")
+        policy = config[start:end]
+        script = policy + r"""
+$cases = [
+ $trustedGatewayRequest('172.20.0.7', '/index.php/admin/remotecontrol', 'POST', ['172.20.0.7']),
+ $trustedGatewayRequest('172.20.0.7', '/index.php/plugins/direct?plugin=Mjy', 'GET', ['172.20.0.7']),
+ $trustedGatewayRequest('172.20.0.8', '/index.php/admin/remotecontrol', 'POST', ['172.20.0.7']),
+ $trustedGatewayRequest('172.20.0.7', '/index.php/admin/remotecontrol', 'GET', ['172.20.0.7']),
+ $trustedGatewayRequest('172.20.0.7', '/index.php/admin/remotecontrol/extra', 'POST', ['172.20.0.7']),
+ $trustedGatewayRequest('172.20.0.7', '/survey/index.php', 'GET', ['172.20.0.7']),
+ $trustedGatewayRequest('172.20.0.7', '/index.php/plugins/direct', 'POST', ['172.20.0.7']),
+ $trustedGatewayRequest('172.20.0.7', '/index.php/plugins/direct', 'GET', []),
+];
+echo json_encode($cases);
+"""
+        result = subprocess.run([os.environ.get("TEST_PHP", "php"), "-r", script], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([True, True, False, False, False, False, False, False], json.loads(result.stdout))
+        self.assertIn("gethostbynamel('publish-gateway')", config)
+        self.assertIn("$trustedGatewayRequest(", config[end:])
+        self.assertIn("$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https'", config[end:])
+
     def test_engine_config_uses_real_survey_prefix_and_https_settings(self):
         config = (PRODUCTION_DIR / "init" / "config.production.php").read_text(
             encoding="utf-8"
