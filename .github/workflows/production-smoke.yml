@@ -1,11 +1,8 @@
 name: Production topology smoke (amd64)
 on:
   workflow_dispatch:
+  # The engine build context is the repository root, so every PR can affect it.
   pull_request:
-    paths:
-      - '.github/workflows/production-smoke.yml'
-      - 'platform/deploy/production/**'
-      - 'platform/deploy/test/assert-gateway-scheme.sh'
 permissions:
   contents: read
 jobs:

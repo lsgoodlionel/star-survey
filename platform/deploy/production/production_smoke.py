@@ -27,6 +27,44 @@ def run(command, **kwargs):
     return subprocess.run(command, check=True, capture_output=True, text=True, **kwargs)
 
 
+def assert_resources_absent(prefixes, runner=run):
+    for kind in ('container', 'network', 'volume'):
+        args = ['docker', kind, 'ls']
+        if kind == 'container':
+            args.append('--all')
+        args += ['--format', '{{.Names}}' if kind == 'container' else '{{.Name}}']
+        if any(name.startswith(prefixes) for name in runner(args).stdout.splitlines()):
+            raise ValueError('production smoke resource collision or cleanup incomplete')
+
+
+def attempt_cleanups(actions):
+    succeeded = True
+    for action in actions:
+        try:
+            action()
+        except Exception:
+            succeeded = False
+    return succeeded
+
+
+def engine_subprobes(engine, runner=run):
+    # Execute real checks but retain no response body, CLI output or addresses.
+    code = '''$c=stream_context_create(["http"=>["timeout"=>10,"follow_location"=>0,"ignore_errors"=>true]]);
+    $b=@file_get_contents("http://127.0.0.1/production-health.php",false,$c);
+    $line=$http_response_header[0]??"";preg_match("#^HTTP/\\\\S+ ([0-9]{3})#",$line,$m);
+    echo json_encode(["httpStatus"=>isset($m[1])?(int)$m[1]:0,"requestCompleted"=>$b!==false,
+    "edgeResolved"=>@gethostbynamel("edge")!==false,"gatewayResolved"=>@gethostbynamel("publish-gateway")!==false]);'''
+    value = json.loads(runner(['docker', 'exec', engine, 'php', '-r', code]).stdout)
+    if set(value) != {'httpStatus', 'requestCompleted', 'edgeResolved', 'gatewayResolved'} or type(value['httpStatus']) is not int or not 0 <= value['httpStatus'] <= 599 or any(type(value[k]) is not bool for k in ('requestCompleted', 'edgeResolved', 'gatewayResolved')):
+        raise ValueError('engine subprobe output is invalid')
+    try:
+        runner(['docker', 'exec', engine, 'php', 'application/commands/console.php', 'productionInit', 'status'])
+        value['initStatusExitCode'] = 0
+    except subprocess.CalledProcessError as exc:
+        value['initStatusExitCode'] = exc.returncode if 0 <= exc.returncode <= 255 else -1
+    return {'schemaVersion': 1, **value}
+
+
 def main():
     require_disposable_runner(os.environ)
     root = Path(__file__).resolve().parents[3]
@@ -40,10 +78,7 @@ def main():
     evidence = Path(os.environ['SMOKE_EVIDENCE_DIR']).resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     # This driver owns neither pre-existing containers nor network/volume state.
-    for kind in ('container', 'network', 'volume'):
-        found = run(['docker', kind, 'ls', '--format', '{{.Name}}' if kind != 'container' else '{{.Names}}']).stdout
-        if any(n.startswith(('survey-production', 'survey-smoke-registry')) for n in found.splitlines()):
-            raise ValueError('production smoke resource collision')
+    assert_resources_absent(('survey-production', 'survey-smoke-registry'))
     work = Path(tempfile.mkdtemp(prefix='survey-production-smoke-'))
     os.chmod(work, 0o700)
     target, assets = work / 'target', work / 'assets'
@@ -127,6 +162,7 @@ def main():
                 engine = run(compose + ['ps', '-aq', 'engine']).stdout.strip()
                 health = json.loads(run(['docker', 'inspect', '--format', '{{json .State.Health}}', engine]).stdout)
                 write_engine_health_evidence(health, evidence / 'engine-health.json')
+                (evidence / 'engine-subprobes.json').write_text(json.dumps(engine_subprobes(engine), indent=2) + '\n')
             except Exception:
                 pass  # Explicitly absent evidence; never marks a check passed.
             try:
@@ -135,19 +171,16 @@ def main():
             except Exception:
                 pass
     finally:
-        try:
-            if compose:
+        def cleanup_compose():
+            if compose is not None:
                 run(compose + ['down', '--volumes', '--remove-orphans'])
                 # Verify cleanup independently of the down command's exit status.
-                for kind in ('container', 'network', 'volume'):
-                    names = run(['docker', kind, 'ls', '--format', '{{.Name}}' if kind != 'container' else '{{.Names}}']).stdout
-                    if any(n.startswith('survey-production') for n in names.splitlines()):
-                        raise ValueError('production smoke cleanup incomplete')
+                assert_resources_absent(('survey-production',))
+        def cleanup_registry():
             if registry_started:
                 run(['docker', 'rm', '-fv', 'survey-smoke-registry'])
-            cleanup = True
-        except Exception:
-            cleanup = False
+                assert_resources_absent(('survey-smoke-registry',))
+        cleanup = attempt_cleanups([cleanup_compose, cleanup_registry])
         if hosts_changed:
             try:
                 hosts_path = Path('/etc/hosts')
