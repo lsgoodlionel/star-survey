@@ -317,6 +317,13 @@ jobs:
               stream.write(f'ignore-unfixed={str(ignore_unfixed).lower()}\n')
           PY
 
+      - name: Install checksum-verified Trivy from official GitHub release
+        env:
+          TRIVY_VERSION: ${{ steps.vulnerability-policy.outputs.trivy-version }}
+        run: |
+          python3 platform/deploy/production/release/install_trivy.py --version "$TRIVY_VERSION" --destination "$RUNNER_TEMP/trivy-bin"
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+
       - name: Scan immutable image digest with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -328,6 +335,7 @@ jobs:
           ignore-unfixed: ${{ steps.vulnerability-policy.outputs.ignore-unfixed }}
           trivyignores: .trivyignore.release.yaml
           version: ${{ steps.vulnerability-policy.outputs.trivy-version }}
+          skip-setup-trivy: 'true'
           scanners: vuln
           timeout: 15m
 

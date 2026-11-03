@@ -338,3 +338,15 @@ PR70已合并3bef74a6858d97ab895d2d4f37e125dd08141278，已启动其main CI41722
 先改测试夹具为真实native.write_release_readiness生成完整报告（真实四摘要数据结构与四镜像identity），在未改运行校验器时复现候选RC和bootstrap正例都失败native readiness evidence identity is incomplete。运行修复仅将最终校验器的一行四个期望键改为生成器规范；不做别名归一化，不兼容错误连字符键，不减少四平台数量或SHA256校验。新增缺项、多项、错误别名及非法哈希负例均拒绝；21项资产/发布校验及27项原生证据测试通过。
 
 本次3文件独立修复/回归/记录，不改候选注册、原始证据、签名权限、发布开关或生产。rc.15仍未创建，不需要消耗新版本号；父任务审查合并后，须将标签绑定包含本修复、实际检查成功的新合并SHA，不能仍指向3bef74。旧main门禁成功不能替代该跨模块失败回归，保持不发布Release、不触碰生产。
+
+## Wave 6 rc.15 scanner installation failure (2026-11-03, pending review)
+
+Main 45017ce9298a96b05e00ea3066a6de9dbd52533c passed CI41726994685 (17 jobs) and source/personnel smoke41727106729. Immutable v0.3.15-rc.1 points to that commit. Candidate41730042637 published all four images, but all four scan/sign/attest jobs failed while installing policy-pinned Trivy v0.74.0, exit6. No vulnerability scan or native acceptance ran; final asset signing and Release were skipped. This is not a CVE verdict or a qualified predecessor.
+
+The pinned upstream installer downloads its binary from get.trivy.dev before fetching checksums from GitHub. Read-only DNS/HEAD checks reproduced unresolved host/curl6; official GitHub assets remain available. No DNS/proxy changes, candidate retries, image republishes, or tag moves were performed.
+
+The scoped fix installs the same policy version directly from the official aquasecurity/trivy GitHub release, requiring a unique exact checksum record and SHA256 match before copying one regular binary atomically. It rejects bad/missing/duplicate checksums, download failures, binary aliases/links/duplicates, and preserves existing binaries on failure. The pinned action supports skip-setup-trivy; only its unavailable installer is replaced. HIGH/CRITICAL, ignoreUnfixed, exceptions, exit1, immutable digests and signing gates remain unchanged. No job permissions or persistent credentials are added.
+
+Six installer tests and thirteen workflow tests pass. The real official tar downloaded successfully (50,419,107 bytes), verified against official checksums and GitHub asset metadata: sha256:2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a. A 168,456,354-byte binary was installed into a temporary directory and removed without execution. Actual artifact validation caught the draft 128MiB binary limit; it now allows 256MiB with a boundary regression, while compressed download remains limited to 128MiB. These checks do not claim an actual vulnerability scan passed.
+
+Draft PR requires parent independent review and CI; old failed evidence and tag remain unchanged. New source does not alter the old run workflow. No new candidate, Release, production action, or personnel grant was performed. Parent coordinates later retry/candidate strategy and external status records.
