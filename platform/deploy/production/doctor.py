@@ -42,6 +42,19 @@ class DoctorRuntimeError(DoctorError):
     pass
 
 
+class ProbeHttpError(DoctorRuntimeError):
+    def __init__(self, status):
+        self.status = status if isinstance(status, int) and 100 <= status <= 599 else None
+        super().__init__("product probe HTTP request failed")
+
+
+class ProbeStageError(DoctorRuntimeError):
+    def __init__(self, stage, status=None):
+        self.stage = stage
+        self.status = status
+        super().__init__("product probe failed")
+
+
 class CommandRunner:
     def run(self, command, **kwargs):
         kwargs.setdefault("check", True)
@@ -157,6 +170,8 @@ class ProductProbe:
                 if raw:
                     return response.status, data
                 return response.status, json.loads(data) if data else None
+        except urllib.error.HTTPError as exc:
+            raise ProbeHttpError(exc.code) from exc
         except (OSError, urllib.error.URLError, ValueError) as exc:
             raise DoctorRuntimeError("product probe API request failed") from exc
 
@@ -220,32 +235,42 @@ class ProductProbe:
         sid = None
         export_id = None
         failure = None
+        phase = "login"
         try:
             status, _ = self._api(token, "GET", "/v1/resources?limit=1")
             if status != 200:
                 raise DoctorRuntimeError("product probe login failed")
             suffix = uuid.uuid4().hex[:12]
+            phase = "project-create"
             status, project = self._api(token, "POST", "/v1/projects", {"name": "production-probe-" + suffix})
             project = self._expect(status, 201, project, "project creation")
             project_id = project.get("id")
             definition = {
                 "definitionVersion": 1, "uuid": str(uuid.uuid4()), "title": "Production probe " + suffix,
-                "language": "en", "settings": {"anonymized": "N", "datestamp": "Y", "format": "G"},
+                "language": "en", "settings": {
+                    "anonymized": "N", "datestamp": "Y", "format": "G", "savetimings": "N",
+                    "ipaddr": "N", "refurl": "N", "allowsave": "Y", "allowprev": "Y",
+                    "alloweditaftercompletion": "Y", "questionindex": "0",
+                },
                 "groups": [{"uuid": str(uuid.uuid4()), "title": "Probe", "questions": [{
                     "uuid": str(uuid.uuid4()), "code": "PROBE", "type": "S", "text": "Probe response",
                     "mandatory": True,
                 }]}],
             }
+            phase = "survey-create"
             status, survey = self._api(token, "POST", "/v1/surveys", {"parentId": project_id, "definition": definition})
             survey = self._expect(status, 201, survey, "survey creation")
             survey_id = survey.get("id")
+            phase = "publish"
             status, outcome = self._api(token, "POST", f"/v1/surveys/{survey_id}/publish")
             outcome = self._expect(status, 200, outcome, "publish")
             version = outcome.get("version") or {}
             sid, instance = version.get("engineSid"), version.get("engineInstanceId")
             if not isinstance(sid, int) or sid <= 0 or not isinstance(instance, str):
                 raise DoctorRuntimeError("product probe publish binding is invalid")
+            phase = "answer"
             self._answer(sid)
+            phase = "response-projection"
             for _ in range(30):
                 self.runner.run(self.compose + ["exec", "-T", "engine", "php",
                                                 "application/commands/console.php", "plugin", "cron"],
@@ -258,12 +283,14 @@ class ProductProbe:
                 self.sleep(2)
             else:
                 raise DoctorRuntimeError("product probe response projection failed")
+            phase = "export-create"
             status, export = self._api(token, "POST", f"/v1/surveys/{survey_id}/exports", {
                 "format": "csv", "filter": {"states": ["engine_completed"], "versions": [1]},
                 "templateVersion": "default",
             })
             export = self._expect(status, 202, export, "export creation")
             export_id = export.get("jobId")
+            phase = "export-completion"
             for _ in range(30):
                 status, job = self._api(token, "GET", f"/v1/exports/{export_id}")
                 if status == 200 and isinstance(job, dict) and job.get("status") == "completed":
@@ -273,11 +300,12 @@ class ProductProbe:
                 self.sleep(2)
             else:
                 raise DoctorRuntimeError("product probe export timed out")
+            phase = "export-download"
             status, data = self._api(token, "GET", f"/v1/exports/{export_id}/download", raw=True)
             if status != 200 or not data:
                 raise DoctorRuntimeError("product probe export download failed")
         except (DoctorRuntimeError, OSError, subprocess.CalledProcessError) as exc:
-            failure = exc
+            failure = ProbeStageError(phase, exc.status if isinstance(exc, ProbeHttpError) else None)
         finally:
             try:
                 if instance and sid:
@@ -286,10 +314,10 @@ class ProductProbe:
                     status, _ = self._api(token, "POST", f"/v1/resources/{project_id}/archive")
                     if status != 200:
                         raise DoctorRuntimeError("product probe project cleanup failed")
-            except DoctorRuntimeError as cleanup:
-                failure = cleanup
+            except DoctorRuntimeError:
+                failure = ProbeStageError("cleanup")
         if failure is not None:
-            raise DoctorRuntimeError("product probe failed") from failure
+            raise failure
 
 
 class HostListenerProbe:
@@ -540,9 +568,15 @@ class Doctor:
         pg = self._command(compose + ["exec", "-T", "platform-db", "psql", "-U", "postgres", "-d", "platform", "-Atqc", "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1"])
         engine = self._command(compose + ["exec", "-T", "engine", "sh", "-c", "php application/commands/console.php productionInit status"])
         actual = (pg.stdout or "").strip()
-        engine_ok = "completed" in (engine.stdout or "").lower() or (engine.stdout or "").strip() == "0"
+        # productionInit status reports readiness through its exit code, not stdout.
+        engine_ok = engine.returncode == 0
         ok = actual == expected and engine_ok
-        return self._check("migrations", "ok" if ok else "blocked", "database migrations match the installed release" if ok else "database migration state does not match the installed release")
+        expected_label = expected if isinstance(expected, str) and re.fullmatch(r"[0-9]+", expected) else "invalid"
+        actual_label = actual if re.fullmatch(r"[0-9]+", actual) else "invalid"
+        summary = ("database migrations match the installed release" if ok else
+                   f"database migration state mismatch: expected={expected_label}, actual={actual_label}, "
+                   f"engine={'ok' if engine_ok else 'blocked'}")
+        return self._check("migrations", "ok" if ok else "blocked", summary)
 
     def _volume_check(self):
         result = self._command(["docker", "volume", "inspect", *[f"survey-production_{name}" for name in sorted(EXPECTED_VOLUMES)]])
@@ -578,8 +612,14 @@ class Doctor:
         try:
             self.product_probe(host, compose)
             return self._check("minimal-probe", "ok", "disposable login, publish, answer, query and export journey succeeded")
+        except ProbeStageError as exc:
+            phases = {"login", "project-create", "survey-create", "publish", "answer", "response-projection",
+                      "export-create", "export-completion", "export-download", "cleanup"}
+            phase = exc.stage if exc.stage in phases else "unknown"
+            status = f" (HTTP {exc.status})" if isinstance(exc.status, int) and 100 <= exc.status <= 599 else ""
+            return self._check("minimal-probe", "blocked", f"disposable product journey failed at {phase}{status}")
         except DoctorRuntimeError:
-            return self._check("minimal-probe", "blocked", "disposable product journey failed and was cleaned up")
+            return self._check("minimal-probe", "blocked", "disposable product journey failed during setup")
 
     def run(self):
         version, schema, host, compose = self._load_installation()
