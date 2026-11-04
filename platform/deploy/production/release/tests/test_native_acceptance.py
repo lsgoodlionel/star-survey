@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
+import zipfile
 import importlib.util
 import json
 import os
@@ -20,6 +23,7 @@ WORKFLOW_PATH = ROOT / ".github" / "workflows" / "release.yml"
 SCRIPT_PATH = ROOT / "platform" / "deploy" / "production" / "release" / "native_acceptance.sh"
 EVIDENCE_HELPER_PATH = ROOT / "platform" / "deploy" / "production" / "release" / "native_acceptance_evidence.py"
 BASELINE_POLICY_PATH = ROOT / ".github" / "release" / "baseline-policy.json"
+UPGRADE_HELPER_PATH = EVIDENCE_HELPER_PATH
 
 
 def load_workflow() -> dict:
@@ -53,7 +57,7 @@ REQUIRED_LIFECYCLE_COMMANDS = (
     'run_ctl setup-probe',
     'write_doctor_evidence "doctor-installed"',
     'run_ctl backup',
-    'run_ctl upgrade',
+    'python3 "$evidence_helper" upgrade-data-probe',
     'write_doctor_evidence "doctor-upgraded"',
     'run_ctl restore',
     'write_doctor_evidence "doctor-restored"',
@@ -255,6 +259,11 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
         assert_native_acceptance_contract(self, self.text)
         assert_native_workflow_invocation(self, load_workflow())
 
+    def test_upgrade_data_is_verified_before_upgrade_can_be_claimed(self):
+        self.assertIn('upgrade-data-probe', self.text)
+        self.assertLess(self.text.index('upgrade-data-probe'), self.text.index('upgrade_verified=true'))
+        self.assertIn('--upgrade-data-evidence', self.text)
+
     def test_success_bypass_mutations_are_rejected(self):
         mutations = (
             'ALLOW_SKIP=1',
@@ -325,6 +334,136 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
         self.assertIn('"preflightDisk": "separately-tested"', helper)
 
 
+class UpgradeContinuityProbeTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('upgrade_data_probe', UPGRADE_HELPER_PATH)
+        cls.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.module)
+        runtime = ROOT / 'platform/deploy/production'
+        sys.path.insert(0, str(runtime))
+        try:
+            spec = importlib.util.spec_from_file_location('continuity_test_doctor', runtime / 'doctor.py')
+            cls.doctor = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(cls.doctor)
+        finally:
+            sys.path.pop(0)
+
+    @staticmethod
+    def export_fixture(mode):
+        if mode == 'bare-csv': return b'PROBE\nproduction acceptance\n'
+        header = ['version', 'sid', 'responseid', 'generation', 'state', 'startedat', 'completedat', 'answersstatus', 'PROBE', 'OTHER']
+        labels = ['版本', '引擎问卷号', '答卷号', '代次', '状态', '开始时间', '完成时间', '作答状态', 'production acceptance', '其他']
+        row = ['1', '123', '7', 'generation-one', 'engine_completed', '', '', 'available', 'production acceptance', '']
+        if mode == 'lost-answer': row[8] = 'missing'
+        if mode == 'wrong-column': row[8], row[9] = '', 'production acceptance'
+        if mode == 'wrong-response': row[2] = '8'
+        if mode == 'wrong-generation': row[3] = 'another-generation'
+        rows = [header, labels] + ([] if mode == 'header-only' else [row])
+        if mode == 'duplicate-row': rows.append(row)
+        if mode == 'duplicate-header': header[-1] = 'PROBE'
+        fields = [['version', 'sid', 'column', 'fieldname', 'questioncode', 'type', 'aid', 'scale', 'label', 'sensitive', 'masking', 'options'],
+                  ['1', '123', 'PROBE', 'probe-column', 'PROBE', 'S', '', '0', 'probe', 'false', '', '']]
+        if mode == 'wrong-field': fields[1][3] = 'unrelated-column'
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as archive:
+            for name, table in [('responses.csv', rows), ('fields.csv', fields)]:
+                stream = io.StringIO(newline=''); csv.writer(stream).writerows(table)
+                archive.writestr(name, stream.getvalue().encode('utf-8-sig'))
+        return out.getvalue()
+
+    def test_export_requires_unique_original_response_and_exact_answer_column(self):
+        for mode in ('bare-csv', 'header-only', 'wrong-column', 'wrong-response', 'wrong-generation',
+                     'duplicate-row', 'duplicate-header', 'wrong-field'):
+            with self.subTest(mode=mode):
+                probe, events = self.fixture(mode)
+                with self.assertRaises(self.doctor.DoctorRuntimeError): probe.run_and_verify()
+                self.assertEqual(['close', 'archive'], events[-2:])
+                self.assertFalse(probe.export_verified)
+
+    def fixture(self, mode='success'):
+        events, state = [], {'upgraded': False}
+        config = {'tenantId': '11111111-1111-4111-8111-111111111111', 'actorId': 'fixture-owner'}
+        def api(probe, token, method, path, body=None, raw=False):
+            if method == 'GET' and path == '/v1/resources?limit=1': return 200, {}
+            if method == 'POST' and path == '/v1/projects': return 201, {'id': 'project'}
+            if method == 'POST' and path == '/v1/surveys': return 201, {'id': 'survey'}
+            if method == 'POST' and path.endswith('/publish'):
+                return 200, {'version': {'engineSid': 123, 'engineInstanceId': 'engine'}}
+            if method == 'GET' and '/responses?' in path:
+                events.append('read-after' if state['upgraded'] else 'read-before')
+                if state['upgraded']:
+                    self.assertEqual('after', token)
+                    self.assertEqual(['candidate-compose'], probe.compose)
+                row = {'version': 1, 'engineSid': 123, 'generation': 'generation-one', 'responseId': 7, 'state': 'engine_completed', 'answersStatus': 'available',
+                       'answers': {'probe-column': 'production acceptance'}}
+                if mode == 'no-original-answer':
+                    row.update(answersStatus='missing', answers=None)
+                return 200, {'items': [] if mode == 'lost-response' and state['upgraded'] else [row]}
+            if method == 'POST' and path.endswith('/exports'):
+                events.append('export');self.assertTrue(state['upgraded']);return 202, {'jobId': 'export'}
+            if method == 'GET' and path.endswith('/download'):
+                events.append('download');return 200, self.export_fixture(mode)
+            if method == 'GET' and path == '/v1/exports/export': return 200, {'status': 'completed'}
+            if method == 'POST' and path.endswith('/archive'):
+                events.append('archive');return (500 if mode == 'cleanup-failure' else 200), {}
+            raise AssertionError((method, path))
+        def configuration(probe):
+            return {**config, 'actorId': 'changed'} if state['upgraded'] and mode == 'identity-change' else config
+        methods = {'_configuration': configuration, '_token': lambda probe, config: 'after' if state['upgraded'] else 'before',
+                   '_api': api, '_answer': lambda probe, sid: events.append('answer'),
+                   '_close_engine_survey': lambda probe, instance, sid: events.append('close')}
+        for name, replacement in methods.items():
+            patch = mock.patch.object(self.doctor.ProductProbe, name, replacement)
+            patch.start();self.addCleanup(patch.stop)
+        def upgrade():
+            events.append('upgrade')
+            self.assertLess(events.index('answer'), events.index('read-before'))
+            if mode == 'upgrade-failure': raise self.doctor.DoctorRuntimeError('upgrade failed')
+            state['upgraded'] = True
+        Probe = self.module.make_continuity_probe(self.doctor.ProductProbe, self.doctor.DoctorRuntimeError)
+        return Probe('/unused', 'fixture.test', ['baseline-compose'], mock.Mock(),
+                     upgrade_action=upgrade, upgraded_compose=lambda: ['candidate-compose']), events
+
+    def test_same_response_and_original_answer_are_verified_after_upgrade(self):
+        probe, events = self.fixture()
+        flags = probe.run_and_verify()
+        self.assertTrue(all(flags.values()))
+        self.assertEqual(['answer', 'read-before', 'upgrade', 'read-after', 'export', 'download', 'close', 'archive'], events)
+
+    def test_data_loss_identity_change_upgrade_or_cleanup_failure_never_passes(self):
+        for mode in ('no-original-answer', 'lost-response', 'lost-answer', 'identity-change', 'upgrade-failure', 'cleanup-failure'):
+            with self.subTest(mode=mode):
+                probe, events = self.fixture(mode)
+                with self.assertRaises(self.doctor.DoctorRuntimeError): probe.run_and_verify()
+                self.assertEqual(['close', 'archive'], events[-2:])
+                if mode == 'no-original-answer': self.assertNotIn('upgrade', events)
+                if mode == 'cleanup-failure': self.assertEqual('cleanup', probe.continuity_phase)
+
+    def test_evidence_write_failure_cannot_prevent_product_cleanup(self):
+        probe, events = self.fixture()
+        with self.assertRaises(OSError):
+            self.module.record_continuity(probe, '0.3.17-rc.1', '0.3.18-rc.1', 'a'*64, 'b'*64, Path('/unused'),
+                                          mock.Mock(side_effect=OSError('write failed')))
+        self.assertEqual(['close', 'archive'], events[-2:])
+        self.assertEqual('evidence-write', probe.continuity_phase)
+
+    def test_real_upgrade_command_and_activated_version_are_both_required(self):
+        manager = mock.Mock();manager._read_state.return_value = {'version': '0.3.18-rc.1'}
+        with mock.patch.object(self.module.subprocess, 'run') as run:
+            self.module.perform_upgrade('/ctl', '/target', '/manifest', 'a'*64, '0.3.18-rc.1', manager, self.doctor.DoctorRuntimeError)
+            self.assertEqual(['/ctl', '--target', '/target', 'upgrade', '--manifest', '/manifest', '--manifest-sha256', 'a'*64], run.call_args.args[0])
+            self.assertTrue(run.call_args.kwargs['check'])
+            manager._read_state.return_value = {'version': '0.3.17-rc.1'}
+            with self.assertRaises(self.doctor.DoctorRuntimeError):
+                self.module.perform_upgrade('/ctl', '/target', '/manifest', 'a'*64, '0.3.18-rc.1', manager, self.doctor.DoctorRuntimeError)
+        with mock.patch.object(self.module.subprocess, 'run', side_effect=subprocess.CalledProcessError(4, ['/ctl'], stderr='password=do-not-expose')):
+            with self.assertRaises(self.doctor.DoctorRuntimeError) as failure:
+                self.module.perform_upgrade('/ctl', '/target', '/manifest', 'a'*64, '0.3.18-rc.1', manager, self.doctor.DoctorRuntimeError)
+            self.assertEqual(('cli-exit', 4), (failure.exception.upgrade_category, failure.exception.upgrade_exit_code))
+            self.assertNotIn('do-not-expose', str(failure.exception))
+
+
 class NativeAcceptanceEvidenceTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -355,6 +494,17 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         self.assertFalse(self.module.tls_marker_from_doctor({'checks': []}))
         self.assertFalse(self.module.tls_marker_from_doctor({'checks': [{'id': 'tls', 'status': 'blocked'}]}))
         self.assertTrue(self.module.tls_marker_from_doctor({'checks': [{'id': 'tls', 'status': 'ok'}]}))
+
+    def test_upgrade_claim_requires_data_continuity_evidence(self):
+        env = {'EXPECTED_UBUNTU': '22.04', 'EXPECTED_ARCHITECTURE': 'amd64',
+               'CANDIDATE_MANIFEST_SHA256': 'a' * 64, 'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
+               'ADMIN_IMAGE_DIGEST': 'sha256:' + 'c' * 64, 'PLATFORM_IMAGE_DIGEST': 'sha256:' + 'd' * 64,
+               'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + 'e' * 64, 'ENGINE_IMAGE_DIGEST': 'sha256:' + '2' * 64,
+               'BASELINE_MODE': 'predecessor'}
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, env):
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.write_summary_evidence(Path(temporary) / 'summary.json', 'passed', 0, 'uninstall', True,
+                                                   {'checks': [{'id': 'tls', 'status': 'ok'}]})
 
     def test_summary_reports_missing_marker_without_making_failure_look_successful(self):
         env = {'EXPECTED_UBUNTU': '22.04', 'EXPECTED_ARCHITECTURE': 'amd64',
@@ -668,7 +818,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             identity = {
                 "schemaVersion": 1, "version": "1.0.0", "commit": "1" * 40,
                 "manifestSha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
-                "bundles": bundles, "baseline": {"mode": "predecessor"},
+                "bundles": bundles, "baseline": {"mode": "predecessor", 'version': '0.9.0', 'manifestSha256': '8'*64},
                 "images": {
                     name: {"reference": manifest["images"][key], "digest": image_digests[name]}
                     for name, key in (("admin", "ADMIN_IMAGE"), ("platform", "PLATFORM_IMAGE"), ("publish-gateway", "PUBLISH_GATEWAY_IMAGE"), ("engine", "ENGINE_IMAGE"))
@@ -691,9 +841,28 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                     "preflightDisk": "separately-tested", "completedAt": "2026-10-09T00:00:00+00:00",
                 }
                 (directory / "summary.json").write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
+                proof = {'schemaVersion': 1, 'status': 'passed', 'baselineVersion': '0.9.0', 'candidateVersion': '1.0.0',
+                         'baselineManifestSha256': '8'*64, 'candidateManifestSha256': identity['manifestSha256'],
+                         'versionSwitchVerified': True, 'responseBeforeUpgradeVerified': True,
+                         'responseAfterUpgradeVerified': True, 'exportAnswerVerified': True, 'cleanupCompleted': True}
+                self.module.write_evidence(directory / 'upgrade-data.json', 'upgrade-data', proof)
             readiness_path = root / "release-readiness.json"
             self.module.write_release_readiness_from_assets(identity_path, candidate, evidence, readiness_path)
             self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+
+            proof_path = evidence / 'native-acceptance-22.04-amd64' / 'upgrade-data.json'
+            original_proof = proof_path.read_text()
+            proof_path.unlink()
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+            for field, value in [('baselineManifestSha256', '0'*64), ('candidateManifestSha256', '0'*64),
+                                 ('candidateVersion', '1.0.1'), ('baselineVersion', '0.8.0'),
+                                 ('exportAnswerVerified', False), ('cleanupCompleted', 1), ('raw', 'forbidden'),
+                                 *[('schemaVersion', value) for value in (True, False, 1.0, '1', None, 0, 2)]]:
+                altered = json.loads(original_proof);altered[field] = value;proof_path.write_text(json.dumps(altered))
+                with self.subTest(upgrade_data=field, value=value), self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+            proof_path.write_text(original_proof)
 
             original = readiness_path.read_text(encoding="utf-8")
             self.assertEqual(image_digests["engine"], json.loads(original)["engineManifestDigest"])

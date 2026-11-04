@@ -104,7 +104,8 @@ write_summary() {
     --exit-code "$1" \
     --last-step "$last_step" \
     --upgrade-verified "$upgrade_verified" \
-    --doctor-evidence "$evidence_root/doctor-installed.json"
+    --doctor-evidence "$evidence_root/doctor-installed.json" \
+    --upgrade-data-evidence "$evidence_root/upgrade-data.json"
 }
 
 collect_evidence() {
@@ -292,14 +293,16 @@ last_step="backup"
 run_ctl backup --output "$backup_name"
 
 if [[ "$BASELINE_MODE" == predecessor ]]; then
-  last_step="upgrade"
-  run_ctl upgrade \
-    --manifest "$candidate_release_dir/release.json" \
-    --manifest-sha256 "$CANDIDATE_MANIFEST_SHA256"
+  last_step="upgrade-data-continuity"
+  python3 "$evidence_helper" upgrade-data-probe \
+    --runtime "$runtime" --ctl "$ctl_bin" --target "$target" --host "$SURVEY_ACCEPTANCE_PUBLIC_HOST" \
+    --baseline-manifest "$baseline_dir/release.json" --baseline-sha "$baseline_manifest_sha" \
+    --candidate-manifest "$candidate_release_dir/release.json" --candidate-sha "$CANDIDATE_MANIFEST_SHA256" \
+    --output "$evidence_root/upgrade-data.json"
   ctl_bin="$target/releases/$(jq -er '.version' "$candidate_release_dir/release.json")/surveyctl"
-  upgrade_verified=true
   last_step="doctor-upgraded"
   write_doctor_evidence "doctor-upgraded"
+  upgrade_verified=true
 fi
 
 last_step="restore-target-survey-restore-project"
