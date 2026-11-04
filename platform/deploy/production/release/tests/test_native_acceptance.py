@@ -281,6 +281,25 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                 with self.subTest(field=field, value=value):
                     self.assertNotEqual(0, resolve({**rule, field: value}).returncode)
 
+    def test_rc19_keeps_qualified_rc17_source_and_failed_rc18_policy_unchanged(self):
+        policy = json.loads(BASELINE_POLICY_PATH.read_text())
+        expected = {'mode': 'predecessor-artifact', 'version': '0.3.17-rc.1', 'runId': 41756770743,
+                    'commit': 'd745a5eeb7eca6af59d63986db004249efbd2acc',
+                    'manifestSha256': '95b113aa6c554c8e918bdf8d7b0e4ed47bfa59d6b129741d131e7ca4c611379b'}
+        self.assertEqual(expected, policy['releases'].get('0.3.19-rc.1'))
+        self.assertEqual(expected, policy['releases']['0.3.18-rc.1'])
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases']['0.3.17-rc.1'])
+        step = next(s for s in self.workflow['jobs']['candidate-assets']['steps'] if s.get('id') == 'baseline')
+        script = step['run'].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        result = subprocess.run([sys.executable, '-', '0.3.19-rc.1', str(BASELINE_POLICY_PATH)],
+                                input=script, text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        values = dict(line.split('=', 1) for line in result.stdout.splitlines())
+        self.assertEqual({'BASELINE_MODE': 'predecessor', 'BASELINE_SOURCE': 'predecessor-artifact',
+                          'BASELINE_VERSION': expected['version'], 'MINIMUM_SOURCE_VERSION': expected['version'],
+                          'BASELINE_RUN_ID': str(expected['runId']), 'BASELINE_COMMIT': expected['commit'],
+                          'BASELINE_MANIFEST_SHA256': expected['manifestSha256']}, values)
+
 
 class NativeAcceptanceScriptTest(unittest.TestCase):
     @classmethod
