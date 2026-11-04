@@ -223,11 +223,20 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertEqual({"mode": "bootstrap"}, policy["releases"].get("0.3.17-rc.1"))
         for version, rule in policy["releases"].items():
             with self.subTest(version=version):
-                self.assertIn(rule["mode"], {"predecessor", "bootstrap"})
-                if rule["mode"] == "predecessor":
+                self.assertIn(rule["mode"], {"predecessor", "predecessor-artifact", "bootstrap"})
+                if rule["mode"] in {"predecessor", "predecessor-artifact"}:
+                    fields = {'mode', 'version', 'manifestSha256'}
+                    if rule['mode'] == 'predecessor-artifact':
+                        fields |= {'runId', 'commit'}
+                        self.assertIs(type(rule['runId']), int)
+                        self.assertGreater(rule['runId'], 0)
+                        self.assertRegex(rule['commit'], r'^[0-9a-f]{40}$')
+                        self.assertRegex(rule['version'], r'^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$')
+                    self.assertEqual(fields, set(rule))
                     self.assertRegex(rule["version"], r"^[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?$")
                     self.assertRegex(rule["manifestSha256"], r"^[0-9a-f]{64}$")
                 else:
+                    self.assertEqual({'mode'}, set(rule))
                     self.assertRegex(version, r"^[0-9]+\.[0-9]+\.[0-9]+-rc\.1$")
                     self.assertNotIn("version", rule)
         candidate_text = job_text(self.workflow["jobs"]["candidate-assets"])
@@ -238,6 +247,35 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn("upgrade_verified=false", script)
         helper = EVIDENCE_HELPER_PATH.read_text(encoding="utf-8")
         self.assertIn('"upgradeVerified": upgrade_verified', helper)
+
+    def test_rc18_uses_exact_reverified_rc17_actions_predecessor(self):
+        policy = json.loads(BASELINE_POLICY_PATH.read_text())
+        rule = {'mode': 'predecessor-artifact', 'version': '0.3.17-rc.1', 'runId': 41756770743,
+                'commit': 'd745a5eeb7eca6af59d63986db004249efbd2acc',
+                'manifestSha256': '95b113aa6c554c8e918bdf8d7b0e4ed47bfa59d6b129741d131e7ca4c611379b'}
+        self.assertEqual(rule, policy['releases'].get('0.3.18-rc.1'))
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases']['0.3.17-rc.1'])
+        step = next(step for step in self.workflow['jobs']['candidate-assets']['steps'] if step.get('id') == 'baseline')
+        script = step['run'].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'policy.json'
+            def resolve(value):
+                path.write_text(json.dumps({'schemaVersion': 1, 'releases': {'0.3.18-rc.1': value}}))
+                return subprocess.run([sys.executable, '-', '0.3.18-rc.1', str(path)], input=script, text=True,
+                                      capture_output=True, check=False)
+            result = resolve(rule)
+            self.assertEqual(0, result.returncode, result.stderr)
+            values = dict(line.split('=', 1) for line in result.stdout.splitlines())
+            self.assertEqual('predecessor', values['BASELINE_MODE'])
+            self.assertEqual('predecessor-artifact', values['BASELINE_SOURCE'])
+            self.assertEqual(rule['version'], values['MINIMUM_SOURCE_VERSION'])
+            self.assertEqual(str(rule['runId']), values['BASELINE_RUN_ID'])
+            self.assertEqual(rule['commit'], values['BASELINE_COMMIT'])
+            self.assertEqual(rule['manifestSha256'], values['BASELINE_MANIFEST_SHA256'])
+            for field, value in [('runId', True), ('runId', 0), ('commit', 'bad'), ('manifestSha256', 'bad'),
+                                 ('version', '0.3.17'), ('url', 'https://invalid.example')]:
+                with self.subTest(field=field, value=value):
+                    self.assertNotEqual(0, resolve({**rule, field: value}).returncode)
 
 
 class NativeAcceptanceScriptTest(unittest.TestCase):
