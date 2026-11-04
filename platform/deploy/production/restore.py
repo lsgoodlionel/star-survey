@@ -139,7 +139,7 @@ class RestoreManager:
                 raise RestoreIntegrityError("current release does not meet the personnel security floor")
         compatible.add(target_schema)
         minimum = release.get("minimumSourceVersion")
-        if not isinstance(minimum, str) or re.fullmatch(r"\d+\.\d+\.\d+", minimum) is None:
+        if not isinstance(minimum, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?", minimum) is None:
             raise RestoreIntegrityError("release version compatibility metadata is invalid")
         return version, release_dir, target_schema, compatible, minimum
 

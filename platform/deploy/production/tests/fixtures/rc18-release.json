@@ -1,0 +1,55 @@
+{
+  "assets": {
+    "bundles": {
+      "amd64": {
+        "name": "survey-0.3.18-rc.1-linux-amd64.tar.gz",
+        "sha256": "1ec50caacac7a892f8e52e329b9c440b1fb31d0ba6a3f5c9847f05e7c8821e08"
+      },
+      "arm64": {
+        "name": "survey-0.3.18-rc.1-linux-arm64.tar.gz",
+        "sha256": "94ff509be296cbdcfe0c99e9039c96b258e43e9537f3a0b6599a5de10e8c30b9"
+      }
+    }
+  },
+  "channel": "candidate",
+  "commit": "a34fcd5078c42cc7b11c00ef88b0aa49c63326fb",
+  "database": {
+    "backupSchema": 2,
+    "compatibleSourceSchemas": [
+      "953"
+    ],
+    "rollback": "restore-only",
+    "schema": "953"
+  },
+  "images": {
+    "ADMIN_IMAGE": "ghcr.io/lsgoodlionel/star-survey-admin@sha256:e7bfacd15da7e250dd1a16d17e2bf39967c557b948ca50798295a5a59b811d43",
+    "CADDY_IMAGE": "caddy@sha256:d44355d3c2149dc580ce2cac735955d1c08d3d00882c30489c241aa51a5c10d9",
+    "ENGINE_IMAGE": "ghcr.io/lsgoodlionel/star-survey-engine@sha256:df06e84756d531dc1163d3363acc6c794443b0e8f2905aa1ec881829219f40ea",
+    "MARIADB_IMAGE": "mariadb@sha256:dbe56e20372fc6d6b8e0e396866ba89c4c7f128c38c4f59aaa54d957db95790c",
+    "PLATFORM_IMAGE": "ghcr.io/lsgoodlionel/star-survey-platform@sha256:474a13e3ac9bb76052fe189bf38685ccd390676e02cd73318b04080349f0eb69",
+    "POSTGRES_IMAGE": "postgres@sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4378742297",
+    "PUBLISH_GATEWAY_IMAGE": "ghcr.io/lsgoodlionel/star-survey-publish-gateway@sha256:943abd1fd86ae6ba7111b1ebc9c4b09023e03cf41ff7727b0c4411ce66cad7ff"
+  },
+  "minimumSourceVersion": "0.3.17-rc.1",
+  "nativeAcceptance": {
+    "diskEvidence": "separately-tested",
+    "minimumFreeBytes": 8589934592,
+    "profile": "github-actions-native-v1",
+    "tlsMode": "local-ca"
+  },
+  "schemaVersion": 1,
+  "securityCapabilities": {
+    "platform-admin-session-v1": "ghcr.io/lsgoodlionel/star-survey-platform@sha256:474a13e3ac9bb76052fe189bf38685ccd390676e02cd73318b04080349f0eb69"
+  },
+  "supportedHosts": {
+    "architectures": [
+      "amd64",
+      "arm64"
+    ],
+    "ubuntu": [
+      "22.04",
+      "24.04"
+    ]
+  },
+  "version": "0.3.18-rc.1"
+}
