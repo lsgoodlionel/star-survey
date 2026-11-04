@@ -857,9 +857,10 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                 self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
             for field, value in [('baselineManifestSha256', '0'*64), ('candidateManifestSha256', '0'*64),
                                  ('candidateVersion', '1.0.1'), ('baselineVersion', '0.8.0'),
-                                 ('exportAnswerVerified', False), ('cleanupCompleted', 1), ('raw', 'forbidden')]:
+                                 ('exportAnswerVerified', False), ('cleanupCompleted', 1), ('raw', 'forbidden'),
+                                 *[('schemaVersion', value) for value in (True, False, 1.0, '1', None, 0, 2)]]:
                 altered = json.loads(original_proof);altered[field] = value;proof_path.write_text(json.dumps(altered))
-                with self.subTest(upgrade_data=field), self.assertRaises(self.module.EvidenceError):
+                with self.subTest(upgrade_data=field, value=value), self.assertRaises(self.module.EvidenceError):
                     self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
             proof_path.write_text(original_proof)
 

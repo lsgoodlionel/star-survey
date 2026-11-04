@@ -317,7 +317,8 @@ def validate_upgrade_data(value: Any) -> None:
              'exportAnswerVerified', 'cleanupCompleted'}
     report = exact_keys(value, {'schemaVersion', 'status', 'baselineVersion', 'candidateVersion',
                                'baselineManifestSha256', 'candidateManifestSha256'} | flags, 'upgrade data')
-    if report['schemaVersion'] != 1 or report['status'] != 'passed':
+    integer(report['schemaVersion'], 'upgrade data schemaVersion', 1, 1)
+    if report['status'] != 'passed':
         raise EvidenceError('upgrade data evidence is not passed')
     for field in ('baselineVersion', 'candidateVersion'):
         string(report[field], field, 128, SEMVER)
