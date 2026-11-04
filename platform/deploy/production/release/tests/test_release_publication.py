@@ -541,7 +541,19 @@ class VerifyReleaseScriptTest(unittest.TestCase):
         log = self.root / "commands.log"
         log.write_text("", encoding="utf-8")
         for name, body in {
-            "cosign": '#!/bin/sh\nprintf "cosign %s\\n" "$*" >> "$VERIFY_LOG"\n',
+            "cosign": '''#!/bin/sh
+printf "cosign %s\\n" "$*" >> "$VERIFY_LOG"
+if [ "$1" = verify ]; then
+  for arg in "$@"; do
+    [ "$arg" != --bundle ] || { echo 'unknown flag: --bundle' >&2; exit 1; }
+  done
+fi
+case "$*" in
+  *cosign-admin.sigstore.json*)
+    [ "$1" = verify-blob-attestation ] || exit 1
+    [ "${FAIL_IMAGE_BUNDLE:-0}" != 1 ] || exit 1 ;;
+esac
+''',
             "gh": '#!/bin/sh\nprintf "gh %s\\n" "$*" >> "$VERIFY_LOG"\n',
             "docker": '#!/bin/sh\nprintf "docker %s\\n" "$*" >> "$VERIFY_LOG"\nprintf oci-index\n',
         }.items():
@@ -592,13 +604,43 @@ class VerifyReleaseScriptTest(unittest.TestCase):
         stable = self.run_verifier(assets, environment, target="v1.2.3")
         self.assertEqual(0, stable.returncode, stable.stderr)
         commands = Path(environment["VERIFY_LOG"]).read_text(encoding="utf-8")
-        self.assertEqual(10, commands.count("cosign "))
+        self.assertEqual(18, commands.count("cosign "))
+        self.assertNotIn('cosign generate ', commands)
+        self.assertEqual(2, commands.count("cosign verify-blob "))
+        self.assertEqual(8, commands.count("cosign verify-blob-attestation "))
+        self.assertEqual(8, sum(line.startswith('cosign verify ') for line in commands.splitlines()))
+        for line in commands.splitlines():
+            if line.startswith(('cosign verify ', 'cosign verify-blob ', 'cosign verify-blob-attestation ')):
+                self.assertIn('--certificate-identity https://github.com/example/project/.github/workflows/release.yml@refs/tags/v1.2.3-rc.1', line)
+                self.assertIn('--certificate-oidc-issuer https://token.actions.githubusercontent.com', line)
         self.assertEqual(36, commands.count("gh attestation verify"))
         self.assertEqual(8, commands.count("docker buildx imagetools inspect"))
         self.assertEqual(2, commands.count("docker buildx imagetools inspect ghcr.io/example/engine@"))
         self.assertEqual(4, commands.count("gh attestation verify oci://ghcr.io/example/engine@"))
         self.assertEqual(2, sum("gh attestation verify " in line and "sbom-engine.spdx.json" in line
                                 for line in commands.splitlines()))
+
+    def test_image_bundle_verification_failure_stops_before_registry_and_attestations(self):
+        assets, environment = self.make_fixture()
+        result = self.run_verifier(assets, {**environment, 'FAIL_IMAGE_BUNDLE': '1'})
+        self.assertNotEqual(0, result.returncode)
+        commands = Path(environment['VERIFY_LOG']).read_text()
+        self.assertIn('cosign verify-blob-attestation --bundle ', commands)
+        self.assertIn('cosign-admin.sigstore.json', commands)
+        self.assertNotIn('gh attestation verify', commands)
+
+    def test_signed_image_digest_and_predicate_claims_are_explicit(self):
+        assets, environment = self.make_fixture()
+        result = self.run_verifier(assets, environment)
+        self.assertEqual(0, result.returncode, result.stderr)
+        commands = Path(environment['VERIFY_LOG']).read_text()
+        expected = hashlib.sha256(b'oci-index').hexdigest()
+        lines = [line for line in commands.splitlines() if line.startswith('cosign verify-blob-attestation ')]
+        self.assertEqual(4, len(lines))
+        for line in lines:
+            self.assertIn(f'--digest {expected} --digestAlg sha256', line)
+            self.assertIn('--type https://sigstore.dev/cosign/sign/v1', line)
+            self.assertIn('--check-claims=true', line)
 
     def test_complete_bootstrap_assets_are_a_baseline_but_not_stable_promotion(self):
         assets, environment = self.make_fixture(promotable=False)
@@ -722,5 +764,44 @@ class VerifyReleaseScriptTest(unittest.TestCase):
             self.assertNotEqual(0, self.run_verifier(assets, environment).returncode)
 
 
+def real_cosign_preflight(bundle: Path) -> None:
+    """Verify the original rc16 DSSE bundle with the actual pinned CLI, no stubs."""
+    assert hashlib.sha256(bundle.read_bytes()).hexdigest() == '0206b44a1602d4fd45413266ec3c0df17fb2ce056f9492b20fbcba9f98a9fce9'
+    version = subprocess.run(['cosign', 'version'], text=True, capture_output=True, timeout=30, check=True)
+    assert re.search(r'GitVersion:\s+v3\.1\.4\b', version.stdout + version.stderr), 'expected pinned Cosign v3.1.4'
+    print(json.dumps({'cosignVersion': 'v3.1.4', 'mode': 'DSSE subject-digest and predicate claims; default trusted-root and transparency verification',
+                      'fixtureSha256': '0206b44a1602d4fd45413266ec3c0df17fb2ce056f9492b20fbcba9f98a9fce9'}), flush=True)
+    identity = 'https://github.com/lsgoodlionel/star-survey/.github/workflows/release.yml@refs/tags/v0.3.16-rc.1'
+    digest = 'a39d53bc1d1344b93408faa4230222a1e27612b2be18598f39e953a4085607c5'
+    # Exercise the actual verifier invocation rather than a separately copied CLI.
+    body = VERIFY_PATH.read_text().split('  cosign verify-blob-attestation ', 1)[1].split('\n  cosign verify ', 1)[0]
+    tokens = shlex.split('cosign verify-blob-attestation ' + body.replace('\\\n', ' '))
+    bindings = {'$assets/cosign-$name.sigstore.json': str(bundle),
+                '${expected_digest#sha256:}': digest,
+                '$workflow_identity': identity,
+                '$issuer': 'https://token.actions.githubusercontent.com'}
+    command = [bindings.get(token, token) for token in tokens]
+    assert not any('$' in token for token in command), 'unresolved verifier command variable'
+    cases = [('original-dsse-bundle', None, None, None),
+             ('wrong-digest', '--digest', '0' * 64, 'digest'),
+             ('wrong-identity', '--certificate-identity', identity + '-wrong', 'identity'),
+             ('wrong-issuer', '--certificate-oidc-issuer', 'https://invalid.example', 'issuer'),
+             ('wrong-predicate', '--type', 'https://invalid.example/predicate', 'predicate')]
+    for name, flag, value, reason in cases:
+        arguments = command.copy()
+        if flag:
+            arguments[arguments.index(flag) + 1] = value
+        result = subprocess.run(arguments, text=True, capture_output=True, timeout=120, check=False)
+        if flag is None:
+            assert result.returncode == 0, f'{name} failed: {result.stderr.splitlines()[-1:]}'
+        else:
+            assert result.returncode != 0, f'{name} incorrectly accepted'
+            assert reason in result.stderr.lower(), f'{name} did not fail for the expected claim: {result.stderr.splitlines()[-1:]}'
+        print(json.dumps({'case': name, 'expectedResultVerified': True, 'exitCode': result.returncode}), flush=True)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if len(sys.argv) == 3 and sys.argv[1] == '--real-cosign':
+        real_cosign_preflight(Path(sys.argv[2]))
+    else:
+        unittest.main()
