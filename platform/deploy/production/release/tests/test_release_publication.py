@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import unicodedata
 
 import yaml
@@ -133,6 +134,39 @@ def assert_publication_contract(testcase: unittest.TestCase, workflow: dict) -> 
 
 
 class ReleasePublicationWorkflowTest(unittest.TestCase):
+    def test_real_registry_preflight_has_only_scoped_read_permissions(self):
+        job = load_workflow(ROOT / '.github/workflows/production-smoke.yml')['jobs']['cosign-contract']
+        self.assertEqual({'contents': 'read', 'packages': 'read'}, job['permissions'])
+        text = job_text(job)
+        self.assertIn('--real-registry', text)
+        self.assertIn('docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9', text)
+
+    def test_real_registry_preflight_binds_all_four_images_and_source(self):
+        def success(args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, 'GitVersion: v3.1.4', '')
+        with patch('subprocess.run', side_effect=success) as run, patch('builtins.print'):
+            real_registry_preflight()
+        calls = [call.args[0] for call in run.call_args_list]
+        signatures = [cmd for cmd in calls if cmd[:2] == ['cosign', 'verify']]
+        attestations = [cmd for cmd in calls if cmd[:3] == ['gh', 'attestation', 'verify']]
+        self.assertEqual(4, len(signatures))
+        self.assertEqual(8, len(attestations))
+        self.assertEqual({'admin', 'platform', 'publish-gateway', 'engine'},
+                         {cmd[-1].split('star-survey-')[1].split('@')[0] for cmd in signatures})
+        for cmd in attestations:
+            self.assertEqual('refs/tags/v0.3.16-rc.1', cmd[cmd.index('--source-ref') + 1])
+            self.assertEqual('ba2cd00091690173f2fe6a5f2014665a4a1dc9c8', cmd[cmd.index('--source-digest') + 1])
+            self.assertIn('@sha256:', cmd[3])
+
+    def test_real_registry_preflight_stops_on_signature_failure(self):
+        def fail_signature(args, **kwargs):
+            return subprocess.CompletedProcess(args, 1 if args[:2] == ['cosign', 'verify'] else 0,
+                                               'GitVersion: v3.1.4\n', 'signature rejected')
+        with patch('subprocess.run', side_effect=fail_signature) as run, patch('builtins.print'):
+            with self.assertRaisesRegex(AssertionError, 'admin/registry-signature failed'):
+                real_registry_preflight()
+        self.assertFalse(any(call.args[0][:3] == ['gh', 'attestation', 'verify'] for call in run.call_args_list))
+
     @classmethod
     def setUpClass(cls):
         cls.workflow = load_workflow()
@@ -764,6 +798,41 @@ esac
             self.assertNotEqual(0, self.run_verifier(assets, environment).returncode)
 
 
+def real_registry_preflight() -> None:
+    """Read existing rc16 image evidence only; never build, push or qualify rc16."""
+    version = subprocess.run(['cosign', 'version'], text=True, capture_output=True, timeout=30, check=True)
+    assert re.search(r'GitVersion:\s+v3\.1\.4\b', version.stdout + version.stderr), 'expected pinned Cosign v3.1.4'
+    gh_version = subprocess.run(['gh', 'version'], text=True, capture_output=True, timeout=30, check=True)
+    print(json.dumps({'scope': 'existing rc16 registry evidence only; not candidate acceptance',
+                      'cosignVersion': 'v3.1.4', 'ghVersion': gh_version.stdout.splitlines()[0]}), flush=True)
+    digests = {
+        'admin': 'a39d53bc1d1344b93408faa4230222a1e27612b2be18598f39e953a4085607c5',
+        'platform': '6a7558d70d74bb07ca9b1a1a6a2b5f94eae8acac9c911e91baea08cb4b97f926',
+        'publish-gateway': 'b42077d4cfea1bf6db3a02d6c635c75dd954176e1ce700bfc0de7ecfce0cf625',
+        'engine': '972f686221824c78a5b1d330e156bcd3be78e51aba41309b01009f6cdf94895f',
+    }
+    identity = 'https://github.com/lsgoodlionel/star-survey/.github/workflows/release.yml@refs/tags/v0.3.16-rc.1'
+    for name, digest in digests.items():
+        reference = f'ghcr.io/lsgoodlionel/star-survey-{name}@sha256:{digest}'
+        bindings = {'$reference': reference, 'oci://$reference': f'oci://{reference}',
+                    '$workflow_identity': identity, '$issuer': 'https://token.actions.githubusercontent.com',
+                    '$repository': 'lsgoodlionel/star-survey', '$source_ref': 'refs/tags/v0.3.16-rc.1',
+                    '$repository/.github/workflows/release.yml': 'lsgoodlionel/star-survey/.github/workflows/release.yml',
+                    '$source_commit': 'ba2cd00091690173f2fe6a5f2014665a4a1dc9c8'}
+        commands = {}
+        for kind, marker, occurrence in [('registry-signature', '  cosign verify ', 0),
+                                          ('provenance', '  gh attestation verify ', 0),
+                                          ('sbom', '  gh attestation verify ', 1)]:
+            body = VERIFY_PATH.read_text().split(marker)[occurrence + 1].split(' >/dev/null', 1)[0]
+            tokens = shlex.split(marker.strip() + ' ' + body.replace('\\\n', ' '))
+            commands[kind] = [bindings.get(token, token) for token in tokens]
+            assert not any('$' in token for token in commands[kind]), 'unresolved verifier command variable'
+        for kind, command in commands.items():
+            result = subprocess.run(command, text=True, capture_output=True, timeout=120, check=False)
+            assert result.returncode == 0, f'{name}/{kind} failed: {result.stderr.splitlines()[-1:]}'
+            print(json.dumps({'image': name, 'check': kind, 'exitCode': result.returncode}), flush=True)
+
+
 def real_cosign_preflight(bundle: Path) -> None:
     """Verify the original rc16 DSSE bundle with the actual pinned CLI, no stubs."""
     assert hashlib.sha256(bundle.read_bytes()).hexdigest() == '0206b44a1602d4fd45413266ec3c0df17fb2ce056f9492b20fbcba9f98a9fce9'
@@ -801,7 +870,9 @@ def real_cosign_preflight(bundle: Path) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == '--real-cosign':
+    if sys.argv[1:] == ['--real-registry']:
+        real_registry_preflight()
+    elif len(sys.argv) == 3 and sys.argv[1] == '--real-cosign':
         real_cosign_preflight(Path(sys.argv[2]))
     else:
         unittest.main()
