@@ -2,6 +2,8 @@ import contextlib
 import io
 import json
 import os
+import hashlib
+import subprocess
 import tempfile
 from pathlib import Path
 import unittest
@@ -67,6 +69,25 @@ class ReadonlyPredecessorWorkflowTest(unittest.TestCase):
         self.assertIn('predecessor-reverification-only', steps['evidence']['run'])
         self.assertIn('upgradeVerified', steps['evidence']['run'])
         self.assertIn("'publicationApproved': False", steps['evidence']['run'])
+
+    def test_download_content_hash_is_a_real_gate_not_an_archive_warning(self):
+        workflow = self.load()
+        step = next(s for s in workflow['jobs']['verify']['steps'] if s.get('id') == 'manifest')
+        self.assertIn('NOT a ZIP-byte hash gate', PATH.read_text())
+        fixed = '95b113aa6c554c8e918bdf8d7b0e4ed47bfa59d6b129741d131e7ca4c611379b'
+        original = b'{"fixture":"original manifest bytes"}'
+        # Execute the actual shell guard with a small fixture's known hash.
+        command = step['run'].replace(fixed, hashlib.sha256(original).hexdigest())
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'baseline-assets/release.json'
+            path.parent.mkdir()
+            for payload, accepted in ((original, True), (original + b' ', False), (b'', False)):
+                with self.subTest(payload=payload):
+                    path.write_bytes(payload)
+                    result = subprocess.run(['bash', '-c', command], cwd=temporary, capture_output=True)
+                    self.assertEqual(accepted, result.returncode == 0)
+            path.unlink()
+            self.assertNotEqual(0, subprocess.run(['bash', '-c', command], cwd=temporary, capture_output=True).returncode)
 
     def test_evidence_cannot_turn_failed_skipped_or_unknown_checks_into_success(self):
         job = self.load()['jobs']['verify']

@@ -49,6 +49,9 @@ jobs:
               raise SystemExit('fixed predecessor artifact identity or availability mismatch')
           print('Fixed predecessor artifact metadata verified')
           PY
+      # API digest above binds metadata only. download-artifact digest mismatch is
+      # warning-only; it is NOT a ZIP-byte hash gate. The manifest pin and full
+      # verifier below authenticate the actual downloaded files and signatures.
       - name: Download only the fixed verified artifact
         id: download
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
