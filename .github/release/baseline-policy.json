@@ -61,6 +61,13 @@
       "manifestSha256": "95b113aa6c554c8e918bdf8d7b0e4ed47bfa59d6b129741d131e7ca4c611379b",
       "runId": 41756770743,
       "commit": "d745a5eeb7eca6af59d63986db004249efbd2acc"
+    },
+    "0.3.19-rc.1": {
+      "mode": "predecessor-artifact",
+      "version": "0.3.17-rc.1",
+      "manifestSha256": "95b113aa6c554c8e918bdf8d7b0e4ed47bfa59d6b129741d131e7ca4c611379b",
+      "runId": 41756770743,
+      "commit": "d745a5eeb7eca6af59d63986db004249efbd2acc"
     }
   }
 }
