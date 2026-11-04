@@ -235,8 +235,6 @@ workflow_identity="https://github.com/${repository}/.github/workflows/release.ym
 issuer="https://token.actions.githubusercontent.com"
 source_commit="$(jq -er '.commit' "$assets/release.json")"
 source_ref="refs/tags/$source_tag"
-verification_work="$(mktemp -d)"
-trap 'rm -rf -- "$verification_work"' EXIT
 
 cosign verify-blob \
   --bundle "$assets/cosign-release.sigstore.json" \
@@ -250,14 +248,16 @@ for name in admin platform publish-gateway engine; do
   [[ "$name" == publish-gateway ]] && key="PUBLISH_GATEWAY_IMAGE"
   [[ "$name" == engine ]] && key="ENGINE_IMAGE"
   reference="$(jq -er --arg key "$key" '.images[$key]' "$assets/release.json")"
-  # Cosign v3.1.4's image verify has no --bundle option. Verify the saved
-  # signature against the exact image payload, then verify registry claims too.
-  cosign generate "$reference" > "$verification_work/$name.payload"
-  cosign verify-blob \
+  # v3 sign emits a DSSE in-toto statement, not a legacy image payload.
+  # Bind its signed subject digest and predicate before registry verification.
+  expected_digest="${reference##*@}"
+  cosign verify-blob-attestation \
     --bundle "$assets/cosign-$name.sigstore.json" \
+    --digest "${expected_digest#sha256:}" --digestAlg sha256 \
+    --type https://sigstore.dev/cosign/sign/v1 \
+    --check-claims=true \
     --certificate-identity "$workflow_identity" \
-    --certificate-oidc-issuer "$issuer" \
-    "$verification_work/$name.payload"
+    --certificate-oidc-issuer "$issuer"
   cosign verify \
     --certificate-identity "$workflow_identity" \
     --certificate-oidc-issuer "$issuer" \
@@ -271,7 +271,6 @@ for name in admin platform publish-gateway engine; do
     --signer-workflow "$repository/.github/workflows/release.yml" \
     --source-ref "$source_ref" --source-digest "$source_commit" \
     --predicate-type https://spdx.dev/Document/v2.3 >/dev/null
-  expected_digest="${reference##*@}"
   actual_digest="sha256:$(docker buildx imagetools inspect "$reference" --raw | sha256sum | awk '{print $1}')"
   [[ "$actual_digest" == "$expected_digest" ]]
 done
