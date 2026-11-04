@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
+import io
+import subprocess
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -308,6 +311,26 @@ VALIDATORS = {
 }
 
 
+def validate_upgrade_data(value: Any) -> None:
+    flags = {'versionSwitchVerified', 'responseBeforeUpgradeVerified', 'responseAfterUpgradeVerified',
+             'exportAnswerVerified', 'cleanupCompleted'}
+    report = exact_keys(value, {'schemaVersion', 'status', 'baselineVersion', 'candidateVersion',
+                               'baselineManifestSha256', 'candidateManifestSha256'} | flags, 'upgrade data')
+    if report['schemaVersion'] != 1 or report['status'] != 'passed':
+        raise EvidenceError('upgrade data evidence is not passed')
+    for field in ('baselineVersion', 'candidateVersion'):
+        string(report[field], field, 128, SEMVER)
+    if report['baselineVersion'] == report['candidateVersion']:
+        raise EvidenceError('upgrade data must cross distinct versions')
+    for field in ('baselineManifestSha256', 'candidateManifestSha256'):
+        string(report[field], field, 64, SHA256)
+    if any(report[field] is not True for field in flags):
+        raise EvidenceError('upgrade data assertions must all pass')
+
+
+VALIDATORS['upgrade-data'] = validate_upgrade_data
+
+
 def validate_evidence(kind: str, value: Any, secret_values: Iterable[str] = ()) -> None:
     validator = VALIDATORS.get(kind)
     if validator is None:
@@ -424,7 +447,12 @@ def write_engine_health_evidence(health: Any, output: Path) -> None:
                    'probeExitCodes': codes, 'probeCategories': categories})
 
 
-def write_summary_evidence(output: Path, status: str, exit_code: int, last_step: str, upgrade_verified: bool, doctor: Any = None) -> None:
+def write_summary_evidence(output: Path, status: str, exit_code: int, last_step: str, upgrade_verified: bool, doctor: Any = None,
+                           upgrade_data: Any = None) -> None:
+    if upgrade_verified:
+        validate_evidence('upgrade-data', upgrade_data)
+        if os.environ['BASELINE_MODE'] != 'predecessor' or upgrade_data['candidateManifestSha256'] != os.environ['CANDIDATE_MANIFEST_SHA256']:
+            raise EvidenceError('upgrade data does not match the native candidate')
     write_evidence(output, "summary", {
         "schemaVersion": 1,
         "status": status,
@@ -610,6 +638,7 @@ def write_release_readiness_from_assets(
     identity = load_json(identity_path)
     verify_candidate_assets(identity, candidate_directory)
     summaries, hashes = load_native_summaries(evidence_directory)
+    verify_upgrade_data_assets(identity, evidence_directory)
     write_release_readiness(identity, summaries, hashes, output)
 
 
@@ -621,15 +650,32 @@ def verify_release_readiness_assets(
     identity = load_json(identity_path)
     verify_candidate_assets(identity, candidate_directory)
     summaries, hashes = load_native_summaries(evidence_directory)
+    verify_upgrade_data_assets(identity, evidence_directory)
     expected = build_release_readiness(identity, summaries, hashes)
     if readiness != expected:
         raise EvidenceError("release readiness does not match independently recomputed downloaded assets")
 
 
+def verify_upgrade_data_assets(identity: dict[str, Any], evidence_directory: Path) -> None:
+    for path in evidence_directory.glob('*/summary.json'):
+        proof_path = path.parent / 'upgrade-data.json'
+        if identity['baseline']['mode'] == 'bootstrap':
+            if proof_path.exists():
+                raise EvidenceError('bootstrap cannot include an upgrade data assertion')
+            continue
+        report = load_json(proof_path)
+        validate_evidence('upgrade-data', report)
+        expected = {'candidateVersion': identity['version'], 'candidateManifestSha256': identity['manifestSha256'],
+                    'baselineVersion': identity['baseline'].get('version'),
+                    'baselineManifestSha256': identity['baseline'].get('manifestSha256')}
+        if any(report[field] != value for field, value in expected.items()):
+            raise EvidenceError('upgrade data identity differs from the candidate or predecessor')
+
+
 def evidence_kind(path: Path) -> str:
     if DOCTOR_FILE.fullmatch(path.name):
         return "doctor"
-    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services", "engine-health.json": "engine-health", "gateway-diagnostic.json": "gateway-diagnostic"}
+    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services", "engine-health.json": "engine-health", "gateway-diagnostic.json": "gateway-diagnostic", 'upgrade-data.json': 'upgrade-data'}
     try:
         return kinds[path.name]
     except KeyError as exc:
@@ -653,6 +699,144 @@ def scan_directory(directory: Path, secret_values: Iterable[str] = ()) -> None:
         validate_evidence(evidence_kind(path), value, secret_values)
 
 
+def make_continuity_probe(base_probe, error_type):
+    class ContinuityProbe(base_probe):
+        def __init__(self, *args, upgrade_action, upgraded_compose, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.upgrade_action = upgrade_action
+            self.upgraded_compose = upgraded_compose
+            self.before_items = self.response_path = self.fixture_identity = None
+            self.after_token = None
+            self.upgrade_completed = self.response_verified = self.export_verified = False
+            self.continuity_phase = 'prepare'
+            self.upgrade_failure_category, self.upgrade_exit_code = 'none', None
+
+        def _token(self, config):
+            if self.fixture_identity is None:
+                self.fixture_identity = dict(config)
+            elif config != self.fixture_identity:
+                raise error_type('continuity probe identity changed')
+            return super()._token(config)
+
+        def _api(self, token, method, path, body=None, raw=False):
+            if method == 'POST' and self.response_path and path == self.response_path.split('/responses?', 1)[0] + '/exports':
+                if self.upgrade_completed or not self.before_items:
+                    raise error_type('continuity upgrade must execute exactly once after the original answer')
+                self.continuity_phase = 'upgrade'
+                try:
+                    self.upgrade_action()
+                except Exception as exc:
+                    self.upgrade_failure_category = getattr(exc, 'upgrade_category', 'unknown')
+                    self.upgrade_exit_code = getattr(exc, 'upgrade_exit_code', None)
+                    raise
+                self.upgrade_completed = True
+                self.compose = self.upgraded_compose()
+                self.after_token = self._token(self._configuration())
+                self.continuity_phase = 'response-read'
+                status, responses = super()._api(self.after_token, 'GET', self.response_path)
+                if status != 200 or not isinstance(responses, dict) or responses.get('items') != self.before_items:
+                    raise error_type('original response changed or disappeared across upgrade')
+                self.response_verified = True
+            status, value = super()._api(self.after_token or token, method, path, body, raw)
+            if not self.upgrade_completed and method == 'GET' and '/responses?' in path and status == 200:
+                if isinstance(value, dict) and isinstance(value.get('items'), list) and value['items']:
+                    self.continuity_phase = 'pre-upgrade-read'
+                    if len(value['items']) != 1:
+                        raise error_type('continuity fixture must contain exactly one response')
+                    row = value['items'][0]
+                    if not isinstance(row, dict) or row.get('answersStatus') != 'available' or not isinstance(row.get('answers'), dict) or 'production acceptance' not in row['answers'].values():
+                        raise error_type('original engine answer is unavailable before upgrade')
+                    self.before_items = json.loads(json.dumps(value['items']))
+                    self.response_path = path
+            if self.upgrade_completed and raw and method == 'GET' and path.endswith('/download'):
+                self.continuity_phase = 'export-read'
+                if status != 200 or not isinstance(value, bytes):
+                    raise error_type('upgraded export is unavailable')
+                try:
+                    text = value.decode('utf-8-sig')
+                    try:
+                        dialect = csv.Sniffer().sniff(text[:4096], delimiters=',;\t')
+                    except csv.Error:
+                        dialect = csv.excel
+                    found = any(field == 'production acceptance' for row in csv.reader(io.StringIO(text), dialect) for field in row)
+                except (UnicodeDecodeError, csv.Error) as exc:
+                    raise error_type('upgraded export format is invalid') from exc
+                if not found:
+                    raise error_type('original answer is missing from the upgraded engine export')
+                self.export_verified = True
+            return status, value
+
+        def run_and_verify(self):
+            try:
+                self.run()  # Existing product journey owns engine close and project archive.
+            except Exception as exc:
+                if getattr(exc, 'stage', None) == 'cleanup': self.continuity_phase = 'cleanup'
+                raise
+            if not all((self.before_items, self.upgrade_completed, self.response_verified, self.export_verified)):
+                raise error_type('continuity journey did not complete')
+            self.continuity_phase = 'complete'
+            return {'versionSwitchVerified': True, 'responseBeforeUpgradeVerified': True,
+                    'responseAfterUpgradeVerified': True, 'exportAnswerVerified': True, 'cleanupCompleted': True}
+    return ContinuityProbe
+
+
+def perform_upgrade(ctl, target, manifest, manifest_sha, version, manager, error_type):
+    try:
+        subprocess.run([str(ctl), '--target', str(target), 'upgrade', '--manifest', str(manifest),
+                        '--manifest-sha256', manifest_sha], check=True, capture_output=True, text=True, timeout=600)
+        if manager._read_state(require_current=True)['version'] != version:
+            raise error_type('upgrade did not activate the expected version')
+    except Exception as exc:
+        failure = error_type('continuity upgrade or version verification failed')
+        failure.upgrade_category = ('cli-exit' if isinstance(exc, subprocess.CalledProcessError) else
+                                    'cli-timeout' if isinstance(exc, subprocess.TimeoutExpired) else
+                                    'cli-launch' if isinstance(exc, OSError) else 'version-check')
+        failure.upgrade_exit_code = exc.returncode if isinstance(exc, subprocess.CalledProcessError) else None
+        raise failure from None
+
+
+def record_continuity(probe, baseline, candidate, baseline_sha, candidate_sha, output, writer):
+    flags = probe.run_and_verify()
+    # Persist only after the original product probe has finished all cleanup.
+    probe.continuity_phase = 'evidence-write'
+    writer(output, 'upgrade-data', {'schemaVersion': 1, 'status': 'passed',
+           'baselineVersion': baseline, 'candidateVersion': candidate,
+           'baselineManifestSha256': baseline_sha, 'candidateManifestSha256': candidate_sha, **flags})
+    probe.continuity_phase = 'complete'
+
+
+def run_upgrade_data_probe(args):
+    if any(os.environ.get(key) != value for key, value in {'NATIVE_ACCEPTANCE_REAL': '1', 'GITHUB_ACTIONS': 'true',
+                                                         'SURVEY_NATIVE_ACCEPTANCE': '1'}.items()) or not args.host.endswith('.test'):
+        raise EvidenceError('real isolated GitHub native acceptance context required')
+    baseline_path, candidate_path = Path(args.baseline_manifest), Path(args.candidate_manifest)
+    for path, expected in ((baseline_path, args.baseline_sha), (candidate_path, args.candidate_sha)):
+        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise EvidenceError('continuity manifest identity mismatch')
+    baseline, candidate = json.loads(baseline_path.read_text()), json.loads(candidate_path.read_text())
+    sys.path.insert(0, args.runtime)
+    from doctor import ProductProbe, DoctorRuntimeError, CommandRunner
+    from surveyctl import SurveyManager
+    manager = SurveyManager(args.target)
+    if manager._read_state(require_current=True)['version'] != baseline['version']:
+        raise EvidenceError('installed version differs from the verified predecessor')
+    Probe = make_continuity_probe(ProductProbe, DoctorRuntimeError)
+    probe = Probe(args.target, args.host, manager._compose(baseline['version']), CommandRunner(),
+                  upgrade_action=lambda: perform_upgrade(args.ctl, args.target, candidate_path, args.candidate_sha,
+                                                         candidate['version'], manager, DoctorRuntimeError),
+                  upgraded_compose=lambda: manager._compose(candidate['version']))
+    try:
+        record_continuity(probe, baseline['version'], candidate['version'], args.baseline_sha, args.candidate_sha,
+                          Path(args.output), write_evidence)
+    except Exception as exc:
+        status = getattr(exc, 'status', None)
+        status = status if type(status) is int and 100 <= status <= 599 else None
+        print(f'upgrade data continuity failed phase={probe.continuity_phase} http={status} '
+              f'upgrade={probe.upgrade_failure_category} exit={probe.upgrade_exit_code}', file=sys.stderr)
+        return 4
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--secrets-dir", type=Path)
@@ -668,6 +852,10 @@ def parser() -> argparse.ArgumentParser:
     health.add_argument('--output', type=Path, required=True)
     gateway = sub.add_parser('gateway-diagnostic')
     gateway.add_argument('--output', type=Path, required=True)
+    upgrade = sub.add_parser('upgrade-data-probe')
+    for name in ('runtime', 'ctl', 'target', 'host', 'baseline-manifest', 'baseline-sha',
+                 'candidate-manifest', 'candidate-sha', 'output'):
+        upgrade.add_argument('--' + name, required=True)
     summary = sub.add_parser("summary")
     summary.add_argument("--output", type=Path, required=True)
     summary.add_argument("--status", choices=("passed", "failed"), required=True)
@@ -675,6 +863,7 @@ def parser() -> argparse.ArgumentParser:
     summary.add_argument("--last-step", required=True)
     summary.add_argument("--upgrade-verified", choices=("true", "false"), required=True)
     summary.add_argument('--doctor-evidence', type=Path)
+    summary.add_argument('--upgrade-data-evidence', type=Path)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("--output", type=Path, required=True)
     preflight.add_argument("--actual-free-bytes", type=int, required=True)
@@ -706,10 +895,13 @@ def main() -> int:
             write_engine_health_evidence(load_json(args.input), args.output)
         elif args.command == 'gateway-diagnostic':
             write_gateway_diagnostic_evidence(sys.stdin.read(1024 * 1024), args.output)
+        elif args.command == 'upgrade-data-probe':
+            return run_upgrade_data_probe(args)
         elif args.command == "summary":
             write_summary_evidence(
                 args.output, args.status, args.exit_code, args.last_step, args.upgrade_verified == "true",
                 load_json(args.doctor_evidence) if args.doctor_evidence and args.doctor_evidence.exists() else None,
+                load_json(args.upgrade_data_evidence) if args.upgrade_data_evidence and args.upgrade_data_evidence.exists() else None,
             )
         elif args.command == "preflight":
             write_preflight_evidence(args.output, args.actual_free_bytes, args.required_free_bytes)
