@@ -1,0 +1,134 @@
+name: Read-only rc17 predecessor verification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      github.repository == 'lsgoodlionel/star-survey' && github.actor == 'lsgoodlionel'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Check fixed successful same-repository run and live tag
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 platform/deploy/production/release/candidate_provenance.py
+          --run-id 41756770743 --repository lsgoodlionel/star-survey
+          --tag v0.3.17-rc.1 --commit d745a5eeb7eca6af59d63986db004249efbd2acc
+      - name: Reject expired or substituted fixed artifact metadata
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          metadata = json.loads(subprocess.check_output([
+              'gh', 'api', 'repos/lsgoodlionel/star-survey/actions/artifacts/13289572394'], text=True))
+          expected = {'id': 13289572394, 'name': 'verified-release-assets',
+                      'digest': 'sha256:5634d53ea99a324b51136fc7c3bd414715bc066c9b41d3ba7b14a1b27af4f45b'}
+          source = {'id': 41756770743, 'head_sha': 'd745a5eeb7eca6af59d63986db004249efbd2acc',
+                    'head_branch': 'v0.3.17-rc.1', 'repository_id': 1377727385, 'head_repository_id': 1377727385}
+          if (metadata.get('expired') is not False or any(metadata.get(k) != v for k, v in expected.items()) or
+                  not isinstance(metadata.get('workflow_run'), dict) or
+                  any(metadata['workflow_run'].get(k) != v for k, v in source.items())):
+              raise SystemExit('fixed predecessor artifact identity or availability mismatch')
+          print('Fixed predecessor artifact metadata verified')
+          PY
+      # API digest above binds metadata only. download-artifact digest mismatch is
+      # warning-only; it is NOT a ZIP-byte hash gate. The manifest pin and full
+      # verifier below authenticate the actual downloaded files and signatures.
+      - name: Download only the fixed verified artifact
+        id: download
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          artifact-ids: '13289572394'
+          run-id: '41756770743'
+          repository: lsgoodlionel/star-survey
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: baseline-assets
+      - name: Pin the downloaded manifest before verification
+        id: manifest
+        run: |
+          set -euo pipefail
+          test "$(sha256sum baseline-assets/release.json | awk '{print $1}')" = 95b113aa6c554c8e918bdf8d7b0e4ed47bfa59d6b129741d131e7ca4c611379b
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.1.4
+      - name: Require existing runner Buildx CLI without creating a builder
+        id: buildx
+        run: docker buildx version
+      - name: Authenticate temporary read-only image verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Full original verifier with exact source identity
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          platform/deploy/production/release/verify_release.sh \
+            --assets baseline-assets --repository lsgoodlionel/star-survey \
+            --target-tag v0.3.17-rc.1 --source-tag v0.3.17-rc.1 \
+            --target-commit d745a5eeb7eca6af59d63986db004249efbd2acc
+      - name: Recheck live source after all verification
+        id: recheck
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 platform/deploy/production/release/candidate_provenance.py
+          --run-id 41756770743 --repository lsgoodlionel/star-survey
+          --tag v0.3.17-rc.1 --commit d745a5eeb7eca6af59d63986db004249efbd2acc
+      - name: Record bounded verification outcome without publication claims
+        id: evidence
+        if: always()
+        env:
+          SOURCE: ${{ steps.source.outcome }}
+          ARTIFACT: ${{ steps.artifact.outcome }}
+          DOWNLOAD: ${{ steps.download.outcome }}
+          MANIFEST: ${{ steps.manifest.outcome }}
+          VERIFY: ${{ steps.verify.outcome }}
+          RECHECK: ${{ steps.recheck.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          stages = {key.lower(): os.environ[key] for key in ('SOURCE', 'ARTIFACT', 'DOWNLOAD', 'MANIFEST', 'VERIFY', 'RECHECK')}
+          evidence = {'schemaVersion': 1, 'scope': 'predecessor-reverification-only',
+                      'status': 'passed' if all(v == 'success' for v in stages.values()) else 'not-passed',
+                      'runId': 41756770743, 'artifactId': 13289572394, 'tag': 'v0.3.17-rc.1',
+                      'commit': 'd745a5eeb7eca6af59d63986db004249efbd2acc',
+                      'manifestSha256': '95b113aa6c554c8e918bdf8d7b0e4ed47bfa59d6b129741d131e7ca4c611379b',
+                      'cosignVersion': 'v3.1.4', 'stages': stages,
+                      'upgradeVerified': False, 'publicationApproved': False}
+          Path('verification-evidence').mkdir(exist_ok=True)
+          Path('verification-evidence/rc17.json').write_text(json.dumps(evidence, sort_keys=True) + '\n')
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as output:
+              output.write('rc17 predecessor re-verification: ' + evidence['status'] + '\n\nNo upgrade, Release or production acceptance is granted.\n')
+          PY
+      - name: Save bounded evidence even when verification fails
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rc17-readonly-verification
+          path: verification-evidence/rc17.json
+          if-no-files-found: error
