@@ -64,6 +64,69 @@ class ReleaseBuilderTest(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
+    def test_exact_rc_predecessor_floor_crosses_policy_builder_and_bundled_loader(self):
+        import yaml
+        workflow = yaml.safe_load((PRODUCTION_DIR.parents[2] / '.github/workflows/release.yml').read_text())
+        step = next(step for step in workflow['jobs']['candidate-assets']['steps'] if step.get('id') == 'baseline')
+        script = step['run'].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        policy = self.root / 'policy.json'
+        rule = {'mode': 'predecessor-artifact', 'version': '0.3.17-rc.1',
+                'manifestSha256': '95b113aa6c554c8e918bdf8d7b0e4ed47bfa59d6b129741d131e7ca4c611379b',
+                'runId': 41756770743, 'commit': 'd745a5eeb7eca6af59d63986db004249efbd2acc'}
+        policy.write_text(json.dumps({'schemaVersion': 1, 'releases': {'0.3.18-rc.1': rule}}))
+        resolved = subprocess.run([sys.executable, '-', '0.3.18-rc.1', str(policy)], input=script, text=True,
+                                  capture_output=True, check=False)
+        self.assertEqual(0, resolved.returncode, resolved.stderr)
+        values = dict(line.split('=', 1) for line in resolved.stdout.splitlines())
+        self.assertEqual(rule['version'], values['MINIMUM_SOURCE_VERSION'])
+        self.assertEqual('predecessor-artifact', values['BASELINE_SOURCE'])
+        self.assertEqual(str(rule['runId']), values['BASELINE_RUN_ID'])
+        self.assertEqual(rule['commit'], values['BASELINE_COMMIT'])
+        version_file = self.root / 'target-version';version_file.write_text('0.3.18-rc.1\n')
+        output = self.root / 'rc-minimum'
+        result = self.build(output, '--version-file', str(version_file), '--minimum-source-version', values['MINIMUM_SOURCE_VERSION'])
+        self.assertEqual(0, result.returncode, result.stderr)
+        manifest = load_surveyctl().load_manifest(output / 'release.json')
+        self.assertEqual('0.3.17-rc.1', manifest.raw['minimumSourceVersion'])
+        for arch in ('amd64', 'arm64'):
+            runtime = self.root / ('runtime-' + arch);runtime.mkdir()
+            with tarfile.open(output / manifest.raw['assets']['bundles'][arch]['name']) as archive:
+                archive.extractall(runtime)
+            spec = importlib.util.spec_from_file_location('bundled_floor_' + arch, runtime / 'surveyctl.py')
+            module = importlib.util.module_from_spec(spec);sys.modules[spec.name] = module;spec.loader.exec_module(module)
+            loaded = module.load_manifest(output / 'release.json')
+            floor = module._version_key(loaded.raw['minimumSourceVersion'])
+            self.assertEqual(module._version_key(rule['version']), floor)
+            self.assertLess(module._version_key('0.3.17-rc.0'), floor)
+            self.assertGreater(module._version_key('0.3.17'), floor)
+            self.assertGreater(module._version_key(loaded.version), floor)
+            manager = module.SurveyManager((self.root / ('floor-target-' + arch)).resolve())
+            state = {'version': '0.3.17-rc.0', 'publicHost': 'fixture.test'}
+            with mock.patch.object(manager, '_read_state', side_effect=lambda **kwargs: dict(state)), \
+                 mock.patch.object(manager, '_personnel_guard_enabled', return_value=False), \
+                 mock.patch.object(manager, 'preflight', side_effect=RuntimeError('version-floor-passed')) as preflight:
+                with self.assertRaisesRegex(module.InputError, 'below the release minimum source version'):
+                    manager.upgrade(output / 'release.json')
+                preflight.assert_not_called()
+                state['version'] = '0.3.17-rc.1'
+                with self.assertRaisesRegex(RuntimeError, 'version-floor-passed'):
+                    manager.upgrade(output / 'release.json')
+                preflight.assert_called_once()
+
+    def test_invalid_minimum_source_versions_remain_rejected(self):
+        valid_output = self.root / 'valid-floor-source'
+        built = self.build(valid_output)
+        self.assertEqual(0, built.returncode, built.stderr)
+        original = json.loads((valid_output / 'release.json').read_text())
+        runtime = load_surveyctl()
+        for index, version in enumerate(('latest', '0.3.17-rc.', '0.3.17-beta.1', '0.3.17+build', '0.3.17-rc.1\nBAD=1')):
+            with self.subTest(version=version):
+                result = self.build(self.root / f'bad-floor-{index}', '--minimum-source-version', version)
+                self.assertNotEqual(0, result.returncode)
+                malformed = {**original, 'minimumSourceVersion': version}
+                path = self.root / f'bad-floor-{index}.json';path.write_text(json.dumps(malformed))
+                with self.assertRaises(runtime.IntegrityError): runtime.load_manifest(path)
+
     def test_personnel_capability_requires_matching_verified_image_and_source(self):
         builder = load_builder()
         image = "ghcr.io/example/platform@sha256:" + "a" * 64
