@@ -541,7 +541,21 @@ class VerifyReleaseScriptTest(unittest.TestCase):
         log = self.root / "commands.log"
         log.write_text("", encoding="utf-8")
         for name, body in {
-            "cosign": '#!/bin/sh\nprintf "cosign %s\\n" "$*" >> "$VERIFY_LOG"\n',
+            "cosign": '''#!/bin/sh
+printf "cosign %s\\n" "$*" >> "$VERIFY_LOG"
+if [ "$1" = verify ]; then
+  for arg in "$@"; do
+    [ "$arg" != --bundle ] || { echo 'unknown flag: --bundle' >&2; exit 1; }
+  done
+fi
+if [ "$1" = generate ]; then
+  [ "${FAIL_GENERATE:-0}" != 1 ] || exit 1
+  printf 'image-payload'
+fi
+case "$*" in
+  *cosign-admin.sigstore.json*) [ "${FAIL_IMAGE_BUNDLE:-0}" != 1 ] || exit 1 ;;
+esac
+''',
             "gh": '#!/bin/sh\nprintf "gh %s\\n" "$*" >> "$VERIFY_LOG"\n',
             "docker": '#!/bin/sh\nprintf "docker %s\\n" "$*" >> "$VERIFY_LOG"\nprintf oci-index\n',
         }.items():
@@ -592,13 +606,42 @@ class VerifyReleaseScriptTest(unittest.TestCase):
         stable = self.run_verifier(assets, environment, target="v1.2.3")
         self.assertEqual(0, stable.returncode, stable.stderr)
         commands = Path(environment["VERIFY_LOG"]).read_text(encoding="utf-8")
-        self.assertEqual(10, commands.count("cosign "))
+        self.assertEqual(26, commands.count("cosign "))
+        self.assertEqual(8, commands.count("cosign generate "))
+        self.assertEqual(10, commands.count("cosign verify-blob "))
+        self.assertEqual(8, sum(line.startswith('cosign verify ') for line in commands.splitlines()))
+        for line in commands.splitlines():
+            if line.startswith(('cosign verify ', 'cosign verify-blob ')):
+                self.assertIn('--certificate-identity https://github.com/example/project/.github/workflows/release.yml@refs/tags/v1.2.3-rc.1', line)
+                self.assertIn('--certificate-oidc-issuer https://token.actions.githubusercontent.com', line)
+            if line.startswith('cosign verify-blob ') and '.payload' in line:
+                self.assertFalse(Path(shlex.split(line)[-1]).exists())
         self.assertEqual(36, commands.count("gh attestation verify"))
         self.assertEqual(8, commands.count("docker buildx imagetools inspect"))
         self.assertEqual(2, commands.count("docker buildx imagetools inspect ghcr.io/example/engine@"))
         self.assertEqual(4, commands.count("gh attestation verify oci://ghcr.io/example/engine@"))
         self.assertEqual(2, sum("gh attestation verify " in line and "sbom-engine.spdx.json" in line
                                 for line in commands.splitlines()))
+
+    def test_image_bundle_verification_failure_stops_before_registry_and_attestations(self):
+        assets, environment = self.make_fixture()
+        result = self.run_verifier(assets, {**environment, 'FAIL_IMAGE_BUNDLE': '1'})
+        self.assertNotEqual(0, result.returncode)
+        commands = Path(environment['VERIFY_LOG']).read_text()
+        self.assertIn('cosign verify-blob --bundle ', commands)
+        self.assertIn('cosign-admin.sigstore.json', commands)
+        self.assertNotIn('gh attestation verify', commands)
+        payload = next(line for line in commands.splitlines() if '.payload' in line)
+        self.assertFalse(Path(shlex.split(payload)[-1]).exists())
+
+    def test_payload_generation_failure_stops_verification(self):
+        assets, environment = self.make_fixture()
+        result = self.run_verifier(assets, {**environment, 'FAIL_GENERATE': '1'})
+        self.assertNotEqual(0, result.returncode)
+        commands = Path(environment['VERIFY_LOG']).read_text()
+        self.assertIn('cosign generate ', commands)
+        self.assertNotIn('cosign-admin.sigstore.json', commands)
+        self.assertNotIn('gh attestation verify', commands)
 
     def test_complete_bootstrap_assets_are_a_baseline_but_not_stable_promotion(self):
         assets, environment = self.make_fixture(promotable=False)

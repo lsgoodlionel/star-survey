@@ -235,6 +235,8 @@ workflow_identity="https://github.com/${repository}/.github/workflows/release.ym
 issuer="https://token.actions.githubusercontent.com"
 source_commit="$(jq -er '.commit' "$assets/release.json")"
 source_ref="refs/tags/$source_tag"
+verification_work="$(mktemp -d)"
+trap 'rm -rf -- "$verification_work"' EXIT
 
 cosign verify-blob \
   --bundle "$assets/cosign-release.sigstore.json" \
@@ -248,8 +250,15 @@ for name in admin platform publish-gateway engine; do
   [[ "$name" == publish-gateway ]] && key="PUBLISH_GATEWAY_IMAGE"
   [[ "$name" == engine ]] && key="ENGINE_IMAGE"
   reference="$(jq -er --arg key "$key" '.images[$key]' "$assets/release.json")"
-  cosign verify \
+  # Cosign v3.1.4's image verify has no --bundle option. Verify the saved
+  # signature against the exact image payload, then verify registry claims too.
+  cosign generate "$reference" > "$verification_work/$name.payload"
+  cosign verify-blob \
     --bundle "$assets/cosign-$name.sigstore.json" \
+    --certificate-identity "$workflow_identity" \
+    --certificate-oidc-issuer "$issuer" \
+    "$verification_work/$name.payload"
+  cosign verify \
     --certificate-identity "$workflow_identity" \
     --certificate-oidc-issuer "$issuer" \
     "$reference" >/dev/null
