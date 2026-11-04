@@ -8,6 +8,7 @@ import base64
 import csv
 import io
 import subprocess
+import zipfile
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -699,6 +700,42 @@ def scan_directory(directory: Path, secret_values: Iterable[str] = ()) -> None:
         validate_evidence(evidence_kind(path), value, secret_values)
 
 
+def verify_continuity_export(payload, original):
+    """Read the actual CsvExportWriter ZIP schema; never extract files or emit answer data."""
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        names = archive.namelist()
+        tables = {}
+        for name in ('responses.csv', 'fields.csv'):
+            if names.count(name) != 1:
+                raise ValueError('missing or duplicate export table')
+            info = archive.getinfo(name)
+            if info.file_size > 8 * 1024 * 1024:
+                raise ValueError('export table exceeds probe bound')
+            tables[name] = list(csv.reader(io.StringIO(archive.read(name).decode('utf-8-sig')), strict=True))
+    responses, fields = tables['responses.csv'], tables['fields.csv']
+    fixed = ['version', 'sid', 'responseid', 'generation', 'state', 'startedat', 'completedat', 'answersstatus']
+    dictionary = ['version', 'sid', 'column', 'fieldname', 'questioncode', 'type', 'aid', 'scale', 'label', 'sensitive', 'masking', 'options']
+    if (len(responses) < 3 or responses[0][:8] != fixed or
+            len(set(responses[0])) != len(responses[0]) or
+            any(len(row) != len(responses[0]) for row in responses[1:]) or
+            not fields or fields[0] != dictionary or any(len(row) != len(dictionary) for row in fields[1:])):
+        raise ValueError('unexpected export schema')
+    identity = [str(original[key]) for key in ('version', 'engineSid', 'responseId', 'generation')]
+    answer_fields = [key for key, answer in original['answers'].items() if answer == 'production acceptance']
+    if len(answer_fields) != 1:
+        raise ValueError('ambiguous original probe answer')
+    mappings = [row for row in fields[1:] if row[0:2] == identity[0:2] and row[3] == answer_fields[0]]
+    if (len(mappings) != 1 or mappings[0][4:8] != ['PROBE', 'S', '', '0'] or
+            mappings[0][2] not in responses[0][8:]):
+        raise ValueError('missing probe field mapping')
+    answer_index = responses[0].index(mappings[0][2])
+    # ExportLayout has TWO header rows; neither can count as a response.
+    matches = [row for row in responses[2:] if row[:4] == identity]
+    if (len(matches) != 1 or matches[0][4] != original['state'] or
+            matches[0][7] != 'available' or matches[0][answer_index] != original['answers'][answer_fields[0]]):
+        raise ValueError('original exported response is missing or ambiguous')
+
+
 def make_continuity_probe(base_probe, error_type):
     class ContinuityProbe(base_probe):
         def __init__(self, *args, upgrade_action, upgraded_compose, **kwargs):
@@ -753,16 +790,9 @@ def make_continuity_probe(base_probe, error_type):
                 if status != 200 or not isinstance(value, bytes):
                     raise error_type('upgraded export is unavailable')
                 try:
-                    text = value.decode('utf-8-sig')
-                    try:
-                        dialect = csv.Sniffer().sniff(text[:4096], delimiters=',;\t')
-                    except csv.Error:
-                        dialect = csv.excel
-                    found = any(field == 'production acceptance' for row in csv.reader(io.StringIO(text), dialect) for field in row)
-                except (UnicodeDecodeError, csv.Error) as exc:
-                    raise error_type('upgraded export format is invalid') from exc
-                if not found:
-                    raise error_type('original answer is missing from the upgraded engine export')
+                    verify_continuity_export(value, self.before_items[0])
+                except (ValueError, UnicodeDecodeError, csv.Error, zipfile.BadZipFile, KeyError, OSError) as exc:
+                    raise error_type('original response answer is missing or ambiguous in the upgraded export') from exc
                 self.export_verified = True
             return status, value
 

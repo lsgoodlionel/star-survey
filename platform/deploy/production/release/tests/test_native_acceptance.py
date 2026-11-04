@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
+import zipfile
 import importlib.util
 import json
 import os
@@ -346,6 +349,38 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
         finally:
             sys.path.pop(0)
 
+    @staticmethod
+    def export_fixture(mode):
+        if mode == 'bare-csv': return b'PROBE\nproduction acceptance\n'
+        header = ['version', 'sid', 'responseid', 'generation', 'state', 'startedat', 'completedat', 'answersstatus', 'PROBE', 'OTHER']
+        labels = ['版本', '引擎问卷号', '答卷号', '代次', '状态', '开始时间', '完成时间', '作答状态', 'production acceptance', '其他']
+        row = ['1', '123', '7', 'generation-one', 'engine_completed', '', '', 'available', 'production acceptance', '']
+        if mode == 'lost-answer': row[8] = 'missing'
+        if mode == 'wrong-column': row[8], row[9] = '', 'production acceptance'
+        if mode == 'wrong-response': row[2] = '8'
+        if mode == 'wrong-generation': row[3] = 'another-generation'
+        rows = [header, labels] + ([] if mode == 'header-only' else [row])
+        if mode == 'duplicate-row': rows.append(row)
+        if mode == 'duplicate-header': header[-1] = 'PROBE'
+        fields = [['version', 'sid', 'column', 'fieldname', 'questioncode', 'type', 'aid', 'scale', 'label', 'sensitive', 'masking', 'options'],
+                  ['1', '123', 'PROBE', 'probe-column', 'PROBE', 'S', '', '0', 'probe', 'false', '', '']]
+        if mode == 'wrong-field': fields[1][3] = 'unrelated-column'
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as archive:
+            for name, table in [('responses.csv', rows), ('fields.csv', fields)]:
+                stream = io.StringIO(newline=''); csv.writer(stream).writerows(table)
+                archive.writestr(name, stream.getvalue().encode('utf-8-sig'))
+        return out.getvalue()
+
+    def test_export_requires_unique_original_response_and_exact_answer_column(self):
+        for mode in ('bare-csv', 'header-only', 'wrong-column', 'wrong-response', 'wrong-generation',
+                     'duplicate-row', 'duplicate-header', 'wrong-field'):
+            with self.subTest(mode=mode):
+                probe, events = self.fixture(mode)
+                with self.assertRaises(self.doctor.DoctorRuntimeError): probe.run_and_verify()
+                self.assertEqual(['close', 'archive'], events[-2:])
+                self.assertFalse(probe.export_verified)
+
     def fixture(self, mode='success'):
         events, state = [], {'upgraded': False}
         config = {'tenantId': '11111111-1111-4111-8111-111111111111', 'actorId': 'fixture-owner'}
@@ -360,7 +395,7 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
                 if state['upgraded']:
                     self.assertEqual('after', token)
                     self.assertEqual(['candidate-compose'], probe.compose)
-                row = {'responseId': 7, 'state': 'engine_completed', 'answersStatus': 'available',
+                row = {'version': 1, 'engineSid': 123, 'generation': 'generation-one', 'responseId': 7, 'state': 'engine_completed', 'answersStatus': 'available',
                        'answers': {'probe-column': 'production acceptance'}}
                 if mode == 'no-original-answer':
                     row.update(answersStatus='missing', answers=None)
@@ -368,7 +403,7 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
             if method == 'POST' and path.endswith('/exports'):
                 events.append('export');self.assertTrue(state['upgraded']);return 202, {'jobId': 'export'}
             if method == 'GET' and path.endswith('/download'):
-                events.append('download');return 200, b'PROBE\nmissing\n' if mode == 'lost-answer' else b'PROBE\nproduction acceptance\n'
+                events.append('download');return 200, self.export_fixture(mode)
             if method == 'GET' and path == '/v1/exports/export': return 200, {'status': 'completed'}
             if method == 'POST' and path.endswith('/archive'):
                 events.append('archive');return (500 if mode == 'cleanup-failure' else 200), {}
