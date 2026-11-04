@@ -36,6 +36,19 @@ class ReadonlyPredecessorWorkflowTest(unittest.TestCase):
             if 'uses' in step:
                 self.assertRegex(step['uses'], r'@[0-9a-f]{40}$')
 
+    def test_imagetools_uses_existing_cli_without_starting_a_builder(self):
+        job = self.load()['jobs']['verify']
+        for step in job['steps']:
+            self.assertFalse(step.get('uses', '').startswith('docker/setup-buildx-action@'))
+            for forbidden in ('buildx create', 'buildx inspect --bootstrap', 'buildkitd-flags', 'entitlements'):
+                self.assertNotIn(forbidden, step.get('run', ''))
+        probe = next(s for s in job['steps'] if s.get('id') == 'buildx')
+        self.assertEqual('docker buildx version', probe['run'])
+        self.assertLess(job['steps'].index(probe), next(i for i, s in enumerate(job['steps']) if s.get('id') == 'verify'))
+        verifier = (ROOT / 'platform/deploy/production/release/verify_release.sh').read_text()
+        self.assertIn('docker buildx imagetools inspect', verifier)
+        self.assertNotIn('buildx create', verifier)
+
     def test_fixed_source_exact_artifact_and_full_verifier(self):
         job = self.load()['jobs']['verify']
         steps = {step['id']: step for step in job['steps'] if 'id' in step}
