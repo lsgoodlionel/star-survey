@@ -95,6 +95,20 @@ class ReleaseBuilderTest(unittest.TestCase):
             spec = importlib.util.spec_from_file_location('bundled_floor_' + arch, runtime / 'surveyctl.py')
             module = importlib.util.module_from_spec(spec);sys.modules[spec.name] = module;spec.loader.exec_module(module)
             loaded = module.load_manifest(output / 'release.json')
+            # Both distributed CLIs must accept the exact RC floor, not only surveyctl.
+            restore_target = (self.root / ('restore-floor-' + arch)).resolve()
+            installed = restore_target / 'releases' / loaded.version
+            installed.mkdir(parents=True)
+            (restore_target / 'current').write_text(loaded.version)
+            (installed / 'release.json').write_bytes((output / 'release.json').read_bytes())
+            (installed / 'compose.yml').write_text('services: {}\n')
+            (installed / '.env').write_text('PLATFORM_ADMIN_ENFORCE_PERSONNEL=false\n')
+            restore_check = subprocess.run([sys.executable, '-c',
+                "import sys; sys.path.insert(0, sys.argv[1]); from restore import RestoreManager; "
+                "print(RestoreManager(sys.argv[2])._load_current()[-1])", str(runtime), str(restore_target)],
+                capture_output=True, text=True, check=False)
+            self.assertEqual(0, restore_check.returncode, restore_check.stderr)
+            self.assertEqual(rule['version'], restore_check.stdout.strip())
             floor = module._version_key(loaded.raw['minimumSourceVersion'])
             self.assertEqual(module._version_key(rule['version']), floor)
             self.assertLess(module._version_key('0.3.17-rc.0'), floor)

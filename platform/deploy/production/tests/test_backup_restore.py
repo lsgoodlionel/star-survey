@@ -117,6 +117,95 @@ class BackupRestoreTest(unittest.TestCase):
         manager.create(output, "0.2.0")
         return output
 
+    def rc_upgrade_backup(self, source_version='0.3.17-rc.1'):
+        # Real failed-candidate TARGET metadata; synthetic source/data/runner/cipher fixtures.
+        raw = (PRODUCTION_DIR / 'tests/fixtures/rc18-release.json').read_bytes()
+        self.assertEqual('ba712336cf84259bb24d0ec8acdb0060e0abfd25dd3b04329c4f9b7f357dd29b', hashlib.sha256(raw).hexdigest())
+        actual = json.loads(raw)
+        source = self.target / 'releases' / source_version
+        (self.target / 'releases/0.2.0').rename(source)
+        manifest = json.loads((source / 'release.json').read_text())
+        manifest['version'] = source_version
+        manifest['database'] = actual['database']
+        manifest['securityCapabilities'] = {'platform-admin-session-v1': manifest['images']['PLATFORM_IMAGE']}
+        (source / 'release.json').write_text(json.dumps(manifest))
+        (source / '.env').write_text('PLATFORM_ADMIN_ENFORCE_PERSONNEL=true\n')
+        floor = self.target / '.surveyctl/auth-security-floor'
+        floor.parent.mkdir(); floor.write_text('platform-admin-session-v1\n')
+        (self.target / 'current').write_text(source_version)
+        output = self.target / 'backups/rc-before-upgrade'
+        self.backup.BackupManager(self.target, runner=FakeRunner(), cipher=FakeCipher()).create(output, source_version)
+        release = self.target / 'releases' / actual['version']; release.mkdir()
+        (release / 'release.json').write_bytes(raw)
+        (release / '.env').write_text('PLATFORM_ADMIN_ENFORCE_PERSONNEL=true\n')
+        (release / 'compose.yml').write_text((source / 'compose.yml').read_text())
+        (self.target / 'current').write_text(actual['version'])
+        return output, release
+
+    def test_actual_rc_manifest_verifies_backup_doctor_and_restore_call_chain(self):
+        output, release = self.rc_upgrade_backup()
+        runner = FakeRunner()
+        manager = self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher())
+        self.assertEqual('0.3.17-rc.1', manager.verify_only(output)['version'])
+        doctor = load_module('doctor')
+        check = doctor.Doctor(self.target, runner=runner, backup_verifier=manager)._backup_check()
+        self.assertEqual('ok', check['status'])
+        manager.restore(output)
+        commands = [c for c, _ in runner.calls]
+        self.assertEqual(2, sum('pg_restore' in c for c in commands))
+        scrubs = [i for i, c in enumerate(commands) if 'psql' in c]
+        self.assertEqual(2, len(scrubs))
+        for index in scrubs:
+            self.assertIn('platform_security_restore_audit', runner.calls[index][1]['input'])
+        self.assertEqual('platform-admin-session-v1\n', (self.target / '.surveyctl/auth-security-floor').read_text())
+        self.assertEqual('0.3.17-rc.1', manager.verify_only(output)['version'])
+
+    def test_rc_minimum_rejects_unsupported_versions_before_restore_operations(self):
+        output, release = self.rc_upgrade_backup()
+        original = json.loads((release / 'release.json').read_text())
+        for value in (True, None, 1, 'latest', '0.3.17-rc.', '0.3.17-beta.1', '0.3.17+build',
+                      '0.3.17-rc.1\n', 'v0.3.17', '0.3.17-rc.-1', '٠.٣.١٧-rc.1', ''):
+            with self.subTest(minimum=value):
+                (release / 'release.json').write_text(json.dumps({**original, 'minimumSourceVersion': value}))
+                runner = FakeRunner()
+                with self.assertRaises(self.restore.RestoreIntegrityError):
+                    self.restore.RestoreManager(self.target, runner=runner, cipher=FakeCipher()).restore(output)
+                self.assertEqual([], runner.calls)
+
+    def test_rc_minimum_keeps_authenticated_backup_and_personnel_floor_gates(self):
+        output, release = self.rc_upgrade_backup()
+        manager = self.restore.RestoreManager(self.target, runner=FakeRunner(), cipher=FakeCipher())
+        self.assertEqual('0.3.17-rc.1', manager.verify_only(output)['version'])
+        control = (output / 'CONTROL-HMAC').read_bytes()
+        (output / 'CONTROL-HMAC').write_text('0'*64)
+        with self.assertRaisesRegex(self.restore.RestoreIntegrityError, 'authentication failed'):
+            manager.verify_only(output)
+        (output / 'CONTROL-HMAC').write_bytes(control)
+        floor = self.target / '.surveyctl/auth-security-floor'; floor.unlink()
+        with self.assertRaisesRegex(self.restore.RestoreIntegrityError, 'security floor is missing'):
+            manager.verify_only(output)
+
+    def test_rc_version_ordering_preserves_exact_lower_and_upper_bounds(self):
+        # Independent fixtures preserve source identities and authenticated metadata.
+        cases = [('0.3.17-rc.0', False), ('0.3.16', False), ('0.3.18-rc.2', False),
+                 ('0.3.18', False), ('0.3.19-rc.1', False),
+                 ('0.3.17-rc.1', True), ('0.3.17-rc.2', True), ('0.3.17', True)]
+        for version, accepted in cases:
+            with self.subTest(source=version):
+                fixture = BackupRestoreTest(); fixture.setUp()
+                try:
+                    output, _ = fixture.rc_upgrade_backup(version)
+                    runner = FakeRunner()
+                    manager = fixture.restore.RestoreManager(fixture.target, runner=runner, cipher=FakeCipher())
+                    if accepted:
+                        self.assertEqual(version, manager.verify_only(output)['version'])
+                    else:
+                        with self.assertRaisesRegex(fixture.restore.RestoreIntegrityError, 'version is incompatible'):
+                            manager.restore(output)
+                    self.assertEqual([], runner.calls)
+                finally:
+                    fixture.doCleanups()
+
     def test_backup_contains_encrypted_dumps_volumes_and_exact_checksums(self):
         output = self.create_backup()
         manifest = json.loads((output / "manifest.json").read_text())
