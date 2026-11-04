@@ -460,7 +460,7 @@ jobs:
                   raise SystemExit('predecessor version is invalid')
               if not re.fullmatch(r'[0-9a-f]{64}', rule['manifestSha256']):
                   raise SystemExit('predecessor manifest checksum is invalid')
-              minimum = rule['version'].split('-rc.', 1)[0]
+              minimum = rule['version']
               print('BASELINE_MODE=predecessor')
               print(f'BASELINE_SOURCE={rule["mode"]}')
               if rule['mode'] == 'predecessor-artifact':

@@ -301,8 +301,8 @@ def validate_args(args: argparse.Namespace) -> tuple[str, dict[str, str], list[s
         raise ReleaseBuildError("output directory already exists")
     if COMMIT.fullmatch(args.commit) is None:
         raise ReleaseBuildError("commit must be a full lowercase Git SHA")
-    if STABLE_SEMVER.fullmatch(args.minimum_source_version) is None:
-        raise ReleaseBuildError("minimum source version must be a stable semantic version")
+    if SEMVER.fullmatch(args.minimum_source_version) is None:
+        raise ReleaseBuildError("minimum source version must be a stable or RC semantic version")
     if SCHEMA.fullmatch(args.database_schema) is None:
         raise ReleaseBuildError("database schema is invalid")
     if args.backup_schema != 2:
