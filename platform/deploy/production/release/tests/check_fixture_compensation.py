@@ -62,7 +62,7 @@ COMMIT;
 """
         execute(setup, database)
         provision = f"""
-BEGIN; SET LOCAL ROLE platform_owner; {scope}
+BEGIN; SET LOCAL ROLE platform_app; {scope}
 INSERT INTO plan_version(id,plan_code,version,capabilities,quotas,export_window_days)
  SELECT '{fixture_plan}','ci-fixture',1,capabilities,jsonb_set(quotas,'{{member.seats}}','2'),export_window_days
  FROM plan_version WHERE id='{owner_plan}';
@@ -94,7 +94,7 @@ COMMIT;
         if failed.returncode == 0:
             raise RuntimeError('injected ambiguous result did not fail')
         compensate = f"""
-BEGIN; SET LOCAL ROLE platform_owner; {scope}
+BEGIN; SET LOCAL ROLE platform_app; {scope}
 SELECT pg_advisory_xact_lock(hashtextextended('access.members:{tenant}',0));
 DO $$ DECLARE current_plan uuid; BEGIN
  SELECT plan_version_id INTO current_plan FROM subscription WHERE tenant_id='{tenant}' AND starts_at <= now()
@@ -121,16 +121,16 @@ COMMIT;
 """
         execute(compensate, database)
         execute(compensate, database)
-        verified = execute(f"""BEGIN; SET LOCAL ROLE platform_owner; {scope}
+        verified = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
 SELECT (SELECT plan_version_id='{owner_plan}' FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1)
  AND (SELECT count(*)=1 FROM access_member WHERE tenant_id='{tenant}' AND uses_seat AND status<>'removed')
  AND EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL)
  AND NOT EXISTS (SELECT 1 FROM org_login_session WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND revoked_at IS NULL)
- AND NOT EXISTS (SELECT 1 FROM org_login_handoff WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND consumed_at IS NULL AND expires_at>now());
+ AND NOT EXISTS (SELECT 1 FROM org_login_handoff_consume('{tenant}','{handoff_hash}','{browser_hash}',now()));
 COMMIT;""", database).stdout
         if verified.strip().splitlines()[-1] != 't':
             raise RuntimeError('compensation state verification failed')
-        print('actual migrated schema: transaction rollback, ambiguous commit and idempotent compensation verified')
+        print('actual migrated schema and platform_app role: rollback, ambiguous commit and idempotent compensation verified')
     finally:
         execute('DROP DATABASE ' + database + ' WITH (FORCE)')
 
