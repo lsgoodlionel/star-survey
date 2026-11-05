@@ -102,6 +102,16 @@ def main():
             raise RuntimeError('unapproved database client was accepted')
         if app_session.sql('SELECT 1;') != '1':
             raise RuntimeError('existing client behavior was not confirmed')
+        # An independently connected superuser on the maintenance database can
+        # reopen the gate. A snapshot without daemon/privileged exclusion is
+        # therefore not a durable proof. Detect the change and re-close only the
+        # synthetic database before proceeding.
+        maintenance_extra.sql(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS true;')
+        if owner_session.sql('SELECT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
+            raise RuntimeError('privileged gate reopening was not observed')
+        query(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS false', owner, 'postgres')
+        if owner_session.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
+            raise RuntimeError('synthetic gate did not close again')
         extra_session.close()
         try:
             require_only_expected_clients()
