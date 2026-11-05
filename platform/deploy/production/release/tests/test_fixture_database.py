@@ -20,6 +20,20 @@ finally:
 
 
 class FixtureDatabaseTest(unittest.TestCase):
+    @staticmethod
+    def complete_container(container, release):
+        target = str(Path(release).parent.parent.parent)
+        config = container['Config']
+        config.update({'Env': ['PGDATA=/var/lib/postgresql/data', 'POSTGRES_USER=postgres',
+                               'POSTGRES_DB=postgres', 'POSTGRES_PASSWORD_FILE=/run/secrets/platform_db_superuser_password',
+                               'PLATFORM_DB_OWNER_PASSWORD_FILE=/run/secrets/platform_db_owner_password',
+                               'PLATFORM_DB_APP_PASSWORD_FILE=/run/secrets/platform_db_app_password'],
+                       'Entrypoint': ['docker-entrypoint.sh'], 'Cmd': ['postgres']})
+        container['Mounts'].append({'Type': 'bind', 'Source': release + '/init/init-platform-db.sh',
+                                    'Destination': '/docker-entrypoint-initdb.d/10-platform-roles.sh', 'RW': False})
+        for name in ('platform_db_superuser_password', 'platform_db_owner_password', 'platform_db_app_password'):
+            container['Mounts'].append({'Type': 'bind', 'Source': target + '/shared/runtime-secrets/' + name,
+                                        'Destination': '/run/secrets/' + name, 'RW': False})
     def test_inspection_binds_running_database_to_the_verified_candidate_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
@@ -33,6 +47,7 @@ class FixtureDatabaseTest(unittest.TestCase):
                 'com.docker.compose.project.config_files': str(release / 'compose.yml'),
             }}, 'Mounts': [{'Type': 'volume', 'Name': 'survey-production_platform-db-data',
                            'Destination': '/var/lib/postgresql/data'}]}
+            self.complete_container(container, str(release))
             result = subprocess.CompletedProcess([], 0, stdout=json.dumps([container]), stderr='')
             with mock.patch.object(module, 'verify_fixture_owner'), \
                     mock.patch.object(module, 'verify_fixture_volume_snapshot'), \
@@ -76,9 +91,10 @@ class FixtureDatabaseTest(unittest.TestCase):
             'com.docker.compose.project.config_files': release + '/compose.yml',
         }}, 'Mounts': [{'Type': 'volume', 'Name': 'survey-production_platform-db-data',
                        'Destination': '/var/lib/postgresql/data'}]}
+        self.complete_container(expected, release)
         module.validate_database_container(expected, release, image)
         import copy
-        for mutation in ('stopped', 'project', 'service', 'workdir', 'config', 'image', 'mount', 'extra'):
+        for mutation in ('stopped', 'project', 'service', 'workdir', 'config', 'image', 'mount', 'extra', 'pgdata', 'duplicate_env', 'command', 'entrypoint', 'overlay', 'secret_source', 'pgoptions', 'missing_bind', 'writable_bind'):
             value = copy.deepcopy(expected)
             if mutation == 'stopped': value['State']['Running'] = False
             if mutation == 'project': value['Config']['Labels']['com.docker.compose.project'] = 'other'
@@ -88,5 +104,14 @@ class FixtureDatabaseTest(unittest.TestCase):
             if mutation == 'image': value['Config']['Image'] = 'postgres:latest'
             if mutation == 'mount': value['Mounts'][0]['Name'] = 'other'
             if mutation == 'extra': value['Mounts'].append(dict(value['Mounts'][0]))
+            if mutation == 'pgdata': value['Config']['Env'][0] = 'PGDATA=/tmp/other'
+            if mutation == 'duplicate_env': value['Config']['Env'].append('PGDATA=/tmp/other')
+            if mutation == 'command': value['Config']['Cmd'] = ['postgres', '-D', '/tmp/other']
+            if mutation == 'entrypoint': value['Config']['Entrypoint'] = ['/bin/sh']
+            if mutation == 'overlay': value['Mounts'].append({'Type': 'bind', 'Destination': '/var/lib/postgresql/data/base'})
+            if mutation == 'secret_source': value['Mounts'][2]['Source'] = '/tmp/other'
+            if mutation == 'pgoptions': value['Config']['Env'].append('PGOPTIONS=-c data_directory=/tmp/other')
+            if mutation == 'missing_bind': value['Mounts'].pop()
+            if mutation == 'writable_bind': value['Mounts'][1]['RW'] = True
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 module.validate_database_container(value, release, image)

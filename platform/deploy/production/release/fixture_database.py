@@ -92,3 +92,46 @@ def validate_database_container(container, release, expected_image):
     if (len(volumes) != 1 or volumes[0].get('Name') != 'survey-production_platform-db-data' or
             volumes[0].get('Destination') != '/var/lib/postgresql/data'):
         raise ValueError('isolated database volume binding is invalid')
+
+    # Compose's documented database contract. Do not infer data location from
+    # the volume label alone: env, startup arguments and all mounts matter.
+    if config.get('Entrypoint') != ['docker-entrypoint.sh'] or config.get('Cmd') != ['postgres']:
+        raise ValueError('isolated database startup is invalid')
+    entries = config.get('Env')
+    if not isinstance(entries, list) or any(not isinstance(item, str) or '=' not in item for item in entries):
+        raise ValueError('isolated database environment is invalid')
+    env = {}
+    for item in entries:
+        key, value = item.split('=', 1)
+        if key in env:
+            raise ValueError('isolated database environment is ambiguous')
+        env[key] = value
+    expected_env = {
+        'PGDATA': '/var/lib/postgresql/data', 'POSTGRES_USER': 'postgres', 'POSTGRES_DB': 'postgres',
+        'POSTGRES_PASSWORD_FILE': '/run/secrets/platform_db_superuser_password',
+        'PLATFORM_DB_OWNER_PASSWORD_FILE': '/run/secrets/platform_db_owner_password',
+        'PLATFORM_DB_APP_PASSWORD_FILE': '/run/secrets/platform_db_app_password',
+    }
+    if any(env.get(key) != value for key, value in expected_env.items()):
+        raise ValueError('isolated database environment differs')
+    allowed_pg = set(expected_env) | {'PG_MAJOR', 'PG_VERSION', 'PG_SHA256', 'PG_CONFIGURE_ARGS'}
+    if any((key.startswith('PG') or key.startswith('POSTGRES_') or key.startswith('PLATFORM_DB_'))
+           and key not in allowed_pg for key in env):
+        raise ValueError('unexpected database environment')
+    target = Path(release).parent.parent.parent
+    binds = {'/docker-entrypoint-initdb.d/10-platform-roles.sh': release + '/init/init-platform-db.sh'}
+    for name in ('platform_db_superuser_password', 'platform_db_owner_password', 'platform_db_app_password'):
+        binds['/run/secrets/' + name] = str(target / 'shared/runtime-secrets' / name)
+    if len(mounts) != 1 + len(binds):
+        raise ValueError('isolated database mount set differs')
+    seen = set()
+    for mount in mounts:
+        if mount is volumes[0]:
+            continue
+        destination = mount.get('Destination')
+        if (destination not in binds or destination in seen or mount.get('Type') != 'bind' or
+                mount.get('Source') != binds[destination] or mount.get('RW') is not False):
+            raise ValueError('isolated database bind is invalid')
+        seen.add(destination)
+    if seen != set(binds):
+        raise ValueError('isolated database bind set is incomplete')
