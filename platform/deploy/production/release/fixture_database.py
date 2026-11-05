@@ -54,6 +54,8 @@ def inspect_fixture_database(work, marker):
         raise ValueError('fixture candidate manifest differs')
     try:
         manifest = json.loads(payload)
+        if manifest['version'] != version:
+            raise ValueError('fixture candidate version differs')
         image = manifest['images']['POSTGRES_IMAGE']
         output = subprocess.run(['docker', '--host', 'unix:///var/run/docker.sock', 'inspect', '--type',
                                  'container', 'survey-production-platform-db-1'],
@@ -64,7 +66,7 @@ def inspect_fixture_database(work, marker):
     if not isinstance(containers, list) or len(containers) != 1:
         raise ValueError('fixture database inspection is ambiguous')
     validate_database_container(containers[0], str(release), image)
-    return release
+    return release, containers[0]['Id']
 
 
 def validate_database_container(container, release, expected_image):
@@ -72,6 +74,8 @@ def validate_database_container(container, release, expected_image):
             not isinstance(expected_image, str) or
             re.fullmatch(r'[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}', expected_image) is None):
         raise ValueError('invalid isolated database container')
+    if not isinstance(container.get('Id'), str) or re.fullmatch(r'[0-9a-f]{64}', container['Id']) is None:
+        raise ValueError('isolated database ID is invalid')
     state = container.get('State')
     config = container.get('Config')
     mounts = container.get('Mounts')

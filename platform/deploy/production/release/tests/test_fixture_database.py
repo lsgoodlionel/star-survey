@@ -40,8 +40,8 @@ class FixtureDatabaseTest(unittest.TestCase):
             release = work / 'primary/releases/0.3.19-rc.1'
             release.mkdir(parents=True)
             image = 'postgres@sha256:' + 'a' * 64
-            payload = json.dumps({'images': {'POSTGRES_IMAGE': image}}).encode()
-            container = {'State': {'Running': True}, 'Config': {'Image': image, 'Labels': {
+            payload = json.dumps({'version': '0.3.19-rc.1', 'images': {'POSTGRES_IMAGE': image}}).encode()
+            container = {'Id': 'b' * 64, 'State': {'Running': True}, 'Config': {'Image': image, 'Labels': {
                 'com.docker.compose.project': 'survey-production', 'com.docker.compose.service': 'platform-db',
                 'com.docker.compose.project.working_dir': str(release),
                 'com.docker.compose.project.config_files': str(release / 'compose.yml'),
@@ -55,9 +55,24 @@ class FixtureDatabaseTest(unittest.TestCase):
                     mock.patch.object(module, '_read_regular', side_effect=[b'0.3.19-rc.1\n', payload]), \
                     mock.patch.dict(os.environ, {'CANDIDATE_MANIFEST_SHA256': hashlib.sha256(payload).hexdigest()}), \
                     mock.patch.object(module.subprocess, 'run', return_value=result) as run:
-                self.assertEqual(release, module.inspect_fixture_database(work, work / 'owner.json'))
+                self.assertEqual((release, 'b' * 64), module.inspect_fixture_database(work, work / 'owner.json'))
                 self.assertEqual(['docker', '--host', 'unix:///var/run/docker.sock', 'inspect', '--type',
                                   'container', 'survey-production-platform-db-1'], run.call_args.args[0])
+
+    def test_manifest_version_mismatch_fails_before_container_inspection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            (work / 'primary/releases/0.3.19-rc.1').mkdir(parents=True)
+            payload = json.dumps({'version': '0.3.18', 'images': {'POSTGRES_IMAGE': 'unused'}}).encode()
+            with mock.patch.object(module, 'verify_fixture_owner'), \
+                    mock.patch.object(module, 'verify_fixture_volume_snapshot'), \
+                    mock.patch.object(module.os, 'geteuid', return_value=0), \
+                    mock.patch.object(module, '_read_regular', side_effect=[b'0.3.19-rc.1\n', payload]), \
+                    mock.patch.dict(os.environ, {'CANDIDATE_MANIFEST_SHA256': hashlib.sha256(payload).hexdigest()}), \
+                    mock.patch.object(module.subprocess, 'run') as run:
+                with self.assertRaises(ValueError):
+                    module.inspect_fixture_database(work, work / 'owner.json')
+                run.assert_not_called()
 
     def test_database_inspection_is_never_attempted_if_owner_or_volumes_fail(self):
         with mock.patch.object(module, 'verify_fixture_owner', side_effect=ValueError('wrong owner')), \
@@ -84,7 +99,7 @@ class FixtureDatabaseTest(unittest.TestCase):
     def test_container_must_be_running_and_bound_to_exact_candidate_release(self):
         release = '/tmp/survey-native-acceptance.test/primary/releases/0.3.19-rc.1'
         image = 'postgres@sha256:' + 'a' * 64
-        expected = {'State': {'Running': True}, 'Config': {'Image': image, 'Labels': {
+        expected = {'Id': 'b' * 64, 'State': {'Running': True}, 'Config': {'Image': image, 'Labels': {
             'com.docker.compose.project': 'survey-production',
             'com.docker.compose.service': 'platform-db',
             'com.docker.compose.project.working_dir': release,
@@ -94,7 +109,7 @@ class FixtureDatabaseTest(unittest.TestCase):
         self.complete_container(expected, release)
         module.validate_database_container(expected, release, image)
         import copy
-        for mutation in ('stopped', 'project', 'service', 'workdir', 'config', 'image', 'mount', 'extra', 'pgdata', 'duplicate_env', 'command', 'entrypoint', 'overlay', 'secret_source', 'pgoptions', 'missing_bind', 'writable_bind'):
+        for mutation in ('stopped', 'project', 'service', 'workdir', 'config', 'image', 'mount', 'extra', 'pgdata', 'duplicate_env', 'command', 'entrypoint', 'overlay', 'secret_source', 'pgoptions', 'missing_bind', 'writable_bind', 'container_id'):
             value = copy.deepcopy(expected)
             if mutation == 'stopped': value['State']['Running'] = False
             if mutation == 'project': value['Config']['Labels']['com.docker.compose.project'] = 'other'
@@ -113,5 +128,6 @@ class FixtureDatabaseTest(unittest.TestCase):
             if mutation == 'pgoptions': value['Config']['Env'].append('PGOPTIONS=-c data_directory=/tmp/other')
             if mutation == 'missing_bind': value['Mounts'].pop()
             if mutation == 'writable_bind': value['Mounts'][1]['RW'] = True
+            if mutation == 'container_id': value['Id'] = 'survey-production-platform-db-1'
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 module.validate_database_container(value, release, image)
