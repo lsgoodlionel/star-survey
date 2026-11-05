@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import csv
 import io
 import zipfile
@@ -542,6 +543,66 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         cls.module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = cls.module
         spec.loader.exec_module(cls.module)
+
+    def test_fixture_volume_inventory_requires_exact_project_and_stable_volume_identity(self):
+        doctor = ast.parse((ROOT / 'platform/deploy/production/doctor.py').read_text())
+        expected_node = next(node.value for node in doctor.body if isinstance(node, ast.Assign)
+                             and any(isinstance(target, ast.Name) and target.id == 'EXPECTED_VOLUMES'
+                                     for target in node.targets))
+        self.assertEqual(set(ast.literal_eval(expected_node)), set(self.module.FIXTURE_VOLUME_NAMES))
+        names = sorted('survey-production_' + name for name in self.module.FIXTURE_VOLUME_NAMES)
+        def inspected(name):
+            return {'Name': name, 'Driver': 'local', 'CreatedAt': '2026-01-01T00:00:00Z',
+                    'Labels': {'com.docker.compose.project': 'survey-production',
+                               'com.docker.compose.volume': name.removeprefix('survey-production_')}}
+        output = subprocess.CompletedProcess([], 0, stdout='\n'.join(names) + '\n', stderr='')
+        detail = subprocess.CompletedProcess([], 0, stdout=json.dumps([inspected(n) for n in names]), stderr='')
+        with mock.patch.object(self.module.subprocess, 'run', side_effect=[output, output, detail]):
+            inventory = self.module.read_fixture_volumes()
+        self.assertEqual(names, sorted(inventory))
+        missing_list = subprocess.CompletedProcess([], 0, stdout='\n'.join(names[:-1]), stderr='')
+        with mock.patch.object(self.module.subprocess, 'run', return_value=missing_list):
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.read_fixture_volumes()
+        with mock.patch.object(self.module.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'docker')):
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.read_fixture_volumes()
+        for mutation in ('missing', 'unexpected', 'wrong-project', 'wrong-volume', 'changed-created', 'driver'):
+            altered = json.loads(json.dumps([inspected(n) for n in names]))
+            if mutation == 'missing': altered.pop()
+            if mutation == 'unexpected': altered.append(inspected('survey-production_intruder'))
+            if mutation == 'wrong-project': altered[0]['Labels']['com.docker.compose.project'] = 'other'
+            if mutation == 'wrong-volume': altered[0]['Labels']['com.docker.compose.volume'] = 'other'
+            if mutation == 'changed-created': altered[0]['CreatedAt'] = ''
+            if mutation == 'driver': altered[0]['Driver'] = 'external'
+            with self.subTest(mutation=mutation), self.assertRaises(self.module.EvidenceError):
+                self.module.parse_fixture_volumes(altered)
+
+    def test_fixture_volume_snapshot_detects_replacement_and_requires_owner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            marker, snapshot = work / 'owner.json', work / 'volumes.json'
+            volumes = {'survey-production_engine-db-data': {'driver': 'local', 'created': '2026-01-01T00:00:00Z'}}
+            with mock.patch.object(self.module, 'verify_fixture_owner', side_effect=self.module.EvidenceError('bad')), \
+                    mock.patch.object(self.module, 'read_fixture_volumes') as read:
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.write_fixture_volume_snapshot(work, marker, snapshot)
+                read.assert_not_called()
+            with mock.patch.object(self.module, 'verify_fixture_owner') as owner, \
+                    mock.patch.object(self.module, 'read_fixture_volumes', return_value=volumes):
+                self.module.write_fixture_volume_snapshot(work, marker, snapshot)
+                self.module.verify_fixture_volume_snapshot(work, marker, snapshot)
+                self.assertEqual(2, owner.call_count)
+            replacement = {'survey-production_engine-db-data': {'driver': 'local', 'created': '2026-01-02T00:00:00Z'}}
+            with mock.patch.object(self.module, 'verify_fixture_owner'), \
+                    mock.patch.object(self.module, 'read_fixture_volumes', return_value=replacement):
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_volume_snapshot(work, marker, snapshot)
+            snapshot.unlink()
+            snapshot.symlink_to(work / 'other')
+            with mock.patch.object(self.module, 'verify_fixture_owner'):
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_volume_snapshot(work, marker, snapshot)
 
     def test_restore_cleanup_check_rejects_orphans_and_query_failures(self):
         empty = subprocess.CompletedProcess([], 0, stdout='', stderr='')

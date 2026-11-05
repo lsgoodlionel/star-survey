@@ -60,6 +60,10 @@ RUNNERS = {
     ("22.04", "arm64"),
     ("24.04", "arm64"),
 }
+FIXTURE_VOLUME_NAMES = frozenset({
+    'caddy-data', 'caddy-config', 'platform-db-data', 'platform-assets', 'platform-exports',
+    'publish-gateway-state', 'engine-db-data', 'engine-upload', 'engine-runtime',
+})
 MATRIX_EVIDENCE_KEYS = {
     ("22.04", "amd64"): "ubuntu-22.04-amd64",
     ("24.04", "amd64"): "ubuntu-24.04-amd64",
@@ -190,6 +194,80 @@ def verify_fixture_owner(work: Path, target: Path, marker: Path) -> None:
                 raise EvidenceError('fixture owner marker does not match this run')
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError('fixture owner marker cannot be read') from exc
+
+
+def parse_fixture_volumes(values: Any) -> dict[str, dict[str, str]]:
+    """Bounded volume metadata for a hosted test; not by itself a purge authorization."""
+    expected = {'survey-production_' + name for name in FIXTURE_VOLUME_NAMES}
+    if not isinstance(values, list) or len(values) != len(expected):
+        raise EvidenceError('fixture volume inventory is incomplete')
+    result: dict[str, dict[str, str]] = {}
+    for item in values:
+        if not isinstance(item, dict):
+            raise EvidenceError('fixture volume metadata is invalid')
+        name, driver, created, labels = (item.get('Name'), item.get('Driver'), item.get('CreatedAt'), item.get('Labels'))
+        if (not isinstance(name, str) or name not in expected or name in result or driver != 'local' or not isinstance(created, str) or
+                not created or not isinstance(labels, dict) or
+                labels.get('com.docker.compose.project') != 'survey-production' or
+                labels.get('com.docker.compose.volume') != name.removeprefix('survey-production_')):
+            raise EvidenceError('fixture volume identity is invalid')
+        try:
+            timestamp = datetime.fromisoformat(created.replace('Z', '+00:00'))
+            if timestamp.tzinfo is None:
+                raise ValueError('timezone required')
+        except ValueError as exc:
+            raise EvidenceError('fixture volume creation time is invalid') from exc
+        result[name] = {'driver': driver, 'created': created}
+    if set(result) != expected:
+        raise EvidenceError('fixture volume inventory is incomplete')
+    return result
+
+
+def read_fixture_volumes() -> dict[str, dict[str, str]]:
+    expected = sorted('survey-production_' + name for name in FIXTURE_VOLUME_NAMES)
+    prefix = ['docker', '--host', 'unix:///var/run/docker.sock', 'volume']
+    try:
+        for selector in ('label=com.docker.compose.project=survey-production', 'name=^survey-production_'):
+            result = subprocess.run(prefix + ['ls', '-q', '--filter', selector], check=True,
+                                    capture_output=True, text=True, timeout=30)
+            names = result.stdout.splitlines()
+            if len(names) != len(expected) or set(names) != set(expected):
+                raise EvidenceError('fixture volume listing differs from expected inventory')
+        result = subprocess.run(prefix + ['inspect', *expected], check=True, capture_output=True, text=True, timeout=30)
+        return parse_fixture_volumes(json.loads(result.stdout))
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise EvidenceError('fixture volume inspection failed') from exc
+
+
+def write_fixture_volume_snapshot(work: Path, marker: Path, snapshot: Path) -> None:
+    if snapshot != work / 'volumes.json':
+        raise EvidenceError('fixture volume snapshot path is invalid')
+    verify_fixture_owner(work, work / 'primary', marker)
+    volumes = read_fixture_volumes()
+    try:
+        fd = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(volumes, stream, sort_keys=True)
+    except OSError as exc:
+        raise EvidenceError('fixture volume snapshot cannot be written') from exc
+
+
+def verify_fixture_volume_snapshot(work: Path, marker: Path, snapshot: Path) -> None:
+    if snapshot != work / 'volumes.json':
+        raise EvidenceError('fixture volume snapshot path is invalid')
+    verify_fixture_owner(work, work / 'primary', marker)
+    try:
+        fd = os.open(snapshot, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'r', encoding='utf-8') as stream:
+            metadata = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600 or
+                    metadata.st_uid != os.geteuid() or metadata.st_size > 8192):
+                raise EvidenceError('fixture volume snapshot is unsafe')
+            recorded = json.loads(stream.read(8193))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EvidenceError('fixture volume snapshot cannot be read') from exc
+    if recorded != read_fixture_volumes():
+        raise EvidenceError('fixture volume inventory changed')
 
 
 def normalized_key(value: object) -> str:
@@ -995,7 +1073,7 @@ def parser() -> argparse.ArgumentParser:
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser('clean-host')
     sub.add_parser('clean-restore')
-    for action in ('fixture-owner-create', 'fixture-owner-verify'):
+    for action in ('fixture-owner-create', 'fixture-owner-verify', 'fixture-volumes-create', 'fixture-volumes-verify'):
         owner = sub.add_parser(action)
         owner.add_argument('--work', type=Path, required=True)
         owner.add_argument('--marker', type=Path, required=True)
@@ -1053,6 +1131,10 @@ def main() -> int:
             write_fixture_owner(args.work, args.marker)
         elif args.command == 'fixture-owner-verify':
             verify_fixture_owner(args.work, args.work / 'primary', args.marker)
+        elif args.command == 'fixture-volumes-create':
+            write_fixture_volume_snapshot(args.work, args.marker, args.work / 'volumes.json')
+        elif args.command == 'fixture-volumes-verify':
+            verify_fixture_volume_snapshot(args.work, args.marker, args.work / 'volumes.json')
         elif args.command == "doctor":
             write_doctor_evidence(load_json(args.input), args.output, secrets)
         elif args.command == "services":
