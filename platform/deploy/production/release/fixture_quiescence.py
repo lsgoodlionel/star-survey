@@ -8,7 +8,8 @@ writers for the whole transaction, and reject missing or stale evidence.
 
 def require_quiescent_snapshot(snapshot, expected):
     """Reject unknown clients, changed identities or any outstanding work."""
-    if not isinstance(expected, dict) or set(expected) != {'database_oid', 'clients'}:
+    if (not isinstance(expected, dict) or set(expected) != {'database_oid', 'clients'} or
+            type(expected['database_oid']) is not int or expected['database_oid'] <= 0):
         raise ValueError('expected database identity is invalid')
     if not isinstance(snapshot, dict) or set(snapshot) != {
         'database_oid', 'allow_connections', 'clients', 'prepared', 'unsafe'

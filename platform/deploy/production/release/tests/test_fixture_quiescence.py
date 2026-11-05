@@ -19,6 +19,12 @@ class FixtureQuiescenceTest(unittest.TestCase):
     def test_accepts_exact_closed_quiet_snapshot(self):
         module.require_quiescent_snapshot(self.snapshot, self.expected)
 
+    def test_rejects_missing_or_boolean_expected_identity(self):
+        for expected in (None, {}, {'database_oid': True, 'clients': [self.client]},
+                         {'database_oid': 42, 'clients': []}):
+            with self.subTest(expected=expected), self.assertRaises(ValueError):
+                module.require_quiescent_snapshot(self.snapshot, expected)
+
     def test_rejects_unknown_restarted_or_ambiguous_clients_and_work(self):
         for mutation in ('gate', 'oid', 'prepared', 'unsafe', 'extra', 'restart', 'duplicate', 'invalid'):
             value = copy.deepcopy(self.snapshot)
