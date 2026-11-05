@@ -44,7 +44,7 @@ def main():
                 raise RuntimeError('migration not uniquely found')
             migrations.append(matches[0].read_text())
         execute('SET ROLE platform_owner;\n' + '\n'.join(migrations), database)
-        tenant, owner_plan, fixture_plan, principal, connection = (str(uuid.uuid4()) for _ in range(5))
+        tenant, other_tenant, owner_plan, fixture_plan, principal, connection = (str(uuid.uuid4()) for _ in range(6))
         original_sub, fixture_sub, restore_sub, grant, session, owner_grant = (str(uuid.uuid4()) for _ in range(6))
         handoff_hash, browser_hash = secrets.token_hex(32), secrets.token_hex(32)
         scope = "SELECT set_config('app.tenant_id','" + tenant + "',true);"
@@ -52,6 +52,8 @@ def main():
 BEGIN; SET LOCAL ROLE platform_owner; {scope}
 INSERT INTO tenant(id,code,name,status) VALUES ('{tenant}','ci-probe','CI probe','provisioning');
 UPDATE tenant SET status='active' WHERE id='{tenant}';
+INSERT INTO tenant(id,code,name,status) VALUES ('{other_tenant}','ci-other','CI other','provisioning');
+UPDATE tenant SET status='active' WHERE id='{other_tenant}';
 INSERT INTO plan_version(id,plan_code,version,capabilities,quotas,export_window_days)
  VALUES ('{owner_plan}','ci-probe',1,ARRAY['survey.read','survey.write','response.collect','response.export'],
  '{{"member.seats":1,"response.valid_completed":100}}',1);
@@ -101,18 +103,18 @@ COMMIT;
         # do not take any application advisory lock. This is a disposable DB.
         app_name = 'fixture_lock_' + secrets.token_hex(12)
         holder_sql = f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
-LOCK TABLE subscription IN SHARE ROW EXCLUSIVE MODE; SELECT pg_sleep(6); COMMIT;"""
+LOCK TABLE subscription IN SHARE ROW EXCLUSIVE MODE; SELECT pg_sleep(60); COMMIT;"""
         command = ['psql', '-X', '-q', '-h', '127.0.0.1', '-p', port, '-U', 'postgres',
                    '-d', database, '-v', 'ON_ERROR_STOP=1', '-c', holder_sql]
-        holder = subprocess.Popen(command, env=dict(env, PGAPPNAME=app_name), stdin=subprocess.DEVNULL,
+        holder = subprocess.Popen(command, env=dict(env, PGAPPNAME=app_name, PGOPTIONS='-c statement_timeout=120000'), stdin=subprocess.DEVNULL,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         try:
             deadline = time.monotonic() + 10
             seen = False
             while time.monotonic() < deadline:
-                observed = execute("SELECT count(*) FROM pg_stat_activity WHERE application_name='" + app_name +
+                observed = execute("SELECT pid FROM pg_stat_activity WHERE application_name='" + app_name +
                                    "' AND datname='" + database + "' AND wait_event='PgSleep'").stdout.strip()
-                if observed == '1':
+                if re.fullmatch(r'[0-9]+', observed):
                     seen = True
                     break
                 if holder.poll() is not None:
@@ -120,16 +122,33 @@ LOCK TABLE subscription IN SHARE ROW EXCLUSIVE MODE; SELECT pg_sleep(6); COMMIT;
                 time.sleep(.05)
             if not seen:
                 raise RuntimeError('subscription lock holder was not observed')
-            concurrent_id = str(uuid.uuid4())
-            blocked = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+            # The physical lock is table-wide, so even a different tenant's
+            # write must block. Confirm timeout leaves neither insert committed.
+            for target_tenant in (tenant, other_tenant):
+                concurrent_id = str(uuid.uuid4())
+                concurrent_scope = "SELECT set_config('app.tenant_id','" + target_tenant + "',true);"
+                insert = f"""BEGIN; SET LOCAL ROLE platform_app; {concurrent_scope}
 SET LOCAL lock_timeout='1s';
 INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
- SELECT '{concurrent_id}','{tenant}','{owner_plan}',kind,now(),ends_at FROM subscription WHERE id='{original_sub}';
-COMMIT;""", database, check=False)
-            if blocked.returncode == 0 or 'lock timeout' not in blocked.stderr:
-                raise RuntimeError('concurrent subscription insert was not blocked by physical lock')
-            if holder.wait(timeout=10) != 0:
-                raise RuntimeError('lock holder did not finish cleanly')
+ VALUES ('{concurrent_id}','{target_tenant}','{owner_plan}','trial',now(),now()+interval '1 day');
+COMMIT;"""
+                blocked = execute(insert, database, check=False)
+                if blocked.returncode == 0 or 'lock timeout' not in blocked.stderr:
+                    raise RuntimeError('concurrent subscription insert was not blocked by physical lock')
+                count = execute(f"BEGIN; SET LOCAL ROLE platform_app; {concurrent_scope} SELECT count(*) FROM subscription WHERE id='{concurrent_id}'; COMMIT;", database).stdout
+                if count.strip().splitlines()[-1] != '0':
+                    raise RuntimeError('timed-out subscription insert committed')
+            # Kill the identified synthetic lock backend; verify the lock is
+            # released and a new write on the isolated other tenant succeeds.
+            execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name='" + app_name +
+                    "' AND datname='" + database + "' AND pid=" + observed)
+            holder.wait(timeout=10)
+            other_scope = "SELECT set_config('app.tenant_id','" + other_tenant + "',true);"
+            execute(f"""BEGIN; SET LOCAL ROLE platform_app; {other_scope}
+SET LOCAL lock_timeout='1s';
+INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
+ VALUES ('{uuid.uuid4()}','{other_tenant}','{owner_plan}','trial',now(),now()+interval '1 day');
+COMMIT;""", database)
         finally:
             if holder.poll() is None:
                 holder.kill()
