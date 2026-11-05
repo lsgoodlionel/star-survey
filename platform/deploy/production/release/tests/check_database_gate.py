@@ -172,18 +172,7 @@ def main():
         require_only_expected_clients()
         def require_quiescent():
             require_only_expected_clients()
-            state = snapshot()
-            try:
-                require_quiescent_snapshot(state, expected_snapshot)
-            except ValueError as exc:
-                # Synthetic service only: counts, booleans and redacted backend
-                # type/state, never SQL, credentials or connection addresses.
-                details = cluster_inspector.sql("SELECT coalesce(string_agg(coalesce(backend_type,'null')||':'||"
-                    "coalesce(state,'null')||':'||(xact_start IS NOT NULL)::text,',' ORDER BY pid),'none') "
-                    "FROM pg_stat_activity WHERE datid=" + db_oid + ";")
-                raise RuntimeError('quiescence failure: oid_match=' + str(state.get('database_oid') == expected_snapshot['database_oid']) +
-                    ' gate=' + str(state.get('allow_connections')) + ' prepared=' + str(state.get('prepared')) +
-                    ' unsafe=' + str(state.get('unsafe')) + ' backend_states=' + details) from exc
+            require_quiescent_snapshot(snapshot(), expected_snapshot)
             if cluster_inspector.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
                 raise RuntimeError('database gate is not closed')
             if cluster_inspector.sql("SELECT count(*) FROM pg_prepared_xacts WHERE database='" + db + "';") != '0':
@@ -217,6 +206,19 @@ def main():
                              " AND state='idle' AND xact_start IS NULL;")
         if safe != '1':
             raise RuntimeError('known app backend did not become idle without a transaction')
+        require_quiescent()
+        # A previously approved client can begin work immediately after a
+        # clean observation. The closed connection gate does not contain an
+        # existing session: a stale snapshot must never authorize recovery.
+        app_session.sql('BEGIN; SELECT 1;')
+        try:
+            require_quiescent()
+        except RuntimeError:
+            if cluster_inspector.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
+                raise RuntimeError('gate reopened after stale snapshot rejection')
+        else:
+            raise RuntimeError('a previously quiet client resumed work without rejection')
+        app_session.sql('ROLLBACK;')
         require_quiescent()
         query(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS true', owner, 'postgres')
         if (query("SELECT coalesce(datacl::text,'DEFAULT') FROM pg_database WHERE oid=" + db_oid).stdout.strip() != original_acl
