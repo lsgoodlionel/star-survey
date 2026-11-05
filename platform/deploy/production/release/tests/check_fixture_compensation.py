@@ -9,7 +9,6 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
-import time
 import uuid
 
 
@@ -109,61 +108,14 @@ COMMIT;
         failed = execute(provision + '\\echo committed-before-error\nSELECT 1/0;', database, check=False)
         if failed.returncode == 0:
             raise RuntimeError('injected ambiguous result did not fail')
-        # Probe whether the ordinary runtime role can take a physical table lock
-        # that conflicts with every subscription INSERT, including writers which
-        # do not take any application advisory lock. This is a disposable DB.
-        app_name = 'fixture_lock_' + secrets.token_hex(12)
-        holder_sql = f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
-LOCK TABLE subscription IN SHARE ROW EXCLUSIVE MODE; SELECT pg_sleep(60); COMMIT;"""
-        command = ['psql', '-X', '-q', '-h', '127.0.0.1', '-p', port, '-U', 'postgres',
-                   '-d', database, '-v', 'ON_ERROR_STOP=1', '-c', holder_sql]
-        holder = subprocess.Popen(command, env=dict(env, PGAPPNAME=app_name, PGOPTIONS='-c statement_timeout=120000'), stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        try:
-            deadline = time.monotonic() + 10
-            seen = False
-            while time.monotonic() < deadline:
-                observed = execute("SELECT pid FROM pg_stat_activity WHERE application_name='" + app_name +
-                                   "' AND datname='" + database + "' AND wait_event='PgSleep'").stdout.strip()
-                if re.fullmatch(r'[0-9]+', observed):
-                    seen = True
-                    break
-                if holder.poll() is not None:
-                    raise RuntimeError('runtime role cannot hold lock: ' + holder.stderr.read()[-1000:])
-                time.sleep(.05)
-            if not seen:
-                raise RuntimeError('subscription lock holder was not observed')
-            # The physical lock is table-wide, so even a different tenant's
-            # write must block. Confirm timeout leaves neither insert committed.
-            for target_tenant in (tenant, other_tenant):
-                concurrent_id = str(uuid.uuid4())
-                concurrent_scope = "SELECT set_config('app.tenant_id','" + target_tenant + "',true);"
-                insert = f"""BEGIN; SET LOCAL ROLE platform_app; {concurrent_scope}
-SET LOCAL lock_timeout='1s';
-INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
- VALUES ('{concurrent_id}','{target_tenant}','{owner_plan}','trial',now(),now()+interval '1 day');
-COMMIT;"""
-                blocked = execute(insert, database, check=False)
-                if blocked.returncode == 0 or 'lock timeout' not in blocked.stderr:
-                    raise RuntimeError('concurrent subscription insert was not blocked by physical lock')
-                count = execute(f"BEGIN; SET LOCAL ROLE platform_app; {concurrent_scope} SELECT count(*) FROM subscription WHERE id='{concurrent_id}'; COMMIT;", database).stdout
-                if count.strip().splitlines()[-1] != '0':
-                    raise RuntimeError('timed-out subscription insert committed')
-            # Kill the identified synthetic lock backend; verify the lock is
-            # released and a new write on the isolated other tenant succeeds.
-            execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name='" + app_name +
-                    "' AND datname='" + database + "' AND pid=" + observed)
-            holder.wait(timeout=10)
-            other_scope = "SELECT set_config('app.tenant_id','" + other_tenant + "',true);"
-            execute(f"""BEGIN; SET LOCAL ROLE platform_app; {other_scope}
-SET LOCAL lock_timeout='1s';
-INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
- VALUES ('{uuid.uuid4()}','{other_tenant}','{owner_plan}','trial',now(),now()+interval '1 day');
-COMMIT;""", database)
-        finally:
-            if holder.poll() is None:
-                holder.kill()
-                holder.wait(timeout=10)
+        # Product runtime privileges deliberately do not permit the physical
+        # lock needed to block uncooperative subscription writers. Keep this as
+        # a negative contract; it is not proof of concurrent compensation safety.
+        denied_lock = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+LOCK TABLE subscription IN SHARE ROW EXCLUSIVE MODE; COMMIT;""", database, check=False)
+        if denied_lock.returncode == 0 or 'permission denied for table subscription' not in denied_lock.stderr:
+            raise RuntimeError('subscription lock privilege changed; concurrency design requires review')
+        print('runtime role cannot take physical subscription lock; concurrent compensation remains blocked')
 
         compensate = f"""
 BEGIN; SET LOCAL ROLE platform_app; {scope}
