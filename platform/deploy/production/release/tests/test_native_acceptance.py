@@ -534,6 +534,60 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         sys.modules[spec.name] = cls.module
         spec.loader.exec_module(cls.module)
 
+    def test_fixture_owner_binding_rejects_identity_and_path_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            work = parent / 'survey-native-acceptance.test'
+            work.mkdir(mode=0o700)
+            marker = work / 'owner.json'
+            env = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+                   'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey',
+                   'GITHUB_RUN_ID': '12345', 'GITHUB_RUN_ATTEMPT': '1',
+                   'CANDIDATE_MANIFEST_SHA256': 'a' * 64,
+                   'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
+                   'ADMIN_IMAGE_DIGEST': 'sha256:' + '1' * 64,
+                   'PLATFORM_IMAGE_DIGEST': 'sha256:' + '2' * 64,
+                   'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + '3' * 64,
+                   'ENGINE_IMAGE_DIGEST': 'sha256:' + '4' * 64,
+                   'EXPECTED_UBUNTU': '24.04', 'EXPECTED_ARCHITECTURE': 'arm64',
+                   'COMPOSE_PROJECT_NAME': 'survey-production',
+                   'DOCKER_HOST': 'unix:///var/run/docker.sock', 'RUNNER_TEMP': str(parent)}
+            with mock.patch.dict(os.environ, env, clear=True):
+                with mock.patch.object(self.module, 'require_clean_native_host') as preflight:
+                    self.module.write_fixture_owner(work, marker)
+                    preflight.assert_called_once()
+                self.module.verify_fixture_owner(work, work / 'primary', marker)
+                for key, value in [('GITHUB_RUN_ID', '999'), ('GITHUB_RUN_ATTEMPT', '2'),
+                                   ('GITHUB_REPOSITORY', 'other/repository'),
+                                   ('CANDIDATE_MANIFEST_SHA256', 'c' * 64),
+                                   ('CANDIDATE_BUNDLE_SHA256', 'd' * 64),
+                                   ('ADMIN_IMAGE_DIGEST', 'sha256:' + '5' * 64),
+                                   ('PLATFORM_IMAGE_DIGEST', 'sha256:' + '5' * 64),
+                                   ('PUBLISH_GATEWAY_IMAGE_DIGEST', 'sha256:' + '5' * 64),
+                                   ('ENGINE_IMAGE_DIGEST', 'sha256:' + '5' * 64),
+                                   ('COMPOSE_PROJECT_NAME', 'other'), ('DOCKER_HOST', 'tcp://remote')]:
+                    with self.subTest(field=key), mock.patch.dict(os.environ, {key: value}):
+                        with self.assertRaises(self.module.EvidenceError):
+                            self.module.verify_fixture_owner(work, work / 'primary', marker)
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_owner(work, parent / 'other', marker)
+                saved = marker.read_text()
+                marker.write_text('{}')
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_owner(work, work / 'primary', marker)
+                marker.write_text(saved)
+                marker.chmod(0o644)
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_owner(work, work / 'primary', marker)
+                marker.unlink()
+                marker.symlink_to(parent / 'outside')
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_owner(work, work / 'primary', marker)
+                marker.unlink()
+                work.chmod(0o755)
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.write_fixture_owner(work, marker)
+
     def test_clean_host_guard_fails_closed_on_nonhosted_or_existing_resources(self):
         completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
         with mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted'}):

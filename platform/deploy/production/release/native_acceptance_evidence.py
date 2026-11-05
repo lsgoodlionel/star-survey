@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 from typing import Any, Iterable
 from urllib.parse import quote, quote_plus
@@ -97,6 +98,66 @@ def require_clean_native_host() -> None:
             raise EvidenceError('native host resource preflight failed') from exc
         if result.stdout.strip():
             raise EvidenceError('native host already contains production-project resources')
+
+
+def _fixture_owner(work: Path, target: Path, marker: Path) -> dict[str, str]:
+    """Validate the isolated runner identity before constructing an ownership marker."""
+    if (os.environ.get('GITHUB_ACTIONS') != 'true' or
+            os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted' or
+            os.environ.get('GITHUB_REPOSITORY') != 'lsgoodlionel/star-survey' or
+            os.environ.get('DOCKER_CONTEXT') or
+            os.environ.get('DOCKER_HOST') != 'unix:///var/run/docker.sock' or
+            os.environ.get('COMPOSE_PROJECT_NAME') != 'survey-production'):
+        raise EvidenceError('fixture runner or Docker binding is invalid')
+    run = os.environ.get('GITHUB_RUN_ID', '')
+    attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '')
+    manifest = os.environ.get('CANDIDATE_MANIFEST_SHA256', '')
+    bundle = os.environ.get('CANDIDATE_BUNDLE_SHA256', '')
+    ubuntu = os.environ.get('EXPECTED_UBUNTU', '')
+    arch = os.environ.get('EXPECTED_ARCHITECTURE', '')
+    images = {name: os.environ.get(key, '') for name, key in (
+        ('admin', 'ADMIN_IMAGE_DIGEST'), ('platform', 'PLATFORM_IMAGE_DIGEST'),
+        ('gateway', 'PUBLISH_GATEWAY_IMAGE_DIGEST'), ('engine', 'ENGINE_IMAGE_DIGEST'))}
+    if (re.fullmatch(r'[1-9][0-9]*', run) is None or re.fullmatch(r'[1-9][0-9]*', attempt) is None or
+            SHA256.fullmatch(manifest) is None or SHA256.fullmatch(bundle) is None or (ubuntu, arch) not in RUNNERS or
+            any(DIGEST.fullmatch(value) is None for value in images.values())):
+        raise EvidenceError('fixture candidate or run identity is invalid')
+    temp = Path(os.environ.get('RUNNER_TEMP', ''))
+    if (not temp.is_absolute() or not work.is_absolute() or work.is_symlink() or not work.is_dir() or
+            work.resolve().parent != temp.resolve() or not work.name.startswith('survey-native-acceptance.') or
+            target != work / 'primary' or target.is_symlink() or marker != work / 'owner.json'):
+        raise EvidenceError('fixture target path is invalid')
+    metadata = work.stat()
+    if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise EvidenceError('fixture work directory is unsafe')
+    return {'repository': 'lsgoodlionel/star-survey', 'run': run, 'attempt': attempt, 'manifest': manifest, 'bundle': bundle,
+            'ubuntu': ubuntu, 'architecture': arch, 'target': str(target), 'project': 'survey-production', **images}
+
+
+def write_fixture_owner(work: Path, marker: Path) -> None:
+    owner = _fixture_owner(work, work / 'primary', marker)
+    require_clean_native_host()
+    try:
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(owner, stream, sort_keys=True)
+    except OSError as exc:
+        raise EvidenceError('fixture owner marker cannot be written') from exc
+
+
+def verify_fixture_owner(work: Path, target: Path, marker: Path) -> None:
+    expected = _fixture_owner(work, target, marker)
+    try:
+        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'r', encoding='utf-8') as stream:
+            metadata = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600 or
+                    metadata.st_uid != os.geteuid() or metadata.st_size > 4096):
+                raise EvidenceError('fixture owner marker is unsafe')
+            if json.loads(stream.read(4097)) != expected:
+                raise EvidenceError('fixture owner marker does not match this run')
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EvidenceError('fixture owner marker cannot be read') from exc
 
 
 def normalized_key(value: object) -> str:
@@ -901,6 +962,10 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--secrets-dir", type=Path)
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser('clean-host')
+    for action in ('fixture-owner-create', 'fixture-owner-verify'):
+        owner = sub.add_parser(action)
+        owner.add_argument('--work', type=Path, required=True)
+        owner.add_argument('--marker', type=Path, required=True)
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--input", type=Path, required=True)
     doctor.add_argument("--output", type=Path, required=True)
@@ -949,6 +1014,10 @@ def main() -> int:
     try:
         if args.command == 'clean-host':
             require_clean_native_host()
+        elif args.command == 'fixture-owner-create':
+            write_fixture_owner(args.work, args.marker)
+        elif args.command == 'fixture-owner-verify':
+            verify_fixture_owner(args.work, args.work / 'primary', args.marker)
         elif args.command == "doctor":
             write_doctor_evidence(load_json(args.input), args.output, secrets)
         elif args.command == "services":
