@@ -1,0 +1,62 @@
+import importlib.util
+from pathlib import Path
+import unittest
+
+PATH = Path(__file__).resolve().parents[1] / 'fixture_recovery.py'
+spec = importlib.util.spec_from_file_location('fixture_recovery', PATH)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+class FixtureRecoveryTest(unittest.TestCase):
+    def test_recovery_order_and_binding_before_every_action(self):
+        calls = []
+        def step(name):
+            return lambda: calls.append(name)
+        module.recover_fixture(step('bind'), step('revoke'), step('restore'), step('verify'), step('doctor'))
+        self.assertEqual(['bind', 'revoke', 'bind', 'restore', 'bind', 'verify', 'bind', 'doctor'], calls)
+
+    def test_failures_do_not_suppress_later_independent_recovery(self):
+        for failed in ('revoke', 'restore', 'verify', 'doctor'):
+            calls = []
+            def action(name):
+                def run():
+                    calls.append(name)
+                    if name == failed:
+                        raise RuntimeError('sensitive details')
+                return run
+            with self.subTest(failed=failed), self.assertRaises(module.RecoveryError) as raised:
+                module.recover_fixture(action('bind'), *(action(name) for name in ('revoke', 'restore', 'verify', 'doctor')))
+            expected = ['bind', 'revoke', 'bind', 'restore']
+            if failed != 'restore':
+                expected += ['bind', 'verify']
+                if failed != 'verify':
+                    expected += ['bind', 'doctor']
+            self.assertEqual(expected, calls)
+            self.assertNotIn('sensitive details', str(raised.exception))
+
+    def test_binding_failure_never_calls_the_associated_mutation(self):
+        calls = []
+        def bind():
+            calls.append('bind')
+            raise ValueError('unsafe')
+        def operation():
+            calls.append('operation')
+        with self.assertRaises(module.RecoveryError):
+            module.recover_fixture(bind, operation, operation, operation, operation)
+        self.assertEqual(['bind'], calls)
+
+    def test_interruption_still_attempts_remaining_recovery(self):
+        calls = []
+        def revoke():
+            calls.append('revoke')
+            raise KeyboardInterrupt()
+        def step(name):
+            return lambda: calls.append(name)
+        with self.assertRaises(module.RecoveryError):
+            module.recover_fixture(step('bind'), revoke, step('restore'), step('verify'), step('doctor'))
+        self.assertEqual(['bind', 'revoke', 'bind', 'restore', 'bind', 'verify', 'bind', 'doctor'], calls)
+
+
+if __name__ == '__main__':
+    unittest.main()
