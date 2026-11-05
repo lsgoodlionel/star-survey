@@ -572,7 +572,8 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             with self.assertRaises(self.module.EvidenceError):
                 self.module.read_fixture_volumes()
         for mutation in ('missing', 'unexpected', 'wrong-project', 'wrong-volume', 'changed-created', 'driver',
-                         'bind', 'nfs', 'cifs', 'missing-options', 'invalid-options', 'global-scope', 'missing-scope'):
+                         'bind', 'nfs', 'cifs', 'missing-options', 'invalid-options', 'global-scope',
+                         'null-scope', 'invalid-scope', 'missing-scope'):
             altered = json.loads(json.dumps([inspected(n) for n in names]))
             if mutation == 'missing': altered.pop()
             if mutation == 'unexpected': altered.append(inspected('survey-production_intruder'))
@@ -586,6 +587,8 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             if mutation == 'missing-options': del altered[0]['Options']
             if mutation == 'invalid-options': altered[0]['Options'] = []
             if mutation == 'global-scope': altered[0]['Scope'] = 'global'
+            if mutation == 'null-scope': altered[0]['Scope'] = None
+            if mutation == 'invalid-scope': altered[0]['Scope'] = []
             if mutation == 'missing-scope': del altered[0]['Scope']
             with self.subTest(mutation=mutation), self.assertRaises(self.module.EvidenceError):
                 self.module.parse_fixture_volumes(altered)
