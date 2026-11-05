@@ -79,14 +79,20 @@ INSERT INTO identity_binding(principal_id,tenant_id,provider,app_id,external_id)
  VALUES ('{principal}','{tenant}','wecom','ci-corp','ci-user');
 INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by)
  VALUES ('{tenant}','{principal}','active',true,'ci');
-INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by)
- VALUES ('{tenant}','{grant}','{principal}','project_manager',NULL,'ci');
+INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,expires_at)
+ VALUES ('{tenant}','{grant}','{principal}','org_admin',NULL,'ci',now()+interval '15 minutes');
 INSERT INTO org_login_handoff(handoff_hash,browser_hash,tenant_id,principal_id,connection_id,provider,expires_at)
  VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}','wecom',now()+interval '1 minute');
 INSERT INTO org_login_session(id,tenant_id,principal_id,connection_id,expires_at)
  VALUES ('{session}','{tenant}','{principal}','{connection}',now()+interval '1 hour');
 COMMIT;
 """
+        # The browser author needs tenant-wide project creation and export;
+        # the earlier project_manager role lacks manage-settings.
+        permissions = execute("SELECT count(*) FROM access_role_permission WHERE role_code='org_admin' "
+                              "AND permission_code IN ('manage-settings','edit','publish','export-raw-responses')", database).stdout
+        if permissions.strip() != '4':
+            raise RuntimeError('fixture role lacks required author permissions')
         # First prove rollback on an injected error inside the transaction.
         failed = execute(provision.replace('COMMIT;', 'SELECT 1/0; COMMIT;'), database, check=False)
         if failed.returncode == 0:
