@@ -7,6 +7,8 @@ on:
       - 'platform/deploy/production/release/fixture_supervisor.py'
       - 'platform/deploy/production/release/fixture_cgroup.py'
       - 'platform/deploy/production/release/fixture_compensation.py'
+      - 'platform/deploy/production/release/fixture_quiescence.py'
+      - 'platform/deploy/production/release/tests/test_fixture_quiescence.py'
       - 'platform/deploy/production/release/tests/test_fixture_compensation_builder.py'
       - 'platform/deploy/production/release/tests/test_fixture_supervisor.py'
       - 'platform/deploy/production/release/tests/check_cgroup_containment.py'
@@ -79,6 +81,8 @@ jobs:
         env:
           FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
         run: python3 platform/deploy/production/release/tests/check_fixture_compensation.py
+      - name: Test quiescence snapshot validation
+        run: python3 -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_quiescence.py -q
       - name: Test isolated database connection freeze and drain
         env:
           FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}

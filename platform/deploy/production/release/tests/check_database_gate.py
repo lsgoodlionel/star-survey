@@ -4,12 +4,18 @@
 Existing connections remain usable and must be inspected separately. This is
 not an installation guard, a Docker ownership proof, or a recovery procedure.
 """
+import json
 import os
 import re
 import secrets
 import select
 import subprocess
 import time
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fixture_quiescence import require_quiescent_snapshot
 
 
 def main():
@@ -98,6 +104,24 @@ def main():
         # Match connection identity, role and database; PID alone is not enough.
         expected = {owner_pid + ':' + owner + ':' + db, app_pid + ':' + app + ':' + db,
                     inspector_pid + ':' + app + ':' + db, cluster_pid + ':postgres:postgres'}
+        known_pids = ','.join((owner_pid, app_pid, inspector_pid, cluster_pid))
+        identities_sql = ("SELECT coalesce(json_agg(json_build_object('pid',pid,'role',usename,"
+                          "'database',datname,'started',backend_start::text) ORDER BY pid),'[]'::json) "
+                          "FROM pg_stat_activity WHERE backend_type='client backend' AND pid IN (" + known_pids + ");")
+        known_clients = json.loads(cluster_inspector.sql(identities_sql))
+        if len(known_clients) != 4 or {str(item['pid']) + ':' + item['role'] + ':' + item['database'] for item in known_clients} != expected:
+            raise RuntimeError('initial database client identities differ')
+        expected_snapshot = {'database_oid': int(db_oid), 'clients': known_clients}
+        def snapshot():
+            sql = ("SELECT json_build_object('database_oid',d.oid,'allow_connections',d.datallowconn,"
+                   "'clients',(SELECT coalesce(json_agg(json_build_object('pid',pid,'role',usename,"
+                   "'database',datname,'started',backend_start::text) ORDER BY pid),'[]'::json) "
+                   "FROM pg_stat_activity WHERE backend_type='client backend'),"
+                   "'prepared',(SELECT count(*) FROM pg_prepared_xacts WHERE database=d.datname),"
+                   "'unsafe',(SELECT count(*) FROM pg_stat_activity WHERE datid=d.oid AND "
+                   "(backend_type IS DISTINCT FROM 'client backend' OR state IS DISTINCT FROM 'idle' OR xact_start IS NOT NULL))) "
+                   "FROM pg_database d WHERE d.oid=" + db_oid + ";")
+            return json.loads(cluster_inspector.sql(sql))
         def require_only_expected_clients():
             actual = clients()
             if actual != expected:
@@ -148,6 +172,7 @@ def main():
         require_only_expected_clients()
         def require_quiescent():
             require_only_expected_clients()
+            require_quiescent_snapshot(snapshot(), expected_snapshot)
             if cluster_inspector.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
                 raise RuntimeError('database gate is not closed')
             if cluster_inspector.sql("SELECT count(*) FROM pg_prepared_xacts WHERE database='" + db + "';") != '0':
