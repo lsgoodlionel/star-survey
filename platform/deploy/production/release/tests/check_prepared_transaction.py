@@ -52,6 +52,7 @@ def summarize_container_diagnostics(inspect_output, logs):
         'ready': 'database system is ready to accept connections',
         'shutdown': 'database system is shut down',
         'startup': 'starting postgresql',
+        'init_complete': 'postgresql init process complete; ready for start up',
     }
     counts = ' '.join(name + '=' + str(lower.count(marker)) for name, marker in markers.items())
     return (f'container_state={status} restarts={restart_count} exit_code={exit_code} '
@@ -133,7 +134,13 @@ def main():
         verify()
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            if sql('SELECT 1', check=False).returncode == 0:
+            verify()
+            logs = run(DOCKER + ['logs', container], check=False)
+            # The image briefly starts a temporary server during initdb. A
+            # successful query there does not prove the final server is ready.
+            initialized = ('postgresql init process complete; ready for start up' in
+                           (logs.stdout + logs.stderr).lower())
+            if logs.returncode == 0 and initialized and sql('SELECT 1', check=False).returncode == 0:
                 break
             time.sleep(.25)
         else:

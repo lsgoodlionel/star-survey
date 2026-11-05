@@ -16,7 +16,7 @@ class PreparedDiagnosticsTest(unittest.TestCase):
                                'RestartCount': 0, 'secret': secret}])
         result = module.summarize_container_diagnostics(inspect, secret + '\n' +
             'database system is ready to accept connections\ndatabase system is shut down')
-        self.assertEqual(result, 'container_state=running restarts=0 exit_code=0 oom=false ready=1 shutdown=1 startup=0')
+        self.assertEqual(result, 'container_state=running restarts=0 exit_code=0 oom=false ready=1 shutdown=1 startup=0 init_complete=0')
         self.assertNotIn(secret, result)
         self.assertEqual(module.summarize_container_diagnostics(inspect.replace('running', secret), secret),
                          'container_state=unavailable')
