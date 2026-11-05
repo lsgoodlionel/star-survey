@@ -9,6 +9,7 @@ on:
       - 'platform/deploy/production/release/tests/test_fixture_supervisor.py'
       - 'platform/deploy/production/release/tests/check_cgroup_containment.py'
       - 'platform/deploy/production/release/tests/check_pg_quiescence.py'
+      - 'platform/deploy/production/release/tests/check_pg_handoff_race.py'
   workflow_dispatch:
 
 permissions:
@@ -60,3 +61,7 @@ jobs:
         env:
           FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
         run: python3 platform/deploy/production/release/tests/check_pg_quiescence.py
+      - name: Test synthetic handoff exchange and compensation race
+        env:
+          FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
+        run: python3 platform/deploy/production/release/tests/check_pg_handoff_race.py
