@@ -1,7 +1,9 @@
-"""Test-only subprocess supervision; no target ownership or recovery proof.
+"""Unintegrated test-only supervisor; it does not establish ownership.
 
-Only use from a separately verified isolated fixture supervisor. SIGKILL and
-host loss cannot be caught and must remain failed/unverified externally.
+A process group cannot contain a descendant that calls setsid. A caller must
+supply an independently anchored containment verifier (e.g. a dedicated cgroup)
+that proves no descendants remain, including after reparenting. Until one exists,
+the default is fail-closed. SIGKILL and host loss remain externally unverified.
 """
 import os
 import signal
@@ -9,17 +11,27 @@ import subprocess
 import time
 
 
-def supervise(worker, recovery, *, stop_timeout=5, recovery_timeout=120):
-    """Run recovery after a stopped worker, including a SIGTERM to this process.
+def _group_gone(pgid):
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
 
-    Return nonzero for interruption, any worker/recovery failure, or an uncertain
-    worker stop. Commands are argument vectors and never run through a shell.
-    Signal handling must run on the main Python thread. Output is discarded to
-    avoid leaking test credentials; evidence must be emitted separately.
+
+def supervise(worker, recovery, *, verify_containment=None, stop_timeout=5, recovery_timeout=120):
+    """Return failure unless each isolated process group and containment is empty.
+
+    The verifier receives (phase, group_leader_pid), must raise or return false
+    unless it proves the entire independently controlled containment is empty,
+    and must not infer that proof merely from the marker or process group.
     """
+    if not callable(verify_containment):
+        return 1
     interrupted = False
     child = None
-    stopped = True
     worker_ok = False
     recovery_ok = False
     old_term = signal.getsignal(signal.SIGTERM)
@@ -28,6 +40,14 @@ def supervise(worker, recovery, *, stop_timeout=5, recovery_timeout=120):
     def interrupt(_signum, _frame):
         nonlocal interrupted
         interrupted = True
+
+    def clean(phase, process):
+        if process is None or process.poll() is None or not _group_gone(process.pid):
+            return False
+        try:
+            return verify_containment(phase, process.pid) is True
+        except BaseException:
+            return False
 
     signal.signal(signal.SIGTERM, interrupt)
     signal.signal(signal.SIGINT, interrupt)
@@ -44,19 +64,25 @@ def supervise(worker, recovery, *, stop_timeout=5, recovery_timeout=120):
                         child.wait(timeout=stop_timeout)
                     except subprocess.TimeoutExpired:
                         os.killpg(child.pid, signal.SIGKILL)
-                        try:
-                            child.wait(timeout=stop_timeout)
-                        except subprocess.TimeoutExpired:
-                            stopped = False
+                        child.wait(timeout=stop_timeout)
                 worker_ok = child.poll() == 0 and not interrupted
         except (OSError, subprocess.SubprocessError):
-            stopped = child is None or child.poll() is not None
-        if stopped:
+            pass
+        if clean('worker', child):
+            recovery_process = None
             try:
-                result = subprocess.run(recovery, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL, timeout=recovery_timeout, check=False)
-                recovery_ok = result.returncode == 0
+                recovery_process = subprocess.Popen(recovery, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                                    stderr=subprocess.DEVNULL, start_new_session=True)
+                recovery_process.wait(timeout=recovery_timeout)
+                recovery_ok = recovery_process.returncode == 0 and clean('recovery', recovery_process)
             except (OSError, subprocess.SubprocessError):
+                # A timed-out recovery must not keep running unattended.
+                if recovery_process is not None and recovery_process.poll() is None:
+                    try:
+                        os.killpg(recovery_process.pid, signal.SIGKILL)
+                        recovery_process.wait(timeout=stop_timeout)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
                 recovery_ok = False
     finally:
         signal.signal(signal.SIGTERM, old_term)
