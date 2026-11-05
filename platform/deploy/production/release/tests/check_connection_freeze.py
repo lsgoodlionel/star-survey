@@ -59,6 +59,16 @@ def main():
             raise RuntimeError('new app connection was not rejected')
         if sessions() != '1' or client.poll() is not None:
             raise RuntimeError('freeze unexpectedly removed the old session')
+        # Revoking CONNECT is not a write barrier for a session already open.
+        client.stdin.write('SELECT pg_sleep(3);\n')
+        client.stdin.flush()
+        running_sql = ("SELECT count(*) FROM pg_stat_activity WHERE datname='" + db + "' AND usename='" + app +
+                       "' AND state='active' AND wait_event='PgSleep'")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and query(running_sql).stdout.strip() != '1':
+            time.sleep(.05)
+        if query(running_sql).stdout.strip() != '1':
+            raise RuntimeError('existing connection could not demonstrate continued execution')
         backend = query("SELECT pid FROM pg_stat_activity WHERE datname='" + db + "' AND usename='" + app + "'").stdout.strip()
         if not re.fullmatch(r'[0-9]+', backend):
             raise RuntimeError('existing app backend was not uniquely identified')
