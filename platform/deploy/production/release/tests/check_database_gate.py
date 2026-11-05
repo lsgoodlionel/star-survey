@@ -172,7 +172,18 @@ def main():
         require_only_expected_clients()
         def require_quiescent():
             require_only_expected_clients()
-            require_quiescent_snapshot(snapshot(), expected_snapshot)
+            state = snapshot()
+            try:
+                require_quiescent_snapshot(state, expected_snapshot)
+            except ValueError as exc:
+                # Synthetic service only: counts, booleans and redacted backend
+                # type/state, never SQL, credentials or connection addresses.
+                details = cluster_inspector.sql("SELECT coalesce(string_agg(coalesce(backend_type,'null')||':'||"
+                    "coalesce(state,'null')||':'||(xact_start IS NOT NULL)::text,',' ORDER BY pid),'none') "
+                    "FROM pg_stat_activity WHERE datid=" + db_oid + ";")
+                raise RuntimeError('quiescence failure: oid_match=' + str(state.get('database_oid') == expected_snapshot['database_oid']) +
+                    ' gate=' + str(state.get('allow_connections')) + ' prepared=' + str(state.get('prepared')) +
+                    ' unsafe=' + str(state.get('unsafe')) + ' backend_states=' + details) from exc
             if cluster_inspector.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
                 raise RuntimeError('database gate is not closed')
             if cluster_inspector.sql("SELECT count(*) FROM pg_prepared_xacts WHERE database='" + db + "';") != '0':
