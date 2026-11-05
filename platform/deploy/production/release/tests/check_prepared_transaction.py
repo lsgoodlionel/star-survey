@@ -59,6 +59,16 @@ def summarize_container_diagnostics(inspect_output, logs):
             f'oom={str(oom).lower()} {counts}')
 
 
+def wait_for_final_server(initialized, query_ready, *, clock=time.monotonic, sleep=time.sleep, timeout=60):
+    """Wait with a soft deadline; individual Docker operations have their own timeouts."""
+    deadline = clock() + timeout
+    while clock() < deadline:
+        if initialized() and query_ready():
+            return
+        sleep(.25)
+    raise RuntimeError('isolated test database did not start')
+
+
 def run(args, *, check=True, timeout=30):
     result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, timeout=timeout)
@@ -132,19 +142,14 @@ def main():
         return result
     try:
         verify()
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
+        def initialized():
             verify()
             logs = run(DOCKER + ['logs', container], check=False)
             # The image briefly starts a temporary server during initdb. A
             # successful query there does not prove the final server is ready.
-            initialized = ('postgresql init process complete; ready for start up' in
-                           (logs.stdout + logs.stderr).lower())
-            if logs.returncode == 0 and initialized and sql('SELECT 1', check=False).returncode == 0:
-                break
-            time.sleep(.25)
-        else:
-            raise RuntimeError('isolated test database did not start')
+            return (logs.returncode == 0 and 'postgresql init process complete; ready for start up' in
+                    (logs.stdout + logs.stderr).lower())
+        wait_for_final_server(initialized, lambda: sql('SELECT 1', check=False).returncode == 0)
         gid = 'fixture_' + nonce
         sql('CREATE TABLE fixture_prepared (id integer NOT NULL)')
         sql("BEGIN; INSERT INTO fixture_prepared VALUES (1); PREPARE TRANSACTION '" + gid + "';")

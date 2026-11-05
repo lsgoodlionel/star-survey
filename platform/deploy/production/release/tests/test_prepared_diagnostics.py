@@ -10,6 +10,27 @@ spec.loader.exec_module(module)
 
 
 class PreparedDiagnosticsTest(unittest.TestCase):
+    def test_wait_requires_initialization_then_successful_query(self):
+        now = [0.0]
+        initialized = iter((False, True, True))
+        queries = iter((False, True))
+        calls = []
+        def query():
+            calls.append('query')
+            return next(queries)
+        module.wait_for_final_server(lambda: next(initialized), query, clock=lambda: now[0],
+                                     sleep=lambda delay: now.__setitem__(0, now[0] + delay), timeout=1)
+        self.assertEqual(calls, ['query', 'query'])
+        self.assertEqual(now[0], .5)
+
+    def test_wait_fails_closed_at_soft_deadline(self):
+        now = [0.0]
+        def no_query():
+            self.fail('query must not run before initialization')
+        with self.assertRaisesRegex(RuntimeError, 'did not start'):
+            module.wait_for_final_server(lambda: False, no_query, clock=lambda: now[0],
+                                         sleep=lambda delay: now.__setitem__(0, now[0] + delay), timeout=.5)
+
     def test_container_diagnostics_reports_only_fixed_fields_and_counts(self):
         secret = 'PRIVATE_FIXTURE_SENTINEL'
         inspect = json.dumps([{'State': {'Status': 'running', 'ExitCode': 0, 'OOMKilled': False},
