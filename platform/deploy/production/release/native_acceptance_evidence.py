@@ -197,7 +197,7 @@ def verify_fixture_owner(work: Path, target: Path, marker: Path) -> None:
 
 
 def parse_fixture_volumes(values: Any) -> dict[str, dict[str, str]]:
-    """Bounded volume metadata for a hosted test; not by itself a purge authorization."""
+    """Bounded metadata only: timestamps are not unique identities or purge authorization."""
     expected = {'survey-production_' + name for name in FIXTURE_VOLUME_NAMES}
     if not isinstance(values, list) or len(values) != len(expected):
         raise EvidenceError('fixture volume inventory is incomplete')
@@ -206,8 +206,10 @@ def parse_fixture_volumes(values: Any) -> dict[str, dict[str, str]]:
         if not isinstance(item, dict):
             raise EvidenceError('fixture volume metadata is invalid')
         name, driver, created, labels = (item.get('Name'), item.get('Driver'), item.get('CreatedAt'), item.get('Labels'))
+        options = item.get('Options')
         if (not isinstance(name, str) or name not in expected or name in result or driver != 'local' or not isinstance(created, str) or
                 not created or not isinstance(labels, dict) or
+                'Options' not in item or not (options is None or (type(options) is dict and not options)) or
                 labels.get('com.docker.compose.project') != 'survey-production' or
                 labels.get('com.docker.compose.volume') != name.removeprefix('survey-production_')):
             raise EvidenceError('fixture volume identity is invalid')

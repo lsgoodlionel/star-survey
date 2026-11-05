@@ -553,6 +553,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         names = sorted('survey-production_' + name for name in self.module.FIXTURE_VOLUME_NAMES)
         def inspected(name):
             return {'Name': name, 'Driver': 'local', 'CreatedAt': '2026-01-01T00:00:00Z',
+                    'Options': None,
                     'Labels': {'com.docker.compose.project': 'survey-production',
                                'com.docker.compose.volume': name.removeprefix('survey-production_')}}
         output = subprocess.CompletedProcess([], 0, stdout='\n'.join(names) + '\n', stderr='')
@@ -560,6 +561,9 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         with mock.patch.object(self.module.subprocess, 'run', side_effect=[output, output, detail]):
             inventory = self.module.read_fixture_volumes()
         self.assertEqual(names, sorted(inventory))
+        empty_options = [inspected(n) for n in names]
+        empty_options[0]['Options'] = {}
+        self.assertEqual(inventory, self.module.parse_fixture_volumes(empty_options))
         missing_list = subprocess.CompletedProcess([], 0, stdout='\n'.join(names[:-1]), stderr='')
         with mock.patch.object(self.module.subprocess, 'run', return_value=missing_list):
             with self.assertRaises(self.module.EvidenceError):
@@ -567,7 +571,8 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         with mock.patch.object(self.module.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'docker')):
             with self.assertRaises(self.module.EvidenceError):
                 self.module.read_fixture_volumes()
-        for mutation in ('missing', 'unexpected', 'wrong-project', 'wrong-volume', 'changed-created', 'driver'):
+        for mutation in ('missing', 'unexpected', 'wrong-project', 'wrong-volume', 'changed-created', 'driver',
+                         'bind', 'nfs', 'cifs', 'missing-options', 'invalid-options'):
             altered = json.loads(json.dumps([inspected(n) for n in names]))
             if mutation == 'missing': altered.pop()
             if mutation == 'unexpected': altered.append(inspected('survey-production_intruder'))
@@ -575,6 +580,11 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             if mutation == 'wrong-volume': altered[0]['Labels']['com.docker.compose.volume'] = 'other'
             if mutation == 'changed-created': altered[0]['CreatedAt'] = ''
             if mutation == 'driver': altered[0]['Driver'] = 'external'
+            if mutation == 'bind': altered[0]['Options'] = {'type': 'none', 'o': 'bind', 'device': '/other'}
+            if mutation == 'nfs': altered[0]['Options'] = {'type': 'nfs', 'device': 'server:/data'}
+            if mutation == 'cifs': altered[0]['Options'] = {'type': 'cifs', 'device': '//server/share'}
+            if mutation == 'missing-options': del altered[0]['Options']
+            if mutation == 'invalid-options': altered[0]['Options'] = []
             with self.subTest(mutation=mutation), self.assertRaises(self.module.EvidenceError):
                 self.module.parse_fixture_volumes(altered)
 
