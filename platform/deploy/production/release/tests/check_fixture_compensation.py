@@ -10,6 +10,10 @@ import re
 import secrets
 import subprocess
 import uuid
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fixture_compensation import build_compensation_sql
 
 
 def main():
@@ -122,47 +126,12 @@ LOCK TABLE subscription IN SHARE ROW EXCLUSIVE MODE; COMMIT;""", database, check
             raise RuntimeError('subscription lock privilege changed; concurrency design requires review')
         print('runtime role cannot take physical subscription lock; concurrent compensation remains blocked')
 
-        compensate = f"""
-BEGIN; SET LOCAL ROLE platform_app; {scope}
-SELECT pg_advisory_xact_lock(hashtextextended('access.members:{tenant}',0));
-DO $$ DECLARE current_id uuid; current_plan uuid; current_kind text; current_end timestamptz;
- original_kind text; original_end timestamptz; BEGIN
- SELECT kind, ends_at INTO original_kind, original_end FROM subscription
-   WHERE tenant_id='{tenant}' AND id='{original_sub}' AND plan_version_id='{owner_plan}';
- IF original_kind IS DISTINCT FROM 'trial' OR original_end IS NULL OR original_end <= now() THEN
-   RAISE EXCEPTION 'original subscription changed';
- END IF;
- SELECT id,plan_version_id,kind,ends_at INTO current_id,current_plan,current_kind,current_end
-   FROM subscription WHERE tenant_id='{tenant}' AND starts_at <= now()
-   ORDER BY starts_at DESC,seq DESC LIMIT 1;
- IF current_id IS NULL OR current_id NOT IN ('{original_sub}'::uuid,'{fixture_sub}'::uuid,'{restore_sub}'::uuid)
-    OR current_kind IS DISTINCT FROM original_kind OR current_end IS DISTINCT FROM original_end
-    OR (current_id='{fixture_sub}'::uuid AND current_plan IS DISTINCT FROM '{fixture_plan}'::uuid)
-    OR (current_id IN ('{original_sub}'::uuid,'{restore_sub}'::uuid) AND current_plan IS DISTINCT FROM '{owner_plan}'::uuid)
-    OR NOT EXISTS (SELECT 1 FROM access_member m JOIN access_grant g ON g.tenant_id=m.tenant_id AND g.actor_id=m.actor_id
-       WHERE m.tenant_id='{tenant}' AND m.actor_id='production-probe-owner' AND m.status='active' AND m.uses_seat
-       AND g.id='{owner_grant}' AND g.role_code='tenant_owner' AND g.resource_id IS NULL AND g.expires_at IS NULL) THEN
-   RAISE EXCEPTION 'unexpected original or current state';
- END IF;
- IF EXISTS (SELECT 1 FROM identity_binding WHERE tenant_id='{tenant}' AND principal_id='{principal}') THEN
-   INSERT INTO identity_binding_revocation(tenant_id,principal_id,reason,revoked_by)
-     VALUES ('{tenant}','{principal}','admin','ci-cleanup')
-     ON CONFLICT (tenant_id,principal_id) WHERE reinstated_at IS NULL DO NOTHING;
-   PERFORM * FROM org_login_handoff_consume('{tenant}','{handoff_hash}','{browser_hash}',now());
-   UPDATE org_login_session SET revoked_at=now(),revoke_reason='binding_revoked'
-     WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND revoked_at IS NULL;
-   DELETE FROM access_grant WHERE tenant_id='{tenant}' AND actor_id='{principal}';
-   UPDATE org_connection SET enabled=false,updated_at=now() WHERE tenant_id='{tenant}' AND id='{connection}';
-   UPDATE access_member SET status='removed',updated_at=now()
-     WHERE tenant_id='{tenant}' AND actor_id='{principal}';
- END IF;
- IF current_id='{fixture_sub}'::uuid THEN
-   INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
-   SELECT '{restore_sub}','{tenant}','{owner_plan}',kind,now(),ends_at FROM subscription WHERE id='{original_sub}';
- END IF;
-END $$;
-COMMIT;
-"""
+        compensate = build_compensation_sql(
+            tenant=tenant, owner_plan=owner_plan, fixture_plan=fixture_plan, principal=principal,
+            connection=connection, original_sub=original_sub, fixture_sub=fixture_sub,
+            restore_sub=restore_sub, owner_grant=owner_grant,
+            handoff_hash=handoff_hash, browser_hash=browser_hash)
+
         # Prove the author role is tenant-wide and expires; the later cleanup
         # must remove it alongside any project-specific creator grants.
         author = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
