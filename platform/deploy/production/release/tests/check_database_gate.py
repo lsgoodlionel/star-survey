@@ -31,8 +31,8 @@ def main():
             raise RuntimeError('isolated gate operation failed: ' + result.stderr[-1000:])
         return result
     class Session:
-        def __init__(self, user):
-            self.process = subprocess.Popen(command(user, db), env=env, stdin=subprocess.PIPE,
+        def __init__(self, user, database=db):
+            self.process = subprocess.Popen(command(user, database), env=env, stdin=subprocess.PIPE,
                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.buffer = b''
         def sql(self, statement):
@@ -62,12 +62,14 @@ def main():
     sessions = []
     try:
         owner_session, app_session, inspector, extra_session = Session(owner), Session(app), Session(app), Session(other)
-        sessions.extend((owner_session, app_session, inspector, extra_session))
+        maintenance_extra = Session(other, 'postgres')
+        sessions.extend((owner_session, app_session, inspector, extra_session, maintenance_extra))
         owner_pid = owner_session.sql('SELECT pg_backend_pid();')
         app_pid = app_session.sql('SELECT pg_backend_pid();')
         inspector_pid = inspector.sql('SELECT pg_backend_pid();')
         extra_pid = extra_session.sql('SELECT pg_backend_pid();')
-        if any(not re.fullmatch(r'[0-9]+', value) for value in (owner_pid, app_pid, inspector_pid, extra_pid)):
+        maintenance_pid = maintenance_extra.sql('SELECT pg_backend_pid();')
+        if any(not re.fullmatch(r'[0-9]+', value) for value in (owner_pid, app_pid, inspector_pid, extra_pid, maintenance_pid)):
             raise RuntimeError('backend identities were invalid')
         identity_sql = 'SELECT oid FROM pg_database WHERE datname=current_database();'
         db_oid = owner_session.sql(identity_sql)
@@ -83,15 +85,15 @@ def main():
             if query('SELECT 1', role, db, check=False).returncode == 0:
                 raise RuntimeError('new connection unexpectedly succeeded for ' + role)
         def client_pids():
-            raw = owner_session.sql("SELECT coalesce(string_agg(pid::text,',' ORDER BY pid),'') FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend';")
+            raw = owner_session.sql("SELECT coalesce(string_agg(pid::text,',' ORDER BY pid),'') FROM pg_stat_activity WHERE backend_type='client backend';")
             return set(raw.split(',')) if raw else set()
         # Unknown sessions must prevent entry to the compensating transaction.
         expected = {owner_pid, app_pid, inspector_pid}
         def require_only_expected_clients():
             if client_pids() != expected:
                 raise RuntimeError('unapproved database client')
-        if extra_pid not in client_pids():
-            raise RuntimeError('unexpected client was not observed')
+        if extra_pid not in client_pids() or maintenance_pid not in client_pids():
+            raise RuntimeError('unexpected target or maintenance client was not observed')
         try:
             require_only_expected_clients()
         except RuntimeError:
@@ -101,6 +103,13 @@ def main():
         if app_session.sql('SELECT 1;') != '1':
             raise RuntimeError('existing client behavior was not confirmed')
         extra_session.close()
+        try:
+            require_only_expected_clients()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError('unknown maintenance-database superuser was accepted')
+        maintenance_extra.close()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and client_pids() != expected:
             time.sleep(.05)
