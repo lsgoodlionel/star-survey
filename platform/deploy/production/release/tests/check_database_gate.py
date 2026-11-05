@@ -84,8 +84,11 @@ def main():
         for role in (owner, app, 'postgres'):
             if query('SELECT 1', role, db, check=False).returncode == 0:
                 raise RuntimeError('new connection unexpectedly succeeded for ' + role)
+        # backend_type may be hidden for other roles; filtering on it silently
+        # drops unknown privileged sessions. usesysid remains visible, and
+        # conservatively includes every user-associated backend.
         def client_pids():
-            raw = owner_session.sql("SELECT coalesce(string_agg(pid::text,',' ORDER BY pid),'') FROM pg_stat_activity WHERE backend_type='client backend';")
+            raw = owner_session.sql("SELECT coalesce(string_agg(pid::text,',' ORDER BY pid),'') FROM pg_stat_activity WHERE usesysid IS NOT NULL;")
             return set(raw.split(',')) if raw else set()
         # Unknown sessions must prevent entry to the compensating transaction.
         expected = {owner_pid, app_pid, inspector_pid}
