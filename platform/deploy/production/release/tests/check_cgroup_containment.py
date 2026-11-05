@@ -6,6 +6,7 @@ proof that Docker-daemon-created processes belong to the same cgroup.
 """
 import os
 import selectors
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -102,6 +103,54 @@ time.sleep(60)
         if result == 0 or not recovered.exists():
             raise RuntimeError('supervisor did not contain worker before recovery')
         print('supervisor contained detached descendant before isolated recovery')
+
+        # Exercise the cgroup entry point itself, using synthetic processes.
+        recovered.unlink()
+        sleeper = "import time; time.sleep(60)"
+        result = supervise_cgroup([sys.executable, '-c', sleeper], [sys.executable, '-c', recovery],
+                                  uid, gid, worker_timeout=.2)
+        if result == 0 or not recovered.exists():
+            raise RuntimeError('worker timeout did not fail with recovery')
+        recovered.unlink()
+        result = supervise_cgroup([sys.executable, '-c', 'pass'], [sys.executable, '-c', 'raise SystemExit(3)'], uid, gid)
+        if result == 0:
+            raise RuntimeError('recovery failure was accepted')
+        delayed = f"import time; from pathlib import Path; time.sleep(10); Path({str(recovered)!r}).touch()"
+        result = supervise_cgroup([sys.executable, '-c', 'pass'], [sys.executable, '-c', delayed],
+                                  uid, gid, recovery_timeout=.2)
+        if result == 0 or recovered.exists():
+            raise RuntimeError('recovery timeout was accepted')
+
+        launcher = """import sys
+sys.path.insert(0,sys.argv[1])
+from fixture_supervisor import supervise_cgroup
+sys.exit(supervise_cgroup([sys.executable,'-c',sys.argv[4]], [sys.executable,'-c',sys.argv[5]], int(sys.argv[2]), int(sys.argv[3])))
+"""
+        root = str(Path(__file__).resolve().parents[1])
+        for phase in ('worker', 'recovery'):
+            ready = Path(tmp) / ('ready-' + phase)
+            done = Path(tmp) / ('done-' + phase)
+            ready_sleep = f"from pathlib import Path; import time; Path({str(ready)!r}).touch(); time.sleep(1)"
+            recovery_done = f"from pathlib import Path; Path({str(done)!r}).touch()"
+            if phase == 'worker':
+                test_worker = ready_sleep + '; import time; time.sleep(60)'
+                test_recovery = recovery_done
+            else:
+                test_worker = 'pass'
+                test_recovery = ready_sleep + '; ' + recovery_done
+            process = subprocess.Popen([sys.executable, '-c', launcher, root, str(uid), str(gid),
+                                        test_worker, test_recovery], stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                wait_for(ready.exists)
+                os.kill(process.pid, signal.SIGTERM)
+                if process.wait(timeout=15) == 0 or not done.exists():
+                    raise RuntimeError('SIGTERM recovery behavior invalid for ' + phase)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
+        print('supervisor SIGTERM, worker timeout, recovery timeout and recovery failure behaved fail-closed')
 
 
 if __name__ == '__main__':

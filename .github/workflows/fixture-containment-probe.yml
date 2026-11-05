@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/fixture-containment-probe.yml'
       - 'platform/deploy/production/release/fixture_supervisor.py'
+      - 'platform/deploy/production/release/fixture_cgroup.py'
       - 'platform/deploy/production/release/tests/test_fixture_supervisor.py'
       - 'platform/deploy/production/release/tests/check_cgroup_containment.py'
       - 'platform/deploy/production/release/tests/check_pg_quiescence.py'
