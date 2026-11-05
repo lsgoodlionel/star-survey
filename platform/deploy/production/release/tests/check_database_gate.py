@@ -101,10 +101,19 @@ def main():
         def require_only_expected_clients():
             actual = clients()
             if actual != expected:
-                # This script runs only against fresh CI service roles; never
-                # print connection SQL, addresses, credentials or token data.
+                extras = sorted(actual - expected)
+                pids = [item.split(':', 1)[0] for item in extras]
+                details = 'unavailable'
+                if pids and len(pids) <= 8 and all(re.fullmatch(r'[0-9]+', pid) for pid in pids):
+                    # Synthetic disposable service only: omit query text, client
+                    # addresses, credentials and arbitrary application names.
+                    details = cluster_inspector.sql("SELECT coalesce(string_agg(pid::text||':'||"
+                        "CASE WHEN application_name IN ('psql','pg_isready') THEN application_name "
+                        "WHEN application_name='' THEN 'empty' ELSE 'other' END||':'||coalesce(state,'null')||':'||"
+                        "coalesce(round(extract(epoch FROM clock_timestamp()-backend_start))::text,'null'),',' ORDER BY pid),'gone') "
+                        "FROM pg_stat_activity WHERE pid IN (" + ','.join(pids) + ");")
                 raise RuntimeError('unapproved database client: missing=' + str(sorted(expected - actual)) +
-                                   ' extra=' + str(sorted(actual - expected)))
+                                   ' extra=' + str(extras) + ' safe_details=' + details)
         if extra_pid + ':' + other + ':' + db not in clients() or maintenance_pid + ':' + other + ':postgres' not in clients():
             raise RuntimeError('unexpected target or maintenance client was not observed')
         try:
