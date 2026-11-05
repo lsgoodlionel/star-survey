@@ -60,3 +60,33 @@ class FixtureRecoveryTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class FixtureSupervisorTest(unittest.TestCase):
+    def test_ambiguous_provision_always_triggers_recovery_and_is_redacted(self):
+        calls = []
+        def provision():
+            calls.append('provision')
+            raise RuntimeError('sensitive database output')
+        with self.assertRaises(module.FixtureExecutionError) as caught:
+            module.execute_fixture(provision, lambda: calls.append('journey'), lambda: calls.append('recovery'))
+        self.assertEqual(['provision', 'recovery'], calls)
+        self.assertNotIn('sensitive', str(caught.exception))
+
+    def test_success_does_not_precede_recovery(self):
+        calls = []
+        module.execute_fixture(*(lambda name=name: calls.append(name) for name in ('provision', 'journey', 'recovery')))
+        self.assertEqual(['provision', 'journey', 'recovery'], calls)
+
+    def test_interrupt_and_failed_cleanup_cannot_report_success(self):
+        for interruption in (KeyboardInterrupt, SystemExit):
+            calls = []
+            def journey():
+                calls.append('journey')
+                raise interruption()
+            def recovery():
+                calls.append('recovery')
+                raise ValueError('secret')
+            with self.subTest(interruption=interruption), self.assertRaises(module.FixtureExecutionError) as caught:
+                module.execute_fixture(lambda: calls.append('provision'), journey, recovery)
+            self.assertEqual(['provision', 'journey', 'recovery'], calls)
+            self.assertNotIn('secret', str(caught.exception))

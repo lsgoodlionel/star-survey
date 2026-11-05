@@ -37,3 +37,32 @@ def recover_fixture(check_binding, revoke, restore, verify, doctor):
         run('doctor', doctor)
     if failures:
         raise RecoveryError('fixture recovery failed: ' + ', '.join(failures)) from None
+
+
+class FixtureExecutionError(RuntimeError):
+    """A fixture attempt or its recovery did not complete."""
+
+
+def execute_fixture(provision, journey, recovery):
+    """Recover even when provisioning may have committed before reporting failure.
+
+    A caller must durably mark the attempt before calling this function and
+    arrange recovery on process termination. This helper cannot handle SIGKILL,
+    machine loss, or guarantee that callback implementations are safe.
+    """
+    attempted = False
+    failed = False
+    try:
+        attempted = True
+        provision()
+        journey()
+    except BaseException:
+        failed = True
+    finally:
+        if attempted:
+            try:
+                recovery()
+            except BaseException:
+                failed = True
+    if failed:
+        raise FixtureExecutionError('fixture execution or recovery failed') from None
