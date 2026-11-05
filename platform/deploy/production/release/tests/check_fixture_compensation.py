@@ -119,6 +119,24 @@ DO $$ DECLARE current_plan uuid; BEGIN
 END $$;
 COMMIT;
 """
+        # A concurrent subscription change must abort the whole compensation,
+        # without revoking the fixture or overwriting a different plan. The
+        # surrounding synthetic transaction is rolled back on psql failure.
+        other_plan, other_sub = str(uuid.uuid4()), str(uuid.uuid4())
+        conflict = f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+INSERT INTO plan_version(id,plan_code,version,capabilities,quotas,export_window_days)
+ SELECT '{other_plan}','ci-other',1,capabilities,quotas,export_window_days FROM plan_version WHERE id='{owner_plan}';
+INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
+ SELECT '{other_sub}','{tenant}','{other_plan}',kind,now(),ends_at FROM subscription WHERE id='{original_sub}';
+""" + compensate
+        if execute(conflict, database, check=False).returncode == 0:
+            raise RuntimeError('concurrent subscription change was accepted')
+        state = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SELECT (SELECT plan_version_id='{fixture_plan}' FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1)
+ AND NOT EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL);
+COMMIT;""", database).stdout
+        if state.strip().splitlines()[-1] != 't':
+            raise RuntimeError('failed compensation changed fixture state')
         execute(compensate, database)
         execute(compensate, database)
         verified = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
