@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
@@ -50,7 +51,7 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
     @Autowired
     OrgSessionRepository sessions;
 
-    @Autowired
+    @MockitoSpyBean
     OrgLoginService login;
 
     record AdminCallback(String handoff, Cookie browser, URI location) {
@@ -162,6 +163,52 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
         assertThat(tenantScope.call(tenant, () -> bindings.reinstate(principal, "test-reinstatement"))).isTrue();
         mvc.perform(get("/v1/me").header("Authorization", "Bearer " + signedIn.accessToken()))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void concurrentHttpExchangeAfterRevocationCannotUseOrReviveLateSession() throws Exception {
+        TenantId tenant = newTenant();
+        Org org = connect(tenant, "wecom", null);
+        String userId = unique("u");
+        UUID principal = UUID.fromString(preauthorize(org, userId));
+        AdminCallback callback = adminCallback(org, userId, startAdminWeb(tenant, org.connectionId()));
+        var reachedIssue = new java.util.concurrent.CountDownLatch(1);
+        var releaseIssue = new java.util.concurrent.CountDownLatch(1);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            OrgLoginService.Authenticated authenticated = invocation.getArgument(0);
+            if (principal.equals(authenticated.principalId())) {
+                reachedIssue.countDown();
+                if (!releaseIssue.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("test handoff interleave timed out");
+                }
+            }
+            return invocation.callRealMethod();
+        }).when(login).issue(org.mockito.ArgumentMatchers.any(OrgLoginService.Authenticated.class),
+                org.mockito.ArgumentMatchers.anyString());
+
+        try (var pool = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var exchangeResult = pool.submit(() -> exchange(tenant, callback.handoff(), callback.browser())
+                    .andExpect(status().isOk()).andReturn());
+            try {
+                assertThat(reachedIssue.await(15, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                tenantScope.run(tenant, () -> {
+                    bindings.revoke(tenant, principal, "admin", "test-concurrent-cleanup");
+                    sessions.revokeAllOf(principal, "binding_revoked");
+                });
+            } finally {
+                releaseIssue.countDown();
+            }
+            MvcResult result = exchangeResult.get(20, java.util.concurrent.TimeUnit.SECONDS);
+            String token = JsonPath.read(result.getResponse().getContentAsString(), "$.accessToken");
+            assertThat(sessionCount(tenant)).isEqualTo(1);
+            mvc.perform(get("/v1/me").header("Authorization", "Bearer " + token))
+                    .andExpect(status().isUnauthorized());
+            assertThat(tenantScope.call(tenant, () -> sessions.revokeAllOf(principal, "binding_revoked"))).isEqualTo(1);
+            assertThat(tenantScope.call(tenant, () -> bindings.reinstate(principal, "test-reinstatement"))).isTrue();
+            mvc.perform(get("/v1/me").header("Authorization", "Bearer " + token))
+                    .andExpect(status().isUnauthorized());
+            exchange(tenant, callback.handoff(), callback.browser()).andExpect(status().isBadRequest());
+        }
     }
 
     @Test
