@@ -50,8 +50,17 @@ def main():
                 item.get('HostConfig', {}).get('AutoRemove') is not True):
             raise RuntimeError('test container identity changed')
         mounts = item.get('Mounts')
-        if not isinstance(mounts, list) or len(mounts) != 1 or mounts[0].get('Type') != 'tmpfs' or mounts[0].get('Destination') != '/var/lib/postgresql/data':
-            raise RuntimeError('test database storage is not an isolated tmpfs')
+        tmpfs = item.get('HostConfig', {}).get('Tmpfs')
+        # Docker may omit tmpfs entries from Mounts; require its declared tmpfs
+        # configuration and independently inspect the mounted filesystem.
+        if (not isinstance(tmpfs, dict) or set(tmpfs) != {'/var/lib/postgresql/data'} or
+                not isinstance(mounts, list) or len(mounts) > 1 or
+                any(not isinstance(m, dict) or m.get('Type') != 'tmpfs' or
+                    m.get('Destination') != '/var/lib/postgresql/data' for m in mounts)):
+            raise RuntimeError('test database mount configuration is not isolated')
+        filesystem = run(DOCKER + ['exec', container, 'stat', '-f', '-c', '%T', '/var/lib/postgresql/data']).stdout.strip()
+        if filesystem != 'tmpfs':
+            raise RuntimeError('test database filesystem is not tmpfs')
     def sql(statement, check=True):
         verify()
         return run(DOCKER + ['exec', container, 'psql', '-X', '-q', '-A', '-t', '-U', 'postgres',
