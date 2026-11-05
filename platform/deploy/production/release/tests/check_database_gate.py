@@ -92,15 +92,16 @@ def main():
         # backend_type is hidden from non-members; only the pinned test
         # superuser observer may classify clients. Unknown or extra client
         # connections cause rejection, including on the maintenance database.
-        def client_pids():
-            raw = cluster_inspector.sql("SELECT coalesce(string_agg(pid::text,',' ORDER BY pid),'') FROM pg_stat_activity WHERE backend_type='client backend';")
+        def clients():
+            raw = cluster_inspector.sql("SELECT coalesce(string_agg(pid::text||':'||usename||':'||datname,',' ORDER BY pid),'') FROM pg_stat_activity WHERE backend_type='client backend';")
             return set(raw.split(',')) if raw else set()
-        # Unknown sessions must prevent entry to the compensating transaction.
-        expected = {owner_pid, app_pid, inspector_pid, cluster_pid}
+        # Match connection identity, role and database; PID alone is not enough.
+        expected = {owner_pid + ':' + owner + ':' + db, app_pid + ':' + app + ':' + db,
+                    inspector_pid + ':' + app + ':' + db, cluster_pid + ':postgres:postgres'}
         def require_only_expected_clients():
-            if client_pids() != expected:
+            if clients() != expected:
                 raise RuntimeError('unapproved database client')
-        if extra_pid not in client_pids() or maintenance_pid not in client_pids():
+        if extra_pid + ':' + other + ':' + db not in clients() or maintenance_pid + ':' + other + ':postgres' not in clients():
             raise RuntimeError('unexpected target or maintenance client was not observed')
         try:
             require_only_expected_clients()
@@ -129,7 +130,7 @@ def main():
             raise RuntimeError('unknown maintenance-database superuser was accepted')
         maintenance_extra.close()
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and client_pids() != expected:
+        while time.monotonic() < deadline and clients() != expected:
             time.sleep(.05)
         require_only_expected_clients()
         # A matching PID is insufficient: the known app backend can hold an
