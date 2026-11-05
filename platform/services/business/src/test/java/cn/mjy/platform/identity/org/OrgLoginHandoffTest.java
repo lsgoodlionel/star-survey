@@ -159,6 +159,9 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
         assertThat(tenantScope.call(tenant, () -> jdbc.sql("SELECT COUNT(*) FROM org_login_session WHERE principal_id=:p AND revoked_at IS NULL")
                 .param("p", principal).query(Long.class).single())).isZero();
         exchange(tenant, callback.handoff(), callback.browser()).andExpect(status().isBadRequest());
+        assertThat(tenantScope.call(tenant, () -> bindings.reinstate(principal, "test-reinstatement"))).isTrue();
+        mvc.perform(get("/v1/me").header("Authorization", "Bearer " + signedIn.accessToken()))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
