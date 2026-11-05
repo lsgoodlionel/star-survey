@@ -63,13 +63,18 @@ def main():
     try:
         owner_session, app_session, inspector, extra_session = Session(owner), Session(app), Session(app), Session(other)
         maintenance_extra = Session(other, 'postgres')
-        sessions.extend((owner_session, app_session, inspector, extra_session, maintenance_extra))
+        # An explicitly identified supervisor connection uses existing CI
+        # superuser credentials for read-only cluster visibility; no grants are
+        # added to platform_app. This does not authorize candidate use.
+        cluster_inspector = Session('postgres', 'postgres')
+        sessions.extend((owner_session, app_session, inspector, extra_session, maintenance_extra, cluster_inspector))
         owner_pid = owner_session.sql('SELECT pg_backend_pid();')
         app_pid = app_session.sql('SELECT pg_backend_pid();')
         inspector_pid = inspector.sql('SELECT pg_backend_pid();')
         extra_pid = extra_session.sql('SELECT pg_backend_pid();')
         maintenance_pid = maintenance_extra.sql('SELECT pg_backend_pid();')
-        if any(not re.fullmatch(r'[0-9]+', value) for value in (owner_pid, app_pid, inspector_pid, extra_pid, maintenance_pid)):
+        cluster_pid = cluster_inspector.sql('SELECT pg_backend_pid();')
+        if any(not re.fullmatch(r'[0-9]+', value) for value in (owner_pid, app_pid, inspector_pid, extra_pid, maintenance_pid, cluster_pid)):
             raise RuntimeError('backend identities were invalid')
         identity_sql = 'SELECT oid FROM pg_database WHERE datname=current_database();'
         db_oid = owner_session.sql(identity_sql)
@@ -84,14 +89,14 @@ def main():
         for role in (owner, app, 'postgres'):
             if query('SELECT 1', role, db, check=False).returncode == 0:
                 raise RuntimeError('new connection unexpectedly succeeded for ' + role)
-        # backend_type may be hidden for other roles; filtering on it silently
-        # drops unknown privileged sessions. usesysid remains visible, and
-        # conservatively includes every user-associated backend.
+        # backend_type is hidden from non-members; only the pinned test
+        # superuser observer may classify clients. Unknown or extra client
+        # connections cause rejection, including on the maintenance database.
         def client_pids():
-            raw = owner_session.sql("SELECT coalesce(string_agg(pid::text,',' ORDER BY pid),'') FROM pg_stat_activity WHERE usesysid IS NOT NULL;")
+            raw = cluster_inspector.sql("SELECT coalesce(string_agg(pid::text,',' ORDER BY pid),'') FROM pg_stat_activity WHERE backend_type='client backend';")
             return set(raw.split(',')) if raw else set()
         # Unknown sessions must prevent entry to the compensating transaction.
-        expected = {owner_pid, app_pid, inspector_pid}
+        expected = {owner_pid, app_pid, inspector_pid, cluster_pid}
         def require_only_expected_clients():
             if client_pids() != expected:
                 raise RuntimeError('unapproved database client')
