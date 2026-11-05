@@ -207,7 +207,8 @@ def parse_fixture_volumes(values: Any) -> dict[str, dict[str, str]]:
             raise EvidenceError('fixture volume metadata is invalid')
         name, driver, created, labels = (item.get('Name'), item.get('Driver'), item.get('CreatedAt'), item.get('Labels'))
         options = item.get('Options')
-        if (not isinstance(name, str) or name not in expected or name in result or driver != 'local' or not isinstance(created, str) or
+        if (not isinstance(name, str) or name not in expected or name in result or driver != 'local' or
+                item.get('Scope') != 'local' or not isinstance(created, str) or
                 not created or not isinstance(labels, dict) or
                 'Options' not in item or not (options is None or (type(options) is dict and not options)) or
                 labels.get('com.docker.compose.project') != 'survey-production' or

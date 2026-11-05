@@ -553,7 +553,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         names = sorted('survey-production_' + name for name in self.module.FIXTURE_VOLUME_NAMES)
         def inspected(name):
             return {'Name': name, 'Driver': 'local', 'CreatedAt': '2026-01-01T00:00:00Z',
-                    'Options': None,
+                    'Options': None, 'Scope': 'local',
                     'Labels': {'com.docker.compose.project': 'survey-production',
                                'com.docker.compose.volume': name.removeprefix('survey-production_')}}
         output = subprocess.CompletedProcess([], 0, stdout='\n'.join(names) + '\n', stderr='')
@@ -572,7 +572,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             with self.assertRaises(self.module.EvidenceError):
                 self.module.read_fixture_volumes()
         for mutation in ('missing', 'unexpected', 'wrong-project', 'wrong-volume', 'changed-created', 'driver',
-                         'bind', 'nfs', 'cifs', 'missing-options', 'invalid-options'):
+                         'bind', 'nfs', 'cifs', 'missing-options', 'invalid-options', 'global-scope', 'missing-scope'):
             altered = json.loads(json.dumps([inspected(n) for n in names]))
             if mutation == 'missing': altered.pop()
             if mutation == 'unexpected': altered.append(inspected('survey-production_intruder'))
@@ -585,6 +585,8 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             if mutation == 'cifs': altered[0]['Options'] = {'type': 'cifs', 'device': '//server/share'}
             if mutation == 'missing-options': del altered[0]['Options']
             if mutation == 'invalid-options': altered[0]['Options'] = []
+            if mutation == 'global-scope': altered[0]['Scope'] = 'global'
+            if mutation == 'missing-scope': del altered[0]['Scope']
             with self.subTest(mutation=mutation), self.assertRaises(self.module.EvidenceError):
                 self.module.parse_fixture_volumes(altered)
 
