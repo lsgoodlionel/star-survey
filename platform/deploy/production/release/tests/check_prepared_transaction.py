@@ -78,8 +78,12 @@ def main():
             raise RuntimeError('test database filesystem is not uniquely tmpfs')
     def sql(statement, check=True):
         verify()
-        return run(DOCKER + ['exec', container, 'psql', '-X', '-q', '-A', '-t', '-U', 'postgres',
-                             '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', statement], check=check)
+        result = run(DOCKER + ['exec', container, 'psql', '-X', '-q', '-A', '-t', '-U', 'postgres',
+                               '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', statement], check=False)
+        if check and result.returncode:
+            # This isolated diagnostic uses synthetic data and credentials only.
+            raise RuntimeError('synthetic PostgreSQL stderr: ' + result.stderr[-1000:])
+        return result
     try:
         verify()
         deadline = time.monotonic() + 60
