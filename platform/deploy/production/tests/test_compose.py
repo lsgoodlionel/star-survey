@@ -16,6 +16,11 @@ FIXTURE_ENV = Path(__file__).resolve().parent / "fixtures" / "test.env"
 class ProductionComposeTest(unittest.TestCase):
     maxDiff = None
 
+    def test_organization_login_returns_to_same_origin_admin_web(self):
+        service = self.render_compose()["services"]["platform"]
+        env = service["environment"]
+        self.assertEqual(env["PLATFORM_PUBLIC_BASE_URL"], env["PLATFORM_ADMIN_WEB_BASE_URL"])
+
     def render_compose(self, env_file=FIXTURE_ENV):
         result = subprocess.run(
             [

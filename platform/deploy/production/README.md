@@ -12,6 +12,7 @@ Release manifest、校验过的架构 bundle 和固定 digest 镜像；服务器
 - 管理员密码和所有服务密钥由安装过程生成在 `<target>/shared/secrets`，目录权限 `0700`、文件权限 `0600`。不要把该目录写入日志、工单或仓库。
 - 文件型 Compose secret 保留宿主文件权限，不能依赖 Compose 的 `uid/gid/mode` 转换。安装器将需要挂载的密钥同步到 `<target>/shared/runtime-secrets`（目录 `0700`，副本 `0444`），供各服务按既有 secret 列表只读挂载。宿主上的 `shared` 和副本目录均禁止其他用户遍历；原始密钥保持 `0600`，`backup_encryption_key` 不生成挂载副本。派生管理员密码哈希生成后会同步副本；安装及升级会从原始文件刷新副本，不要直接编辑副本。
 - 网关需要的生成配置 `engines.json` 为 `0644`，所在 release 目录保持 `0700`。这些权限用于让非 root 容器读取单文件挂载，不应放宽宿主目录权限。
+- 组织登录的管理端交接地址使用与 `PUBLIC_HOST` 相同的 HTTPS 根地址；实际组织连接、成员授权和供应商凭据仍需另行配置并验证。
 
 ## 可选 SMTP Email 投递
 
