@@ -137,6 +137,18 @@ def main():
         while time.monotonic() < deadline and clients() != expected:
             time.sleep(.05)
         require_only_expected_clients()
+        def require_quiescent():
+            require_only_expected_clients()
+            if cluster_inspector.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
+                raise RuntimeError('database gate is not closed')
+            if cluster_inspector.sql("SELECT count(*) FROM pg_prepared_xacts WHERE database='" + db + "';") != '0':
+                raise RuntimeError('prepared transaction remains')
+            # Conservatively reject all database-associated background workers,
+            # unknown backend types, active clients and open transactions.
+            unsafe = cluster_inspector.sql("SELECT count(*) FROM pg_stat_activity WHERE datid=" + db_oid +
+                " AND (backend_type IS DISTINCT FROM 'client backend' OR state IS DISTINCT FROM 'idle' OR xact_start IS NOT NULL);")
+            if unsafe != '0':
+                raise RuntimeError('database worker or transaction is not quiet')
         # A matching PID is insufficient: the known app backend can hold an
         # open transaction. A second same-role session can inspect its state
         # without granting pg_read_all_stats to any role.
@@ -145,11 +157,18 @@ def main():
                                " AND (state IS DISTINCT FROM 'idle' OR xact_start IS NOT NULL);")
         if unsafe != '1':
             raise RuntimeError('open transaction on known backend was not detected')
+        try:
+            require_quiescent()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError('quiescence guard accepted an open transaction')
         app_session.sql('ROLLBACK;')
         safe = inspector.sql("SELECT count(*) FROM pg_stat_activity WHERE pid=" + app_pid +
                              " AND state='idle' AND xact_start IS NULL;")
         if safe != '1':
             raise RuntimeError('known app backend did not become idle without a transaction')
+        require_quiescent()
         query(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS true', owner, 'postgres')
         if (query("SELECT coalesce(datacl::text,'DEFAULT') FROM pg_database WHERE oid=" + db_oid).stdout.strip() != original_acl
                 or owner_session.sql('SELECT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't'):
