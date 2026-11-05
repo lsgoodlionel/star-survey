@@ -34,7 +34,7 @@ def main():
             "DO $$ BEGIN CREATE ROLE platform_app NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;")
     execute('CREATE DATABASE ' + database + ' OWNER platform_owner')
     try:
-        migration_dir = Path(__file__).resolve().parents[3] / 'services/business/src/main/resources/db/migration'
+        migration_dir = Path(__file__).resolve().parents[4] / 'services/business/src/main/resources/db/migration'
         versions = (1, 100, 101, 103, 104, 105, 106, 107, 108, 110, 111, 200, 201, 400, 401)
         migrations = []
         for version in versions:
