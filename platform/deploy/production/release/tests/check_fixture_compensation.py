@@ -140,6 +140,30 @@ SELECT count(*) FROM access_grant WHERE tenant_id='{tenant}' AND id='{grant}' AN
 COMMIT;""", database).stdout
         if author.strip().splitlines()[-1] != '1':
             raise RuntimeError('fixture author role is not constrained as expected')
+        # A mismatched handoff must roll back atomically without consuming the
+        # other principal's handoff or revoking this fixture identity.
+        other_principal = str(uuid.uuid4())
+        other_handoff, other_browser = secrets.token_hex(32), secrets.token_hex(32)
+        execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+INSERT INTO identity_binding(principal_id,tenant_id,provider,app_id,external_id)
+ VALUES ('{other_principal}','{tenant}','wecom','ci-corp','ci-other-user');
+INSERT INTO org_login_handoff(handoff_hash,browser_hash,tenant_id,principal_id,connection_id,provider,expires_at)
+ VALUES ('{other_handoff}','{other_browser}','{tenant}','{other_principal}','{connection}','wecom',now()+interval '1 minute');
+COMMIT;""", database)
+        mismatch = build_compensation_sql(
+            tenant=tenant, owner_plan=owner_plan, fixture_plan=fixture_plan, principal=principal,
+            connection=connection, original_sub=original_sub, fixture_sub=fixture_sub,
+            restore_sub=restore_sub, owner_grant=owner_grant,
+            handoff_hash=other_handoff, browser_hash=other_browser)
+        if execute(mismatch, database, check=False).returncode == 0:
+            raise RuntimeError('mismatched handoff was accepted')
+        mismatch_state = execute(f"""BEGIN; SET LOCAL ROLE platform_owner; {scope}
+SELECT EXISTS (SELECT 1 FROM org_login_handoff WHERE handoff_hash='{other_handoff}' AND consumed_at IS NULL)
+ AND NOT EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL);
+COMMIT;""", database).stdout
+        if mismatch_state.strip().splitlines()[-1] != 't':
+            raise RuntimeError('mismatched handoff changed database state')
+
         # A concurrent subscription change must abort the whole compensation,
         # without revoking the fixture or overwriting a different plan. The
         # surrounding synthetic transaction is rolled back on psql failure.
