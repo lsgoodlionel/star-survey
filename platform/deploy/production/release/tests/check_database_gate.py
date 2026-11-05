@@ -160,7 +160,11 @@ def main():
         try:
             require_quiescent()
         except RuntimeError:
-            pass
+            # A rejected recovery check must not open the synthetic database.
+            if cluster_inspector.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
+                raise RuntimeError('gate reopened after rejected recovery check')
+            if query('SELECT 1', app, db, check=False).returncode == 0:
+                raise RuntimeError('new connection succeeded after rejected recovery check')
         else:
             raise RuntimeError('quiescence guard accepted an open transaction')
         app_session.sql('ROLLBACK;')
