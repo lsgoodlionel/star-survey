@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import time
 import uuid
 
 
@@ -95,6 +96,45 @@ COMMIT;
         failed = execute(provision + '\\echo committed-before-error\nSELECT 1/0;', database, check=False)
         if failed.returncode == 0:
             raise RuntimeError('injected ambiguous result did not fail')
+        # Probe whether the ordinary runtime role can take a physical table lock
+        # that conflicts with every subscription INSERT, including writers which
+        # do not take any application advisory lock. This is a disposable DB.
+        app_name = 'fixture_lock_' + secrets.token_hex(12)
+        holder_sql = f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+LOCK TABLE subscription IN SHARE ROW EXCLUSIVE MODE; SELECT pg_sleep(6); COMMIT;"""
+        command = ['psql', '-X', '-q', '-h', '127.0.0.1', '-p', port, '-U', 'postgres',
+                   '-d', database, '-v', 'ON_ERROR_STOP=1', '-c', holder_sql]
+        holder = subprocess.Popen(command, env=dict(env, PGAPPNAME=app_name), stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 10
+            seen = False
+            while time.monotonic() < deadline:
+                observed = execute("SELECT count(*) FROM pg_stat_activity WHERE application_name='" + app_name +
+                                   "' AND datname='" + database + "' AND wait_event='PgSleep'").stdout.strip()
+                if observed == '1':
+                    seen = True
+                    break
+                if holder.poll() is not None:
+                    raise RuntimeError('runtime role cannot hold lock: ' + holder.stderr.read()[-1000:])
+                time.sleep(.05)
+            if not seen:
+                raise RuntimeError('subscription lock holder was not observed')
+            concurrent_id = str(uuid.uuid4())
+            blocked = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SET LOCAL lock_timeout='1s';
+INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
+ SELECT '{concurrent_id}','{tenant}','{owner_plan}',kind,now(),ends_at FROM subscription WHERE id='{original_sub}';
+COMMIT;""", database, check=False)
+            if blocked.returncode == 0 or 'lock timeout' not in blocked.stderr:
+                raise RuntimeError('concurrent subscription insert was not blocked by physical lock')
+            if holder.wait(timeout=10) != 0:
+                raise RuntimeError('lock holder did not finish cleanly')
+        finally:
+            if holder.poll() is None:
+                holder.kill()
+                holder.wait(timeout=10)
+
         compensate = f"""
 BEGIN; SET LOCAL ROLE platform_app; {scope}
 SELECT pg_advisory_xact_lock(hashtextextended('access.members:{tenant}',0));
