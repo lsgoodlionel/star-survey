@@ -62,6 +62,33 @@ def main():
         if activity() or query('SELECT count(*) FROM ' + table) != '0':
             raise RuntimeError('backend remained active or transaction did not roll back')
         print('isolated backend terminated and uncommitted synthetic insert rolled back')
+        # A lost client may also have committed already. Prove that termination
+        # cannot be treated as rollback evidence for an ambiguous commit.
+        child = subprocess.Popen(base + ['-c', 'BEGIN; INSERT INTO ' + table +
+                                         ' VALUES (2); COMMIT; SELECT pg_sleep(60)'],
+                                 env=worker_env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+        deadline = time.monotonic() + 15
+        backend = ''
+        while time.monotonic() < deadline:
+            backend = activity(sleeping=True)
+            if backend:
+                break
+            if child.poll() is not None:
+                raise RuntimeError('client exited before committed transaction was observed')
+            time.sleep(.1)
+        if not re.fullmatch(r'[0-9]+', backend):
+            raise RuntimeError('committed transaction backend not observed')
+        os.killpg(child.pid, signal.SIGKILL)
+        child.wait(timeout=10)
+        query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name='" + app +
+              "' AND pid=" + backend + " AND datname=current_database() AND usename=current_user AND pid<>pg_backend_pid()")
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and activity():
+            time.sleep(.1)
+        if activity() or query('SELECT count(*) FROM ' + table) != '1':
+            raise RuntimeError('committed transaction evidence was not retained')
+        print('committed synthetic transaction remained after client loss; recovery is required')
     finally:
         if child is not None and child.poll() is None:
             os.killpg(child.pid, signal.SIGKILL)
