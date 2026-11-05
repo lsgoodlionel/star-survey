@@ -6,6 +6,7 @@ on:
       - '.github/workflows/fixture-containment-probe.yml'
       - 'platform/deploy/production/release/fixture_supervisor.py'
       - 'platform/deploy/production/release/tests/test_fixture_supervisor.py'
+      - 'platform/deploy/production/release/tests/check_cgroup_containment.py'
   workflow_dispatch:
 
 permissions:
@@ -38,3 +39,6 @@ jobs:
           if sudo test -w /sys/fs/cgroup; then printf 'yes\n'; else printf 'no\n'; fi
           printf 'Systemd available: '
           if command -v systemd-run >/dev/null && systemctl is-system-running >/dev/null 2>&1; then printf 'yes\n'; else printf 'unconfirmed\n'; fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Test dedicated cgroup and unprivileged setsid containment
+        run: sudo python3 platform/deploy/production/release/tests/check_cgroup_containment.py
