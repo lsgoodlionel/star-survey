@@ -306,6 +306,8 @@ run_ctl setup-probe
 
 last_step="doctor-installed"
 write_doctor_evidence "doctor-installed"
+last_step="capture-fixture-volumes"
+python3 "$evidence_helper" fixture-volumes-create --work "$work_root" --marker "$work_root/owner.json"
 
 last_step="backup"
 run_ctl backup --output "$backup_name"
@@ -332,5 +334,6 @@ last_step="doctor-restored"
 write_doctor_evidence "doctor-restored"
 
 last_step="uninstall"
+python3 "$evidence_helper" fixture-volumes-verify --work "$work_root" --marker "$work_root/owner.json"
 run_ctl uninstall
 acceptance_status="passed"
