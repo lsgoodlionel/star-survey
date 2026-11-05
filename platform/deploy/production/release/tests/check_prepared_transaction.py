@@ -39,7 +39,9 @@ def main():
     container = started.stdout.strip()
     if re.fullmatch(r'[0-9a-f]{64}', container) is None:
         raise RuntimeError('test container identity ambiguous')
-    def verify():
+    initial_started_at = None
+    def verify(*, require_stable=True):
+        nonlocal initial_started_at
         objects = json.loads(run(DOCKER + ['inspect', '--type', 'container', container]).stdout)
         if not isinstance(objects, list) or len(objects) != 1:
             raise RuntimeError('test container inspection ambiguous')
@@ -49,6 +51,13 @@ def main():
                 item.get('HostConfig', {}).get('NetworkMode') != 'none' or
                 item.get('HostConfig', {}).get('AutoRemove') is not True):
             raise RuntimeError('test container identity changed')
+        state = item.get('State')
+        if not isinstance(state, dict) or state.get('Running') is not True or not isinstance(state.get('StartedAt'), str):
+            raise RuntimeError('test container is not running')
+        if initial_started_at is None:
+            initial_started_at = state['StartedAt']
+        elif require_stable and state['StartedAt'] != initial_started_at:
+            raise RuntimeError('test container restarted')
         mounts = item.get('Mounts')
         tmpfs = item.get('HostConfig', {}).get('Tmpfs')
         # Docker may omit tmpfs entries from Mounts; require its declared tmpfs
@@ -95,10 +104,24 @@ def main():
                 sql('SELECT count(*) FROM fixture_prepared').stdout.strip() != '0'):
             raise RuntimeError('prepared transaction cleanup was not verified')
         print('prepared transaction survived client exit and was detected and rolled back in isolated test')
+        # Deliberately restart this uniquely identified throwaway container and
+        # verify the stable-instance check rejects it before any further work.
+        verify()
+        run(DOCKER + ['restart', '--time', '3', container], timeout=30)
+        try:
+            verify()
+        except RuntimeError as exc:
+            if str(exc) != 'test container restarted':
+                raise
+        else:
+            raise RuntimeError('test container restart was not detected')
+        print('test container restart was rejected by stable-instance check')
     finally:
         # Never address an inferred name or a nonmatching container. --rm and
         # tmpfs avoid retaining this test database, without touching named volumes.
-        verify()
+        # A deliberately restarted test container may still be stopped only
+        # after its full ID, label, image, network and tmpfs are revalidated.
+        verify(require_stable=False)
         run(DOCKER + ['stop', '--time', '3', container], timeout=15)
         remaining = run(DOCKER + ['inspect', '--type', 'container', container], check=False)
         if remaining.returncode == 0:
