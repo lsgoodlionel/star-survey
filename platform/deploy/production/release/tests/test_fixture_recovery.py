@@ -90,3 +90,32 @@ class FixtureSupervisorTest(unittest.TestCase):
                 module.execute_fixture(lambda: calls.append('provision'), journey, recovery)
             self.assertEqual(['provision', 'journey', 'recovery'], calls)
             self.assertNotIn('secret', str(caught.exception))
+
+class MarkedFixtureSupervisorTest(unittest.TestCase):
+    def test_mark_before_provision_and_clear_only_after_verified_recovery(self):
+        calls = []
+        module.execute_marked_fixture(*(lambda name=name: calls.append(name)
+                                       for name in ('mark', 'provision', 'journey', 'recovery', 'clear')))
+        self.assertEqual(['mark', 'provision', 'journey', 'recovery', 'clear'], calls)
+
+    def test_failed_marker_prevents_mutation_and_failed_recovery_retains_marker(self):
+        calls = []
+        def fail():
+            raise ValueError('private')
+        with self.assertRaises(module.FixtureExecutionError):
+            module.execute_marked_fixture(fail, lambda: calls.append('provision'), lambda: None,
+                                          lambda: None, lambda: calls.append('clear'))
+        self.assertEqual([], calls)
+        with self.assertRaises(module.FixtureExecutionError):
+            module.execute_marked_fixture(lambda: calls.append('mark'), lambda: calls.append('provision'),
+                                          lambda: None, fail, lambda: calls.append('clear'))
+        self.assertEqual(['mark', 'provision'], calls)
+
+    def test_journey_failure_can_clear_only_after_successful_recovery(self):
+        calls = []
+        def fail():
+            raise ValueError('private')
+        with self.assertRaises(module.FixtureExecutionError):
+            module.execute_marked_fixture(lambda: calls.append('mark'), lambda: calls.append('provision'), fail,
+                                          lambda: calls.append('recovery'), lambda: calls.append('clear'))
+        self.assertEqual(['mark', 'provision', 'recovery', 'clear'], calls)

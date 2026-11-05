@@ -66,3 +66,31 @@ def execute_fixture(provision, journey, recovery):
                 failed = True
     if failed:
         raise FixtureExecutionError('fixture execution or recovery failed') from None
+
+
+def execute_marked_fixture(mark_pending, provision, journey, recovery, clear_pending):
+    """Record intent before mutation and retain it whenever recovery is uncertain.
+
+    Process-level signal supervision and durable storage across VM loss remain the
+    caller's responsibility; this synchronous helper cannot provide either.
+    """
+    try:
+        mark_pending()
+    except BaseException:
+        raise FixtureExecutionError('fixture recovery marker failed') from None
+    failed = False
+    try:
+        provision()
+        journey()
+    except BaseException:
+        failed = True
+    try:
+        recovery()
+    except BaseException:
+        raise FixtureExecutionError('fixture recovery failed; marker retained') from None
+    try:
+        clear_pending()
+    except BaseException:
+        raise FixtureExecutionError('fixture marker clearance failed') from None
+    if failed:
+        raise FixtureExecutionError('fixture execution failed after recovery') from None
