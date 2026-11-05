@@ -106,6 +106,10 @@ jobs:
         working-directory: platform/apps/admin-web
         run: npm ci
 
+      - name: Native handoff fixture contract
+        working-directory: platform/apps/admin-web
+        run: node --test e2e/native-candidate/handoff-check.mjs
+
       - name: ESLint
         working-directory: platform/apps/admin-web
         run: npm run lint
