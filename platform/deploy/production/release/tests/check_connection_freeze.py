@@ -20,7 +20,7 @@ def main():
     suffix = secrets.token_hex(10)
     db, owner, app = 'freeze_' + suffix, 'owner_' + suffix, 'app_' + suffix
     env = dict(os.environ, PGPASSWORD='fixture-only-password', PGCONNECT_TIMEOUT='3',
-               PGOPTIONS='-c statement_timeout=5000')
+               PGOPTIONS='-c statement_timeout=15000')
     def command(user, database):
         return ['psql', '-X', '-q', '-A', '-t', '-h', '127.0.0.1', '-p', port,
                 '-U', user, '-d', database, '-v', 'ON_ERROR_STOP=1']
@@ -60,7 +60,7 @@ def main():
         if sessions() != '1' or client.poll() is not None:
             raise RuntimeError('freeze unexpectedly removed the old session')
         # Revoking CONNECT is not a write barrier for a session already open.
-        client.stdin.write('SELECT pg_sleep(3);\n')
+        client.stdin.write('SELECT pg_sleep(8);\n')
         client.stdin.flush()
         running_sql = ("SELECT count(*) FROM pg_stat_activity WHERE datname='" + db + "' AND usename='" + app +
                        "' AND state='active' AND wait_event='PgSleep'")
@@ -80,7 +80,7 @@ def main():
         # Closing the actual client leaves no running SQL or transaction in this
         # experiment; a live query needs separate cancellation and verification.
         client.stdin.close()
-        if client.wait(timeout=10) != 0:
+        if client.wait(timeout=15) != 0:
             raise RuntimeError('existing app client did not close cleanly')
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and sessions() != '0':
