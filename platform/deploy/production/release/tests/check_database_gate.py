@@ -68,7 +68,14 @@ def main():
         extra_pid = extra_session.sql('SELECT pg_backend_pid();')
         if any(not re.fullmatch(r'[0-9]+', value) for value in (owner_pid, app_pid, inspector_pid, extra_pid)):
             raise RuntimeError('backend identities were invalid')
+        identity_sql = 'SELECT oid FROM pg_database WHERE datname=current_database();'
+        db_oid = owner_session.sql(identity_sql)
+        if not re.fullmatch(r'[0-9]+', db_oid) or app_session.sql(identity_sql) != db_oid:
+            raise RuntimeError('persistent sessions do not share a database identity')
+        original_acl = query("SELECT coalesce(datacl::text,'DEFAULT') FROM pg_database WHERE oid=" + db_oid).stdout.strip()
         owner_session.sql(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS false;')
+        if owner_session.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
+            raise RuntimeError('database gate was not closed')
         for role in (owner, app, 'postgres'):
             if query('SELECT 1', role, db, check=False).returncode == 0:
                 raise RuntimeError('new connection unexpectedly succeeded for ' + role)
@@ -109,6 +116,9 @@ def main():
         if safe != '1':
             raise RuntimeError('known app backend did not become idle without a transaction')
         owner_session.sql(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS true;')
+        if (query("SELECT coalesce(datacl::text,'DEFAULT') FROM pg_database WHERE oid=" + db_oid).stdout.strip() != original_acl
+                or owner_session.sql('SELECT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't'):
+            raise RuntimeError('database gate or ACL did not return to original state')
         query('SELECT 1', app, db)
         print('database gate rejected new connections, unknown superuser and known active transaction')
     finally:
