@@ -76,9 +76,12 @@ def main():
                 target_entries.append(filesystem[0])
         if target_entries != ['tmpfs']:
             raise RuntimeError('test database filesystem is not uniquely tmpfs')
+    # TCP is available only on the final server, unlike the temporary
+    # socket-only init server used by the official image.
     def sql(statement, check=True):
         verify()
-        return run(DOCKER + ['exec', container, 'psql', '-X', '-q', '-A', '-t', '-U', 'postgres',
+        return run(DOCKER + ['exec', '-e', 'PGPASSWORD=fixture-only-password', container, 'psql',
+                             '-X', '-q', '-A', '-t', '-h', '127.0.0.1', '-U', 'postgres',
                              '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', statement], check=check)
     try:
         verify()
