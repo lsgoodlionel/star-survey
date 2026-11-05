@@ -1,0 +1,40 @@
+name: Fixture containment capability probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/fixture-containment-probe.yml'
+      - 'platform/deploy/production/release/fixture_supervisor.py'
+      - 'platform/deploy/production/release/tests/test_fixture_supervisor.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: Inspect cgroup availability on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+    steps:
+      - name: Inspect kernel containment prerequisites without creating a scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'Kernel: '
+          uname -sr
+          printf 'Architecture: '
+          uname -m
+          printf 'Cgroup filesystem: '
+          stat -fc '%T' /sys/fs/cgroup
+          printf 'Cgroup v2 controllers: '
+          if [[ -r /sys/fs/cgroup/cgroup.controllers ]]; then cat /sys/fs/cgroup/cgroup.controllers; else printf 'unavailable\n'; fi
+          printf 'Root cgroup writable by runner: '
+          if [[ -w /sys/fs/cgroup ]]; then printf 'yes\n'; else printf 'no\n'; fi
+          printf 'Root cgroup writable by root: '
+          if sudo test -w /sys/fs/cgroup; then printf 'yes\n'; else printf 'no\n'; fi
+          printf 'Systemd available: '
+          if command -v systemd-run >/dev/null && systemctl is-system-running >/dev/null 2>&1; then printf 'yes\n'; else printf 'unconfirmed\n'; fi
