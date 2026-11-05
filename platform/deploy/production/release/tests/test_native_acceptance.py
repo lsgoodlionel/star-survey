@@ -584,6 +584,19 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                 with self.assertRaises(self.module.EvidenceError):
                     self.module.verify_fixture_owner(work, work / 'primary', marker)
                 marker.unlink()
+                os.mkfifo(marker, 0o600)
+                script = (
+                    'import importlib.util,sys; from pathlib import Path; '
+                    's=importlib.util.spec_from_file_location("fixture",sys.argv[1]); '
+                    'm=importlib.util.module_from_spec(s); s.loader.exec_module(m); '
+                    'w=Path(sys.argv[2]); '
+                    'm.verify_fixture_owner(w,w/"primary",w/"owner.json")'
+                )
+                result = subprocess.run([sys.executable, '-c', script, str(EVIDENCE_HELPER_PATH), str(work)],
+                                        env=dict(os.environ), capture_output=True, text=True, timeout=3)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn('EvidenceError', result.stderr)
+                marker.unlink()
                 work.chmod(0o755)
                 with self.assertRaises(self.module.EvidenceError):
                     self.module.write_fixture_owner(work, marker)

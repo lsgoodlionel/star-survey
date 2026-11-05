@@ -146,9 +146,14 @@ def write_fixture_owner(work: Path, marker: Path) -> None:
 
 
 def verify_fixture_owner(work: Path, target: Path, marker: Path) -> None:
+    """Reject accidental run mismatches; this marker alone never authorizes purge.
+
+    The marker must belong to the current effective user. This is not proof of a
+    clean host, root ownership, or protection against code running as that user.
+    """
     expected = _fixture_owner(work, target, marker)
     try:
-        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, 'r', encoding='utf-8') as stream:
             metadata = os.fstat(stream.fileno())
             if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600 or
