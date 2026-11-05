@@ -46,22 +46,25 @@ def main():
         with open(credential, 'w', encoding='ascii') as stream: stream.write('fixture-only')
         os.chmod(credential, 0o600)
         worker_code = '''import os,socket,sys
-assert os.geteuid() != 0 and not os.getgroups()
-assert set(os.environ) <= {'PATH', 'LC_CTYPE'}
-for path in (sys.argv[1], '/var/lib/docker'):
- try:
-  os.stat(path)
- except PermissionError: pass
- else: raise RuntimeError('private path accessible')
+if os.geteuid() == 0 or os.getgroups(): sys.exit(21)
+if not set(os.environ) <= {'PATH', 'LC_CTYPE'}: sys.exit(22)
+try:
+ open(sys.argv[1]).read()
+except PermissionError: pass
+else: sys.exit(23)
+try:
+ os.listdir('/var/lib/docker')
+except PermissionError: pass
+else: sys.exit(24)
 s=socket.socket(socket.AF_UNIX)
 try:
  s.connect('/var/run/docker.sock')
 except PermissionError: pass
-else: raise RuntimeError('docker socket accessible')
+else: sys.exit(25)
 '''
         worker = run(['setpriv', '--reuid=nobody', '--regid=nogroup', '--clear-groups', '--no-new-privs', '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin',
                       '/usr/bin/python3', '-c', worker_code, credential], check=False)
-        if worker.returncode != 0: raise RuntimeError('unprivileged worker isolation not demonstrated')
+        if worker.returncode != 0: raise RuntimeError('unprivileged worker isolation not demonstrated: code=' + str(worker.returncode))
         sleeper = subprocess.Popen(['setpriv', '--reuid=nobody', '--regid=nogroup', '--clear-groups', '--no-new-privs', '/usr/bin/env', '-i',
                                     'PATH=/usr/bin:/bin', '/usr/bin/sleep', '30'],
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
