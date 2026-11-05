@@ -22,7 +22,7 @@ finally:
 class FixtureDatabaseTest(unittest.TestCase):
     @staticmethod
     def complete_container(container, release):
-        target = str(Path(release).parent.parent.parent)
+        target = release.rsplit('/releases/', 1)[0]
         config = container['Config']
         config.update({'Env': ['PGDATA=/var/lib/postgresql/data', 'POSTGRES_USER=postgres',
                                'POSTGRES_DB=postgres', 'POSTGRES_PASSWORD_FILE=/run/secrets/platform_db_superuser_password',
@@ -95,6 +95,23 @@ class FixtureDatabaseTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.inspect_fixture_database(Path('/tmp/work'), Path('/tmp/work/owner.json'))
             run.assert_not_called()
+
+    def test_runtime_secret_paths_are_bound_to_primary_target(self):
+        release = '/tmp/example/primary/releases/0.3.19-rc.1'
+        image = 'postgres@sha256:' + 'a' * 64
+        container = {'Id': 'b' * 64, 'State': {'Running': True}, 'Config': {'Image': image, 'Labels': {
+            'com.docker.compose.project': 'survey-production', 'com.docker.compose.service': 'platform-db',
+            'com.docker.compose.project.working_dir': release,
+            'com.docker.compose.project.config_files': release + '/compose.yml',
+        }}, 'Mounts': [{'Type': 'volume', 'Name': 'survey-production_platform-db-data',
+                       'Destination': '/var/lib/postgresql/data'}]}
+        self.complete_container(container, release)
+        self.assertEqual('/tmp/example/primary/shared/runtime-secrets/platform_db_superuser_password',
+                         container['Mounts'][2]['Source'])
+        module.validate_database_container(container, release, image)
+        container['Mounts'][2]['Source'] = '/tmp/example/shared/runtime-secrets/platform_db_superuser_password'
+        with self.assertRaises(ValueError):
+            module.validate_database_container(container, release, image)
 
     def test_revalidation_fails_when_candidate_or_container_changes(self):
         release = Path('/tmp/target/releases/0.3.19-rc.1')

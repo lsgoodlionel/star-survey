@@ -122,7 +122,7 @@ def validate_database_container(container, release, expected_image):
     if any((key.startswith('PG') or key.startswith('POSTGRES_') or key.startswith('PLATFORM_DB_'))
            and key not in allowed_pg for key in env):
         raise ValueError('unexpected database environment')
-    target = Path(release).parent.parent.parent
+    target = Path(release).parent.parent
     binds = {'/docker-entrypoint-initdb.d/10-platform-roles.sh': release + '/init/init-platform-db.sh'}
     for name in ('platform_db_superuser_password', 'platform_db_owner_password', 'platform_db_app_password'):
         binds['/run/secrets/' + name] = str(target / 'shared/runtime-secrets' / name)
