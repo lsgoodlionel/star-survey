@@ -7,6 +7,7 @@ on:
       - 'platform/deploy/production/release/fixture_supervisor.py'
       - 'platform/deploy/production/release/tests/test_fixture_supervisor.py'
       - 'platform/deploy/production/release/tests/check_cgroup_containment.py'
+      - 'platform/deploy/production/release/tests/check_pg_quiescence.py'
   workflow_dispatch:
 
 permissions:
@@ -20,6 +21,18 @@ jobs:
       fail-fast: false
       matrix:
         runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+    services:
+      fixture-db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: fixture-only-password
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: Inspect kernel containment prerequisites without creating a scope
         shell: bash
@@ -42,3 +55,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Test dedicated cgroup and unprivileged setsid containment
         run: sudo python3 platform/deploy/production/release/tests/check_cgroup_containment.py
+      - name: Test synthetic transaction cancellation and server quiescence
+        env:
+          FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
+        run: python3 platform/deploy/production/release/tests/check_pg_quiescence.py
