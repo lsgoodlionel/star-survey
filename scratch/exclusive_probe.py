@@ -73,21 +73,28 @@ def main():
         if supervisor.sql("SELECT NOT datallowconn FROM pg_database WHERE datname='postgres';") != 't': raise RuntimeError('gate not closed')
         if supervisor.sql('SELECT pg_terminate_backend(' + stale_pid + ');') != 't': raise RuntimeError('old client not terminated')
         maintenance.close()
+        # The sole retained target connection also closes the maintenance DB.
+        # This is only a disposable cluster and is never reopened on failure.
+        supervisor.sql('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS false;')
+        if supervisor.sql('SELECT count(*) FROM pg_database WHERE datallowconn;') != '0':
+            raise RuntimeError('connectable database remains')
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if supervisor.sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();") == '0': break
             time.sleep(.05)
         else: raise RuntimeError('unexpected client remains')
         if supervisor.sql("SELECT count(*) FROM pg_prepared_xacts;") != '0': raise RuntimeError('prepared transaction remains')
-        if connect('postgres').returncode == 0: raise RuntimeError('closed gate accepted new client')
+        if connect('postgres').returncode == 0 or connect('template1').returncode == 0:
+            raise RuntimeError('closed gate accepted new client')
         if supervisor.sql("SELECT current_database() || ':' || pg_backend_pid()::text;") != 'postgres:' + pid: raise RuntimeError('supervisor identity changed')
         # Inject a failure after closure. The handler verifies closure, does not reopen.
         try: raise RuntimeError('synthetic recovery failure')
         except RuntimeError:
-            if supervisor.sql("SELECT NOT datallowconn FROM pg_database WHERE datname='postgres';") != 't' or connect('postgres').returncode == 0:
+            if (supervisor.sql('SELECT count(*) FROM pg_database WHERE datallowconn;') != '0' or
+                    connect('postgres').returncode == 0 or connect('template1').returncode == 0):
                 raise RuntimeError('gate reopened after failure')
         print('closed gate retained only bound target session; old client terminated; failure did not reopen gate')
-        print('scope: trusted runner and daemon; no guarantee against same-privilege malicious process or maintenance access')
+        print('scope: trusted runner and daemon; no guarantee against same-privilege malicious process')
     finally:
         for session in sessions:
             try: session.close()
