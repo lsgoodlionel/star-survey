@@ -74,7 +74,9 @@ def main():
         if not re.fullmatch(r'[0-9]+', db_oid) or app_session.sql(identity_sql) != db_oid:
             raise RuntimeError('persistent sessions do not share a database identity')
         original_acl = query("SELECT coalesce(datacl::text,'DEFAULT') FROM pg_database WHERE oid=" + db_oid).stdout.strip()
-        owner_session.sql(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS false;')
+        # PostgreSQL forbids closing the gate from the target database itself.
+        # Use the owner through the separate postgres maintenance database.
+        query(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS false', owner, 'postgres')
         if owner_session.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
             raise RuntimeError('database gate was not closed')
         for role in (owner, app, 'postgres'):
@@ -116,7 +118,7 @@ def main():
                              " AND state='idle' AND xact_start IS NULL;")
         if safe != '1':
             raise RuntimeError('known app backend did not become idle without a transaction')
-        owner_session.sql(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS true;')
+        query(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS true', owner, 'postgres')
         if (query("SELECT coalesce(datacl::text,'DEFAULT') FROM pg_database WHERE oid=" + db_oid).stdout.strip() != original_acl
                 or owner_session.sql('SELECT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't'):
             raise RuntimeError('database gate or ACL did not return to original state')
