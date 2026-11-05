@@ -37,6 +37,7 @@ platform:
   identity:
     org-login:
       callback-base-url: ${PLATFORM_PUBLIC_BASE_URL:}
+      admin-web-base-url: ${PLATFORM_ADMIN_WEB_BASE_URL:}
       token-ttl: ${PLATFORM_ORG_LOGIN_TOKEN_TTL:PT10M}
       state-ttl: PT5M
     # 通讯录事件回调 /v1/org-events/{租户}/{连接}（ADR 0014 增补二）：Token 与加密密钥按连接的 eventTokenRef /
