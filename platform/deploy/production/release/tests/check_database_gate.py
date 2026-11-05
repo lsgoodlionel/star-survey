@@ -99,8 +99,12 @@ def main():
         expected = {owner_pid + ':' + owner + ':' + db, app_pid + ':' + app + ':' + db,
                     inspector_pid + ':' + app + ':' + db, cluster_pid + ':postgres:postgres'}
         def require_only_expected_clients():
-            if clients() != expected:
-                raise RuntimeError('unapproved database client')
+            actual = clients()
+            if actual != expected:
+                # This script runs only against fresh CI service roles; never
+                # print connection SQL, addresses, credentials or token data.
+                raise RuntimeError('unapproved database client: missing=' + str(sorted(expected - actual)) +
+                                   ' extra=' + str(sorted(actual - expected)))
         if extra_pid + ':' + other + ':' + db not in clients() or maintenance_pid + ':' + other + ':postgres' not in clients():
             raise RuntimeError('unexpected target or maintenance client was not observed')
         try:
