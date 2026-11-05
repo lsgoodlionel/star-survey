@@ -80,9 +80,13 @@ def main():
     # socket-only init server used by the official image.
     def sql(statement, check=True):
         verify()
-        return run(DOCKER + ['exec', '-e', 'PGPASSWORD=fixture-only-password', container, 'psql',
-                             '-X', '-q', '-A', '-t', '-h', '127.0.0.1', '-U', 'postgres',
-                             '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', statement], check=check)
+        result = run(DOCKER + ['exec', '-e', 'PGPASSWORD=fixture-only-password', container, 'psql',
+                               '-X', '-q', '-A', '-t', '-h', '127.0.0.1', '-U', 'postgres',
+                               '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', statement], check=False)
+        if check and result.returncode:
+            # Only synthetic statements run here; no product credentials or data.
+            raise RuntimeError('isolated PostgreSQL command failed: ' + result.stderr[-1000:])
+        return result
     try:
         verify()
         deadline = time.monotonic() + 60
