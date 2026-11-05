@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Disposable CI experiment only; assumes a trusted runner and Docker daemon."""
-import json, os, re, secrets, select, subprocess, time
+import json, os, re, secrets, select, signal, subprocess, tempfile, time
 
 D = ['docker', '--host', 'unix:///var/run/docker.sock']
 
@@ -36,8 +36,39 @@ class Session:
 
 def main():
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted'
-            or os.environ.get('GITHUB_REPOSITORY') != 'lsgoodlionel/star-survey'):
+            or os.environ.get('GITHUB_REPOSITORY') != 'lsgoodlionel/star-survey' or os.geteuid() != 0):
         raise RuntimeError('requires dedicated GitHub-hosted repository runner')
+    # A separate unprivileged worker receives a minimal environment and no
+    # inherited secrets. This probes OS permissions, not arbitrary root code.
+    with tempfile.TemporaryDirectory(prefix='survey-private-') as private:
+        os.chmod(private, 0o700)
+        credential = os.path.join(private, 'fixture-credential')
+        with open(credential, 'w', encoding='ascii') as stream: stream.write('fixture-only')
+        os.chmod(credential, 0o600)
+        worker_code = '''import os,socket,sys
+assert os.geteuid() != 0 and not os.getgroups()
+assert set(os.environ) <= {'PATH', 'LC_CTYPE'}
+for path in (sys.argv[1], '/var/lib/docker'):
+ try:
+  os.stat(path)
+ except PermissionError: pass
+ else: raise RuntimeError('private path accessible')
+s=socket.socket(socket.AF_UNIX)
+try:
+ s.connect('/var/run/docker.sock')
+except PermissionError: pass
+else: raise RuntimeError('docker socket accessible')
+'''
+        worker = run(['setpriv', '--reuid=nobody', '--regid=nogroup', '--clear-groups', '--no-new-privs', '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin',
+                      '/usr/bin/python3', '-c', worker_code, credential], check=False)
+        if worker.returncode != 0: raise RuntimeError('unprivileged worker isolation not demonstrated')
+        sleeper = subprocess.Popen(['setpriv', '--reuid=nobody', '--regid=nogroup', '--clear-groups', '--no-new-privs', '/usr/bin/env', '-i',
+                                    'PATH=/usr/bin:/bin', '/usr/bin/sleep', '30'],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   start_new_session=True)
+        os.killpg(sleeper.pid, signal.SIGKILL)
+        sleeper.wait(timeout=5)
+        if sleeper.returncode == 0: raise RuntimeError('forced worker termination not detected')
     nonce = secrets.token_hex(16)
     image = run(D + ['image', 'inspect', 'postgres:16-alpine', '--format', '{{.Id}}']).stdout.strip()
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image): raise RuntimeError('invalid image')
@@ -69,6 +100,11 @@ def main():
         sessions.extend([supervisor, stale, maintenance])
         pid = supervisor.sql('SELECT pg_backend_pid();'); stale_pid = stale.sql('SELECT pg_backend_pid();')
         if not re.fullmatch(r'[0-9]+', pid) or not re.fullmatch(r'[0-9]+', stale_pid) or pid == stale_pid: raise RuntimeError('bad client identity')
+        identity_sql = ("SELECT a.pid::text||':'||a.backend_start::text||':'||d.oid::text "
+                        "FROM pg_stat_activity a JOIN pg_database d ON d.oid=a.datid WHERE a.pid=pg_backend_pid();")
+        db_identity = supervisor.sql(identity_sql)
+        if not db_identity.startswith(pid + ':') or not re.search(r':[0-9]+$', db_identity):
+            raise RuntimeError('database identity invalid')
         maintenance.sql('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS false;')
         if supervisor.sql("SELECT NOT datallowconn FROM pg_database WHERE datname='postgres';") != 't': raise RuntimeError('gate not closed')
         if supervisor.sql('SELECT pg_terminate_backend(' + stale_pid + ');') != 't': raise RuntimeError('old client not terminated')
@@ -87,6 +123,8 @@ def main():
         if connect('postgres').returncode == 0 or connect('template1').returncode == 0:
             raise RuntimeError('closed gate accepted new client')
         if supervisor.sql("SELECT current_database() || ':' || pg_backend_pid()::text;") != 'postgres:' + pid: raise RuntimeError('supervisor identity changed')
+        verify()
+        if supervisor.sql(identity_sql) != db_identity: raise RuntimeError('bound database identity changed')
         # Inject a failure after closure. The handler verifies closure, does not reopen.
         try: raise RuntimeError('synthetic recovery failure')
         except RuntimeError:
