@@ -4,6 +4,7 @@
 This test does not authorize or inspect a candidate installation. Cleanup touches
 only the full container ID created here after rechecking its random label.
 """
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,20 @@ import time
 
 
 DOCKER = ['docker', '--host', 'unix:///var/run/docker.sock']
+
+
+def summarize_sql_error(stderr):
+    # Never log raw stderr: even test tools may echo SQL or environment data.
+    normalized = stderr.lower()
+    categories = (
+        ('connection_refused', 'connection refused'),
+        ('starting_up', 'the database system is starting up'),
+        ('server_closed', 'server closed the connection unexpectedly'),
+        ('connection_terminated', 'terminating connection'),
+    )
+    category = next((name for name, marker in categories if marker in normalized), 'other')
+    digest = hashlib.sha256(stderr.encode('utf-8', errors='replace')).hexdigest()
+    return 'category=' + category + ' stderr_sha256=' + digest
 
 
 def run(args, *, check=True, timeout=30):
@@ -76,16 +91,12 @@ def main():
                 target_entries.append(filesystem[0])
         if target_entries != ['tmpfs']:
             raise RuntimeError('test database filesystem is not uniquely tmpfs')
-    # TCP is available only on the final server, unlike the temporary
-    # socket-only init server used by the official image.
     def sql(statement, check=True):
         verify()
-        result = run(DOCKER + ['exec', '-e', 'PGPASSWORD=fixture-only-password', container, 'psql',
-                               '-X', '-q', '-A', '-t', '-h', '127.0.0.1', '-U', 'postgres',
+        result = run(DOCKER + ['exec', container, 'psql', '-X', '-q', '-A', '-t', '-U', 'postgres',
                                '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', statement], check=False)
         if check and result.returncode:
-            # Only synthetic statements run here; no product credentials or data.
-            raise RuntimeError('isolated PostgreSQL command failed: ' + result.stderr[-1000:])
+            raise RuntimeError('synthetic PostgreSQL failure: ' + summarize_sql_error(result.stderr))
         return result
     try:
         verify()
