@@ -58,9 +58,15 @@ def main():
                 any(not isinstance(m, dict) or m.get('Type') != 'tmpfs' or
                     m.get('Destination') != '/var/lib/postgresql/data' for m in mounts)):
             raise RuntimeError('test database mount configuration is not isolated')
-        filesystem = run(DOCKER + ['exec', container, 'stat', '-f', '-c', '%T', '/var/lib/postgresql/data']).stdout.strip()
-        if filesystem != 'tmpfs':
-            raise RuntimeError('test database filesystem is not tmpfs')
+        mountinfo = run(DOCKER + ['exec', container, 'cat', '/proc/self/mountinfo']).stdout.splitlines()
+        target_entries = []
+        for line in mountinfo:
+            left, separator, right = line.partition(' - ')
+            fields, filesystem = left.split(), right.split()
+            if separator and len(fields) >= 5 and filesystem and fields[4] == '/var/lib/postgresql/data':
+                target_entries.append(filesystem[0])
+        if target_entries != ['tmpfs']:
+            raise RuntimeError('test database filesystem is not uniquely tmpfs')
     def sql(statement, check=True):
         verify()
         return run(DOCKER + ['exec', container, 'psql', '-X', '-q', '-A', '-t', '-U', 'postgres',
