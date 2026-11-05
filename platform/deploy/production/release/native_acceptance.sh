@@ -25,6 +25,10 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 evidence_helper="$script_dir/native_acceptance_evidence.py"
+[[ -f "$evidence_helper" ]]
+python3 "$evidence_helper" clean-host
+export DOCKER_HOST=unix:///var/run/docker.sock
+export COMPOSE_PROJECT_NAME=survey-production
 candidate_root="$(realpath "$CANDIDATE_DIR")"
 identity_path="$(realpath "$CANDIDATE_IDENTITY")"
 evidence_root="$(realpath -m "$EVIDENCE_DIR")"
