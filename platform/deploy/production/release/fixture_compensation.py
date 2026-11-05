@@ -38,7 +38,7 @@ def build_compensation_sql(*, tenant, owner_plan, fixture_plan, principal, conne
 BEGIN; SET LOCAL ROLE platform_app; {scope}
 SELECT pg_advisory_xact_lock(hashtextextended('access.members:{tenant}',0));
 DO $$ DECLARE current_id uuid; current_plan uuid; current_kind text; current_end timestamptz;
- original_kind text; original_end timestamptz; handoff_principal uuid; handoff_connection uuid; BEGIN
+ original_kind text; original_end timestamptz; handoff_principal uuid; handoff_connection uuid; already_revoked boolean; BEGIN
  SELECT kind, ends_at INTO original_kind, original_end FROM subscription
    WHERE tenant_id='{tenant}' AND id='{original_sub}' AND plan_version_id='{owner_plan}';
  IF original_kind IS DISTINCT FROM 'trial' OR original_end IS NULL OR original_end <= now() THEN
@@ -62,13 +62,23 @@ DO $$ DECLARE current_id uuid; current_plan uuid; current_kind text; current_end
        WHERE b.tenant_id='{tenant}' AND b.principal_id='{principal}' AND c.id='{connection}') THEN
      RAISE EXCEPTION 'fixture identity binding mismatch';
    END IF;
+   SELECT EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL)
+      AND EXISTS (SELECT 1 FROM org_connection WHERE tenant_id='{tenant}' AND id='{connection}' AND NOT enabled)
+      AND EXISTS (SELECT 1 FROM access_member WHERE tenant_id='{tenant}' AND actor_id='{principal}' AND status='removed')
+      INTO already_revoked;
    INSERT INTO identity_binding_revocation(tenant_id,principal_id,reason,revoked_by)
      VALUES ('{tenant}','{principal}','admin','ci-cleanup')
      ON CONFLICT (tenant_id,principal_id) WHERE reinstated_at IS NULL DO NOTHING;
    SELECT principal_id,connection_id INTO handoff_principal,handoff_connection
      FROM org_login_handoff_consume('{tenant}','{handoff_hash}','{browser_hash}',now());
-   IF FOUND AND (handoff_principal IS DISTINCT FROM '{principal}'::uuid OR handoff_connection IS DISTINCT FROM '{connection}'::uuid) THEN
-     RAISE EXCEPTION 'fixture handoff identity mismatch';
+   IF FOUND THEN
+     IF handoff_principal IS DISTINCT FROM '{principal}'::uuid OR handoff_connection IS DISTINCT FROM '{connection}'::uuid THEN
+       RAISE EXCEPTION 'fixture handoff identity mismatch';
+     END IF;
+   ELSIF NOT already_revoked THEN
+     -- No row is ambiguous: wrong hashes, expiration, absence or prior use.
+     -- Do not infer which occurred from the runtime role's limited visibility.
+     RAISE EXCEPTION 'fixture handoff state unconfirmed';
    END IF;
    UPDATE org_login_session SET revoked_at=now(),revoke_reason='binding_revoked'
      WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND revoked_at IS NULL;

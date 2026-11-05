@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import time
 import uuid
 import sys
 
@@ -125,6 +126,42 @@ LOCK TABLE subscription IN SHARE ROW EXCLUSIVE MODE; COMMIT;""", database, check
         if denied_lock.returncode == 0 or 'permission denied for table subscription' not in denied_lock.stderr:
             raise RuntimeError('subscription lock privilege changed; concurrency design requires review')
         print('runtime role cannot take physical subscription lock; concurrent compensation remains blocked')
+        # Use two real database sessions to show that the existing member lock
+        # does not serialize an unrelated subscription writer. The concurrent
+        # insertion rolls back and the experiment cannot change final state.
+        lock_app = 'fixture_access_lock_' + secrets.token_hex(12)
+        holder_sql = f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SELECT pg_advisory_xact_lock(hashtextextended('access.members:{tenant}',0)); SELECT pg_sleep(5); ROLLBACK;"""
+        command = ['psql', '-X', '-q', '-h', '127.0.0.1', '-p', port, '-U', 'postgres',
+                   '-d', database, '-v', 'ON_ERROR_STOP=1', '-c', holder_sql]
+        holder = subprocess.Popen(command, env=dict(env, PGAPPNAME=lock_app), stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                observed = execute("SELECT count(*) FROM pg_stat_activity WHERE application_name='" + lock_app +
+                                   "' AND datname='" + database + "' AND wait_event='PgSleep'").stdout.strip()
+                if observed == '1':
+                    break
+                if holder.poll() is not None:
+                    raise RuntimeError('member-lock holder exited before concurrent test')
+                time.sleep(.05)
+            else:
+                raise RuntimeError('member-lock holder was not observed')
+            concurrent_id = str(uuid.uuid4())
+            result = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SET LOCAL lock_timeout='1s';
+INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
+ SELECT '{concurrent_id}','{tenant}','{owner_plan}',kind,now(),ends_at FROM subscription WHERE id='{original_sub}';
+ROLLBACK;""", database, check=False)
+            if result.returncode != 0 or holder.poll() is not None:
+                raise RuntimeError('concurrent subscription observation was ambiguous')
+            if holder.wait(timeout=10) != 0:
+                raise RuntimeError('member-lock holder failed')
+        finally:
+            if holder.poll() is None:
+                holder.kill()
+                holder.wait(timeout=10)
 
         compensate = build_compensation_sql(
             tenant=tenant, owner_plan=owner_plan, fixture_plan=fixture_plan, principal=principal,
@@ -164,7 +201,52 @@ COMMIT;""", database).stdout
         if mismatch_state.strip().splitlines()[-1] != 't':
             raise RuntimeError('mismatched handoff changed database state')
 
-        # A concurrent subscription change must abort the whole compensation,
+        # Missing, expired and already-consumed handoffs are indistinguishable
+        # to the application role. Initial compensation must reject all three.
+        for handoff_state in ('missing', 'expired', 'consumed'):
+            test_hash, test_browser = secrets.token_hex(32), secrets.token_hex(32)
+            if handoff_state != 'missing':
+                expiry = "now()-interval '1 second'" if handoff_state == 'expired' else "now()+interval '1 minute'"
+                execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+INSERT INTO org_login_handoff(handoff_hash,browser_hash,tenant_id,principal_id,connection_id,provider,expires_at)
+ VALUES ('{test_hash}','{test_browser}','{tenant}','{principal}','{connection}','wecom',{expiry});
+COMMIT;""", database)
+                if handoff_state == 'consumed':
+                    execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SELECT * FROM org_login_handoff_consume('{tenant}','{test_hash}','{test_browser}',now()); COMMIT;""", database)
+            ambiguous = build_compensation_sql(
+                tenant=tenant, owner_plan=owner_plan, fixture_plan=fixture_plan, principal=principal,
+                connection=connection, original_sub=original_sub, fixture_sub=fixture_sub,
+                restore_sub=restore_sub, owner_grant=owner_grant,
+                handoff_hash=test_hash, browser_hash=test_browser)
+            if execute(ambiguous, database, check=False).returncode == 0:
+                raise RuntimeError('ambiguous initial handoff accepted: ' + handoff_state)
+        wrong_connection = build_compensation_sql(
+            tenant=tenant, owner_plan=owner_plan, fixture_plan=fixture_plan, principal=principal,
+            connection=str(uuid.uuid4()), original_sub=original_sub, fixture_sub=fixture_sub,
+            restore_sub=restore_sub, owner_grant=owner_grant,
+            handoff_hash=handoff_hash, browser_hash=browser_hash)
+        if execute(wrong_connection, database, check=False).returncode == 0:
+            raise RuntimeError('wrong fixture connection was accepted')
+        wrong_principal = build_compensation_sql(
+            tenant=tenant, owner_plan=owner_plan, fixture_plan=fixture_plan, principal=other_principal,
+            connection=connection, original_sub=original_sub, fixture_sub=fixture_sub,
+            restore_sub=restore_sub, owner_grant=owner_grant,
+            handoff_hash=handoff_hash, browser_hash=browser_hash)
+        if execute(wrong_principal, database, check=False).returncode == 0:
+            raise RuntimeError('wrong fixture principal was accepted')
+        # An injected failure inside compensation must roll back every change.
+        if execute(compensate.replace('COMMIT;', 'SELECT 1/0; COMMIT;'), database, check=False).returncode == 0:
+            raise RuntimeError('injected compensation failure was accepted')
+        unchanged = execute(f"""BEGIN; SET LOCAL ROLE platform_owner; {scope}
+SELECT EXISTS (SELECT 1 FROM org_login_handoff WHERE handoff_hash='{handoff_hash}' AND consumed_at IS NULL)
+ AND NOT EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id IN ('{principal}'::uuid,'{other_principal}'::uuid) AND reinstated_at IS NULL)
+ AND EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{tenant}' AND actor_id='{principal}' AND id='{grant}');
+COMMIT;""", database).stdout
+        if unchanged.strip().splitlines()[-1] != 't':
+            raise RuntimeError('failed compensation was not rolled back')
+
+        # A pre-existing subscription change must abort the whole compensation,
         # without revoking the fixture or overwriting a different plan. The
         # surrounding synthetic transaction is rolled back on psql failure.
         for kind in ('trial', 'cancelled'):
@@ -183,7 +265,10 @@ SELECT (SELECT id='{fixture_sub}' FROM subscription WHERE tenant_id='{tenant}' A
 COMMIT;""", database).stdout
             if state.strip().splitlines()[-1] != 't':
                 raise RuntimeError('failed compensation changed fixture state')
-        execute(compensate, database)
+        # A committed compensation followed by an error models a lost response;
+        # retry must converge safely without duplicating the restore period.
+        if execute(compensate + '\\echo committed-before-error\nSELECT 1/0;', database, check=False).returncode == 0:
+            raise RuntimeError('post-commit response-loss injection did not fail')
         execute(compensate, database)
         verified = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
 SELECT (SELECT id='{restore_sub}' AND plan_version_id='{owner_plan}' AND kind='trial'
