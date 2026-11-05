@@ -100,6 +100,33 @@ def require_clean_native_host() -> None:
             raise EvidenceError('native host already contains production-project resources')
 
 
+def require_no_restore_resources() -> None:
+    """Fail if the isolated restore project left resources; never delete them."""
+    if (os.environ.get('GITHUB_ACTIONS') != 'true' or
+            os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted' or os.environ.get('DOCKER_CONTEXT') or
+            os.environ.get('DOCKER_HOST') != 'unix:///var/run/docker.sock' or
+            os.environ.get('COMPOSE_PROJECT_NAME') != 'survey-production'):
+        raise EvidenceError('restore cleanup host binding is invalid')
+    label_format = '{{.Label "com.docker.compose.project"}}'
+    queries = (
+        (['ps', '-aq', '--filter', 'name=^/survey-restore-'], False),
+        (['ps', '-a', '--format', label_format], True),
+        (['volume', 'ls', '-q', '--filter', 'name=^survey-restore-'], False),
+        (['volume', 'ls', '--format', label_format], True),
+        (['network', 'ls', '-q', '--filter', 'name=^survey-restore-'], False),
+        (['network', 'ls', '--format', label_format], True),
+    )
+    for command, labels in queries:
+        try:
+            result = subprocess.run(['docker', '--host', 'unix:///var/run/docker.sock', *command],
+                                    check=True, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise EvidenceError('restore cleanup inspection failed') from exc
+        lines = result.stdout.splitlines()
+        if (any(line.strip().startswith('survey-restore-') for line in lines) if labels else bool(result.stdout.strip())):
+            raise EvidenceError('isolated restore project resources remain')
+
+
 def _fixture_owner(work: Path, target: Path, marker: Path) -> dict[str, str]:
     """Validate the isolated runner identity before constructing an ownership marker."""
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or
@@ -967,6 +994,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--secrets-dir", type=Path)
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser('clean-host')
+    sub.add_parser('clean-restore')
     for action in ('fixture-owner-create', 'fixture-owner-verify'):
         owner = sub.add_parser(action)
         owner.add_argument('--work', type=Path, required=True)
@@ -1019,6 +1047,8 @@ def main() -> int:
     try:
         if args.command == 'clean-host':
             require_clean_native_host()
+        elif args.command == 'clean-restore':
+            require_no_restore_resources()
         elif args.command == 'fixture-owner-create':
             write_fixture_owner(args.work, args.marker)
         elif args.command == 'fixture-owner-verify':

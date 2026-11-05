@@ -380,6 +380,15 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
         self.assertLess(self.text.index('export DOCKER_HOST=unix:///var/run/docker.sock'), self.text.index('run_ctl install'))
         self.assertLess(self.text.index('export COMPOSE_PROJECT_NAME=survey-production'), self.text.index('run_ctl install'))
 
+    def test_restore_cleanup_check_is_blocking_and_in_exit_handler(self):
+        trap_body = self.text.split('collect_evidence() {', 1)[1].split('trap collect_evidence EXIT', 1)[0]
+        self.assertIn('if ! python3 "$evidence_helper" clean-restore; then', trap_body)
+        self.assertLess(trap_body.index('clean-restore'), trap_body.index('write_summary "$result"'))
+        self.assertIn('restore_clean=false', trap_body)
+        self.assertIn('if [[ "$restore_clean" == true ]]; then', trap_body)
+        after_restore = self.text.split('run_ctl restore "$backup_name"', 1)[1]
+        self.assertLess(after_restore.index('"$evidence_helper" clean-restore'), after_restore.index('doctor-restored'))
+
     def test_script_redacts_diagnostics_and_writes_success_or_failure_summary(self):
         self.assertIn("native_acceptance_evidence.py", self.text)
         self.assertIn("trap collect_evidence EXIT", self.text)
@@ -533,6 +542,40 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         cls.module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = cls.module
         spec.loader.exec_module(cls.module)
+
+    def test_restore_cleanup_check_rejects_orphans_and_query_failures(self):
+        empty = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        env = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+               'COMPOSE_PROJECT_NAME': 'survey-production', 'DOCKER_HOST': 'unix:///var/run/docker.sock'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch.object(self.module.subprocess, 'run', return_value=empty) as run:
+                self.module.require_no_restore_resources()
+                self.assertEqual(6, run.call_count)
+            for index in range(6):
+                responses = [empty] * 6
+                responses[index] = subprocess.CompletedProcess([], 0, stdout='survey-restore-deadbeef\n', stderr='')
+                with self.subTest(query=index), mock.patch.object(self.module.subprocess, 'run', side_effect=responses):
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.require_no_restore_resources()
+            with mock.patch.object(self.module.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'docker')):
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.require_no_restore_resources()
+            for key, value in [('RUNNER_ENVIRONMENT', 'self-hosted'), ('DOCKER_CONTEXT', 'remote'),
+                               ('DOCKER_HOST', 'tcp://remote'), ('COMPOSE_PROJECT_NAME', 'other')]:
+                with self.subTest(binding=key), mock.patch.dict(os.environ, {key: value}):
+                    with mock.patch.object(self.module.subprocess, 'run') as run:
+                        with self.assertRaises(self.module.EvidenceError):
+                            self.module.require_no_restore_resources()
+                        run.assert_not_called()
+
+    def test_restore_cleanup_check_ignores_unrelated_project_labels(self):
+        empty = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        other = subprocess.CompletedProcess([], 0, stdout='unrelated-project\n', stderr='')
+        env = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+               'COMPOSE_PROJECT_NAME': 'survey-production', 'DOCKER_HOST': 'unix:///var/run/docker.sock'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch.object(self.module.subprocess, 'run', side_effect=[empty, other] * 3):
+                self.module.require_no_restore_resources()
 
     def test_fixture_owner_binding_rejects_identity_and_path_changes(self):
         with tempfile.TemporaryDirectory() as temporary:

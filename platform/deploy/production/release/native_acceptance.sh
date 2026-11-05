@@ -29,6 +29,7 @@ evidence_helper="$script_dir/native_acceptance_evidence.py"
 python3 "$evidence_helper" clean-host
 export DOCKER_HOST=unix:///var/run/docker.sock
 export COMPOSE_PROJECT_NAME=survey-production
+python3 "$evidence_helper" clean-restore
 candidate_root="$(realpath "$CANDIDATE_DIR")"
 identity_path="$(realpath "$CANDIDATE_IDENTITY")"
 evidence_root="$(realpath -m "$EVIDENCE_DIR")"
@@ -114,6 +115,7 @@ write_summary() {
 
 collect_evidence() {
   local result=$?
+  local restore_clean=true
   trap - EXIT
   set +e
   sed -i.bak "/# $hosts_marker$/d" /etc/hosts
@@ -139,6 +141,11 @@ collect_evidence() {
       result=5
     fi
   fi
+  if ! python3 "$evidence_helper" clean-restore; then
+    result=5
+    acceptance_status="failed"
+    restore_clean=false
+  fi
   write_summary "$result"
   local summary_result=$?
   if [[ "$summary_result" -ne 0 ]]; then result=5; fi
@@ -149,7 +156,11 @@ collect_evidence() {
     run_ctl uninstall
   fi
   chmod -R a+rX "$evidence_root"
-  rm -rf "$work_root"
+  if [[ "$restore_clean" == true ]]; then
+    rm -rf "$work_root"
+  else
+    printf 'Isolated restore cleanup could not be verified; protected work directory retained until runner disposal.\n' >&2
+  fi
   exit "$result"
 }
 trap collect_evidence EXIT
@@ -314,6 +325,8 @@ fi
 
 last_step="restore-target-survey-restore-project"
 run_ctl restore "$backup_name"
+last_step="verify-restore-cleanup"
+python3 "$evidence_helper" clean-restore
 
 last_step="doctor-restored"
 write_doctor_evidence "doctor-restored"
