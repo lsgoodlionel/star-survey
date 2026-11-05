@@ -140,10 +140,10 @@ sys.exit(supervise_cgroup([sys.executable,'-c',sys.argv[4]], [sys.executable,'-c
                 test_recovery = ready_sleep + '; ' + recovery_done
             process = subprocess.Popen([sys.executable, '-c', launcher, root, str(uid), str(gid),
                                         test_worker, test_recovery], stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             try:
                 wait_for(ready.exists)
-                os.kill(process.pid, signal.SIGTERM)
+                os.killpg(process.pid, signal.SIGTERM)
                 if process.wait(timeout=15) == 0 or not done.exists():
                     raise RuntimeError('SIGTERM recovery behavior invalid for ' + phase)
             finally:
