@@ -56,16 +56,17 @@ def main():
             if self.process.poll() is None:
                 self.process.stdin.close()
                 self.process.wait(timeout=10)
-    query(f"CREATE ROLE {owner} LOGIN PASSWORD 'fixture-only-password'; CREATE ROLE {app} LOGIN PASSWORD 'fixture-only-password'; CREATE ROLE {other} LOGIN PASSWORD 'fixture-only-password';")
+    query(f"CREATE ROLE {owner} LOGIN PASSWORD 'fixture-only-password'; CREATE ROLE {app} LOGIN PASSWORD 'fixture-only-password'; CREATE ROLE {other} LOGIN SUPERUSER PASSWORD 'fixture-only-password';")
     query(f'CREATE DATABASE {db} OWNER {owner}')
     sessions = []
     try:
-        owner_session, app_session, extra_session = Session(owner), Session(app), Session(other)
-        sessions.extend((owner_session, app_session, extra_session))
+        owner_session, app_session, inspector, extra_session = Session(owner), Session(app), Session(app), Session(other)
+        sessions.extend((owner_session, app_session, inspector, extra_session))
         owner_pid = owner_session.sql('SELECT pg_backend_pid();')
         app_pid = app_session.sql('SELECT pg_backend_pid();')
+        inspector_pid = inspector.sql('SELECT pg_backend_pid();')
         extra_pid = extra_session.sql('SELECT pg_backend_pid();')
-        if any(not re.fullmatch(r'[0-9]+', value) for value in (owner_pid, app_pid, extra_pid)):
+        if any(not re.fullmatch(r'[0-9]+', value) for value in (owner_pid, app_pid, inspector_pid, extra_pid)):
             raise RuntimeError('backend identities were invalid')
         owner_session.sql(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS false;')
         for role in (owner, app, 'postgres'):
@@ -75,7 +76,7 @@ def main():
             raw = owner_session.sql("SELECT coalesce(string_agg(pid::text,',' ORDER BY pid),'') FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend';")
             return set(raw.split(',')) if raw else set()
         # Unknown sessions must prevent entry to the compensating transaction.
-        expected = {owner_pid, app_pid}
+        expected = {owner_pid, app_pid, inspector_pid}
         def require_only_expected_clients():
             if client_pids() != expected:
                 raise RuntimeError('unapproved database client')
@@ -94,9 +95,22 @@ def main():
         while time.monotonic() < deadline and client_pids() != expected:
             time.sleep(.05)
         require_only_expected_clients()
+        # A matching PID is insufficient: the known app backend can hold an
+        # open transaction. A second same-role session can inspect its state
+        # without granting pg_read_all_stats to any role.
+        app_session.sql('BEGIN; SELECT 1;')
+        unsafe = inspector.sql("SELECT count(*) FROM pg_stat_activity WHERE pid=" + app_pid +
+                               " AND (state IS DISTINCT FROM 'idle' OR xact_start IS NOT NULL);")
+        if unsafe != '1':
+            raise RuntimeError('open transaction on known backend was not detected')
+        app_session.sql('ROLLBACK;')
+        safe = inspector.sql("SELECT count(*) FROM pg_stat_activity WHERE pid=" + app_pid +
+                             " AND state='idle' AND xact_start IS NULL;")
+        if safe != '1':
+            raise RuntimeError('known app backend did not become idle without a transaction')
         owner_session.sql(f'ALTER DATABASE {db} WITH ALLOW_CONNECTIONS true;')
         query('SELECT 1', app, db)
-        print('database gate rejected new connections and detected an unapproved existing client')
+        print('database gate rejected new connections, unknown superuser and known active transaction')
     finally:
         for session in sessions:
             try:
