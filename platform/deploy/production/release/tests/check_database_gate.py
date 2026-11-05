@@ -113,7 +113,7 @@ def main():
             raise RuntimeError('initial database client identities differ')
         expected_snapshot = {'database_oid': int(db_oid), 'clients': known_clients}
         def snapshot():
-            sql = ("SELECT json_build_object('database_oid',d.oid,'allow_connections',d.datallowconn,"
+            sql = ("SELECT json_build_object('database_oid',d.oid::bigint,'allow_connections',d.datallowconn,"
                    "'clients',(SELECT coalesce(json_agg(json_build_object('pid',pid,'role',usename,"
                    "'database',datname,'started',backend_start::text) ORDER BY pid),'[]'::json) "
                    "FROM pg_stat_activity WHERE backend_type='client backend'),"
