@@ -96,6 +96,19 @@ class FixtureDatabaseTest(unittest.TestCase):
                 module.inspect_fixture_database(Path('/tmp/work'), Path('/tmp/work/owner.json'))
             run.assert_not_called()
 
+    def test_revalidation_fails_when_candidate_or_container_changes(self):
+        release = Path('/tmp/target/releases/0.3.19-rc.1')
+        container_id = 'a' * 64
+        with mock.patch.object(module, 'inspect_fixture_database', return_value=(release, container_id)) as inspect:
+            self.assertEqual(container_id, module.revalidate_fixture_database(Path('/tmp/work'), Path('/tmp/marker'), release, container_id))
+            with self.assertRaises(ValueError):
+                module.revalidate_fixture_database(Path('/tmp/work'), Path('/tmp/marker'), release, 'b' * 64)
+            with self.assertRaises(ValueError):
+                module.revalidate_fixture_database(Path('/tmp/work'), Path('/tmp/marker'), Path('/tmp/other'), container_id)
+            with self.assertRaises(ValueError):
+                module.revalidate_fixture_database(Path('/tmp/work'), Path('/tmp/marker'), release, 'container-name')
+            self.assertEqual(3, inspect.call_count)
+
     def test_container_must_be_running_and_bound_to_exact_candidate_release(self):
         release = '/tmp/survey-native-acceptance.test/primary/releases/0.3.19-rc.1'
         image = 'postgres@sha256:' + 'a' * 64

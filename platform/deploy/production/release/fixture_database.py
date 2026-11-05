@@ -139,3 +139,17 @@ def validate_database_container(container, release, expected_image):
         seen.add(destination)
     if seen != set(binds):
         raise ValueError('isolated database bind set is incomplete')
+
+
+def revalidate_fixture_database(work, marker, expected_release, expected_container_id):
+    """Reinspect immediately before a future operation; this is not an ownership proof.
+
+    Callers must address Docker by the returned full ID, never by service name.
+    A check and a subsequent operation are not atomic with container replacement.
+    """
+    if not isinstance(expected_container_id, str) or re.fullmatch(r'[0-9a-f]{64}', expected_container_id) is None:
+        raise ValueError('fixture database ID is invalid')
+    release, container_id = inspect_fixture_database(work, marker)
+    if release != expected_release or container_id != expected_container_id:
+        raise ValueError('fixture database changed')
+    return container_id
