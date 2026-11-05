@@ -88,3 +88,77 @@ def supervise(worker, recovery, *, verify_containment=None, stop_timeout=5, reco
         signal.signal(signal.SIGTERM, old_term)
         signal.signal(signal.SIGINT, old_int)
     return 0 if worker_ok and recovery_ok and not interrupted else 1
+
+
+def supervise_cgroup(worker, recovery, uid, gid, *, worker_timeout=120, recovery_timeout=120):
+    """Supervise explicitly unprivileged local processes in distinct cgroups.
+
+    This does not authorize a target, contain daemon-created processes, prevent
+    privileged API access, or prove server-side rollback. Never use it for an
+    operation until those properties are independently established.
+    """
+    from fixture_cgroup import CgroupScope
+    interrupted = False
+    worker_ok = False
+    recovery_ok = False
+    old_term, old_int = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)
+
+    def interrupt(_signum, _frame):
+        nonlocal interrupted
+        interrupted = True
+
+    def run(scope, command, timeout, cancel_on_signal):
+        process = scope.spawn(command)
+        deadline = time.monotonic() + timeout
+        while process.poll() is None and time.monotonic() < deadline:
+            if cancel_on_signal and interrupted:
+                break
+            time.sleep(.05)
+        # A child or detached descendant still present makes this step fail,
+        # but recovery can proceed only after the kernel scope is empty.
+        success = process.poll() == 0 and scope.empty()
+        if not scope.empty():
+            scope.kill_and_wait()
+        process.wait(timeout=5)
+        if not scope.empty():
+            raise RuntimeError('scope did not become empty')
+        return success
+
+    signal.signal(signal.SIGTERM, interrupt)
+    signal.signal(signal.SIGINT, interrupt)
+    worker_scope = recovery_scope = None
+    try:
+        worker_scope = CgroupScope(uid, gid)
+        try:
+            worker_ok = run(worker_scope, worker, worker_timeout, True)
+        except BaseException:
+            # An ambiguous worker state must not cause recovery to begin.
+            if not worker_scope.empty():
+                return 1
+        if not worker_scope.empty():
+            return 1
+        worker_scope.close()
+        worker_scope = None
+        recovery_scope = CgroupScope(uid, gid)
+        try:
+            recovery_ok = run(recovery_scope, recovery, recovery_timeout, False)
+        except BaseException:
+            recovery_ok = False
+        if not recovery_scope.empty():
+            return 1
+        recovery_scope.close()
+        recovery_scope = None
+    except BaseException:
+        return 1
+    finally:
+        # Never delete a group whose emptiness cannot be proved.
+        for scope in (worker_scope, recovery_scope):
+            if scope is not None:
+                try:
+                    if scope.empty():
+                        scope.close()
+                except BaseException:
+                    pass
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGINT, old_int)
+    return 0 if worker_ok and recovery_ok and not interrupted else 1

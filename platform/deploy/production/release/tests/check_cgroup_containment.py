@@ -88,6 +88,21 @@ time.sleep(60)
         wait_for(lambda: not populated(group))
         group.rmdir()
 
+    # Exercise the actual supervisor integration with only synthetic programs.
+    # The worker leaves a detached child; the supervisor must kill the scope,
+    # invoke the independently scoped recovery, and still return failure.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from fixture_supervisor import supervise_cgroup
+    with tempfile.TemporaryDirectory(prefix='survey-fixture-check-') as tmp:
+        os.chown(tmp, uid, gid)
+        recovered = Path(tmp) / 'recovered'
+        worker = "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True)"
+        recovery = f"from pathlib import Path; Path({str(recovered)!r}).touch()"
+        result = supervise_cgroup([sys.executable, '-c', worker], [sys.executable, '-c', recovery], uid, gid)
+        if result == 0 or not recovered.exists():
+            raise RuntimeError('supervisor did not contain worker before recovery')
+        print('supervisor contained detached descendant before isolated recovery')
+
 
 if __name__ == '__main__':
     main()
