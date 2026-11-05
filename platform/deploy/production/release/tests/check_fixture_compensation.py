@@ -139,26 +139,32 @@ COMMIT;
         # A concurrent subscription change must abort the whole compensation,
         # without revoking the fixture or overwriting a different plan. The
         # surrounding synthetic transaction is rolled back on psql failure.
-        other_sub = str(uuid.uuid4())
-        conflict = f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+        for kind in ('trial', 'cancelled'):
+            other_sub = str(uuid.uuid4())
+            conflict = f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
 INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
- SELECT '{other_sub}','{tenant}','{fixture_plan}',kind,now(),ends_at FROM subscription WHERE id='{original_sub}';
+ SELECT '{other_sub}','{tenant}','{fixture_plan}','{kind}',now(),
+        CASE WHEN '{kind}'='cancelled' THEN now() ELSE ends_at END
+ FROM subscription WHERE id='{original_sub}';
 """ + compensate
-        if execute(conflict, database, check=False).returncode == 0:
-            raise RuntimeError('concurrent subscription change was accepted')
-        state = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
-SELECT (SELECT plan_version_id='{fixture_plan}' FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1)
+            if execute(conflict, database, check=False).returncode == 0:
+                raise RuntimeError('concurrent same-plan subscription change was accepted')
+            state = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SELECT (SELECT id='{fixture_sub}' FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1)
  AND NOT EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL);
 COMMIT;""", database).stdout
-        if state.strip().splitlines()[-1] != 't':
-            raise RuntimeError('failed compensation changed fixture state')
+            if state.strip().splitlines()[-1] != 't':
+                raise RuntimeError('failed compensation changed fixture state')
         execute(compensate, database)
         execute(compensate, database)
         verified = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
 SELECT (SELECT id='{restore_sub}' AND plan_version_id='{owner_plan}' AND kind='trial'
         AND ends_at=(SELECT ends_at FROM subscription WHERE id='{original_sub}')
         FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1)
+ AND (SELECT count(*)=3 FROM subscription WHERE tenant_id='{tenant}')
  AND EXISTS (SELECT 1 FROM subscription WHERE id='{original_sub}' AND tenant_id='{tenant}' AND plan_version_id='{owner_plan}' AND kind='trial')
+ AND EXISTS (SELECT 1 FROM subscription WHERE id='{fixture_sub}' AND tenant_id='{tenant}' AND plan_version_id='{fixture_plan}' AND kind='trial'
+             AND ends_at=(SELECT ends_at FROM subscription WHERE id='{original_sub}'))
  AND EXISTS (SELECT 1 FROM access_member m JOIN access_grant g ON g.tenant_id=m.tenant_id AND g.actor_id=m.actor_id
              WHERE m.tenant_id='{tenant}' AND m.actor_id='production-probe-owner' AND m.status='active' AND m.uses_seat
              AND g.id='{owner_grant}' AND g.role_code='tenant_owner' AND g.resource_id IS NULL AND g.expires_at IS NULL)

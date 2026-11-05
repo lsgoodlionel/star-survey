@@ -11,6 +11,7 @@ on:
       - 'platform/deploy/production/release/tests/check_pg_quiescence.py'
       - 'platform/deploy/production/release/tests/check_pg_handoff_race.py'
       - 'platform/deploy/production/release/tests/check_fixture_compensation.py'
+      - 'platform/services/business/src/main/resources/db/migration/**'
   workflow_dispatch:
 
 permissions:
