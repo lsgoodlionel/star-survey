@@ -45,7 +45,7 @@ def main():
             migrations.append(matches[0].read_text())
         execute('SET ROLE platform_owner;\n' + '\n'.join(migrations), database)
         tenant, other_tenant, owner_plan, fixture_plan, principal, connection = (str(uuid.uuid4()) for _ in range(6))
-        original_sub, fixture_sub, restore_sub, grant, session, owner_grant = (str(uuid.uuid4()) for _ in range(6))
+        original_sub, fixture_sub, restore_sub, grant, session, owner_grant, project, project_grant = (str(uuid.uuid4()) for _ in range(8))
         handoff_hash, browser_hash = secrets.token_hex(32), secrets.token_hex(32)
         scope = "SELECT set_config('app.tenant_id','" + tenant + "',true);"
         setup = f"""
@@ -81,6 +81,11 @@ INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by)
  VALUES ('{tenant}','{principal}','active',true,'ci');
 INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,expires_at)
  VALUES ('{tenant}','{grant}','{principal}','org_admin',NULL,'ci',now()+interval '15 minutes');
+-- Model the project-level creator grant generated during a real author journey.
+INSERT INTO access_resource(tenant_id,id,kind,parent_id,name)
+ VALUES ('{tenant}','{project}','project',NULL,'CI test project');
+INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,expires_at)
+ VALUES ('{tenant}','{project_grant}','{principal}','project_manager','{project}','ci',now()+interval '15 minutes');
 INSERT INTO org_login_handoff(handoff_hash,browser_hash,tenant_id,principal_id,connection_id,provider,expires_at)
  VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}','wecom',now()+interval '1 minute');
 INSERT INTO org_login_session(id,tenant_id,principal_id,connection_id,expires_at)
@@ -189,7 +194,7 @@ DO $$ DECLARE current_id uuid; current_plan uuid; current_kind text; current_end
    PERFORM * FROM org_login_handoff_consume('{tenant}','{handoff_hash}','{browser_hash}',now());
    UPDATE org_login_session SET revoked_at=now(),revoke_reason='binding_revoked'
      WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND revoked_at IS NULL;
-   DELETE FROM access_grant WHERE tenant_id='{tenant}' AND id='{grant}' AND actor_id='{principal}';
+   DELETE FROM access_grant WHERE tenant_id='{tenant}' AND actor_id='{principal}';
    UPDATE org_connection SET enabled=false,updated_at=now() WHERE tenant_id='{tenant}' AND id='{connection}';
    UPDATE access_member SET status='removed',updated_at=now()
      WHERE tenant_id='{tenant}' AND actor_id='{principal}';
@@ -233,7 +238,7 @@ SELECT (SELECT id='{restore_sub}' AND plan_version_id='{owner_plan}' AND kind='t
  AND EXISTS (SELECT 1 FROM access_member m JOIN access_grant g ON g.tenant_id=m.tenant_id AND g.actor_id=m.actor_id
              WHERE m.tenant_id='{tenant}' AND m.actor_id='production-probe-owner' AND m.status='active' AND m.uses_seat
              AND g.id='{owner_grant}' AND g.role_code='tenant_owner' AND g.resource_id IS NULL AND g.expires_at IS NULL)
- AND NOT EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{tenant}' AND id='{grant}')
+ AND NOT EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{tenant}' AND actor_id='{principal}')
  AND EXISTS (SELECT 1 FROM org_connection WHERE tenant_id='{tenant}' AND id='{connection}' AND NOT enabled)
  AND (SELECT count(*)=1 FROM access_member WHERE tenant_id='{tenant}' AND uses_seat AND status<>'removed')
  AND EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL)
