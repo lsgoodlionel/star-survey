@@ -97,8 +97,20 @@ time.sleep(60)
     with tempfile.TemporaryDirectory(prefix='survey-fixture-check-') as tmp:
         os.chown(tmp, uid, gid)
         recovered = Path(tmp) / 'recovered'
-        worker = "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True)"
-        recovery = f"from pathlib import Path; Path({str(recovered)!r}).touch()"
+        descendant_pid = Path(tmp) / 'descendant.pid'
+        descendant = f"import os,time; from pathlib import Path; Path({str(descendant_pid)!r}).write_text(str(os.getpid())); time.sleep(60)"
+        worker = ("import subprocess,sys,time; from pathlib import Path; "
+                  "subprocess.Popen([sys.executable,'-c'," + repr(descendant) + "],start_new_session=True); "
+                  f"p=Path({str(descendant_pid)!r}); "
+                  "deadline=time.monotonic()+5; "
+                  "exec(\"while not p.exists() and time.monotonic()<deadline:\\n time.sleep(.02)\"); "
+                  "assert p.exists()")
+        # The independently started recovery refuses to proceed if the recorded
+        # descendant is still running; a zombie is already stopped and inert.
+        recovery = (f"from pathlib import Path; p=Path('/proc')/Path({str(descendant_pid)!r}).read_text()/'stat'; "
+                    "state=p.read_text().rsplit(')',1)[1].strip().split()[0] if p.exists() else 'gone'; "
+                    "assert state in ('Z','gone'); "
+                    f"Path({str(recovered)!r}).touch()")
         result = supervise_cgroup([sys.executable, '-c', worker], [sys.executable, '-c', recovery], uid, gid)
         if result == 0 or not recovered.exists():
             raise RuntimeError('supervisor did not contain worker before recovery')
@@ -106,6 +118,7 @@ time.sleep(60)
 
         # Exercise the cgroup entry point itself, using synthetic processes.
         recovered.unlink()
+        recovery = f"from pathlib import Path; Path({str(recovered)!r}).touch()"
         sleeper = "import time; time.sleep(60)"
         result = supervise_cgroup([sys.executable, '-c', sleeper], [sys.executable, '-c', recovery],
                                   uid, gid, worker_timeout=.2)
