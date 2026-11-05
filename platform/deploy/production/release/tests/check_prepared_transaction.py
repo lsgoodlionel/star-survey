@@ -30,6 +30,34 @@ def summarize_sql_error(stderr):
     return 'category=' + category + ' stderr_sha256=' + digest
 
 
+def summarize_container_diagnostics(inspect_output, logs):
+    """Report fixed state fields and log marker counts, never raw Docker output."""
+    try:
+        objects = json.loads(inspect_output)
+        if not isinstance(objects, list) or len(objects) != 1:
+            raise ValueError('ambiguous inspection')
+        item = objects[0]
+        state = item['State']
+        status = state['Status']
+        if status not in {'created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead'}:
+            raise ValueError('unknown state')
+        restart_count, exit_code, oom = item['RestartCount'], state['ExitCode'], state['OOMKilled']
+        if (type(restart_count) is not int or restart_count < 0 or type(exit_code) is not int or
+                type(oom) is not bool):
+            raise ValueError('invalid state')
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return 'container_state=unavailable'
+    lower = logs.lower()
+    markers = {
+        'ready': 'database system is ready to accept connections',
+        'shutdown': 'database system is shut down',
+        'startup': 'starting postgresql',
+    }
+    counts = ' '.join(name + '=' + str(lower.count(marker)) for name, marker in markers.items())
+    return (f'container_state={status} restarts={restart_count} exit_code={exit_code} '
+            f'oom={str(oom).lower()} {counts}')
+
+
 def run(args, *, check=True, timeout=30):
     result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, timeout=timeout)
@@ -96,7 +124,10 @@ def main():
         result = run(DOCKER + ['exec', container, 'psql', '-X', '-q', '-A', '-t', '-U', 'postgres',
                                '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', statement], check=False)
         if check and result.returncode:
-            raise RuntimeError('synthetic PostgreSQL failure: ' + summarize_sql_error(result.stderr))
+            inspection = run(DOCKER + ['inspect', '--type', 'container', container], check=False)
+            logs = run(DOCKER + ['logs', container], check=False)
+            diagnostic = summarize_container_diagnostics(inspection.stdout, logs.stdout + logs.stderr)
+            raise RuntimeError('synthetic PostgreSQL failure: ' + summarize_sql_error(result.stderr) + ' ' + diagnostic)
         return result
     try:
         verify()

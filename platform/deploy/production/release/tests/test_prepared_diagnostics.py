@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import json
 
 path = Path(__file__).with_name('check_prepared_transaction.py')
 spec = importlib.util.spec_from_file_location('prepared_test', path)
@@ -9,6 +10,19 @@ spec.loader.exec_module(module)
 
 
 class PreparedDiagnosticsTest(unittest.TestCase):
+    def test_container_diagnostics_reports_only_fixed_fields_and_counts(self):
+        secret = 'PRIVATE_FIXTURE_SENTINEL'
+        inspect = json.dumps([{'State': {'Status': 'running', 'ExitCode': 0, 'OOMKilled': False},
+                               'RestartCount': 0, 'secret': secret}])
+        result = module.summarize_container_diagnostics(inspect, secret + '\n' +
+            'database system is ready to accept connections\ndatabase system is shut down')
+        self.assertEqual(result, 'container_state=running restarts=0 exit_code=0 oom=false ready=1 shutdown=1 startup=0')
+        self.assertNotIn(secret, result)
+        self.assertEqual(module.summarize_container_diagnostics(inspect.replace('running', secret), secret),
+                         'container_state=unavailable')
+        self.assertEqual(module.summarize_container_diagnostics('not json ' + secret, secret),
+                         'container_state=unavailable')
+
     def test_failure_classification_never_exposes_raw_data(self):
         secret = 'PRIVATE_FIXTURE_SENTINEL'
         for stderr, category in ((f'connection refused {secret}', 'connection_refused'),
