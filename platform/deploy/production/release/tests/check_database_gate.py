@@ -193,7 +193,7 @@ def main():
             raise RuntimeError('open transaction on known backend was not detected')
         try:
             require_quiescent()
-        except RuntimeError:
+        except (RuntimeError, ValueError):
             # A rejected recovery check must not open the synthetic database.
             if cluster_inspector.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
                 raise RuntimeError('gate reopened after rejected recovery check')
@@ -213,7 +213,7 @@ def main():
         app_session.sql('BEGIN; SELECT 1;')
         try:
             require_quiescent()
-        except RuntimeError:
+        except (RuntimeError, ValueError):
             if cluster_inspector.sql('SELECT NOT datallowconn FROM pg_database WHERE oid=' + db_oid + ';') != 't':
                 raise RuntimeError('gate reopened after stale snapshot rejection')
         else:
