@@ -71,6 +71,32 @@ class EvidenceError(ValueError):
     pass
 
 
+def require_clean_native_host() -> None:
+    """Reject pre-existing project resources before a hosted native test starts.
+
+    This is a preflight only: it does not authorize or perform deletion.
+    """
+    if (os.environ.get('GITHUB_ACTIONS') != 'true' or
+            os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted' or os.environ.get('DOCKER_CONTEXT')):
+        raise EvidenceError('native acceptance requires a GitHub-hosted runner')
+    commands = (
+        ['ps', '-aq', '--filter', 'label=com.docker.compose.project=survey-production'],
+        ['ps', '-aq', '--filter', 'name=^/survey-production-'],
+        ['volume', 'ls', '-q', '--filter', 'label=com.docker.compose.project=survey-production'],
+        ['volume', 'ls', '-q', '--filter', 'name=^survey-production_'],
+        ['network', 'ls', '-q', '--filter', 'label=com.docker.compose.project=survey-production'],
+        ['network', 'ls', '-q', '--filter', 'name=^survey-production_'],
+    )
+    for command in commands:
+        try:
+            result = subprocess.run(['docker', '--host', 'unix:///var/run/docker.sock', *command],
+                                    check=True, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise EvidenceError('native host resource preflight failed') from exc
+        if result.stdout.strip():
+            raise EvidenceError('native host already contains production-project resources')
+
+
 def normalized_key(value: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
@@ -872,6 +898,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--secrets-dir", type=Path)
     sub = result.add_subparsers(dest="command", required=True)
+    sub.add_parser('clean-host')
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--input", type=Path, required=True)
     doctor.add_argument("--output", type=Path, required=True)
@@ -918,7 +945,9 @@ def main() -> int:
     args = parser().parse_args()
     secrets = load_secret_values(args.secrets_dir)
     try:
-        if args.command == "doctor":
+        if args.command == 'clean-host':
+            require_clean_native_host()
+        elif args.command == "doctor":
             write_doctor_evidence(load_json(args.input), args.output, secrets)
         elif args.command == "services":
             write_service_evidence(args.input.read_text(encoding="utf-8"), args.output, secrets)

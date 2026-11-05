@@ -375,6 +375,10 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
         self.assertIn("survey-restore-", self.text)
         self.assertIn("BASELINE_MODE", self.text)
 
+    def test_clean_host_check_precedes_any_test_installation(self):
+        self.assertLess(self.text.index('"$evidence_helper" clean-host'), self.text.index('work_root='))
+        self.assertLess(self.text.index('export DOCKER_HOST=unix:///var/run/docker.sock'), self.text.index('run_ctl install'))
+
     def test_script_redacts_diagnostics_and_writes_success_or_failure_summary(self):
         self.assertIn("native_acceptance_evidence.py", self.text)
         self.assertIn("trap collect_evidence EXIT", self.text)
@@ -528,6 +532,41 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         cls.module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = cls.module
         spec.loader.exec_module(cls.module)
+
+    def test_clean_host_guard_fails_closed_on_nonhosted_or_existing_resources(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        with mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted'}):
+            with mock.patch.object(self.module.subprocess, 'run', return_value=completed) as run:
+                self.module.require_clean_native_host()
+                self.assertEqual(6, run.call_count)
+                for call in run.call_args_list:
+                    self.assertEqual(['docker', '--host', 'unix:///var/run/docker.sock'], call.args[0][:3])
+                    self.assertTrue(call.kwargs['check'])
+                commands = [call.args[0][3:] for call in run.call_args_list]
+                self.assertEqual([
+                    ['ps', '-aq', '--filter', 'label=com.docker.compose.project=survey-production'],
+                    ['ps', '-aq', '--filter', 'name=^/survey-production-'],
+                    ['volume', 'ls', '-q', '--filter', 'label=com.docker.compose.project=survey-production'],
+                    ['volume', 'ls', '-q', '--filter', 'name=^survey-production_'],
+                    ['network', 'ls', '-q', '--filter', 'label=com.docker.compose.project=survey-production'],
+                    ['network', 'ls', '-q', '--filter', 'name=^survey-production_'],
+                ], commands)
+            for position in range(6):
+                responses = [completed] * 6
+                responses[position] = subprocess.CompletedProcess([], 0, stdout='existing-resource\n', stderr='')
+                with self.subTest(position=position), mock.patch.object(self.module.subprocess, 'run', side_effect=responses):
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.require_clean_native_host()
+            with mock.patch.object(self.module.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'docker')):
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.require_clean_native_host()
+        with mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'self-hosted'}):
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.require_clean_native_host()
+        with mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+                                          'DOCKER_CONTEXT': 'remote'}):
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.require_clean_native_host()
 
     def test_engine_health_evidence_never_copies_probe_output(self):
         with tempfile.TemporaryDirectory() as temporary:
