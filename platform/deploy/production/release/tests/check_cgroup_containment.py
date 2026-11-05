@@ -49,8 +49,7 @@ def main():
 
         # Verify that setsid does not leave the kernel scope and that the
         # unprivileged process cannot move itself into the host root cgroup.
-        program = '''import os, sys, time
-os.setsid()
+        grandchild = """import os, sys, time
 try:
     with open('/sys/fs/cgroup/cgroup.procs', 'w') as f:
         f.write(str(os.getpid()))
@@ -60,7 +59,12 @@ else:
     print('escape-allowed', flush=True)
     sys.exit(2)
 time.sleep(60)
-'''
+"""
+        # The direct process exits after starting a new-session descendant.
+        # The scope must remain populated after the direct process has exited.
+        program = ("import subprocess, sys; "
+                   "subprocess.Popen([sys.executable, '-c', " + repr(grandchild) +
+                   "], start_new_session=True)")
         child = subprocess.Popen([sys.executable, '-c', program], preexec_fn=enter_and_drop,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.DEVNULL, text=True)
@@ -68,11 +72,12 @@ time.sleep(60)
             selector.register(child.stdout, selectors.EVENT_READ)
             if not selector.select(timeout=10) or child.stdout.readline().strip() != 'escape-denied':
                 raise RuntimeError('scope escape was not denied')
+        if child.wait(timeout=10) != 0:
+            raise RuntimeError('direct process did not exit cleanly')
         wait_for(lambda: populated(group))
         (group / 'cgroup.kill').write_text('1')
-        child.wait(timeout=10)
         wait_for(lambda: not populated(group))
-        print('isolated cgroup retained setsid process, denied migration, and became empty')
+        print('isolated cgroup retained setsid descendant after parent exit, denied migration, and became empty')
     finally:
         # Only this newly created, randomly named cgroup is touched. Never
         # recursively kill or remove any other group.
