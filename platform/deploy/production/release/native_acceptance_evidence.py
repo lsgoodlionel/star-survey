@@ -79,6 +79,8 @@ def require_clean_native_host() -> None:
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or
             os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted' or os.environ.get('DOCKER_CONTEXT')):
         raise EvidenceError('native acceptance requires a GitHub-hosted runner')
+    if os.environ.get('COMPOSE_PROJECT_NAME') not in (None, 'survey-production'):
+        raise EvidenceError('native acceptance rejects a Compose project override')
     commands = (
         ['ps', '-aq', '--filter', 'label=com.docker.compose.project=survey-production'],
         ['ps', '-aq', '--filter', 'name=^/survey-production-'],

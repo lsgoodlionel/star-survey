@@ -378,6 +378,7 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
     def test_clean_host_check_precedes_any_test_installation(self):
         self.assertLess(self.text.index('"$evidence_helper" clean-host'), self.text.index('work_root='))
         self.assertLess(self.text.index('export DOCKER_HOST=unix:///var/run/docker.sock'), self.text.index('run_ctl install'))
+        self.assertLess(self.text.index('export COMPOSE_PROJECT_NAME=survey-production'), self.text.index('run_ctl install'))
 
     def test_script_redacts_diagnostics_and_writes_success_or_failure_summary(self):
         self.assertIn("native_acceptance_evidence.py", self.text)
@@ -567,6 +568,25 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                                           'DOCKER_CONTEXT': 'remote'}):
             with self.assertRaises(self.module.EvidenceError):
                 self.module.require_clean_native_host()
+        for override in ('other-project', ''):
+            with self.subTest(project_override=override), mock.patch.dict(os.environ,
+                    {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+                     'COMPOSE_PROJECT_NAME': override}, clear=True):
+                with mock.patch.object(self.module.subprocess, 'run', return_value=completed) as run:
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.require_clean_native_host()
+                    run.assert_not_called()
+
+    def test_fixed_project_environment_overrides_env_file_and_compose_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / '.env').write_text('COMPOSE_PROJECT_NAME=other-project\n')
+            (root / 'compose.yml').write_text('name: another-project\nservices:\n  fixture:\n    image: fixture:test\n')
+            result = subprocess.run(['docker', 'compose', '--env-file', str(root / '.env'), '-f',
+                                     str(root / 'compose.yml'), 'config', '--format', 'json'],
+                                    env={'PATH': os.environ['PATH'], 'COMPOSE_PROJECT_NAME': 'survey-production'},
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual('survey-production', json.loads(result.stdout)['name'])
 
     def test_engine_health_evidence_never_copies_probe_output(self):
         with tempfile.TemporaryDirectory() as temporary:
