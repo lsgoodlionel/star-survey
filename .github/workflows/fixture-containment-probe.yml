@@ -12,6 +12,7 @@ on:
       - 'platform/deploy/production/release/tests/check_pg_handoff_race.py'
       - 'platform/deploy/production/release/tests/check_fixture_compensation.py'
       - 'platform/deploy/production/release/tests/check_connection_freeze.py'
+      - 'platform/deploy/production/release/tests/check_database_gate.py'
       - 'platform/services/business/src/main/resources/db/migration/**'
   workflow_dispatch:
 
@@ -76,3 +77,7 @@ jobs:
         env:
           FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
         run: python3 platform/deploy/production/release/tests/check_connection_freeze.py
+      - name: Test database-wide gate and unknown-session rejection
+        env:
+          FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
+        run: python3 platform/deploy/production/release/tests/check_database_gate.py
