@@ -33,7 +33,7 @@ def main():
     class Session:
         def __init__(self, user):
             self.process = subprocess.Popen(command(user, db), env=env, stdin=subprocess.PIPE,
-                                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.buffer = b''
         def sql(self, statement):
             self.process.stdin.write((statement + '\n\\echo END_FIXTURE_QUERY\n').encode())
@@ -46,7 +46,8 @@ def main():
                     raise RuntimeError('persistent session did not respond')
                 chunk = os.read(self.process.stdout.fileno(), 4096)
                 if not chunk:
-                    raise RuntimeError('persistent session ended unexpectedly')
+                    detail = self.process.stderr.read(1200).decode('utf-8', errors='replace')
+                    raise RuntimeError('persistent session ended unexpectedly: ' + detail)
                 self.buffer += chunk
                 if len(self.buffer) > 8192:
                     raise RuntimeError('persistent session returned excessive data')
