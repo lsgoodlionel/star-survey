@@ -44,7 +44,7 @@ def main():
             migrations.append(matches[0].read_text())
         execute('SET ROLE platform_owner;\n' + '\n'.join(migrations), database)
         tenant, other_tenant, owner_plan, fixture_plan, principal, connection = (str(uuid.uuid4()) for _ in range(6))
-        original_sub, fixture_sub, restore_sub, grant, session, owner_grant, project, project_grant = (str(uuid.uuid4()) for _ in range(8))
+        original_sub, fixture_sub, restore_sub, grant, session, owner_grant, project, project_grant, other_grant = (str(uuid.uuid4()) for _ in range(9))
         handoff_hash, browser_hash = secrets.token_hex(32), secrets.token_hex(32)
         scope = "SELECT set_config('app.tenant_id','" + tenant + "',true);"
         setup = f"""
@@ -62,6 +62,11 @@ INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by)
  VALUES ('{tenant}','production-probe-owner','active',true,'ci');
 INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by)
  VALUES ('{tenant}','{owner_grant}','production-probe-owner','tenant_owner',NULL,'ci');
+SELECT set_config('app.tenant_id','{other_tenant}',true);
+INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by)
+ VALUES ('{other_tenant}','{principal}','active',true,'ci');
+INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,expires_at)
+ VALUES ('{other_tenant}','{other_grant}','{principal}','org_admin',NULL,'ci',now()+interval '15 minutes');
 COMMIT;
 """
         execute(setup, database)
@@ -158,6 +163,14 @@ DO $$ DECLARE current_id uuid; current_plan uuid; current_kind text; current_end
 END $$;
 COMMIT;
 """
+        # Prove the author role is tenant-wide and expires; the later cleanup
+        # must remove it alongside any project-specific creator grants.
+        author = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SELECT count(*) FROM access_grant WHERE tenant_id='{tenant}' AND id='{grant}' AND actor_id='{principal}'
+ AND role_code='org_admin' AND resource_id IS NULL AND expires_at>now() AND expires_at<=now()+interval '15 minutes';
+COMMIT;""", database).stdout
+        if author.strip().splitlines()[-1] != '1':
+            raise RuntimeError('fixture author role is not constrained as expected')
         # A concurrent subscription change must abort the whole compensation,
         # without revoking the fixture or overwriting a different plan. The
         # surrounding synthetic transaction is rolled back on psql failure.
@@ -199,6 +212,14 @@ SELECT (SELECT id='{restore_sub}' AND plan_version_id='{owner_plan}' AND kind='t
 COMMIT;""", database).stdout
         if verified.strip().splitlines()[-1] != 't':
             raise RuntimeError('compensation state verification failed')
+        # An identical actor string in another tenant must remain untouched.
+        other_scope = "SELECT set_config('app.tenant_id','" + other_tenant + "',true);"
+        other_state = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {other_scope}
+SELECT EXISTS (SELECT 1 FROM access_member WHERE tenant_id='{other_tenant}' AND actor_id='{principal}' AND status='active')
+ AND EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{other_tenant}' AND actor_id='{principal}' AND id='{other_grant}');
+COMMIT;""", database).stdout
+        if other_state.strip().splitlines()[-1] != 't':
+            raise RuntimeError('compensation touched another tenant')
         print('actual migrated schema and platform_app role: rollback, ambiguous commit and idempotent compensation verified')
     finally:
         execute('DROP DATABASE ' + database + ' WITH (FORCE)')
