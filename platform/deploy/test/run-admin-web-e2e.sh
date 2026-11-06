@@ -67,7 +67,18 @@ cleanup_run() {
     return 0
   fi
   if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
-    "${COMPOSE[@]}" --profile relay-test down -v --remove-orphans >/dev/null 2>&1 || return 1
+    if ! "${COMPOSE[@]}" --profile relay-test down -v --remove-orphans >/dev/null 2>&1; then
+      echo "relay diagnostic cleanup: compose down failed" >&2
+      return 1
+    fi
+    local remaining
+    remaining="$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || return 1
+    [[ -z "$remaining" ]] || { echo "relay diagnostic cleanup: containers remain" >&2; return 1; }
+    remaining="$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || return 1
+    [[ -z "$remaining" ]] || { echo "relay diagnostic cleanup: volumes remain" >&2; return 1; }
+    remaining="$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || return 1
+    [[ -z "$remaining" ]] || { echo "relay diagnostic cleanup: networks remain" >&2; return 1; }
+    echo "relay diagnostic cleanup: project resources absent" >&2
   else
     "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
   fi
@@ -262,6 +273,15 @@ PY
     ENGINE_RELAY_PID=$!
   fi
   if ! run_playwright; then
+    if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+      local event_counts
+      event_counts="$(db_query "SELECT COUNT(*), SUM(CASE WHEN delivered_at IS NULL THEN 1 ELSE 0 END), SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) FROM lime_mjyplatformbridge_event_log" 2>/dev/null)" || event_counts="unavailable"
+      if [[ "$event_counts" =~ ^[0-9[:space:]\|NULL]+$ ]]; then
+        echo "relay diagnostic event counts (total/pending/delivered): $event_counts" >&2
+      else
+        echo "relay diagnostic event counts: unavailable" >&2
+      fi
+    fi
     stop_engine_relay
     export_failure_artifacts || true
     sanitize_test_artifacts true || true
@@ -269,8 +289,14 @@ PY
   fi
   stop_engine_relay
   [[ -f "$ADMIN_WEB_RESULT_FILE" ]] || fail "Playwright did not write the redacted result"
-  export_failure_artifacts
-  sanitize_test_artifacts false
+  if ! export_failure_artifacts; then
+    echo "relay diagnostic: sanitized evidence export failed" >&2
+    return 1
+  fi
+  if ! sanitize_test_artifacts false; then
+    echo "relay diagnostic: artifact sanitization failed" >&2
+    return 1
+  fi
 }
 
 verify_and_archive_run_root() {
