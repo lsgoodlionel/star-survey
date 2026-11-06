@@ -11,7 +11,7 @@ compiled=compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec')
 
 class StopActionTest(unittest.TestCase):
     def run_scenario(self, failure):
-        state={'gates':{'platform':True,'postgres':True,'template1':True},'running':False,'restart':'no','started':'old','failure':failure,'emergency':False}
+        state={'gates':{'platform':True,'postgres':True,'template1':True},'running':False,'restart':'no','started':'old','failure':failure,'emergency':False,'messages':[]}
         identities=[{'pid':i,'started':'s','database_oid':i,'database':'postgres'} for i in (1,2,3)]
         class Session:
             def __init__(self,index): self.identity=identities[index]; self.index=index
@@ -22,10 +22,13 @@ class StopActionTest(unittest.TestCase):
                         state['gates'][database]=True
                         if state['failure']=='open': raise RuntimeError('ambiguous open')
                     else:
+                        if self.index==2 and failure=='start_emergency': raise RuntimeError('emergency unavailable')
                         state['gates'][database]=False
                         if self.index==2: state['emergency']=True
                     return ''
-                if 'json_agg' in sql: return json.dumps(identities)
+                if 'json_agg' in sql:
+                    extra = [{'pid':99,'started':'s','database_oid':99,'database':'postgres'}] if failure=='unknown' else []
+                    return json.dumps(identities + extra)
                 if 'array_agg' in sql: return 't' if all(state['gates'].values()) else 'f'
                 if 'count(*) FROM pg_database' in sql: return str(sum(state['gates'].values()))
                 if 'pg_prepared_xacts' in sql: return '0'
@@ -45,23 +48,30 @@ class StopActionTest(unittest.TestCase):
             elif args[0]=='stop': state['running']=False
             elif args[0]=='start':
                 state['running']=True; state['started']='new'
-                if failure=='start': raise RuntimeError('ambiguous start')
+                if failure in ('start','start_emergency'): raise RuntimeError('ambiguous start')
         class Clock:
             value=0
             def monotonic(self): self.value+=200; return self.value
             def sleep(self,_): pass
         env={'check':check,'run':run,'pid':'a'*64,'expected':{'running':True,'started':'old','restart':'unless-stopped'},
              'admin':admin,'target':target,'emergency':emergency,'json':json,'inspect':lambda *_:item(),
-             'check_platform_identity':item,'time':Clock(),'print':lambda *_:None}
+             'check_platform_identity':item,'time':Clock(),'print':lambda message:state['messages'].append(message)}
         exec(compiled,env)
         with self.assertRaises(RuntimeError): env['action']()
+        if failure=='unknown':
+            self.assertFalse(any(state['gates'].values()))
+            self.assertFalse(state['running'])
+            return
+        if failure=='start_emergency':
+            self.assertIn('diagnostic: emergency closure unverified; checkpoint remains pending',state['messages'])
+            return
         self.assertTrue(state['emergency'])
         self.assertFalse(any(state['gates'].values()))
         self.assertFalse(state['running'])
         self.assertEqual(state['restart'],'no')
 
     def test_recloses_gate_after_uncertain_open_start_health_or_policy(self):
-        for failure in ('open','start','health','policy'):
+        for failure in ('open','start','health','policy','unknown','start_emergency'):
             with self.subTest(failure=failure): self.run_scenario(failure)
 
 if __name__=='__main__': unittest.main()
