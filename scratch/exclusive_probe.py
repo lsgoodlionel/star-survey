@@ -227,11 +227,27 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
                 if not descendant_file.exists() or worker_scope.empty(): raise RuntimeError('worker descendants not observed')
                 descendant_pid = descendant_file.read_text().strip()
                 if not re.fullmatch(r'[0-9]+', descendant_pid): raise RuntimeError('descendant identity invalid')
+                # Simulated application phase: the real platform would need a
+                # separately controlled network. This uses local test clients.
+                supervisor.sql('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS true;')
+                phase_admin = Session(cid, 'template1'); sessions.append(phase_admin)
+                phase_admin.sql('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true;')
+                phase_client = Session(cid, 'postgres'); sessions.append(phase_client)
+                if phase_client.sql('SELECT 1;') != '1': raise RuntimeError('application phase unavailable')
                 worker_scope.kill_and_wait(); proc.wait(timeout=5)
                 if not worker_scope.empty(): raise RuntimeError('worker worker_scope remains active')
                 stat = Path('/proc') / descendant_pid / 'stat'
                 if stat.exists() and stat.read_text().rsplit(')', 1)[1].strip().split()[0] != 'Z':
                     raise RuntimeError('detached descendant remains alive')
+                # Stop the simulated writer and restore both closed gates.
+                phase_admin.sql('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS false;')
+                phase_client.close(); phase_admin.close()
+                supervisor.sql('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS false;')
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if supervisor.sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();") == '0': break
+                    time.sleep(.05)
+                else: raise RuntimeError('application phase clients remain')
             finally:
                 if not worker_scope.empty(): worker_scope.kill_and_wait()
                 if proc is not None: proc.wait(timeout=5)
