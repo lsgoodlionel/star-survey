@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -76,14 +77,39 @@ class CheckpointTrapTest(unittest.TestCase):
     def test_receipt_without_live_supervisor_success_is_unverified(self):
         self.exercise(pending=False, live_success=False)
 
-    def exercise(self, pending, uninstall_failure=False, missing_mode=False, live_success=True):
+    def test_pending_recreation_and_receipt_removal_both_fail_closed(self):
+        self.exercise(pending=False, live_success=False, compound_failure=True)
+
+    def exercise(self, pending, uninstall_failure=False, missing_mode=False, live_success=True, compound_failure=False):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve(); work = base / 'work'; evidence = base / 'evidence'
             checkpoint = base / 'evidence.fixture-checkpoint'; bindir = base / 'bin'
             for path in (work, evidence, checkpoint, bindir): path.mkdir(mode=0o700)
             identity = bound_checkpoint_identity(work, '12', '1', 'b' * 64)
-            if pending: RecoveryMarker(checkpoint, identity).create()
-            else: run_checkpointed(checkpoint, work, identity, lambda: None, lambda: True, run_id='12', attempt='1', manifest_sha='b' * 64)
+            if pending:
+                RecoveryMarker(checkpoint, identity).create()
+            elif compound_failure:
+                original_create = RecoveryMarker.create
+                original_unlink = os.unlink
+                calls = []
+                def create(marker):
+                    calls.append('create')
+                    if len(calls) > 1: raise OSError('recreation failed')
+                    return original_create(marker)
+                def clear(marker):
+                    original_unlink(checkpoint / 'fixture-recovery.pending')
+                    raise OSError('fsync failed')
+                with mock.patch('fixture_checkpoint.RecoveryMarker.create', autospec=True, side_effect=create), \
+                     mock.patch('fixture_checkpoint.RecoveryMarker.clear', autospec=True, side_effect=clear), \
+                     mock.patch('fixture_checkpoint.os.unlink', side_effect=OSError('receipt removal failed')):
+                    with self.assertRaises(OSError):
+                        run_checkpointed(checkpoint, work, identity, lambda: None, lambda: True,
+                                         run_id='12', attempt='1', manifest_sha='b' * 64)
+                self.assertFalse((checkpoint / 'fixture-recovery.pending').exists())
+                self.assertTrue((checkpoint / 'fixture-recovery.verified').exists())
+            else:
+                run_checkpointed(checkpoint, work, identity, lambda: None, lambda: True,
+                                 run_id='12', attempt='1', manifest_sha='b' * 64)
             if uninstall_failure:
                 (work / 'primary/.surveyctl').mkdir(parents=True)
                 (work / 'primary/.surveyctl/state.json').write_text('{}')

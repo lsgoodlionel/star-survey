@@ -52,6 +52,8 @@ RUNTIME_FILES = (
     "release/native_acceptance_evidence.py",
     "release/fixture_checkpoint.py",
     "release/fixture_recovery_marker.py",
+    "release/fixture_supervisor.py",
+    "release/fixture_cgroup.py",
     "release/verify_release.sh",
     "release.schema.json",
     "restore.py",

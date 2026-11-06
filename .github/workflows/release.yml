@@ -732,8 +732,11 @@ jobs:
           tar -tzf "candidate-assets/candidate/$bundle" > "$RUNNER_TEMP/native-bundle-files"
           if grep -Fxq release/fixture_checkpoint.py "$RUNNER_TEMP/native-bundle-files"; then
             grep -Fxq release/fixture_recovery_marker.py "$RUNNER_TEMP/native-bundle-files"
+            grep -Fxq release/fixture_supervisor.py "$RUNNER_TEMP/native-bundle-files"
+            grep -Fxq release/fixture_cgroup.py "$RUNNER_TEMP/native-bundle-files"
             tar -xzf "candidate-assets/candidate/$bundle" -C orchestrator \
-              release/fixture_checkpoint.py release/fixture_recovery_marker.py
+              release/fixture_checkpoint.py release/fixture_recovery_marker.py \
+              release/fixture_supervisor.py release/fixture_cgroup.py
           fi
           chmod 0755 orchestrator/release/native_acceptance.sh orchestrator/release/native_acceptance_evidence.py
 

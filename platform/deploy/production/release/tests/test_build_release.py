@@ -309,7 +309,24 @@ class ReleaseBuilderTest(unittest.TestCase):
         self.assertIn("release/native_acceptance_evidence.py", names)
         self.assertIn("release/fixture_checkpoint.py", names)
         self.assertIn("release/fixture_recovery_marker.py", names)
+        self.assertIn("release/fixture_supervisor.py", names)
+        self.assertIn("release/fixture_cgroup.py", names)
         self.assertIn("release/verify_release.sh", names)
+        extracted = self.root / "bundle-checkpoint-runtime"
+        extracted.mkdir()
+        with tarfile.open(output / "survey-0.3.0-rc.1-linux-amd64.tar.gz", "r:gz") as archive:
+            for name in ("fixture_checkpoint.py", "fixture_recovery_marker.py", "fixture_supervisor.py", "fixture_cgroup.py"):
+                (extracted / name).write_bytes(archive.extractfile("release/" + name).read())
+        work = self.root / "bundle-checkpoint-work"
+        work.mkdir(mode=0o700)
+        result = subprocess.run([sys.executable, "-I", "-c",
+            "import sys; sys.path.insert(0,sys.argv[1]); "
+            "from fixture_supervisor import supervise_author_preview; "
+            "from fixture_checkpoint import bound_checkpoint_identity; "
+            "from pathlib import Path; print(bound_checkpoint_identity(Path(sys.argv[2]),'12','1','b'*64))",
+            str(extracted), str(work)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout.strip(), r"^[0-9a-f]{64}$")
 
     def test_manifest_rejects_mutated_native_acceptance_threshold_or_mode(self):
         output = self.root / "native-release"
