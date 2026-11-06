@@ -34,10 +34,11 @@
       "evidence": [
         {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R01-04 |", "description": "基础编辑需求已编号。"},
         {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/survey/SurveyController.java", "locator": "public class SurveyController", "description": "草稿读取、保存和版本控制接口已存在。"},
-        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/editor/EditorPage.tsx", "locator": "export function EditorRoutePage", "description": "基础题型编辑、排序和保存已接入；高级题型仍只读。"},
-        {"layer": "flow", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "#### Step 3：问卷编辑", "description": "核查报告确认基础作者链路可用，同时记录 Phase C 缺口。"}
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/features/editor/EditorPage.tsx", "locator": "export function EditorRoutePage", "description": "基础题型编辑、排序和保存已接入；首批折叠栏目、多级下拉和轮播图已支持可视化配置，其余高级题型仍需逐项核对。"},
+        {"layer": "flow", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "#### Step 3：问卷编辑", "description": "2026-10-09 核查报告记录了当时的 Phase C 缺口；Wave 5 首批功能与自动化阶段后续已完成。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/authoring.spec.ts", "locator": "Wave 5 advanced questions survive authoring, isolated preview and published response", "description": "Wave 5 首批三种题型的配置、隔离预览、发布、作答和回读由双库浏览器阶段验收覆盖；生产及真人屏幕阅读证据仍单列。"}
       ],
-      "nextWave": "Wave 5"
+      "nextWave": "Wave 6"
     },
     {
       "id": "import",
