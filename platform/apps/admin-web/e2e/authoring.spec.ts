@@ -589,15 +589,16 @@ async function engineEventQuery(sql: string): Promise<string> {
   return (await runText('docker', args)).trim();
 }
 
-async function platformQuery(sql: string): Promise<string> {
+async function platformQuery(tenantId: string, sql: string): Promise<string> {
+  assertCanonicalUuid(tenantId);
   return (await runText('docker', ['exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'),
-    'psql', '-U', 'platform_owner', '-d', 'platform', '-tAq', '-c', sql])).trim();
+    'psql', '-U', 'platform_owner', '-d', 'platform', '-tAq', '-c', `BEGIN; SET LOCAL app.tenant_id = '${tenantId}'; ${sql} COMMIT;`])).trim();
 }
 
 async function publishedEngineSid(surveyId: string, tenantId: string): Promise<number> {
   assertCanonicalUuid(surveyId);
   assertCanonicalUuid(tenantId);
-  const value = Number(await platformQuery(`SELECT engine_sid FROM survey_published_version WHERE tenant_id='${tenantId}' AND survey_id='${surveyId}' AND version_no=1;`));
+  const value = Number(await platformQuery(tenantId, `SELECT engine_sid FROM survey_published_version WHERE tenant_id='${tenantId}' AND survey_id='${surveyId}' AND version_no=1;`));
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Invalid diagnostic survey mapping');
   return value;
 }
@@ -631,8 +632,8 @@ async function exerciseAutomaticRelayOutage(respondent: Page, sid: number, tenan
   await expect.poll(async () => Number(await engineEventQuery(`SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=${sid} AND delivered_at IS NULL;`)), { timeout: 90_000, intervals: [1000, 2000] }).toBe(0);
   const completed = (await engineEventQuery(`SELECT event_id FROM lime_mjyplatformbridge_event_log WHERE survey_id=${sid} AND event_type='response.completed' ORDER BY id LIMIT 1;`)).trim();
   assertCanonicalUuid(completed);
-  const inboxCount = async () => Number(await platformQuery(`SELECT count(*) FROM engine_event_inbox WHERE tenant_id='${tenantId}' AND survey_id=${sid} AND event_id='${completed}';`));
-  const projectionCount = async () => Number(await platformQuery(`SELECT count(*) FROM response_projection WHERE tenant_id='${tenantId}' AND survey_id=${sid} AND state='engine_completed';`));
+  const inboxCount = async () => Number(await platformQuery(tenantId, `SELECT count(*) FROM engine_event_inbox WHERE tenant_id='${tenantId}' AND survey_id=${sid} AND event_id='${completed}';`));
+  const projectionCount = async () => Number(await platformQuery(tenantId, `SELECT count(*) FROM response_projection WHERE tenant_id='${tenantId}' AND survey_id=${sid} AND state='engine_completed';`));
   await expect.poll(inboxCount, { timeout: 30_000 }).toBe(1);
   await expect.poll(projectionCount, { timeout: 30_000 }).toBe(1);
   // Synthetic acknowledgement loss: replay exactly one event already accepted
