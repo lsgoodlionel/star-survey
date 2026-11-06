@@ -141,6 +141,22 @@ collect_evidence() {
       result=5
     fi
   fi
+  if [[ -n "${NATIVE_AUTHOR_CHECKPOINT_IDENTITY:-}" ]]; then
+    if python3 "$script_dir/fixture_checkpoint.py" verify "${evidence_root}.fixture-checkpoint" "$work_root" "$NATIVE_AUTHOR_CHECKPOINT_IDENTITY"; then
+      if ! printf '{"schemaVersion":1,"status":"verified"}\n' >"$evidence_root/fixture-checkpoint-status.json"; then
+        result=5
+        acceptance_status="failed"
+        restore_clean=false
+      fi
+    else
+      if ! printf '{"schemaVersion":1,"status":"pending_or_unverified"}\n' >"$evidence_root/fixture-checkpoint-status.json"; then
+        printf 'Fixture checkpoint status could not be preserved.\n' >&2
+      fi
+      result=5
+      acceptance_status="failed"
+      restore_clean=false
+    fi
+  fi
   if ! python3 "$evidence_helper" clean-restore; then
     result=5
     acceptance_status="failed"
@@ -148,18 +164,34 @@ collect_evidence() {
   fi
   write_summary "$result"
   local summary_result=$?
-  if [[ "$summary_result" -ne 0 ]]; then result=5; fi
-  python3 "$evidence_helper" "${args[@]}" scan --directory "$evidence_root"
-  local scan_result=$?
-  if [[ "$scan_result" -ne 0 ]]; then result=5; fi
-  if [[ "$result" -ne 0 && -n "${ctl_bin:-}" && -f "$target/.surveyctl/state.json" ]]; then
-    run_ctl uninstall
+  if [[ "$summary_result" -ne 0 ]]; then result=5; acceptance_status="failed"; fi
+  if ! python3 "$evidence_helper" "${args[@]}" scan --directory "$evidence_root"; then
+    result=5
+    acceptance_status="failed"
   fi
-  chmod -R a+rX "$evidence_root"
+  if [[ "$restore_clean" == true && "$result" -ne 0 && -n "${ctl_bin:-}" && -f "$target/.surveyctl/state.json" ]]; then
+    if ! run_ctl uninstall; then
+      result=5
+      acceptance_status="failed"
+      restore_clean=false
+    fi
+  fi
   if [[ "$restore_clean" == true ]]; then
-    rm -rf "$work_root"
+    if ! rm -rf "$work_root"; then
+      result=5
+      acceptance_status="failed"
+    fi
   else
     printf 'Isolated restore cleanup could not be verified; protected work directory retained until runner disposal.\n' >&2
+  fi
+  if [[ "$result" -ne 0 ]]; then acceptance_status="failed"; fi
+  write_summary "$result"
+  summary_result=$?
+  if [[ "$summary_result" -ne 0 ]]; then result=5; acceptance_status="failed"; fi
+  if ! chmod -R a+rX "$evidence_root"; then
+    result=5
+    acceptance_status="failed"
+    write_summary "$result"
   fi
   exit "$result"
 }

@@ -500,6 +500,13 @@ def validate_gateway_diagnostic(value: Any) -> None:
         raise EvidenceError('gateway diagnostic categories are invalid')
 
 
+def validate_fixture_checkpoint(value: Any) -> None:
+    report = exact_keys(value, {'schemaVersion', 'status'}, 'fixture checkpoint')
+    integer(report['schemaVersion'], 'fixture checkpoint schemaVersion', 1, 1)
+    if not isinstance(report['status'], str) or report['status'] not in {'verified', 'pending_or_unverified'}:
+        raise EvidenceError('fixture checkpoint status is invalid')
+
+
 VALIDATORS = {
     "doctor": validate_doctor,
     "services": validate_services,
@@ -508,6 +515,7 @@ VALIDATORS = {
     "readiness": validate_readiness,
     "engine-health": validate_engine_health,
     "gateway-diagnostic": validate_gateway_diagnostic,
+    "fixture-checkpoint": validate_fixture_checkpoint,
 }
 
 
@@ -876,7 +884,7 @@ def verify_upgrade_data_assets(identity: dict[str, Any], evidence_directory: Pat
 def evidence_kind(path: Path) -> str:
     if DOCTOR_FILE.fullmatch(path.name):
         return "doctor"
-    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services", "engine-health.json": "engine-health", "gateway-diagnostic.json": "gateway-diagnostic", 'upgrade-data.json': 'upgrade-data'}
+    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services", "engine-health.json": "engine-health", "gateway-diagnostic.json": "gateway-diagnostic", 'upgrade-data.json': 'upgrade-data', 'fixture-checkpoint-status.json': 'fixture-checkpoint'}
     try:
         return kinds[path.name]
     except KeyError as exc:

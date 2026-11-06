@@ -729,6 +729,12 @@ jobs:
           mkdir -p orchestrator
           tar -xzf "candidate-assets/candidate/$bundle" -C orchestrator \
             release/native_acceptance.sh release/native_acceptance_evidence.py
+          tar -tzf "candidate-assets/candidate/$bundle" > "$RUNNER_TEMP/native-bundle-files"
+          if grep -Fxq release/fixture_checkpoint.py "$RUNNER_TEMP/native-bundle-files"; then
+            grep -Fxq release/fixture_recovery_marker.py "$RUNNER_TEMP/native-bundle-files"
+            tar -xzf "candidate-assets/candidate/$bundle" -C orchestrator \
+              release/fixture_checkpoint.py release/fixture_recovery_marker.py
+          fi
           chmod 0755 orchestrator/release/native_acceptance.sh orchestrator/release/native_acceptance_evidence.py
 
       - name: Require ready native systemd and Docker
