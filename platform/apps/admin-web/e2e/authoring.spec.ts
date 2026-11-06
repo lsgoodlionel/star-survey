@@ -162,17 +162,24 @@ test('author filters stable resources, restores archive, and publishes the same 
   await expect(page.getByRole('heading', { name: '快速预览' })).toBeVisible();
 
   const isolationBefore = await readPreviewIsolationSnapshot(surveyId, me.tenantId);
-  const deliveredBefore = await readDeliveredEngineEvents();
-
   const previewPagePromise = page.context().waitForEvent('page');
+  const previewCreate = page.waitForResponse((response) =>
+    response.url().includes(`/v1/surveys/${surveyId}/preview-sessions`)
+      && response.request().method() === 'POST');
   await clickAction(page.getByRole('button', { name: '创建真实预览' }));
+  const createdPreview: unknown = await (await previewCreate).json();
+  if (typeof createdPreview !== 'object' || createdPreview === null || !('id' in createdPreview)
+      || typeof createdPreview.id !== 'string') throw new Error('Preview session identity is invalid');
+  assertCanonicalUuid(createdPreview.id);
   await expect(page.getByText('真实预览已就绪')).toBeVisible({ timeout: 210_000 });
+  const previewIdentity = await readPreviewIdentity(me.tenantId, surveyId, createdPreview.id);
+  const deliveredBefore = await readDeliveredEngineEvents(previewIdentity.sid, previewIdentity.generation);
   await captureEvidenceScreenshot(page, 'real-preview-desktop.png');
   await clickAction(page.getByRole('button', { name: '在新窗口打开真实预览' }));
   const previewPage = await previewPagePromise;
   await completeLimeSurvey(previewPage);
   await previewPage.close();
-  await expect.poll(readDeliveredEngineEvents, {
+  await expect.poll(() => readDeliveredEngineEvents(previewIdentity.sid, previewIdentity.generation), {
     timeout: 60_000,
     intervals: [500, 1_000, 2_000],
   }).toBeGreaterThan(deliveredBefore);
@@ -272,6 +279,13 @@ test('author filters stable resources, restores archive, and publishes the same 
     await clickAction(page.getByRole('button', { name: '刷新答卷数据' }));
     await expect(page.getByLabel('已完成 1')).toBeVisible();
   }).toPass({ timeout: 60_000, intervals: [500, 1_000, 2_000, 5_000] });
+  // Positive control: the same tenant-bound snapshot must see formal records.
+  // Without this check RLS misconfiguration could make both preview snapshots zero.
+  const formalSnapshot = await readPreviewIsolationSnapshot(surveyId, me.tenantId);
+  expect(formalSnapshot.publishedVersions).toBeGreaterThan(0);
+  expect(formalSnapshot.publishedBindings).toBeGreaterThan(0);
+  expect(formalSnapshot.officialRoutes).toBeGreaterThan(0);
+  expect(formalSnapshot.responses).toBeGreaterThan(0);
   const formalAnswer = page.locator('.response-answers > div').filter({
     has: page.locator('dd', { hasText: /^A1$/ }),
   }).first();
@@ -550,10 +564,7 @@ async function readPreviewIsolationSnapshot(
     'engineOutbox', (SELECT count(*)::int FROM engine_outbox WHERE tenant_id = '${tenantId}'),
     'responses', (SELECT count(*)::int FROM response_projection WHERE tenant_id = '${tenantId}')
   )::text;`;
-  const output = await runText('docker', [
-    'exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'),
-    'psql', '-U', 'platform_owner', '-d', 'platform', '-tAq', '-c', sql,
-  ]);
+  const output = await platformQuery(tenantId, sql);
   const payload: unknown = JSON.parse(output.trim());
   expect(payload).toEqual({
     publishedVersions: expect.any(Number),
@@ -565,18 +576,27 @@ async function readPreviewIsolationSnapshot(
   return payload as PreviewIsolationSnapshot;
 }
 
-async function readDeliveredEngineEvents() {
-  const query = 'SELECT COUNT(*) FROM lime_mjyplatformbridge_event_log WHERE delivered_at IS NOT NULL;';
-  const kind = requiredEnv('ADMIN_WEB_ENGINE_DB_KIND');
-  const container = requiredEnv('ADMIN_WEB_ENGINE_DB_CONTAINER');
-  const output = kind === 'pgsql'
-    ? await runText('docker', [
-      'exec', container, 'psql', '-U', 'postgres', '-d', 'limesurvey', '-tAq', '-c', query,
-    ])
-    : await runText('docker', [
-      'exec', container, 'mariadb', '-uroot', '-proot', 'limesurvey', '-N', '-B', '-e', query,
-    ]);
-  const count = Number(output.trim());
+async function readPreviewIdentity(tenantId: string, surveyId: string, sessionId: string) {
+  assertCanonicalUuid(tenantId);
+  assertCanonicalUuid(surveyId);
+  assertCanonicalUuid(sessionId);
+  const raw = await platformQuery(tenantId, `SELECT json_build_object('sid', engine_sid, 'generation', generation)::text FROM survey_preview_session WHERE tenant_id='${tenantId}' AND survey_id='${surveyId}' AND id='${sessionId}' AND status='ready';`);
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== 'object' || value === null || !('sid' in value) || !('generation' in value)
+      || typeof value.sid !== 'number' || !Number.isSafeInteger(value.sid) || value.sid <= 0
+      || typeof value.generation !== 'string' || !/^preview-[a-z0-9][a-z0-9-]{2,55}$/.test(value.generation)) {
+    throw new Error('Preview engine identity is invalid');
+  }
+  // The bridge generation is an engine UUID, distinct from the preview session generation.
+  const engineGeneration = await engineEventQuery(`SELECT generation FROM lime_mjyplatformbridge_generation WHERE survey_id=${value.sid};`);
+  assertCanonicalUuid(engineGeneration);
+  return { sid: value.sid, generation: engineGeneration };
+}
+
+async function readDeliveredEngineEvents(sid: number, generation: string) {
+  if (!Number.isSafeInteger(sid) || sid <= 0) throw new Error('Preview engine identity is invalid');
+  assertCanonicalUuid(generation);
+  const count = Number(await engineEventQuery(`SELECT COUNT(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=${sid} AND generation='${generation}' AND event_type='response.completed' AND delivered_at IS NOT NULL;`));
   if (!Number.isInteger(count) || count < 0) throw new Error('Engine event count is invalid');
   return count;
 }
