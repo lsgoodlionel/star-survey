@@ -11,6 +11,17 @@ import subprocess
 import time
 
 
+def _checked_child_environment(child_env):
+    allowed = {'PATH', 'HOME', 'CI', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'GITHUB_REPOSITORY',
+               'SURVEY_NATIVE_ACCEPTANCE', 'NATIVE_AUTHOR_FIXTURE_DIR', 'PLAYWRIGHT_BROWSERS_PATH',
+               'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'}
+    if (not isinstance(child_env, dict) or not child_env or
+            any(not isinstance(k, str) or k not in allowed or not isinstance(v, str) or '\x00' in v
+                for k, v in child_env.items())):
+        raise ValueError('fixture child environment is invalid')
+    return dict(child_env)
+
+
 def _group_gone(pgid):
     try:
         os.killpg(pgid, 0)
@@ -178,13 +189,7 @@ def supervise_checkpointed(evidence, work, identity, provision, worker, recovery
         raise ValueError('fixture callbacks are invalid')
     if identity != bound_checkpoint_identity(work, run_id, attempt, manifest_sha):
         raise ValueError('fixture checkpoint binding differs')
-    allowed = {'PATH', 'HOME', 'CI', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'GITHUB_REPOSITORY',
-               'SURVEY_NATIVE_ACCEPTANCE', 'NATIVE_AUTHOR_FIXTURE_DIR', 'PLAYWRIGHT_BROWSERS_PATH',
-               'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'}
-    if (not isinstance(child_env, dict) or not child_env or
-            any(not isinstance(k, str) or k not in allowed or not isinstance(v, str) or '\x00' in v
-                for k, v in child_env.items())):
-        raise ValueError('fixture child environment is invalid')
+    child_env = _checked_child_environment(child_env)
 
     def action():
         provision()
@@ -197,3 +202,73 @@ def supervise_checkpointed(evidence, work, identity, provision, worker, recovery
                          run_id=run_id, attempt=attempt, manifest_sha=manifest_sha)
     except BaseException:
         raise RuntimeError('fixture execution or recovery unverified') from None
+
+
+def supervise_author_preview(evidence, work, identity, provision, worker, recover, verify, uid, gid,
+                             *, run_id, attempt, manifest_sha, child_env, worker_timeout=600):
+    """Run an unprivileged author worker and trusted recovery after its scope is empty.
+
+    The caller must supply real target binding, server-side writer exclusion and
+    independently verified recovery; cgroups do not contain daemon work. The
+    root supervisor does not expose its ambient environment to the child.
+    Interrupted or failed journeys remain pending even if recovery ran.
+    """
+    from fixture_cgroup import CgroupScope
+    from fixture_checkpoint import bound_checkpoint_identity, run_checkpointed
+    if any(not callable(fn) for fn in (provision, recover, verify)):
+        raise ValueError('fixture callbacks are invalid')
+    if identity != bound_checkpoint_identity(work, run_id, attempt, manifest_sha):
+        raise ValueError('fixture checkpoint binding differs')
+    child_env = _checked_child_environment(child_env)
+    interrupted = False
+    old_term, old_int = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)
+
+    def interrupt(_signum, _frame):
+        nonlocal interrupted
+        interrupted = True
+
+    def action():
+        provision()
+        if interrupted:
+            raise RuntimeError('fixture interrupted before worker')
+        scope = CgroupScope(uid, gid)
+        process = None
+        worker_ok = False
+        try:
+            process = scope.spawn(worker, env=child_env)
+            deadline = time.monotonic() + worker_timeout
+            while process.poll() is None and not interrupted and time.monotonic() < deadline:
+                time.sleep(.05)
+            worker_ok = process.poll() == 0 and scope.empty() and not interrupted
+            if not scope.empty():
+                scope.kill_and_wait()
+            process.wait(timeout=5)
+            if not scope.empty():
+                raise RuntimeError('fixture worker scope remains populated')
+            scope.close()
+        except BaseException:
+            # No recovery callback can begin if worker containment is uncertain.
+            try:
+                if not scope.empty():
+                    scope.kill_and_wait()
+                if process is not None:
+                    process.wait(timeout=5)
+                if scope.empty():
+                    scope.close()
+            except BaseException:
+                pass
+            raise
+        recover()
+        if not worker_ok or interrupted:
+            raise RuntimeError('fixture author worker failed')
+
+    signal.signal(signal.SIGTERM, interrupt)
+    signal.signal(signal.SIGINT, interrupt)
+    try:
+        run_checkpointed(evidence, work, identity, action, verify,
+                         run_id=run_id, attempt=attempt, manifest_sha=manifest_sha)
+    except BaseException:
+        raise RuntimeError('fixture author execution or recovery unverified') from None
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGINT, old_int)

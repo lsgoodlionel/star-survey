@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fixture_checkpoint import bound_checkpoint_identity, require_completed_checkpoint
-from fixture_supervisor import supervise_checkpointed
+from fixture_supervisor import supervise_author_preview, supervise_checkpointed
 
 
 class CheckpointSupervisorTest(unittest.TestCase):
@@ -55,6 +55,33 @@ class CheckpointSupervisorTest(unittest.TestCase):
             self.invoke(lambda: self.fail('provision ran'), lambda: True,
                         {'PATH': '/usr/bin', 'GITHUB_TOKEN': 'secret'})
         self.assertFalse(self.pending.exists())
+
+    def test_author_recovery_runs_only_after_worker_scope_is_empty(self):
+        events = self.events
+        class Process:
+            def poll(self): return 0
+            def wait(self, timeout): events.append('wait'); return 0
+        class Scope:
+            def __init__(self, uid, gid): self.populated = True
+            def spawn(self, command, *, env):
+                self_env = {'PATH': '/usr/bin:/bin'}
+                if env != self_env: raise AssertionError('unexpected child environment')
+                events.append('spawn'); return Process()
+            def empty(self): return not self.populated
+            def kill_and_wait(self): events.append('kill'); self.populated = False
+            def close(self): events.append('close')
+        def provision():
+            self.assertTrue(self.pending.exists()); events.append('provision')
+        def recover():
+            self.assertEqual(events[-1], 'close'); events.append('recover')
+        with mock.patch('fixture_cgroup.CgroupScope', Scope):
+            with self.assertRaisesRegex(RuntimeError, 'unverified'):
+                supervise_author_preview(self.evidence, self.work, self.identity, provision,
+                    ['worker'], recover, lambda: self.fail('verification ran'), 1001, 1001,
+                    run_id='12', attempt='1', manifest_sha='b' * 64,
+                    child_env={'PATH': '/usr/bin:/bin'})
+        self.assertEqual(events, ['provision', 'spawn', 'kill', 'wait', 'close', 'recover'])
+        self.assertTrue(self.pending.exists())
 
 
 if __name__ == '__main__': unittest.main()

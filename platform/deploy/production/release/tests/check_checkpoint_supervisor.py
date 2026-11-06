@@ -7,7 +7,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fixture_checkpoint import bound_checkpoint_identity, require_completed_checkpoint
-from fixture_supervisor import supervise_checkpointed
+from fixture_supervisor import supervise_author_preview, supervise_checkpointed
 
 if (os.geteuid() != 0 or os.environ.get('GITHUB_ACTIONS') != 'true' or
         os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted'):
@@ -47,4 +47,20 @@ with tempfile.TemporaryDirectory(prefix='checkpoint-scope-') as root_name, tempf
     if not recovered.exists() or not (evidence / 'fixture-recovery.pending').exists():
         raise RuntimeError('recovery order or pending checkpoint not verified')
     if (evidence / 'fixture-recovery.verified').exists(): raise RuntimeError('failed execution was marked verified')
+    (evidence / 'fixture-recovery.pending').unlink(); descendant.unlink(); recovered.unlink()
+    def trusted_recover():
+        process = Path('/proc') / descendant.read_text() / 'stat'
+        state = process.read_text().rsplit(')', 1)[1].strip().split()[0] if process.exists() else 'gone'
+        if state not in ('Z', 'gone'): raise RuntimeError('descendant survived into recovery')
+        recovered.touch()
+    try:
+        supervise_author_preview(evidence, work, identity, lambda: None, [child, '-c', worker_code],
+                                 trusted_recover, lambda: False, uid, gid,
+                                 run_id='12', attempt='1', manifest_sha='b' * 64, child_env=env)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError('author worker with descendant was accepted')
+    if not recovered.exists() or not (evidence / 'fixture-recovery.pending').exists():
+        raise RuntimeError('author trusted recovery order or checkpoint not verified')
     print('checkpoint wraps real cgroup supervisor; detached descendant stopped before recovery; failure remains pending')
