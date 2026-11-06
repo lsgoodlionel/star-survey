@@ -118,6 +118,7 @@ async function writeSanitizedTraceSummary(page: Page, testInfo: TestInfo) {
 }
 
 test('author filters stable resources, restores archive, and publishes the same survey', async ({ page }, testInfo) => {
+  if (process.env.ADMIN_WEB_RELAY_DIAGNOSTIC === '1') testInfo.setTimeout(360_000);
   const metadata = await readMetadata();
   const token = await readToken();
   const network: NetworkRecord[] = [];
@@ -254,7 +255,13 @@ test('author filters stable resources, restores archive, and publishes the same 
 
   const respondentPage = await page.context().newPage();
   await respondentPage.goto(deliveryUrl!);
-  await completeLimeSurvey(respondentPage);
+  const relayDiagnostic = process.env.ADMIN_WEB_RELAY_DIAGNOSTIC === '1';
+  const sid = relayDiagnostic ? await publishedEngineSid(surveyId, me.tenantId) : 0;
+  if (relayDiagnostic) {
+    await exerciseAutomaticRelayOutage(respondentPage, sid, me.tenantId);
+  } else {
+    await completeLimeSurvey(respondentPage);
+  }
   await respondentPage.close();
 
   await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', {
@@ -572,6 +579,75 @@ async function readDeliveredEngineEvents() {
   const count = Number(output.trim());
   if (!Number.isInteger(count) || count < 0) throw new Error('Engine event count is invalid');
   return count;
+}
+
+async function engineEventQuery(sql: string): Promise<string> {
+  const container = requiredEnv('ADMIN_WEB_ENGINE_DB_CONTAINER');
+  const args = requiredEnv('ADMIN_WEB_ENGINE_DB_KIND') === 'pgsql'
+    ? ['exec', container, 'psql', '-U', 'postgres', '-d', 'limesurvey', '-tAq', '-c', sql]
+    : ['exec', container, 'mariadb', '-uroot', '-proot', 'limesurvey', '-N', '-B', '-e', sql];
+  return (await runText('docker', args)).trim();
+}
+
+async function platformQuery(sql: string): Promise<string> {
+  return (await runText('docker', ['exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'),
+    'psql', '-U', 'platform_owner', '-d', 'platform', '-tAq', '-c', sql])).trim();
+}
+
+async function publishedEngineSid(surveyId: string, tenantId: string): Promise<number> {
+  assertCanonicalUuid(surveyId);
+  assertCanonicalUuid(tenantId);
+  const value = Number(await platformQuery(`SELECT engine_sid FROM survey_published_version WHERE tenant_id='${tenantId}' AND survey_id='${surveyId}' AND version_no=1;`));
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Invalid diagnostic survey mapping');
+  return value;
+}
+
+async function exerciseAutomaticRelayOutage(respondent: Page, sid: number, tenantId: string) {
+  if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') {
+    throw new Error('Relay outage test requires a dedicated GitHub-hosted runner');
+  }
+  const platform = requiredEnv('ADMIN_WEB_PLATFORM_CONTAINER');
+  const relay = requiredEnv('ADMIN_WEB_RELAY_CONTAINER');
+  if (!/^[0-9a-f]{64}$/.test(platform) || !/^[0-9a-f]{64}$/.test(relay)) throw new Error('Invalid container identities');
+  const project = requiredEnv('COMPOSE_PROJECT_NAME');
+  if (!/^relay-ci-[a-z0-9-]+$/.test(project)) throw new Error('Invalid diagnostic project');
+  for (const [id, service] of [[platform, 'platform'], [relay, 'test-relay']]) {
+    const labels = await runText('docker', ['inspect', '--format', '{{index .Config.Labels "com.docker.compose.project"}}/{{index .Config.Labels "com.docker.compose.service"}}', id]);
+    if (labels.trim() !== `${project}/${service}`) throw new Error('Diagnostic container ownership mismatch');
+  }
+  const heartbeat = async () => Number((await runText('docker', ['exec', relay, 'stat', '-c', '%Y', '/tmp/survey-event-relay-heartbeat'])).trim());
+  await expect.poll(heartbeat, { timeout: 60_000 }).toBeGreaterThan(0);
+  const before = await heartbeat();
+  await runText('docker', ['pause', platform]);
+  try {
+    await completeLimeSurvey(respondent);
+    await expect.poll(async () => Number(await engineEventQuery(`SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=${sid} AND delivered_at IS NULL;`)), { timeout: 30_000 }).toBeGreaterThan(0);
+    // The production loop touched its heartbeat after an attempted iteration;
+    // this is only a progress check, not proof that delivery succeeded.
+    await expect.poll(heartbeat, { timeout: 60_000, intervals: [1000, 2000] }).toBeGreaterThan(before);
+  } finally {
+    await runText('docker', ['unpause', platform]);
+  }
+  await expect.poll(async () => Number(await engineEventQuery(`SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=${sid} AND delivered_at IS NULL;`)), { timeout: 90_000, intervals: [1000, 2000] }).toBe(0);
+  const completed = (await engineEventQuery(`SELECT event_id FROM lime_mjyplatformbridge_event_log WHERE survey_id=${sid} AND event_type='response.completed' ORDER BY id LIMIT 1;`)).trim();
+  assertCanonicalUuid(completed);
+  const inboxCount = async () => Number(await platformQuery(`SELECT count(*) FROM engine_event_inbox WHERE tenant_id='${tenantId}' AND survey_id=${sid} AND event_id='${completed}';`));
+  const projectionCount = async () => Number(await platformQuery(`SELECT count(*) FROM response_projection WHERE tenant_id='${tenantId}' AND survey_id=${sid} AND state='engine_completed';`));
+  await expect.poll(inboxCount, { timeout: 30_000 }).toBe(1);
+  await expect.poll(projectionCount, { timeout: 30_000 }).toBe(1);
+  // Synthetic acknowledgement loss: replay exactly one event already accepted
+  // by the platform, then prove the inbox and projection remain deduplicated.
+  await engineEventQuery(`UPDATE lime_mjyplatformbridge_event_log SET delivered_at=NULL WHERE survey_id=${sid} AND event_id='${completed}';`);
+  await expect.poll(async () => Number(await engineEventQuery(`SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=${sid} AND event_id='${completed}' AND delivered_at IS NOT NULL;`)), { timeout: 90_000, intervals: [1000, 2000] }).toBe(1);
+  expect(await inboxCount()).toBe(1);
+  expect(await projectionCount()).toBe(1);
+
+  // Restart the exact test worker, then replay the same synthetic event again.
+  await runText('docker', ['restart', relay]);
+  await engineEventQuery(`UPDATE lime_mjyplatformbridge_event_log SET delivered_at=NULL WHERE survey_id=${sid} AND event_id='${completed}';`);
+  await expect.poll(async () => Number(await engineEventQuery(`SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=${sid} AND event_id='${completed}' AND delivered_at IS NOT NULL;`)), { timeout: 90_000, intervals: [1000, 2000] }).toBe(1);
+  expect(await inboxCount()).toBe(1);
+  expect(await projectionCount()).toBe(1);
 }
 
 async function assertDownloadedCsvContainsFormalResponse(download: Download, expectedQuestionCode: string) {

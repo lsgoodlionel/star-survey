@@ -88,3 +88,20 @@ services:
       MJY_ENGINE_INSTANCE_ID:
       MJY_PLATFORM_EVENTS_URL: http://platform:8080/internal/engine-events
       MJY_PLATFORM_EVENTS_SECRET:
+
+  # Opt-in only on a fresh dedicated CI runner. Runs the production worker and
+  # bridge command against the real development databases; no cron runner.
+  test-relay:
+    profiles: [relay-test]
+    image: survey-web
+    environment:
+      MJY_ENGINE_INSTANCE_ID:
+      MJY_PLATFORM_EVENTS_URL: http://platform:8080/internal/engine-events
+      MJY_PLATFORM_EVENTS_SECRET:
+      YII_CONSOLE_COMMANDS: /var/www/html/platform/deploy/production/init
+    volumes:
+      - ./:/var/www/html
+      - ./platform/deploy/test/.runtime/config.php:/var/www/html/application/config/config.php:ro
+      - test-tmp:/var/www/html/tmp
+    working_dir: /var/www/html
+    command: ["/bin/sh", "platform/deploy/production/init/event-relay.sh"]

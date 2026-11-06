@@ -66,13 +66,17 @@ cleanup_run() {
     echo "ADMIN_WEB_E2E_KEEP=1: leaving only compose resources running; private files were removed" >&2
     return 0
   fi
-  "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+    "${COMPOSE[@]}" --profile relay-test down -v --remove-orphans >/dev/null 2>&1 || return 1
+  else
+    "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
   return 0
 }
 
 cleanup() {
   local status=$?
-  cleanup_run "$status"
+  cleanup_run "$status" || status=1
   return "$status"
 }
 
@@ -187,7 +191,9 @@ export_failure_artifacts() {
 run_playwright() {
   (
     cd "$ADMIN_WEB_DIR"
-    if [[ "$E2E_SUITE" == "wave3" ]]; then
+    if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+      npm run e2e -- --project=chromium-desktop --grep 'author filters stable resources, restores archive, and publishes the same survey'
+    elif [[ "$E2E_SUITE" == "wave3" ]]; then
       npm run e2e -- --project=chromium-wave3-data
     else
       npm run e2e -- --project=chromium-desktop --project=chromium-template-branding --project=chromium-mobile
@@ -209,13 +215,21 @@ run_browser_tests() {
   issue_browser_token admin-web-e2e-reviewer "$ADMIN_WEB_REVIEWER_JWT_FILE"
   issue_browser_token admin-web-e2e-data "$ADMIN_WEB_DATA_JWT_FILE"
   issue_browser_token admin-web-e2e-operator "$ADMIN_WEB_OPERATOR_JWT_FILE"
-  (
-    while true; do
-      docker exec "$CONTAINER" php application/commands/console.php plugin cron >/dev/null 2>&1 || true
-      sleep 2
-    done
-  ) &
-  ENGINE_RELAY_PID=$!
+  if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+    "${COMPOSE[@]}" --profile relay-test up -d --no-deps test-relay >/dev/null
+    export ADMIN_WEB_RELAY_CONTAINER ADMIN_WEB_PLATFORM_CONTAINER
+    ADMIN_WEB_RELAY_CONTAINER="$("${COMPOSE[@]}" --profile relay-test ps -q test-relay)"
+    ADMIN_WEB_PLATFORM_CONTAINER="$("${COMPOSE[@]}" ps -q platform)"
+    [[ "$ADMIN_WEB_RELAY_CONTAINER" =~ ^[0-9a-f]{64}$ && "$ADMIN_WEB_PLATFORM_CONTAINER" =~ ^[0-9a-f]{64}$ ]] || fail "diagnostic container identity is invalid"
+  else
+    (
+      while true; do
+        docker exec "$CONTAINER" php application/commands/console.php plugin cron >/dev/null 2>&1 || true
+        sleep 2
+      done
+    ) &
+    ENGINE_RELAY_PID=$!
+  fi
   if ! run_playwright; then
     stop_engine_relay
     export_failure_artifacts || true
@@ -290,6 +304,14 @@ for tool in docker python3 curl npm node unzip; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 docker info >/dev/null 2>&1 || fail "docker daemon is not running"
+
+if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+  [[ "${GITHUB_ACTIONS:-}" == "true" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]] || fail "relay diagnostic requires a GitHub-hosted runner"
+  [[ "$COMPOSE_PROJECT_NAME" == relay-ci-* && "$SURVEY_TEST_PREFIX" == "$COMPOSE_PROJECT_NAME" ]] || fail "relay diagnostic requires its dedicated project"
+  [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" ]] || fail "relay diagnostic project is not empty"
+  [[ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" ]] || fail "relay diagnostic volumes are not empty"
+  [[ -z "$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" ]] || fail "relay diagnostic network is not empty"
+fi
 
 WORK_DIR="$(mktemp -d)"
 export ADMIN_WEB_PORT="${ADMIN_WEB_PORT:-$(random_loopback_port)}"
@@ -399,7 +421,7 @@ run_browser_tests
 step "gate: platform API, platform DB, gateway and engine DB"
 verify_and_archive_run_root
 
-if [[ "$E2E_SUITE" == "full" ]]; then
+if [[ "$E2E_SUITE" == "full" && "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" != "1" ]]; then
   step "browser: personnel grant, tenant status and revocation under enforced guard"
   run_personnel_status_test
 fi
