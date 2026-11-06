@@ -477,6 +477,8 @@ class ReleaseBuilderTest(unittest.TestCase):
         notes = (output / "release-notes.md").read_text(encoding="utf-8")
         for phrase in ("0.3.0-rc.1", "candidate", "surveyctl install", "surveyctl upgrade", "backup", "restore-only"):
             self.assertIn(phrase, notes)
+        self.assertIn("Do not use the installed release's older CLI", notes)
+        self.assertIn("./surveyctl upgrade --manifest /path/to/verified/release.json", notes)
         self.assertNotIn("0123456789abcdef0123456789abcdef01234567", notes)
 
 
