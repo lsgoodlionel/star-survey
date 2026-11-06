@@ -36,6 +36,21 @@ class CompensationBuilderTest(unittest.TestCase):
         self.assertTrue(sql.strip().startswith('BEGIN;'))
         self.assertTrue(sql.strip().endswith('COMMIT;'))
 
+    def test_trusted_builder_validates_inputs_and_locks_exact_expired_or_consumed_row(self):
+        values = self.values()
+        sql = module.build_trusted_compensation_sql(**values)
+        self.assertTrue(sql.strip().startswith('BEGIN;'))
+        self.assertLess(sql.index('FOR UPDATE;'), sql.index('SET LOCAL ROLE platform_app;'))
+        for key in ('tenant', 'principal', 'connection', 'handoff_hash', 'browser_hash'):
+            self.assertIn(values[key], sql[:sql.index('SET LOCAL ROLE platform_app;')])
+        self.assertIn('consumed_at IS NOT NULL', sql)
+        self.assertIn('expires_at<=now()', sql)
+        for field, value in (('tenant', "x'; SELECT 1;--"), ('handoff_hash', 'a'*63),
+                             ('principal', str(uuid.UUID(int=0)))):
+            invalid = dict(values, **{field: value})
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                module.build_trusted_compensation_sql(**invalid)
+
 
 if __name__ == '__main__':
     unittest.main()

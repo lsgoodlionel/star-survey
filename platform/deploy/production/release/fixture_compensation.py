@@ -20,9 +20,24 @@ def _random_uuid(value):
     return value
 
 
-def build_compensation_sql(*, tenant, owner_plan, fixture_plan, principal, connection,
-                           original_sub, fixture_sub, restore_sub, owner_grant,
-                           handoff_hash, browser_hash):
+def build_compensation_sql(**values):
+    """Build runtime-role cleanup; ambiguous first-use handoffs are rejected."""
+    return _build_compensation_sql(**values, _trusted_handoff=False)
+
+
+def build_trusted_compensation_sql(**values):
+    """Build cleanup requiring a pinned privileged session and exclusive writers.
+
+    The exact expired/consumed handoff row is locked and checked before role
+    reduction. This SQL is test-only and does not itself establish isolation,
+    target authorization or safe recovery after a disconnected session.
+    """
+    return _build_compensation_sql(**values, _trusted_handoff=True)
+
+
+def _build_compensation_sql(*, tenant, owner_plan, fixture_plan, principal, connection,
+                            original_sub, fixture_sub, restore_sub, owner_grant,
+                            handoff_hash, browser_hash, _trusted_handoff):
     """Return SQL only; its advisory lock does not serialize subscription writers."""
     ids = (tenant, owner_plan, fixture_plan, principal, connection,
            original_sub, fixture_sub, restore_sub, owner_grant)
@@ -34,8 +49,20 @@ def build_compensation_sql(*, tenant, owner_plan, fixture_plan, principal, conne
            for value in (handoff_hash, browser_hash)):
         raise ValueError('fixture handoff hashes are invalid')
     scope = "SELECT set_config('app.tenant_id','" + tenant + "',true);"
+    prelude = ''
+    if _trusted_handoff:
+        prelude = f"""
+DO $fixture_verify$ BEGIN
+ PERFORM 1 FROM org_login_handoff WHERE handoff_hash='{handoff_hash}' AND browser_hash='{browser_hash}'
+   AND tenant_id='{tenant}' AND principal_id='{principal}' AND connection_id='{connection}'
+   AND ((consumed_at IS NOT NULL AND consumed_at<=now()) OR expires_at<=now()) FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'trusted handoff state not established'; END IF;
+END $fixture_verify$;
+"""
+    missing_guard = 'false' if _trusted_handoff else 'NOT already_revoked'
+    opening = f'BEGIN; {prelude} SET LOCAL ROLE platform_app; {scope}' if prelude else f'BEGIN; SET LOCAL ROLE platform_app; {scope}'
     return f"""
-BEGIN; SET LOCAL ROLE platform_app; {scope}
+{opening}
 SELECT pg_advisory_xact_lock(hashtextextended('access.members:{tenant}',0));
 DO $$ DECLARE current_id uuid; current_plan uuid; current_kind text; current_end timestamptz;
  original_kind text; original_end timestamptz; handoff_principal uuid; handoff_connection uuid; already_revoked boolean; BEGIN
@@ -75,7 +102,7 @@ DO $$ DECLARE current_id uuid; current_plan uuid; current_kind text; current_end
      IF handoff_principal IS DISTINCT FROM '{principal}'::uuid OR handoff_connection IS DISTINCT FROM '{connection}'::uuid THEN
        RAISE EXCEPTION 'fixture handoff identity mismatch';
      END IF;
-   ELSIF NOT already_revoked THEN
+   ELSIF {missing_guard} THEN
      -- No row is ambiguous: wrong hashes, expiration, absence or prior use.
      -- Do not infer which occurred from the runtime role's limited visibility.
      RAISE EXCEPTION 'fixture handoff state unconfirmed';

@@ -1,20 +1,18 @@
-name: Isolated fixture checkpoint probe
+name: Trusted fixture compensation regression
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  checkpoint:
+  fixture:
     runs-on: ubuntu-22.04
-    timeout-minutes: 4
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [normal, loss-before, loss-after, consumed, expired, wrong-hash, wrong-handoff, wrong-principal, wrong-connection, wrong-tenant, missing, cleaned]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_checkpoint.py -v
-      - run: python3 -B scratch/checkpoint_artifact_probe.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: fixture-pending-marker-probe
-          path: checkpoint-evidence/fixture-recovery.pending
-          if-no-files-found: error
-          retention-days: 1
+      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_compensation_builder.py -q
+      - run: docker pull postgres:16-alpine
+      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_REPOSITORY python3 -B scratch/exclusive_probe.py '${{ matrix.mode }}'
