@@ -179,7 +179,7 @@ test('author filters stable resources, restores archive, and publishes the same 
   const previewPage = await previewPagePromise;
   if (process.env.ADMIN_WEB_CADDY_DIAGNOSTIC === '1') {
     await previewPage.waitForURL('**/survey/**');
-    expect(new URL(previewPage.url()).origin).toBe(new URL(env('ADMIN_WEB_BASE_URL')).origin);
+    expect(new URL(previewPage.url()).origin).toBe(new URL(requiredEnv('ADMIN_WEB_BASE_URL')).origin);
   }
   await completeLimeSurvey(previewPage);
   await previewPage.close();
@@ -233,7 +233,7 @@ test('author filters stable resources, restores archive, and publishes the same 
   expect(deliveryUrl).toBe(createdLink.shortUrl ?? createdLink.url);
   expect(deliveryUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
   if (process.env.ADMIN_WEB_CADDY_DIAGNOSTIC === '1') {
-    expect(new URL(deliveryUrl!).origin).toBe(new URL(env('ADMIN_WEB_BASE_URL')).origin);
+    expect(new URL(deliveryUrl!).origin).toBe(new URL(requiredEnv('ADMIN_WEB_BASE_URL')).origin);
   }
 
   if (testInfo.project.name !== 'chromium-wave3-seed') {
