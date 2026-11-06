@@ -83,6 +83,8 @@ COMMIT;
             author_grant=grant, handoff_hash=handoff_hash, browser_hash=browser_hash,
             expires_at=datetime.now(timezone.utc)+timedelta(seconds=60))
         project_rows = f"""
+INSERT INTO org_login_session(id,tenant_id,principal_id,connection_id,expires_at)
+ VALUES ('{session}','{tenant}','{principal}','{connection}',now()+interval '1 hour');
 INSERT INTO access_resource(tenant_id,id,kind,parent_id,name)
  VALUES ('{tenant}','{project}','project',NULL,'CI test project');
 INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,expires_at)
