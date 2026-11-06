@@ -317,8 +317,9 @@ test('branded copy previews and publishes with language and pinned image bytes',
   await respondent.close(); await fresh.close();
 
   await page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '品牌与语言' }).click();
-  // The fixture changed the draft through the API; reload before editing to avoid a stale draft version.
-  await page.reload();
+  // A fresh synthetic login clears the stale in-memory draft after the fixture API update.
+  await login(page, 'ADMIN_WEB_JWT_FILE');
+  await navigate(page, `/surveys/${copiedSurveyId}/branding`);
   await page.getByRole('textbox', { name: '页脚文本' }).fill('感谢参与第二版');
   await page.getByRole('button', { name: '保存品牌与语言' }).click();
   await expect(page.getByText(/已保存，草稿版本/)).toBeVisible();
