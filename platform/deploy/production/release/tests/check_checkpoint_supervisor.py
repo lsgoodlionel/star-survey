@@ -73,10 +73,12 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0,sys.argv[1])
 from fixture_checkpoint import bound_checkpoint_identity
+from fixture_recovery_marker import RecoveryMarker
 from fixture_supervisor import supervise_author_preview
 work,evidence,ready,phase=Path(sys.argv[2]),Path(sys.argv[3]),Path(sys.argv[4]),sys.argv[5]
 identity=bound_checkpoint_identity(work,'12','1','b'*64)
 original=os.fsync; count=[0]
+original_clear=RecoveryMarker.clear
 def delayed_fsync(fd):
     count[0]+=1
     if phase=='receipt' and count[0]==3:
@@ -85,13 +87,16 @@ def delayed_fsync(fd):
 def verify():
     if phase=='verify': ready.touch(); time.sleep(1)
     return True
-with mock.patch('fixture_checkpoint.os.fsync', side_effect=delayed_fsync):
+def delayed_clear(marker):
+    original_clear(marker)
+    if phase=='after-clear': ready.touch(); time.sleep(1)
+with mock.patch('fixture_checkpoint.os.fsync', side_effect=delayed_fsync), mock.patch.object(RecoveryMarker,'clear',delayed_clear):
     supervise_author_preview(evidence,work,identity,lambda:None,['/usr/bin/python3','-c','pass'],
         lambda:None,verify,65534,65534,run_id='12',attempt='1',manifest_sha='b'*64,
         child_env={'PATH':'/usr/bin:/bin'})
 '''
     module_dir = str(Path(__file__).resolve().parents[1])
-    for phase in ('verify', 'receipt'):
+    for phase in ('verify', 'receipt', 'after-clear'):
         phase_work = root / ('work-' + phase); phase_work.mkdir(mode=0o700)
         phase_evidence = root / ('evidence-' + phase); phase_evidence.mkdir(mode=0o700)
         ready = root / ('ready-' + phase)
