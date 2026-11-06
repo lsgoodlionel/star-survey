@@ -133,13 +133,13 @@
 +  [[ -z "$output" ]] || fail "review container name already exists"
 +  output="$("${DOCKER[@]}" volume ls -q)" || fail "volume list unavailable"
 +  for name in "${PROJECT}_engine-data" "${PROJECT}_engine-runtime" "${PROJECT}_engine-tmp" "${PROJECT}_platform-data" survey-review-46766fd-maven; do
-+    if printf '%s\n' "$output" | grep -Fqx -- "$name"; then fail "review volume already exists"; fi
++    if grep -Fqx -- "$name" <<< "$output"; then fail "review volume already exists"; fi
 +  done
 +  output="$("${DOCKER[@]}" network ls --format '{{.Name}}')" || fail "network list unavailable"
-+  if printf '%s\n' "$output" | grep -Fqx -- "${PROJECT}_default"; then fail "review network already exists"; fi
++  if grep -Fqx -- "${PROJECT}_default" <<< "$output"; then fail "review network already exists"; fi
 +  output="$("${DOCKER[@]}" image ls --format '{{.Repository}}')" || fail "image list unavailable"
 +  for name in survey-review-46766fd-engine survey-review-46766fd-gateway survey-review-46766fd-admin; do
-+    if printf '%s\n' "$output" | grep -Fqx -- "$name"; then fail "review image already exists"; fi
++    if grep -Fqx -- "$name" <<< "$output"; then fail "review image already exists"; fi
 +  done
 +  python3 - <<'PORTCHECK' || fail "review port unavailable"
 +import socket
