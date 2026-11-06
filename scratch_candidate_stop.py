@@ -36,7 +36,7 @@ expected={'running':True,'started':platform['State']['StartedAt'],'restart':'unl
 config=platform['Config']; labels=config['Labels']; image=config['Image']
 networks={key:value['NetworkID'] for key,value in platform['NetworkSettings']['Networks'].items()}
 if set(networks)!={'survey-production_edge','survey-production_internal'}: raise RuntimeError('network identity invalid')
-def check():
+def check_database():
     if run(['info','--format','{{.ID}}'])!=daemon: raise RuntimeError('daemon identity changed')
     if revalidate_fixture_database(work,marker,release,dbid)!=dbid: raise RuntimeError('database binding changed')
     db=inspect('container',dbid)
@@ -52,7 +52,16 @@ def check():
         if (network.get('Id')!=nid or network_labels.get('com.docker.compose.project')!='survey-production' or
             network_labels.get('com.docker.compose.network')!=suffix or network.get('Internal') is not (suffix=='internal')):
             raise RuntimeError('candidate network changed')
-    item=inspect('container',pid); state=item['State']; cfg=item['Config']; host=item['HostConfig']
+    return True
+def check_platform_identity():
+    check_database()
+    item=inspect('container',pid); cfg=item['Config']
+    actual={key:value['NetworkID'] for key,value in item['NetworkSettings']['Networks'].items()}
+    if item['Id']!=pid or cfg['Image']!=image or cfg['Labels']!=labels or actual!=networks:
+        raise RuntimeError('platform identity changed')
+    return item
+def check():
+    item=check_platform_identity(); state=item['State']; cfg=item['Config']; host=item['HostConfig']
     actual={key:value['NetworkID'] for key,value in item['NetworkSettings']['Networks'].items()}
     if (item['Id']!=pid or cfg['Image']!=image or cfg['Labels']!=labels or actual!=networks or
         state['Running'] is not expected['running'] or state['StartedAt']!=expected['started'] or
@@ -60,17 +69,18 @@ def check():
     return True
 
 def callback(expected_id):
-    return expected_id==dbid and check()
+    return expected_id==dbid and check_database()
 
 identity=os.environ.get('NATIVE_AUTHOR_CHECKPOINT_IDENTITY','')
 run_id=os.environ.get('GITHUB_RUN_ID',''); attempt=os.environ.get('GITHUB_RUN_ATTEMPT','')
 manifest=os.environ.get('CANDIDATE_MANIFEST_SHA256','')
 if identity!=bound_checkpoint_identity(work,run_id,attempt,manifest): raise RuntimeError('checkpoint identity differs')
 os.mkdir(evidence,0o700)
-admin=target=None
+admin=target=emergency=None
 try:
     admin=PinnedDatabaseSession(dbid,'postgres',callback)
     target=PinnedDatabaseSession(dbid,'platform',callback)
+    emergency=PinnedDatabaseSession(dbid,'postgres',callback)
     def action():
         check(); run(['update','--restart=no',pid]); expected['restart']='no'; check()
         admin.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS false;')
@@ -80,27 +90,43 @@ try:
             "FROM pg_stat_activity WHERE backend_type='client backend';")
         clients=json.loads(raw)
         def key(item): return (item['pid'],item['started'],item['database_oid'],item['database'])
-        if not isinstance(clients,list) or sorted(map(key,clients))!=sorted(map(key,[admin.identity,target.identity])):
+        if not isinstance(clients,list) or sorted(map(key,clients))!=sorted(map(key,[admin.identity,target.identity,emergency.identity])):
             raise RuntimeError('unknown database client present')
         if admin.execute("SELECT count(*) FROM pg_prepared_xacts;")!='0': raise RuntimeError('prepared transaction present')
         if admin.execute("SELECT count(*) FROM pg_stat_activity WHERE datname='platform' AND (backend_type IS DISTINCT FROM 'client backend' OR state IS DISTINCT FROM 'idle' OR xact_start IS NOT NULL);")!='0':
             raise RuntimeError('database not quiet')
         if admin.execute("SELECT NOT datallowconn FROM pg_database WHERE datname='platform';")!='t': raise RuntimeError('gate not closed')
         print('diagnostic: bound candidate platform stopped and database writers drained')
-        # Only the successful diagnostic path may reopen and restart.
-        admin.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS true;')
-        check(); run(['start',pid],timeout=45)
-        state=inspect('container',pid)['State']
-        if state.get('Running') is not True or state.get('StartedAt')==expected['started']:
-            raise RuntimeError('candidate platform restart unconfirmed')
-        expected['running']=True; expected['started']=state['StartedAt']; check()
-        deadline=time.monotonic()+180
-        while time.monotonic()<deadline:
-            check(); state=inspect('container',pid)['State']
-            if (state.get('Health') or {}).get('Status')=='healthy': break
-            time.sleep(1)
-        else: raise RuntimeError('candidate platform health unverified')
-        check(); run(['update','--restart=unless-stopped',pid]); expected['restart']='unless-stopped'; check()
+        # If any post-open operation fails, the separately pinned emergency
+        # session attempts to close the gate again. Failure remains unknown.
+        try:
+            admin.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS true;')
+            check(); run(['start',pid],timeout=45)
+            state=inspect('container',pid)['State']
+            if state.get('Running') is not True or state.get('StartedAt')==expected['started']:
+                raise RuntimeError('candidate platform restart unconfirmed')
+            expected['running']=True; expected['started']=state['StartedAt']; check()
+            deadline=time.monotonic()+180
+            while time.monotonic()<deadline:
+                check(); state=inspect('container',pid)['State']
+                if (state.get('Health') or {}).get('Status')=='healthy': break
+                time.sleep(1)
+            else: raise RuntimeError('candidate platform health unverified')
+            check(); run(['update','--restart=unless-stopped',pid]); expected['restart']='unless-stopped'; check()
+        except BaseException:
+            try:
+                emergency.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS false;')
+                if emergency.execute("SELECT NOT datallowconn FROM pg_database WHERE datname='platform';")!='t':
+                    raise RuntimeError('emergency gate closure unverified')
+                item=check_platform_identity()
+                if item['HostConfig']['RestartPolicy']['Name']!='no':
+                    run(['update','--restart=no',pid])
+                if item['State']['Running'] is True:
+                    run(['stop','--time','30',pid],timeout=45)
+                print('diagnostic: emergency gate closure and platform stop requested; recovery remains unverified')
+            except BaseException:
+                print('diagnostic: emergency closure unverified; checkpoint remains pending')
+            raise
     def verify():
         check()
         return (admin.execute("SELECT datallowconn FROM pg_database WHERE datname='platform';")=='t' and
@@ -110,3 +136,4 @@ try:
 finally:
     if target is not None: target.close()
     if admin is not None: admin.close()
+    if emergency is not None: emergency.close()

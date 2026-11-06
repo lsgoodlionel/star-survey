@@ -4,8 +4,8 @@ import unittest
 
 source = Path(__file__).resolve().parents[1] / 'scratch_candidate_stop.py'
 tree = ast.parse(source.read_text())
-node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'check')
-compiled = compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec')
+nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('check_database', 'check_platform_identity', 'check')]
+compiled = compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec')
 
 class CandidateStopGuardTest(unittest.TestCase):
     def setUp(self):
