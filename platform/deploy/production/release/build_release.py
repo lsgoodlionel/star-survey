@@ -44,6 +44,7 @@ RUNTIME_FILES = (
     "init/ProductionInitCommand.php",
     "init/config.production.php",
     "init/engine-init.sh",
+    "init/event-relay.sh",
     "init/init-platform-db.sh",
     "init/production-health.php",
     "init/run-with-secrets.sh",

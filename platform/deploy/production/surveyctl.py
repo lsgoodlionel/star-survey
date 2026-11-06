@@ -43,7 +43,7 @@ IMAGE_KEYS = {
     "ENGINE_IMAGE", "POSTGRES_IMAGE", "MARIADB_IMAGE",
 }
 LONG_RUNNING_SERVICES = {
-    "edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db",
+    "edge", "admin-web", "platform", "publish-gateway", "engine", "engine-relay", "platform-db", "engine-db",
 }
 ONE_SHOT_SERVICES = {"engine-init"}
 SECRET_NAMES = (

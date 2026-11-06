@@ -129,7 +129,7 @@ class FakeRunner:
             version = command[command.index("--version") + 1]
             write_fake_backup(output, version, self.backup_schema)
         if "ps" in command and "--format" in command:
-            services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"]
+            services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "engine-relay", "platform-db", "engine-db"]
             payload = [
                 {
                     "Service": service,
