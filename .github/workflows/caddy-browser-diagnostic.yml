@@ -1,0 +1,60 @@
+name: Caddy browser business diagnostic
+
+on:
+  push:
+    branches: [codex/caddy-native-browser-diagnostic]
+
+permissions:
+  contents: read
+
+jobs:
+  real-relay:
+    name: Development stack relay (${{ matrix.db }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [mysql, pgsql]
+    env:
+      TEST_DB: ${{ matrix.db }}
+      ADMIN_WEB_RELAY_DIAGNOSTIC: '1'
+      ADMIN_WEB_CADDY_DIAGNOSTIC: '1'
+      SURVEY_TEST_PREFIX: relay-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.db }}
+      COMPOSE_PROJECT_NAME: relay-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.db }}
+      ADMIN_WEB_CI_ARTIFACT_DIR: platform/apps/admin-web/test-results/ci-artifacts
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: platform/apps/admin-web/package-lock.json
+      - name: Verify PR head and production route
+        run: |
+          git merge-base --is-ancestor 0c344aa3b02c231bdb2c1dd9a49198c13bfdd6f5 HEAD
+          git diff --exit-code 0c344aa3b02c231bdb2c1dd9a49198c13bfdd6f5 HEAD -- platform/deploy/production/Caddyfile platform/tools/publish-gateway platform/deploy/production/init/event-relay.sh
+      - name: Check diagnostic cleanup failure handling
+        run: python3 -m unittest discover -s platform/deploy/test -p test_relay_diagnostic.py
+      - name: Install application dependencies
+        working-directory: platform/apps/admin-web
+        run: npm ci
+      - name: Install browser
+        working-directory: platform/apps/admin-web
+        run: npx playwright install --with-deps chromium
+      - name: Exercise production worker in isolated development stack
+        id: relay
+        run: platform/deploy/test/run-admin-web-e2e.sh --fresh
+      - name: Upload sanitized failure evidence
+        if: ${{ failure() && steps.relay.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: relay-devstack-sanitized-${{ matrix.db }}
+          path: platform/apps/admin-web/test-results/ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 7

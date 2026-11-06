@@ -13,6 +13,10 @@ export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$SURVEY_TEST_PREFIX}"
 # shellcheck source=platform/deploy/test/lib.sh
 source "$REPO_ROOT/platform/deploy/test/lib.sh"
 COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.dev.yml" -f "$TEST_DIR/admin-web-e2e.compose.yml" --profile test)
+if [[ "${ADMIN_WEB_CADDY_DIAGNOSTIC:-}" == "1" ]]; then
+  [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]] || { echo "Caddy diagnostic requires isolated relay mode" >&2; exit 1; }
+  COMPOSE+=( -f "$TEST_DIR/caddy-diagnostic.compose.yml" )
+fi
 
 INSTANCE_ID=admin-web-engine-01
 PLATFORM_JAR="$REPO_ROOT/platform/services/business/target/business-0.1.0-SNAPSHOT.jar"
@@ -395,7 +399,13 @@ fi
 
 WORK_DIR="$(mktemp -d)"
 export ADMIN_WEB_PORT="${ADMIN_WEB_PORT:-$(random_loopback_port)}"
-export ADMIN_WEB_PUBLIC_URL="http://127.0.0.1:$ADMIN_WEB_PORT"
+if [[ "${ADMIN_WEB_CADDY_DIAGNOSTIC:-}" == "1" ]]; then
+  export ADMIN_WEB_PUBLIC_PORT="$(random_loopback_port)"
+  [[ "$ADMIN_WEB_PUBLIC_PORT" != "$ADMIN_WEB_PORT" ]] || fail "diagnostic ports collided"
+else
+  export ADMIN_WEB_PUBLIC_PORT="$ADMIN_WEB_PORT"
+fi
+export ADMIN_WEB_PUBLIC_URL="http://127.0.0.1:$ADMIN_WEB_PUBLIC_PORT"
 export ADMIN_WEB_PLATFORM_JAR="$PLATFORM_JAR"
 export ADMIN_WEB_ENGINES_FILE="$WORK_DIR/engines.json"
 export ADMIN_WEB_JWT_FILE="$WORK_DIR/owner.jwt"
@@ -424,10 +434,12 @@ PLATFORM_ASSET_SECRET="$(random_secret)"
 ADMIN_PASSWORD="$(random_secret)"
 export PUBGW_ENGINE_ADMIN_WEB_PASSWORD="$ADMIN_PASSWORD"
 
+ENGINE_RPC_HOST=test-web
+if [[ "${ADMIN_WEB_CADDY_DIAGNOSTIC:-}" == "1" ]]; then ENGINE_RPC_HOST=engine; fi
 cat >"$ADMIN_WEB_ENGINES_FILE" <<JSON
 {
   "$INSTANCE_ID": {
-    "rpcUrl": "http://test-web/index.php/admin/remotecontrol",
+    "rpcUrl": "http://$ENGINE_RPC_HOST/index.php/admin/remotecontrol",
     "user": "$ADMIN_USER",
     "passwordEnv": "PUBGW_ENGINE_ADMIN_WEB_PASSWORD",
     "channelSecretEnv": "PUBGW_ENGINE_ADMIN_WEB_CHANNEL_SECRET"
@@ -491,6 +503,9 @@ ok "engine installed and RemoteControl enabled"
 
 step "gateway and same-origin admin web: build and start"
 "${COMPOSE[@]}" up -d --build gateway admin-web >/dev/null
+if [[ "${ADMIN_WEB_CADDY_DIAGNOSTIC:-}" == "1" ]]; then
+  "${COMPOSE[@]}" up -d diagnostic-edge >/dev/null
+fi
 GATEWAY_URL="$(service_url gateway 8080)"
 wait_healthy gateway "$GATEWAY_URL/healthz" "$SERVICE_HEALTH_ATTEMPTS" "$GATEWAY_CONTAINER"
 export ADMIN_WEB_BASE_URL="$ADMIN_WEB_PUBLIC_URL"

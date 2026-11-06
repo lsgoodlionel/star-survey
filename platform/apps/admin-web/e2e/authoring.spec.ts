@@ -177,6 +177,10 @@ test('author filters stable resources, restores archive, and publishes the same 
   await captureEvidenceScreenshot(page, 'real-preview-desktop.png');
   await clickAction(page.getByRole('button', { name: '在新窗口打开真实预览' }));
   const previewPage = await previewPagePromise;
+  if (process.env.ADMIN_WEB_CADDY_DIAGNOSTIC === '1') {
+    await previewPage.waitForURL('**/survey/**');
+    expect(new URL(previewPage.url()).origin).toBe(new URL(env('ADMIN_WEB_BASE_URL')).origin);
+  }
   await completeLimeSurvey(previewPage);
   await previewPage.close();
   await expect.poll(() => readDeliveredEngineEvents(previewIdentity.sid, previewIdentity.generation), {
@@ -228,6 +232,9 @@ test('author filters stable resources, restores archive, and publishes the same 
   const deliveryUrl = await deliveryLink.getAttribute('href');
   expect(deliveryUrl).toBe(createdLink.shortUrl ?? createdLink.url);
   expect(deliveryUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
+  if (process.env.ADMIN_WEB_CADDY_DIAGNOSTIC === '1') {
+    expect(new URL(deliveryUrl!).origin).toBe(new URL(env('ADMIN_WEB_BASE_URL')).origin);
+  }
 
   if (testInfo.project.name !== 'chromium-wave3-seed') {
     await clickAction(page.getByRole('link', { name: '受众与投放' }));
