@@ -513,8 +513,14 @@ wait_healthy admin-web "$ADMIN_WEB_BASE_URL/actuator/health" "$SERVICE_HEALTH_AT
 ok "gateway and admin web healthy"
 
 step "engine: seed an isolated RemoteControl baseline for first-preview reconciliation"
+SEED_ENGINE_BASE="$ADMIN_WEB_BASE_URL/survey"
+if [[ "${ADMIN_WEB_CADDY_DIAGNOSTIC:-}" == "1" ]]; then
+  # Production Caddy intentionally blocks admin RPC; setup alone uses the
+  # isolated engine's loopback endpoint. Browser journeys still use Caddy.
+  SEED_ENGINE_BASE="$(service_url test-web 80)"
+fi
 python3 "$TEST_DIR/seed-empty-engine.py" \
-  --base-url "$ADMIN_WEB_BASE_URL/survey" \
+  --base-url "$SEED_ENGINE_BASE" \
   --fixture "$REPO_ROOT/platform/tests/fixtures/surveys/mjy-question-slice.lss"
 ok "engine first-preview baseline ready"
 
