@@ -95,6 +95,7 @@ services:
     profiles: [relay-test]
     image: survey-web
     environment:
+      ENGINE_DB_ROOT_PASSWORD: root
       MJY_ENGINE_INSTANCE_ID:
       MJY_PLATFORM_EVENTS_URL: http://platform:8080/internal/engine-events
       MJY_PLATFORM_EVENTS_SECRET:

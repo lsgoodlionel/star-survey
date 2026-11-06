@@ -321,6 +321,11 @@ verify_and_archive_run_root() {
   local root_id_file="$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
   local expected_publish_calls=4
   if [[ "$E2E_SUITE" == "wave3" ]]; then expected_publish_calls=3; fi
+  local verification_scope=full
+  if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+    verification_scope=relay-diagnostic
+    expected_publish_calls=1
+  fi
   [[ -f "$success_marker" && "$(<"$success_marker")" == "passed" ]] \
     || fail "Playwright did not write a valid suite success marker"
   [[ -f "$root_id_file" ]] || fail "Playwright did not write run root evidence"
@@ -329,6 +334,7 @@ verify_and_archive_run_root() {
     --metadata-file "$ADMIN_WEB_METADATA_FILE" \
     --result-file "$ADMIN_WEB_RESULT_FILE" \
     --wave2-evidence-file "$ADMIN_WEB_TEST_RESULTS_DIR/wave2-scenarios.json" \
+    --verification-scope "$verification_scope" \
     --platform-db-container "$PLATFORM_DB_CONTAINER" \
     --platform-db-name platform \
     --engine-db-container "$TEST_PREFIX-$DB_SERVICE" \

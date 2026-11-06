@@ -42,5 +42,22 @@ cleanup_run 0'''
                 self.assertEqual(0 if kind == 'none' else 1, result.returncode, result.stderr)
 
 
+    def test_mysql_worker_uses_same_test_database_credential_as_test_web(self):
+        import re
+        root = SCRIPT.parents[3]
+        compose = (SCRIPT.parent / 'admin-web-e2e.compose.yml').read_text()
+        development = (root / 'docker-compose.dev.yml').read_text()
+        relay = re.search(r'(?ms)^  test-relay:\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)', compose)
+        web = re.search(r'(?ms)^  test-web:\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)', development)
+        self.assertIsNotNone(relay)
+        self.assertIsNotNone(web)
+        pattern = r'(?m)^      ENGINE_DB_ROOT_PASSWORD: (\S+)$'
+        relay_password = re.search(pattern, relay.group(1))
+        web_password = re.search(pattern, web.group(1))
+        self.assertIsNotNone(relay_password)
+        self.assertIsNotNone(web_password)
+        self.assertEqual(relay_password.group(1), web_password.group(1))
+
+
 if __name__ == '__main__':
     unittest.main()
