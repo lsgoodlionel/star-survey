@@ -1,44 +1,12 @@
-name: Immutable rc19 image identity probe
+name: Isolated fixture checkpoint probe
 on:
   workflow_dispatch:
 permissions:
-  actions: read
   contents: read
-  packages: read
 jobs:
-  image:
+  checkpoint:
     runs-on: ubuntu-22.04
-    timeout-minutes: 8
+    timeout-minutes: 4
     steps:
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
-        with:
-          name: release-candidate
-          path: candidate-assets
-          run-id: 41942118701
-          repository: ${{ github.repository }}
-          github-token: ${{ github.token }}
-      - name: Verify immutable candidate identity
-        shell: bash
-        run: |
-          set -euo pipefail
-          jq -e '.version == "0.3.19-rc.1" and .commit == "46766fd4326c370e0a5eeaa8de50235b5abb4a16"' candidate-assets/identity.json >/dev/null
-          expected="$(jq -er '.manifestSha256' candidate-assets/identity.json)"
-          actual="$(sha256sum candidate-assets/candidate/release.json | cut -d' ' -f1)"
-          test "$expected" = "$actual"
-          reference="$(jq -er '.images.platform.reference' candidate-assets/identity.json)"
-          digest="$(jq -er '.images.platform.digest' candidate-assets/identity.json)"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$reference" == *@"$digest" ]]
-          printf 'PLATFORM_REFERENCE=%s\n' "$reference" >> "$GITHUB_ENV"
-          printf 'candidate manifest %s; platform digest %s\n' "$actual" "$digest"
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull exact platform image
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker pull "$PLATFORM_REFERENCE" >/dev/null
-          docker image inspect "$PLATFORM_REFERENCE" --format '{{.Id}}' | grep -E '^sha256:[0-9a-f]{64}$'
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_checkpoint.py -v
