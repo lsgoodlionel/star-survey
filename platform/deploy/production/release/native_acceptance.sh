@@ -132,6 +132,23 @@ collect_evidence() {
   local restore_clean=true
   trap - EXIT
   set +e
+  # Before any Docker, host or uninstall action, fail closed if the author
+  # checkpoint is pending, missing, or lacks the live supervisor latch.
+  local checkpoint_unverified=false
+  if [[ "$author_mode" == "1" ]]; then
+    if [[ "$author_checkpoint_verified" != true ]] || ! python3 "$script_dir/fixture_checkpoint.py" verify "${evidence_root}.fixture-checkpoint" "$work_root" "${NATIVE_AUTHOR_CHECKPOINT_IDENTITY:-}" "${GITHUB_RUN_ID:-}" "${GITHUB_RUN_ATTEMPT:-}" "$CANDIDATE_MANIFEST_SHA256"; then
+      checkpoint_unverified=true
+    fi
+  elif [[ -e "${evidence_root}.fixture-checkpoint" || -L "${evidence_root}.fixture-checkpoint" ]]; then
+    checkpoint_unverified=true
+  fi
+  if [[ "$checkpoint_unverified" == true ]]; then
+    acceptance_status="failed"
+    printf '{"schemaVersion":1,"status":"pending_or_unverified"}\n' >"$evidence_root/fixture-checkpoint-status.json" || :
+    write_summary 5 || :
+    printf 'Fixture outcome unverified; retaining work until runner disposal.\n' >&2
+    exit 5
+  fi
   sed -i.bak "/# $hosts_marker$/d" /etc/hosts
   rm -f /etc/hosts.bak
   docker ps --format '{"id":"{{.ID}}","image":"{{.Image}}","name":"{{.Names}}","state":"{{.State}}","health":"{{.Status}}"}' >"$work_root/services.jsonl"

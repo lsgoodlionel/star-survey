@@ -118,7 +118,7 @@ class CheckpointTrapTest(unittest.TestCase):
                               'p=Path(args[args.index("--output")+1]) if "--output" in args else None\n'
                               'p.write_text("{}") if p else None\n')
             docker = bindir / 'docker'
-            docker.write_text('#!/bin/sh\nif [ "$1" = ps ]; then exit 0; fi\nexit 1\n'); docker.chmod(0o755)
+            docker.write_text('#!/bin/sh\nprintf called >> "$DOCKER_SENTINEL"\nif [ "$1" = ps ]; then exit 0; fi\nexit 1\n'); docker.chmod(0o755)
             source = (ROOT / 'native_acceptance.sh').read_text()
             function = source[source.index('collect_evidence() {'):source.index('trap collect_evidence EXIT')]
             # The production trap also edits /etc/hosts. Exclude that unrelated
@@ -149,12 +149,13 @@ run_ctl() {{ return 1; }}
 {'false' if uninstall_failure else ':'}
 collect_evidence
 '''
-            env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'])
+            env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'], DOCKER_SENTINEL=str(base / 'docker-called'))
             result = subprocess.run(['bash', '-c', shell], env=env, capture_output=True, text=True, timeout=10)
             status = json.loads((evidence / 'fixture-checkpoint-status.json').read_text())
             if pending or not live_success:
                 self.assertEqual(result.returncode, 5, result.stderr)
                 self.assertEqual(status['status'], 'pending_or_unverified')
+                self.assertFalse((base / 'docker-called').exists(), 'Docker must not run after an unverified checkpoint')
                 self.assertEqual((evidence / 'result.txt').read_text(), 'failed:5')
                 self.assertTrue(work.exists())
                 if pending: self.assertTrue((checkpoint / 'fixture-recovery.pending').exists())

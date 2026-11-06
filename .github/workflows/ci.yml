@@ -11,5 +11,6 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - run: python3 -B -m unittest discover -s scratch -p 'test_candidate_stop_*.py' -v
       - run: python3 -B scratch/check_candidate_stop_signal.py
+      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_checkpoint_trap.py -v
       - run: docker pull postgres:16-alpine
       - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_REPOSITORY,GITHUB_WORKSPACE python3 -B scratch/check_lost_exec.py
