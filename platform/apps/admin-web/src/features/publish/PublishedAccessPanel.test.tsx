@@ -124,6 +124,35 @@ describe('PublishedAccessPanel', () => {
     expect(createObjectURL).toHaveBeenCalledTimes(2);
   });
 
+  test('does not revive a revoked QR when a route changes away and back', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValueOnce('blob:first').mockReturnValueOnce('blob:latest');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let resolveLatest!: (value: Blob) => void;
+    const fetchQr = vi.fn().mockResolvedValueOnce(new Blob(['first']))
+      .mockImplementationOnce(() => new Promise<Blob>(() => undefined))
+      .mockImplementationOnce(() => new Promise<Blob>((resolve) => { resolveLatest = resolve; }));
+    let currentLinks: LinkView[] = [activeLink];
+    const api = apiFrom((request) => {
+      if (request.path.includes('/delivery/')) return currentLinks;
+      if (request.path.includes('/responses/summary')) return summary;
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    const rendered = renderWithQuery(
+      <MemoryRouter><PublishedAccessPanel api={api} fetchQr={fetchQr} published surveyId={surveyId} tenantId="tenant-a" /></MemoryRouter>,
+    );
+    expect(await screen.findByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:first');
+    currentLinks = [{ ...activeLink, url: 'https://survey.example.test/s/other' }];
+    await act(async () => rendered.queryClient.invalidateQueries({ queryKey: ['delivery-links', 'tenant-a', surveyId] }));
+    await waitFor(() => expect(fetchQr).toHaveBeenCalledTimes(2));
+    currentLinks = [activeLink];
+    await act(async () => rendered.queryClient.invalidateQueries({ queryKey: ['delivery-links', 'tenant-a', surveyId] }));
+    await waitFor(() => expect(fetchQr).toHaveBeenCalledTimes(3));
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:first');
+    expect(screen.queryByRole('img', { name: '正式投放二维码' })).not.toBeInTheDocument();
+    await act(async () => resolveLatest(new Blob(['latest'])));
+    expect(await screen.findByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:latest');
+  });
+
   test('keeps unpublished, forbidden and failed states distinct and actionable', async () => {
     const api = apiFrom(() => {
       throw new Error('unpublished must not load delivery data');

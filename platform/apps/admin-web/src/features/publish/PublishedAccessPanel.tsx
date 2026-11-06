@@ -254,9 +254,9 @@ function DeliveryQr({ link, load }: {
   link: LinkView;
   load: (linkId: string, signal: AbortSignal) => Promise<Blob>;
 }) {
+  const requestIdentity = useMemo(() => ({ linkId: link.id, route: link.url, loader: load }), [link.id, link.url, load]);
   const [result, setResult] = useState<{
-    route: string;
-    loader: typeof load;
+    identity: object;
     url: string | null;
   } | null>(null);
 
@@ -266,18 +266,18 @@ function DeliveryQr({ link, load }: {
     void load(link.id, controller.signal).then((blob) => {
       if (controller.signal.aborted) return;
       objectUrl = URL.createObjectURL(blob);
-      setResult({ route: link.url, loader: load, url: objectUrl });
+      setResult({ identity: requestIdentity, url: objectUrl });
     }).catch(() => {
-      if (!controller.signal.aborted) setResult({ route: link.url, loader: load, url: null });
+      if (!controller.signal.aborted) setResult({ identity: requestIdentity, url: null });
     });
     return () => {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [link.id, link.url, load]);
+  }, [link.id, load, requestIdentity]);
 
-  // Never show a previous route or previous session's QR while reloading.
-  const current = result?.route === link.url && result.loader === load ? result : null;
+  // A new identity also prevents reviving a revoked blob if a route changes back.
+  const current = result?.identity === requestIdentity ? result : null;
   if (!current) return <span className="delivery-qr-loading">正在加载二维码</span>;
   if (!current.url) return <span className="delivery-qr-error">二维码暂不可用</span>;
   return <img className="delivery-qr" src={current.url} alt={`${link.label}二维码`} />;
