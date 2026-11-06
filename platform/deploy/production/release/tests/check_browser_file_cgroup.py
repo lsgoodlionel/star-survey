@@ -9,7 +9,7 @@ import tempfile
 import uuid
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from fixture_browser_file import BrowserFixtureFile
+from fixture_browser_file import BrowserFixtureError, BrowserFixtureFile, require_unused_worker_ids
 from fixture_cgroup import CgroupScope
 from fixture_handoff import make_handoff
 
@@ -29,15 +29,28 @@ if hashlib.sha256(helper.read_bytes()).digest()!=hashlib.sha256(module_copy.read
     raise RuntimeError('browser reader copy differs')
 tenant,principal,connection=(str(uuid.uuid4()) for _ in range(3))
 handoff=make_handoff(tenant,principal,connection)
-fixture=BrowserFixtureFile.create(Path('/tmp').resolve(),handoff,65534,65534)
+# Existing processes with the selected numeric IDs must block issuance.
+probe=CgroupScope(61001,61001)
+process=probe.spawn(['/usr/bin/sleep','5'],env={'PATH':'/usr/bin:/bin'})
+try:
+    try: require_unused_worker_ids(61001,61001)
+    except BrowserFixtureError: pass
+    else: raise RuntimeError('live worker identity was accepted')
+finally:
+    probe.kill_and_wait(); process.wait(timeout=5); probe.close()
+fixture=BrowserFixtureFile.create(Path('/tmp').resolve(),handoff,61001,61001)
 scope=None; process=None
 try:
     # Fixed exit codes reveal the failing stage without printing fixture data.
     code='''let reader; try { reader=await import(process.argv[1]); } catch { process.exit(21); }
-let item; try { item=await reader.readHandoffFixture(process.argv[2],process.argv[3]); } catch { process.exit(22); }
+let item; try { item=await reader.readTrustedHandoffFixture(process.argv[2],process.argv[3],process.argv[4],process.argv[5]); } catch { process.exit(22); }
+try { await reader.readTrustedHandoffFixture(process.argv[2],process.argv[3],process.argv[4],'00000000-0000-4000-8000-000000000000'); process.exit(24); } catch {}
+const fs=await import('node:fs/promises');
+try { await fs.appendFile(process.argv[2],'x'); process.exit(25); } catch (e) { if(e.code!=='EACCES') process.exit(26); }
+try { await fs.unlink(process.argv[2]); process.exit(27); } catch (e) { if(e.code!=='EACCES') process.exit(28); }
 if(item.tenantId!==process.argv[4]||item.principalId!==process.argv[5]) process.exit(23);
 '''
-    scope=CgroupScope(65534,65534)
+    scope=CgroupScope(61001,61001)
     process=scope.spawn([node,'--input-type=module','-e',code,module_copy.as_uri(),str(fixture.directory/'handoff.json'),
                          str(fixture.directory),tenant,principal],env={'PATH':'/usr/bin:/bin'})
     result=process.wait(timeout=20)

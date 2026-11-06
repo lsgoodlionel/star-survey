@@ -32,6 +32,36 @@ export async function readHandoffFixture(path, work, now = Date.now()) {
   }
 }
 
+// The real preview uses root-owned, group-readable data so its worker cannot
+// rewrite the fixture or replace it. Expected IDs come from the supervisor.
+export async function readTrustedHandoffFixture(path, work, expectedTenant, expectedPrincipal, now = Date.now()) {
+  if (!isAbsolute(work) || path !== join(work, 'handoff.json') || resolve(work) !== work ||
+      !UUID.test(expectedTenant) || !UUID.test(expectedPrincipal) || process.geteuid() === 0)
+    throw new Error('invalid trusted handoff parameters');
+  let file;
+  try {
+    const dir = await lstat(work);
+    if (!dir.isDirectory() || dir.isSymbolicLink() || (dir.mode & 0o777) !== 0o710 ||
+        dir.uid !== 0 || dir.gid !== process.getegid()) throw new Error('unsafe directory');
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const info = await file.stat();
+    if (!info.isFile() || (info.mode & 0o777) !== 0o440 || info.uid !== 0 ||
+        info.gid !== process.getegid() || info.nlink !== 1 || info.size > 4096) throw new Error('unsafe file');
+    const buffer = Buffer.alloc(4097);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > 4096) throw new Error('oversized fixture');
+    const fixture = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
+    prepareHandoff(fixture, now);
+    if (fixture.tenantId !== expectedTenant || fixture.principalId !== expectedPrincipal)
+      throw new Error('identity differs');
+    return fixture;
+  } catch {
+    throw new Error('trusted native handoff fixture cannot be read');
+  } finally {
+    if (file) await file.close();
+  }
+}
+
 export function prepareHandoff(fixture, now = Date.now()) {
   if (!fixture || typeof fixture !== 'object' || Array.isArray(fixture) ||
       Object.keys(fixture).sort().join(',') !== 'expiresAt,handoff,nonce,principalId,tenantId' ||

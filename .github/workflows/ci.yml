@@ -9,6 +9,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_browser_file.py -v
+      - run: sudo python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_browser_file.py -v
       - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_handoff.py -v
       - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_REPOSITORY,GITHUB_WORKSPACE python3 -B platform/deploy/production/release/tests/check_browser_file_cgroup.py

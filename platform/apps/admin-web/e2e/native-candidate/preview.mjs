@@ -1,9 +1,8 @@
 /* global process, URL, window, PopStateEvent */
 import { randomBytes } from 'node:crypto';
-import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
-import { loginWithHandoff, readHandoffFixture } from './handoff.mjs';
+import { loginWithHandoff, readTrustedHandoffFixture } from './handoff.mjs';
 import { pairActionAndResponse, runWithCleanup } from './cleanup.mjs';
 
 // This is a test-only preview slice, not a full author-journey acceptance result.
@@ -14,8 +13,8 @@ test('native candidate author can create and close an isolated preview', async (
       env.GITHUB_REPOSITORY !== 'lsgoodlionel/star-survey' || env.SURVEY_NATIVE_ACCEPTANCE !== '1' ||
       !env.NATIVE_AUTHOR_FIXTURE_DIR) throw new Error('native author fixture unavailable');
   const fixturePath = join(env.NATIVE_AUTHOR_FIXTURE_DIR, 'handoff.json');
-  const fixture = await readHandoffFixture(fixturePath, env.NATIVE_AUTHOR_FIXTURE_DIR);
-  await unlink(fixturePath);
+  const fixture = await readTrustedHandoffFixture(fixturePath, env.NATIVE_AUTHOR_FIXTURE_DIR,
+    env.NATIVE_AUTHOR_EXPECTED_TENANT, env.NATIVE_AUTHOR_EXPECTED_PRINCIPAL);
   const projectName = `native-author-${randomBytes(8).toString('hex')}`;
   const state = { previewPossible: false, projectPossible: false, handoffAttempted: false };
   await runWithCleanup(state, async (current) => {

@@ -13,20 +13,24 @@ from fixture_handoff import make_handoff
 
 class BrowserFixtureFileTest(unittest.TestCase):
     def setUp(self):
-        if os.getuid() == 0 or os.getgid() == 0: self.skipTest('requires an unprivileged test user')
+        if os.geteuid() != 0: self.skipTest('requires root on an isolated test host')
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.parent = Path(self.tmp.name).resolve()
         self.handoff = make_handoff(*(str(uuid.uuid4()) for _ in range(3)))
 
     def create(self):
-        return BrowserFixtureFile.create(self.parent, self.handoff, os.getuid(), os.getgid())
+        return BrowserFixtureFile.create(self.parent, self.handoff, 61001, 61001)
 
     def test_private_one_use_file_and_cleanup(self):
         fixture = self.create(); path = fixture.directory / 'handoff.json'
-        self.assertEqual(fixture.directory.stat().st_mode & 0o777, 0o700)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(fixture.directory.stat().st_mode & 0o777, 0o710)
+        self.assertEqual(fixture.directory.stat().st_uid, 0)
+        self.assertEqual(fixture.directory.stat().st_gid, 61001)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o440)
+        self.assertEqual(path.stat().st_uid, 0)
+        self.assertEqual(path.stat().st_gid, 61001)
         self.assertEqual(json.loads(path.read_text()), self.handoff.browser_values())
-        path.unlink(); fixture.cleanup()
+        fixture.cleanup()
         self.assertFalse(fixture.directory.exists())
 
     def test_cleanup_refuses_unknown_entry_and_symlink(self):
