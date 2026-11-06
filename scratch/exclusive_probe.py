@@ -18,8 +18,8 @@ def run(args, check=True, timeout=30):
 class Session:
     def __init__(self, cid, db):
         self.p = subprocess.Popen(D + ['exec', '-i', cid, 'psql', '-X', '-q', '-A', '-t',
-                                  '-U', 'postgres', '-d', db, '-v', 'ON_ERROR_STOP=1'],
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                                  '-U', 'postgres', '-d', db, '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=sqlstate'],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.buffer = b''
     def sql(self, sql):
         self.p.stdin.write((sql + '\n\\echo FIXTURE_END\n').encode()); self.p.stdin.flush()
@@ -29,7 +29,10 @@ class Session:
             if remain <= 0 or not select.select([self.p.stdout], [], [], remain)[0]:
                 raise RuntimeError('session did not respond')
             chunk = os.read(self.p.stdout.fileno(), 4096)
-            if not chunk: raise RuntimeError('session ended')
+            if not chunk:
+                detail = self.p.stderr.read(4096).decode('utf-8', errors='replace')
+                codes = re.findall(r'(?m)^ERROR:\s+([0-9A-Z]{5})\s*$', detail)
+                raise RuntimeError('session ended; SQLSTATE=' + (codes[-1] if codes else 'unavailable'))
             self.buffer += chunk
             if len(self.buffer) > 8192: raise RuntimeError('unexpected session output')
         output, self.buffer = self.buffer.split(marker, 1)
