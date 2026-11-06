@@ -32,7 +32,7 @@ class CgroupScope:
         if (metadata.st_dev, metadata.st_ino) != self.identity:
             raise CgroupError('cgroup identity changed')
 
-    def spawn(self, command):
+    def spawn(self, command, *, env=None):
         self._check()
         procs = os.open('cgroup.procs', os.O_WRONLY | os.O_NOFOLLOW, dir_fd=self.fd)
         uid, gid = self.uid, self.gid
@@ -48,7 +48,7 @@ class CgroupScope:
         try:
             return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, start_new_session=True,
-                                    preexec_fn=enter, pass_fds=(procs,))
+                                    preexec_fn=enter, pass_fds=(procs,), env=env)
         finally:
             os.close(procs)
 
