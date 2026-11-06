@@ -271,39 +271,43 @@ test('branded copy previews and publishes with language and pinned image bytes',
   expect(createHash('sha256').update(await pinnedImage.body()).digest('hex')).toBe(beforeHash);
   await assertNoThirdPartyUrls(fresh);
   await switchToEnglish(fresh);
-  await expectEnglishQuestion(fresh);
-  const uploadCount = fresh.locator('input[name$="_Cfilecount"]').first();
-  await expect(uploadCount).toBeAttached();
-  const countName = await uploadCount.getAttribute('name');
-  if (!countName?.endsWith('_Cfilecount')) throw new Error('Upload count field is missing');
-  const fieldName = countName.slice(0, -'_Cfilecount'.length);
-  const csrf = await fresh.locator('input[name="YII_CSRF_TOKEN"]').first().inputValue();
-  const uploadUrl = new URL('/uploader/index', fresh.url());
-  uploadUrl.searchParams.set('mode', 'upload');
-  uploadUrl.searchParams.set('fieldname', fieldName);
-  const upload = await fresh.request.post(uploadUrl.toString(), { multipart: {
-    YII_CSRF_TOKEN: csrf, mode: 'upload', fieldname: fieldName,
-    uploadfile: { name: 'synthetic-evidence.txt', mimeType: 'text/plain', buffer: Buffer.from('synthetic wave 3 attachment') },
-  } });
-  expect(upload.status()).toBe(200);
-  const uploaded = await upload.json() as { success: boolean; size: number; name: string; filename: string; ext: string };
-  expect(uploaded.success).toBe(true);
-  await fresh.locator('input').evaluateAll((inputs, values) => {
-    const find = (name: string) => inputs.find((input) => input.getAttribute('name') === name) as HTMLInputElement | undefined;
-    const field = find(values.fieldName); const count = find(values.countName);
-    if (!field || !count) throw new Error('Upload form fields are missing');
-    field.value = JSON.stringify([{ title: '', comment: '', size: values.uploaded.size,
-      name: values.uploaded.name, filename: values.uploaded.filename, ext: values.uploaded.ext }]);
-    count.value = '1';
-  }, { fieldName, countName, uploaded });
-  await fresh.locator('input[type="radio"]:visible').first().check();
-  for (let step = 0; step < 4; step += 1) {
+  let fieldName = '';
+  type UploadResponse = { success: boolean; size: number; name: string; filename: string; ext: string };
+  let uploaded: UploadResponse | null = null;
+  const translated = fresh.getByText('Which option describes you?', { exact: true });
+  for (let step = 0; step < 8; step += 1) {
+    const uploadCount = fresh.locator('input[name$="_Cfilecount"]').first();
+    if (!uploaded && await uploadCount.count()) {
+      const countName = await uploadCount.getAttribute('name');
+      if (!countName?.endsWith('_Cfilecount')) throw new Error('Upload count field is missing');
+      fieldName = countName.slice(0, -'_Cfilecount'.length);
+      const csrf = await fresh.locator('input[name="YII_CSRF_TOKEN"]').first().inputValue();
+      const uploadUrl = new URL('/uploader/index', fresh.url());
+      uploadUrl.searchParams.set('mode', 'upload');
+      uploadUrl.searchParams.set('fieldname', fieldName);
+      const upload = await fresh.request.post(uploadUrl.toString(), { multipart: {
+        YII_CSRF_TOKEN: csrf, mode: 'upload', fieldname: fieldName,
+        uploadfile: { name: 'synthetic-evidence.txt', mimeType: 'text/plain', buffer: Buffer.from('synthetic wave 3 attachment') },
+      } });
+      expect(upload.status()).toBe(200);
+      uploaded = await upload.json() as UploadResponse;
+      if (!uploaded?.success) throw new Error('Synthetic upload failed');
+      await fresh.locator('input').evaluateAll((inputs, values) => {
+        const find = (name: string) => inputs.find((input) => input.getAttribute('name') === name) as HTMLInputElement | undefined;
+        const field = find(values.fieldName); const count = find(values.countName);
+        if (!field || !count) throw new Error('Upload form fields are missing');
+        field.value = JSON.stringify([{ title: '', comment: '', size: values.uploaded.size,
+          name: values.uploaded.name, filename: values.uploaded.filename, ext: values.uploaded.ext }]);
+        count.value = '1';
+      }, { fieldName, countName, uploaded });
+    }
+    if (await translated.isVisible()) await fresh.locator('input[type="radio"]:visible').first().check();
     const submit = fresh.locator('#ls-button-submit:visible, #ls-button-next:visible, button[type="submit"]:visible, input[type="submit"]:visible').last();
     if (await submit.count() === 0) break;
     await submit.click();
     await fresh.waitForLoadState('domcontentloaded');
-    if (await fresh.locator('input[type="radio"]:visible').count() === 0) break;
   }
+  if (!uploaded) throw new Error('Synthetic upload question was not encountered');
   await expect.poll(async () => {
     const response = await page.request.get(`${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${copiedSurveyId}/responses/summary`,
       { headers: { Authorization: `Bearer ${token}` } });
