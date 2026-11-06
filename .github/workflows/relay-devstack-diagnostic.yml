@@ -32,6 +32,8 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: platform/apps/admin-web/package-lock.json
+      - name: Check diagnostic cleanup failure handling
+        run: python3 -m unittest discover -s platform/deploy/test -p test_relay_diagnostic.py
       - name: Install application dependencies
         working-directory: platform/apps/admin-web
         run: npm ci

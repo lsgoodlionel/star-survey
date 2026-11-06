@@ -77,7 +77,10 @@ cleanup_run() {
 cleanup() {
   local status=$?
   cleanup_run "$status" || status=1
-  return "$status"
+  # Returning from an EXIT trap preserves the original exit code; explicitly
+  # exit so failed diagnostic cleanup cannot be reported as a passing run.
+  trap - EXIT
+  exit "$status"
 }
 
 wait_healthy() {
@@ -192,7 +195,7 @@ run_playwright() {
   (
     cd "$ADMIN_WEB_DIR"
     if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
-      npm run e2e -- --project=chromium-desktop --grep 'author filters stable resources, restores archive, and publishes the same survey'
+      npm run e2e -- --project=chromium-desktop --retries=0 --grep 'author filters stable resources, restores archive, and publishes the same survey'
     elif [[ "$E2E_SUITE" == "wave3" ]]; then
       npm run e2e -- --project=chromium-wave3-data
     else
@@ -221,6 +224,33 @@ run_browser_tests() {
     ADMIN_WEB_RELAY_CONTAINER="$("${COMPOSE[@]}" --profile relay-test ps -q test-relay)"
     ADMIN_WEB_PLATFORM_CONTAINER="$("${COMPOSE[@]}" ps -q platform)"
     [[ "$ADMIN_WEB_RELAY_CONTAINER" =~ ^[0-9a-f]{64}$ && "$ADMIN_WEB_PLATFORM_CONTAINER" =~ ^[0-9a-f]{64}$ ]] || fail "diagnostic container identity is invalid"
+    # The first preview assertion reads the event table. Do not race the
+    # worker's first startup; record only bounded classifications on failure.
+    local ready=false attempt relay_state
+    for ((attempt = 1; attempt <= 45; attempt++)); do
+      if db_query 'SELECT COUNT(*) FROM lime_mjyplatformbridge_event_log' >/dev/null 2>&1; then
+        ready=true
+        break
+      fi
+      relay_state="$(docker inspect -f '{{.State.Status}}' "$ADMIN_WEB_RELAY_CONTAINER" 2>/dev/null || printf unavailable)"
+      [[ "$relay_state" == running ]] || break
+      sleep 2
+    done
+    if [[ "$ready" != true ]]; then
+      relay_state="$(docker inspect -f '{{.State.Status}}' "$ADMIN_WEB_RELAY_CONTAINER" 2>/dev/null || printf unavailable)"
+      docker logs "$ADMIN_WEB_RELAY_CONTAINER" >"$WORK_DIR/relay-private.log" 2>&1 || true
+      python3 - "$WORK_DIR/relay-private.log" "$relay_state" <<'PY'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text(errors='replace').lower()
+categories = ['event bridge is not active', 'event bridge could not be loaded',
+              'event reconciliation failed', 'event relay failed', 'unknown command',
+              'not defined', 'no such file or directory', 'fatal error',
+              'database connection failed']
+print('relay diagnostic state:', sys.argv[2])
+print('relay diagnostic categories:', ','.join(x for x in categories if x in text) or 'unclassified')
+PY
+      fail "automatic relay did not create the event table"
+    fi
   else
     (
       while true; do
