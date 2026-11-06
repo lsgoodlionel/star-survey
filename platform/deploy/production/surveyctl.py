@@ -761,6 +761,18 @@ class SurveyManager:
                 time.sleep(min(1, remaining))
 
     def _assert_healthy(self, compose: list[str], message: str) -> None:
+        # `_compose(version)` has already verified the staged release and its
+        # generated configuration.  Derive the expected topology from that
+        # target release, never from the running container inventory: during
+        # rollback the target can legitimately predate engine-relay.
+        declaration = self._run(compose + ["config", "--services"], message, capture_output=True)
+        declared = (declaration.stdout or "").splitlines()
+        new_expected = LONG_RUNNING_SERVICES | ONE_SHOT_SERVICES
+        old_expected = new_expected - {"engine-relay"}
+        if len(declared) != len(set(declared)) or set(declared) not in (old_expected, new_expected):
+            raise RuntimeHealthError(f"{message}: target compose service contract is invalid")
+        expected = set(declared)
+        running_services = expected - ONE_SHOT_SERVICES
         result = self._run(compose + ["ps", "--all", "--format", "json"], message, capture_output=True)
         try:
             text = result.stdout.strip()
@@ -769,12 +781,12 @@ class SurveyManager:
             raise RuntimeHealthError(f"{message}: unreadable container status") from exc
         if not isinstance(records, list) or not records or not all(isinstance(item, dict) for item in records):
             raise RuntimeHealthError(f"{message}: container status is empty or invalid")
-        services, expected = [record.get("Service") for record in records], LONG_RUNNING_SERVICES | ONE_SHOT_SERVICES
+        services = [record.get("Service") for record in records]
         if set(services) != expected or len(services) != len(expected):
             raise RuntimeHealthError(f"{message}: service set does not match production compose")
         by_service = {record["Service"]: record for record in records}
         unhealthy = {
-            service for service in LONG_RUNNING_SERVICES
+            service for service in running_services
             if by_service[service].get("State") != "running" or by_service[service].get("Health") != "healthy"
         }
         init = by_service["engine-init"]

@@ -42,6 +42,7 @@ RUNTIME_FILES = (
     "engines.example.json",
     "env.example",
     "init/ProductionInitCommand.php",
+    "init/ProductionRelayCommand.php",
     "init/config.production.php",
     "init/engine-init.sh",
     "init/event-relay.sh",

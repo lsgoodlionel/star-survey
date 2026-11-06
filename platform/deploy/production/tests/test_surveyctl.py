@@ -98,6 +98,8 @@ class FakeRunner:
         backup_schema="920",
         engine_init_exit_code=0,
         engine_init_health="",
+        configured_relay=True,
+        running_relay=True,
     ):
         self.commands = []
         self.calls = []
@@ -110,6 +112,8 @@ class FakeRunner:
         self.backup_schema = backup_schema
         self.engine_init_exit_code = engine_init_exit_code
         self.engine_init_health = engine_init_health
+        self.configured_relay = configured_relay
+        self.running_relay = running_relay
 
     def run(self, command, **kwargs):
         command = tuple(str(part) for part in command)
@@ -128,8 +132,17 @@ class FakeRunner:
             output = Path(command[command.index("--output") + 1])
             version = command[command.index("--version") + 1]
             write_fake_backup(output, version, self.backup_schema)
+        if "config" in command and "--services" in command:
+            services = {"edge", "admin-web", "platform", "publish-gateway", "engine",
+                        "platform-db", "engine-db", "engine-init"}
+            if self.configured_relay:
+                services.add("engine-relay")
+            return subprocess.CompletedProcess(command, 0, stdout="\n".join(
+                sorted(services)) + "\n", stderr="")
         if "ps" in command and "--format" in command:
-            services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "engine-relay", "platform-db", "engine-db"]
+            services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"]
+            if self.running_relay:
+                services.append("engine-relay")
             payload = [
                 {
                     "Service": service,
@@ -430,6 +443,27 @@ class SurveyctlAdversarialTest(unittest.TestCase):
             self.manager(runner=FakeRunner(empty_health=True)).install(
                 manifest, "survey.example.com", "operations", "operations@example.com"
             )
+
+    def test_health_uses_target_release_contract_for_legacy_and_relay_stacks(self):
+        old = self.manager(runner=FakeRunner(configured_relay=False, running_relay=False))
+        old._assert_healthy(["docker", "compose"], "legacy rollback")
+        new = self.manager(runner=FakeRunner(configured_relay=True, running_relay=True))
+        new._assert_healthy(["docker", "compose"], "new release")
+        missing = self.manager(runner=FakeRunner(configured_relay=True, running_relay=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            missing._assert_healthy(["docker", "compose"], "new release missing relay")
+        unexpected = self.manager(runner=FakeRunner(configured_relay=False, running_relay=True))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            unexpected._assert_healthy(["docker", "compose"], "legacy release extra relay")
+
+        class UnknownContractRunner(FakeRunner):
+            def run(runner, command, **kwargs):
+                if "config" in command and "--services" in command:
+                    return subprocess.CompletedProcess(command, 0, stdout="edge\nengine\n", stderr="")
+                return super().run(command, **kwargs)
+
+        with self.assertRaises(self.module.RuntimeHealthError):
+            self.manager(runner=UnknownContractRunner())._assert_healthy(["docker", "compose"], "unknown target")
 
     def test_malformed_nested_manifest_is_integrity_error_not_attribute_error(self):
         data = json.loads(FIXTURE_MANIFEST.read_text())
@@ -1068,7 +1102,8 @@ class SurveyctlTest(unittest.TestCase):
         self.assertIn("pull", joined[0])
         self.assertIn("hash-password", joined[1])
         self.assertIn("up -d", joined[2])
-        self.assertIn("ps", joined[3])
+        self.assertIn("config --services", joined[3])
+        self.assertIn("ps", joined[4])
         self.assertTrue((secret_dir / "engine_admin_password_hash").read_text().startswith("$2a$14$"))
         admin_password = (secret_dir / "engine_admin_password").read_text().strip()
         self.assertTrue(all(admin_password not in value for value in joined))
@@ -1392,6 +1427,43 @@ class SurveyctlTest(unittest.TestCase):
         self.assertLess(next(i for i, value in enumerate(joined) if "backup" in value), next(i for i, value in enumerate(joined) if "pull" in value))
         self.assertLess(next(i for i, value in enumerate(joined) if "ps" in value), len(joined))
         self.assertEqual("0.3.0", (self.target / "current").read_text().strip())
+
+    def test_upgrade_from_legacy_and_failed_upgrade_recovers_legacy_topology(self):
+        self.runner.configured_relay = self.runner.running_relay = False
+        self.install()
+
+        class VersionRunner(FakeRunner):
+            def run(runner, command, **kwargs):
+                old = any("/releases/0.2.0/" in str(part) for part in command)
+                runner.configured_relay = runner.running_relay = not old
+                return super().run(command, **kwargs)
+
+        next_manifest = self.manifest(version="0.3.0", minimumSourceVersion="0.2.0")
+        failing = VersionRunner(fail_when=lambda command: "up" in command and "0.3.0" in " ".join(command))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            self.manager(runner=failing).upgrade(next_manifest)
+        state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
+        self.assertEqual("upgrade_failed", state["status"])
+        self.assertEqual("0.2.0", state["version"])
+        self.assertTrue(any("config" in c and "--services" in c and "0.2.0" in " ".join(c)
+                            for c in failing.commands))
+
+    def test_successful_upgrade_from_legacy_checks_new_relay_topology(self):
+        self.runner.configured_relay = self.runner.running_relay = False
+        self.install()
+
+        class VersionRunner(FakeRunner):
+            def run(runner, command, **kwargs):
+                old = any("/releases/0.2.0/" in str(part) for part in command)
+                runner.configured_relay = runner.running_relay = not old
+                return super().run(command, **kwargs)
+
+        runner = VersionRunner()
+        next_manifest = self.manifest(version="0.3.0", minimumSourceVersion="0.2.0")
+        self.manager(runner=runner).upgrade(next_manifest)
+        self.assertEqual("0.3.0", (self.target / "current").read_text().strip())
+        self.assertTrue(any("config" in c and "--services" in c and "0.3.0" in " ".join(c)
+                            for c in runner.commands))
 
     def test_upgrade_refuses_a_lower_version(self):
         self.install()
