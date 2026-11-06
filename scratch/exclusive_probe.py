@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'platform/deploy/production/release'))
 from fixture_cgroup import CgroupScope
 from fixture_compensation import build_compensation_sql
+from trusted_compensation import build_trusted_compensation
 
 D = ['docker', '--host', 'unix:///var/run/docker.sock']
 
@@ -56,7 +57,7 @@ class Session:
             self.p.stdin.close(); self.p.wait(timeout=10)
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ('normal', 'loss-before', 'loss-after'):
+    if len(sys.argv) != 2 or sys.argv[1] not in ('normal', 'loss-before', 'loss-after', 'consumed', 'expired', 'wrong-hash'):
         raise RuntimeError('invalid isolated experiment mode')
     mode = sys.argv[1]
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted'
@@ -145,6 +146,7 @@ INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
 VALUES ('{original_sub}','{tenant}','{owner_plan}','trial',now()-interval '1 day',now()+interval '10 days');
 INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by) VALUES ('{tenant}','production-probe-owner','active',true,'ci');
 INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by) VALUES ('{tenant}','{owner_grant}','production-probe-owner','tenant_owner',NULL,'ci'); COMMIT;""")
+        expiration = "now()-interval '1 second'" if mode == 'expired' else "now()+interval '1 minute'"
         supervisor.sql(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
 INSERT INTO plan_version(id,plan_code,version,capabilities,quotas,export_window_days)
 SELECT '{fixture_plan}','ci-fixture',1,capabilities,jsonb_set(quotas,'{{member.seats}}','2'),export_window_days FROM plan_version WHERE id='{owner_plan}';
@@ -157,8 +159,11 @@ INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by) VALUES
 INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,expires_at)
 VALUES ('{tenant}','{grant}','{principal}','org_admin',NULL,'ci',now()+interval '15 minutes');
 INSERT INTO org_login_handoff(handoff_hash,browser_hash,tenant_id,principal_id,connection_id,provider,expires_at)
-VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}','wecom',now()+interval '1 minute'); COMMIT;""")
-        compensation = build_compensation_sql(tenant=tenant,owner_plan=owner_plan,fixture_plan=fixture_plan,principal=principal,
+VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}','wecom',{expiration}); COMMIT;""")
+        if mode in ('consumed', 'wrong-hash'):
+            supervisor.sql(f"BEGIN; SET LOCAL ROLE platform_app; {scope} SELECT * FROM org_login_handoff_consume('{tenant}','{handoff_hash}','{browser_hash}',now()); COMMIT;")
+        builder = build_trusted_compensation if mode in ('consumed', 'expired', 'wrong-hash') else build_compensation_sql
+        compensation = builder(tenant=tenant,owner_plan=owner_plan,fixture_plan=fixture_plan,principal=principal,
             connection=connection,original_sub=original_sub,fixture_sub=fixture_sub,restore_sub=restore_sub,owner_grant=owner_grant,
             handoff_hash=handoff_hash,browser_hash=browser_hash)
         pid = supervisor.sql('SELECT pg_backend_pid();'); stale_pid = stale.sql('SELECT pg_backend_pid();')
@@ -227,6 +232,13 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
             supervisor.sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();") != '0' or
             supervisor.sql('SELECT count(*) FROM pg_prepared_xacts;') != '0'):
             raise RuntimeError('post-worker exclusivity not established')
+        if mode == 'wrong-hash':
+            wrong = build_trusted_compensation(tenant=tenant,owner_plan=owner_plan,fixture_plan=fixture_plan,principal=principal,
+                connection=connection,original_sub=original_sub,fixture_sub=fixture_sub,restore_sub=restore_sub,owner_grant=owner_grant,
+                handoff_hash=handoff_hash,browser_hash=secrets.token_hex(32))
+            supervisor.sql('\\set ON_ERROR_STOP off\n' + wrong + '\n\\set ON_ERROR_STOP on')
+            unchanged = supervisor.sql(f"BEGIN; SET LOCAL ROLE platform_app; {scope} SELECT EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{tenant}' AND id='{grant}'); COMMIT;")
+            if unchanged.splitlines()[-1] != 't': raise RuntimeError('wrong digest changed fixture state')
         # Deliberately fail inside the transaction while retaining the only
         # trusted session, then independently verify that changes rolled back.
         supervisor.sql('\\set ON_ERROR_STOP off\n' +

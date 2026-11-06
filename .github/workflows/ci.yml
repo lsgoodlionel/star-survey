@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [normal, loss-before, loss-after]
+        mode: [normal, loss-before, loss-after, consumed, expired, wrong-hash]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - run: docker pull postgres:16-alpine
