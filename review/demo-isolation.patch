@@ -1,0 +1,244 @@
+--- a/platform/deploy/demo/run-admin-web-demo.sh
++++ b/platform/deploy/demo/run-admin-web-demo.sh
+@@ -9,12 +9,13 @@
+ METADATA_FILE="$RUNTIME_DIR/demo-metadata.json"
+ EVENT_SECRET_FILE="$RUNTIME_DIR/engine-event-secret"
+ ENGINES_FILE="$RUNTIME_DIR/engines.json"
+-COMPOSE_FILE="$DEMO_DIR/admin-web-demo.compose.yml"
++DEMO_COMPOSE_FILE="$DEMO_DIR/admin-web-demo.compose.yml"
+ SUPPORT="$DEMO_DIR/admin_web_demo.py"
+-PROJECT=adminweb-demo
++PROJECT=survey-review-46766fd
+ PLATFORM_JAR="$REPO_ROOT/platform/services/business/target/business-0.1.0-SNAPSHOT.jar"
+ JAVA_IMAGE=maven:3.9-eclipse-temurin-21
+-COMPOSE=(docker compose -p "$PROJECT" -f "$COMPOSE_FILE")
++DOCKER=(docker --host unix:///Users/lionel/.docker/run/docker.sock)
++COMPOSE=("${DOCKER[@]}" compose -p "$PROJECT" -f "$DEMO_COMPOSE_FILE")
+ 
+ fail() {
+   echo "admin-web demo: $*" >&2
+@@ -214,7 +215,7 @@
+   id="$("${COMPOSE[@]}" ps -q "$service")"
+   [[ -n "$id" ]] || fail "$service container is absent"
+   for ((attempt = 1; attempt <= 90; attempt++)); do
+-    status="$(docker inspect -f '{{.State.Health.Status}}' "$id" 2>/dev/null || true)"
++    status="$("${DOCKER[@]}" inspect -f '{{.State.Health.Status}}' "$id" 2>/dev/null || true)"
+     [[ "$status" == "healthy" ]] && return 0
+     [[ "$status" == "unhealthy" ]] && fail "$service container is unhealthy"
+     sleep 2
+@@ -227,7 +228,7 @@
+   engine_db_id="$("${COMPOSE[@]}" ps -q engine-db)"
+   platform_db_id="$("${COMPOSE[@]}" ps -q platform-db)"
+   [[ -n "$engine_db_id" && -n "$platform_db_id" ]] || fail "demo databases are absent"
+-  run_quiet docker exec -e ENGINE_DB_ROOT_PASSWORD "$engine_db_id" sh -c '
++  run_quiet "${DOCKER[@]}" exec -e ENGINE_DB_ROOT_PASSWORD "$engine_db_id" sh -c '
+     MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot <<SQL
+ ALTER USER '\''root'\''@'\''localhost'\'' IDENTIFIED BY '\''$ENGINE_DB_ROOT_PASSWORD'\'';
+ CREATE USER IF NOT EXISTS '\''root'\''@'\''%'\'' IDENTIFIED BY '\''$ENGINE_DB_ROOT_PASSWORD'\'';
+@@ -235,7 +236,7 @@
+ GRANT ALL PRIVILEGES ON *.* TO '\''root'\''@'\''%'\'' WITH GRANT OPTION;
+ SQL
+   '
+-  run_quiet docker exec -e PLATFORM_DB_SUPERUSER_PASSWORD -e PLATFORM_DB_APP_PASSWORD \
++  run_quiet "${DOCKER[@]}" exec -e PLATFORM_DB_SUPERUSER_PASSWORD -e PLATFORM_DB_APP_PASSWORD \
+     -e PLATFORM_DB_OWNER_PASSWORD "$platform_db_id" sh -c '
+     psql --set=ON_ERROR_STOP=1 --username postgres --dbname postgres <<'\''SQL'\''
+ \getenv superuser_password PLATFORM_DB_SUPERUSER_PASSWORD
+@@ -259,7 +260,7 @@
+     return 0
+   fi
+   [[ -n "$engine_db_id" && -n "$platform_db_id" ]] || fail "demo database state is incomplete"
+-  run_quiet docker start "$engine_db_id" "$platform_db_id"
++  run_quiet "${DOCKER[@]}" start "$engine_db_id" "$platform_db_id"
+   wait_container_healthy platform-db
+   wait_container_healthy engine-db
+   sync_database_credentials
+@@ -269,16 +270,16 @@
+   if [[ -f "$PLATFORM_JAR" ]]; then
+     return 0
+   fi
+-  run_quiet docker run --rm \
++  run_quiet "${DOCKER[@]}" run --rm \
+     -v "$REPO_ROOT/platform/services/business:/workspace" \
+-    -v "${PLATFORM_MAVEN_REPO:-platform-maven-repo}:/root/.m2/repository" \
++    -v "survey-review-46766fd-maven:/root/.m2/repository" \
+     -v "$REPO_ROOT/platform/deploy/platform-dev/maven-settings.xml:/root/.m2/settings.xml:ro" \
+     -w /workspace "$JAVA_IMAGE" mvn -B -q -DskipTests package
+   [[ -f "$PLATFORM_JAR" ]] || fail "platform jar was not built"
+ }
+ 
+ build_engine_if_missing() {
+-  if ! docker image inspect survey-web >/dev/null 2>&1; then
++  if ! "${DOCKER[@]}" image inspect survey-review-46766fd-engine >/dev/null 2>&1; then
+     run_quiet "${COMPOSE[@]}" build engine
+   fi
+ }
+@@ -287,20 +288,20 @@
+   local engine_id db_id installed
+   engine_id="$("${COMPOSE[@]}" ps -q engine)"
+   db_id="$("${COMPOSE[@]}" ps -q engine-db)"
+-  docker exec "$engine_id" sh -c \
++  "${DOCKER[@]}" exec "$engine_id" sh -c \
+     'mkdir -p application/runtime tmp/runtime tmp/assets tmp/upload && chmod -R 777 application/runtime tmp'
+   export MYSQL_PWD="$ENGINE_DB_ROOT_PASSWORD"
+-  installed="$(docker exec -e MYSQL_PWD "$db_id" mariadb -uroot -N -e \
++  installed="$("${DOCKER[@]}" exec -e MYSQL_PWD "$db_id" mariadb -uroot -N -e \
+     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='limesurvey' AND table_name='lime_users'")"
+   if [[ "$installed" == "0" ]]; then
+-    run_quiet docker exec "$engine_id" php application/commands/console.php installDemo
+-  fi
+-  run_quiet docker exec -e MYSQL_PWD "$db_id" mariadb -uroot limesurvey -e \
++    run_quiet "${DOCKER[@]}" exec "$engine_id" php application/commands/console.php installDemo
++  fi
++  run_quiet "${DOCKER[@]}" exec -e MYSQL_PWD "$db_id" mariadb -uroot limesurvey -e \
+     "DELETE FROM lime_settings_global WHERE stg_name='RPCInterface'; INSERT INTO lime_settings_global (stg_name, stg_value) VALUES ('RPCInterface', 'json');"
+   unset MYSQL_PWD
+-  run_quiet docker exec "$engine_id" php platform/tools/engine-theme/install-survey-theme.php zh-business
+-  run_quiet docker exec "$engine_id" php platform/tests/e2e/install_question_themes.php mjy-collapsible
+-  docker exec "$engine_id" rm -rf tmp/runtime/cache
++  run_quiet "${DOCKER[@]}" exec "$engine_id" php platform/tools/engine-theme/install-survey-theme.php zh-business
++  run_quiet "${DOCKER[@]}" exec "$engine_id" php platform/tests/e2e/install_question_themes.php mjy-collapsible
++  "${DOCKER[@]}" exec "$engine_id" rm -rf tmp/runtime/cache
+ }
+ 
+ enable_bridge() {
+@@ -308,22 +309,58 @@
+   engine_id="$("${COMPOSE[@]}" ps -q engine)"
+   db_id="$("${COMPOSE[@]}" ps -q engine-db)"
+   export MYSQL_PWD="$ENGINE_DB_ROOT_PASSWORD"
+-  run_quiet docker exec -e MYSQL_PWD "$db_id" mariadb -uroot limesurvey -e \
++  run_quiet "${DOCKER[@]}" exec -e MYSQL_PWD "$db_id" mariadb -uroot limesurvey -e \
+     "DELETE FROM lime_plugins WHERE name='MjyPlatformBridge'; INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error) VALUES ('MjyPlatformBridge', 'user', 1, 0, '0.1.0', 0);"
+   unset MYSQL_PWD
+-  docker exec "$engine_id" rm -rf tmp/runtime/cache
++  "${DOCKER[@]}" exec "$engine_id" rm -rf tmp/runtime/cache
++}
++
++# Fail closed before the first write; the target project is disposable and must be new.
++require_empty_review_target() {
++  local name output host
++  for name in DOCKER_HOST DOCKER_CONTEXT COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES COMPOSE_ENV_FILES ADMIN_WEB_DEMO_PORT PLATFORM_MAVEN_REPO; do
++    [[ -z "${!name:-}" ]] || fail "unexpected environment override: $name"
++  done
++  [[ ! -e "$RUNTIME_DIR" && ! -L "$RUNTIME_DIR" ]] || fail "review runtime already exists"
++  for name in "$DEMO_DIR/.env" "$REPO_ROOT/.env" "$PWD/.env"; do
++    [[ ! -e "$name" && ! -L "$name" ]] || fail "unexpected Compose env file"
++  done
++  host="$("${DOCKER[@]}" context inspect --format '{{.Endpoints.docker.Host}}')"
++  [[ "$host" == "unix:///Users/lionel/.docker/run/docker.sock" ]] || fail "unexpected Docker endpoint"
++  "${DOCKER[@]}" info --format '{{.ID}}' >/dev/null || fail "Docker daemon unavailable"
++  output="$("${DOCKER[@]}" ps -aq --filter "label=com.docker.compose.project=$PROJECT")" || fail "container list unavailable"
++  [[ -z "$output" ]] || fail "review project already has containers"
++  output="$("${DOCKER[@]}" ps -aq --filter "name=^/${PROJECT}[-_]")" || fail "container names unavailable"
++  [[ -z "$output" ]] || fail "review container name already exists"
++  output="$("${DOCKER[@]}" volume ls -q)" || fail "volume list unavailable"
++  for name in "${PROJECT}_engine-data" "${PROJECT}_engine-runtime" "${PROJECT}_engine-tmp" "${PROJECT}_platform-data" survey-review-46766fd-maven; do
++    if printf '%s\n' "$output" | grep -Fqx -- "$name"; then fail "review volume already exists"; fi
++  done
++  output="$("${DOCKER[@]}" network ls --format '{{.Name}}')" || fail "network list unavailable"
++  if printf '%s\n' "$output" | grep -Fqx -- "${PROJECT}_default"; then fail "review network already exists"; fi
++  output="$("${DOCKER[@]}" image ls --format '{{.Repository}}')" || fail "image list unavailable"
++  for name in survey-review-46766fd-engine survey-review-46766fd-gateway survey-review-46766fd-admin; do
++    if printf '%s\n' "$output" | grep -Fqx -- "$name"; then fail "review image already exists"; fi
++  done
++  python3 - <<'PORTCHECK' || fail "review port unavailable"
++import socket
++s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
++try:
++    s.bind(('127.0.0.1', 51891))
++finally:
++    s.close()
++PORTCHECK
+ }
+ 
+ start_demo() {
+   local platform_url engine_url gateway_url admin_url
++  require_empty_review_target
+   ensure_runtime
+   build_platform
+   build_engine_if_missing
+-  prepare_existing_database_credentials
+   run_quiet "${COMPOSE[@]}" up -d platform-db engine-db
+   wait_container_healthy platform-db
+   wait_container_healthy engine-db
+-  sync_database_credentials
+   # runtime.env may have been upgraded with a new secret; force the application
+   # containers to consume it instead of retaining their previous environment.
+   run_quiet "${COMPOSE[@]}" up -d --force-recreate platform engine
+@@ -410,25 +447,8 @@
+ }
+ 
+ main() {
+-  case "${1:-}" in
+-    start|status|refresh-token) [[ $# == 1 ]] || fail "usage: $0 start|status|refresh-token" ;;
+-    stop) [[ $# == 1 || ( $# == 2 && "$2" == "--purge" ) ]] || fail "usage: $0 stop [--purge]" ;;
+-    *) fail "usage: $0 start|stop [--purge]|status|refresh-token" ;;
+-  esac
+-  case "${1:-}" in
+-    start)
+-      start_demo
+-      ;;
+-    stop)
+-      stop_demo "${2:-}"
+-      ;;
+-    status)
+-      status_demo
+-      ;;
+-    refresh-token)
+-      refresh_token
+-      ;;
+-  esac
++  [[ $# == 1 && "$1" == start ]] || fail "isolated review supports start only; no reuse or cleanup"
++  start_demo
+ }
+ 
+ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+--- a/platform/deploy/demo/admin-web-demo.compose.yml
++++ b/platform/deploy/demo/admin-web-demo.compose.yml
+@@ -21,7 +21,7 @@
+     build:
+       context: ../dev
+       dockerfile: Dockerfile
+-    image: survey-web
++    image: survey-review-46766fd-engine
+     ports:
+       - "127.0.0.1::80"
+     volumes:
+@@ -76,8 +76,8 @@
+       PLATFORM_DELIVERY_SECRET:
+       PLATFORM_PUBGW_SECRET: ${PUBGW_SHARED_SECRET}
+       PLATFORM_PUBGW_URL: http://gateway:8080
+-      PLATFORM_DELIVERY_ENABLED: "true"
+-      PLATFORM_PUBLIC_BASE_URL: http://127.0.0.1:${ADMIN_WEB_DEMO_PORT:-51888}
++      PLATFORM_DELIVERY_ENABLED: "false"
++      PLATFORM_PUBLIC_BASE_URL: http://127.0.0.1:51891
+     depends_on:
+       platform-db:
+         condition: service_healthy
+@@ -85,7 +85,7 @@
+   gateway:
+     build:
+       context: ../../tools/publish-gateway
+-    image: survey-publish-gateway:adminweb-demo
++    image: survey-review-46766fd-gateway
+     ports:
+       - "127.0.0.1::8080"
+     volumes:
+@@ -102,11 +102,15 @@
+       context: ../../apps/admin-web
+       args:
+         VITE_E2E: "true"
+-    image: survey-admin-web-demo
++    image: survey-review-46766fd-admin
+     ports:
+-      - "127.0.0.1:${ADMIN_WEB_DEMO_PORT:-51888}:80"
++      - "127.0.0.1:51891:80"
+     depends_on:
+       - platform
++
++networks:
++  default:
++    internal: true
+ 
+ volumes:
+   engine-data:
