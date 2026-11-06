@@ -44,8 +44,9 @@ class Session:
                 shape = ('word' if token and re.fullmatch(r'[A-Za-z_]+', token.group(1)) else
                          'punctuation' if token and re.fullmatch(r'[^A-Za-z0-9]+', token.group(1)) else 'mixed')
                 punctuation = ','.join(str(ord(c)) for c in token.group(1)) if token and shape == 'punctuation' and len(token.group(1)) <= 8 else 'none'
+                caret = re.search(r'(?m)^([ ]*)\^', detail)
                 raise RuntimeError('session ended; SQLSTATE=' + (codes[-1] if codes else 'unavailable') +
-                                   ' error_line=' + (line.group(1) if line else 'unavailable') + ' near=' + near + ' shape=' + shape + ' punctuation_codes=' + punctuation)
+                                   ' error_line=' + (line.group(1) if line else 'unavailable') + ' near=' + near + ' shape=' + shape + ' punctuation_codes=' + punctuation + ' caret=' + (str(len(caret.group(1))) if caret else 'unavailable'))
             self.buffer += chunk
             if len(self.buffer) > 8192: raise RuntimeError('unexpected session output')
         output, self.buffer = self.buffer.split(marker, 1)
