@@ -91,6 +91,22 @@ INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,
  VALUES ('{tenant}','{project_grant}','{principal}','project_manager','{project}','ci',now()+interval '15 minutes');
 """
         provision = provision.replace('COMMIT;', project_rows + 'COMMIT;')
+        # Reject stale handoffs and a mismatched baseline before any fixture
+        # identity or subscription can be committed.
+        for invalid in ('expired', 'baseline'):
+            rejected = build_fixture_provision_sql(
+                tenant=tenant, owner_plan=str(uuid.uuid4()) if invalid == 'baseline' else owner_plan,
+                original_sub=original_sub, owner_grant=owner_grant, fixture_plan=fixture_plan,
+                fixture_sub=fixture_sub, principal=principal, connection=connection, author_grant=grant,
+                handoff_hash=handoff_hash, browser_hash=browser_hash,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=-1 if invalid == 'expired' else 60))
+            if execute(rejected, database, check=False).returncode == 0:
+                raise RuntimeError('invalid fixture provision was accepted')
+            state = execute(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SELECT NOT EXISTS (SELECT 1 FROM access_member WHERE tenant_id='{tenant}' AND actor_id='{principal}')
+AND (SELECT count(*)=1 FROM subscription WHERE tenant_id='{tenant}'); COMMIT;""", database).stdout
+            if state.strip().splitlines()[-1] != 't':
+                raise RuntimeError('rejected fixture provision changed state')
         # The browser author needs tenant-wide project creation and export;
         # the earlier project_manager role lacks manage-settings.
         permissions = execute("SELECT count(*) FROM access_role_permission WHERE role_code='org_admin' "
