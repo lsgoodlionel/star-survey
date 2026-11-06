@@ -30,6 +30,45 @@ def summarize_sql_error(stderr):
     return 'category=' + category + ' stderr_sha256=' + digest
 
 
+def summarize_container_diagnostics(inspect_output, logs):
+    """Report fixed state fields and log marker counts, never raw Docker output."""
+    try:
+        objects = json.loads(inspect_output)
+        if not isinstance(objects, list) or len(objects) != 1:
+            raise ValueError('ambiguous inspection')
+        item = objects[0]
+        state = item['State']
+        status = state['Status']
+        if status not in {'created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead'}:
+            raise ValueError('unknown state')
+        restart_count, exit_code, oom = item['RestartCount'], state['ExitCode'], state['OOMKilled']
+        if (type(restart_count) is not int or restart_count < 0 or type(exit_code) is not int or
+                type(oom) is not bool):
+            raise ValueError('invalid state')
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return 'container_state=unavailable'
+    lower = logs.lower()
+    markers = {
+        'ready': 'database system is ready to accept connections',
+        'shutdown': 'database system is shut down',
+        'startup': 'starting postgresql',
+        'init_complete': 'postgresql init process complete; ready for start up',
+    }
+    counts = ' '.join(name + '=' + str(lower.count(marker)) for name, marker in markers.items())
+    return (f'container_state={status} restarts={restart_count} exit_code={exit_code} '
+            f'oom={str(oom).lower()} {counts}')
+
+
+def wait_for_final_server(initialized, query_ready, *, clock=time.monotonic, sleep=time.sleep, timeout=60):
+    """Wait with a soft deadline; individual Docker operations have their own timeouts."""
+    deadline = clock() + timeout
+    while clock() < deadline:
+        if initialized() and query_ready():
+            return
+        sleep(.25)
+    raise RuntimeError('isolated test database did not start')
+
+
 def run(args, *, check=True, timeout=30):
     result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, timeout=timeout)
@@ -96,17 +135,21 @@ def main():
         result = run(DOCKER + ['exec', container, 'psql', '-X', '-q', '-A', '-t', '-U', 'postgres',
                                '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', statement], check=False)
         if check and result.returncode:
-            raise RuntimeError('synthetic PostgreSQL failure: ' + summarize_sql_error(result.stderr))
+            inspection = run(DOCKER + ['inspect', '--type', 'container', container], check=False)
+            logs = run(DOCKER + ['logs', container], check=False)
+            diagnostic = summarize_container_diagnostics(inspection.stdout, logs.stdout + logs.stderr)
+            raise RuntimeError('synthetic PostgreSQL failure: ' + summarize_sql_error(result.stderr) + ' ' + diagnostic)
         return result
     try:
         verify()
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            if sql('SELECT 1', check=False).returncode == 0:
-                break
-            time.sleep(.25)
-        else:
-            raise RuntimeError('isolated test database did not start')
+        def initialized():
+            verify()
+            logs = run(DOCKER + ['logs', container], check=False)
+            # The image briefly starts a temporary server during initdb. A
+            # successful query there does not prove the final server is ready.
+            return (logs.returncode == 0 and 'postgresql init process complete; ready for start up' in
+                    (logs.stdout + logs.stderr).lower())
+        wait_for_final_server(initialized, lambda: sql('SELECT 1', check=False).returncode == 0)
         gid = 'fixture_' + nonce
         sql('CREATE TABLE fixture_prepared (id integer NOT NULL)')
         sql("BEGIN; INSERT INTO fixture_prepared VALUES (1); PREPARE TRANSACTION '" + gid + "';")
