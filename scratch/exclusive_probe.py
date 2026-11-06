@@ -56,6 +56,9 @@ class Session:
             self.p.stdin.close(); self.p.wait(timeout=10)
 
 def main():
+    if len(sys.argv) != 2 or sys.argv[1] not in ('normal', 'loss-before', 'loss-after'):
+        raise RuntimeError('invalid isolated experiment mode')
+    mode = sys.argv[1]
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted'
             or os.environ.get('GITHUB_REPOSITORY') != 'lsgoodlionel/star-survey' or os.geteuid() != 0):
         raise RuntimeError('requires dedicated GitHub-hosted repository runner')
@@ -235,6 +238,26 @@ AND NOT EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tena
 AND (SELECT id='{fixture_sub}' FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1);
 COMMIT;""")
         if rollback_check.splitlines()[-1] != 't': raise RuntimeError('injected compensation failure did not roll back')
+        if mode == 'loss-before':
+            # Kill the sole client with an open transaction. The closed gate
+            # prevents observation or recovery through a replacement session.
+            supervisor.sql('BEGIN; CREATE TEMP TABLE fixture_uncommitted (id integer); INSERT INTO fixture_uncommitted VALUES (1);')
+            supervisor.p.kill(); supervisor.p.wait(timeout=10)
+            if connect('postgres').returncode == 0 or connect('template1').returncode == 0:
+                raise RuntimeError('gate reopened after client loss')
+            print('client lost before commit; recovery unverified, gate remains closed')
+            return
+        if mode == 'loss-after':
+            # Submit the product transaction, then force its backend to close
+            # before the application reads any result. The trusted connection
+            # is gone; never infer commit or recovery from this experiment.
+            supervisor.p.stdin.write((compensation + '\nSELECT pg_terminate_backend(pg_backend_pid());\n').encode())
+            supervisor.p.stdin.flush()
+            if supervisor.p.wait(timeout=15) == 0: raise RuntimeError('client unexpectedly survived termination')
+            if connect('postgres').returncode == 0 or connect('template1').returncode == 0:
+                raise RuntimeError('gate reopened after client loss')
+            print('client lost after transaction submission; commit and recovery unverified, gate remains closed')
+            return
         # Simulate lost application response by discarding the successful
         # return value, then query state and retry on the same pinned session.
         supervisor.sql(compensation)
