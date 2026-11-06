@@ -1428,6 +1428,9 @@ class SurveyManager:
             self._reject_symlink_components(path)
         state = self._read_state(require_current=True)
         helper = self._release_dir(state["version"]) / "restore.py"
+        # The helper decrypts into a private temporary directory and can
+        # outlive this controller; pure inventory checks above are read-only.
+        self._begin_operation()
         self._run_helper(
             [sys.executable, str(helper), "verify", "--target", str(self.target), "--backup", str(backup)],
             "backup restore-grade verification failed",
@@ -1467,9 +1470,6 @@ class SurveyManager:
 
     def _restore_for_failed_upgrade_or_manual(self, name, state) -> None:
         backup = self._backup_path(name)
-        # Verification starts a helper that decrypts into a private temporary
-        # directory; it can outlive this controller if the process is killed.
-        self._begin_operation()
         metadata = self._verify_backup(backup)
         if self._personnel_guard_enabled(state["version"], require_floor=True):
             self._require_personnel_capability(self._release_manifest(metadata["version"]))

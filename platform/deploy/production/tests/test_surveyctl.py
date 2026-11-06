@@ -757,6 +757,77 @@ with manager._mutation_lock(operation='uninstall'):
                 try: os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError: pass
 
+    def test_restore_local_rejections_remain_retryable_before_helper(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        with mock.patch.object(manager, '_run_helper') as helper:
+            with self.assertRaises(self.module.IntegrityError):
+                manager.restore('missing')
+            backup = self.target / 'backups' / 'corrupt'
+            write_fake_backup(backup)
+            (backup / 'payload.bin').write_bytes(b'tampered')
+            with self.assertRaises(self.module.IntegrityError):
+                manager.restore('corrupt')
+            helper.assert_not_called()
+        self.assertEqual('complete', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+        valid = self.target / 'backups' / 'valid'
+        write_fake_backup(valid)
+        manager.restore('valid')
+        self.assertEqual('complete', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+
+    def test_restore_verify_helper_interruption_keeps_pending(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        write_fake_backup(self.target / 'backups' / 'valid')
+        def interrupted(*args, **kwargs):
+            self.assertEqual('pending', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+            raise KeyboardInterrupt()
+        with mock.patch.object(manager, '_run_helper', side_effect=interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                manager.restore('valid')
+        with self.assertRaisesRegex(self.module.InputError, 'unverified outcome'):
+            manager.uninstall(False, None)
+
+    def test_killed_restore_controller_blocks_while_verify_child_survives(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        write_fake_backup(self.target / 'backups' / 'valid')
+        ready, child_file = self.root / 'verify-ready', self.root / 'verify-child'
+        script = r'''import importlib.util, pathlib, subprocess, sys, time
+spec = importlib.util.spec_from_file_location('survey_test_fixture', sys.argv[1])
+tests = importlib.util.module_from_spec(spec); spec.loader.exec_module(tests)
+module = tests.load_module()
+manager = module.SurveyManager(target=pathlib.Path(sys.argv[2]), runner=tests.FakeRunner(), host_probe=tests.FakeHostProbe(), source_dir=pathlib.Path(sys.argv[3]))
+def helper(command, *args, **kwargs):
+    assert 'verify' in command
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pathlib.Path(sys.argv[4]).write_text(str(child.pid)); pathlib.Path(sys.argv[5]).write_text('ready')
+    while True: time.sleep(1)
+manager._run_helper = helper
+manager.restore('valid')
+'''
+        holder = subprocess.Popen([sys.executable, '-c', script, str(Path(__file__).resolve()), str(self.target), str(PRODUCTION_DIR), str(child_file), str(ready)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        pid = None
+        try:
+            deadline = time.monotonic() + 8
+            while not ready.exists() and holder.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), 'verification helper was not reached')
+            pid = int(child_file.read_text())
+            holder.kill(); holder.wait(timeout=5); os.kill(pid, 0)
+            blocked = subprocess.run([sys.executable, str(MODULE_PATH), '--target', str(self.target), 'uninstall'], capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(0, blocked.returncode)
+            self.assertIn('unverified outcome', blocked.stderr)
+            self.assertEqual('pending', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+        finally:
+            if holder.poll() is None: holder.kill(); holder.wait(timeout=5)
+            if pid is not None:
+                try: os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError: pass
+
     def test_restore_only_upgrade_failure_never_starts_old_images_without_restore(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager()
