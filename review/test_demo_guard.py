@@ -23,9 +23,12 @@ case "$1 $2" in
   "context inspect") if [ "$TEST_COLLISION" = context ]; then echo unix:///other.sock; else echo unix:///Users/lionel/.docker/run/docker.sock; fi ;;
   "info --format") echo disposable-daemon ;;
   "ps -aq") if [ "$TEST_COLLISION" = container ]; then echo collision; fi ;;
-  "volume ls") if [ "$TEST_COLLISION" = volume ]; then echo survey-review-46766fd-maven; fi ;;
-  "network ls") if [ "$TEST_COLLISION" = network ]; then echo survey-review-46766fd_default; fi ;;
-  "image ls") if [ "$TEST_COLLISION" = image ]; then echo survey-review-46766fd-admin; fi ;;
+  "volume ls") if [ "$TEST_COLLISION" = volume ] || [ "$TEST_COLLISION" = long_volume ]; then echo survey-review-46766fd-maven; fi
+               if [ "$TEST_COLLISION" = long_volume ]; then awk 'BEGIN { for (i=0;i<20000;i++) print "other-volume-" i }'; fi ;;
+  "network ls") if [ "$TEST_COLLISION" = network ] || [ "$TEST_COLLISION" = long_network ]; then echo survey-review-46766fd_default; fi
+                if [ "$TEST_COLLISION" = long_network ]; then awk 'BEGIN { for (i=0;i<20000;i++) print "other-network-" i }'; fi ;;
+  "image ls") if [ "$TEST_COLLISION" = image ] || [ "$TEST_COLLISION" = long_image ]; then echo survey-review-46766fd-admin; fi
+              if [ "$TEST_COLLISION" = long_image ]; then awk 'BEGIN { for (i=0;i<20000;i++) print "other-image-" i }'; fi ;;
   *) exit 91 ;;
 esac
 '''); docker.chmod(0o755)
@@ -56,6 +59,13 @@ esac
             result=subprocess.run(['bash',str(SOURCE),operation],capture_output=True,text=True,timeout=5)
             self.assertNotEqual(result.returncode,0)
             self.assertIn('supports start only',result.stderr)
+
+    def test_long_resource_lists_reject_early_collisions(self):
+        for collision in ('long_volume', 'long_network', 'long_image'):
+            with self.subTest(collision=collision):
+                result=self.run_guard(collision)
+                self.assertNotEqual(result.returncode,0,result.stderr)
+                self.assertIn('already exists',result.stderr)
 
     def test_environment_override_fails_closed(self):
         self.assertNotEqual(self.run_guard(override=True).returncode,0)
