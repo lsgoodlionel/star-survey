@@ -422,6 +422,67 @@ class SurveyctlAdversarialTest(unittest.TestCase):
                 with self.assertRaises(self.module.IntegrityError):
                     manager._verify_backup(backup, "0.2.0", "920")
 
+    def test_recovery_stops_target_relay_and_rejects_unverified_inventory(self):
+        module = self.module
+        class RecoveryRunner(FakeRunner):
+            def __init__(runner, *, mode='normal'):
+                super().__init__()
+                runner.mode = mode
+                runner.stopped = False
+            def run(runner, command, **kwargs):
+                if 'stop' in command and 'engine-relay' in command:
+                    if runner.mode == 'stop-error':
+                        raise subprocess.CalledProcessError(1, command)
+                    runner.stopped = True
+                if 'ps' in command and '--format' in command:
+                    rows = [{'Service': 'platform', 'State': 'running'},
+                            {'Service': 'engine-relay', 'ID': 'a' * 64 if not runner.stopped or runner.mode != 'replaced' else 'b' * 64, 'State': 'exited' if runner.stopped and runner.mode != 'restart' else 'running'}]
+                    if runner.mode == 'absent':
+                        rows = [rows[0]]
+                    if runner.mode == 'unknown':
+                        rows.append({'Service': 'unknown-writer', 'State': 'running'})
+                    if runner.mode == 'duplicate':
+                        rows.append({'Service': 'engine-relay', 'State': 'running'})
+                    return subprocess.CompletedProcess(command, 0, stdout=json.dumps(rows), stderr='')
+                return super().run(command, **kwargs)
+        for mode in ('normal', 'absent', 'stop-error', 'restart', 'replaced', 'unknown', 'duplicate'):
+            with self.subTest(mode=mode):
+                runner = RecoveryRunner(mode=mode)
+                manager = self.manager(runner=runner)
+                if mode in ('normal', 'absent'):
+                    self.assertTrue(manager._stop_new_writers_before_legacy_restore(['docker', 'compose']))
+                    self.assertEqual(mode == 'normal', runner.stopped)
+                else:
+                    with self.assertRaises(module.RuntimeHealthError):
+                        manager._stop_new_writers_before_legacy_restore(['docker', 'compose'])
+
+    def test_restore_only_never_calls_legacy_restore_when_writer_quiescence_fails(self):
+        manager = self.manager()
+        manifest = mock.Mock(version='0.3.0', rollback='restore-only')
+        failure = self.module.RuntimeHealthError('upgrade failed')
+        with mock.patch.object(manager, '_compose', return_value=['docker', 'compose']), \
+             mock.patch.object(manager, '_personnel_guard_enabled', return_value=False), \
+             mock.patch.object(manager, '_stop_new_writers_before_legacy_restore', side_effect=self.module.RuntimeHealthError('writer')) as stop, \
+             mock.patch.object(manager, 'restore') as restore, \
+             mock.patch.object(manager, '_stop_after_failed_recovery', side_effect=self.module.RuntimeHealthError('recovery required')):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                manager._recover_failed_upgrade(manifest, '0.2.0', 'backup', failure)
+            stop.assert_called_once()
+            restore.assert_not_called()
+
+    def test_restore_only_does_not_invoke_old_helper_after_relay_was_stopped(self):
+        manager = self.manager()
+        manifest = mock.Mock(version='0.3.0', rollback='restore-only')
+        failure = self.module.RuntimeHealthError('upgrade failed')
+        with mock.patch.object(manager, '_compose', return_value=['docker', 'compose']), \
+             mock.patch.object(manager, '_personnel_guard_enabled', return_value=False), \
+             mock.patch.object(manager, '_stop_new_writers_before_legacy_restore', return_value=True), \
+             mock.patch.object(manager, 'restore') as restore, \
+             mock.patch.object(manager, '_stop_after_failed_recovery', side_effect=self.module.RuntimeHealthError('recovery required')):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                manager._recover_failed_upgrade(manifest, '0.2.0', 'backup', failure)
+            restore.assert_not_called()
+
     def test_restore_only_upgrade_failure_never_starts_old_images_without_restore(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager()
@@ -1581,7 +1642,7 @@ class SurveyctlTest(unittest.TestCase):
         integrity.write_text(json.dumps(data))
         failing = FakeRunner(fail_when=lambda command: "up" in command and "0.3.0" in " ".join(command))
         candidate = self.manifest(version="0.3.0", minimumSourceVersion="0.2.0")
-        with self.assertRaisesRegex(self.module.RuntimeHealthError, "services stopped"):
+        with self.assertRaisesRegex(self.module.RuntimeHealthError, "service stop requested"):
             self.manager(runner=failing).upgrade(candidate)
         self.assertEqual("recovery_required", json.loads((self.target / ".surveyctl" / "state.json").read_text())["status"])
         self.assertFalse(any("up" in command and "releases/0.2.0/compose.yml" in " ".join(command) for command in failing.commands))

@@ -1501,6 +1501,46 @@ class SurveyManager:
         except SurveyctlError as failure:
             self._recover_failed_upgrade(manifest, previous, backup_name, failure)
 
+    def _stop_new_writers_before_legacy_restore(self, compose: list[str]) -> bool:
+        # The old restore helper freezes only writers known to its release.
+        # Stop the added relay first; the old helper freezes the remaining
+        # writers when it takes its pre-restore safety backup.
+        declaration = self._run(compose + ["config", "--services"], "recovery topology could not be read", capture_output=True)
+        declared = (declaration.stdout or "").splitlines()
+        expected = LONG_RUNNING_SERVICES | ONE_SHOT_SERVICES
+        if len(declared) != len(set(declared)) or set(declared) != expected:
+            raise RuntimeHealthError("recovery topology is not the expected target release")
+
+        def observed():
+            result = self._run(compose + ["ps", "--all", "--format", "json"],
+                               "recovery writer status could not be read", capture_output=True)
+            text = (result.stdout or "").strip()
+            try:
+                rows = json.loads(text) if text.startswith("[") else [json.loads(line) for line in text.splitlines() if line]
+            except (AttributeError, json.JSONDecodeError) as exc:
+                raise RuntimeHealthError("recovery writer status is invalid") from exc
+            if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+                raise RuntimeHealthError("recovery writer status is invalid")
+            names = [row.get("Service") for row in rows]
+            if any(name not in expected for name in names) or len(names) != len(set(names)):
+                raise RuntimeHealthError("recovery writer inventory is unexpected")
+            return {row["Service"]: row for row in rows}
+
+        before = observed()
+        if "engine-relay" not in before:
+            # Absence does not establish whether a previously running relay
+            # left work in flight, so legacy restore must still fail closed.
+            return True
+        relay_id = before["engine-relay"].get("ID")
+        if not isinstance(relay_id, str) or not re.fullmatch(r"[0-9a-f]{12,64}", relay_id):
+            raise RuntimeHealthError("recovery relay identity is invalid")
+        self._run(compose + ["stop", "engine-relay"], "recovery relay could not be stopped")
+        after = observed()
+        relay = after.get("engine-relay")
+        if relay is None or relay.get("ID") != relay_id or relay.get("State") not in {"exited", "dead"}:
+            raise RuntimeHealthError("recovery relay stop could not be verified")
+        return True
+
     def _recover_failed_upgrade(self, manifest, previous, backup_name, failure) -> None:
         new_compose = self._compose(manifest.version)
         if self._personnel_guard_enabled(manifest.version):
@@ -1523,6 +1563,12 @@ class SurveyManager:
             raise failure
         if manifest.rollback == "restore-only":
             try:
+                if self._stop_new_writers_before_legacy_restore(new_compose):
+                    # Stopping a client container alone cannot prove that its
+                    # in-flight HTTP or database work has finished. Preserve
+                    # the verified backup rather than invoke an old helper
+                    # that cannot freeze the added writer.
+                    raise RuntimeHealthError("cross-version writer quiescence is unverified")
                 self.restore(backup_name)
                 old_compose = self._compose(previous)
                 self._run(old_compose + ["up", "-d", "--remove-orphans"], "restored rollback start failed")
@@ -1542,7 +1588,7 @@ class SurveyManager:
             pass
         self._atomic_write(self.current_path, previous + "\n")
         self._write_state(status="recovery_required", version=previous, recoveryBackup=backup_name)
-        raise RuntimeHealthError(f"upgrade recovery failed; services stopped; verified backup retained as {backup_name}") from cause
+        raise RuntimeHealthError(f"upgrade recovery failed; service stop requested; verified backup retained as {backup_name}") from cause
 
     def upgrade_version(self, version, expected_sha256) -> None:
         path = self._download_manifest(version, expected_sha256)
