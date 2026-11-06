@@ -39,9 +39,12 @@ class Session:
                                'INSERT', 'UPDATE', 'DELETE', 'VALUES', 'AS', 'OR', 'NOT', 'INTO', 'LIMIT',
                                'ALTER', 'TABLE', 'CREATE', 'USING', 'LANGUAGE', 'IS', 'DISTINCT', 'RETURNING',
                                ':', '=', ',', '*', '-', '+', '/', '}', '{', 'EOF'}
-                near = token.group(1) if token and token.group(1) in safe_tokens else 'other'
+                safe_tokens.update(word.upper() for word in re.findall(r'[AA-Za-z_]{2,40}', Path(__file__).read_text()))
+                near = token.group(1).upper() if token and token.group(1).upper() in safe_tokens else 'other'
+                shape = ('word' if token and re.fullmatch(r'[A-Za-z_]+', token.group(1)) else
+                         'punctuation' if token and re.fullmatch(r'[^A-Za-z0-9]+', token.group(1)) else 'mixed')
                 raise RuntimeError('session ended; SQLSTATE=' + (codes[-1] if codes else 'unavailable') +
-                                   ' error_line=' + (line.group(1) if line else 'unavailable') + ' near=' + near)
+                                   ' error_line=' + (line.group(1) if line else 'unavailable') + ' near=' + near + ' shape=' + shape)
             self.buffer += chunk
             if len(self.buffer) > 8192: raise RuntimeError('unexpected session output')
         output, self.buffer = self.buffer.split(marker, 1)
