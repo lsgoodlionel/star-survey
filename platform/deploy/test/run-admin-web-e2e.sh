@@ -228,7 +228,8 @@ run_browser_tests() {
     # worker's first startup; record only bounded classifications on failure.
     local ready=false attempt relay_state
     for ((attempt = 1; attempt <= 45; attempt++)); do
-      if db_query 'SELECT COUNT(*) FROM lime_mjyplatformbridge_event_log' >/dev/null 2>&1; then
+      if db_query 'SELECT COUNT(*) FROM lime_mjyplatformbridge_event_log' >/dev/null 2>&1 \
+          && docker exec "$ADMIN_WEB_RELAY_CONTAINER" test -f /tmp/survey-event-relay-heartbeat >/dev/null 2>&1; then
         ready=true
         break
       fi
@@ -249,7 +250,7 @@ categories = ['event bridge is not active', 'event bridge could not be loaded',
 print('relay diagnostic state:', sys.argv[2])
 print('relay diagnostic categories:', ','.join(x for x in categories if x in text) or 'unclassified')
 PY
-      fail "automatic relay did not create the event table"
+      fail "automatic relay did not complete its first iteration with initialized event schema"
     fi
   else
     (
@@ -427,6 +428,14 @@ db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version
 db_query "DELETE FROM lime_plugins WHERE name = 'MjyQuestionExtensions'" >/dev/null
 db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
           VALUES ('MjyQuestionExtensions', 'user', 1, 0, '0.1.0', 0)" >/dev/null
+if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+  # Mirror the real production plugin installation/schema step. This creates
+  # fixture schema only; it does not dispatch cron or deliver any events.
+  if ! docker exec -e YII_CONSOLE_COMMANDS=/var/www/html/platform/deploy/production/init \
+      "$CONTAINER" php application/commands/console.php productionInit plugins >"$WORK_DIR/plugin-init-private.log" 2>&1; then
+    fail "production plugin fixture initialization failed"
+  fi
+fi
 docker exec "$CONTAINER" php platform/tools/engine-theme/install-survey-theme.php zh-business >/dev/null
 docker exec "$CONTAINER" php platform/tests/e2e/install_question_themes.php mjy-collapsible mjy-cascading-select mjy-carousel >/dev/null
 ok "engine installed and RemoteControl enabled"
