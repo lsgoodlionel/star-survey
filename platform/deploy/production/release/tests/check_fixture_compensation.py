@@ -15,6 +15,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fixture_compensation import build_compensation_sql
+from fixture_provision import build_fixture_provision_sql
+from datetime import datetime, timedelta, timezone
 
 
 def main():
@@ -75,32 +77,18 @@ INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,
 COMMIT;
 """
         execute(setup, database)
-        provision = f"""
-BEGIN; SET LOCAL ROLE platform_app; {scope}
-INSERT INTO plan_version(id,plan_code,version,capabilities,quotas,export_window_days)
- SELECT '{fixture_plan}','ci-fixture',1,capabilities,jsonb_set(quotas,'{{member.seats}}','2'),export_window_days
- FROM plan_version WHERE id='{owner_plan}';
-INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
- SELECT '{fixture_sub}','{tenant}','{fixture_plan}',kind,now(),ends_at FROM subscription WHERE id='{original_sub}';
-INSERT INTO org_connection(id,tenant_id,provider,corp_id,app_id,secret_ref,unknown_user_policy,enabled,created_by)
- VALUES ('{connection}','{tenant}','wecom','ci-corp','ci-app','CI_SECRET','require_preauthorized',true,'ci');
-INSERT INTO identity_binding(principal_id,tenant_id,provider,app_id,external_id)
- VALUES ('{principal}','{tenant}','wecom','ci-corp','ci-user');
-INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by)
- VALUES ('{tenant}','{principal}','active',true,'ci');
-INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,expires_at)
- VALUES ('{tenant}','{grant}','{principal}','org_admin',NULL,'ci',now()+interval '15 minutes');
--- Model the project-level creator grant generated during a real author journey.
+        provision = build_fixture_provision_sql(
+            tenant=tenant, owner_plan=owner_plan, original_sub=original_sub, owner_grant=owner_grant,
+            fixture_plan=fixture_plan, fixture_sub=fixture_sub, principal=principal, connection=connection,
+            author_grant=grant, handoff_hash=handoff_hash, browser_hash=browser_hash,
+            expires_at=datetime.now(timezone.utc)+timedelta(seconds=60))
+        project_rows = f"""
 INSERT INTO access_resource(tenant_id,id,kind,parent_id,name)
  VALUES ('{tenant}','{project}','project',NULL,'CI test project');
 INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,expires_at)
  VALUES ('{tenant}','{project_grant}','{principal}','project_manager','{project}','ci',now()+interval '15 minutes');
-INSERT INTO org_login_handoff(handoff_hash,browser_hash,tenant_id,principal_id,connection_id,provider,expires_at)
- VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}','wecom',now()+interval '1 minute');
-INSERT INTO org_login_session(id,tenant_id,principal_id,connection_id,expires_at)
- VALUES ('{session}','{tenant}','{principal}','{connection}',now()+interval '1 hour');
-COMMIT;
 """
+        provision = provision.replace('COMMIT;', project_rows + 'COMMIT;')
         # The browser author needs tenant-wide project creation and export;
         # the earlier project_manager role lacks manage-settings.
         permissions = execute("SELECT count(*) FROM access_role_permission WHERE role_code='org_admin' "
