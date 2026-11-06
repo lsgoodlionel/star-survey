@@ -32,7 +32,9 @@ class Session:
             if not chunk:
                 detail = self.p.stderr.read(4096).decode('utf-8', errors='replace')
                 codes = re.findall(r'(?m)^ERROR:\s+([0-9A-Z]{5})\s*$', detail)
-                raise RuntimeError('session ended; SQLSTATE=' + (codes[-1] if codes else 'unavailable'))
+                line = re.search(r'(?m)^LINE ([0-9]+):', detail)
+                raise RuntimeError('session ended; SQLSTATE=' + (codes[-1] if codes else 'unavailable') +
+                                   ' error_line=' + (line.group(1) if line else 'unavailable'))
             self.buffer += chunk
             if len(self.buffer) > 8192: raise RuntimeError('unexpected session output')
         output, self.buffer = self.buffer.split(marker, 1)
@@ -211,13 +213,16 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
             supervisor.sql('SELECT count(*) FROM pg_prepared_xacts;') != '0'):
             raise RuntimeError('post-worker exclusivity not established')
         supervisor.sql(compensation)
-        verified = supervisor.sql(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
-SELECT (SELECT id='{restore_sub}' AND plan_version_id='{owner_plan}' AND kind='trial' AND ends_at=(SELECT ends_at FROM subscription WHERE id='{original_sub}') FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1)
-AND NOT EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{tenant}' AND actor_id='{principal}')
-AND EXISTS (SELECT 1 FROM org_connection WHERE tenant_id='{tenant}' AND id='{connection}' AND NOT enabled)
-AND EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL)
-AND (SELECT count(*)=1 FROM access_member WHERE tenant_id='{tenant}' AND uses_seat AND status<>'removed'); COMMIT;""")
-        if verified.splitlines()[-1] != 't': raise RuntimeError('fixture compensation not verified')
+        checks = [
+            f"SELECT id='{restore_sub}' AND plan_version_id='{owner_plan}' AND kind='trial' AND ends_at=(SELECT ends_at FROM subscription WHERE id='{original_sub}') FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1",
+            f"SELECT NOT EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{tenant}' AND actor_id='{principal}')",
+            f"SELECT EXISTS (SELECT 1 FROM org_connection WHERE tenant_id='{tenant}' AND id='{connection}' AND NOT enabled)",
+            f"SELECT EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL)",
+            f"SELECT count(*)=1 FROM access_member WHERE tenant_id='{tenant}' AND uses_seat AND status<>'removed'",
+        ]
+        for index, check in enumerate(checks):
+            result = supervisor.sql(f"BEGIN; SET LOCAL ROLE platform_app; {scope} {check}; COMMIT;")
+            if result.splitlines()[-1] != 't': raise RuntimeError('fixture compensation check failed: ' + str(index))
         supervisor.sql(compensation)
         print('product compensation completed and retry was idempotent on bound exclusive session')
         # Inject a failure after closure. The handler verifies closure, does not reopen.
