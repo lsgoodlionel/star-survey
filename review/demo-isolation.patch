@@ -102,7 +102,7 @@
  }
  
  enable_bridge() {
-@@ -308,22 +309,58 @@
+@@ -308,22 +309,67 @@
    engine_id="$("${COMPOSE[@]}" ps -q engine)"
    db_id="$("${COMPOSE[@]}" ps -q engine-db)"
    export MYSQL_PWD="$ENGINE_DB_ROOT_PASSWORD"
@@ -112,6 +112,15 @@
    unset MYSQL_PWD
 -  docker exec "$engine_id" rm -rf tmp/runtime/cache
 +  "${DOCKER[@]}" exec "$engine_id" rm -rf tmp/runtime/cache
++}
++
++# Compare complete newline-delimited output with Bash builtins only.
++review_list_contains() {
++  local wanted="$1" line
++  while IFS= read -r line; do
++    [[ "$line" == "$wanted" ]] && return 0
++  done <<< "$2"
++  return 1
 +}
 +
 +# Fail closed before the first write; the target project is disposable and must be new.
@@ -133,13 +142,13 @@
 +  [[ -z "$output" ]] || fail "review container name already exists"
 +  output="$("${DOCKER[@]}" volume ls -q)" || fail "volume list unavailable"
 +  for name in "${PROJECT}_engine-data" "${PROJECT}_engine-runtime" "${PROJECT}_engine-tmp" "${PROJECT}_platform-data" survey-review-46766fd-maven; do
-+    if grep -Fqx -- "$name" <<< "$output"; then fail "review volume already exists"; fi
++    if review_list_contains "$name" "$output"; then fail "review volume already exists"; fi
 +  done
 +  output="$("${DOCKER[@]}" network ls --format '{{.Name}}')" || fail "network list unavailable"
-+  if grep -Fqx -- "${PROJECT}_default" <<< "$output"; then fail "review network already exists"; fi
++  if review_list_contains "${PROJECT}_default" "$output"; then fail "review network already exists"; fi
 +  output="$("${DOCKER[@]}" image ls --format '{{.Repository}}')" || fail "image list unavailable"
 +  for name in survey-review-46766fd-engine survey-review-46766fd-gateway survey-review-46766fd-admin; do
-+    if grep -Fqx -- "$name" <<< "$output"; then fail "review image already exists"; fi
++    if review_list_contains "$name" "$output"; then fail "review image already exists"; fi
 +  done
 +  python3 - <<'PORTCHECK' || fail "review port unavailable"
 +import socket
@@ -165,7 +174,7 @@
    # runtime.env may have been upgraded with a new secret; force the application
    # containers to consume it instead of retaining their previous environment.
    run_quiet "${COMPOSE[@]}" up -d --force-recreate platform engine
-@@ -410,25 +447,8 @@
+@@ -410,25 +456,8 @@
  }
  
  main() {
