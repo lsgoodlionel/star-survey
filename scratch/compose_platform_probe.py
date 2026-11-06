@@ -2,7 +2,7 @@
 """Disposable hosted-runner Compose topology probe, not candidate authorization."""
 import json, os, re, secrets, subprocess, tempfile, time
 from pathlib import Path
-from exclusive_probe import require_container_absent
+from exclusive_probe import Session, require_container_absent
 D=['docker','--host','unix:///var/run/docker.sock']
 
 def run(args, check=True, timeout=40):
@@ -32,7 +32,7 @@ def main():
                     'command':['while :; do PGAPPNAME=fixture_platform psql -h platform-db -U postgres -d postgres -c "select pg_sleep(1)" >/dev/null 2>&1 || true; done'],
                     'networks':['edge','internal'],'restart':'unless-stopped'}},
          'networks':{'edge':{},'internal':{'internal':True}}}
-    ids={}; nets={}; directory=tempfile.TemporaryDirectory(prefix='survey-compose-probe-')
+    ids={}; nets={}; unknown=None; directory=tempfile.TemporaryDirectory(prefix='survey-compose-probe-')
     path=Path(directory.name)/'compose.json'; path.write_text(json.dumps(doc)); os.chmod(path,0o600)
     compose=D+['compose','--project-name',project,'--file',str(path)]
     try:
@@ -71,6 +71,11 @@ def main():
             if q.returncode==0 and q.stdout.strip()=='1': break
             time.sleep(.1)
         else: raise RuntimeError('platform writer not observed')
+        # A separate, known test connection stands in for an unexpected writer.
+        # It must prevent the drain guard from reporting success.
+        unknown=Session(db,'postgres')
+        unknown_pid=unknown.sql('SELECT pg_backend_pid();')
+        if not re.fullmatch(r'[0-9]+',unknown_pid): raise RuntimeError('test client identity invalid')
         def require_stoppable():
             x=inspect('container',platform)
             if x['Id']!=platform or x['State']['StartedAt']!=ids['platform'][1] or x['HostConfig']['RestartPolicy']['Name']!='no':
@@ -86,16 +91,30 @@ def main():
         x=inspect('container',platform)
         if x['Id']!=platform or x['State']['Running'] is not False or x['State']['StartedAt']!=ids['platform'][1] or x['HostConfig']['RestartPolicy']['Name']!='no':
             raise RuntimeError('platform stop unconfirmed')
+        def require_drained():
+            q=sql("SELECT count(*) FROM pg_stat_activity WHERE datname='postgres' AND backend_type='client backend';",'template1')
+            if q.returncode or q.stdout.strip()!='0': raise RuntimeError('platform database clients remain')
         deadline=time.monotonic()+10
         while time.monotonic()<deadline:
-            q=sql("SELECT count(*) FROM pg_stat_activity WHERE datname='postgres' AND backend_type='client backend';",'template1')
+            q=sql("SELECT count(*) FROM pg_stat_activity WHERE datname='postgres' AND application_name='fixture_platform';",'template1')
             if q.returncode==0 and q.stdout.strip()=='0': break
+            time.sleep(.05)
+        else: raise RuntimeError('stopped platform backend remains')
+        try: require_drained()
+        except RuntimeError: pass
+        else: raise RuntimeError('unknown writer was accepted')
+        unknown.close(); unknown=None
+        deadline=time.monotonic()+10
+        while time.monotonic()<deadline:
+            try: require_drained(); break
+            except RuntimeError: pass
             time.sleep(.05)
         else: raise RuntimeError('platform database clients remain')
         if sql('SELECT 1;').returncode==0: raise RuntimeError('closed gate accepted connection')
         print('exact platform and network identities verified; restart disabled; platform stopped; database clients drained')
         print('scope: synthetic Compose services on trusted dedicated runner, not candidate browser acceptance')
     finally:
+        if unknown is not None: unknown.close()
         # Only exact IDs whose labels are rechecked may be touched. A failure
         # leaves an explicitly failed hosted job; never infer cleanup success.
         for service,(cid,_) in ids.items():
