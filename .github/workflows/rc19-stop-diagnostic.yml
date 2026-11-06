@@ -1,12 +1,15 @@
 name: rc19 independent stop and drain diagnostic
 on:
   workflow_dispatch:
+  push:
+    branches: [codex/checkpoint-integration-check]
 permissions:
   actions: read
   contents: read
   packages: read
 jobs:
   diagnostic:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'Run reviewed rc19 isolated stop diagnostic once'
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
