@@ -114,7 +114,9 @@ class ReleaseBuilderTest(unittest.TestCase):
             self.assertLess(module._version_key('0.3.17-rc.0'), floor)
             self.assertGreater(module._version_key('0.3.17'), floor)
             self.assertGreater(module._version_key(loaded.version), floor)
-            manager = module.SurveyManager((self.root / ('floor-target-' + arch)).resolve())
+            target = (self.root / ('floor-target-' + arch)).resolve()
+            (target / '.surveyctl').mkdir(parents=True, mode=0o700)
+            manager = module.SurveyManager(target)
             state = {'version': '0.3.17-rc.0', 'publicHost': 'fixture.test'}
             with mock.patch.object(manager, '_read_state', side_effect=lambda **kwargs: dict(state)), \
                  mock.patch.object(manager, '_personnel_guard_enabled', return_value=False), \
