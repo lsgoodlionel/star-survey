@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fixture_checkpoint import require_completed_checkpoint, run_checkpointed
@@ -41,6 +42,25 @@ class CheckpointTest(unittest.TestCase):
         self.marker.unlink()
         (self.evidence / 'fixture-recovery.verified').write_text('b' * 64 + '\n')
         with self.assertRaises(ValueError):
+            require_completed_checkpoint(self.evidence, self.work, self.identity)
+
+    def test_failed_marker_clear_keeps_pending_even_with_receipt(self):
+        with mock.patch('fixture_checkpoint.RecoveryMarker.clear', side_effect=ValueError('clear failed')):
+            with self.assertRaises(ValueError):
+                self.run_guard(lambda: None, lambda: True)
+        self.assertTrue(self.marker.exists())
+        self.assertTrue((self.evidence / 'fixture-recovery.verified').exists())
+        with self.assertRaises(RuntimeError):
+            require_completed_checkpoint(self.evidence, self.work, self.identity)
+
+    def test_fifo_or_symlink_receipt_is_rejected_without_blocking(self):
+        receipt = self.evidence / 'fixture-recovery.verified'
+        os.mkfifo(receipt, 0o600)
+        with self.assertRaises(ValueError):
+            require_completed_checkpoint(self.evidence, self.work, self.identity)
+        receipt.unlink()
+        receipt.symlink_to(self.work / 'not-a-receipt')
+        with self.assertRaises(OSError):
             require_completed_checkpoint(self.evidence, self.work, self.identity)
 
     def test_action_and_verification_failure_retain_marker(self):
