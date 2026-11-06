@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Disposable CI experiment only; assumes a trusted runner and Docker daemon."""
-import json, os, re, secrets, select, signal, subprocess, tempfile, time
+import json, os, re, secrets, select, signal, subprocess, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'platform/deploy/production/release'))
+from fixture_cgroup import CgroupScope
 
 D = ['docker', '--host', 'unix:///var/run/docker.sock']
 
@@ -128,6 +131,48 @@ else: sys.exit(25)
         if supervisor.sql("SELECT current_database() || ':' || pg_backend_pid()::text;") != 'postgres:' + pid: raise RuntimeError('supervisor identity changed')
         verify()
         if supervisor.sql(identity_sql) != db_identity: raise RuntimeError('bound database identity changed')
+        # Browser stand-in: a real unprivileged worker starts a setsid child.
+        # Nothing may touch the database for recovery until its cgroup is empty.
+        with tempfile.TemporaryDirectory(prefix='survey-worker-') as worker_dir:
+            os.chown(worker_dir, 65534, 65534); os.chmod(worker_dir, 0o700)
+            descendant_file = Path(worker_dir) / 'descendant'
+            child_code = f"import os,time; from pathlib import Path; Path({str(descendant_file)!r}).write_text(str(os.getpid())); time.sleep(60)"
+            worker_code = ('import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",' +
+                           repr(child_code) + '],start_new_session=True); time.sleep(60)')
+            scope = CgroupScope(65534, 65534)
+            proc = None
+            try:
+                saved = dict(os.environ)
+                try:
+                    os.environ.clear(); os.environ.update({'PATH': '/usr/bin:/bin'})
+                    proc = scope.spawn(['/usr/bin/python3', '-c', worker_code])
+                finally:
+                    os.environ.clear(); os.environ.update(saved)
+                deadline = time.monotonic() + 10
+                while not descendant_file.exists() and time.monotonic() < deadline: time.sleep(.05)
+                if not descendant_file.exists() or scope.empty(): raise RuntimeError('worker descendants not observed')
+                descendant_pid = descendant_file.read_text().strip()
+                if not re.fullmatch(r'[0-9]+', descendant_pid): raise RuntimeError('descendant identity invalid')
+                scope.kill_and_wait(); proc.wait(timeout=5)
+                if not scope.empty(): raise RuntimeError('worker scope remains active')
+                stat = Path('/proc') / descendant_pid / 'stat'
+                if stat.exists() and stat.read_text().rsplit(')', 1)[1].strip().split()[0] != 'Z':
+                    raise RuntimeError('detached descendant remains alive')
+            finally:
+                if not scope.empty(): scope.kill_and_wait()
+                if proc is not None: proc.wait(timeout=5)
+                if scope.empty(): scope.close()
+        # Re-establish the same bound identity and exclusive closed state before
+        # a harmless synthetic transaction; this is not product compensation.
+        verify()
+        if (supervisor.sql(identity_sql) != db_identity or
+            supervisor.sql('SELECT count(*) FROM pg_database WHERE datallowconn;') != '0' or
+            supervisor.sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();") != '0' or
+            supervisor.sql('SELECT count(*) FROM pg_prepared_xacts;') != '0'):
+            raise RuntimeError('post-worker exclusivity not established')
+        supervisor.sql('CREATE TEMP TABLE fixture_recovery_check (value integer);')
+        supervisor.sql('BEGIN; INSERT INTO fixture_recovery_check VALUES (1); COMMIT;')
+        if supervisor.sql('SELECT count(*) FROM fixture_recovery_check;') != '1': raise RuntimeError('synthetic recovery failed')
         # Inject a failure after closure. The handler verifies closure, does not reopen.
         try: raise RuntimeError('synthetic recovery failure')
         except RuntimeError:
