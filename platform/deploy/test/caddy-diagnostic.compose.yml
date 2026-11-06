@@ -1,6 +1,9 @@
 # Dedicated hosted-runner diagnostic only; uses the production Caddyfile.
 services:
   test-web:
+    # Setup-only RPC access on an unpredictable loopback port.
+    ports:
+      - "127.0.0.1::80"
     networks:
       default:
         aliases: [engine]
