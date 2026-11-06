@@ -10,3 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_checkpoint.py -v
+      - run: python3 -B scratch/checkpoint_artifact_probe.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fixture-pending-marker-probe
+          path: checkpoint-evidence/fixture-recovery.pending
+          if-no-files-found: error
+          retention-days: 1
