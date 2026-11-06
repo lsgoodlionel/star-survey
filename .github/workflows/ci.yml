@@ -25,6 +25,22 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Require ready native systemd and Docker
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d /run/systemd/system
+          test "$(ps -p 1 -o comm=)" = systemd
+          state="$(sudo timeout 180 systemctl is-system-running --wait)" || status=$?
+          printf 'Native host systemd state: %s (status %s)\n' "$state" "${status:-0}"
+          case "$state" in
+            running|degraded) ;;
+            *) echo 'Native host systemd did not become ready' >&2; exit 1 ;;
+          esac
+          sudo systemctl is-active docker
+          docker info --format '{{json .ServerVersion}}'
+          docker compose version
       - name: Execute independent new-script diagnostic against rc19
         shell: bash
         run: |
