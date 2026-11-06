@@ -1,18 +1,13 @@
-name: Exclusive database prototype
+name: Isolated Compose platform probe
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  prototype:
+  probe:
     runs-on: ubuntu-22.04
     timeout-minutes: 8
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [loss-before, wrong-connection]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - run: docker pull postgres:16-alpine
-      - run: python3 -B -m unittest discover -s scratch -p test_absence.py -v
-      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_REPOSITORY python3 scratch/exclusive_probe.py '${{ matrix.mode }}'
+      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_REPOSITORY python3 scratch/compose_platform_probe.py
