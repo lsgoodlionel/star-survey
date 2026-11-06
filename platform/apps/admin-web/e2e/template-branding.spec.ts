@@ -346,7 +346,20 @@ test('branded copy previews and publishes with language and pinned image bytes',
     await page.getByRole('button', { name: '下载导出文件' }).click();
     const file = await downloadPromise;
     expect(file.suggestedFilename()).toMatch(new RegExp(`${suffix.replaceAll('.', '\\.')}$`));
-    expect((await stat(await file.path())).size).toBeGreaterThan(0);
+    const filePath = await file.path();
+    expect((await stat(filePath)).size).toBeGreaterThan(0);
+    if (format === 'pdf') {
+      // Independent Poppler reader checks extractable Chinese from the actual downloaded file.
+      const { stdout } = await promisify(execFile)('pdftotext', ['-enc', 'UTF-8', filePath, '-'], { timeout: 15_000 });
+      for (const label of ['答卷信息', '版本', '答卷号', '作答状态']) expect(stdout.includes(label)).toBe(true);
+    }
+    if (format === 'report-docx') {
+      const entries = readZipEntries(await readFile(filePath));
+      const xml = entries.get('word/document.xml')?.toString('utf8') ?? '';
+      // Check label and value in the same table row, not merely anywhere in the document.
+      const totalRow = xml.match(/<w:tr>[^]*?<\/w:tr>/g)?.find((row) => row.includes('答卷总数')) ?? '';
+      expect(/<w:t(?: [^>]*)?>2<\/w:t>/.test(totalRow)).toBe(true);
+    }
   }
 
   await page.getByLabel('导出格式').selectOption('docx');
