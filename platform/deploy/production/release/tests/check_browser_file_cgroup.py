@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """CI-only ownership handoff to a contained unprivileged Node reader."""
 import os
+import hashlib
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 import uuid
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -20,21 +22,26 @@ if not node: raise RuntimeError('Node is unavailable')
 root=Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
 helper=root/'platform/apps/admin-web/e2e/native-candidate/handoff.mjs'
 if helper.is_symlink() or not helper.is_file(): raise RuntimeError('browser reader unavailable')
+module_directory=tempfile.TemporaryDirectory(prefix='survey-reader-',dir='/tmp')
+module_root=Path(module_directory.name); os.chmod(module_root,0o755)
+module_copy=module_root/'handoff.mjs'; shutil.copyfile(helper,module_copy); os.chmod(module_copy,0o444)
+if hashlib.sha256(helper.read_bytes()).digest()!=hashlib.sha256(module_copy.read_bytes()).digest():
+    raise RuntimeError('browser reader copy differs')
 tenant,principal,connection=(str(uuid.uuid4()) for _ in range(3))
 handoff=make_handoff(tenant,principal,connection)
 fixture=BrowserFixtureFile.create(Path('/tmp').resolve(),handoff,65534,65534)
 scope=None; process=None
 try:
-    code='''import {readHandoffFixture} from process.argv[1];
-const item=await readHandoffFixture(process.argv[2],process.argv[3]);
-if(item.tenantId!==process.argv[4]||item.principalId!==process.argv[5]) process.exit(1);
+    # Fixed exit codes reveal the failing stage without printing fixture data.
+    code='''let reader; try { reader=await import(process.argv[1]); } catch { process.exit(21); }
+let item; try { item=await reader.readHandoffFixture(process.argv[2],process.argv[3]); } catch { process.exit(22); }
+if(item.tenantId!==process.argv[4]||item.principalId!==process.argv[5]) process.exit(23);
 '''
-    # Dynamic import supports an absolute path while never printing the values.
-    code="const {readHandoffFixture}=await import(process.argv[1]);" + code.split(';',1)[1]
     scope=CgroupScope(65534,65534)
-    process=scope.spawn([node,'--input-type=module','-e',code,helper.as_uri(),str(fixture.directory/'handoff.json'),
+    process=scope.spawn([node,'--input-type=module','-e',code,module_copy.as_uri(),str(fixture.directory/'handoff.json'),
                          str(fixture.directory),tenant,principal],env={'PATH':'/usr/bin:/bin'})
-    if process.wait(timeout=20)!=0: raise RuntimeError('unprivileged fixture reader failed')
+    result=process.wait(timeout=20)
+    if result!=0: raise RuntimeError('unprivileged fixture reader failed: code='+str(result))
     if not scope.empty():
         scope.kill_and_wait()
         raise RuntimeError('fixture reader left descendants')
@@ -47,3 +54,4 @@ finally:
         if process is not None: process.wait(timeout=5)
         if scope.empty(): scope.close()
     if fixture is not None: fixture.cleanup()
+    module_directory.cleanup()
