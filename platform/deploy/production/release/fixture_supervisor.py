@@ -90,7 +90,7 @@ def supervise(worker, recovery, *, verify_containment=None, stop_timeout=5, reco
     return 0 if worker_ok and recovery_ok and not interrupted else 1
 
 
-def supervise_cgroup(worker, recovery, uid, gid, *, worker_timeout=120, recovery_timeout=120):
+def supervise_cgroup(worker, recovery, uid, gid, *, worker_timeout=120, recovery_timeout=120, child_env=None):
     """Supervise explicitly unprivileged local processes in distinct cgroups.
 
     This does not authorize a target, contain daemon-created processes, prevent
@@ -108,7 +108,7 @@ def supervise_cgroup(worker, recovery, uid, gid, *, worker_timeout=120, recovery
         interrupted = True
 
     def run(scope, command, timeout, cancel_on_signal):
-        process = scope.spawn(command)
+        process = scope.spawn(command, env=child_env)
         deadline = time.monotonic() + timeout
         while process.poll() is None and time.monotonic() < deadline:
             if cancel_on_signal and interrupted:
@@ -162,3 +162,35 @@ def supervise_cgroup(worker, recovery, uid, gid, *, worker_timeout=120, recovery
         signal.signal(signal.SIGTERM, old_term)
         signal.signal(signal.SIGINT, old_int)
     return 0 if worker_ok and recovery_ok and not interrupted else 1
+
+
+def supervise_checkpointed(evidence, work, identity, provision, worker, recovery, uid, gid, verify,
+                           *, child_env, worker_timeout=120, recovery_timeout=120):
+    """Record pending before provisioning and clear only after containment and verification.
+
+    This is test orchestration, not target authorization: trusted callers must
+    establish instance ownership, deny privileged APIs to workers, bind the
+    database and verify the real recovery. Failure to provision or supervise
+    retains the checkpoint. SIGKILL or host loss remains externally unverified.
+    """
+    from fixture_checkpoint import run_checkpointed
+    if not callable(provision) or not callable(verify):
+        raise ValueError('fixture callbacks are invalid')
+    allowed = {'PATH', 'HOME', 'CI', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'GITHUB_REPOSITORY',
+               'SURVEY_NATIVE_ACCEPTANCE', 'NATIVE_AUTHOR_FIXTURE_DIR', 'PLAYWRIGHT_BROWSERS_PATH',
+               'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'}
+    if (not isinstance(child_env, dict) or not child_env or
+            any(not isinstance(k, str) or k not in allowed or not isinstance(v, str) or '\x00' in v
+                for k, v in child_env.items())):
+        raise ValueError('fixture child environment is invalid')
+
+    def action():
+        provision()
+        if supervise_cgroup(worker, recovery, uid, gid, worker_timeout=worker_timeout,
+                            recovery_timeout=recovery_timeout, child_env=dict(child_env)) != 0:
+            raise RuntimeError('fixture supervision failed')
+
+    try:
+        run_checkpointed(evidence, work, identity, action, verify)
+    except BaseException:
+        raise RuntimeError('fixture execution or recovery unverified') from None

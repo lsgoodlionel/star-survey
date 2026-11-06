@@ -11,5 +11,6 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
       - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p 'test_fixture_checkpoint*.py' -v
+      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 -B platform/deploy/production/release/tests/check_checkpoint_supervisor.py
       - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_native_acceptance.py -q
       - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_build_release.py -q
