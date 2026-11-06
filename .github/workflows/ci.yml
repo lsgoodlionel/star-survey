@@ -65,7 +65,7 @@ jobs:
           python3 - "$RUNNER_TEMP/candidate-diagnostic/native_acceptance.sh" <<'PYCODE'
           from pathlib import Path
           import sys
-          path=Path(sys.argv[1]); text=path.read_text(); needle='last_step="uninstall"\n'
+          path=Path(sys.argv[1]); text=path.read_text(); needle='# An author fixture must establish verified recovery before any normal uninstall.\n'
           if text.count(needle)!=1: raise SystemExit('diagnostic insertion point ambiguous')
           text=text.replace(needle,'last_step="independent-stop-diagnostic"\npython3 "$script_dir/scratch_candidate_stop.py" "$work_root" "${evidence_root}.fixture-checkpoint"\nwrite_doctor_evidence "doctor-restored"\n'+needle)
           path.write_text(text)
