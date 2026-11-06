@@ -1690,22 +1690,26 @@ class SurveyctlTest(unittest.TestCase):
                          "target=pathlib.Path(sys.argv[sys.argv.index('--target')+1])\n"
                          "sys.exit(0 if 'verify' in sys.argv and (target/'allow-verify').exists() else (5 if 'verify' in sys.argv else 4))\n")
         manifest, _ = write_test_release(self.root, restore_source=helper_source.encode())
-        self.install(manifest)
-        backup = self.target / "backups" / "sample"
-        write_fake_backup(backup)
         for operation, expected in (
             ("verify", 5),
             ("restore", 4),
         ):
             with self.subTest(operation=operation):
+                target = self.root / ("helper-" + operation)
+                manager = self.module.SurveyManager(target=target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+                manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+                write_fake_backup(target / "backups" / "sample")
                 if operation == "restore":
-                    (self.target / "allow-verify").touch()
+                    (target / "allow-verify").touch()
                 result = subprocess.run(
-                    [sys.executable, str(MODULE_PATH), "--target", str(self.target), "restore", "sample"],
+                    [sys.executable, str(MODULE_PATH), "--target", str(target), "restore", "sample"],
                     capture_output=True, text=True,
                 )
                 self.assertEqual(expected, result.returncode, result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual("pending", json.loads((target / ".surveyctl/operation.intent").read_text())["state"])
+                blocked = subprocess.run([sys.executable, str(MODULE_PATH), "--target", str(target), "uninstall"], capture_output=True, text=True)
+                self.assertIn("unverified outcome", blocked.stderr)
         other_target = self.root / "helper-backup-target"
         other_manager = self.module.SurveyManager(target=other_target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
         other_manager.install(manifest, "survey.example.com", "operations", "operations@example.com")

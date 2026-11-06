@@ -1467,6 +1467,9 @@ class SurveyManager:
 
     def _restore_for_failed_upgrade_or_manual(self, name, state) -> None:
         backup = self._backup_path(name)
+        # Verification starts a helper that decrypts into a private temporary
+        # directory; it can outlive this controller if the process is killed.
+        self._begin_operation()
         metadata = self._verify_backup(backup)
         if self._personnel_guard_enabled(state["version"], require_floor=True):
             self._require_personnel_capability(self._release_manifest(metadata["version"]))
