@@ -405,6 +405,15 @@ python3 "$evidence_helper" clean-restore
 last_step="doctor-restored"
 write_doctor_evidence "doctor-restored"
 
+# Hosted-only diagnostic: separate from author acceptance and its success latch.
+if [[ "${NATIVE_CANDIDATE_STOP_DIAGNOSTIC:-0}" == "1" ]]; then
+  [[ "$author_mode" == "1" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" && "${GITHUB_REPOSITORY:-}" == "lsgoodlionel/star-survey" ]]
+  [[ -f "${GITHUB_WORKSPACE:?}/scratch_candidate_stop.py" ]]
+  last_step="candidate-stop-diagnostic"
+  PYTHONPATH="$script_dir${PYTHONPATH:+:$PYTHONPATH}" python3 "$GITHUB_WORKSPACE/scratch_candidate_stop.py" "$work_root" "${evidence_root}.fixture-checkpoint"
+  printf 'Candidate stop diagnostic returned; author acceptance is still unverified.\n'
+fi
+
 # An author fixture must establish verified recovery before any normal uninstall.
 if [[ "$author_mode" == "0" && -e "${evidence_root}.fixture-checkpoint" ]]; then exit 2; fi
 if [[ "$author_mode" == "0" && -L "${evidence_root}.fixture-checkpoint" ]]; then exit 2; fi
