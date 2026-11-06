@@ -67,7 +67,7 @@ class Session:
             self.p.stdin.close(); self.p.wait(timeout=10)
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ('normal', 'loss-before', 'loss-after', 'consumed', 'expired', 'wrong-hash'):
+    if len(sys.argv) != 2 or sys.argv[1] not in ('normal', 'loss-before', 'loss-after', 'consumed', 'expired', 'wrong-hash', 'wrong-handoff', 'wrong-principal', 'wrong-connection', 'wrong-tenant', 'missing', 'cleaned'):
         raise RuntimeError('invalid isolated experiment mode')
     mode = sys.argv[1]
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted'
@@ -138,6 +138,11 @@ else: sys.exit(25)
         else: raise RuntimeError('test database not ready')
         supervisor, stale, maintenance = Session(cid, 'postgres'), Session(cid, 'postgres'), Session(cid, 'template1')
         sessions.extend([supervisor, stale, maintenance])
+        observer = Session(cid, 'postgres') if mode == 'loss-before' else None
+        if observer: sessions.append(observer)
+        observer_pid = observer.sql('SELECT pg_backend_pid();') if observer else None
+        if observer_pid is not None and not re.fullmatch(r'[0-9]+', observer_pid): raise RuntimeError('observer identity invalid')
+        other_clients = "SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()" + (" AND pid<>" + observer_pid if observer_pid else '') + ';'
         supervisor.sql("CREATE ROLE platform_owner NOLOGIN; CREATE ROLE platform_app NOLOGIN; ALTER DATABASE postgres OWNER TO platform_owner;")
         migration_dir = Path(__file__).resolve().parents[1] / 'platform/services/business/src/main/resources/db/migration'
         migrations = []
@@ -172,9 +177,9 @@ INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,
 VALUES ('{tenant}','{grant}','{principal}','org_admin',NULL,'ci',now()+interval '15 minutes');
 INSERT INTO org_login_handoff(handoff_hash,browser_hash,tenant_id,principal_id,connection_id,provider,expires_at)
 VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}','wecom',{expiration}); COMMIT;""")
-        if mode in ('consumed', 'wrong-hash'):
+        if mode in ('consumed', 'wrong-hash', 'wrong-handoff', 'wrong-principal', 'wrong-connection', 'wrong-tenant', 'missing', 'cleaned'):
             supervisor.sql(f"BEGIN; SET LOCAL ROLE platform_app; {scope} SELECT * FROM org_login_handoff_consume('{tenant}','{handoff_hash}','{browser_hash}',now()); COMMIT;")
-        builder = build_trusted_compensation if mode in ('consumed', 'expired', 'wrong-hash') else build_compensation_sql
+        builder = build_trusted_compensation if mode in ('consumed', 'expired', 'wrong-hash', 'wrong-handoff', 'wrong-principal', 'wrong-connection', 'wrong-tenant', 'missing', 'cleaned') else build_compensation_sql
         compensation = builder(tenant=tenant,owner_plan=owner_plan,fixture_plan=fixture_plan,principal=principal,
             connection=connection,original_sub=original_sub,fixture_sub=fixture_sub,restore_sub=restore_sub,owner_grant=owner_grant,
             handoff_hash=handoff_hash,browser_hash=browser_hash)
@@ -196,7 +201,7 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
             raise RuntimeError('connectable database remains')
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if supervisor.sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();") == '0': break
+            if supervisor.sql(other_clients) == '0': break
             time.sleep(.05)
         else: raise RuntimeError('unexpected client remains')
         if supervisor.sql("SELECT count(*) FROM pg_prepared_xacts;") != '0': raise RuntimeError('prepared transaction remains')
@@ -245,7 +250,7 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
                 supervisor.sql('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS false;')
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
-                    if supervisor.sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();") == '0': break
+                    if supervisor.sql(other_clients) == '0': break
                     time.sleep(.05)
                 else: raise RuntimeError('application phase clients remain')
             finally:
@@ -257,16 +262,22 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
         verify()
         if (supervisor.sql(identity_sql) != db_identity or
             supervisor.sql('SELECT count(*) FROM pg_database WHERE datallowconn;') != '0' or
-            supervisor.sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();") != '0' or
+            supervisor.sql(other_clients) != '0' or
             supervisor.sql('SELECT count(*) FROM pg_prepared_xacts;') != '0'):
             raise RuntimeError('post-worker exclusivity not established')
-        if mode == 'wrong-hash':
-            wrong = build_trusted_compensation(tenant=tenant,owner_plan=owner_plan,fixture_plan=fixture_plan,principal=principal,
-                connection=connection,original_sub=original_sub,fixture_sub=fixture_sub,restore_sub=restore_sub,owner_grant=owner_grant,
-                handoff_hash=handoff_hash,browser_hash=secrets.token_hex(32))
+        if mode in ('wrong-hash', 'wrong-handoff', 'wrong-principal', 'wrong-connection', 'wrong-tenant', 'missing'):
+            alternate = {'tenant': tenant, 'principal': principal, 'connection': connection,
+                         'handoff_hash': handoff_hash, 'browser_hash': browser_hash}
+            if mode == 'wrong-hash': alternate['browser_hash'] = secrets.token_hex(32)
+            elif mode in ('wrong-handoff', 'missing'): alternate['handoff_hash'] = secrets.token_hex(32)
+            elif mode == 'wrong-principal': alternate['principal'] = str(uuid.uuid4())
+            elif mode == 'wrong-connection': alternate['connection'] = str(uuid.uuid4())
+            elif mode == 'wrong-tenant': alternate['tenant'] = str(uuid.uuid4())
+            wrong = build_trusted_compensation(**alternate,owner_plan=owner_plan,fixture_plan=fixture_plan,
+                original_sub=original_sub,fixture_sub=fixture_sub,restore_sub=restore_sub,owner_grant=owner_grant)
             supervisor.sql('\\set ON_ERROR_STOP off\n' + wrong + '\n\\set ON_ERROR_STOP on')
             unchanged = supervisor.sql(f"BEGIN; SET LOCAL ROLE platform_app; {scope} SELECT EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{tenant}' AND id='{grant}'); COMMIT;")
-            if unchanged.splitlines()[-1] != 't': raise RuntimeError('wrong digest changed fixture state')
+            if unchanged.splitlines()[-1] != 't': raise RuntimeError('invalid handoff changed fixture state')
         # Deliberately fail inside the transaction while retaining the only
         # trusted session, then independently verify that changes rolled back.
         supervisor.sql('\\set ON_ERROR_STOP off\n' +
@@ -281,11 +292,18 @@ COMMIT;""")
         if mode == 'loss-before':
             # Kill the sole client with an open transaction. The closed gate
             # prevents observation or recovery through a replacement session.
-            supervisor.sql('BEGIN; CREATE TEMP TABLE fixture_uncommitted (id integer); INSERT INTO fixture_uncommitted VALUES (1);')
+            supervisor.sql('CREATE TABLE fixture_disconnect_check (id integer);')
+            supervisor.sql('BEGIN; INSERT INTO fixture_disconnect_check VALUES (1);')
             supervisor.p.kill(); supervisor.p.wait(timeout=10)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if observer.sql('SELECT count(*) FROM pg_stat_activity WHERE pid=' + pid + ';') == '0': break
+                time.sleep(.05)
+            else: raise RuntimeError('lost client database backend remains')
+            if observer.sql('SELECT count(*) FROM fixture_disconnect_check;') != '0': raise RuntimeError('lost client transaction did not roll back')
             if connect('postgres').returncode == 0 or connect('template1').returncode == 0:
                 raise RuntimeError('gate reopened after client loss')
-            print('client lost before commit; recovery unverified, gate remains closed')
+            print('client backend exited and open transaction rolled back; recovery unverified, gate remains closed')
             return
         if mode == 'loss-after':
             # Submit the product transaction, then force its backend to close
