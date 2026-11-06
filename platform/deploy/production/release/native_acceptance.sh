@@ -4,6 +4,17 @@ set -Eeuo pipefail
 [[ "${NATIVE_ACCEPTANCE_REAL:-}" == "1" ]]
 [[ "${GITHUB_ACTIONS:-}" == "true" ]]
 [[ "${SURVEY_NATIVE_ACCEPTANCE:-}" == "1" ]]
+author_mode="${NATIVE_AUTHOR_ACCEPTANCE:-0}"
+author_checkpoint_verified=false
+case "$author_mode" in
+  0|1) ;;
+  *) exit 2;;
+esac
+if [[ "$author_mode" == "1" ]]; then
+  if ! [[ "${NATIVE_AUTHOR_CHECKPOINT_IDENTITY:-}" =~ ^[0-9a-f]{64}$ ]]; then exit 2; fi
+else
+  if ! [[ -z "${NATIVE_AUTHOR_CHECKPOINT_IDENTITY:-}" ]]; then exit 2; fi
+fi
 
 required_variables=(
   CANDIDATE_DIR CANDIDATE_IDENTITY CANDIDATE_MANIFEST_SHA256
@@ -141,8 +152,17 @@ collect_evidence() {
       result=5
     fi
   fi
-  if [[ -n "${NATIVE_AUTHOR_CHECKPOINT_IDENTITY:-}" ]]; then
-    if python3 "$script_dir/fixture_checkpoint.py" verify "${evidence_root}.fixture-checkpoint" "$work_root" "$NATIVE_AUTHOR_CHECKPOINT_IDENTITY"; then
+  checkpoint_unexpected=false
+  if [[ -e "${evidence_root}.fixture-checkpoint" ]]; then checkpoint_unexpected=true; fi
+  if [[ -L "${evidence_root}.fixture-checkpoint" ]]; then checkpoint_unexpected=true; fi
+  if [[ "$author_mode" == "0" && "$checkpoint_unexpected" == true ]]; then
+    printf '{"schemaVersion":1,"status":"pending_or_unverified"}\n' >"$evidence_root/fixture-checkpoint-status.json"
+    result=5
+    acceptance_status="failed"
+    restore_clean=false
+  fi
+  if [[ "$author_mode" == "1" ]]; then
+    if [[ "$author_checkpoint_verified" == true ]] && python3 "$script_dir/fixture_checkpoint.py" verify "${evidence_root}.fixture-checkpoint" "$work_root" "$NATIVE_AUTHOR_CHECKPOINT_IDENTITY" "${GITHUB_RUN_ID:-}" "${GITHUB_RUN_ATTEMPT:-}" "$CANDIDATE_MANIFEST_SHA256"; then
       if ! printf '{"schemaVersion":1,"status":"verified"}\n' >"$evidence_root/fixture-checkpoint-status.json"; then
         result=5
         acceptance_status="failed"
@@ -365,6 +385,14 @@ python3 "$evidence_helper" clean-restore
 last_step="doctor-restored"
 write_doctor_evidence "doctor-restored"
 
+# An author fixture must establish verified recovery before any normal uninstall.
+if [[ "$author_mode" == "0" && -e "${evidence_root}.fixture-checkpoint" ]]; then exit 2; fi
+if [[ "$author_mode" == "0" && -L "${evidence_root}.fixture-checkpoint" ]]; then exit 2; fi
+if [[ "$author_mode" == "1" ]]; then
+  last_step="fixture-checkpoint"
+  if [[ "$author_checkpoint_verified" != true ]]; then exit 2; fi
+  python3 "$script_dir/fixture_checkpoint.py" verify "${evidence_root}.fixture-checkpoint" "$work_root" "$NATIVE_AUTHOR_CHECKPOINT_IDENTITY" "${GITHUB_RUN_ID:-}" "${GITHUB_RUN_ATTEMPT:-}" "$CANDIDATE_MANIFEST_SHA256"
+fi
 last_step="uninstall"
 python3 "$evidence_helper" fixture-volumes-verify --work "$work_root" --marker "$work_root/owner.json"
 run_ctl uninstall

@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fixture_checkpoint import require_completed_checkpoint, run_checkpointed
+from fixture_checkpoint import bound_checkpoint_identity, require_completed_checkpoint, run_checkpointed
 
 
 class CheckpointTest(unittest.TestCase):
@@ -23,6 +23,25 @@ class CheckpointTest(unittest.TestCase):
 
     def run_guard(self, action, verify):
         return run_checkpointed(self.evidence, self.work, self.identity, action, verify)
+
+    def test_identity_binds_run_candidate_and_work_directory(self):
+        other = self.base / 'other'; other.mkdir(mode=0o700)
+        identity = bound_checkpoint_identity(self.work, '12', '1', 'b' * 64)
+        self.assertNotEqual(identity, bound_checkpoint_identity(other, '12', '1', 'b' * 64))
+        self.assertNotEqual(identity, bound_checkpoint_identity(self.work, '13', '1', 'b' * 64))
+        self.assertNotEqual(identity, bound_checkpoint_identity(self.work, '12', '2', 'b' * 64))
+        self.assertNotEqual(identity, bound_checkpoint_identity(self.work, '12', '1', 'c' * 64))
+        with self.assertRaises(ValueError): bound_checkpoint_identity(self.work, '0', '1', 'b' * 64)
+        run_checkpointed(self.evidence, self.work, identity, lambda: None, lambda: True)
+        cli = str(Path(__file__).resolve().parents[1] / 'fixture_checkpoint.py')
+        for work, run, attempt, manifest, expected in (
+            (self.work, '12', '1', 'b' * 64, 0), (other, '12', '1', 'b' * 64, 1),
+            (self.work, '13', '1', 'b' * 64, 1), (self.work, '12', '2', 'b' * 64, 1),
+            (self.work, '12', '1', 'c' * 64, 1),
+        ):
+            result = subprocess.run([sys.executable, cli, 'verify', str(self.evidence), str(work),
+                                     identity, run, attempt, manifest], capture_output=True, timeout=5)
+            self.assertEqual(result.returncode == 0, expected == 0)
 
     def test_verified_completion_clears_marker_only_after_verify(self):
         def verify():
@@ -49,7 +68,18 @@ class CheckpointTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.run_guard(lambda: None, lambda: True)
         self.assertTrue(self.marker.exists())
-        self.assertTrue((self.evidence / 'fixture-recovery.verified').exists())
+        self.assertFalse((self.evidence / 'fixture-recovery.verified').exists())
+        with self.assertRaises(RuntimeError):
+            require_completed_checkpoint(self.evidence, self.work, self.identity)
+
+    def test_unlink_then_fsync_failure_does_not_verify(self):
+        def fail_after_unlink(_marker):
+            self.marker.unlink()
+            raise ValueError('directory fsync failed')
+        with mock.patch('fixture_checkpoint.RecoveryMarker.clear', autospec=True, side_effect=fail_after_unlink):
+            with self.assertRaises(ValueError): self.run_guard(lambda: None, lambda: True)
+        self.assertTrue(self.marker.exists())
+        self.assertFalse((self.evidence / 'fixture-recovery.verified').exists())
         with self.assertRaises(RuntimeError):
             require_completed_checkpoint(self.evidence, self.work, self.identity)
 

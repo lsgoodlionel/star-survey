@@ -5,7 +5,7 @@ from unittest import mock
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fixture_checkpoint import require_completed_checkpoint
+from fixture_checkpoint import bound_checkpoint_identity, require_completed_checkpoint
 from fixture_supervisor import supervise_checkpointed
 
 
@@ -16,12 +16,13 @@ class CheckpointSupervisorTest(unittest.TestCase):
         self.evidence, self.work = root / 'evidence', root / 'work'
         self.evidence.mkdir(mode=0o700); self.work.mkdir(mode=0o700)
         self.pending = self.evidence / 'fixture-recovery.pending'
-        self.identity = 'a' * 64
+        self.identity = bound_checkpoint_identity(self.work, '12', '1', 'b' * 64)
         self.events = []
 
     def invoke(self, provision, verify, env=None):
         return supervise_checkpointed(self.evidence, self.work, self.identity, provision,
             ['worker'], ['recovery'], 1001, 1001, verify,
+            run_id='12', attempt='1', manifest_sha='b' * 64,
             child_env={'PATH': '/usr/bin:/bin'} if env is None else env)
 
     def test_pending_precedes_provision_and_supervision_and_verification(self):

@@ -165,7 +165,7 @@ def supervise_cgroup(worker, recovery, uid, gid, *, worker_timeout=120, recovery
 
 
 def supervise_checkpointed(evidence, work, identity, provision, worker, recovery, uid, gid, verify,
-                           *, child_env, worker_timeout=120, recovery_timeout=120):
+                           *, run_id, attempt, manifest_sha, child_env, worker_timeout=120, recovery_timeout=120):
     """Record pending before provisioning and clear only after containment and verification.
 
     This is test orchestration, not target authorization: trusted callers must
@@ -173,9 +173,11 @@ def supervise_checkpointed(evidence, work, identity, provision, worker, recovery
     database and verify the real recovery. Failure to provision or supervise
     retains the checkpoint. SIGKILL or host loss remains externally unverified.
     """
-    from fixture_checkpoint import run_checkpointed
+    from fixture_checkpoint import bound_checkpoint_identity, run_checkpointed
     if not callable(provision) or not callable(verify):
         raise ValueError('fixture callbacks are invalid')
+    if identity != bound_checkpoint_identity(work, run_id, attempt, manifest_sha):
+        raise ValueError('fixture checkpoint binding differs')
     allowed = {'PATH', 'HOME', 'CI', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'GITHUB_REPOSITORY',
                'SURVEY_NATIVE_ACCEPTANCE', 'NATIVE_AUTHOR_FIXTURE_DIR', 'PLAYWRIGHT_BROWSERS_PATH',
                'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'}

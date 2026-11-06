@@ -6,24 +6,25 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fixture_checkpoint import require_completed_checkpoint
+from fixture_checkpoint import bound_checkpoint_identity, require_completed_checkpoint
 from fixture_supervisor import supervise_checkpointed
 
 if (os.geteuid() != 0 or os.environ.get('GITHUB_ACTIONS') != 'true' or
         os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted'):
     raise RuntimeError('dedicated hosted runner required')
 uid = gid = 65534
-identity = 'a' * 64
 with tempfile.TemporaryDirectory(prefix='checkpoint-scope-') as root_name, tempfile.TemporaryDirectory(prefix='checkpoint-worker-') as worker_name:
     root, worker = Path(root_name), Path(worker_name)
     os.chown(worker, uid, gid); os.chmod(worker, 0o700)
     work, evidence = root / 'work', root / 'evidence'
     work.mkdir(mode=0o700); evidence.mkdir(mode=0o700)
+    identity = bound_checkpoint_identity(work, '12', '1', 'b' * 64)
     env = {'PATH': '/usr/bin:/bin'}
     child = '/usr/bin/python3'
     verify_env = "import os; assert set(os.environ) <= {'PATH','LC_CTYPE'}; assert os.geteuid()!=0"
     supervise_checkpointed(evidence, work, identity, lambda: None, [child, '-c', verify_env],
-                           [child, '-c', verify_env], uid, gid, lambda: True, child_env=env)
+                           [child, '-c', verify_env], uid, gid, lambda: True,
+                           run_id='12', attempt='1', manifest_sha='b' * 64, child_env=env)
     require_completed_checkpoint(evidence, work, identity)
     (evidence / 'fixture-recovery.verified').unlink()
     descendant = worker / 'descendant.pid'; recovered = worker / 'recovered'
@@ -37,7 +38,8 @@ with tempfile.TemporaryDirectory(prefix='checkpoint-scope-') as root_name, tempf
                      "assert state in ('Z','gone'); " + f"Path({str(recovered)!r}).touch()")
     try:
         supervise_checkpointed(evidence, work, identity, lambda: None, [child, '-c', worker_code],
-                               [child, '-c', recovery_code], uid, gid, lambda: True, child_env=env)
+                               [child, '-c', recovery_code], uid, gid, lambda: True,
+                               run_id='12', attempt='1', manifest_sha='b' * 64, child_env=env)
     except RuntimeError:
         pass
     else:

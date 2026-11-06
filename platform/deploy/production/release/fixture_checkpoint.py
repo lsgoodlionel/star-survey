@@ -5,7 +5,10 @@ ownership, exclusivity, or recovery. Runner loss may destroy it before artifact
 upload, so externally an interrupted job must remain unverified. Same-UID code
 can forge it; callers must independently constrain workers and verify outcomes.
 """
+import hashlib
+import json
 import os
+import re
 import stat
 import sys
 from pathlib import Path
@@ -25,6 +28,19 @@ def _directory(path):
     finally:
         os.close(fd)
     return path.resolve(strict=True)
+
+
+def bound_checkpoint_identity(work, run_id, attempt, manifest_sha):
+    """Bind the checkpoint to this run, candidate manifest and work inode."""
+    if (not isinstance(run_id, str) or re.fullmatch(r'[1-9][0-9]*', run_id) is None or
+            not isinstance(attempt, str) or re.fullmatch(r'[1-9][0-9]*', attempt) is None or
+            not isinstance(manifest_sha, str) or re.fullmatch(r'[0-9a-f]{64}', manifest_sha) is None):
+        raise ValueError('checkpoint run or candidate identity invalid')
+    work_path = _directory(work)
+    info = os.stat(work_path, follow_symlinks=False)
+    payload = {'run': run_id, 'attempt': attempt, 'manifest': manifest_sha,
+               'work': str(work_path), 'device': info.st_dev, 'inode': info.st_ino}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def run_checkpointed(evidence, work, identity, action, verify):
@@ -57,7 +73,22 @@ def run_checkpointed(evidence, work, identity, action, verify):
         os.fsync(directory)
     finally:
         os.close(directory)
-    marker.clear()
+    try:
+        marker.clear()
+    except BaseException:
+        # unlink may have succeeded even when the following fsync failed.
+        # Recreate pending and invalidate the receipt where possible; callers
+        # must also require the live supervisor's successful return.
+        if not os.path.lexists(evidence_path / 'fixture-recovery.pending'):
+            try:
+                marker.create()
+            except BaseException:
+                pass
+        try:
+            os.unlink(receipt)
+        except OSError:
+            pass
+        raise
 
 
 def require_completed_checkpoint(evidence, work, identity):
@@ -81,6 +112,8 @@ def require_completed_checkpoint(evidence, work, identity):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 5 or sys.argv[1] != 'verify':
+    if len(sys.argv) != 8 or sys.argv[1] != 'verify':
         raise SystemExit('invalid checkpoint command')
+    if sys.argv[4] != bound_checkpoint_identity(Path(sys.argv[3]), sys.argv[5], sys.argv[6], sys.argv[7]):
+        raise SystemExit('checkpoint binding differs')
     require_completed_checkpoint(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
