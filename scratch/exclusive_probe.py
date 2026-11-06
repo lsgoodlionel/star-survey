@@ -16,6 +16,16 @@ def run(args, check=True, timeout=30):
         raise RuntimeError('isolated experiment command failed')
     return result
 
+def require_container_absent(result, cid, initial_daemon, before, after):
+    """Only explicit not-found from the same healthy daemon proves absence."""
+    if (before.returncode != 0 or after.returncode != 0 or not initial_daemon or
+            before.stdout.strip() != initial_daemon or after.stdout.strip() != initial_daemon):
+        raise RuntimeError('daemon health or identity unconfirmed')
+    accepted = {f'Error: No such object: {cid}', f'Error: No such container: {cid}',
+                f'Error response from daemon: No such container: {cid}'}
+    if result.returncode == 0 or result.stderr.strip() not in accepted:
+        raise RuntimeError('container absence unconfirmed')
+
 class Session:
     def __init__(self, cid, db):
         self.p = subprocess.Popen(D + ['exec', '-i', cid, 'psql', '-X', '-q', '-A', '-t',
@@ -98,6 +108,8 @@ else: sys.exit(25)
         sleeper.wait(timeout=5)
         if sleeper.returncode == 0: raise RuntimeError('forced worker termination not detected')
     nonce = secrets.token_hex(16)
+    daemon = run(D + ['info', '--format', '{{.ID}}']).stdout.strip()
+    if not daemon: raise RuntimeError('daemon identity invalid')
     image = run(D + ['image', 'inspect', 'postgres:16-alpine', '--format', '{{.Id}}']).stdout.strip()
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image): raise RuntimeError('invalid image')
     cid = run(D + ['run', '-d', '--rm', '--network', 'none', '--tmpfs', '/var/lib/postgresql/data',
@@ -302,7 +314,9 @@ COMMIT;""")
                 if session.p.poll() is None: session.p.kill(); session.p.wait(timeout=10)
         verify()
         run(D + ['stop', '--time', '3', cid], timeout=15)
-        if run(D + ['inspect', '--type', 'container', cid], check=False).returncode == 0:
-            raise RuntimeError('disposable container remains')
+        before = run(D + ['info', '--format', '{{.ID}}'], check=False)
+        remaining = run(D + ['inspect', '--type', 'container', cid], check=False)
+        after = run(D + ['info', '--format', '{{.ID}}'], check=False)
+        require_container_absent(remaining, cid, daemon, before, after)
 
 if __name__ == '__main__': main()
