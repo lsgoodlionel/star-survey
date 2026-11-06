@@ -2,6 +2,7 @@
 """Disposable hosted-runner Compose topology probe, not candidate authorization."""
 import json, os, re, secrets, subprocess, tempfile, time
 from pathlib import Path
+from exclusive_probe import require_container_absent
 D=['docker','--host','unix:///var/run/docker.sock']
 
 def run(args, check=True, timeout=40):
@@ -20,6 +21,8 @@ def main():
         os.environ.get('GITHUB_REPOSITORY')!='lsgoodlionel/star-survey'):
         raise RuntimeError('dedicated hosted runner required')
     project='fixture'+secrets.token_hex(12)
+    daemon=run(D+['info','--format','{{.ID}}']).stdout.strip()
+    if not daemon: raise RuntimeError('daemon identity invalid')
     image=run(D+['image','inspect','postgres:16-alpine','--format','{{.Id}}']).stdout.strip()
     if not re.fullmatch(r'sha256:[0-9a-f]{64}',image): raise RuntimeError('image identity invalid')
     doc={'name':project,'services':{
@@ -100,11 +103,21 @@ def main():
             if x['Id']!=cid or x['Config']['Labels'].get('com.docker.compose.project')!=project or x['Config']['Labels'].get('com.docker.compose.service')!=service:
                 raise RuntimeError('cleanup container binding changed')
             run(D+['rm','-f',cid],timeout=20)
+            before=run(D+['info','--format','{{.ID}}'],check=False)
+            gone=run(D+['inspect','--type','container',cid],check=False)
+            after=run(D+['info','--format','{{.ID}}'],check=False)
+            require_container_absent(gone,cid,daemon,before,after)
         for key,nid in nets.items():
             n=inspect('network',nid)
             if n['Id']!=nid or n['Labels'].get('com.docker.compose.project')!=project or n['Labels'].get('com.docker.compose.network')!=key:
                 raise RuntimeError('cleanup network binding changed')
             run(D+['network','rm',nid],timeout=20)
+            before=run(D+['info','--format','{{.ID}}'],check=False)
+            gone=run(D+['inspect','--type','network',nid],check=False)
+            after=run(D+['info','--format','{{.ID}}'],check=False)
+            errors={f'Error: No such object: {nid}',f'Error: No such network: {nid}',f'Error response from daemon: network {nid} not found'}
+            if (before.returncode or after.returncode or before.stdout.strip()!=daemon or after.stdout.strip()!=daemon or
+                gone.returncode==0 or gone.stderr.strip() not in errors): raise RuntimeError('network absence unconfirmed')
         directory.cleanup()
 
 if __name__=='__main__': main()
