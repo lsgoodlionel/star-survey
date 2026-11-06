@@ -10,10 +10,9 @@ case "$author_mode" in
   0|1) ;;
   *) exit 2;;
 esac
+if ! [[ -z "${NATIVE_AUTHOR_CHECKPOINT_IDENTITY:-}" ]]; then exit 2; fi
 if [[ "$author_mode" == "1" ]]; then
-  if ! [[ "${NATIVE_AUTHOR_CHECKPOINT_IDENTITY:-}" =~ ^[0-9a-f]{64}$ ]]; then exit 2; fi
-else
-  if ! [[ -z "${NATIVE_AUTHOR_CHECKPOINT_IDENTITY:-}" ]]; then exit 2; fi
+  if ! [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ && "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]]; then exit 2; fi
 fi
 
 required_variables=(
@@ -45,6 +44,10 @@ candidate_root="$(realpath "$CANDIDATE_DIR")"
 identity_path="$(realpath "$CANDIDATE_IDENTITY")"
 evidence_root="$(realpath -m "$EVIDENCE_DIR")"
 work_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/survey-native-acceptance.XXXXXX")"
+if [[ "$author_mode" == "1" ]]; then
+  NATIVE_AUTHOR_CHECKPOINT_IDENTITY="$(python3 "$script_dir/fixture_checkpoint.py" identity "$work_root" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$CANDIDATE_MANIFEST_SHA256")"
+  export NATIVE_AUTHOR_CHECKPOINT_IDENTITY
+fi
 target="$work_root/primary"
 runtime="$work_root/runtime"
 candidate_release_dir="$candidate_root/candidate"

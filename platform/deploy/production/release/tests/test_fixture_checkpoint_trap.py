@@ -18,12 +18,14 @@ class CheckpointTrapTest(unittest.TestCase):
     def test_author_mode_requires_exact_checkpoint_identity(self):
         source = (ROOT / 'native_acceptance.sh').read_text()
         preflight = source[source.index('author_mode='):source.index('required_variables=(')]
-        for mode, identity, expected in (('1', '', False), ('1', 'a' * 64, True),
-                                          ('1', 'invalid', False), ('0', 'a' * 64, False),
-                                          ('invalid', '', False), ('0', '', True)):
-            with self.subTest(mode=mode, identity=identity):
+        for mode, identity, run, expected in (('1', '', '12', True), ('1', '', '', False),
+                                               ('1', 'a' * 64, '12', False), ('1', 'invalid', '12', False),
+                                               ('0', 'a' * 64, '12', False), ('invalid', '', '12', False),
+                                               ('0', '', '', True)):
+            with self.subTest(mode=mode, identity=identity, run=run):
                 env = dict(os.environ, NATIVE_AUTHOR_ACCEPTANCE=mode,
-                           NATIVE_AUTHOR_CHECKPOINT_IDENTITY=identity)
+                           NATIVE_AUTHOR_CHECKPOINT_IDENTITY=identity,
+                           GITHUB_RUN_ID=run, GITHUB_RUN_ATTEMPT='1')
                 result = subprocess.run(['bash', '-c', 'set -e\n' + preflight + '\nprintf ready'],
                                         env=env, capture_output=True, text=True, timeout=5)
                 self.assertEqual(result.returncode == 0, expected)
@@ -38,7 +40,7 @@ class CheckpointTrapTest(unittest.TestCase):
                 for path in (work, evidence, checkpoint): path.mkdir(mode=0o700)
                 identity = bound_checkpoint_identity(work, '12', '1', 'b' * 64)
                 if pending: RecoveryMarker(checkpoint, identity).create()
-                else: run_checkpointed(checkpoint, work, identity, lambda: None, lambda: True)
+                else: run_checkpointed(checkpoint, work, identity, lambda: None, lambda: True, run_id='12', attempt='1', manifest_sha='b' * 64)
                 sentinel = base / 'uninstall-called'
                 shell = (f'set -e\nauthor_mode=1\nauthor_checkpoint_verified=true\nscript_dir={str(ROOT)!r}\n'
                          f'evidence_root={str(evidence)!r}\nwork_root={str(work)!r}\n'
@@ -81,7 +83,7 @@ class CheckpointTrapTest(unittest.TestCase):
             for path in (work, evidence, checkpoint, bindir): path.mkdir(mode=0o700)
             identity = bound_checkpoint_identity(work, '12', '1', 'b' * 64)
             if pending: RecoveryMarker(checkpoint, identity).create()
-            else: run_checkpointed(checkpoint, work, identity, lambda: None, lambda: True)
+            else: run_checkpointed(checkpoint, work, identity, lambda: None, lambda: True, run_id='12', attempt='1', manifest_sha='b' * 64)
             if uninstall_failure:
                 (work / 'primary/.surveyctl').mkdir(parents=True)
                 (work / 'primary/.surveyctl/state.json').write_text('{}')

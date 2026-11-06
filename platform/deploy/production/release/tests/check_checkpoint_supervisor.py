@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix='checkpoint-scope-') as root_name, tempf
     supervise_checkpointed(evidence, work, identity, lambda: None, [child, '-c', verify_env],
                            [child, '-c', verify_env], uid, gid, lambda: True,
                            run_id='12', attempt='1', manifest_sha='b' * 64, child_env=env)
-    require_completed_checkpoint(evidence, work, identity)
+    require_completed_checkpoint(evidence, work, identity, run_id='12', attempt='1', manifest_sha='b' * 64)
     (evidence / 'fixture-recovery.verified').unlink()
     descendant = worker / 'descendant.pid'; recovered = worker / 'recovered'
     child_code = f"import os,time; from pathlib import Path; Path({str(descendant)!r}).write_text(str(os.getpid())); time.sleep(60)"

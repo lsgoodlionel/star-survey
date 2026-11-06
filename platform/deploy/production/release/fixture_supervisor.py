@@ -193,6 +193,7 @@ def supervise_checkpointed(evidence, work, identity, provision, worker, recovery
             raise RuntimeError('fixture supervision failed')
 
     try:
-        run_checkpointed(evidence, work, identity, action, verify)
+        run_checkpointed(evidence, work, identity, action, verify,
+                         run_id=run_id, attempt=attempt, manifest_sha=manifest_sha)
     except BaseException:
         raise RuntimeError('fixture execution or recovery unverified') from None

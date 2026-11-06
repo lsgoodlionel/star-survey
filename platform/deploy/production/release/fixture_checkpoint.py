@@ -43,7 +43,7 @@ def bound_checkpoint_identity(work, run_id, attempt, manifest_sha):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def run_checkpointed(evidence, work, identity, action, verify):
+def run_checkpointed(evidence, work, identity, action, verify, *, run_id, attempt, manifest_sha):
     """Create intent before action; clear it only after an explicit verified result.
 
     The action and verifier are trusted supervisor code, not a proof supplied by
@@ -55,6 +55,8 @@ def run_checkpointed(evidence, work, identity, action, verify):
     evidence_path, work_path = _directory(evidence), _directory(work)
     if evidence_path == work_path or work_path in evidence_path.parents:
         raise ValueError('checkpoint must be outside candidate work')
+    if identity != bound_checkpoint_identity(work_path, run_id, attempt, manifest_sha):
+        raise ValueError('checkpoint binding differs')
     marker = RecoveryMarker(evidence_path, identity)
     receipt = evidence_path / _RECEIPT
     if os.path.lexists(receipt):
@@ -91,11 +93,13 @@ def run_checkpointed(evidence, work, identity, action, verify):
         raise
 
 
-def require_completed_checkpoint(evidence, work, identity):
+def require_completed_checkpoint(evidence, work, identity, *, run_id, attempt, manifest_sha):
     """Require a matching verified receipt and no pending marker, fail closed."""
     evidence_path, work_path = _directory(evidence), _directory(work)
     if evidence_path == work_path or work_path in evidence_path.parents:
         raise ValueError('checkpoint must be outside candidate work')
+    if identity != bound_checkpoint_identity(work_path, run_id, attempt, manifest_sha):
+        raise ValueError('checkpoint binding differs')
     marker = RecoveryMarker(evidence_path, identity)
     if os.path.lexists(evidence_path / 'fixture-recovery.pending'):
         raise RuntimeError('recovery remains pending')
@@ -112,8 +116,12 @@ def require_completed_checkpoint(evidence, work, identity):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 8 or sys.argv[1] != 'verify':
+    if len(sys.argv) == 6 and sys.argv[1] == 'identity':
+        print(bound_checkpoint_identity(Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]))
+    elif len(sys.argv) == 8 and sys.argv[1] == 'verify':
+        if sys.argv[4] != bound_checkpoint_identity(Path(sys.argv[3]), sys.argv[5], sys.argv[6], sys.argv[7]):
+            raise SystemExit('checkpoint binding differs')
+        require_completed_checkpoint(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4],
+                                     run_id=sys.argv[5], attempt=sys.argv[6], manifest_sha=sys.argv[7])
+    else:
         raise SystemExit('invalid checkpoint command')
-    if sys.argv[4] != bound_checkpoint_identity(Path(sys.argv[3]), sys.argv[5], sys.argv[6], sys.argv[7]):
-        raise SystemExit('checkpoint binding differs')
-    require_completed_checkpoint(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])

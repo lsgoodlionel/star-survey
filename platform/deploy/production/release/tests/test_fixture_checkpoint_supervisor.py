@@ -37,7 +37,7 @@ class CheckpointSupervisorTest(unittest.TestCase):
         with mock.patch('fixture_supervisor.supervise_cgroup', side_effect=supervise):
             self.invoke(provision, verify)
         self.assertEqual(self.events, ['provision', 'supervise', 'verify'])
-        require_completed_checkpoint(self.evidence, self.work, self.identity)
+        require_completed_checkpoint(self.evidence, self.work, self.identity, run_id='12', attempt='1', manifest_sha='b' * 64)
 
     def test_provision_supervisor_and_verifier_failures_retain_pending(self):
         for failure in ('provision', 'supervisor', 'verify'):
