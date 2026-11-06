@@ -12,7 +12,12 @@ if (os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or
     raise RuntimeError('dedicated hosted candidate required')
 work=Path(sys.argv[1]); evidence=Path(sys.argv[2]); marker=work/'owner.json'
 # Reuse the separate read-only identity diagnostic before any mutation.
-runpy.run_path(str(Path(__file__).with_name('scratch_candidate_binding.py')),run_name='candidate_binding')
+original_argv=sys.argv
+try:
+    sys.argv=[str(Path(__file__).with_name('scratch_candidate_binding.py')),str(work)]
+    runpy.run_path(sys.argv[0],run_name='candidate_binding')
+finally:
+    sys.argv=original_argv
 release,dbid=inspect_fixture_database(work,marker)
 D=['docker','--host','unix:///var/run/docker.sock']
 def run(args, timeout=30):
