@@ -34,7 +34,11 @@ class Session:
                 codes = re.findall(r'(?m)^ERROR:\s+([0-9A-Z]{5}):', detail)
                 line = re.search(r'(?m)^LINE ([0-9]+):', detail)
                 token = re.search(r'syntax error at or near "([^"\n]+)"', detail)
-                safe_tokens = {'SELECT', 'FROM', 'WHERE', 'AND', 'BEGIN', 'COMMIT', 'END', 'DO', ';', ')', '(', '$', '\\'}
+                safe_tokens = {'SELECT', 'FROM', 'WHERE', 'AND', 'BEGIN', 'COMMIT', 'END', 'DO', ';', ')', '(', '$', '\\',
+                               'FIXTURE_END', 'SET', 'ROLE', 'ON', 'NULL', 'THEN', 'ELSE', 'IF', 'EXISTS',
+                               'INSERT', 'UPDATE', 'DELETE', 'VALUES', 'AS', 'OR', 'NOT', 'INTO', 'LIMIT',
+                               'ALTER', 'TABLE', 'CREATE', 'USING', 'LANGUAGE', 'IS', 'DISTINCT', 'RETURNING',
+                               ':', '=', ',', '*', '-', '+', '/', '}', '{', 'EOF'}
                 near = token.group(1) if token and token.group(1) in safe_tokens else 'other'
                 raise RuntimeError('session ended; SQLSTATE=' + (codes[-1] if codes else 'unavailable') +
                                    ' error_line=' + (line.group(1) if line else 'unavailable') + ' near=' + near)
