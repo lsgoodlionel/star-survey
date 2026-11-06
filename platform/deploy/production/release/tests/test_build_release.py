@@ -307,6 +307,8 @@ class ReleaseBuilderTest(unittest.TestCase):
             names = {member.name for member in archive.getmembers() if member.isfile()}
         self.assertIn("release/native_acceptance.sh", names)
         self.assertIn("release/native_acceptance_evidence.py", names)
+        self.assertIn("release/fixture_checkpoint.py", names)
+        self.assertIn("release/fixture_recovery_marker.py", names)
         self.assertIn("release/verify_release.sh", names)
 
     def test_manifest_rejects_mutated_native_acceptance_threshold_or_mode(self):

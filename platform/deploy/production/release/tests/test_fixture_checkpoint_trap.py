@@ -11,9 +11,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from fixture_checkpoint import run_checkpointed
 from fixture_recovery_marker import RecoveryMarker
+from native_acceptance_evidence import EvidenceError, evidence_kind, validate_evidence
 
 
 class CheckpointTrapTest(unittest.TestCase):
+    def test_checkpoint_status_is_allowlisted_and_strict(self):
+        self.assertEqual(evidence_kind(Path('fixture-checkpoint-status.json')), 'fixture-checkpoint')
+        for status in ('verified', 'pending_or_unverified'):
+            validate_evidence('fixture-checkpoint', {'schemaVersion': 1, 'status': status})
+        for invalid in ({'schemaVersion': True, 'status': 'verified'},
+                        {'schemaVersion': 1, 'status': 'passed'},
+                        {'schemaVersion': 1, 'status': []},
+                        {'schemaVersion': 1, 'status': 'verified', 'extra': 'x'}):
+            with self.subTest(invalid=invalid), self.assertRaises(EvidenceError):
+                validate_evidence('fixture-checkpoint', invalid)
+
     def test_pending_retains_work_and_failed_summary(self):
         self.exercise(pending=True)
 
