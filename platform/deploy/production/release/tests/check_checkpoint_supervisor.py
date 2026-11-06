@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix='checkpoint-scope-') as root_name, tempf
 from pathlib import Path
 from unittest import mock
 sys.path.insert(0,sys.argv[1])
-from fixture_checkpoint import bound_checkpoint_identity
+from fixture_checkpoint import bound_checkpoint_identity, run_checkpointed
 from fixture_recovery_marker import RecoveryMarker
 from fixture_supervisor import supervise_author_preview
 work,evidence,ready,phase=Path(sys.argv[2]),Path(sys.argv[3]),Path(sys.argv[4]),sys.argv[5]
@@ -90,13 +90,18 @@ def verify():
 def delayed_clear(marker):
     original_clear(marker)
     if phase=='after-clear': ready.touch(); time.sleep(1)
+def trace(frame,event,arg):
+    if phase=='post-commit' and frame.f_code is run_checkpointed.__code__ and event=='return':
+        ready.touch(); time.sleep(1)
+    return trace
+if phase=='post-commit': sys.settrace(trace)
 with mock.patch('fixture_checkpoint.os.fsync', side_effect=delayed_fsync), mock.patch.object(RecoveryMarker,'clear',delayed_clear):
     supervise_author_preview(evidence,work,identity,lambda:None,['/usr/bin/python3','-c','pass'],
         lambda:None,verify,65534,65534,run_id='12',attempt='1',manifest_sha='b'*64,
         child_env={'PATH':'/usr/bin:/bin'})
 '''
     module_dir = str(Path(__file__).resolve().parents[1])
-    for phase in ('verify', 'receipt', 'after-clear'):
+    for phase in ('verify', 'receipt', 'after-clear', 'post-commit'):
         phase_work = root / ('work-' + phase); phase_work.mkdir(mode=0o700)
         phase_evidence = root / ('evidence-' + phase); phase_evidence.mkdir(mode=0o700)
         ready = root / ('ready-' + phase)
@@ -108,9 +113,14 @@ with mock.patch('fixture_checkpoint.os.fsync', side_effect=delayed_fsync), mock.
             while not ready.exists() and proc.poll() is None and time.monotonic() < deadline: time.sleep(.05)
             if not ready.exists(): raise RuntimeError('signal test did not reach target phase')
             proc.send_signal(signal.SIGTERM)
-            if proc.wait(timeout=10) == 0: raise RuntimeError('interrupted finalization was accepted')
-            if not (phase_evidence / 'fixture-recovery.pending').exists(): raise RuntimeError('interrupted checkpoint missing')
-            if (phase_evidence / 'fixture-recovery.verified').exists(): raise RuntimeError('interrupted receipt retained')
+            outcome = proc.wait(timeout=10)
+            if phase == 'post-commit':
+                if outcome != 0 or (phase_evidence / 'fixture-recovery.pending').exists() or not (phase_evidence / 'fixture-recovery.verified').exists():
+                    raise RuntimeError('completed recovery did not preserve its commit point')
+            else:
+                if outcome == 0: raise RuntimeError('interrupted finalization was accepted')
+                if not (phase_evidence / 'fixture-recovery.pending').exists(): raise RuntimeError('interrupted checkpoint missing')
+                if (phase_evidence / 'fixture-recovery.verified').exists(): raise RuntimeError('interrupted receipt retained')
         finally:
             if proc.poll() is None: proc.kill(); proc.wait(timeout=5)
     print('checkpoint wraps real cgroup supervisor; detached descendant stopped before recovery; failure remains pending')

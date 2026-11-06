@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p 'test_fixture_checkpoint*.py' -q
+      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 -B platform/deploy/production/release/tests/check_checkpoint_supervisor.py
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
         with:
           name: release-candidate

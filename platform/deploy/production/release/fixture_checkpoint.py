@@ -50,6 +50,9 @@ def run_checkpointed(evidence, work, identity, action, verify, *, run_id, attemp
     The action and verifier are trusted supervisor code, not a proof supplied by
     an untrusted worker. Failure, cancellation and ambiguous results retain the
     marker. Host loss cannot be distinguished from incomplete upload locally.
+    The final successful continue_finalization check, after receipt and pending
+    directory syncs, is the commit point. A signal observed before that check
+    rejects completion; a later signal does not retroactively undo recovery.
     """
     if not callable(action) or not callable(verify) or not callable(continue_finalization):
         raise ValueError('checkpoint callbacks are invalid')
