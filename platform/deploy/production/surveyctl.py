@@ -549,7 +549,7 @@ class SurveyManager:
                     if not isinstance(record, dict) or set(record) != {"schemaVersion", "state", "operation"} or record.get("schemaVersion") != 1 or record.get("state") not in {"pending", "complete"} or not isinstance(record.get("operation"), str):
                         raise IntegrityError("installation operation intent is invalid")
                     if record['state'] == 'pending':
-                        raise InputError("an earlier operation has an unverified outcome; controlled recovery is not yet available")
+                        raise InputError("an earlier operation has an unverified outcome; preserve the installation and operation marker, do not remove it; controlled recovery is not yet available")
                 if self.state_path.exists() or self.state_path.is_symlink():
                     self._require_no_pending_recovery(self._read_state())
                 self._operation_intent = intent

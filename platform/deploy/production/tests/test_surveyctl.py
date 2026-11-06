@@ -1043,9 +1043,9 @@ with manager._mutation_lock(operation='uninstall'):
         intent = self.target / '.surveyctl/operation.intent'
         self.assertEqual('pending', json.loads(intent.read_text())['state'])
         next_manifest, _ = self.write_bundle_manifest('0.3.0')
-        with self.assertRaisesRegex(self.module.InputError, 'unverified outcome'):
+        with self.assertRaisesRegex(self.module.InputError, 'do not remove it'):
             manager.uninstall(False, None)
-        with self.assertRaisesRegex(self.module.InputError, 'unverified outcome'):
+        with self.assertRaisesRegex(self.module.InputError, 'controlled recovery is not yet available'):
             self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
         self.assertEqual(state_before, manager.state_path.read_bytes())
         self.assertFalse(manager.current_path.exists())
