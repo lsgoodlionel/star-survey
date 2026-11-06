@@ -623,8 +623,8 @@ async function exerciseAutomaticRelayOutage(respondent: Page, sid: number, tenan
   try {
     await completeLimeSurvey(respondent);
     await expect.poll(async () => Number(await engineEventQuery(`SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=${sid} AND delivered_at IS NULL;`)), { timeout: 30_000 }).toBeGreaterThan(0);
-    // The production loop touched its heartbeat after an attempted iteration;
-    // this is only a progress check, not proof that delivery succeeded.
+    // The production loop advanced; heartbeat does not prove a delivery attempt
+    // or successful delivery.
     await expect.poll(heartbeat, { timeout: 60_000, intervals: [1000, 2000] }).toBeGreaterThan(before);
   } finally {
     await runText('docker', ['unpause', platform]);
