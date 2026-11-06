@@ -107,7 +107,11 @@ def interrupt(_signum,_frame):
 def check_cancel():
     if interrupted: raise RuntimeError('candidate diagnostic interrupted')
 def isolate_after_failure():
-    # Independent attempts: a poisoned session cannot prevent later operations.
+    # A lost database session can still have an in-flight server operation.
+    # Do not issue further commands or infer isolation from a snapshot.
+    if any(session is not None and session.poisoned for session in (admin,target,emergency,emergency_target)):
+        print('diagnostic: database session lost; instance unrecoverable, checkpoint remains pending')
+        return
     failed=[]
     for name, session, statement in (
         ('platform_gate',emergency,'ALTER DATABASE platform WITH ALLOW_CONNECTIONS false;'),
@@ -118,7 +122,8 @@ def isolate_after_failure():
             if session is None: raise RuntimeError('emergency session missing')
             session.execute(statement)
         except BaseException:
-            failed.append(name)
+            print('diagnostic: emergency database operation unverified; instance unrecoverable, checkpoint remains pending')
+            return
     try:
         item=check_platform_identity()
         if item['HostConfig']['RestartPolicy']['Name']!='no': run(['update','--restart=no',pid])

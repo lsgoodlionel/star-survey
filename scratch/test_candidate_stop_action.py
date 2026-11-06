@@ -14,15 +14,15 @@ class StopActionTest(unittest.TestCase):
         state={'gates':{'platform':True,'postgres':True,'template1':True},'running':False,'restart':'no','started':'old','failure':failure,'emergency':False,'messages':[],'action_done':False}
         identities=[{'pid':i,'started':'s','database_oid':i,'database':'postgres'} for i in (1,2,3,4)]
         class Session:
-            def __init__(self,index): self.identity=identities[index]; self.index=index
+            def __init__(self,index): self.identity=identities[index]; self.index=index; self.poisoned=False
             def execute(self,sql):
                 if sql.startswith('ALTER DATABASE'):
                     database=sql.split()[2]
                     if 'true' in sql:
                         state['gates'][database]=True
-                        if state['failure']=='open': raise RuntimeError('ambiguous open')
+                        if state['failure']=='open': self.poisoned=True; raise RuntimeError('ambiguous open')
                     else:
-                        if self.index==2 and failure=='start_emergency': raise RuntimeError('emergency unavailable')
+                        if self.index==2 and failure=='start_emergency': self.poisoned=True; raise RuntimeError('emergency unavailable')
                         state['gates'][database]=False
                         if self.index==2: state['emergency']=True
                     return ''
@@ -65,18 +65,38 @@ class StopActionTest(unittest.TestCase):
             except BaseException:
                 if env['mutation_started']: env['isolate_after_failure']()
                 raise
+        if failure=='open':
+            self.assertIn('diagnostic: database session lost; instance unrecoverable, checkpoint remains pending',state['messages'])
+            self.assertFalse(state['emergency'])
+            return
         if failure=='unknown':
             self.assertFalse(any(state['gates'].values()))
             self.assertFalse(state['running'])
             return
         if failure=='start_emergency':
-            self.assertIn('diagnostic: emergency isolation unverified; checkpoint remains pending',state['messages'])
-            self.assertFalse(state['running'])
+            self.assertIn('diagnostic: emergency database operation unverified; instance unrecoverable, checkpoint remains pending',state['messages'])
+            self.assertTrue(state['running'])
             return
         self.assertTrue(state['emergency'])
         self.assertFalse(any(state['gates'].values()))
         self.assertFalse(state['running'])
         self.assertEqual(state['restart'],'no')
+
+    def test_any_lost_session_forbids_followup_even_when_other_sessions_alive(self):
+        for lost in range(4):
+            with self.subTest(lost=lost):
+                calls = []
+                class Session:
+                    def __init__(self, index): self.poisoned = index == lost
+                    def execute(self, sql): calls.append(sql); raise AssertionError('unexpected SQL')
+                sessions = [Session(i) for i in range(4)]
+                env = dict(zip(('admin', 'target', 'emergency', 'emergency_target'), sessions))
+                env.update(print=lambda message: calls.append(message),
+                           check_platform_identity=lambda: self.fail('unexpected container access'),
+                           run=lambda *args, **kwargs: self.fail('unexpected Docker action'))
+                exec(compiled, env)
+                env['isolate_after_failure']()
+                self.assertEqual(calls, ['diagnostic: database session lost; instance unrecoverable, checkpoint remains pending'])
 
     def test_recloses_gate_after_uncertain_open_start_health_or_policy(self):
         for failure in ('open','start','health','policy','verify','unknown','start_emergency'):

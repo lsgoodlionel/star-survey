@@ -23,7 +23,7 @@ def child(phase,work,evidence,ready,isolated):
     identities=[{'pid':i,'started':'s','database_oid':i,'database':'postgres'} for i in (1,2,3,4)]
     def pause(): ready.touch(); time.sleep(1)
     class Session:
-        def __init__(self,index): self.identity=identities[index]
+        def __init__(self,index): self.identity=identities[index]; self.poisoned=False
         def execute(self,sql):
             if sql.startswith('ALTER DATABASE'):
                 state['gates'][sql.split()[2]]='true' in sql; return ''
