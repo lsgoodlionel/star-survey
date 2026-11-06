@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Disposable CI experiment only; assumes a trusted runner and Docker daemon."""
-import json, os, re, secrets, select, signal, subprocess, sys, tempfile, time
+import json, os, re, secrets, select, signal, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'platform/deploy/production/release'))
 from fixture_cgroup import CgroupScope
+from fixture_compensation import build_compensation_sql
 
 D = ['docker', '--host', 'unix:///var/run/docker.sock']
 
@@ -104,6 +105,42 @@ else: sys.exit(25)
         else: raise RuntimeError('test database not ready')
         supervisor, stale, maintenance = Session(cid, 'postgres'), Session(cid, 'postgres'), Session(cid, 'template1')
         sessions.extend([supervisor, stale, maintenance])
+        supervisor.sql("CREATE ROLE platform_owner NOLOGIN; CREATE ROLE platform_app NOLOGIN; ALTER DATABASE postgres OWNER TO platform_owner;")
+        migration_dir = Path(__file__).resolve().parents[1] / 'platform/services/business/src/main/resources/db/migration'
+        migrations = []
+        for version in (1, 100, 101, 103, 104, 105, 106, 107, 108, 110, 111, 200, 201, 400, 401):
+            matches = list(migration_dir.glob('V' + str(version) + '__*.sql'))
+            if len(matches) != 1: raise RuntimeError('migration not uniquely found')
+            migrations.append(matches[0].read_text())
+        supervisor.sql('SET ROLE platform_owner;\n' + '\n'.join(migrations) + '\nRESET ROLE;')
+        tenant, owner_plan, fixture_plan, principal, connection, original_sub, fixture_sub, restore_sub, owner_grant = (str(uuid.uuid4()) for _ in range(9))
+        grant, handoff_hash, browser_hash = str(uuid.uuid4()), secrets.token_hex(32), secrets.token_hex(32)
+        scope = "SELECT set_config('app.tenant_id','" + tenant + "',true);"
+        supervisor.sql(f"""BEGIN; SET LOCAL ROLE platform_owner; {scope}
+INSERT INTO tenant(id,code,name,status) VALUES ('{tenant}','ci-probe','CI probe','provisioning');
+UPDATE tenant SET status='active' WHERE id='{tenant}';
+INSERT INTO plan_version(id,plan_code,version,capabilities,quotas,export_window_days)
+VALUES ('{owner_plan}','ci-probe',1,ARRAY['survey.read','survey.write','response.collect','response.export'], '{{"member.seats":1,"response.valid_completed":100}}',1);
+INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
+VALUES ('{original_sub}','{tenant}','{owner_plan}','trial',now()-interval '1 day',now()+interval '10 days');
+INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by) VALUES ('{tenant}','production-probe-owner','active',true,'ci');
+INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by) VALUES ('{tenant}','{owner_grant}','production-probe-owner','tenant_owner',NULL,'ci'); COMMIT;""")
+        supervisor.sql(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+INSERT INTO plan_version(id,plan_code,version,capabilities,quotas,export_window_days)
+SELECT '{fixture_plan}','ci-fixture',1,capabilities,jsonb_set(quotas,'{{member.seats}}','2'),export_window_days FROM plan_version WHERE id='{owner_plan}';
+INSERT INTO subscription(id,tenant_id,plan_version_id,kind,starts_at,ends_at)
+SELECT '{fixture_sub}','{tenant}','{fixture_plan}',kind,now(),ends_at FROM subscription WHERE id='{original_sub}';
+INSERT INTO org_connection(id,tenant_id,provider,corp_id,app_id,secret_ref,unknown_user_policy,enabled,created_by)
+VALUES ('{connection}','{tenant}','wecom','ci-corp','ci-app','CI_SECRET','require_preauthorized',true,'ci');
+INSERT INTO identity_binding(principal_id,tenant_id,provider,app_id,external_id) VALUES ('{principal}','{tenant}','wecom','ci-corp','ci-user');
+INSERT INTO access_member(tenant_id,actor_id,status,uses_seat,invited_by) VALUES ('{tenant}','{principal}','active',true,'ci');
+INSERT INTO access_grant(tenant_id,id,actor_id,role_code,resource_id,granted_by,expires_at)
+VALUES ('{tenant}','{grant}','{principal}','org_admin',NULL,'ci',now()+interval '15 minutes');
+INSERT INTO org_login_handoff(handoff_hash,browser_hash,tenant_id,principal_id,connection_id,provider,expires_at)
+VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}','wecom',now()+interval '1 minute'); COMMIT;""")
+        compensation = build_compensation_sql(tenant=tenant,owner_plan=owner_plan,fixture_plan=fixture_plan,principal=principal,
+            connection=connection,original_sub=original_sub,fixture_sub=fixture_sub,restore_sub=restore_sub,owner_grant=owner_grant,
+            handoff_hash=handoff_hash,browser_hash=browser_hash)
         pid = supervisor.sql('SELECT pg_backend_pid();'); stale_pid = stale.sql('SELECT pg_backend_pid();')
         if not re.fullmatch(r'[0-9]+', pid) or not re.fullmatch(r'[0-9]+', stale_pid) or pid == stale_pid: raise RuntimeError('bad client identity')
         identity_sql = ("SELECT a.pid::text||':'||a.backend_start::text||':'||d.oid::text "
@@ -170,9 +207,16 @@ else: sys.exit(25)
             supervisor.sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();") != '0' or
             supervisor.sql('SELECT count(*) FROM pg_prepared_xacts;') != '0'):
             raise RuntimeError('post-worker exclusivity not established')
-        supervisor.sql('CREATE TEMP TABLE fixture_recovery_check (value integer);')
-        supervisor.sql('BEGIN; INSERT INTO fixture_recovery_check VALUES (1); COMMIT;')
-        if supervisor.sql('SELECT count(*) FROM fixture_recovery_check;') != '1': raise RuntimeError('synthetic recovery failed')
+        supervisor.sql(compensation)
+        verified = supervisor.sql(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SELECT (SELECT id='{restore_sub}' AND plan_version_id='{owner_plan}' AND kind='trial' AND ends_at=(SELECT ends_at FROM subscription WHERE id='{original_sub}') FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1)
+AND NOT EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{tenant}' AND actor_id='{principal}')
+AND EXISTS (SELECT 1 FROM org_connection WHERE tenant_id='{tenant}' AND id='{connection}' AND NOT enabled)
+AND EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL)
+AND (SELECT count(*)=1 FROM access_member WHERE tenant_id='{tenant}' AND uses_seat AND status<>'removed'); COMMIT;""")
+        if verified.splitlines()[-1] != 't': raise RuntimeError('fixture compensation not verified')
+        supervisor.sql(compensation)
+        print('product compensation completed and retry was idempotent on bound exclusive session')
         # Inject a failure after closure. The handler verifies closure, does not reopen.
         try: raise RuntimeError('synthetic recovery failure')
         except RuntimeError:
