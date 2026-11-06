@@ -124,6 +124,33 @@ describe('PublishedAccessPanel', () => {
     expect(createObjectURL).toHaveBeenCalledTimes(2);
   });
 
+  test('ignores a delayed old QR response after the new route has loaded', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:new-route');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let resolveOld!: (value: Blob) => void;
+    const fetchQr = vi.fn()
+      .mockImplementationOnce(() => new Promise<Blob>((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(new Blob(['new']));
+    let currentLinks: LinkView[] = [activeLink];
+    const api = apiFrom((request) => {
+      if (request.path.includes('/delivery/')) return currentLinks;
+      if (request.path.includes('/responses/summary')) return summary;
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    const rendered = renderWithQuery(
+      <MemoryRouter><PublishedAccessPanel api={api} fetchQr={fetchQr} published surveyId={surveyId} tenantId="tenant-a" /></MemoryRouter>,
+    );
+    await waitFor(() => expect(fetchQr).toHaveBeenCalledTimes(1));
+    const oldSignal = fetchQr.mock.calls[0][1] as AbortSignal;
+    currentLinks = [{ ...activeLink, url: 'https://survey.example.test/s/new-version' }];
+    await act(async () => rendered.queryClient.invalidateQueries({ queryKey: ['delivery-links', 'tenant-a', surveyId] }));
+    expect(await screen.findByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:new-route');
+    expect(oldSignal.aborted).toBe(true);
+    await act(async () => resolveOld(new Blob(['old'])));
+    expect(screen.getByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:new-route');
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
   test('does not revive a revoked QR when a route changes away and back', async () => {
     vi.spyOn(URL, 'createObjectURL').mockReturnValueOnce('blob:first').mockReturnValueOnce('blob:latest');
     const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
