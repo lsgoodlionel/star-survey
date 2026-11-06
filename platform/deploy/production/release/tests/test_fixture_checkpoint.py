@@ -85,6 +85,17 @@ class CheckpointTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             require_completed_checkpoint(self.evidence, self.work, self.identity, run_id='12', attempt='1', manifest_sha='b' * 64)
 
+    def test_cancel_after_pending_unlink_recreates_pending_and_invalidates_receipt(self):
+        checks = iter((True, True, False))
+        with self.assertRaises(RuntimeError):
+            run_checkpointed(self.evidence, self.work, self.identity, lambda: None, lambda: True,
+                             run_id='12', attempt='1', manifest_sha='b' * 64,
+                             continue_finalization=lambda: next(checks))
+        self.assertTrue(self.marker.exists())
+        self.assertFalse((self.evidence / 'fixture-recovery.verified').exists())
+        with self.assertRaises(RuntimeError):
+            require_completed_checkpoint(self.evidence, self.work, self.identity, run_id='12', attempt='1', manifest_sha='b' * 64)
+
     def test_fifo_or_symlink_receipt_is_rejected_without_blocking(self):
         receipt = self.evidence / 'fixture-recovery.verified'
         os.mkfifo(receipt, 0o600)

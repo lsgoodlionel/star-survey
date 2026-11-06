@@ -12,5 +12,8 @@ jobs:
       - run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
       - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p 'test_fixture_checkpoint*.py' -v
       - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 -B platform/deploy/production/release/tests/check_checkpoint_supervisor.py
+      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_pinned_database.py -q
+      - run: docker pull postgres:16-alpine
+      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_REPOSITORY python3 -B platform/deploy/production/release/tests/check_fixture_pinned_database.py
       - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_native_acceptance.py -q
       - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_build_release.py -q

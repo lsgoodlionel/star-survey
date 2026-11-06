@@ -266,7 +266,8 @@ def supervise_author_preview(evidence, work, identity, provision, worker, recove
     signal.signal(signal.SIGINT, interrupt)
     try:
         run_checkpointed(evidence, work, identity, action, verify,
-                         run_id=run_id, attempt=attempt, manifest_sha=manifest_sha)
+                         run_id=run_id, attempt=attempt, manifest_sha=manifest_sha,
+                         continue_finalization=lambda: not interrupted)
     except BaseException:
         raise RuntimeError('fixture author execution or recovery unverified') from None
     finally:

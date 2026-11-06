@@ -43,14 +43,15 @@ def bound_checkpoint_identity(work, run_id, attempt, manifest_sha):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def run_checkpointed(evidence, work, identity, action, verify, *, run_id, attempt, manifest_sha):
+def run_checkpointed(evidence, work, identity, action, verify, *, run_id, attempt, manifest_sha,
+                     continue_finalization=lambda: True):
     """Create intent before action; clear it only after an explicit verified result.
 
     The action and verifier are trusted supervisor code, not a proof supplied by
     an untrusted worker. Failure, cancellation and ambiguous results retain the
     marker. Host loss cannot be distinguished from incomplete upload locally.
     """
-    if not callable(action) or not callable(verify):
+    if not callable(action) or not callable(verify) or not callable(continue_finalization):
         raise ValueError('checkpoint callbacks are invalid')
     evidence_path, work_path = _directory(evidence), _directory(work)
     if evidence_path == work_path or work_path in evidence_path.parents:
@@ -63,20 +64,24 @@ def run_checkpointed(evidence, work, identity, action, verify, *, run_id, attemp
         raise ValueError('checkpoint receipt already exists')
     marker.create()
     action()
-    if verify() is not True:
+    if verify() is not True or continue_finalization() is not True:
         raise RuntimeError('recovery verification failed; checkpoint retained')
-    directory = os.open(evidence_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        fd = os.open(_RECEIPT, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(identity.encode('ascii') + b'\n')
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-    try:
+        directory = os.open(evidence_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fd = os.open(_RECEIPT, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(identity.encode('ascii') + b'\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        if continue_finalization() is not True:
+            raise RuntimeError('checkpoint finalization interrupted')
         marker.clear()
+        if continue_finalization() is not True:
+            raise RuntimeError('checkpoint finalization interrupted')
     except BaseException:
         # unlink may have succeeded even when the following fsync failed.
         # Recreate pending and invalidate the receipt where possible; callers
