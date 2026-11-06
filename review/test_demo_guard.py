@@ -23,15 +23,19 @@ case "$1 $2" in
   "context inspect") if [ "$TEST_COLLISION" = context ]; then echo unix:///other.sock; else echo unix:///Users/lionel/.docker/run/docker.sock; fi ;;
   "info --format") echo disposable-daemon ;;
   "ps -aq") if [ "$TEST_COLLISION" = container ]; then echo collision; fi ;;
-  "volume ls") if [ "$TEST_COLLISION" = volume ] || [ "$TEST_COLLISION" = long_volume ]; then echo survey-review-46766fd-maven; fi
+  "volume ls") if [ "$TEST_COLLISION" = error_volume ]; then exit 2; fi
+               if [ "$TEST_COLLISION" = volume ] || [ "$TEST_COLLISION" = long_volume ]; then echo survey-review-46766fd-maven; fi
                if [ "$TEST_COLLISION" = long_volume ]; then awk 'BEGIN { for (i=0;i<20000;i++) print "other-volume-" i }'; fi ;;
-  "network ls") if [ "$TEST_COLLISION" = network ] || [ "$TEST_COLLISION" = long_network ]; then echo survey-review-46766fd_default; fi
+  "network ls") if [ "$TEST_COLLISION" = error_network ]; then exit 2; fi
+                if [ "$TEST_COLLISION" = network ] || [ "$TEST_COLLISION" = long_network ]; then echo survey-review-46766fd_default; fi
                 if [ "$TEST_COLLISION" = long_network ]; then awk 'BEGIN { for (i=0;i<20000;i++) print "other-network-" i }'; fi ;;
-  "image ls") if [ "$TEST_COLLISION" = image ] || [ "$TEST_COLLISION" = long_image ]; then echo survey-review-46766fd-admin; fi
+  "image ls") if [ "$TEST_COLLISION" = error_image ]; then exit 2; fi
+              if [ "$TEST_COLLISION" = image ] || [ "$TEST_COLLISION" = long_image ]; then echo survey-review-46766fd-admin; fi
               if [ "$TEST_COLLISION" = long_image ]; then awk 'BEGIN { for (i=0;i<20000;i++) print "other-image-" i }'; fi ;;
   *) exit 91 ;;
 esac
 '''); docker.chmod(0o755)
+            grep=bindir/'grep'; grep.write_text('#!/bin/sh\nexit 2\n'); grep.chmod(0o755)
             python=bindir/'python3'; python.write_text('#!/bin/sh\n[ "$TEST_COLLISION" != port ]\n'); python.chmod(0o755)
             env={k:v for k,v in os.environ.items() if k not in ('DOCKER_HOST','DOCKER_CONTEXT','COMPOSE_PROJECT_NAME','COMPOSE_FILE','COMPOSE_PROFILES','COMPOSE_ENV_FILES','ADMIN_WEB_DEMO_PORT','PLATFORM_MAVEN_REPO')}
             env.update(PATH=str(bindir)+os.pathsep+os.environ['PATH'], TEST_COLLISION=collision)
@@ -62,6 +66,20 @@ esac
 
     def test_long_resource_lists_reject_early_collisions(self):
         for collision in ('long_volume', 'long_network', 'long_image'):
+            with self.subTest(collision=collision):
+                result=self.run_guard(collision)
+                self.assertNotEqual(result.returncode,0,result.stderr)
+                self.assertIn('already exists',result.stderr)
+
+    def test_list_failures_reject_and_grep_failure_cannot_hide_collisions(self):
+        for collision in ('error_volume','error_network','error_image'):
+            with self.subTest(collision=collision):
+                result=self.run_guard(collision)
+                self.assertNotEqual(result.returncode,0,result.stderr)
+                self.assertIn('list unavailable',result.stderr)
+        # Every scenario runs with a fake grep that exits 2; builtins must
+        # still find an early collision and reject it.
+        for collision in ('long_volume','long_network','long_image'):
             with self.subTest(collision=collision):
                 result=self.run_guard(collision)
                 self.assertNotEqual(result.returncode,0,result.stderr)
