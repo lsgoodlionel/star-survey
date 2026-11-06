@@ -1,0 +1,164 @@
+"""Unintegrated test-only supervisor; it does not establish ownership.
+
+A process group cannot contain a descendant that calls setsid. A caller must
+supply an independently anchored containment verifier (e.g. a dedicated cgroup)
+that proves no descendants remain, including after reparenting. Until one exists,
+the default is fail-closed. SIGKILL and host loss remain externally unverified.
+"""
+import os
+import signal
+import subprocess
+import time
+
+
+def _group_gone(pgid):
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def supervise(worker, recovery, *, verify_containment=None, stop_timeout=5, recovery_timeout=120):
+    """Return failure unless each isolated process group and containment is empty.
+
+    The verifier receives (phase, group_leader_pid), must raise or return false
+    unless it proves the entire independently controlled containment is empty,
+    and must not infer that proof merely from the marker or process group.
+    """
+    if not callable(verify_containment):
+        return 1
+    interrupted = False
+    child = None
+    worker_ok = False
+    recovery_ok = False
+    old_term = signal.getsignal(signal.SIGTERM)
+    old_int = signal.getsignal(signal.SIGINT)
+
+    def interrupt(_signum, _frame):
+        nonlocal interrupted
+        interrupted = True
+
+    def clean(phase, process):
+        if process is None or process.poll() is None or not _group_gone(process.pid):
+            return False
+        try:
+            return verify_containment(phase, process.pid) is True
+        except BaseException:
+            return False
+
+    signal.signal(signal.SIGTERM, interrupt)
+    signal.signal(signal.SIGINT, interrupt)
+    try:
+        try:
+            if not interrupted:
+                child = subprocess.Popen(worker, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL, start_new_session=True)
+                while child.poll() is None and not interrupted:
+                    time.sleep(.05)
+                if child.poll() is None:
+                    os.killpg(child.pid, signal.SIGTERM)
+                    try:
+                        child.wait(timeout=stop_timeout)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(child.pid, signal.SIGKILL)
+                        child.wait(timeout=stop_timeout)
+                worker_ok = child.poll() == 0 and not interrupted
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if clean('worker', child):
+            recovery_process = None
+            try:
+                recovery_process = subprocess.Popen(recovery, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                                    stderr=subprocess.DEVNULL, start_new_session=True)
+                recovery_process.wait(timeout=recovery_timeout)
+                recovery_ok = recovery_process.returncode == 0 and clean('recovery', recovery_process)
+            except (OSError, subprocess.SubprocessError):
+                # A timed-out recovery must not keep running unattended.
+                if recovery_process is not None and recovery_process.poll() is None:
+                    try:
+                        os.killpg(recovery_process.pid, signal.SIGKILL)
+                        recovery_process.wait(timeout=stop_timeout)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+                recovery_ok = False
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGINT, old_int)
+    return 0 if worker_ok and recovery_ok and not interrupted else 1
+
+
+def supervise_cgroup(worker, recovery, uid, gid, *, worker_timeout=120, recovery_timeout=120):
+    """Supervise explicitly unprivileged local processes in distinct cgroups.
+
+    This does not authorize a target, contain daemon-created processes, prevent
+    privileged API access, or prove server-side rollback. Never use it for an
+    operation until those properties are independently established.
+    """
+    from fixture_cgroup import CgroupScope
+    interrupted = False
+    worker_ok = False
+    recovery_ok = False
+    old_term, old_int = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)
+
+    def interrupt(_signum, _frame):
+        nonlocal interrupted
+        interrupted = True
+
+    def run(scope, command, timeout, cancel_on_signal):
+        process = scope.spawn(command)
+        deadline = time.monotonic() + timeout
+        while process.poll() is None and time.monotonic() < deadline:
+            if cancel_on_signal and interrupted:
+                break
+            time.sleep(.05)
+        # A child or detached descendant still present makes this step fail,
+        # but recovery can proceed only after the kernel scope is empty.
+        success = process.poll() == 0 and scope.empty()
+        if not scope.empty():
+            scope.kill_and_wait()
+        process.wait(timeout=5)
+        if not scope.empty():
+            raise RuntimeError('scope did not become empty')
+        return success
+
+    signal.signal(signal.SIGTERM, interrupt)
+    signal.signal(signal.SIGINT, interrupt)
+    worker_scope = recovery_scope = None
+    try:
+        worker_scope = CgroupScope(uid, gid)
+        try:
+            worker_ok = run(worker_scope, worker, worker_timeout, True)
+        except BaseException:
+            # An ambiguous worker state must not cause recovery to begin.
+            if not worker_scope.empty():
+                return 1
+        if not worker_scope.empty():
+            return 1
+        worker_scope.close()
+        worker_scope = None
+        recovery_scope = CgroupScope(uid, gid)
+        try:
+            recovery_ok = run(recovery_scope, recovery, recovery_timeout, False)
+        except BaseException:
+            recovery_ok = False
+        if not recovery_scope.empty():
+            return 1
+        recovery_scope.close()
+        recovery_scope = None
+    except BaseException:
+        return 1
+    finally:
+        # Never delete a group whose emptiness cannot be proved.
+        for scope in (worker_scope, recovery_scope):
+            if scope is not None:
+                try:
+                    if scope.empty():
+                        scope.close()
+                except BaseException:
+                    pass
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGINT, old_int)
+    return 0 if worker_ok and recovery_ok and not interrupted else 1

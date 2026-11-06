@@ -1,0 +1,93 @@
+name: Fixture containment capability probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/fixture-containment-probe.yml'
+      - 'platform/deploy/production/release/fixture_supervisor.py'
+      - 'platform/deploy/production/release/fixture_cgroup.py'
+      - 'platform/deploy/production/release/fixture_compensation.py'
+      - 'platform/deploy/production/release/tests/test_fixture_compensation_builder.py'
+      - 'platform/deploy/production/release/tests/test_fixture_supervisor.py'
+      - 'platform/deploy/production/release/tests/check_cgroup_containment.py'
+      - 'platform/deploy/production/release/tests/check_pg_quiescence.py'
+      - 'platform/deploy/production/release/tests/check_pg_handoff_race.py'
+      - 'platform/deploy/production/release/tests/check_fixture_compensation.py'
+      - 'platform/deploy/production/release/tests/check_connection_freeze.py'
+      - 'platform/deploy/production/release/tests/check_database_gate.py'
+      - 'platform/deploy/production/release/tests/check_prepared_transaction.py'
+      - 'platform/deploy/production/release/tests/test_prepared_diagnostics.py'
+      - 'platform/services/business/src/main/resources/db/migration/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: Inspect cgroup availability on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+    services:
+      fixture-db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: fixture-only-password
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Inspect kernel containment prerequisites without creating a scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'Kernel: '
+          uname -sr
+          printf 'Architecture: '
+          uname -m
+          printf 'Cgroup filesystem: '
+          stat -fc '%T' /sys/fs/cgroup
+          printf 'Cgroup v2 controllers: '
+          if [[ -r /sys/fs/cgroup/cgroup.controllers ]]; then cat /sys/fs/cgroup/cgroup.controllers; else printf 'unavailable\n'; fi
+          printf 'Root cgroup writable by runner: '
+          if [[ -w /sys/fs/cgroup ]]; then printf 'yes\n'; else printf 'no\n'; fi
+          printf 'Root cgroup writable by root: '
+          if sudo test -w /sys/fs/cgroup; then printf 'yes\n'; else printf 'no\n'; fi
+          printf 'Systemd available: '
+          if command -v systemd-run >/dev/null && systemctl is-system-running >/dev/null 2>&1; then printf 'yes\n'; else printf 'unconfirmed\n'; fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Test dedicated cgroup and unprivileged setsid containment
+        run: sudo python3 platform/deploy/production/release/tests/check_cgroup_containment.py
+      - name: Test synthetic transaction cancellation and server quiescence
+        env:
+          FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
+        run: python3 platform/deploy/production/release/tests/check_pg_quiescence.py
+      - name: Test synthetic handoff exchange and compensation race
+        env:
+          FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
+        run: python3 platform/deploy/production/release/tests/check_pg_handoff_race.py
+      - name: Test compensation identity validation
+        run: python3 -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_compensation_builder.py -q
+      - name: Test compensation against product database migrations
+        env:
+          FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
+        run: python3 platform/deploy/production/release/tests/check_fixture_compensation.py
+      - name: Test isolated database connection freeze and drain
+        env:
+          FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
+        run: python3 platform/deploy/production/release/tests/check_connection_freeze.py
+      - name: Test database-wide gate and unknown-session rejection
+        env:
+          FIXTURE_PG_PORT: ${{ job.services.fixture-db.ports[5432] }}
+        run: python3 platform/deploy/production/release/tests/check_database_gate.py
+      - name: Test prepared diagnostic redaction
+        run: python3 -m unittest discover -s platform/deploy/production/release/tests -p test_prepared_diagnostics.py -q
+      - name: Test prepared transaction detection on a dedicated container
+        run: python3 platform/deploy/production/release/tests/check_prepared_transaction.py
