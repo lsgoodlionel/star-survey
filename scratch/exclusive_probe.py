@@ -193,29 +193,29 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
             child_code = f"import os,time; from pathlib import Path; Path({str(descendant_file)!r}).write_text(str(os.getpid())); time.sleep(60)"
             worker_code = ('import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",' +
                            repr(child_code) + '],start_new_session=True); time.sleep(60)')
-            scope = CgroupScope(65534, 65534)
+            worker_scope = CgroupScope(65534, 65534)
             proc = None
             try:
                 saved = dict(os.environ)
                 try:
                     os.environ.clear(); os.environ.update({'PATH': '/usr/bin:/bin'})
-                    proc = scope.spawn(['/usr/bin/python3', '-c', worker_code])
+                    proc = worker_scope.spawn(['/usr/bin/python3', '-c', worker_code])
                 finally:
                     os.environ.clear(); os.environ.update(saved)
                 deadline = time.monotonic() + 10
                 while not descendant_file.exists() and time.monotonic() < deadline: time.sleep(.05)
-                if not descendant_file.exists() or scope.empty(): raise RuntimeError('worker descendants not observed')
+                if not descendant_file.exists() or worker_scope.empty(): raise RuntimeError('worker descendants not observed')
                 descendant_pid = descendant_file.read_text().strip()
                 if not re.fullmatch(r'[0-9]+', descendant_pid): raise RuntimeError('descendant identity invalid')
-                scope.kill_and_wait(); proc.wait(timeout=5)
-                if not scope.empty(): raise RuntimeError('worker scope remains active')
+                worker_scope.kill_and_wait(); proc.wait(timeout=5)
+                if not worker_scope.empty(): raise RuntimeError('worker worker_scope remains active')
                 stat = Path('/proc') / descendant_pid / 'stat'
                 if stat.exists() and stat.read_text().rsplit(')', 1)[1].strip().split()[0] != 'Z':
                     raise RuntimeError('detached descendant remains alive')
             finally:
-                if not scope.empty(): scope.kill_and_wait()
+                if not worker_scope.empty(): worker_scope.kill_and_wait()
                 if proc is not None: proc.wait(timeout=5)
-                if scope.empty(): scope.close()
+                if worker_scope.empty(): worker_scope.close()
         # Re-establish the same bound identity and exclusive closed state before
         # a harmless synthetic transaction; this is not product compensation.
         verify()
