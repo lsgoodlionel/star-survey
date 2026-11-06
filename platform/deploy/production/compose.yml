@@ -28,10 +28,13 @@ services:
       - engine_admin_password_hash
     networks:
       - edge
+      - preview
     depends_on:
       admin-web:
         condition: service_healthy
       platform:
+        condition: service_healthy
+      publish-gateway:
         condition: service_healthy
       engine:
         condition: service_healthy
@@ -139,6 +142,7 @@ services:
     environment:
       PUBGW_ENGINES_CONFIG: /etc/survey/engines.json
       PUBGW_STATE_DIR: /var/lib/pubgw
+      PUBGW_PUBLIC_URL: https://${PUBLIC_HOST:?set PUBLIC_HOST}
     volumes:
       - ./init/run-with-secrets.sh:/opt/survey/run-with-secrets.sh:ro
       - ${ENGINES_CONFIG_FILE:?set ENGINES_CONFIG_FILE}:/etc/survey/engines.json:ro
@@ -148,6 +152,7 @@ services:
       - pubgw_engine_channel_secret
       - pubgw_engine_admin_password
     networks:
+      - preview
       - internal
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
@@ -316,6 +321,8 @@ services:
 networks:
   edge:
   internal:
+    internal: true
+  preview:
     internal: true
 
 volumes:

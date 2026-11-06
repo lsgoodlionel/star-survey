@@ -59,6 +59,19 @@
 		respond "survey-production-v1" 200
 	}
 
+	# The gateway validates the signed, short-lived preview capability. Only its
+	# access endpoint is public; its administrative API remains internal.
+	@preview_access {
+		method GET
+		path /v1/preview/access
+	}
+	handle @preview_access {
+		reverse_proxy publish-gateway:8080 {
+			import proxy_headers
+			header_down Location ^http://engine/(.*)$ /survey/$1
+		}
+	}
+
 	@platform_api path /v1 /v1/*
 	handle @platform_api {
 		reverse_proxy platform:8080 {
