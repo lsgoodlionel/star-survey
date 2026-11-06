@@ -1308,6 +1308,7 @@ class SurveyManager:
 
     def backup(self, name) -> Path:
         state = self._read_state(require_current=True)
+        self._require_no_pending_recovery(state)
         output = self._backup_path(name)
         if output.exists() or output.is_symlink():
             raise InputError("backup destination already exists")
@@ -1317,8 +1318,17 @@ class SurveyManager:
         self._verify_backup(output, state["version"], state["databaseSchema"])
         return output
 
+    @staticmethod
+    def _require_no_pending_recovery(state: dict[str, Any]) -> None:
+        if state.get("status") == "recovery_required":
+            raise InputError(
+                "recovery_required: automatic upgrade, rollback, backup and restore are blocked; "
+                "post-backup writes may exist and controlled recovery is not yet available"
+            )
+
     def restore(self, name) -> None:
         state = self._read_state(require_current=True)
+        self._require_no_pending_recovery(state)
         backup = self._backup_path(name)
         metadata = self._verify_backup(backup)
         if self._personnel_guard_enabled(state["version"], require_floor=True):
@@ -1471,6 +1481,7 @@ class SurveyManager:
 
     def upgrade(self, manifest_path, expected_sha256=None, bundle_path=None, asset_loader=None) -> None:
         state = self._read_state(require_current=True)
+        self._require_no_pending_recovery(state)
         previous, manifest = state["version"], load_manifest(manifest_path, expected_sha256)
         if self._personnel_guard_enabled(previous, require_floor=True):
             self._require_personnel_capability(manifest)
@@ -1588,15 +1599,20 @@ class SurveyManager:
             pass
         self._atomic_write(self.current_path, previous + "\n")
         self._write_state(status="recovery_required", version=previous, recoveryBackup=backup_name)
-        raise RuntimeHealthError(f"upgrade recovery failed; service stop requested; verified backup retained as {backup_name}") from cause
+        raise RuntimeHealthError(
+            f"upgrade recovery failed; service stop requested; verified backup retained as {backup_name}; "
+            "post-backup writes may exist; do not overwrite data before assessing them"
+        ) from cause
 
     def upgrade_version(self, version, expected_sha256) -> None:
+        self._require_no_pending_recovery(self._read_state(require_current=True))
         path = self._download_manifest(version, expected_sha256)
         manifest = load_manifest(path, expected_sha256)
         self.upgrade(path, expected_sha256, asset_loader=lambda name: self.release_client.fetch_asset(manifest.version, name))
 
     def rollback(self, version=None) -> None:
         state = self._read_state(require_current=True)
+        self._require_no_pending_recovery(state)
         target_version = version or state.get("previousVersion")
         if target_version is None:
             raise InputError("no rollback version is recorded")

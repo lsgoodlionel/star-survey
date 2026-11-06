@@ -483,6 +483,32 @@ class SurveyctlAdversarialTest(unittest.TestCase):
                 manager._recover_failed_upgrade(manifest, '0.2.0', 'backup', failure)
             restore.assert_not_called()
 
+    def test_recovery_required_blocks_mutating_commands_after_process_restart(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+        manager._write_state(status="recovery_required", recoveryBackup="preserved-backup")
+        state_path = self.target / ".surveyctl" / "state.json"
+        original_state = state_path.read_bytes()
+        original_current = (self.target / "current").read_bytes()
+        commands = (
+            ["upgrade", "--manifest", str(self.root / "nonexistent.json")],
+            ["upgrade", "--version", "0.3.0", "--manifest-sha256", "a" * 64],
+            ["rollback"],
+            ["backup", "--output", "unsafe-labeled-backup"],
+            ["restore", "preserved-backup"],
+        )
+        for command in commands:
+            with self.subTest(command=command[0]):
+                result = subprocess.run([sys.executable, str(MODULE_PATH), "--target", str(self.target), *command],
+                                        capture_output=True, text=True, timeout=10,
+                                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn('recovery_required', result.stderr)
+                self.assertIn('post-backup writes may exist', result.stderr)
+                self.assertEqual(original_state, state_path.read_bytes())
+                self.assertEqual(original_current, (self.target / "current").read_bytes())
+
     def test_restore_only_upgrade_failure_never_starts_old_images_without_restore(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager()
@@ -490,13 +516,17 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         next_manifest, _ = self.write_bundle_manifest("0.3.0", rollback="restore-only")
         runner = FakeRunner(fail_when=lambda command: ("up" in command and "0.3.0" in " ".join(command))
                             or ("restore.py" in " ".join(command) and "restore" in command))
-        with self.assertRaises(self.module.RuntimeHealthError):
+        with self.assertRaises(self.module.RuntimeHealthError) as error:
             self.manager(runner=runner).upgrade(next_manifest)
+        self.assertIn("post-backup writes may exist", str(error.exception))
+        self.assertIn("do not overwrite data", str(error.exception))
+        self.assertFalse(any("restore.py" in " ".join(command) and "restore" in command for command in runner.commands))
         old_starts = [command for command in runner.commands if "up" in command and "0.2.0" in " ".join(command)]
         self.assertEqual([], old_starts)
         self.assertTrue(any("stop" in command for command in runner.commands))
         state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
         self.assertEqual("recovery_required", state["status"])
+        self.assertTrue((self.target / "backups" / state["recoveryBackup"]).is_dir())
 
     def test_health_requires_nonempty_healthy_status_for_exact_service_set(self):
         manifest, _ = self.write_bundle_manifest()
