@@ -24,7 +24,8 @@ def require_container_absent(result, cid, initial_daemon, before, after):
     accepted = {f'Error: No such object: {cid}', f'Error: No such container: {cid}',
                 f'Error response from daemon: No such container: {cid}'}
     if result.returncode == 0 or result.stderr.strip() not in accepted:
-        raise RuntimeError('container absence unconfirmed')
+        reason = 'still_present' if result.returncode == 0 else 'unrecognized_error'
+        raise RuntimeError('container absence unconfirmed: ' + reason)
 
 class Session:
     def __init__(self, cid, db):
@@ -142,6 +143,10 @@ else: sys.exit(25)
         if observer: sessions.append(observer)
         observer_pid = observer.sql('SELECT pg_backend_pid();') if observer else None
         if observer_pid is not None and not re.fullmatch(r'[0-9]+', observer_pid): raise RuntimeError('observer identity invalid')
+        observer_identity = observer.sql("SELECT a.pid::text||':'||a.backend_start::text||':'||a.datid::text FROM pg_stat_activity a WHERE a.pid=pg_backend_pid();") if observer else None
+        def verify_observer():
+            if observer and observer.sql("SELECT a.pid::text||':'||a.backend_start::text||':'||a.datid::text FROM pg_stat_activity a WHERE a.pid=pg_backend_pid();") != observer_identity:
+                raise RuntimeError('observer identity changed')
         other_clients = "SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()" + (" AND pid<>" + observer_pid if observer_pid else '') + ';'
         supervisor.sql("CREATE ROLE platform_owner NOLOGIN; CREATE ROLE platform_app NOLOGIN; ALTER DATABASE postgres OWNER TO platform_owner;")
         migration_dir = Path(__file__).resolve().parents[1] / 'platform/services/business/src/main/resources/db/migration'
@@ -257,6 +262,7 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
                 if not worker_scope.empty(): worker_scope.kill_and_wait()
                 if proc is not None: proc.wait(timeout=5)
                 if worker_scope.empty(): worker_scope.close()
+        verify_observer()
         # Re-establish the same bound identity and exclusive closed state before
         # a harmless synthetic transaction; this is not product compensation.
         verify()
@@ -295,6 +301,7 @@ COMMIT;""")
             supervisor.sql('CREATE TABLE fixture_disconnect_check (id integer);')
             supervisor.sql('BEGIN; INSERT INTO fixture_disconnect_check VALUES (1);')
             supervisor.p.kill(); supervisor.p.wait(timeout=10)
+            verify_observer()
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
                 if observer.sql('SELECT count(*) FROM pg_stat_activity WHERE pid=' + pid + ';') == '0': break
