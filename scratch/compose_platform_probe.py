@@ -111,6 +111,16 @@ def main():
             time.sleep(.05)
         else: raise RuntimeError('platform database clients remain')
         if sql('SELECT 1;').returncode==0: raise RuntimeError('closed gate accepted connection')
+        # Explicitly simulate an external restart of the same container.
+        # The original StartedAt binding must reject it even with restart=no.
+        run(D+['start',platform])
+        try: require_stoppable()
+        except RuntimeError: pass
+        else: raise RuntimeError('restarted platform identity was accepted')
+        run(D+['stop','--time','3',platform],timeout=15)
+        if inspect('container',platform)['State']['Running'] is not False:
+            raise RuntimeError('restarted test platform did not stop')
+        require_drained()
         print('exact platform and network identities verified; restart disabled; platform stopped; database clients drained')
         print('scope: synthetic Compose services on trusted dedicated runner, not candidate browser acceptance')
     finally:
