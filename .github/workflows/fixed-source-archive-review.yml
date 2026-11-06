@@ -1,0 +1,31 @@
+name: Fixed source archive for local review
+on:
+  push:
+    branches: [codex/source-archive-46766fd-1106]
+    paths: [.github/workflows/fixed-source-archive-review.yml]
+permissions:
+  contents: read
+jobs:
+  archive:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 46766fd4326c370e0a5eeaa8de50235b5abb4a16
+          persist-credentials: false
+      - name: Archive only fixed tracked source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 46766fd4326c370e0a5eeaa8de50235b5abb4a16
+          mkdir -p "$RUNNER_TEMP/fixed-source"
+          git archive --format=tar.gz --prefix=survey-source/ HEAD > "$RUNNER_TEMP/fixed-source/source.tar.gz"
+          cd "$RUNNER_TEMP/fixed-source"
+          sha256sum source.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fixed-main-source-46766fd
+          path: ${{ runner.temp }}/fixed-source/
+          if-no-files-found: error
+          retention-days: 1
