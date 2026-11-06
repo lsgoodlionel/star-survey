@@ -25,7 +25,7 @@ def load_doctor():
 
 class DoctorRunner:
     def __init__(self, unhealthy=False, migration="920", secret="", line_delimited_health=False,
-                 runtime_db_port=False, missing_https_listener=False, rogue_listener=False):
+                 runtime_db_port=False, missing_https_listener=False, rogue_listener=False, extra_network_service=None):
         self.unhealthy = unhealthy
         self.migration = migration
         self.secret = secret
@@ -33,6 +33,7 @@ class DoctorRunner:
         self.runtime_db_port = runtime_db_port
         self.missing_https_listener = missing_https_listener
         self.rogue_listener = rogue_listener
+        self.extra_network_service = extra_network_service
         self.calls = []
 
     def run(self, command, **kwargs):
@@ -40,7 +41,7 @@ class DoctorRunner:
         self.calls.append(command)
         joined = " ".join(command)
         if command[:2] == ("docker", "compose") and "ps" in command:
-            services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"]
+            services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "engine-relay", "platform-db", "engine-db"]
             payload = [{"Service": name, "ID": "id-" + name, "State": "running", "Health": "unhealthy" if self.unhealthy and name == "engine" else "healthy"} for name in services]
             payload.append({"Service": "engine-init", "ID": "id-engine-init", "State": "exited", "ExitCode": 0, "Health": ""})
             stdout = "\n".join(json.dumps(row) for row in payload) if self.line_delimited_health else json.dumps(payload)
@@ -53,16 +54,19 @@ class DoctorRunner:
                     "platform-db": {"networks": ["internal"]},
                     "engine-db": {"networks": ["internal"]},
                 },
-                "networks": {"edge": {}, "internal": {"internal": True}},
+                "networks": {"edge": {}, "internal": {"internal": True}, "preview": {"internal": True}},
             }
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
         if command[:2] == ("docker", "inspect"):
             services = [value.removeprefix("id-") for value in command[2:]]
             networks = {
-                "edge": ["edge"], "admin-web": ["edge"], "platform": ["edge", "internal"],
-                "publish-gateway": ["internal"], "engine": ["edge", "internal"],
+                "edge": ["edge", "preview"], "admin-web": ["edge"], "platform": ["edge", "internal"],
+                "publish-gateway": ["preview", "internal"], "engine": ["edge", "internal"],
+                "engine-relay": ["internal"],
                 "platform-db": ["internal"], "engine-db": ["internal"], "engine-init": ["internal"],
             }
+            if self.extra_network_service:
+                networks[self.extra_network_service].append("unexpected")
             rows = []
             for service in services:
                 bindings = None
@@ -202,7 +206,8 @@ class DoctorAndCleanHostTest(unittest.TestCase):
 
     def test_doctor_blocks_runtime_port_drift_and_missing_host_listener(self):
         for runner in (DoctorRunner(runtime_db_port=True), DoctorRunner(missing_https_listener=True),
-                       DoctorRunner(rogue_listener=True)):
+                       DoctorRunner(rogue_listener=True), DoctorRunner(extra_network_service="publish-gateway"),
+                       DoctorRunner(extra_network_service="engine-relay"), DoctorRunner(extra_network_service="edge")):
             with self.subTest(runner=runner):
                 report = self.doctor.Doctor(
                     self.target, runner=runner, tls_probe=lambda host: True, product_probe=lambda *args: None

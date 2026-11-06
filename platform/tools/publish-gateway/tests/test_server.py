@@ -74,6 +74,27 @@ class ServerTestCase(unittest.TestCase):
         shutil.rmtree(self.state_dir)
 
 
+class AccessLogRedactionTest(ServerTestCase):
+    def test_preview_and_unknown_query_credentials_are_not_logged(self):
+        signature = 'synthetic-signature-secret'
+        token = 'synthetic-token-secret'
+        with self.assertLogs('pubgw.server', level='INFO') as captured:
+            status, _, _ = self.server.request(
+                'GET', f'/v1/preview/access?sig={signature}&token={token}'
+            )
+            unknown_status, _, _ = self.server.request('GET', f'/untrusted-{token}?sig={signature}')
+            publish_status, _, _ = self.server.publish()
+            unsupported_status, _, _ = self.server.request('HEAD', f'/v1/preview/access?sig={signature}&token={token}')
+        output = '\n'.join(captured.output)
+        self.assertNotIn(signature, output)
+        self.assertNotIn(token, output)
+        self.assertIn(f'"GET /v1/preview/access HTTP/1.1" {status}', output)
+        self.assertIn(f'"GET <other> HTTP/1.1" {unknown_status}', output)
+        self.assertIn(f'"POST /v1/publish HTTP/1.1" {publish_status}', output)
+        self.assertEqual(501, unsupported_status)
+        self.assertIn('request rejected', output)
+        self.assertIn(f'"OTHER /v1/preview/access HTTP/1.1" {unsupported_status}', output)
+
 class HealthTest(ServerTestCase):
     def test_healthz_needs_no_authentication(self):
         status, headers, raw = self.server.request("GET", "/healthz")

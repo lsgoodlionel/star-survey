@@ -56,7 +56,7 @@ class FakeRunner:
         if command[:3] == ("docker", "compose", "-f") and "ps" in command:
             payload = [
                 {"Service": name, "State": "running", "Health": "healthy"}
-                for name in ("platform-db", "engine-db", "platform", "publish-gateway", "engine", "admin-web", "edge")
+                for name in ("platform-db", "engine-db", "platform", "publish-gateway", "engine", "engine-relay", "admin-web", "edge")
             ]
             stdout = "\n".join(json.dumps(row) for row in payload) if self.line_delimited_health else json.dumps(payload)
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")

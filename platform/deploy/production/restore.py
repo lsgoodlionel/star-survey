@@ -36,8 +36,8 @@ DEFAULT_ARCHIVE_LIMITS = {
     "max_expansion_ratio": 100,
     "expansion_slack_bytes": 1024 * 1024,
 }
-APP_SERVICES = ("admin-web", "platform", "publish-gateway", "engine-init", "engine")
-HEALTHY_SERVICES = {"admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"}
+APP_SERVICES = ("admin-web", "platform", "publish-gateway", "engine-init", "engine", "engine-relay")
+HEALTHY_SERVICES = {"admin-web", "platform", "publish-gateway", "engine", "engine-relay", "platform-db", "engine-db"}
 
 
 class RestoreError(Exception):
