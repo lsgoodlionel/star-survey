@@ -306,8 +306,26 @@ class GatewayHandler(BaseHTTPRequestHandler):
         finally:
             stream.close()
 
-    def log_message(self, format: str, *args) -> None:  # noqa: A002 — 覆盖基类签名
-        log.info("%s %s", self.address_string(), format % args)
+    def log_request(self, code="-", size="-") -> None:
+        # Do not log requestline or raw paths: preview URLs contain bearer
+        # signatures, and malformed requests can put secrets anywhere in them.
+        try:
+            path = self._path()
+        except ValueError:
+            path = ""
+        allowed = set(POST_ROUTES) | {HEALTH_PATH, PREVIEW_ACCESS_PATH, READ_PATH, UPLOADS_PATH, ATTACHMENT_PATH}
+        safe_path = path if path in allowed else "<other>"
+        method = self.command if self.command in {"GET", "POST"} else "OTHER"
+        version = self.request_version if self.request_version in {"HTTP/1.0", "HTTP/1.1"} else "HTTP/unknown"
+        code_value = int(code) if isinstance(code, int) and not isinstance(code, bool) else 0
+        if isinstance(code, str) and code.isascii() and code.isdigit() and len(code) == 3:
+            code_value = int(code)
+        safe_code = str(code_value) if 100 <= code_value <= 599 else "-"
+        safe_size = str(size) if str(size).isdigit() else "-"
+        log.info('%s "%s %s %s" %s %s', self.client_address[0], method, safe_path, version, safe_code, safe_size)
+
+    def log_message(self, format: str, *args) -> None:  # noqa: A002 — 基类错误可能包含原始请求
+        log.info("%s request rejected", self.client_address[0])
 
 
 def _json(payload) -> bytes:
