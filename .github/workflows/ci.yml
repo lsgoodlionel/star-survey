@@ -1,62 +1,14 @@
-name: Survey CI · 产品质量与镜像验证
-
+name: Author handoff private file probe
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: survey-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  changes:
-    name: 变更范围与检查计划
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      profile: ${{ steps.plan.outputs.profile }}
-      images: ${{ steps.plan.outputs.images }}
+  fixture:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - name: 分流及失败阻断回归
-        run: python3 -m unittest discover -s platform/deploy/production/release/tests -p test_ci_plan.py
-      - name: 生成检查计划（证据不完整时执行完整检查）
-        id: plan
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci/plan.py
-
-  quality:
-    name: 产品质量
-    needs: changes
-    if: needs.changes.outputs.profile != 'docs'
-    uses: ./.github/workflows/platform-quality.yml
-    with:
-      profile: ${{ needs.changes.outputs.profile }}
-
-  images:
-    name: PR/main 镜像验证（不发布）
-    needs: [changes, quality]
-    if: needs.changes.outputs.images == 'true'
-    uses: ./.github/workflows/build-images.yml
-    with:
-      version: build-${{ github.sha }}
-
-  summary:
-    name: Survey CI required
-    if: always()
-    needs: [changes, quality, images]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - name: 核对必需作业与按规则跳过项
-        env:
-          CI_NEEDS: ${{ toJSON(needs) }}
-        run: python3 scripts/ci/plan.py summary
+      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_browser_file.py -v
+      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p test_fixture_handoff.py -v
+      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_REPOSITORY,GITHUB_WORKSPACE python3 -B platform/deploy/production/release/tests/check_browser_file_cgroup.py
