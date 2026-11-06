@@ -18,7 +18,7 @@ def run(args, check=True, timeout=30):
 class Session:
     def __init__(self, cid, db):
         self.p = subprocess.Popen(D + ['exec', '-i', cid, 'psql', '-X', '-q', '-A', '-t',
-                                  '-U', 'postgres', '-d', db, '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=sqlstate'],
+                                  '-U', 'postgres', '-d', db, '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=verbose'],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.buffer = b''
     def sql(self, sql):
@@ -31,10 +31,13 @@ class Session:
             chunk = os.read(self.p.stdout.fileno(), 4096)
             if not chunk:
                 detail = self.p.stderr.read(4096).decode('utf-8', errors='replace')
-                codes = re.findall(r'(?m)^ERROR:\s+([0-9A-Z]{5})\s*$', detail)
+                codes = re.findall(r'(?m)^ERROR:\s+([0-9A-Z]{5}):', detail)
                 line = re.search(r'(?m)^LINE ([0-9]+):', detail)
+                token = re.search(r'syntax error at or near "([^"\n]+)"', detail)
+                safe_tokens = {'SELECT', 'FROM', 'WHERE', 'AND', 'BEGIN', 'COMMIT', 'END', 'DO', ';', ')', '(', '$', '\\'}
+                near = token.group(1) if token and token.group(1) in safe_tokens else 'other'
                 raise RuntimeError('session ended; SQLSTATE=' + (codes[-1] if codes else 'unavailable') +
-                                   ' error_line=' + (line.group(1) if line else 'unavailable'))
+                                   ' error_line=' + (line.group(1) if line else 'unavailable') + ' near=' + near)
             self.buffer += chunk
             if len(self.buffer) > 8192: raise RuntimeError('unexpected session output')
         output, self.buffer = self.buffer.split(marker, 1)
