@@ -224,6 +224,19 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
             supervisor.sql("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid();") != '0' or
             supervisor.sql('SELECT count(*) FROM pg_prepared_xacts;') != '0'):
             raise RuntimeError('post-worker exclusivity not established')
+        # Deliberately fail inside the transaction while retaining the only
+        # trusted session, then independently verify that changes rolled back.
+        supervisor.sql('\\set ON_ERROR_STOP off\n' +
+                       compensation.replace('COMMIT;', 'SELECT 1/0; COMMIT;') +
+                       '\n\\set ON_ERROR_STOP on')
+        rollback_check = supervisor.sql(f"""BEGIN; SET LOCAL ROLE platform_app; {scope}
+SELECT EXISTS (SELECT 1 FROM access_grant WHERE tenant_id='{tenant}' AND actor_id='{principal}' AND id='{grant}')
+AND NOT EXISTS (SELECT 1 FROM identity_binding_revocation WHERE tenant_id='{tenant}' AND principal_id='{principal}' AND reinstated_at IS NULL)
+AND (SELECT id='{fixture_sub}' FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1);
+COMMIT;""")
+        if rollback_check.splitlines()[-1] != 't': raise RuntimeError('injected compensation failure did not roll back')
+        # Simulate lost application response by discarding the successful
+        # return value, then query state and retry on the same pinned session.
         supervisor.sql(compensation)
         checks = [
             f"SELECT id='{restore_sub}' AND plan_version_id='{owner_plan}' AND kind='trial' AND ends_at=(SELECT ends_at FROM subscription WHERE id='{original_sub}') FROM subscription WHERE tenant_id='{tenant}' AND starts_at<=now() ORDER BY starts_at DESC,seq DESC LIMIT 1",
@@ -236,6 +249,8 @@ VALUES ('{handoff_hash}','{browser_hash}','{tenant}','{principal}','{connection}
             result = supervisor.sql(f"BEGIN; SET LOCAL ROLE platform_app; {scope} {check}; COMMIT;")
             if result.splitlines()[-1] != 't': raise RuntimeError('fixture compensation check failed: ' + str(index))
         supervisor.sql(compensation)
+        duplicate_check = supervisor.sql(f"BEGIN; SET LOCAL ROLE platform_app; {scope} SELECT count(*)=3 FROM subscription WHERE tenant_id='{tenant}'; COMMIT;")
+        if duplicate_check.splitlines()[-1] != 't': raise RuntimeError('compensation retry duplicated subscription')
         print('product compensation completed and retry was idempotent on bound exclusive session')
         # Inject a failure after closure. The handler verifies closure, does not reopen.
         try: raise RuntimeError('synthetic recovery failure')
