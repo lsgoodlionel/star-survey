@@ -512,7 +512,10 @@ class SurveyManager:
 
     def _assert_target_available(self) -> None:
         self._reject_symlink_components(self.target)
-        if not self.target.exists() or not any(self.target.iterdir()) or self.state_path.exists():
+        if self.state_path.exists() or self.state_path.is_symlink():
+            self._require_no_pending_recovery(self._read_state())
+            return
+        if not self.target.exists() or not any(self.target.iterdir()):
             return
         entries, downloads = set(self.target.iterdir()), self.control_dir / "downloads"
         if (
@@ -581,6 +584,11 @@ class SurveyManager:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, path)
+            directory_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
@@ -612,6 +620,8 @@ class SurveyManager:
 
     def _write_state(self, **values) -> None:
         state = self._read_state() if self.state_path.exists() else {}
+        if state.get("status") == "recovery_required":
+            self._require_no_pending_recovery(state)
         state.update(values)
         state["managedPaths"] = [
             str(self.control_dir), str(self.target / "releases"), str(self.target / "shared"),
@@ -1155,9 +1165,9 @@ class SurveyManager:
         self._sync_runtime_secrets()
 
     def install(self, manifest_path, public_host, admin_user, admin_email, expected_sha256=None, bundle_path=None, asset_loader=None) -> None:
+        self._assert_target_available()
         manifest = load_manifest(manifest_path, expected_sha256)
         self._validate_install_inputs(public_host, admin_user, admin_email)
-        self._assert_target_available()
         if self.state_path.exists() and self._read_state().get("status") not in {"install_failed", "uninstalled"}:
             raise InputError("an installation already exists; use upgrade instead")
         values = self.preflight(manifest, public_host)
@@ -1199,18 +1209,18 @@ class SurveyManager:
         return path
 
     def install_version(self, version, expected_sha256, public_host, admin_user, admin_email) -> None:
-        self._validate_install_inputs(public_host, admin_user, admin_email)
         self._assert_target_available()
+        self._validate_install_inputs(public_host, admin_user, admin_email)
         self._mkdir(".")
         path = self._download_manifest(version, expected_sha256)
         manifest = load_manifest(path, expected_sha256)
         self.install(path, public_host, admin_user, admin_email, expected_sha256, asset_loader=lambda name: self.release_client.fetch_asset(manifest.version, name))
 
     def install_offline(self, package, public_host, admin_user, admin_email, expected_sha256=None) -> None:
+        self._assert_target_available()
         self._validate_install_inputs(public_host, admin_user, admin_email)
         package_path = Path(package)
         _regular_file(package_path, "offline package")
-        self._assert_target_available()
         self._mkdir(".")
         self._mkdir(".surveyctl/downloads")
         destination = self._managed(Path(".surveyctl/downloads") / f"offline-{uuid.uuid4().hex}")
@@ -1309,6 +1319,9 @@ class SurveyManager:
     def backup(self, name) -> Path:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
+        return self._backup_for_upgrade_or_manual(name, state)
+
+    def _backup_for_upgrade_or_manual(self, name, state) -> Path:
         output = self._backup_path(name)
         if output.exists() or output.is_symlink():
             raise InputError("backup destination already exists")
@@ -1320,15 +1333,18 @@ class SurveyManager:
 
     @staticmethod
     def _require_no_pending_recovery(state: dict[str, Any]) -> None:
-        if state.get("status") == "recovery_required":
+        if state.get("status") in {"upgrading", "recovery_required"}:
             raise InputError(
-                "recovery_required: automatic upgrade, rollback, backup and restore are blocked; "
+                f"{state['status']}: mutating and active diagnostic commands are blocked; "
                 "post-backup writes may exist and controlled recovery is not yet available"
             )
 
     def restore(self, name) -> None:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
+        self._restore_for_failed_upgrade_or_manual(name, state)
+
+    def _restore_for_failed_upgrade_or_manual(self, name, state) -> None:
         backup = self._backup_path(name)
         metadata = self._verify_backup(backup)
         if self._personnel_guard_enabled(state["version"], require_floor=True):
@@ -1364,6 +1380,7 @@ class SurveyManager:
 
     def setup_probe(self, api_call=None) -> None:
         state = self._read_state(require_current=True)
+        self._require_no_pending_recovery(state)
         release = self._release_dir(state["version"])
         self._verify_staged_release(release, state["version"])
         guard_values = [line.split("=", 1)[1] for line in (release / ".env").read_text(encoding="utf-8").splitlines()
@@ -1495,9 +1512,12 @@ class SurveyManager:
             require_ports=False,
             expected_addresses=state.get("expectedPublicAddresses"),
         )
+        # Persist and fsync the intent before staging or backup can change
+        # the installation. A killed process leaves a durable command latch.
+        self._write_state(status="upgrading", previousVersion=previous, recoveryBackup=None)
         self._stage_release(manifest, values["architecture"], state["publicHost"], state["adminUser"], state["adminEmail"], bundle_path, asset_loader)
         backup_name = f"pre-upgrade-{previous}-to-{manifest.version}"
-        backup = self.backup(backup_name)
+        backup = self._backup_for_upgrade_or_manual(backup_name, self._read_state(require_current=True))
         self._verify_backup(backup, previous, state["databaseSchema"])
         compose = self._compose(manifest.version)
         try:
@@ -1580,7 +1600,7 @@ class SurveyManager:
                     # the verified backup rather than invoke an old helper
                     # that cannot freeze the added writer.
                     raise RuntimeHealthError("cross-version writer quiescence is unverified")
-                self.restore(backup_name)
+                self._restore_for_failed_upgrade_or_manual(backup_name, self._read_state(require_current=True))
                 old_compose = self._compose(previous)
                 self._run(old_compose + ["up", "-d", "--remove-orphans"], "restored rollback start failed")
                 self._wait_healthy(old_compose, "restored rollback health check failed")
@@ -1606,9 +1626,18 @@ class SurveyManager:
 
     def upgrade_version(self, version, expected_sha256) -> None:
         self._require_no_pending_recovery(self._read_state(require_current=True))
-        path = self._download_manifest(version, expected_sha256)
-        manifest = load_manifest(path, expected_sha256)
-        self.upgrade(path, expected_sha256, asset_loader=lambda name: self.release_client.fetch_asset(manifest.version, name))
+        version = _validate_semver(version.removeprefix("v"), "release version")
+        if not expected_sha256:
+            raise InputError("remote release operation requires --manifest-sha256")
+        # Fetch outside the managed installation. The target's first change
+        # remains the durable upgrading intent written by upgrade().
+        with tempfile.TemporaryDirectory(prefix="survey-upgrade-manifest-") as temporary:
+            path = Path(temporary) / "release.json"
+            path.write_bytes(self.release_client.fetch_manifest(version))
+            manifest = load_manifest(path, expected_sha256)
+            if manifest.version != version:
+                raise IntegrityError("requested version does not match downloaded manifest")
+            self.upgrade(path, expected_sha256, asset_loader=lambda name: self.release_client.fetch_asset(manifest.version, name))
 
     def rollback(self, version=None) -> None:
         state = self._read_state(require_current=True)
@@ -1651,6 +1680,7 @@ class SurveyManager:
 
     def doctor(self) -> None:
         state = self._read_state(require_current=True)
+        self._require_no_pending_recovery(state)
         helper = self._release_dir(state["version"]) / "doctor.py"
         try:
             result = self._run([sys.executable, str(helper), "--target", str(self.target), "--redact"], "doctor checks failed", capture_output=True)
@@ -1692,6 +1722,7 @@ class SurveyManager:
 
     def uninstall(self, purge_data, confirmation) -> None:
         state = self._read_state()
+        self._require_no_pending_recovery(state)
         # A first install can fail after starting Compose but before writing its
         # current pointer. The recorded release is still integrity checked by
         # _compose; all other states retain the current-pointer invariant.
@@ -1811,6 +1842,7 @@ def main(argv=None) -> int:
         elif args.command == "logs":
             manager.logs(args.service)
         elif args.command == "uninstall":
+            manager._require_no_pending_recovery(manager._read_state())
             confirmation = args.confirm
             if args.purge_data and confirmation is None and sys.stdin.isatty():
                 confirmation = input(f"Type PURGE {manager.target} to permanently delete data: ")
