@@ -282,7 +282,7 @@ test('branded copy previews and publishes with language and pinned image bytes',
       if (!countName?.endsWith('_Cfilecount')) throw new Error('Upload count field is missing');
       fieldName = countName.slice(0, -'_Cfilecount'.length);
       const csrf = await fresh.locator('input[name="YII_CSRF_TOKEN"]').first().inputValue();
-      const uploadUrl = new URL('/uploader/index', fresh.url());
+      const uploadUrl = new URL('/index.php/uploader/index', fresh.url());
       uploadUrl.searchParams.set('mode', 'upload');
       uploadUrl.searchParams.set('fieldname', fieldName);
       const upload = await fresh.request.post(uploadUrl.toString(), { multipart: {
