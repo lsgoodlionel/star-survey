@@ -41,6 +41,17 @@ def check():
     if revalidate_fixture_database(work,marker,release,dbid)!=dbid: raise RuntimeError('database binding changed')
     db=inspect('container',dbid)
     if db['State']['StartedAt']!=dbstart: raise RuntimeError('database restarted')
+    dbnet=db.get('NetworkSettings',{}).get('Networks') or {}
+    if (set(dbnet)!={'survey-production_internal'} or
+        dbnet['survey-production_internal'].get('NetworkID')!=networks['survey-production_internal'] or
+        (db.get('HostConfig') or {}).get('PortBindings') not in (None, {})):
+        raise RuntimeError('database network binding changed')
+    for name,nid in networks.items():
+        network=inspect('network',nid); network_labels=network.get('Labels') or {}
+        suffix=name.removeprefix('survey-production_')
+        if (network.get('Id')!=nid or network_labels.get('com.docker.compose.project')!='survey-production' or
+            network_labels.get('com.docker.compose.network')!=suffix or network.get('Internal') is not (suffix=='internal')):
+            raise RuntimeError('candidate network changed')
     item=inspect('container',pid); state=item['State']; cfg=item['Config']; host=item['HostConfig']
     actual={key:value['NetworkID'] for key,value in item['NetworkSettings']['Networks'].items()}
     if (item['Id']!=pid or cfg['Image']!=image or cfg['Labels']!=labels or actual!=networks or

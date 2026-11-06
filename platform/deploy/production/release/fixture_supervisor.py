@@ -211,7 +211,8 @@ def supervise_author_preview(evidence, work, identity, provision, worker, recove
     The caller must supply real target binding, server-side writer exclusion and
     independently verified recovery; cgroups do not contain daemon work. The
     root supervisor does not expose its ambient environment to the child.
-    Interrupted or failed journeys remain pending even if recovery ran.
+    Failed journeys and cancellation before the checkpoint commit point remain
+    pending even if recovery ran. A later signal does not undo completed recovery.
     """
     from fixture_cgroup import CgroupScope
     from fixture_checkpoint import bound_checkpoint_identity, run_checkpointed
