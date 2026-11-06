@@ -11,22 +11,26 @@ compiled=compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec')
 
 class StopActionTest(unittest.TestCase):
     def run_scenario(self, failure):
-        state={'gate':False,'running':False,'restart':'no','started':'old','failure':failure,'emergency':False}
+        state={'gates':{'platform':True,'postgres':True,'template1':True},'running':False,'restart':'no','started':'old','failure':failure,'emergency':False}
         identities=[{'pid':i,'started':'s','database_oid':i,'database':'postgres'} for i in (1,2,3)]
         class Session:
-            def __init__(self,index): self.identity=identities[index]
+            def __init__(self,index): self.identity=identities[index]; self.index=index
             def execute(self,sql):
                 if sql.startswith('ALTER DATABASE'):
+                    database=sql.split()[2]
                     if 'true' in sql:
-                        state['gate']=True
+                        state['gates'][database]=True
                         if state['failure']=='open': raise RuntimeError('ambiguous open')
                     else:
-                        state['gate']=False; state['emergency']=True
+                        state['gates'][database]=False
+                        if self.index==2: state['emergency']=True
                     return ''
                 if 'json_agg' in sql: return json.dumps(identities)
+                if 'array_agg' in sql: return 't' if all(state['gates'].values()) else 'f'
+                if 'count(*) FROM pg_database' in sql: return str(sum(state['gates'].values()))
                 if 'pg_prepared_xacts' in sql: return '0'
                 if 'datname=\'platform\' AND' in sql: return '0'
-                if 'NOT datallowconn' in sql: return 't' if not state['gate'] else 'f'
+                if 'NOT datallowconn' in sql: return 't' if not state['gates']['platform'] else 'f'
                 raise AssertionError('unexpected statement')
         admin,target,emergency=Session(0),Session(1),Session(2)
         def check(): return True
@@ -52,7 +56,7 @@ class StopActionTest(unittest.TestCase):
         exec(compiled,env)
         with self.assertRaises(RuntimeError): env['action']()
         self.assertTrue(state['emergency'])
-        self.assertFalse(state['gate'])
+        self.assertFalse(any(state['gates'].values()))
         self.assertFalse(state['running'])
         self.assertEqual(state['restart'],'no')
 

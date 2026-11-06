@@ -82,8 +82,14 @@ try:
     target=PinnedDatabaseSession(dbid,'platform',callback)
     emergency=PinnedDatabaseSession(dbid,'postgres',callback)
     def action():
+        if admin.execute("SELECT array_agg(datname::text ORDER BY datname::text)=ARRAY['platform','postgres','template1'] FROM pg_database WHERE datallowconn;")!='t':
+            raise RuntimeError('unexpected connectable database')
         check(); run(['update','--restart=no',pid]); expected['restart']='no'; check()
         admin.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS false;')
+        # No other database may accept new privileged sessions while the
+        # bound sessions supervise the isolated cluster.
+        target.execute('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS false;')
+        target.execute('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS false;')
         check(); run(['stop','--time','30',pid],timeout=45); expected['running']=False; check()
         raw=admin.execute("SELECT coalesce(json_agg(json_build_object('pid',pid,'started',backend_start::text,"
             "'database_oid',datid::bigint,'database',datname) ORDER BY pid),'[]'::json) "
@@ -95,11 +101,13 @@ try:
         if admin.execute("SELECT count(*) FROM pg_prepared_xacts;")!='0': raise RuntimeError('prepared transaction present')
         if admin.execute("SELECT count(*) FROM pg_stat_activity WHERE datname='platform' AND (backend_type IS DISTINCT FROM 'client backend' OR state IS DISTINCT FROM 'idle' OR xact_start IS NOT NULL);")!='0':
             raise RuntimeError('database not quiet')
-        if admin.execute("SELECT NOT datallowconn FROM pg_database WHERE datname='platform';")!='t': raise RuntimeError('gate not closed')
+        if admin.execute('SELECT count(*) FROM pg_database WHERE datallowconn;')!='0': raise RuntimeError('database gates not closed')
         print('diagnostic: bound candidate platform stopped and database writers drained')
         # If any post-open operation fails, the separately pinned emergency
         # session attempts to close the gate again. Failure remains unknown.
         try:
+            target.execute('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true;')
+            target.execute('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS true;')
             admin.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS true;')
             check(); run(['start',pid],timeout=45)
             state=inspect('container',pid)['State']
@@ -116,7 +124,9 @@ try:
         except BaseException:
             try:
                 emergency.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS false;')
-                if emergency.execute("SELECT NOT datallowconn FROM pg_database WHERE datname='platform';")!='t':
+                target.execute('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS false;')
+                target.execute('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS false;')
+                if emergency.execute('SELECT count(*) FROM pg_database WHERE datallowconn;')!='0':
                     raise RuntimeError('emergency gate closure unverified')
                 item=check_platform_identity()
                 if item['HostConfig']['RestartPolicy']['Name']!='no':
@@ -129,7 +139,7 @@ try:
             raise
     def verify():
         check()
-        return (admin.execute("SELECT datallowconn FROM pg_database WHERE datname='platform';")=='t' and
+        return (admin.execute("SELECT array_agg(datname::text ORDER BY datname::text)=ARRAY['platform','postgres','template1'] FROM pg_database WHERE datallowconn;")=='t' and
                 (inspect('container',pid)['State'].get('Health') or {}).get('Status')=='healthy')
     run_checkpointed(evidence,work,identity,action,verify,run_id=run_id,attempt=attempt,manifest_sha=manifest)
     print('diagnostic: platform restart and health verified; author preview has not run')

@@ -32,6 +32,8 @@ cid = run(D + ['run', '-d', '--rm', '--network', 'none', '--tmpfs', '/var/lib/po
 if re.fullmatch(r'[0-9a-f]{64}', cid) is None: raise RuntimeError('container identity invalid')
 started = None
 session = None
+target = None
+emergency = None
 
 def inspect(stable=True):
     global started
@@ -57,6 +59,31 @@ try:
     run(D + ['exec', cid, 'sh', '-c', 'mkdir -p /run/secrets && printf %s fixture-only-password > /run/secrets/platform_db_superuser_password && chmod 600 /run/secrets/platform_db_superuser_password'])
     session = PinnedDatabaseSession(cid, 'postgres', lambda expected: expected == cid and inspect())
     if session.execute('SELECT 1;') != '1': raise RuntimeError('pinned query failed')
+    session.execute('CREATE DATABASE platform;')
+    target = PinnedDatabaseSession(cid, 'platform', lambda expected: expected == cid and inspect())
+    emergency = PinnedDatabaseSession(cid, 'postgres', lambda expected: expected == cid and inspect())
+    if session.execute("SELECT array_agg(datname::text ORDER BY datname::text)=ARRAY['platform','postgres','template1'] FROM pg_database WHERE datallowconn;") != 't':
+        raise RuntimeError('unexpected initial database gate state')
+    session.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS false;')
+    target.execute('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS false;')
+    target.execute('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS false;')
+    if emergency.execute('SELECT count(*) FROM pg_database WHERE datallowconn;') != '0':
+        raise RuntimeError('database gates did not close')
+    if emergency.execute("SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend';") != '3':
+        raise RuntimeError('unknown database client present')
+    # Exercise a failure after opening one maintenance gate: the pinned
+    # emergency/target sessions close every gate again without reconnecting.
+    target.execute('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true;')
+    emergency.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS false;')
+    target.execute('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS false;')
+    target.execute('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS false;')
+    if emergency.execute('SELECT count(*) FROM pg_database WHERE datallowconn;') != '0':
+        raise RuntimeError('emergency database gate closure unverified')
+    target.execute('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true;')
+    target.execute('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS true;')
+    session.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS true;')
+    target.close(); target = None
+    emergency.close(); emergency = None
     run(D + ['restart', '--time', '3', cid])
     try: session.execute('SELECT 2;')
     except PinnedSessionError: pass
@@ -66,6 +93,8 @@ try:
     else: raise RuntimeError('poisoned session was reused')
     print('pinned session rejected container restart and remained poisoned')
 finally:
+    if target is not None: target.close()
+    if emergency is not None: emergency.close()
     if session is not None: session.close()
     inspect(stable=False)
     run(D + ['stop', '--time', '3', cid])
