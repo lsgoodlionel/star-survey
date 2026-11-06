@@ -1,11 +1,14 @@
 import ast
 from pathlib import Path
+import re
 import unittest
 
 source = Path(__file__).resolve().parents[1] / 'scratch_candidate_stop.py'
 tree = ast.parse(source.read_text())
-nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('check_database', 'check_platform_identity', 'check')]
+nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('check_common', 'check_database', 'check_platform_identity', 'check')]
 compiled = compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec')
+initial_node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'validate_initial_platform')
+initial_compiled = compile(ast.Module(body=[initial_node], type_ignores=[]), str(source), 'exec')
 
 class CandidateStopGuardTest(unittest.TestCase):
     def setUp(self):
@@ -20,7 +23,7 @@ class CandidateStopGuardTest(unittest.TestCase):
             'Labels':{'com.docker.compose.project':'survey-production','com.docker.compose.network':k.removeprefix('survey-production_')}} for k,v in networks.items()}
         self.daemon='daemon'; self.returned_db=self.dbid
         self.env={'daemon':'daemon','run':lambda _:self.daemon,'revalidate_fixture_database':lambda *_:self.returned_db,
-            'inspect':self.inspect,'work':None,'marker':None,'release':None,'dbid':self.dbid,'dbstart':'db-start',
+            'inspect':self.inspect,'verify_fixture_owner':lambda *_:None,'work':__import__('pathlib').Path('/tmp/work'),'marker':None,'release':None,'dbid':self.dbid,'dbstart':'db-start',
             'networks':networks,'pid':self.pid,'labels':labels,'image':'fixed',
             'expected':{'running':True,'started':'first','restart':'unless-stopped'}}
         exec(compiled,self.env)
@@ -30,6 +33,26 @@ class CandidateStopGuardTest(unittest.TestCase):
         if ident==self.pid: return self.platform
         raise RuntimeError('unknown target')
     def test_exact_binding(self): self.assertTrue(self.env['check']())
+
+    def test_initial_capture_rechecks_manifest_and_compose_identity(self):
+        env={'re':re}; exec(initial_compiled,env)
+        release=Path('/tmp/candidate/releases/1.0.0')
+        item={'Id':'a'*64,'Config':{'Image':'fixed','Labels':{'com.docker.compose.project':'survey-production',
+             'com.docker.compose.service':'platform','com.docker.compose.project.working_dir':str(release),
+             'com.docker.compose.project.config_files':str(release/'compose.yml')}},
+             'State':{'Running':True,'StartedAt':'first'},'HostConfig':{'RestartPolicy':{'Name':'unless-stopped'}}}
+        self.assertEqual(env['validate_initial_platform'](item,release,'fixed'),'a'*64)
+        for field in ('image','work','config','project','service','id'):
+            import copy
+            altered=copy.deepcopy(item)
+            if field=='image': altered['Config']['Image']='other'
+            elif field=='work': altered['Config']['Labels']['com.docker.compose.project.working_dir']='/tmp/other'
+            elif field=='config': altered['Config']['Labels']['com.docker.compose.project.config_files']='/tmp/other.yml'
+            elif field=='project': altered['Config']['Labels']['com.docker.compose.project']='other'
+            elif field=='service': altered['Config']['Labels']['com.docker.compose.service']='other'
+            elif field=='id': altered['Id']='not-an-id'
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                env['validate_initial_platform'](altered,release,'fixed')
     def test_rejects_replacement_restart_and_network_changes(self):
         for mutation in ('daemon','db_id','db_restart','db_network','db_port','network_replaced','network_external',
                          'platform_restart','platform_stopped','platform_policy','platform_replaced','platform_network','platform_labels'):

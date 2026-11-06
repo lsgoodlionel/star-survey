@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """CI-only pinned session experiment against an isolated temporary container."""
+import ast
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,7 @@ started = None
 session = None
 target = None
 emergency = None
+emergency_target = None
 
 def inspect(stable=True):
     global started
@@ -82,6 +84,31 @@ try:
     target.execute('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true;')
     target.execute('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS true;')
     session.execute('ALTER DATABASE platform WITH ALLOW_CONNECTIONS true;')
+    # Real disconnects: a poisoned normal target and emergency postgres
+    # session must not suppress the independently bound target session or
+    # the separately verified platform-stop callback.
+    emergency_target = PinnedDatabaseSession(cid, 'platform', lambda expected: expected == cid and inspect())
+    target.process.kill(); target.process.wait(timeout=5)
+    emergency.process.kill(); emergency.process.wait(timeout=5)
+    source = Path(os.environ['GITHUB_WORKSPACE']) / 'scratch_candidate_stop.py'
+    tree = ast.parse(source.read_text())
+    isolate = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'isolate_after_failure')
+    calls=[]; messages=[]
+    fake_item={'HostConfig':{'RestartPolicy':{'Name':'no'}},'State':{'Running':True}}
+    def fake_run(args, timeout=30):
+        calls.append(tuple(args))
+        if args[0]=='stop': fake_item['State']['Running']=False
+    namespace={'emergency':emergency,'emergency_target':emergency_target,'check_platform_identity':lambda:fake_item,
+               'run':fake_run,'pid':'a'*64,'print':lambda message:messages.append(message)}
+    exec(compile(ast.Module(body=[isolate],type_ignores=[]),str(source),'exec'),namespace)
+    namespace['isolate_after_failure']()
+    if not any(item[0]=='stop' for item in calls): raise RuntimeError('independent platform stop was not attempted')
+    if not messages or 'unverified' not in messages[-1]: raise RuntimeError('ambiguous isolation was not reported')
+    if session.execute("SELECT count(*) FROM pg_database WHERE datname IN ('postgres','template1') AND datallowconn;") != '0':
+        raise RuntimeError('independent maintenance gates did not close')
+    emergency_target.execute('ALTER DATABASE postgres WITH ALLOW_CONNECTIONS true;')
+    emergency_target.execute('ALTER DATABASE template1 WITH ALLOW_CONNECTIONS true;')
+    emergency_target.close(); emergency_target = None
     target.close(); target = None
     emergency.close(); emergency = None
     run(D + ['restart', '--time', '3', cid])
@@ -93,6 +120,7 @@ try:
     else: raise RuntimeError('poisoned session was reused')
     print('pinned session rejected container restart and remained poisoned')
 finally:
+    if emergency_target is not None: emergency_target.close()
     if target is not None: target.close()
     if emergency is not None: emergency.close()
     if session is not None: session.close()

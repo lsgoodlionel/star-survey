@@ -1,81 +1,15 @@
-name: rc19 independent stop and drain diagnostic
+name: Candidate emergency isolation fault tests
 on:
   workflow_dispatch:
 permissions:
-  actions: read
   contents: read
-  packages: read
 jobs:
-  diagnostic:
+  fault-tests:
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - run: python3 -B -m unittest discover -s scratch -p 'test_candidate_stop_*.py' -q
-      - run: python3 -B -m unittest discover -s platform/deploy/production/release/tests -p 'test_fixture_checkpoint*.py' -q
-      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 -B platform/deploy/production/release/tests/check_checkpoint_supervisor.py
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
-        with:
-          name: release-candidate
-          path: candidate-assets
-          run-id: 41942118701
-          repository: ${{ github.repository }}
-          github-token: ${{ github.token }}
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Require ready native systemd and Docker
-        timeout-minutes: 4
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -d /run/systemd/system
-          test "$(ps -p 1 -o comm=)" = systemd
-          state="$(sudo timeout 180 systemctl is-system-running --wait)" || status=$?
-          printf 'Native host systemd state: %s (status %s)\n' "$state" "${status:-0}"
-          case "$state" in
-            running|degraded) ;;
-            *) echo 'Native host systemd did not become ready' >&2; exit 1 ;;
-          esac
-          sudo systemctl is-active docker
-          docker info --format '{{json .ServerVersion}}'
-          docker compose version
-      - name: Execute independent stop diagnostic against rc19
-        shell: bash
-        run: |
-          set -euo pipefail
-          identity="$GITHUB_WORKSPACE/candidate-assets/identity.json"
-          jq -e '.version=="0.3.19-rc.1" and .commit=="46766fd4326c370e0a5eeaa8de50235b5abb4a16"' "$identity" >/dev/null
-          export NATIVE_ACCEPTANCE_REAL=1 SURVEY_NATIVE_ACCEPTANCE=1 NATIVE_AUTHOR_ACCEPTANCE=1
-          export CANDIDATE_DIR="$GITHUB_WORKSPACE/candidate-assets" CANDIDATE_IDENTITY="$identity"
-          export CANDIDATE_MANIFEST_SHA256="$(jq -er '.manifestSha256' "$identity")"
-          export CANDIDATE_BUNDLE_SHA256="$(jq -er '.bundles.amd64.sha256' "$identity")"
-          export ADMIN_IMAGE_DIGEST="$(jq -er '.images.admin.digest' "$identity")"
-          export PLATFORM_IMAGE_DIGEST="$(jq -er '.images.platform.digest' "$identity")"
-          export PUBLISH_GATEWAY_IMAGE_DIGEST="$(jq -er '.images["publish-gateway"].digest' "$identity")"
-          export ENGINE_IMAGE_DIGEST="$(jq -er '.images.engine.digest' "$identity")"
-          export BASELINE_MODE="$(jq -er '.baseline.mode' "$identity")"
-          export EXPECTED_UBUNTU=22.04 EXPECTED_ARCHITECTURE=amd64
-          export SURVEY_ACCEPTANCE_PUBLIC_HOST=survey-native.test SURVEY_ACCEPTANCE_EXPECTED_PUBLIC_ADDRESS=127.0.0.1
-          export SURVEY_ACCEPTANCE_ADMIN_EMAIL=native-acceptance@example.com EVIDENCE_DIR="$GITHUB_WORKSPACE/independent-diagnostic-evidence"
-          mkdir -p "$RUNNER_TEMP/candidate-diagnostic"
-          cp platform/deploy/production/release/native_acceptance.sh platform/deploy/production/release/native_acceptance_evidence.py platform/deploy/production/release/fixture_database.py platform/deploy/production/release/fixture_checkpoint.py platform/deploy/production/release/fixture_recovery_marker.py platform/deploy/production/release/fixture_pinned_database.py "$RUNNER_TEMP/candidate-diagnostic/"
-          cp scratch_candidate_binding.py scratch_candidate_stop.py "$RUNNER_TEMP/candidate-diagnostic/"
-          python3 - "$RUNNER_TEMP/candidate-diagnostic/native_acceptance.sh" <<'PYCODE'
-          from pathlib import Path
-          import sys
-          path=Path(sys.argv[1]); text=path.read_text(); needle='# An author fixture must establish verified recovery before any normal uninstall.\n'
-          if text.count(needle)!=1: raise SystemExit('diagnostic insertion point ambiguous')
-          text=text.replace(needle,'last_step="independent-stop-diagnostic"\npython3 "$script_dir/scratch_candidate_stop.py" "$work_root" "${evidence_root}.fixture-checkpoint"\nwrite_doctor_evidence "doctor-restored"\n'+needle)
-          path.write_text(text)
-          PYCODE
-          sudo -E bash "$RUNNER_TEMP/candidate-diagnostic/native_acceptance.sh"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: independent-rc19-stop-diagnostic
-          path: independent-diagnostic-evidence
-          if-no-files-found: error
-          retention-days: 7
+      - run: python3 -B -m unittest discover -s scratch -p 'test_candidate_stop_*.py' -v
+      - run: python3 -B scratch/check_candidate_stop_signal.py
+      - run: docker pull postgres:16-alpine
+      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_REPOSITORY,GITHUB_WORKSPACE python3 -B platform/deploy/production/release/tests/check_fixture_pinned_database.py
