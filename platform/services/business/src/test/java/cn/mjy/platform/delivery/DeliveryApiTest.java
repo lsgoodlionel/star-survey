@@ -98,12 +98,14 @@ class DeliveryApiTest {
                         .header("Authorization", bearer(p.owner())))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.IMAGE_PNG))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
                 .andReturn().getResponse().getContentAsByteArray();
         assertThat(png).startsWith((byte) 0x89, (byte) 'P', (byte) 'N', (byte) 'G');
 
         String svg = mvc.perform(get("/v1/delivery/links/" + linkId + "/qr?format=svg")
                         .header("Authorization", bearer(p.owner())))
                 .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(svg).startsWith("<?xml").contains("<svg");
 
