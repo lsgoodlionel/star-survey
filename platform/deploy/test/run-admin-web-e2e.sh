@@ -274,6 +274,23 @@ PY
   fi
   if ! run_playwright; then
     if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+      docker logs "$ADMIN_WEB_RELAY_CONTAINER" >"$WORK_DIR/relay-private.log" 2>&1 || true
+      python3 - "$WORK_DIR/relay-private.log" <<'PYLOG'
+import collections, pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text(errors='replace')
+counts = collections.Counter()
+for line in text.splitlines():
+    if re.fullmatch(r'event relay rejected HTTP [1-5][0-9]{2}', line):
+        counts[line] += 1
+    elif line in ('event relay transport failed', 'event relay failed',
+                  'event reconciliation failed', 'event bridge is not active',
+                  'event bridge could not be loaded'):
+        counts[line] += 1
+for category, count in sorted(counts.items()):
+    print('relay diagnostic category:', category, 'count:', count)
+if not counts:
+    print('relay diagnostic category: none observed')
+PYLOG
       local event_counts
       event_counts="$(db_query "SELECT COUNT(*), SUM(CASE WHEN delivered_at IS NULL THEN 1 ELSE 0 END), SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) FROM lime_mjyplatformbridge_event_log" 2>/dev/null)" || event_counts="unavailable"
       if [[ "$event_counts" =~ ^[0-9[:space:]\|NULL]+$ ]]; then

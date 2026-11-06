@@ -25,7 +25,14 @@ class ProductionRelayCommand extends CConsoleCommand
         try {
             $plugin->relayEvents();
         } catch (Throwable $ignored) {
-            fwrite(STDERR, "event relay failed\n");
+            $message = $ignored->getMessage();
+            if (preg_match('/^Event delivery rejected with HTTP ([1-5][0-9]{2}):/', $message, $matches)) {
+                fwrite(STDERR, "event relay rejected HTTP " . $matches[1] . "\n");
+            } elseif (strpos($message, 'Event delivery failed:') === 0) {
+                fwrite(STDERR, "event relay transport failed\n");
+            } else {
+                fwrite(STDERR, "event relay failed\n");
+            }
             $failed = true;
         }
         return $failed ? 1 : 0;

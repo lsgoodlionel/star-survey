@@ -47,9 +47,9 @@ class EventRelayLoopTest(unittest.TestCase):
         program = r'''
 class CConsoleCommand {}
 class MjyPlatformBridge {
-    public $scan = 0; public $relay = 0; public $fail = false;
+    public $scan = 0; public $relay = 0; public $fail = false; public $relayError = "";
     function runCompletionScan() { $this->scan++; if ($this->fail) throw new Exception("secret"); }
-    function relayEvents() { $this->relay++; }
+    function relayEvents() { $this->relay++; if ($this->relayError) throw new Exception($this->relayError); }
 }
 class Plugin { static function model() { return new self; }
     function findByAttributes($x) { return (object)["id" => 4]; } }
@@ -63,11 +63,19 @@ $runner = new ProductionRelayCommand;
 if ($runner->actionRun() !== 0 || Yii::$manager->bridge->scan !== 1 || Yii::$manager->bridge->relay !== 1) exit(8);
 Yii::$manager->bridge->fail = true;
 if ($runner->actionRun() !== 1 || Yii::$manager->bridge->scan !== 2 || Yii::$manager->bridge->relay !== 2) exit(9);
+Yii::$manager->bridge->fail = false;
+foreach (["Event delivery rejected with HTTP 403: secret", "Event delivery failed: secret", "secret"] as $error) {
+  Yii::$manager->bridge->relayError = $error;
+  if ($runner->actionRun() !== 1) exit(10);
+}
 '''
         result = subprocess.run([os.environ.get("TEST_PHP", "php"), "-r", program, str(command)],
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("event reconciliation failed", result.stderr)
+        self.assertIn("event relay rejected HTTP 403", result.stderr)
+        self.assertIn("event relay transport failed", result.stderr)
+        self.assertIn("event relay failed", result.stderr)
         self.assertNotIn("secret", result.stderr)
 
 
