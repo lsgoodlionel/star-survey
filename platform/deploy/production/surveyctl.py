@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
+from functools import wraps
 import base64
 from dataclasses import dataclass
 import hashlib
@@ -23,6 +26,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 from typing import Any, Callable
 import urllib.error
@@ -443,6 +447,16 @@ def _extract_safe_tar(archive_path: Path, destination: Path) -> None:
         raise IntegrityError("release package cannot be safely extracted") from exc
 
 
+def _locked_mutation(*, create_target: bool = False):
+    def decorate(method):
+        @wraps(method)
+        def guarded(self, *args, **kwargs):
+            with self._mutation_lock(create_target=create_target, operation=method.__name__):
+                return method(self, *args, **kwargs)
+        return guarded
+    return decorate
+
+
 class SurveyManager:
     def __init__(
         self,
@@ -466,6 +480,99 @@ class SurveyManager:
         self.current_path = self.target / "current"
         self.expected_public_addresses = self._normalize_expected_addresses(expected_public_addresses or [])
         self._reject_symlink_components(self.target)
+        self._mutation_mutex = threading.RLock()
+        self._mutation_depth = 0
+
+    @contextmanager
+    def _mutation_lock(self, *, create_target: bool = False, operation: str = "operation"):
+        # Lock a stable per-installation inode for the entire public operation.
+        # Old releases and direct helpers cannot be made to honor this lock.
+        with self._mutation_mutex:
+            if self._mutation_depth:
+                self._mutation_depth += 1
+                try:
+                    yield
+                finally:
+                    self._mutation_depth -= 1
+                return
+            if create_target:
+                # Reject a foreign nonempty target before creating control files;
+                # the method repeats the authoritative check after locking.
+                self._assert_target_available()
+                self.target.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self._reject_symlink_components(self.target)
+            if not self.target.is_dir():
+                raise InputError("installation target is unavailable")
+            control = self._managed(".surveyctl")
+            if create_target:
+                control.mkdir(mode=0o700, exist_ok=True)
+            if not control.is_dir() or control.is_symlink():
+                raise IntegrityError("installation control directory is unavailable or unsafe")
+            control_info = os.stat(control, follow_symlinks=False)
+            if control_info.st_uid != os.geteuid() or control_info.st_mode & 0o022:
+                raise IntegrityError("installation control directory permissions are unsafe")
+            lock_path = control / "operation.lock"
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                fd = os.open(lock_path, flags, 0o600)
+            except OSError as exc:
+                raise IntegrityError("installation operation lock is unavailable or unsafe") from exc
+            try:
+                info = os.fstat(fd)
+                path_info = os.lstat(lock_path)
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid()
+                        or info.st_mode & 0o077 or (info.st_dev, info.st_ino) != (path_info.st_dev, path_info.st_ino)):
+                    raise IntegrityError("installation operation lock is unsafe")
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise InputError("another installation operation is in progress") from exc
+                locked_info = os.lstat(lock_path)
+                current_control = os.stat(control, follow_symlinks=False)
+                if ((info.st_dev, info.st_ino) != (locked_info.st_dev, locked_info.st_ino)
+                        or (control_info.st_dev, control_info.st_ino) != (current_control.st_dev, current_control.st_ino)):
+                    raise IntegrityError("installation operation lock identity changed")
+                intent = self._managed(".surveyctl/operation.intent")
+                if os.path.lexists(intent):
+                    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+                    try:
+                        intent_fd = os.open(intent, flags)
+                        with os.fdopen(intent_fd, 'r', encoding='utf-8') as handle:
+                            intent_info = os.fstat(handle.fileno())
+                            if (not stat.S_ISREG(intent_info.st_mode) or intent_info.st_nlink != 1
+                                    or intent_info.st_uid != os.geteuid() or intent_info.st_mode & 0o077
+                                    or intent_info.st_size > 1024):
+                                raise IntegrityError("installation operation intent is unsafe")
+                            record = json.load(handle)
+                    except (OSError, UnicodeError, ValueError) as exc:
+                        raise IntegrityError("installation operation intent is unavailable or invalid") from exc
+                    if not isinstance(record, dict) or set(record) != {"schemaVersion", "state", "operation"} or record.get("schemaVersion") != 1 or record.get("state") not in {"pending", "complete"} or not isinstance(record.get("operation"), str):
+                        raise IntegrityError("installation operation intent is invalid")
+                    if record['state'] == 'pending':
+                        raise InputError("an earlier operation has an unverified outcome; controlled recovery is not yet available")
+                if self.state_path.exists() or self.state_path.is_symlink():
+                    self._require_no_pending_recovery(self._read_state())
+                self._operation_intent = intent
+                self._operation_name = operation
+                self._operation_started = False
+                self._mutation_depth = 1
+                try:
+                    yield
+                    if self._operation_started:
+                        self._atomic_write(intent, json.dumps({"schemaVersion": 1, "state": "complete", "operation": operation}) + "\n")
+                finally:
+                    self._mutation_depth = 0
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def _begin_operation(self) -> None:
+        """Persist an unfinished operation before touching managed data or services."""
+        if not self._mutation_depth:
+            raise IntegrityError("mutation requires an operation lock")
+        if not self._operation_started:
+            self._atomic_write(self._operation_intent, json.dumps({"schemaVersion": 1, "state": "pending", "operation": self._operation_name}) + "\n")
+            self._operation_started = True
 
     @staticmethod
     def _normalize_expected_addresses(values) -> list[str]:
@@ -518,9 +625,11 @@ class SurveyManager:
         if not self.target.exists() or not any(self.target.iterdir()):
             return
         entries, downloads = set(self.target.iterdir()), self.control_dir / "downloads"
+        operation_lock = self.control_dir / "operation.lock"
+        operation_intent = self.control_dir / "operation.intent"
         if (
             entries == {self.control_dir} and self.control_dir.is_dir() and not self.control_dir.is_symlink()
-            and set(self.control_dir.iterdir()) <= {downloads}
+            and set(self.control_dir.iterdir()) <= {downloads, operation_lock, operation_intent}
             and (not downloads.exists() or (downloads.is_dir() and not downloads.is_symlink()))
         ):
             return
@@ -1164,6 +1273,7 @@ class SurveyManager:
         self._atomic_write(hash_path, password_hash + "\n")
         self._sync_runtime_secrets()
 
+    @_locked_mutation(create_target=True)
     def install(self, manifest_path, public_host, admin_user, admin_email, expected_sha256=None, bundle_path=None, asset_loader=None) -> None:
         self._assert_target_available()
         manifest = load_manifest(manifest_path, expected_sha256)
@@ -1171,6 +1281,7 @@ class SurveyManager:
         if self.state_path.exists() and self._read_state().get("status") not in {"install_failed", "uninstalled"}:
             raise InputError("an installation already exists; use upgrade instead")
         values = self.preflight(manifest, public_host)
+        self._begin_operation()
         self._mkdir(".")
         self._stage_release(manifest, values["architecture"], public_host, admin_user, admin_email, bundle_path, asset_loader)
         self._activate_personnel_floor(manifest.version)
@@ -1208,19 +1319,26 @@ class SurveyManager:
             raise IntegrityError("requested version does not match downloaded manifest")
         return path
 
+    @_locked_mutation(create_target=True)
     def install_version(self, version, expected_sha256, public_host, admin_user, admin_email) -> None:
         self._assert_target_available()
         self._validate_install_inputs(public_host, admin_user, admin_email)
+        version = _validate_semver(version.removeprefix("v"), "release version")
+        if not expected_sha256:
+            raise InputError("remote release operation requires --manifest-sha256")
+        self._begin_operation()
         self._mkdir(".")
         path = self._download_manifest(version, expected_sha256)
         manifest = load_manifest(path, expected_sha256)
         self.install(path, public_host, admin_user, admin_email, expected_sha256, asset_loader=lambda name: self.release_client.fetch_asset(manifest.version, name))
 
+    @_locked_mutation(create_target=True)
     def install_offline(self, package, public_host, admin_user, admin_email, expected_sha256=None) -> None:
         self._assert_target_available()
         self._validate_install_inputs(public_host, admin_user, admin_email)
         package_path = Path(package)
         _regular_file(package_path, "offline package")
+        self._begin_operation()
         self._mkdir(".")
         self._mkdir(".surveyctl/downloads")
         destination = self._managed(Path(".surveyctl/downloads") / f"offline-{uuid.uuid4().hex}")
@@ -1316,6 +1434,7 @@ class SurveyManager:
         )
         return metadata
 
+    @_locked_mutation(create_target=False)
     def backup(self, name) -> Path:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
@@ -1325,6 +1444,7 @@ class SurveyManager:
         output = self._backup_path(name)
         if output.exists() or output.is_symlink():
             raise InputError("backup destination already exists")
+        self._begin_operation()
         self._mkdir("backups")
         helper = self._release_dir(state["version"]) / "backup.py"
         self._run_helper([sys.executable, str(helper), "backup", "--target", str(self.target), "--output", str(output), "--version", state["version"]], "backup failed")
@@ -1339,6 +1459,7 @@ class SurveyManager:
                 "post-backup writes may exist and controlled recovery is not yet available"
             )
 
+    @_locked_mutation(create_target=False)
     def restore(self, name) -> None:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
@@ -1354,6 +1475,7 @@ class SurveyManager:
         if metadata["databaseSchema"] not in compatible_schemas:
             raise IntegrityError("backup database schema is incompatible with the installed release")
         helper = self._release_dir(state["version"]) / "restore.py"
+        self._begin_operation()
         self._run_helper([sys.executable, str(helper), "restore", "--target", str(self.target), "--backup", str(backup)], "restore failed")
 
     @staticmethod
@@ -1378,6 +1500,7 @@ class SurveyManager:
         signed = f"{header}.{claims}".encode("ascii")
         return signed.decode("ascii") + "." + encode(hmac.new(secret, signed, hashlib.sha256).digest())
 
+    @_locked_mutation(create_target=False)
     def setup_probe(self, api_call=None) -> None:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
@@ -1433,6 +1556,7 @@ class SurveyManager:
                 if (legacy_probe.exists() or legacy_probe.is_symlink()) and not run_path.exists() and not run_path.is_symlink():
                     raise RuntimeHealthError("legacy probe retained; run doctor, and use a controlled rebuild if needed")
                 proposed = str(uuid.uuid4())
+                self._begin_operation()
                 self._atomic_create_once(run_path, json.dumps({"installationId": installation, "runId": proposed}, sort_keys=True) + "\n")
                 if run_path.is_symlink():
                     raise ValueError("unsafe run state")
@@ -1467,6 +1591,7 @@ class SurveyManager:
                 raise RuntimeHealthError("probe setup API rejected a provisioning step")
             return value
 
+        self._begin_operation()
         tenant = expect("POST", "/v1/platform/tenants", {"code": "production-probe-" + suffix,
                         "name": "Production probe"}, 201)
         tenant_id = tenant.get("id")
@@ -1496,6 +1621,7 @@ class SurveyManager:
             json.dumps({"tenantId": tenant_id, "actorId": owner}, sort_keys=True) + "\n",
         )
 
+    @_locked_mutation(create_target=False)
     def upgrade(self, manifest_path, expected_sha256=None, bundle_path=None, asset_loader=None) -> None:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
@@ -1514,6 +1640,7 @@ class SurveyManager:
         )
         # Persist and fsync the intent before staging or backup can change
         # the installation. A killed process leaves a durable command latch.
+        self._begin_operation()
         self._write_state(status="upgrading", previousVersion=previous, recoveryBackup=None)
         self._stage_release(manifest, values["architecture"], state["publicHost"], state["adminUser"], state["adminEmail"], bundle_path, asset_loader)
         backup_name = f"pre-upgrade-{previous}-to-{manifest.version}"
@@ -1624,6 +1751,7 @@ class SurveyManager:
             "post-backup writes may exist; do not overwrite data before assessing them"
         ) from cause
 
+    @_locked_mutation(create_target=False)
     def upgrade_version(self, version, expected_sha256) -> None:
         self._require_no_pending_recovery(self._read_state(require_current=True))
         version = _validate_semver(version.removeprefix("v"), "release version")
@@ -1639,6 +1767,7 @@ class SurveyManager:
                 raise IntegrityError("requested version does not match downloaded manifest")
             self.upgrade(path, expected_sha256, asset_loader=lambda name: self.release_client.fetch_asset(manifest.version, name))
 
+    @_locked_mutation(create_target=False)
     def rollback(self, version=None) -> None:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
@@ -1654,6 +1783,7 @@ class SurveyManager:
         if current_manifest.rollback != "compatible" or state["databaseSchema"] not in manifest.compatible_source_schemas:
             raise InputError("database compatibility requires restore from backup; image rollback is blocked")
         compose = self._compose(target_version)
+        self._begin_operation()
         self._run(compose + ["up", "-d", "--remove-orphans"], "rollback start failed")
         self._wait_healthy(compose, "rollback health check failed")
         self._verify_public_tls(state["publicHost"])
@@ -1678,10 +1808,12 @@ class SurveyManager:
                         redacted = redacted.replace(value, "[REDACTED]")
         return re.sub(r"(?i)(password|secret|token|private[_-]?key)(\s*[:=]\s*)\S+", r"\1\2[REDACTED]", redacted)
 
+    @_locked_mutation(create_target=False)
     def doctor(self) -> None:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
         helper = self._release_dir(state["version"]) / "doctor.py"
+        self._begin_operation()
         try:
             result = self._run([sys.executable, str(helper), "--target", str(self.target), "--redact"], "doctor checks failed", capture_output=True)
         except RuntimeHealthError as exc:
@@ -1720,6 +1852,7 @@ class SurveyManager:
             command.append(service)
         self._run(command, "log collection failed")
 
+    @_locked_mutation(create_target=False)
     def uninstall(self, purge_data, confirmation) -> None:
         state = self._read_state()
         self._require_no_pending_recovery(state)
@@ -1735,6 +1868,7 @@ class SurveyManager:
             required = f"PURGE {self.target}"
             if confirmation != required:
                 raise InputError(f"data purge requires exact confirmation: {required}")
+            self._begin_operation()
             for path in purge_paths:
                 if path.is_symlink():
                     self._write_state(status="purge_failed")
@@ -1742,6 +1876,7 @@ class SurveyManager:
                 self._reject_symlink_components(path)
             command.append("--volumes")
             self._write_state(status="purging")
+        self._begin_operation()
         try:
             self._run(command, "uninstall failed")
         except SurveyctlError:
