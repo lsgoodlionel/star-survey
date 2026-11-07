@@ -299,6 +299,8 @@ test('branded copy previews and publishes with language and pinned image bytes',
         field.value = JSON.stringify([{ title: '', comment: '', size: values.uploaded.size,
           name: values.uploaded.name, filename: values.uploaded.filename, ext: values.uploaded.ext }]);
         count.value = '1';
+        field.dispatchEvent(new Event('updated', { bubbles: true }));
+        count.dispatchEvent(new Event('updated', { bubbles: true }));
       }, { fieldName, countName, uploaded });
     }
     if (await translated.isVisible()) await fresh.locator('input[type="radio"]:visible').first().check();
@@ -314,6 +316,11 @@ test('branded copy previews and publishes with language and pinned image bytes',
     expect(response.status()).toBe(200);
     return (await response.json() as { total: { engineCompleted: number } }).total.engineCompleted;
   }, { timeout: 60_000 }).toBe(1);
+  const answerPage = await page.request.get(`${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${copiedSurveyId}/responses?version=1&limit=50`,
+    { headers: { Authorization: `Bearer ${token}` } });
+  expect(answerPage.status()).toBe(200);
+  const answerResult = await answerPage.json() as { items: { answers: Record<string, string | null> | null }[] };
+  expect(answerResult.items.some((row) => row.answers?.[fieldName]?.includes(uploaded.filename))).toBe(true);
   await respondent.close(); await fresh.close();
 
   await page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '品牌与语言' }).click();
@@ -404,10 +411,15 @@ test('branded copy previews and publishes with language and pinned image bytes',
     if (format === 'attachments') {
       const entries = readZipEntries(await readFile(filePath));
       const files = [...entries.entries()].filter(([name]) => name.startsWith('files/'));
-      expect(files).toHaveLength(1);
-      expect(files[0][1].equals(Buffer.from('synthetic wave 3 attachment'))).toBe(true);
       const rows = parseAttachmentCsv(entries.get('files.csv')?.toString('utf8') ?? '');
       const manifest = parseAttachmentCsv(entries.get('attachments.csv')?.toString('utf8') ?? '');
+      if (files.length !== 1) {
+        const statusColumn = rows[0]?.indexOf('status') ?? -1;
+        const statuses = rows.slice(1).map((row) => row[statusColumn]);
+        const category = manifest.length <= 1 ? 'manifest-empty' : statuses.includes('absent') ? 'file-absent' : 'unexpected-file-count';
+        throw new Error(`Attachment export failed: ${category}`);
+      }
+      expect(files[0][1].equals(Buffer.from('synthetic wave 3 attachment'))).toBe(true);
       expect(rows).toHaveLength(2);
       expect(manifest).toHaveLength(2);
       const indexRow = Object.fromEntries(rows[0].map((key, i) => [key, rows[1][i]]));
