@@ -14,14 +14,10 @@ import sys
 import tempfile
 import unittest
 import warnings
+from unittest import mock
 import zipfile
 
 import export_content_evidence as evidence
-
-import pandas as pd
-import pyreadstat
-from docx import Document
-from openpyxl import Workbook
 
 FIXED = ['version', 'sid', 'responseid', 'generation', 'state',
          'startedat', 'completedat', 'answersstatus']
@@ -65,12 +61,61 @@ def csv_bytes(rows):
     return ('\ufeff' + stream.getvalue()).encode('utf-8')
 
 
+def pdf_fixture(path, pages):
+    """Small independent PDF with Unicode mapping; no production writer/fonts."""
+    objects = [b'', b'',
+               b'<< /Type /Font /Subtype /Type0 /BaseFont /Fixture /Encoding /Identity-H /DescendantFonts [4 0 R] /ToUnicode 5 0 R >>',
+               b'<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Fixture /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 600 >>']
+    chars = sorted(set(''.join(cell for page in pages for row in page for cell in row)))
+    mapping = {char: index + 1 for index, char in enumerate(chars)}
+    cmap = ('/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n'
+            '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n'
+            '/CMapName /Fixture def /CMapType 2 def\n1 begincodespacerange <0000> <ffff> endcodespacerange\n')
+    for offset in range(0, len(chars), 100):
+        group = chars[offset:offset + 100]
+        cmap += str(len(group)) + ' beginbfchar\n'
+        cmap += ''.join(f'<{mapping[c]:04x}> <{c.encode("utf-16-be").hex()}>\n' for c in group)
+        cmap += 'endbfchar\n'
+    cmap += 'endcmap CMapName currentdict /CMap defineresource pop end end'
+
+    def stream(data):
+        return f'<< /Length {len(data)} >>\nstream\n'.encode() + data + b'\nendstream'
+
+    objects.append(stream(cmap.encode()))
+    page_ids = []
+    for page in pages:
+        page_id = len(objects) + 1
+        page_ids.append(page_id)
+        objects.append(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 850] /Resources << /Font << /F1 3 0 R >> >> /Contents {page_id + 1} 0 R >>'.encode())
+        commands = []
+        for index, row in enumerate(page):
+            for column, cell in enumerate(row):
+                encoded = ''.join(f'{mapping[c]:04x}' for c in cell)
+                commands.append(f'BT /F1 9 Tf 1 0 0 1 {60 + column * 180} {800 - index * 22} Tm <{encoded}> Tj ET')
+        objects.append(stream('\n'.join(commands).encode()))
+    objects[0] = b'<< /Type /Catalog /Pages 2 0 R >>'
+    objects[1] = f'<< /Type /Pages /Count {len(page_ids)} /Kids [{" ".join(str(i) + " 0 R" for i in page_ids)}] >>'.encode()
+    data = bytearray(b'%PDF-1.7\n')
+    offsets = [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(data))
+        data.extend(f'{index} 0 obj\n'.encode() + obj + b'\nendobj\n')
+    start = len(data)
+    data.extend(f'xref\n0 {len(offsets)}\n0000000000 65535 f \n'.encode())
+    data.extend(''.join(f'{offset:010d} 00000 n \n' for offset in offsets[1:]).encode())
+    data.extend(f'trailer << /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n'.encode())
+    path.write_bytes(data)
+
+
 def fixture(path, fmt, actual, mutation=None):
+    # Lazy format imports permit explicit document-only runs; the full suite
+    # still fails (never skips) if any required reader dependency is absent.
     codes = FIXED + list(actual['labels'])
     labels = LABELS + list(actual['labels'].values())
     rows = [cells(row, codes) for row in actual['rows']]
     fields = [FIELDS] + [[scalar(field[key]) for key in FIELDS] for field in actual['fields']]
     if fmt == 'xlsx':
+        from openpyxl import Workbook
         book = Workbook()
         sheet = book.active
         sheet.title = '答卷'
@@ -86,7 +131,91 @@ def fixture(path, fmt, actual, mutation=None):
             sheet.cell(3, 9, '=1+1')
         book.save(path)
         book.close()
+    elif fmt == 'pdf':
+        pages = [[['答卷 ' + row[2]], ['答卷信息']]
+                 + [[label, value] for label, value in zip(LABELS, row[:8])]
+                 + [['作答']] + [[label, value] for label, value in zip(labels[8:], row[8:])]
+                 for row in rows]
+        if mutation == 'section':
+            pages[0][-1], pages[1][-1] = pages[1][-1], pages[0][-1]
+        elif mutation == 'heading':
+            pages[0][0] = ['答卷 999']
+        elif mutation == 'extra_section':
+            pages[0].append(['附件'])
+        elif mutation in ('timestamp_wrap', 'timestamp_wrong', 'timestamp_extra', 'timestamp_misaligned',
+                          'timestamp_cross_field', 'timestamp_excess_continuations', 'timestamp_malformed'):
+            for page in pages:
+                for index in (8, 7):
+                    value = page[index][1]
+                    page[index][1] = value[:11]
+                    page.insert(index + 1, ['', value[11:]])
+            if mutation == 'timestamp_wrong':
+                pages[0][8][1] = '09:00:00Z'
+            elif mutation == 'timestamp_extra':
+                pages[0].insert(9, ['', '09:00:00Z'])
+            elif mutation == 'timestamp_misaligned':
+                pages[0][8] = [pages[0][8][1]]
+            elif mutation == 'timestamp_cross_field':
+                pages[0][8], pages[0][10] = pages[0][10], pages[0][8]
+            elif mutation == 'timestamp_excess_continuations':
+                pages[0][7][1] = '2026-'
+                pages[0][8:9] = [['', '11-'], ['', '07T00:'], ['', '00:00Z']]
+            elif mutation == 'timestamp_malformed':
+                pages[0][8][1] = 'PRIVATE'
+        pdf_fixture(path, pages)
+    elif fmt == 'report-docx':
+        from docx import Document
+        doc = Document()
+        doc.add_heading('答卷统计报告', level=1)
+
+        def table(data):
+            target = doc.add_table(rows=0, cols=len(data[0]))
+            for values in data:
+                for cell, value in zip(target.add_row().cells, values):
+                    cell.text = str(value)
+
+        table([['指标', '数值'], ['答卷总数', len(rows)]])
+        for code, label in actual['labels'].items():
+            values = [scalar(row['answers'][code]) for row in actual['rows']]
+            valid = [value for value in values if value.strip()]
+            doc.add_heading(label, level=2)
+            table([['统计项', '数量'], ['有效值', len(valid)], ['空值', len(values) - len(valid)]])
+            table([['值', '频数', '比例']] + [[value, valid.count(value), f'{100 * valid.count(value) / len(valid):.2f}%']
+                                             for value in sorted(set(valid))])
+        if mutation == 'section':
+            doc.paragraphs[1].text, doc.paragraphs[2].text = doc.paragraphs[2].text, doc.paragraphs[1].text
+        elif mutation == 'duplicate_section':
+            doc.paragraphs[2].text = doc.paragraphs[1].text
+        elif mutation == 'wrong_label':
+            doc.paragraphs[1].text = '错误标签'
+        elif mutation == 'missing_section':
+            doc._element.body.remove(doc.tables[-1]._element)
+        elif mutation == 'extra_section':
+            doc.add_heading('额外问题', level=2)
+        elif mutation == 'missing_value':
+            doc.tables[2]._tbl.remove(doc.tables[2].rows[-1]._tr)
+        elif mutation == 'extra_value':
+            for cell, value in zip(doc.tables[2].add_row().cells, ['A9', '1', '50.00%']):
+                cell.text = value
+        elif mutation in ('no_grid', 'no_grid_wrong_width', 'no_grid_merged'):
+            if mutation == 'no_grid_wrong_width':
+                target = doc.tables[2].rows[1]._tr
+                target.remove(target.tc_lst[-1])
+            elif mutation == 'no_grid_merged':
+                doc.tables[2].cell(0, 0).merge(doc.tables[2].cell(0, 1))
+            for target in doc.tables:
+                target._tbl.remove(target._tbl.tblGrid)
+        elif mutation:
+            target, row, column, value = {
+                'total': (0, 1, 1, '3'), 'valid': (1, 1, 1, '0'),
+                'missing': (1, 2, 1, '2'), 'column': (2, 0, 1, '数量'),
+                'frequency': (2, 1, 1, '2'), 'percent': (2, 1, 2, '100.00%'),
+                'value': (2, 1, 0, 'A9'), 'duplicate_value': (2, 2, 0, 'A1'),
+            }[mutation]
+            doc.tables[target].cell(row, column).text = value
+        doc.save(path)
     elif fmt == 'docx':
+        from docx import Document
         doc = Document()
         for index, row in enumerate(rows):
             if index:
@@ -108,6 +237,8 @@ def fixture(path, fmt, actual, mutation=None):
             doc.paragraphs[0].text = '答卷 999'
         doc.save(path)
     else:
+        import pandas as pd
+        import pyreadstat
         frame = pd.DataFrame(rows, columns=codes)
         for code in FIXED[:4]:
             frame[code] = frame[code].astype(float)
@@ -151,13 +282,103 @@ class ExportEvidenceTests(unittest.TestCase):
         return evidence.verify(fmt, path, self.expected)
 
     def test_independent_readers_accept_exact_synthetic_content(self):
-        for fmt in ('xlsx', 'sav', 'docx'):
+        for fmt in ('xlsx', 'sav', 'docx', 'pdf', 'report-docx'):
             with self.subTest(fmt=fmt):
                 self.assertEqual(self.check(fmt), dict(ok=True, format=fmt, rows=2,
-                                                      fields=0 if fmt == 'docx' else 4))
+                                                      fields=0 if fmt in ('docx', 'pdf', 'report-docx') else 4))
+
+    def test_pdf_and_report_are_supported(self):
+        for fmt in ('pdf', 'report-docx'):
+            with self.subTest(fmt=fmt):
+                self.assertEqual(self.check(fmt), dict(ok=True, format=fmt, rows=2, fields=0))
+
+    def test_pdf_response_association_and_structure(self):
+        for mutation in ('section', 'heading', 'extra_section'):
+            with self.subTest(mutation=mutation), self.assertRaises(evidence.EvidenceError):
+                self.check('pdf', mutation=mutation)
+
+    def test_pdf_wrapped_timestamps_remain_exact_and_bounded(self):
+        for row in self.expected['rows']:
+            row['startedat'] = '2026-11-07T00:00:00Z'
+            row['completedat'] = '2026-11-07T00:01:00Z'
+        self.assertTrue(self.check('pdf', mutation='timestamp_wrap')['ok'])
+        for mutation in ('timestamp_wrong', 'timestamp_extra', 'timestamp_misaligned', 'timestamp_cross_field',
+                         'timestamp_excess_continuations', 'timestamp_malformed'):
+            with self.subTest(mutation=mutation), self.assertRaises(evidence.EvidenceError):
+                self.check('pdf', mutation=mutation)
+
+    def test_report_without_grid_preserves_cell_width_checks(self):
+        self.assertTrue(self.check('report-docx', mutation='no_grid')['ok'])
+        for mutation in ('no_grid_wrong_width', 'no_grid_merged'):
+            with self.subTest(mutation=mutation), self.assertRaises(evidence.EvidenceError):
+                self.check('report-docx', mutation=mutation)
+
+    def test_report_exact_statistics_and_section_associations(self):
+        for mutation in ('section', 'duplicate_section', 'wrong_label', 'missing_section', 'extra_section',
+                         'missing_value', 'extra_value', 'total', 'valid', 'missing',
+                         'column', 'frequency', 'percent', 'value', 'duplicate_value'):
+            with self.subTest(mutation=mutation), self.assertRaises(evidence.EvidenceError):
+                self.check('report-docx', mutation=mutation)
+
+    def test_report_missing_values_and_nonuniform_frequencies(self):
+        self.expected['rows'][1]['answers']['Q2'] = ''
+        self.expected['rows'][1]['answers']['Q1'] = 'A1'
+        self.assertTrue(self.check('report-docx')['ok'])
+        self.expected['rows'][0]['answers']['Q2'] = ''
+        self.assertTrue(self.check('report-docx')['ok'])
+        third = copy.deepcopy(self.expected['rows'][0])
+        third['responseid'] = 2
+        third['answers']['Q1'] = 'A2'
+        self.expected['rows'].append(third)
+        self.assertTrue(self.check('report-docx')['ok'])
+
+    def test_pdf_bounds_timeout_dependency_and_invalid_extraction(self):
+        path = self.root / 'bounded.pdf'
+        path.write_bytes(b'%PDF-1.7\n' + b'x' * 100)
+        with mock.patch.object(evidence, 'MAX_FILE_BYTES', 64), self.assertRaises(evidence.EvidenceError):
+            evidence.verify('pdf', path, self.expected)
+        with mock.patch.object(evidence.subprocess, 'Popen', side_effect=FileNotFoundError('PRIVATE')):
+            with self.assertRaisesRegex(evidence.EvidenceError, '^dependency$'):
+                evidence.verify('pdf', path, self.expected)
+        launch = subprocess.Popen
+        for script, category in [('import time; time.sleep(10)', 'reader'),
+                                 ('import sys; sys.stdout.write("X" * 4096)', 'structure'),
+                                 ('import sys; sys.exit(1)', 'reader')]:
+            def fake_poppler(*args, **kwargs):
+                return launch([sys.executable, '-c', script], **kwargs)
+            with self.subTest(category=category), mock.patch.object(evidence, 'PDF_TIMEOUT_SECONDS', 0.5), \
+                    mock.patch.object(evidence, 'MAX_PDF_TEXT_BYTES', 1024), \
+                    mock.patch.object(evidence.subprocess, 'Popen', side_effect=fake_poppler):
+                with self.assertRaisesRegex(evidence.EvidenceError, '^' + category + '$'):
+                    evidence.verify('pdf', path, self.expected)
+        for text in ('', 'PRIVATE', '\f', '\f\f\f'):
+            with self.subTest(extraction='invalid'), mock.patch.object(evidence, 'pdf_text', return_value=text), \
+                    self.assertRaises(evidence.EvidenceError):
+                evidence.verify('pdf', path, self.expected)
+
+    def test_document_complex_scope_fails_closed(self):
+        for fmt in ('pdf', 'report-docx'):
+            path = fixture(self.root / ('scope.' + fmt), fmt, self.expected)
+            for value in ('two\nlines', '=1+1', ' padded ', 'x' * 101):
+                expected = copy.deepcopy(self.expected)
+                expected['rows'][0]['answers']['Q1'] = value
+                with self.subTest(fmt=fmt), self.assertRaisesRegex(evidence.EvidenceError, '^expectation$'):
+                    evidence.verify(fmt, path, expected)
+
+    def test_pdf_and_report_cli_failure_is_private(self):
+        expected = self.root / 'PRIVATE_EXPECTATION.json'
+        expected.write_text(json.dumps(self.expected), encoding='utf8')
+        for fmt, category in [('pdf', 'structure'), ('report-docx', 'archive')]:
+            path = self.root / ('PRIVATE_DOWNLOAD.' + fmt)
+            path.write_bytes(b'PRIVATE_ANSWER malformed')
+            result = subprocess.run([sys.executable, str(Path(evidence.__file__)), fmt, str(path), str(expected)],
+                                    capture_output=True, text=True, timeout=15, check=False)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(json.loads(result.stdout), {'ok': False, 'category': category})
+            self.assertEqual(result.stderr, '')
 
     def test_swapped_answers_rejected_even_when_all_values_present(self):
-        for fmt in ('xlsx', 'sav', 'docx'):
+        for fmt in ('xlsx', 'sav', 'docx', 'pdf'):
             actual = copy.deepcopy(self.expected)
             actual['rows'][0]['answers'], actual['rows'][1]['answers'] = (
                 actual['rows'][1]['answers'], actual['rows'][0]['answers'])
@@ -165,7 +386,7 @@ class ExportEvidenceTests(unittest.TestCase):
                 self.check(fmt, actual)
 
     def test_wrong_identity_generation_status_and_duplicate_identity_rejected(self):
-        for fmt in ('xlsx', 'sav', 'docx'):
+        for fmt in ('xlsx', 'sav', 'docx', 'pdf'):
             for key, value in [('sid', 999), ('version', 9), ('responseid', 7),
                                ('generation', 4), ('state', 'deleted'), ('answersstatus', 'missing')]:
                 actual = copy.deepcopy(self.expected)
@@ -178,7 +399,7 @@ class ExportEvidenceTests(unittest.TestCase):
                 self.check(fmt, actual)
 
     def test_missing_and_extra_response_rejected(self):
-        for fmt in ('xlsx', 'sav', 'docx'):
+        for fmt in ('xlsx', 'sav', 'docx', 'pdf', 'report-docx'):
             for extra in (False, True):
                 actual = copy.deepcopy(self.expected)
                 if extra:
@@ -202,7 +423,7 @@ class ExportEvidenceTests(unittest.TestCase):
                     self.check(fmt, actual)
 
     def test_wrong_or_missing_answer_column_label_rejected(self):
-        for fmt in ('xlsx', 'sav', 'docx'):
+        for fmt in ('xlsx', 'sav', 'docx', 'pdf', 'report-docx'):
             for missing in (False, True):
                 actual = copy.deepcopy(self.expected)
                 if missing:
@@ -227,7 +448,7 @@ class ExportEvidenceTests(unittest.TestCase):
             self.check('xlsx', mutation='formula')
 
     def test_declared_timestamp_is_compared(self):
-        for fmt in ('xlsx', 'sav', 'docx'):
+        for fmt in ('xlsx', 'sav', 'docx', 'pdf'):
             actual = copy.deepcopy(self.expected)
             self.expected['rows'][0]['startedat'] = '2026-11-07T00:00:00Z'
             with self.subTest(fmt=fmt), self.assertRaises(evidence.EvidenceError):
@@ -235,7 +456,7 @@ class ExportEvidenceTests(unittest.TestCase):
             del self.expected['rows'][0]['startedat']
 
     def test_bounded_archive_rejects_malformed_traversal_duplicate_and_excess_parts(self):
-        for fmt in ('xlsx', 'sav', 'docx'):
+        for fmt in ('xlsx', 'sav', 'docx', 'report-docx'):
             for change in ('malformed', 'traversal', 'duplicate', 'excess', 'doctype', 'utf16_doctype'):
                 path = fixture(self.root / ('bad.' + fmt), fmt, self.expected)
                 if change == 'malformed':

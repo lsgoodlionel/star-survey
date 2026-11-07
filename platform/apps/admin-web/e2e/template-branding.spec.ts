@@ -388,7 +388,9 @@ test('branded copy previews and publishes with language and pinned image bytes',
     expect(file.suggestedFilename()).toMatch(new RegExp(`${suffix.replaceAll('.', '\\.')}$`));
     const filePath = await file.path();
     expect((await stat(filePath)).size).toBeGreaterThan(0);
-    if (['xlsx', 'sav', 'docx'].includes(format)) await verifyDownloadedExport(format, filePath, exportExpected);
+    if (['xlsx', 'sav', 'docx', 'pdf', 'report-docx'].includes(format)) {
+      await verifyDownloadedExport(format, filePath, exportExpected);
+    }
     if (format === 'pdf') {
       // Independent Poppler reader checks extractable Chinese from the actual downloaded file.
       const { stdout } = await promisify(execFile)('pdftotext', ['-enc', 'UTF-8', filePath, '-'], { timeout: 15_000 });
@@ -659,7 +661,7 @@ async function verifyDownloadedExport(format: string, download: string, expected
       { timeout: 30_000, maxBuffer: 16_384 });
     const result = JSON.parse(stdout) as { ok?: boolean; format?: string; rows?: number; fields?: number };
     if (result.ok !== true || result.format !== format || result.rows !== expected.rows.length
-        || result.fields !== (format === 'docx' ? 0 : expected.fields.length)) throw new Error('Invalid reader success evidence');
+        || result.fields !== (['docx', 'pdf', 'report-docx'].includes(format) ? 0 : expected.fields.length)) throw new Error('Invalid reader success evidence');
     process.stdout.write(`[export-content] ${format}:ok rows=${result.rows} fields=${result.fields}\n`);
   } catch (error) {
     let category = 'reader_failure';
