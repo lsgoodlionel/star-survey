@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-07 Wave 3 探针加载修正：`b32a16fa2458ed3a1bd976300d390792e05b8d66` 的 [full run 42338077404](https://github.com/lsgoodlionel/star-survey/actions/runs/42338077404) 正常质量门 11/11 成功；双库仍复现 not_found、清单身份一致，探针仅返回 evidence_unavailable，清理成功，未获得代次/归属/路径边界证据。已定位探针自身漏带引擎必需 config.xml，PluginManager::getPluginInfo 因找不到清单而拒绝发现插件。本次仅补测试插件清单及真实 PluginManager/ExtensionConfig 发现回归；回归先证实发现/有效性/兼容性/名称四项为 false，再补清单后全部通过，gate 60/60，静态复核无阻断。已记录：测试插件必须通过真实加载路径验证，直接实例化的替身测试不能证明其已加载。新双库探针运行仍待验证，未修改业务安全检查，不合并或发布。
+
 2026-11-07 Wave 3 取件边界探针候选：仅在既有附件专项隔离 CI 通过只读 overlay 启用测试观察插件，在真实 attachmentFile 请求原样返回 404 后，使用同一 Web 进程的 DB、uploaddir 与访问身份检查代次、答卷归属和 realpath 边界。请求参数仅在内存，证据与日志仅固定阶段码/布尔值；不调用会补写的 generation.current()，MySQL/PostgreSQL 只读事务失败即停止、始终回滚，并隔离探针 SQL 日志后恢复原请求 logger。原统一 404、所有安全检查、失败断言及生产代码不变。新增 7 项回归覆盖 11 个边界及事务/日志/响应/隐私/隔离，gate 59 项、Release/Workflow 125 项、PHP与shell语法及diff检查通过；同一无网络临时容器内连续两轮59项通过且夹具清理已核验，独立静态复核无阻断。双库真实探针结果待托管 full，Wave 3 仍未封闭，不合并或发布。
 
 2026-11-07 Wave 3 脱敏诊断实跑结果：`b5522151a7617dcced2358a9aadcc81b37e8e5cb` 已核验推送至原附件测试分支，[full run 42336037893](https://github.com/lsgoodlionel/star-survey/actions/runs/42336037893) 已结束。正常质量门 11/11 成功；MySQL 与 PostgreSQL 附件专项均在 ZIP 取件失败，白名单原因同为 `not_found`，singleManifest、singleIndex、manifestMatches、indexMatches、identityMatches 全为 true，资源清理均成功。这将边界收窄到取件链路 404，而非大小限制或未记录取件结论；尚不能断言磁盘文件不存在，代次、答卷归属与路径解析须在隔离环境继续核验。未放宽断言或三道安全检查，生产配置与上游代码不变，未合并或发布，Wave 3 验收仍未封闭。

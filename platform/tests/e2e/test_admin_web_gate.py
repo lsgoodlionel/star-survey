@@ -1665,6 +1665,24 @@ echo json_encode(['sameLogger'=>Yii::getLogger()===$original,'count'=>count($log
 """)
         self.assertEqual({"sameLogger": True, "count": 1, "originalPreserved": True}, result)
 
+    def test_probe_plugin_is_discoverable_by_actual_engine_loader(self):
+        result = self.php(r"""
+require $root . '/vendor/yiisoft/yii/framework/yii.php';
+eval('namespace LimeSurvey\\PluginManager; abstract class PluginBase {}');
+class ProbeConfigApp {function getBasePath(){return $GLOBALS['root'].'/application';}}
+Yii::setApplication(new ProbeConfigApp());
+Yii::setPathOfAlias('probePlugins', $root . '/platform/tests/fixtures/plugins');
+require $root . '/application/models/ExtensionConfig.php';
+require $root . '/application/libraries/PluginManager/PluginManager.php';
+$manager=new LimeSurvey\PluginManager\PluginManager();
+$manager->pluginDirs=['user'=>'probePlugins'];
+$info=$manager->getPluginInfo('AttachmentLocatorProbe');
+echo json_encode(['discovered'=>is_array($info),'valid'=>is_array($info) && $info['extensionConfig']->validate(),
+    'compatible'=>is_array($info) && $info['isCompatible'],
+    'nameMatches'=>is_array($info) && $info['pluginName']==='AttachmentLocatorProbe']);
+""")
+        self.assertEqual({"discovered": True, "valid": True, "compatible": True, "nameMatches": True}, result)
+
     def test_probe_runtime_isolated_and_no_response_or_private_value_output(self):
         root = MODULE_PATH.parents[3]
         plugin = (root / 'platform/tests/fixtures/plugins/AttachmentLocatorProbe/AttachmentLocatorProbe.php').read_text()
