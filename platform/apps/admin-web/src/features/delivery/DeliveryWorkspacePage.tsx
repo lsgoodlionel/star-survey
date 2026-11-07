@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import {
@@ -57,6 +57,13 @@ export function DeliveryWorkspacePage() {
     enabled: Boolean(importJobId), retry: false,
     refetchInterval: (query) => ['queued', 'running'].includes(query.state.data?.status ?? '') ? 1_500 : false,
   });
+  const completedImport = importJob.data?.status === 'completed' ? importJob.data : null;
+  useEffect(() => {
+    if (!completedImport) return;
+    // The user may have selected another list while this job was running.
+    void client.invalidateQueries({ queryKey: contactsQueryKey(tenantId, completedImport.listId) });
+  }, [client, completedImport, tenantId]);
+
   const importOutcomes = useQuery({
     queryKey: contactImportOutcomesQueryKey(tenantId, importJobId ?? 'none', 1, 100),
     queryFn: ({ signal }) => listContactImportOutcomes(api, importJobId!, { signal }),
