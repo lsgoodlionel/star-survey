@@ -142,6 +142,29 @@ def fixture(path, fmt, actual, mutation=None):
             pages[0][0] = ['答卷 999']
         elif mutation == 'extra_section':
             pages[0].append(['附件'])
+        elif mutation in ('generation_wrap', 'generation_wrong', 'generation_missing', 'generation_multiline',
+                          'generation_misaligned', 'generation_cross_field', 'generation_extra', 'generation_empty_prefix'):
+            for page in pages:
+                value = page[5][1]
+                page[5][1] = value[:24]
+                page.insert(6, ['', value[24:]])
+            if mutation == 'generation_wrong':
+                suffix = pages[0][6][1]
+                pages[0][6][1] = ('f' if suffix[0] != 'f' else 'e') + suffix[1:]
+            elif mutation == 'generation_missing':
+                pages[0][6][1] = pages[0][6][1][:-1]
+            elif mutation == 'generation_multiline':
+                suffix = pages[0][6][1]
+                pages[0][6:7] = [['', suffix[:6]], ['', suffix[6:]]]
+            elif mutation == 'generation_misaligned':
+                pages[0][6] = [pages[0][6][1]]
+            elif mutation == 'generation_cross_field':
+                pages[0][6], pages[0][7] = pages[0][7], pages[0][6]
+            elif mutation == 'generation_extra':
+                pages[0].insert(7, ['', 'abcdef'])
+            elif mutation == 'generation_empty_prefix':
+                pages[0][6][1] = pages[0][5][1] + pages[0][6][1]
+                pages[0][5][1] = ''
         elif mutation in ('timestamp_wrap', 'timestamp_wrong', 'timestamp_extra', 'timestamp_misaligned',
                           'timestamp_cross_field', 'timestamp_excess_continuations', 'timestamp_malformed'):
             for page in pages:
@@ -306,6 +329,22 @@ class ExportEvidenceTests(unittest.TestCase):
                          'timestamp_excess_continuations', 'timestamp_malformed'):
             with self.subTest(mutation=mutation), self.assertRaises(evidence.EvidenceError):
                 self.check('pdf', mutation=mutation)
+
+    def test_pdf_wrapped_generation_requires_exact_known_uuid(self):
+        # Fixed independent UUIDv4 identities. The real-writer reproduction
+        # splits mixed-hex UUIDs after 24 characters, unlike the old short IDs.
+        for row, value in zip(self.expected['rows'], (
+                '0d84a2e1-7b3c-4fa9-8cde-123456789abc',
+                'b5e9183a-8c2d-4a6f-9e01-fedcba987654')):
+            row['generation'] = value
+        self.assertTrue(self.check('pdf', mutation='generation_wrap')['ok'])
+        for mutation in ('generation_wrong', 'generation_missing', 'generation_multiline',
+                         'generation_misaligned', 'generation_cross_field', 'generation_extra', 'generation_empty_prefix'):
+            with self.subTest(mutation=mutation), self.assertRaises(evidence.EvidenceError):
+                self.check('pdf', mutation=mutation)
+        self.expected['rows'][0]['generation'] = 'x' * 36
+        with self.assertRaises(evidence.EvidenceError):
+            self.check('pdf', mutation='generation_wrap')
 
     def test_report_without_grid_preserves_cell_width_checks(self):
         self.assertTrue(self.check('report-docx', mutation='no_grid')['ok'])

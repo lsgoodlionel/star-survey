@@ -358,7 +358,7 @@ def pdf_content(raw, rows, labels):
     for page, expected in zip(pages, rows):
         lines = [line.rstrip(' ') for line in page.split('\n') if line.strip()]
         require(3 + len(FIXED_CODES) + len(labels) <= len(lines)
-                <= 7 + len(FIXED_CODES) + len(labels), 'structure')
+                <= 8 + len(FIXED_CODES) + len(labels), 'structure')
         require(lines[0].strip() == '答卷 ' + expected['responseid']
                 and lines[1].strip() == '答卷信息', 'structure')
         values = []
@@ -372,9 +372,24 @@ def pdf_content(raw, rows, labels):
             require(match is not None, 'columns')
             value = match.group(1) or ''
             cursor += 1
+            if index == 3 and value != expected['generation']:
+                # A real mixed-hex generation UUID may wrap once. This is not
+                # general continuation recovery: both fragments must be nonempty,
+                # share the value column, and exactly reconstruct the known ID.
+                wanted = expected['generation']
+                require(re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', wanted)
+                        and value and len(value) < len(wanted) and wanted.startswith(value), 'content')
+                require(cursor < len(lines), 'structure')
+                continuation = lines[cursor]
+                suffix = continuation.lstrip(' ')
+                require(len(continuation) - len(suffix) == match.start(1)
+                        and re.fullmatch(r'[0-9a-f-]+', suffix), 'structure')
+                require(value + suffix == wanted, 'content')
+                value += suffix
+                cursor += 1
             if index in (5, 6) and value:
-                # Poppler retains the value-column indentation. Only ISO time
-                # cells may continue, at that exact column, for <=2 more lines.
+                # Poppler retains the value-column indentation. ISO time cells
+                # may continue here, at that exact column, for <=2 more lines.
                 # Once complete, do not absorb any subsequent text or labels.
                 for _ in range(2):
                     if iso_time.fullmatch(value):
