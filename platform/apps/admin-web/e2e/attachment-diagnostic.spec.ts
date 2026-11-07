@@ -70,8 +70,11 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
   });
   await stage('create-file-input', 12_000, async () => {
     const select = respondent.locator('.file-upload-modal.show button[id^="button_"]').first();
-    await select.hover({ timeout: 8_000 });
-    await expect(respondent.locator('input[type="file"][name="uploadfile"]').last()).toBeAttached({ timeout: 8_000 });
+    const fileInput = respondent.locator('input[type="file"][name="uploadfile"]').last();
+    // AjaxUpload places a transparent file input over the button on mouseover.
+    // If it already exists, hovering the covered button causes an interception loop.
+    if (await fileInput.count() === 0) await select.dispatchEvent('mouseover', { bubbles: true });
+    await expect(fileInput).toBeAttached({ timeout: 8_000 });
   });
   await stage('upload-synthetic-file', 45_000, async () => {
     await respondent.locator('input[type="file"][name="uploadfile"]').last().setInputFiles({ name: 'synthetic-evidence.txt', mimeType: 'text/plain', buffer: Buffer.from('synthetic wave 3 attachment') });
