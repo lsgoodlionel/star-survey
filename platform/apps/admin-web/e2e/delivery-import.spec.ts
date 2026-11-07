@@ -11,8 +11,8 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const jobKeys = ['created', 'duplicate', 'invalid', 'jobId', 'listId', 'processedRows', 'status', 'totalRows', 'updated'];
 const outcomeKeys = ['contactId', 'outcome', 'reason', 'rowNo'];
 
-for (const format of ['csv', 'json'] as const) {
-  test(`delivery ${format} import preserves valid rows, reports failures and deduplicates without leaking row content`, async ({ page }) => {
+for (const { format, bom } of [{ format: 'csv', bom: false }, { format: 'csv', bom: true }, { format: 'json', bom: false }] as const) {
+  test(`delivery ${format}${bom ? ' BOM' : ''} import preserves valid rows, reports failures and deduplicates without leaking row content`, async ({ page }) => {
     await login(page);
     await page.getByRole('link', { name: '投放', exact: true }).click();
     await expect(page).toHaveURL(/\/delivery$/);
@@ -55,7 +55,7 @@ for (const format of ['csv', 'json'] as const) {
     await expect(page.getByRole('region', { name: '联系人列表' })).toContainText(existing.name);
 
     await page.getByLabel('投放工作区导入格式').selectOption(format);
-    await page.getByLabel('投放工作区导入内容').fill(serialize(format, rows));
+    await page.getByLabel('投放工作区导入内容').fill((bom ? '\uFEFF' : '') + serialize(format, rows));
     const [submitted, completed, outcomeResponse] = await Promise.all([
       page.waitForResponse((response) => new URL(response.url()).pathname === `/v1/contact-lists/${list.id}/imports` && response.request().method() === 'POST'),
       page.waitForResponse(async (response) => {
@@ -67,6 +67,9 @@ for (const format of ['csv', 'json'] as const) {
       page.getByRole('button', { name: '提交导入任务', exact: true }).click(),
     ]);
     expect(submitted.status()).toBe(202);
+    const sent = submitted.request().postDataJSON() as { format: string; content: string };
+    expect(sent.format).toBe(format);
+    expect(sent.content).toBe((bom ? '\uFEFF' : '') + serialize(format, rows));
     const submittedJob = await submitted.json() as Record<string, unknown>;
     const completedJob = await completed.json() as Record<string, unknown>;
     for (const job of [submittedJob, completedJob]) {
