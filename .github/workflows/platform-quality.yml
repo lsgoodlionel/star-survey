@@ -373,8 +373,8 @@ jobs:
 #     引擎侧证据）与 run-rpc-gate.sh（RPC 白名单）。
 
   attachment-diagnostic:
-    # Temporary branch-only, explicitly dispatched diagnostic; the normal gates are unchanged.
-    if: inputs.profile == 'policy' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/wave3-attachment-journey'
+    # Temporary branch-only diagnostic runs with full quality, never the policy-only profile.
+    if: inputs.profile != 'policy' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/wave3-attachment-journey'
     name: 隔离附件专项 (${{ matrix.db }})
     runs-on: ubuntu-22.04
     strategy:
