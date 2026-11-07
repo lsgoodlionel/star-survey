@@ -6,7 +6,7 @@ import { deflateSync, inflateRawSync } from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { redactSensitiveInputs } from './redaction';
-import { fieldDictionarySchema, responsePageSchema } from '../src/shared/api/responses';
+import { fieldDictionarySchema, responsePageSchema, type ResponseRow } from '../src/shared/api/responses';
 
 const scenarios = new Set<string>();
 const required = [
@@ -600,7 +600,53 @@ async function syntheticExportExpectation(page: Page, surveyId: string, token: s
     return { version: record.version, sid: record.engineSid, responseid: record.responseId,
       generation: record.generation, state: record.state, answersstatus: record.answersStatus, answers };
   });
+  await verifyResponseQueryBoundaries(page, surveyId, token, records);
   return { rows, fields, labels };
+}
+
+async function verifyResponseQueryBoundaries(page: Page, surveyId: string, token: string, known: ResponseRow[]) {
+  const endpoint = `${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${surveyId}/responses`;
+  const headers = { Authorization: `Bearer ${token}` };
+  const query = async (params: Record<string, string>) => {
+    const response = await page.request.get(`${endpoint}?${new URLSearchParams(params)}`, { headers });
+    expect(response.status()).toBe(200);
+    expect(response.headers()['cache-control']?.includes('no-store')).toBe(true);
+    return responsePageSchema.parse(await response.json());
+  };
+  // Compare complete rows from independently observed real submissions, without
+  // printing identities, cursors or answer values on an assertion failure.
+  const sameRows = (actual: ResponseRow[], expected: ResponseRow[]) =>
+    JSON.stringify(actual) === JSON.stringify(expected);
+  const first = await query({ limit: '1' });
+  expect(sameRows(first.items, known.slice(0, 1))).toBe(true);
+  expect(typeof first.nextCursor === 'string' && first.nextCursor.length > 0).toBe(true);
+  const second = await query({ limit: '1', cursor: first.nextCursor! });
+  expect(sameRows(second.items, known.slice(1))).toBe(true);
+  expect(second.nextCursor === null).toBe(true);
+  expect(sameRows([...first.items, ...second.items], known)).toBe(true);
+  const repeated = await query({ limit: '1', cursor: first.nextCursor! });
+  expect(sameRows(repeated.items, second.items) && repeated.nextCursor === null).toBe(true);
+
+  for (const row of known) {
+    expect(row.completedAt !== null).toBe(true);
+    const combined = await query({ limit: '1', state: 'engine_completed', version: String(row.version),
+      startedFrom: row.startedAt, startedTo: row.startedAt,
+      completedFrom: row.completedAt!, completedTo: row.completedAt! });
+    expect(sameRows(combined.items, [row]) && combined.nextCursor === null).toBe(true);
+  }
+  const beforeEveryStart = new Date(Math.min(...known.map((row) => Date.parse(row.startedAt))) - 1000).toISOString();
+  const emptyQueries: Record<string, string>[] = [{ limit: '1', state: 'in_progress' }, { limit: '1', startedTo: beforeEveryStart }];
+  for (const params of emptyQueries) {
+    const empty = await query(params);
+    expect(empty.items.length === 0 && empty.nextCursor === null).toBe(true);
+  }
+  // Rejected queries must stay errors, rather than silently widening the range.
+  const rejectedQueries: Record<string, string>[] = [{ limit: '0' }, { startedFrom: known[0].startedAt, startedTo: beforeEveryStart }];
+  for (const params of rejectedQueries) {
+    const rejected = await page.request.get(`${endpoint}?${new URLSearchParams(params)}`, { headers });
+    expect(rejected.status()).toBe(400);
+  }
+  process.stdout.write('[response-query] cross-version-pagination-and-composite-filters:ok rows=2\n');
 }
 
 async function verifyDownloadedExport(format: string, download: string, expected: Awaited<ReturnType<typeof syntheticExportExpectation>>) {
