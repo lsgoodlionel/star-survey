@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { inflateRawSync } from 'node:zlib';
 import { recordRunRootId } from './runRootEvidence';
 import { redactSensitiveInputs } from './redaction';
+import { persistedAttachmentName } from './attachmentEvidence';
 
 const required = (name: string) => { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
 async function stage<T>(name: string, timeout: number, action: () => Promise<T>): Promise<T> {
@@ -23,7 +24,7 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
     expect(home.headers()['x-frame-options']).toBe('DENY');
     expect(home.headers()['x-content-type-options']).toBe('nosniff');
   });
-  let surveyId = ''; let fieldName = ''; let storedName = '';
+  let surveyId = ''; let fieldName = ''; let temporaryName = ''; let storedName = '';
   await stage('create-synthetic-survey', 30_000, async () => {
     const project = await request.post(`${base}/v1/projects`, { headers: auth, data: { name: `附件隔离-${randomUUID()}` } });
     expect(project.status()).toBe(201);
@@ -126,7 +127,9 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
     await expect(respondent.locator('.file-upload-modal.show')).toHaveCount(0);
     const answer = await respondent.locator('input').evaluateAll((inputs, name) => (inputs.find((input) => input.getAttribute('name') === name) as HTMLInputElement | undefined)?.value ?? '', fieldName);
     const files = JSON.parse(answer) as { filename?: string }[];
-    if (files.length !== 1 || !files[0].filename) throw new Error('Upload not saved in form'); storedName = files[0].filename;
+    if (files.length !== 1 || !files[0].filename) throw new Error('Upload not saved in form');
+    temporaryName = files[0].filename;
+    expect(temporaryName).toMatch(/^futmp_[a-z0-9]{15}_txt$/);
   });
   await stage('submit-response', 60_000, async () => {
     for (let step = 0; step < 6; step++) {
@@ -138,8 +141,11 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
   });
   await stage('verify-response-value', 30_000, async () => {
     const response = await request.get(`${base}/v1/surveys/${surveyId}/responses?version=1&limit=50`, { headers: auth }); expect(response.status()).toBe(200);
-    const body = await response.json() as { items: { answers: Record<string, string | null> | null }[] };
-    expect(body.items.some((row) => row.answers?.[fieldName]?.includes(storedName))).toBe(true);
+    const body = await response.json() as { items: { state: string; answersStatus: string; answers: Record<string, string | null> | null }[] };
+    expect(body.items.length).toBe(1);
+    expect(body.items[0].state).toBe('engine_completed');
+    expect(body.items[0].answersStatus).toBe('available');
+    storedName = persistedAttachmentName(body.items[0].answers?.[fieldName], temporaryName);
   });
   await stage('download-and-check-package', 120_000, async () => {
     await page.evaluate((id) => { window.history.pushState({}, '', `/surveys/${id}/responses`); window.dispatchEvent(new PopStateEvent('popstate')); }, surveyId);

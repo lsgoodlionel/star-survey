@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-07 Wave 3 附件回调已获双库实证：`04e681850cb6bea2c7ef04c7870aff5888db7792` 的 [full run 42331443279](https://github.com/lsgoodlionel/star-survey/actions/runs/42331443279) 正常质量门 11/11 成功。两个附件专项均通过真实上传、管理端 DENY、引擎 SAMEORIGIN/CSP、弹窗保存和答卷完成，随后在测试拿临时文件名查询持久答案时失败，资源清理成功，ZIP 尚未执行。上游 `em_manager_helper.php` 明确在提交时将 futmp_* 改为新的 fu_*；本次仅修正专项测试的生命周期假设，要求唯一已完成且答案可用的响应、原文件名/扩展名匹配和合法持久名，并保留 ZIP 实物字节及清单关联断言。12 项新增回归先红后绿；管理端 472/472、lint/typecheck/build/生产包断言通过，独立静态复核无阻断发现。新提交的双库 ZIP 及 full CI 待跑，Wave 3 仍未完成，未合并或发布。
+
 2026-11-07 Wave 3 附件隔离验证候选：基于 `codex/wave3-attachment-journey` 的 `a69788b8fe1105f0a44680fa9ca13e6de0b9481c`。既有 [诊断 run 42328919843](https://github.com/lsgoodlionel/star-survey/actions/runs/42328919843) 两库均在上传回调前失败，GET/POST 为 200 但测试代理返回 DENY，浏览器拒绝 iframe；资源清理通过，不能据此认为附件已上传或导出成功。已在测试 nginx 的两个引擎路由使用现有生产 SAMEORIGIN 与原样 CSP，显式重复因 nginx 继承规则而必须保留的其他安全头；管理端 DENY、生产 Caddy 和上游引擎源码不变。专项新增实际响应策略断言；临时诊断作业恢复 full profile 约束，不再违反 policy-only 编排测试，也未放宽门禁断言。
 
 本地验证：新增安全策略回归先红后绿；gate 单测 52/52、Release/Workflow 125/125、生产配置 24/24、管理端 460/460、lint、typecheck、生产构建和生产包去开发入口断言通过。生产配置测试使用现有 PHP 镜像及只读 Yii 目录，不是生产部署。独立真实 nginx 与未改动 AjaxUpload 的合成浏览器对照证明两个引擎路由同源上传回调完成、跨源 iframe 仍被 CSP 拒绝、管理入口仍 DENY，任务容器清理已核验。独立静态复核无阻断发现。新增候选尚未推送，新双库完整附件链路及完整质量 CI 尚未执行；保存答卷、响应数据和 ZIP 实物内容仍须在新提交验收，Wave 3 不提升为完成，未合并或发布。
