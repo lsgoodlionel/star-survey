@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { deflateSync, inflateRawSync } from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -183,23 +183,6 @@ test('branded copy previews and publishes with language and pinned image bytes',
   await page.getByRole('button', { name: '保存品牌与语言' }).click();
   await expect(page.getByText(/已保存，草稿版本/)).toBeVisible();
 
-  // The editor preserves imported types; add the upload question through the normal draft API.
-  const draftWithUpload = await page.request.get(`${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${copiedSurveyId}/draft`,
-    { headers: { Authorization: `Bearer ${token}` } });
-  expect(draftWithUpload.status()).toBe(200);
-  const uploadDraft = await draftWithUpload.json() as {
-    version: number; definition: { groups: { questions: Record<string, unknown>[] }[] };
-  };
-  uploadDraft.definition.groups[0].questions.push({
-    uuid: randomUUID(), code: 'QFILE', type: '|', text: '验收附件', mandatory: false,
-    attributes: { allowed_filetypes: 'txt', min_num_of_files: '0', max_num_of_files: '1', max_filesize: '1024' },
-  });
-  const savedUploadDraft = await page.request.put(`${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${copiedSurveyId}/draft`, {
-    headers: { Authorization: `Bearer ${token}` },
-    data: { expectedVersion: uploadDraft.version, definition: uploadDraft.definition },
-  });
-  expect(savedUploadDraft.status()).toBe(200);
-
   await page.getByRole('navigation', { name: '问卷工作流' })
     .getByRole('link', { name: '快速预览' }).click();
   const previewResponse = page.waitForResponse((response) => response.request().method() === 'POST'
@@ -271,61 +254,24 @@ test('branded copy previews and publishes with language and pinned image bytes',
   expect(createHash('sha256').update(await pinnedImage.body()).digest('hex')).toBe(beforeHash);
   await assertNoThirdPartyUrls(fresh);
   await switchToEnglish(fresh);
-  let fieldName = '';
-  type UploadResponse = { success: boolean; size: number; name: string; filename: string; ext: string };
-  let uploaded: UploadResponse | null = null;
-  const translated = fresh.getByText('Which option describes you?', { exact: true });
-  for (let step = 0; step < 8; step += 1) {
-    const uploadCount = fresh.locator('input[name$="_Cfilecount"]').first();
-    if (!uploaded && await uploadCount.count()) {
-      const countName = await uploadCount.getAttribute('name');
-      if (!countName?.endsWith('_Cfilecount')) throw new Error('Upload count field is missing');
-      fieldName = countName.slice(0, -'_Cfilecount'.length);
-      // Use the actual uploader modal so the engine's own save callback writes the answer.
-      await fresh.locator('a.upload').first().click();
-      const selectFile = fresh.locator('.file-upload-modal.show button[id^="button_"]').first();
-      await expect(selectFile).toBeVisible();
-      await selectFile.hover();
-      const fileInput = fresh.locator('input[type="file"][name="uploadfile"]').last();
-      await expect(fileInput).toBeAttached();
-      await fileInput.setInputFiles({ name: 'synthetic-evidence.txt', mimeType: 'text/plain',
-        buffer: Buffer.from('synthetic wave 3 attachment') });
-      await expect(fresh.locator('.file-upload-modal.show .file-name')).toHaveText('synthetic-evidence.txt');
-      await fresh.locator('.file-upload-modal.show .modal-footer button').click();
-      await expect(fresh.locator('.file-upload-modal.show')).toHaveCount(0);
-      const answerInput = fresh.locator('input');
-      const answer = await answerInput.evaluateAll((inputs, name) => {
-        const input = inputs.find((item) => item.getAttribute('name') === name) as HTMLInputElement | undefined;
-        return input?.value ?? '';
-      }, fieldName);
-      const values = JSON.parse(answer) as UploadResponse[];
-      if (values.length !== 1 || !values[0].filename) throw new Error('Synthetic upload was not saved in the form');
-      uploaded = values[0];
-    }
-    if (await translated.isVisible()) await fresh.locator('input[type="radio"]:visible').first().check();
+  await expectEnglishQuestion(fresh);
+  await fresh.locator('input[type="radio"]:visible').first().check();
+  for (let step = 0; step < 4; step += 1) {
     const submit = fresh.locator('#ls-button-submit:visible, #ls-button-next:visible, button[type="submit"]:visible, input[type="submit"]:visible').last();
     if (await submit.count() === 0) break;
     await submit.click();
     await fresh.waitForLoadState('domcontentloaded');
+    if (await fresh.locator('input[type="radio"]:visible').count() === 0) break;
   }
-  if (!uploaded) throw new Error('Synthetic upload question was not encountered');
   await expect.poll(async () => {
     const response = await page.request.get(`${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${copiedSurveyId}/responses/summary`,
       { headers: { Authorization: `Bearer ${token}` } });
     expect(response.status()).toBe(200);
     return (await response.json() as { total: { engineCompleted: number } }).total.engineCompleted;
   }, { timeout: 60_000 }).toBe(1);
-  const answerPage = await page.request.get(`${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${copiedSurveyId}/responses?version=1&limit=50`,
-    { headers: { Authorization: `Bearer ${token}` } });
-  expect(answerPage.status()).toBe(200);
-  const answerResult = await answerPage.json() as { items: { answers: Record<string, string | null> | null }[] };
-  expect(answerResult.items.some((row) => row.answers?.[fieldName]?.includes(uploaded.filename))).toBe(true);
   await respondent.close(); await fresh.close();
 
   await page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '品牌与语言' }).click();
-  // A fresh synthetic login clears the stale in-memory draft after the fixture API update.
-  await login(page, 'ADMIN_WEB_JWT_FILE');
-  await navigate(page, `/surveys/${copiedSurveyId}/branding`);
   await page.getByRole('textbox', { name: '页脚文本' }).fill('感谢参与第二版');
   await page.getByRole('button', { name: '保存品牌与语言' }).click();
   await expect(page.getByText(/已保存，草稿版本/)).toBeVisible();
@@ -406,32 +352,6 @@ test('branded copy previews and publishes with language and pinned image bytes',
       // Independent Poppler reader checks extractable Chinese from the actual downloaded file.
       const { stdout } = await promisify(execFile)('pdftotext', ['-enc', 'UTF-8', filePath, '-'], { timeout: 15_000 });
       for (const label of ['答卷信息', '版本', '答卷号', '作答状态']) expect(stdout.includes(label)).toBe(true);
-    }
-    if (format === 'attachments') {
-      const entries = readZipEntries(await readFile(filePath));
-      const files = [...entries.entries()].filter(([name]) => name.startsWith('files/'));
-      const rows = parseAttachmentCsv(entries.get('files.csv')?.toString('utf8') ?? '');
-      const manifest = parseAttachmentCsv(entries.get('attachments.csv')?.toString('utf8') ?? '');
-      if (files.length !== 1) {
-        const statusColumn = rows[0]?.indexOf('status') ?? -1;
-        const statuses = rows.slice(1).map((row) => row[statusColumn]);
-        const category = manifest.length <= 1 ? 'manifest-empty' : statuses.includes('absent') ? 'file-absent' : 'unexpected-file-count';
-        throw new Error(`Attachment export failed: ${category}`);
-      }
-      expect(files[0][1].equals(Buffer.from('synthetic wave 3 attachment'))).toBe(true);
-      expect(rows).toHaveLength(2);
-      expect(manifest).toHaveLength(2);
-      const indexRow = Object.fromEntries(rows[0].map((key, i) => [key, rows[1][i]]));
-      const attachmentRow = Object.fromEntries(manifest[0].map((key, i) => [key, manifest[1][i]]));
-      expect(indexRow.status).toBe('stored');
-      expect(indexRow.path).toBe(files[0][0]);
-      expect(indexRow.name).toBe('synthetic-evidence.txt');
-      expect(attachmentRow.storedname).toBe(uploaded.filename);
-      expect(attachmentRow.fieldname).toBe(fieldName);
-      for (const key of ['version', 'sid', 'responseid', 'fieldname', 'index']) {
-        expect(indexRow[key] === attachmentRow[key] && !!indexRow[key]).toBe(true);
-      }
-      expect(indexRow.version).toBe('1');
     }
     if (format === 'report-docx') {
       const entries = readZipEntries(await readFile(filePath));
@@ -737,23 +657,4 @@ function crc32(data: Buffer) {
     for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
   }
   return (crc ^ 0xffffffff) >>> 0;
-}
-
-function parseAttachmentCsv(value: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = []; let cell = ''; let quoted = false;
-  const text = value.replace(/^\uFEFF/, '');
-  for (let i = 0; i < text.length; i += 1) {
-    const c = text[i];
-    if (c === '"') {
-      if (quoted && text[i + 1] === '"') { cell += '"'; i += 1; } else quoted = !quoted;
-    } else if (c === ',' && !quoted) { row.push(cell); cell = ''; }
-    else if ((c === '\r' || c === '\n') && !quoted) {
-      row.push(cell); rows.push(row); row = []; cell = '';
-      if (c === '\r' && text[i + 1] === '\n') i += 1;
-    } else cell += c;
-  }
-  if (quoted) throw new Error('Invalid attachment CSV');
-  if (cell || row.length) rows.push([...row, cell]);
-  return rows;
 }

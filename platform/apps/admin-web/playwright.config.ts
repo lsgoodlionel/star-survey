@@ -21,6 +21,11 @@ export default defineConfig({
   },
   projects: [
     {
+      name: 'chromium-attachment-diagnostic',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /attachment-diagnostic\.spec\.ts/,
+    },
+    {
       name: 'chromium-personnel-status',
       use: { ...devices['Desktop Chrome'] },
       testMatch: /personnel-status\.spec\.ts/,

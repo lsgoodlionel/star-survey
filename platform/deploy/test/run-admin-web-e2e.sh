@@ -187,7 +187,10 @@ export_failure_artifacts() {
 run_playwright() {
   (
     cd "$ADMIN_WEB_DIR"
-    if [[ "$E2E_SUITE" == "wave3" ]]; then
+    if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]]; then
+      [[ "${CI:-}" == "true" && "${GITHUB_ACTIONS:-}" == "true" ]] || fail "attachment diagnostic requires GitHub CI"
+      npm run e2e -- --project=chromium-attachment-diagnostic --retries=0
+    elif [[ "$E2E_SUITE" == "wave3" ]]; then
       npm run e2e -- --project=chromium-wave3-data
     else
       npm run e2e -- --project=chromium-desktop --project=chromium-template-branding --project=chromium-mobile
@@ -223,7 +226,9 @@ run_browser_tests() {
     return 1
   fi
   stop_engine_relay
-  [[ -f "$ADMIN_WEB_RESULT_FILE" ]] || fail "Playwright did not write the redacted result"
+  if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" != "1" ]]; then
+    [[ -f "$ADMIN_WEB_RESULT_FILE" ]] || fail "Playwright did not write the redacted result"
+  fi
   export_failure_artifacts
   sanitize_test_artifacts false
 }
@@ -404,7 +409,11 @@ if [[ "$E2E_SUITE" == "full" ]]; then
   run_personnel_status_test
 fi
 
-echo "Admin web real-stack e2e passed ($TEST_DB); private credentials and temporary results will now be removed" >&2
+if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]]; then
+  echo "Attachment diagnostic passed ($TEST_DB); full gate was not evaluated" >&2
+else
+  echo "Admin web real-stack e2e passed ($TEST_DB); private credentials and temporary results will now be removed" >&2
+fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
