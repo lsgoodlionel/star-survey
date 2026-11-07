@@ -1392,6 +1392,70 @@ main --fresh
             self.assertTrue(all(index < playwright_index for index in issue_indexes))
             self.assertLess(events.index("verify"), events.index("personnel-status"))
 
+    def test_attachment_diagnostic_finalization_requires_success_and_archives(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        for case in ("success", "missing-marker", "wrong-marker", "missing-root", "non-ci", "non-github", "archive-fails"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                trace = root / "trace"
+                trace.touch()
+                if case != "missing-marker":
+                    (root / "playwright-suite-success.txt").write_text("failed" if case == "wrong-marker" else "passed")
+                if case != "missing-root":
+                    (root / "run-root-resource-id.txt").write_text("11111111-1111-4111-8111-111111111111\n")
+                script = r'''
+source "$RUNNER"
+ADMIN_WEB_ATTACHMENT_DIAGNOSTIC=1
+CI=true
+GITHUB_ACTIONS=true
+[[ "$CASE" != non-ci ]] || CI=false
+[[ "$CASE" != non-github ]] || GITHUB_ACTIONS=false
+GATE=gate.py
+PLATFORM_URL=http://127.0.0.1:1
+ADMIN_WEB_METADATA_FILE=metadata.json
+ADMIN_WEB_RESULT_FILE=result.json
+PLATFORM_DB_CONTAINER=platform-db
+GATEWAY_CONTAINER=gateway
+ADMIN_WEB_JWT_FILE=owner.jwt
+ADMIN_WEB_TEST_RESULTS_DIR="$RESULTS"
+python3() {
+  case " $* " in
+    *" verify "*) echo verify >>"$TRACE"; return 77 ;;
+    *" archive-run-root "*)
+      echo archive >>"$TRACE"
+      [[ "$CASE" != archive-fails ]]
+      ;;
+  esac
+}
+verify_and_archive_run_root
+'''
+                completed = run_bash(script, {"RUNNER": str(runner), "RESULTS": directory, "TRACE": str(trace), "CASE": case})
+                self.assertEqual(case == "success", completed.returncode == 0, completed.stderr)
+                expected = ["archive"] if case in ("success", "archive-fails") else []
+                self.assertEqual(expected, trace.read_text().splitlines())
+
+    def test_diagnostic_completion_keeps_normal_full_and_wave3_routing(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        text = runner.read_text()
+        start = text.index('step "gate: platform API, platform DB, gateway and engine DB"')
+        end = text.index('\n}\n\nif [[ "${BASH_SOURCE', start)
+        completion = text[start:end]
+        for diagnostic, suite in (("1", "full"), ("", "full"), ("", "wave3")):
+            with self.subTest(diagnostic=diagnostic, suite=suite), tempfile.TemporaryDirectory() as directory:
+                trace = Path(directory, "trace")
+                script = r'''
+source "$RUNNER"
+ADMIN_WEB_ATTACHMENT_DIAGNOSTIC="$DIAGNOSTIC"
+E2E_SUITE="$SUITE"
+verify_and_archive_run_root() { echo verify-archive >>"$TRACE"; }
+run_personnel_status_test() { echo personnel >>"$TRACE"; }
+finish() {
+''' + completion + '\n}\nfinish\n'
+                result = run_bash(script, {"RUNNER": str(runner), "DIAGNOSTIC": diagnostic, "SUITE": suite, "TRACE": str(trace)})
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(["verify-archive", "personnel"] if not diagnostic and suite == "full" else ["verify-archive"], trace.read_text().splitlines())
+                self.assertEqual(bool(diagnostic), "full gate was not evaluated" in result.stderr)
+
     def test_post_playwright_verify_failure_does_not_archive(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
         with tempfile.TemporaryDirectory() as directory:

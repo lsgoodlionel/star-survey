@@ -281,21 +281,27 @@ verify_and_archive_run_root() {
     || fail "Playwright did not write a valid suite success marker"
   [[ -f "$root_id_file" ]] || fail "Playwright did not write run root evidence"
 
-  python3 "$GATE" --base-url "$PLATFORM_URL" verify \
-    --metadata-file "$ADMIN_WEB_METADATA_FILE" \
-    --result-file "$ADMIN_WEB_RESULT_FILE" \
-    --wave2-evidence-file "$ADMIN_WEB_TEST_RESULTS_DIR/wave2-scenarios.json" \
-    --platform-db-container "$PLATFORM_DB_CONTAINER" \
-    --platform-db-name platform \
-    --engine-db-container "$TEST_PREFIX-$DB_SERVICE" \
-    --engine-db-kind "$TEST_DB" \
-    --gateway-container "$GATEWAY_CONTAINER" \
-    --expected-gateway-publish-calls "$expected_publish_calls"
+  if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]]; then
+    [[ "${CI:-}" == "true" && "${GITHUB_ACTIONS:-}" == "true" ]] || fail "attachment diagnostic requires GitHub CI"
+    # This project proves its own upload/ZIP contract, not the ordinary suite's result.json.
+    # Full quality still runs independently; the success/root evidence and archive below remain required.
+  else
+    python3 "$GATE" --base-url "$PLATFORM_URL" verify \
+      --metadata-file "$ADMIN_WEB_METADATA_FILE" \
+      --result-file "$ADMIN_WEB_RESULT_FILE" \
+      --wave2-evidence-file "$ADMIN_WEB_TEST_RESULTS_DIR/wave2-scenarios.json" \
+      --platform-db-container "$PLATFORM_DB_CONTAINER" \
+      --platform-db-name platform \
+      --engine-db-container "$TEST_PREFIX-$DB_SERVICE" \
+      --engine-db-kind "$TEST_DB" \
+      --gateway-container "$GATEWAY_CONTAINER" \
+      --expected-gateway-publish-calls "$expected_publish_calls"
+  fi
 
   python3 "$GATE" --base-url "$PLATFORM_URL" archive-run-root \
     --jwt-file "$ADMIN_WEB_JWT_FILE" \
     --root-id-file "$root_id_file"
-  ok "successful real-stack gate archived its run root"
+  ok "successful browser suite archived its run root"
 }
 
 run_personnel_status_test() {
@@ -448,7 +454,7 @@ run_browser_tests
 step "gate: platform API, platform DB, gateway and engine DB"
 verify_and_archive_run_root
 
-if [[ "$E2E_SUITE" == "full" ]]; then
+if [[ "$E2E_SUITE" == "full" && "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" != "1" ]]; then
   step "browser: personnel grant, tenant status and revocation under enforced guard"
   run_personnel_status_test
 fi
