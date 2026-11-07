@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { inflateRawSync } from 'node:zlib';
 import { recordRunRootId } from './runRootEvidence';
 import { redactSensitiveInputs } from './redaction';
-import { persistedAttachmentName } from './attachmentEvidence';
+import { attachmentPackageFailure, persistedAttachmentName } from './attachmentEvidence';
 
 const required = (name: string) => { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
 async function stage<T>(name: string, timeout: number, action: () => Promise<T>): Promise<T> {
@@ -157,7 +157,14 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
     const files = [...entries.entries()].filter(([name]) => name.startsWith('files/'));
     const rows = parseAttachmentCsv(entries.get('files.csv')?.toString('utf8') ?? '');
     const manifest = parseAttachmentCsv(entries.get('attachments.csv')?.toString('utf8') ?? '');
-    if (files.length !== 1) { const status = rows[0]?.indexOf('status') ?? -1; const category = manifest.length <= 1 ? 'manifest-empty' : rows.slice(1).some((row) => row[status] === 'absent') ? 'file-absent' : 'unexpected-file-count'; throw new Error(`Attachment export: ${category}`); }
+    if (files.length !== 1) {
+      const evidence = attachmentPackageFailure(rows, manifest, fieldName, storedName);
+      process.stdout.write(`[attachment-export-diagnostic] ${JSON.stringify(evidence)}\n`);
+      const status = rows[0]?.indexOf('status') ?? -1;
+      const category = manifest.length <= 1 ? 'manifest-empty'
+        : rows.slice(1).some((row) => row[status] === 'absent') ? 'file-absent' : 'unexpected-file-count';
+      throw new Error(`Attachment export: ${category}`);
+    }
     expect(files[0][1].equals(Buffer.from('synthetic wave 3 attachment'))).toBe(true);
     expect(rows).toHaveLength(2); expect(manifest).toHaveLength(2);
     const index = Object.fromEntries(rows[0].map((key, i) => [key, rows[1][i]]));
