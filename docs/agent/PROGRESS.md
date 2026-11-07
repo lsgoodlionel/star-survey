@@ -1,5 +1,9 @@
 # 自治执行进度
 
+2026-11-07 Wave 3 取件边界探针候选：仅在既有附件专项隔离 CI 通过只读 overlay 启用测试观察插件，在真实 attachmentFile 请求原样返回 404 后，使用同一 Web 进程的 DB、uploaddir 与访问身份检查代次、答卷归属和 realpath 边界。请求参数仅在内存，证据与日志仅固定阶段码/布尔值；不调用会补写的 generation.current()，MySQL/PostgreSQL 只读事务失败即停止、始终回滚，并隔离探针 SQL 日志后恢复原请求 logger。原统一 404、所有安全检查、失败断言及生产代码不变。新增 7 项回归覆盖 11 个边界及事务/日志/响应/隐私/隔离，gate 59 项、Release/Workflow 125 项、PHP与shell语法及diff检查通过；同一无网络临时容器内连续两轮59项通过且夹具清理已核验，独立静态复核无阻断。双库真实探针结果待托管 full，Wave 3 仍未封闭，不合并或发布。
+
+2026-11-07 Wave 3 脱敏诊断实跑结果：`b5522151a7617dcced2358a9aadcc81b37e8e5cb` 已核验推送至原附件测试分支，[full run 42336037893](https://github.com/lsgoodlionel/star-survey/actions/runs/42336037893) 已结束。正常质量门 11/11 成功；MySQL 与 PostgreSQL 附件专项均在 ZIP 取件失败，白名单原因同为 `not_found`，singleManifest、singleIndex、manifestMatches、indexMatches、identityMatches 全为 true，资源清理均成功。这将边界收窄到取件链路 404，而非大小限制或未记录取件结论；尚不能断言磁盘文件不存在，代次、答卷归属与路径解析须在隔离环境继续核验。未放宽断言或三道安全检查，生产配置与上游代码不变，未合并或发布，Wave 3 验收仍未封闭。
+
 2026-11-07 Wave 3 附件 ZIP 取件诊断：`f64f03a31116cdc135be609de14aff3eb7c175df` 的 [full run 42332587165](https://github.com/lsgoodlionel/star-survey/actions/runs/42332587165) 正常质量门 11/11 成功；双库专项均通过真实上传、安全头、弹窗保存、答卷完成与持久答案核验，在 ZIP 实物缺失时以 `file-absent` 失败，资源清理成功。现有证据尚不能区分 not_found、too_large 或 unknown，也不能据此断言磁盘文件不存在。本次仅在原有失败分支增加固定白名单原因码及清单关联布尔值，禁止输出文件名、路径、CSV 原值或答卷内容；原有失败断言、ZIP 字节与关联核验不变。5 项新增回归先红后绿，管理端 477/477、lint/typecheck/build/生产包断言通过，独立静态复核无阻断发现。用户已明确同意本次脱敏诊断推送至现有附件测试分支及托管 full 验证；该精确提交的双库诊断仍待运行，Wave 3 尚未完成，未合并或发布。
 
 2026-11-07 Wave 3 附件回调已获双库实证：`04e681850cb6bea2c7ef04c7870aff5888db7792` 的 [full run 42331443279](https://github.com/lsgoodlionel/star-survey/actions/runs/42331443279) 正常质量门 11/11 成功。两个附件专项均通过真实上传、管理端 DENY、引擎 SAMEORIGIN/CSP、弹窗保存和答卷完成，随后在测试拿临时文件名查询持久答案时失败，资源清理成功，ZIP 尚未执行。上游 `em_manager_helper.php` 明确在提交时将 futmp_* 改为新的 fu_*；本次仅修正专项测试的生命周期假设，要求唯一已完成且答案可用的响应、原文件名/扩展名匹配和合法持久名，并保留 ZIP 实物字节及清单关联断言。12 项新增回归先红后绿；管理端 472/472、lint/typecheck/build/生产包断言通过，独立静态复核无阻断发现。新提交的双库 ZIP 及 full CI 待跑，Wave 3 仍未完成，未合并或发布。

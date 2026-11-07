@@ -59,14 +59,13 @@ cleanup_run() {
       echo "  [state] ${container}: ${state}" >&2
     done
   fi
-  if [[ -n "$WORK_DIR" ]]; then
-    rm -rf "$WORK_DIR"
-  fi
   if [[ "${ADMIN_WEB_E2E_KEEP:-}" == "1" ]]; then
+    [[ -z "$WORK_DIR" ]] || rm -rf "$WORK_DIR"
     echo "ADMIN_WEB_E2E_KEEP=1: leaving only compose resources running; private files were removed" >&2
     return 0
   fi
   "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  [[ -z "$WORK_DIR" ]] || rm -rf "$WORK_DIR"
   return 0
 }
 
@@ -198,6 +197,45 @@ run_playwright() {
   )
 }
 
+configure_attachment_locator_probe() {
+  [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]] || return 0
+  [[ "${CI:-}" == "true" && "${GITHUB_ACTIONS:-}" == "true" ]] || fail "attachment diagnostic requires GitHub CI"
+  # Test-only plugin observes the actual request in the actual Web process. Production is unchanged.
+  python3 - "$WORK_DIR/attachment-probe.compose.json" "$REPO_ROOT" <<'PROBE_COMPOSE'
+import json, sys
+source = sys.argv[2] + "/platform/tests/fixtures/plugins/AttachmentLocatorProbe"
+with open(sys.argv[1], "w") as output:
+    json.dump({"services": {"test-web": {"environment": {"ADMIN_WEB_ATTACHMENT_LOCATOR_PROBE": "1"},
+        "volumes": [source + ":/var/www/html/plugins/AttachmentLocatorProbe:ro"]}}}, output)
+PROBE_COMPOSE
+  COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.dev.yml" -f "$TEST_DIR/admin-web-e2e.compose.yml" -f "$WORK_DIR/attachment-probe.compose.json" --profile test)
+}
+
+run_attachment_locator_probe() {
+  [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]] || return 0
+  # Only allowlisted results leave the engine. No private request input is saved or copied.
+  docker exec "$CONTAINER" sh -c '
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      [ ! -s /tmp/attachment-locator-probe/attachment-locator-probe.json ] || break
+      sleep 0.2
+    done
+    if [ -f /tmp/attachment-locator-probe/multiple ]; then cat /tmp/attachment-locator-probe/multiple;
+    else cat /tmp/attachment-locator-probe/attachment-locator-probe.json; fi
+  ' 2>/dev/null | python3 -c '
+import json, sys
+stages = {"generation_missing", "generation_mismatch", "table_missing", "field_missing", "response_missing", "ownership_mismatch", "base_unresolved", "file_unresolved", "path_rejected", "not_regular_file", "locator_checks_pass", "probe_failed", "evidence_unavailable", "multiple_requests"}
+keys = {"generationEvaluated", "generationTablePresent", "generationRowPresent", "generationMatches", "ownershipEvaluated", "tablePresent", "fieldPresent", "responsePresent", "answerListsStoredName", "pathEvaluated", "baseResolved", "fileResolved", "withinSurveyDirectory", "regularFile"}
+try:
+    result = json.loads(sys.stdin.read(4097))
+    assert isinstance(result, dict) and result.get("stage") in stages
+    assert set(result) <= keys | {"stage"}
+    assert all(type(value) is bool for key, value in result.items() if key != "stage")
+except Exception:
+    result = {"stage": "evidence_unavailable"}
+print("[attachment-locator-probe] " + json.dumps(result, sort_keys=True))
+' || true
+}
+
 run_browser_tests() {
   export ADMIN_WEB_EDITOR_JWT_FILE="${ADMIN_WEB_EDITOR_JWT_FILE:-$(dirname "$ADMIN_WEB_JWT_FILE")/editor.jwt}"
   export ADMIN_WEB_REVIEWER_JWT_FILE="${ADMIN_WEB_REVIEWER_JWT_FILE:-$(dirname "$ADMIN_WEB_JWT_FILE")/reviewer.jwt}"
@@ -221,6 +259,7 @@ run_browser_tests() {
   ENGINE_RELAY_PID=$!
   if ! run_playwright; then
     stop_engine_relay
+    run_attachment_locator_probe
     export_failure_artifacts || true
     sanitize_test_artifacts true || true
     return 1
@@ -297,6 +336,7 @@ done
 docker info >/dev/null 2>&1 || fail "docker daemon is not running"
 
 WORK_DIR="$(mktemp -d)"
+configure_attachment_locator_probe
 export ADMIN_WEB_PORT="${ADMIN_WEB_PORT:-$(random_loopback_port)}"
 export ADMIN_WEB_PUBLIC_URL="http://127.0.0.1:$ADMIN_WEB_PORT"
 export ADMIN_WEB_PLATFORM_JAR="$PLATFORM_JAR"
@@ -380,6 +420,10 @@ db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version
 db_query "DELETE FROM lime_plugins WHERE name = 'MjyQuestionExtensions'" >/dev/null
 db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
           VALUES ('MjyQuestionExtensions', 'user', 1, 0, '0.1.0', 0)" >/dev/null
+if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]]; then
+  db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
+            VALUES ('AttachmentLocatorProbe', 'user', 1, 100, '0.1.0', 0)" >/dev/null
+fi
 docker exec "$CONTAINER" php platform/tools/engine-theme/install-survey-theme.php zh-business >/dev/null
 docker exec "$CONTAINER" php platform/tests/e2e/install_question_themes.php mjy-collapsible mjy-cascading-select mjy-carousel >/dev/null
 ok "engine installed and RemoteControl enabled"
