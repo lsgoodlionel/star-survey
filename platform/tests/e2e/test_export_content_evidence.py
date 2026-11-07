@@ -108,14 +108,18 @@ def fixture(path, fmt, actual, mutation=None):
             doc.paragraphs[0].text = '答卷 999'
         doc.save(path)
     else:
-        sav_path = path.with_suffix('.sav')
         frame = pd.DataFrame(rows, columns=codes)
         for code in FIXED[:4]:
             frame[code] = frame[code].astype(float)
         sav_labels = list(labels)
         if mutation == 'sav_label':
             sav_labels[-2] = '错误的标签'
-        pyreadstat.write_sav(frame, str(sav_path), column_labels=sav_labels)
+        # Keep the dataset separate even when the bundle itself ends in .sav.
+        # The context also cleans up when the writer or read fails.
+        with tempfile.TemporaryDirectory(prefix='sav-fixture-', dir=path.parent) as directory:
+            sav_path = Path(directory) / 'responses.sav'
+            pyreadstat.write_sav(frame, str(sav_path), column_labels=sav_labels)
+            sav_bytes = sav_path.read_bytes()
         variables = [VARIABLES]
         for code, label in zip(codes, labels):
             numeric = code in FIXED[:4]
@@ -126,12 +130,11 @@ def fixture(path, fmt, actual, mutation=None):
         elif mutation == 'duplicate_mapping':
             variables.append(variables[-1])
         with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
-            archive.write(sav_path, 'responses.sav')
+            archive.writestr('responses.sav', sav_bytes)
             archive.writestr('variables.csv', csv_bytes(variables))
             archive.writestr('fields.csv', csv_bytes(fields))
             archive.writestr('attachments.csv', csv_bytes([['version']]))
             archive.writestr('extensions.csv', csv_bytes([['version']]))
-        sav_path.unlink()
     return path
 
 

@@ -30,6 +30,7 @@ test.beforeAll(async () => {
   test.setTimeout(660_000);
   const run = promisify(execFile);
   let readerSetupStage = 'environment';
+  let readerSetupComplete = false;
   try {
     exportReaderDirectory = await mkdtemp(join(env('ADMIN_WEB_TEST_RESULTS_DIR'), 'export-readers-'));
     exportReaderPython = join(exportReaderDirectory, 'bin/python');
@@ -42,6 +43,7 @@ test.beforeAll(async () => {
     await run(exportReaderPython, ['-m', 'unittest', 'discover', '-s', exportEvidenceRoot,
       '-p', 'test_export_content_evidence.py', '-q'], { timeout: 30_000 });
     process.stdout.write('[export-content] independent-reader-regressions:ok\n');
+    readerSetupComplete = true;
   } catch (error) {
     if (readerSetupStage === 'regressions' && typeof error === 'object' && error !== null
         && 'stderr' in error && typeof error.stderr === 'string') {
@@ -49,8 +51,9 @@ test.beforeAll(async () => {
         .map((match) => match[1]).slice(0, 30);
       process.stdout.write(`[export-content] reader-regressions:failed tests=${[...new Set(failed)].join(',') || 'unknown'}\n`);
     }
-    throw new Error(`Independent export reader ${readerSetupStage} failed`);
   }
+  // This boundary retains only the closed stage, never a subprocess error or cause.
+  if (!readerSetupComplete) throw new Error(`Independent export reader ${readerSetupStage} failed`);
   const gate = join(process.cwd(), '../../tests/e2e/admin_web_gate.py');
   for (const [actor, file] of [
     ['admin-web-e2e-owner', 'ADMIN_WEB_JWT_FILE'],
@@ -603,6 +606,7 @@ async function syntheticExportExpectation(page: Page, surveyId: string, token: s
 async function verifyDownloadedExport(format: string, download: string, expected: Awaited<ReturnType<typeof syntheticExportExpectation>>) {
   const oracle = join(exportReaderDirectory, 'expected.json');
   await writeFile(oracle, JSON.stringify(expected), { mode: 0o600, flag: 'wx' });
+  let failureCategory: string | undefined;
   try {
     const { stdout } = await promisify(execFile)(exportReaderPython,
       [join(exportEvidenceRoot, 'export_content_evidence.py'), format, download, oracle],
@@ -622,10 +626,12 @@ async function verifyDownloadedExport(format: string, download: string, expected
         if (result.ok === false && result.category && allowed.has(result.category)) category = result.category;
       } catch { /* Raw reader messages and paths are never emitted. */ }
     }
-    throw new Error(`Downloaded export content verification failed (${format}): ${category}`);
+    failureCategory = category;
   } finally {
     await unlink(oracle);
   }
+  // Report the closed result after cleanup without retaining raw subprocess output.
+  if (failureCategory) throw new Error(`Downloaded export content verification failed (${format}): ${failureCategory}`);
 }
 
 async function switchToEnglish(page: Page) {
