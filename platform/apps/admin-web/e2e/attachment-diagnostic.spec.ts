@@ -48,11 +48,17 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
   if (!link) throw new Error('Synthetic delivery link missing');
   const respondent = await page.context().newPage();
   const uploadStatuses: string[] = [];
+  let frameDenied = false;
+  respondent.on('console', (message) => {
+    if (/refused to display.*(?:x-frame-options|frame-ancestors)/i.test(message.text())) frameDenied = true;
+  });
   respondent.on('response', (response) => {
     try {
       const method = response.request().method();
       if (new URL(response.url()).pathname.includes('/uploader/') && (method === 'GET' || method === 'POST')) {
-        uploadStatuses.push(`${method}:${response.status()}`);
+        const header = (response.headers()['x-frame-options'] ?? '').toUpperCase();
+        const frame = header === 'DENY' || header === 'SAMEORIGIN' ? header : header ? 'other' : 'none';
+        uploadStatuses.push(`${method}:${response.status()}:${frame}`);
       }
     } catch { /* Do not print URLs. */ }
   });
@@ -92,7 +98,7 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
     } catch {
       const notices = await respondent.locator('.file-upload-modal.show .alert-danger:visible').count();
       const spinner = await respondent.locator('.file-upload-modal.show #loading-icon-fielupload').count();
-      process.stdout.write(`[attachment-diagnostic] uploader-statuses=${uploadStatuses.slice(-20).join(',') || 'none'} danger=${notices > 0} spinner=${spinner > 0}\n`);
+      process.stdout.write(`[attachment-diagnostic] uploader-statuses=${uploadStatuses.slice(-20).join(',') || 'none'} danger=${notices > 0} spinner=${spinner > 0} frame-denied=${frameDenied}\n`);
       throw new Error('Synthetic upload did not appear in modal');
     }
   });
