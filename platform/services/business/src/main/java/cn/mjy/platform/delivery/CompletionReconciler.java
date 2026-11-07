@@ -81,13 +81,13 @@ class CompletionReconciler {
             ResponseProjectionQuery.Position after = cursors.find(surveyId).orElse(null);
             List<ResponseProjection> page = projections.page(route.get().engineInstanceId(),
                     route.get().engineSid(), ProjectionFilter.ofState(ResponseState.ENGINE_COMPLETED), after, PAGE);
-            // 一页最多 PAGE 份答卷，按批问一次；逐条问会把一次对账放大成两百次 HTTP。
+            // 一页最多 PAGE 份答卷，按批问一次；读取失败必须抛出，回滚本次对账而不推进游标。
             Map<Long, String> keys = resolver.respondentKeysOf(tenant, page);
             int recorded = 0;
             ResponseProjection last = null;
             for (ResponseProjection response : page) {
                 last = response;
-                // 认不出是谁的答卷（匿名、没用邀请码进场、或这一轮读不到）直接跳过，
+                // 读取成功但认不出是谁的答卷（匿名、没用邀请码进场）直接跳过，
                 // 绝不算作某个人答的。
                 String key = keys.get(response.key().responseId());
                 if (key != null && completions.recordFromProjection(tenant, surveyId, key,
