@@ -77,11 +77,13 @@ export function PublishPage({ actorId, api, surveyId, tenantId, accessToken, onU
   const [rejectReason, setRejectReason] = useState('');
 
   const overview = useQuery({
+    refetchOnMount: 'always',
     queryKey: surveyOverviewQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => getSurveyOverview(api, surveyId, signal),
     refetchInterval: (query) => shouldPoll(query.state.data, awaitingPublishResult, visible) ? 2_000 : false,
   });
   const approvals = useQuery({
+    refetchOnMount: 'always',
     queryKey: approvalRequestsQueryKey(tenantId, surveyId),
     queryFn: ({ signal }) => listApprovalRequests(api, surveyId, signal),
   });
@@ -145,7 +147,7 @@ export function PublishPage({ actorId, api, surveyId, tenantId, accessToken, onU
   const currentApproval = latestApproval?.draftVersion === overview.data.draftVersion
     ? latestApproval
     : null;
-  const busy = approvalMutation.isPending || publishMutation.isPending;
+  const busy = !ready || approvalMutation.isPending || publishMutation.isPending;
   const publicationBlocked = overview.data.lastPublish?.manualReviewAt != null
     || overview.data.lastPublish?.orphanEngineSid != null;
 

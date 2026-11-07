@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
-import { publishSurvey, versionQueryKey } from '../../shared/api/approvals';
+import { approvalRequestsQueryKey, surveyOverviewQueryKey, publishSurvey, versionQueryKey } from '../../shared/api/approvals';
 import { renderWithQuery } from '../../test/render';
 import { createAppRoutes } from '../../app/router';
 import { PublishPage } from './PublishPage';
@@ -112,6 +112,57 @@ afterEach(() => {
 });
 
 describe('PublishPage', () => {
+  test.each(['voided', 'approved', 'error'] as const)('revalidatesFreshPendingCacheOnReturn: %s', async (status) => {
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: false } } });
+    client.setQueryData(surveyOverviewQueryKey('tenant-a', surveyId), baseSurvey);
+    client.setQueryData(approvalRequestsQueryKey('tenant-a', surveyId), [baseApproval]);
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const read = vi.fn(async () => {
+      await gate;
+      if (status === 'error') throw new Error('offline');
+      return [{ ...baseApproval, status }];
+    });
+    const readOverview = vi.fn(async () => {
+      await gate;
+      return { ...baseSurvey, draftVersion: status === 'voided' ? 5 : 4 };
+    });
+    const submit = vi.fn(() => ({ ...baseApproval, draftVersion: 5 }));
+    const api = standardApi({
+      [`GET /v1/surveys/${surveyId}`]: readOverview,
+      [`GET /v1/surveys/${surveyId}/approval-requests`]: read,
+      [`POST /v1/surveys/${surveyId}/approval-requests`]: submit,
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <PublishPage actorId="author-1" tenantId="tenant-a" surveyId={surveyId} api={api} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    expect(readOverview).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('button', { name: '撤回申请' })).toBeDisabled();
+    const actionButtons = () => screen.queryAllByRole('button', {
+      name: /提交审批|撤回申请|发布问卷|批准申请|驳回申请/,
+    });
+    for (const button of actionButtons()) expect(button).toBeDisabled();
+    await act(async () => { finish(); });
+    if (status === 'error') {
+      expect(await screen.findByRole('alert')).toHaveTextContent('发布信息暂时不可用');
+      expect(actionButtons()).toHaveLength(0);
+    } else {
+      const action = await screen.findByRole('button', {
+        name: status === 'voided' ? '提交审批' : '发布问卷',
+      });
+      expect(action).toBeEnabled();
+      if (status === 'voided') {
+        fireEvent.click(action);
+        await waitFor(() => expect(submit).toHaveBeenCalledWith(
+          expect.objectContaining({ body: { draftVersion: 5 } }),
+        ));
+      }
+    }
+  });
+
   test('usesAnEngineSafeTimeoutForThePublishRequest', async () => {
     const request = vi.fn().mockResolvedValue(undefined);
 

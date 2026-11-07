@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { z } from 'zod';
 import { AppProviders } from '../../app/App';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
+import { approvalRequestsQueryKey, surveyOverviewQueryKey } from '../../shared/api/approvals';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
 import { resourceQueryKey } from '../../shared/api/resources';
@@ -95,6 +96,12 @@ function renderEditor(
       </QueryClientProvider>,
     ),
   };
+}
+
+function seedPublishCaches(client: QueryClient) {
+  const keys = [surveyOverviewQueryKey, approvalRequestsQueryKey].flatMap((key) => [key('tenant-a', surveyId), key('tenant-b', surveyId), key('tenant-a', otherSurveyId)]);
+  keys.forEach((key) => client.setQueryData(key, []));
+  return () => keys.forEach((key) => expect(client.getQueryState(key)?.isInvalidated).toBe(key[1] === 'tenant-a' && key[2] === surveyId));
 }
 
 afterEach(() => {
@@ -428,8 +435,9 @@ describe('EditorPage', () => {
         };
       },
     });
-    renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
+    const rendered = renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
 
+    const assertPublishCaches = seedPublishCaches(rendered.queryClient);
     const text = await screen.findByLabelText('题目文本');
     fireEvent.change(text, { target: { value: '第一次修改' } });
     fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
@@ -439,6 +447,7 @@ describe('EditorPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
     expect(await screen.findByText('已保存版本 6')).toBeInTheDocument();
 
+    assertPublishCaches();
     expect(writes.map((body) => body.expectedVersion)).toEqual([4, 5]);
   });
 
@@ -710,6 +719,7 @@ describe('EditorPage', () => {
     });
     const rendered = renderEditor(api, `/surveys/${surveyId}/edit?question=${singleUuid}`);
 
+    const assertPublishCaches = seedPublishCaches(rendered.queryClient);
     fireEvent.change(await screen.findByLabelText('题目文本'), {
       target: { value: '触发冲突' },
     });
@@ -719,6 +729,7 @@ describe('EditorPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '重新载入' }));
 
     expect(await screen.findByLabelText('题目文本')).toHaveValue('服务器重新载入的题目');
+    assertPublishCaches();
     expect(screen.getByRole('main')).toHaveFocus();
     expect(rendered.queryClient.getQueryData(surveyDraftQueryKey('tenant-a', surveyId))).toEqual({
       surveyId,
