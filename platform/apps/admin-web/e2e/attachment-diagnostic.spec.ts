@@ -58,11 +58,20 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
     }
     throw new Error('Upload question not encountered');
   });
-  await stage('open-upload-modal', 30_000, async () => {
-    await respondent.locator('a.upload').first().click();
+  respondent.setDefaultTimeout(8_000);
+  await stage('click-upload-trigger', 12_000, async () => {
+    const trigger = respondent.locator('a.upload').first();
+    await expect(trigger).toBeVisible({ timeout: 8_000 });
+    await trigger.click({ timeout: 8_000 });
+  });
+  await stage('locate-modal-control', 12_000, async () => {
     const select = respondent.locator('.file-upload-modal.show button[id^="button_"]').first();
-    await expect(select).toBeVisible(); await select.hover();
-    await expect(respondent.locator('input[type="file"][name="uploadfile"]').last()).toBeAttached();
+    await expect(select).toBeVisible({ timeout: 8_000 });
+  });
+  await stage('create-file-input', 12_000, async () => {
+    const select = respondent.locator('.file-upload-modal.show button[id^="button_"]').first();
+    await select.hover({ timeout: 8_000 });
+    await expect(respondent.locator('input[type="file"][name="uploadfile"]').last()).toBeAttached({ timeout: 8_000 });
   });
   await stage('upload-synthetic-file', 45_000, async () => {
     await respondent.locator('input[type="file"][name="uploadfile"]').last().setInputFiles({ name: 'synthetic-evidence.txt', mimeType: 'text/plain', buffer: Buffer.from('synthetic wave 3 attachment') });
