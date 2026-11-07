@@ -18,6 +18,11 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
   const token = (await readFile(required('ADMIN_WEB_JWT_FILE'), 'utf8')).trim();
   const auth = { Authorization: `Bearer ${token}` };
   const base = required('ADMIN_WEB_BASE_URL');
+  await stage('verify-admin-frame-protection', 15_000, async () => {
+    const home = await request.get(base);
+    expect(home.headers()['x-frame-options']).toBe('DENY');
+    expect(home.headers()['x-content-type-options']).toBe('nosniff');
+  });
   let surveyId = ''; let fieldName = ''; let storedName = '';
   await stage('create-synthetic-survey', 30_000, async () => {
     const project = await request.post(`${base}/v1/projects`, { headers: auth, data: { name: `附件隔离-${randomUUID()}` } });
@@ -48,6 +53,7 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
   if (!link) throw new Error('Synthetic delivery link missing');
   const respondent = await page.context().newPage();
   const uploadStatuses: string[] = [];
+  const uploadPolicies: { method: string; status: number; frame: string; ancestors: string; nosniff: boolean }[] = [];
   let frameDenied = false;
   respondent.on('console', (message) => {
     if (/refused to display.*(?:x-frame-options|frame-ancestors)/i.test(message.text())) frameDenied = true;
@@ -59,6 +65,11 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
         const header = (response.headers()['x-frame-options'] ?? '').toUpperCase();
         const frame = header === 'DENY' || header === 'SAMEORIGIN' ? header : header ? 'other' : 'none';
         uploadStatuses.push(`${method}:${response.status()}:${frame}`);
+        const ancestors = (response.headers()['content-security-policy'] ?? '').split(';')
+          .map((part) => part.trim()).find((part) => part.startsWith('frame-ancestors '));
+        uploadPolicies.push({ method, status: response.status(), frame,
+          ancestors: ancestors === "frame-ancestors 'self'" ? 'self' : 'other',
+          nosniff: response.headers()['x-content-type-options'] === 'nosniff' });
       }
     } catch { /* Do not print URLs. */ }
   });
@@ -101,6 +112,14 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
       process.stdout.write(`[attachment-diagnostic] uploader-statuses=${uploadStatuses.slice(-20).join(',') || 'none'} danger=${notices > 0} spinner=${spinner > 0} frame-denied=${frameDenied}\n`);
       throw new Error('Synthetic upload did not appear in modal');
     }
+  });
+  await stage('verify-engine-frame-protection', 15_000, async () => {
+    expect(frameDenied).toBe(false);
+    for (const method of ['GET', 'POST']) {
+      const policy = uploadPolicies.filter((item) => item.method === method).at(-1);
+      expect(policy).toEqual({ method, status: 200, frame: 'SAMEORIGIN', ancestors: 'self', nosniff: true });
+    }
+    process.stdout.write(`[attachment-diagnostic] verified-policies=${uploadStatuses.slice(-20).join(',')}\n`);
   });
   await stage('save-upload-modal', 30_000, async () => {
     await respondent.locator('.file-upload-modal.show .modal-footer button').click();

@@ -1,5 +1,9 @@
 # 自治执行进度
 
+2026-11-07 Wave 3 附件隔离验证候选：基于 `codex/wave3-attachment-journey` 的 `a69788b8fe1105f0a44680fa9ca13e6de0b9481c`。既有 [诊断 run 42328919843](https://github.com/lsgoodlionel/star-survey/actions/runs/42328919843) 两库均在上传回调前失败，GET/POST 为 200 但测试代理返回 DENY，浏览器拒绝 iframe；资源清理通过，不能据此认为附件已上传或导出成功。已在测试 nginx 的两个引擎路由使用现有生产 SAMEORIGIN 与原样 CSP，显式重复因 nginx 继承规则而必须保留的其他安全头；管理端 DENY、生产 Caddy 和上游引擎源码不变。专项新增实际响应策略断言；临时诊断作业恢复 full profile 约束，不再违反 policy-only 编排测试，也未放宽门禁断言。
+
+本地验证：新增安全策略回归先红后绿；gate 单测 52/52、Release/Workflow 125/125、生产配置 24/24、管理端 460/460、lint、typecheck、生产构建和生产包去开发入口断言通过。生产配置测试使用现有 PHP 镜像及只读 Yii 目录，不是生产部署。独立真实 nginx 与未改动 AjaxUpload 的合成浏览器对照证明两个引擎路由同源上传回调完成、跨源 iframe 仍被 CSP 拒绝、管理入口仍 DENY，任务容器清理已核验。独立静态复核无阻断发现。新增候选尚未推送，新双库完整附件链路及完整质量 CI 尚未执行；保存答卷、响应数据和 ZIP 实物内容仍须在新提交验收，Wave 3 不提升为完成，未合并或发布。
+
 2026-11-02 PR #28 合并接续：用户直接授权合并后，因 main 已合入 PR #29，先普通合入 main `7eb63e59fb82d7fe64ba5175d537f1dbb68c1dac`；唯一冲突为本文件顶部新增记录，已保留策略登记与 CI 优化双方内容。相对最新 main 的业务差异仍仅 `0.3.7-rc.1: bootstrap` 及本进度记录。更新后 Release 全套与 CI 待复核；不创建标签或 RC。
 
 2026-11-02 下一候选策略登记：基于远端 main `14e4005b35cddf1786dd5e3eb002f36bfabde67c` 建立独立分支 `codex/wave2-rc7-policy`，本地与远端均未发现 `v0.3.7-rc.1` 标签，基线文件无同名策略后，新增 `.github/release/baseline-policy.json` 的 `0.3.7-rc.1: bootstrap`。只登记策略，未创建标签或 RC，未修改旧策略或功能。Release 全套 60/60、`git diff --check` 通过。bootstrap 不代表升级验证通过或稳定版可推广，完整原生生命周期仍待发布后独立验收。推送前 main 精确提交的 [质量 run 41390926881](https://github.com/lsgoodlionel/star-survey/actions/runs/41390926881) 成功，10/10 作业通过；本分支 CI 尚未触发，推送后核验，不自动合并。

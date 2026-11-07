@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import stat
 import struct
 import subprocess
@@ -58,6 +59,36 @@ def png(width, height):
 
 
 class AdminWebGateTest(unittest.TestCase):
+    def test_engine_frame_policy_matches_production_and_keeps_inherited_defenses(self):
+        root = Path(__file__).parents[3]
+        nginx = (root / "platform/deploy/test/admin-web-e2e.nginx.conf").read_text()
+        production = (root / "platform/deploy/production/Caddyfile").read_text()
+        csp = re.search(r'Content-Security-Policy "([^"]+)"', production).group(1)
+        inherited = dict(re.findall(r'add_header ([\w-]+) "([^"]*)" always;', nginx.split("    location", 1)[0]))
+        locations = re.findall(r'    location ([^\n]+) \{\n(.*?)\n    \}', nginx, re.S)
+        engines = [body for path, body in locations if "proxy_pass ${ENGINE_UPSTREAM}" in body]
+        self.assertEqual(2, len(engines))
+        for body in engines:
+            with self.subTest(route=body.splitlines()[0]):
+                headers = dict(re.findall(r'add_header ([\w-]+) "([^"]*)" always;', body))
+                self.assertEqual("SAMEORIGIN", headers.get("X-Frame-Options"))
+                self.assertEqual(csp, headers.get("Content-Security-Policy"))
+                for key, value in inherited.items():
+                    if key != "X-Frame-Options":
+                        self.assertEqual(value, headers.get(key), key)
+        self.assertEqual(2, nginx.count('add_header X-Frame-Options "SAMEORIGIN" always;'))
+
+    def test_admin_frame_policy_stays_deny(self):
+        root = Path(__file__).parents[3]
+        nginx = (root / "platform/deploy/test/admin-web-e2e.nginx.conf").read_text()
+        self.assertIn('add_header X-Frame-Options "DENY" always;', nginx.split("    location", 1)[0])
+        for path, body in re.findall(r'    location ([^\n]+) \{\n(.*?)\n    \}', nginx, re.S):
+            if "proxy_pass ${ENGINE_UPSTREAM}" not in body:
+                self.assertNotIn("SAMEORIGIN", body, path)
+        admin = (root / "platform/apps/admin-web/nginx.conf").read_text()
+        self.assertIn('add_header X-Frame-Options "DENY" always;', admin)
+        self.assertIn("frame-ancestors 'none'", admin)
+
     def test_wave2_browser_evidence_requires_every_named_scenario(self):
         gate = load_gate()
         expected = {
