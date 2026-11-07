@@ -47,6 +47,15 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
   const link = await page.getByRole('list', { name: '投放链接' }).getByRole('link').first().getAttribute('href');
   if (!link) throw new Error('Synthetic delivery link missing');
   const respondent = await page.context().newPage();
+  const uploadStatuses: string[] = [];
+  respondent.on('response', (response) => {
+    try {
+      const method = response.request().method();
+      if (new URL(response.url()).pathname.includes('/uploader/') && (method === 'GET' || method === 'POST')) {
+        uploadStatuses.push(`${method}:${response.status()}`);
+      }
+    } catch { /* Do not print URLs. */ }
+  });
   await stage('open-respondent', 30_000, async () => { try { await respondent.goto(link, { timeout: 25_000 }); } catch { throw new Error('Synthetic respondent navigation failed'); } });
   await stage('find-upload-question', 60_000, async () => {
     for (let step = 0; step < 6; step++) {
@@ -78,7 +87,14 @@ test('isolated real attachment upload and package', async ({ page, request }) =>
   });
   await stage('upload-synthetic-file', 45_000, async () => {
     await respondent.locator('input[type="file"][name="uploadfile"]').last().setInputFiles({ name: 'synthetic-evidence.txt', mimeType: 'text/plain', buffer: Buffer.from('synthetic wave 3 attachment') });
-    await expect(respondent.locator('.file-upload-modal.show .file-name')).toHaveText('synthetic-evidence.txt', { timeout: 30_000 });
+    try {
+      await expect(respondent.locator('.file-upload-modal.show .file-name')).toHaveText('synthetic-evidence.txt', { timeout: 30_000 });
+    } catch {
+      const notices = await respondent.locator('.file-upload-modal.show .alert-danger:visible').count();
+      const spinner = await respondent.locator('.file-upload-modal.show #loading-icon-fielupload').count();
+      process.stdout.write(`[attachment-diagnostic] uploader-statuses=${uploadStatuses.slice(-20).join(',') || 'none'} danger=${notices > 0} spinner=${spinner > 0}\n`);
+      throw new Error('Synthetic upload did not appear in modal');
+    }
   });
   await stage('save-upload-modal', 30_000, async () => {
     await respondent.locator('.file-upload-modal.show .modal-footer button').click();
