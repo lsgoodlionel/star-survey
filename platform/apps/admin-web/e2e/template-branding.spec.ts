@@ -281,27 +281,26 @@ test('branded copy previews and publishes with language and pinned image bytes',
       const countName = await uploadCount.getAttribute('name');
       if (!countName?.endsWith('_Cfilecount')) throw new Error('Upload count field is missing');
       fieldName = countName.slice(0, -'_Cfilecount'.length);
-      const csrf = await fresh.locator('input[name="YII_CSRF_TOKEN"]').first().inputValue();
-      const uploadUrl = new URL('/index.php/uploader/index', fresh.url());
-      uploadUrl.searchParams.set('mode', 'upload');
-      uploadUrl.searchParams.set('fieldname', fieldName);
-      const upload = await fresh.request.post(uploadUrl.toString(), { multipart: {
-        YII_CSRF_TOKEN: csrf, mode: 'upload', fieldname: fieldName,
-        uploadfile: { name: 'synthetic-evidence.txt', mimeType: 'text/plain', buffer: Buffer.from('synthetic wave 3 attachment') },
-      } });
-      expect(upload.status()).toBe(200);
-      uploaded = await upload.json() as UploadResponse;
-      if (!uploaded?.success) throw new Error('Synthetic upload failed');
-      await fresh.locator('input').evaluateAll((inputs, values) => {
-        const find = (name: string) => inputs.find((input) => input.getAttribute('name') === name) as HTMLInputElement | undefined;
-        const field = find(values.fieldName); const count = find(values.countName);
-        if (!field || !count) throw new Error('Upload form fields are missing');
-        field.value = JSON.stringify([{ title: '', comment: '', size: values.uploaded.size,
-          name: values.uploaded.name, filename: values.uploaded.filename, ext: values.uploaded.ext }]);
-        count.value = '1';
-        field.dispatchEvent(new Event('updated', { bubbles: true }));
-        count.dispatchEvent(new Event('updated', { bubbles: true }));
-      }, { fieldName, countName, uploaded });
+      // Use the actual uploader modal so the engine's own save callback writes the answer.
+      await fresh.locator('a.upload').first().click();
+      const selectFile = fresh.locator('.file-upload-modal.show button[id^="button_"]').first();
+      await expect(selectFile).toBeVisible();
+      await selectFile.hover();
+      const fileInput = fresh.locator('input[type="file"][name="uploadfile"]').last();
+      await expect(fileInput).toBeAttached();
+      await fileInput.setInputFiles({ name: 'synthetic-evidence.txt', mimeType: 'text/plain',
+        buffer: Buffer.from('synthetic wave 3 attachment') });
+      await expect(fresh.locator('.file-upload-modal.show .file-name')).toHaveText('synthetic-evidence.txt');
+      await fresh.locator('.file-upload-modal.show .modal-footer button').click();
+      await expect(fresh.locator('.file-upload-modal.show')).toHaveCount(0);
+      const answerInput = fresh.locator('input');
+      const answer = await answerInput.evaluateAll((inputs, name) => {
+        const input = inputs.find((item) => item.getAttribute('name') === name) as HTMLInputElement | undefined;
+        return input?.value ?? '';
+      }, fieldName);
+      const values = JSON.parse(answer) as UploadResponse[];
+      if (values.length !== 1 || !values[0].filename) throw new Error('Synthetic upload was not saved in the form');
+      uploaded = values[0];
     }
     if (await translated.isVisible()) await fresh.locator('input[type="radio"]:visible').first().check();
     const submit = fresh.locator('#ls-button-submit:visible, #ls-button-next:visible, button[type="submit"]:visible, input[type="submit"]:visible').last();
