@@ -1519,15 +1519,16 @@ class AttachmentLocatorProbeTests(unittest.TestCase):
         results = self.php(r"""
 require $root . '/vendor/yiisoft/yii/framework/yii.php';
 $out = [];
-foreach (['ok', 'generation_missing', 'generation_mismatch', 'table_missing', 'field_missing', 'response_missing', 'ownership_mismatch', 'base_unresolved', 'file_unresolved', 'path_rejected', 'not_regular_file'] as $case) {
+foreach (['ok', 'generation_missing', 'generation_mismatch', 'table_missing', 'legacy_only', 'field_missing', 'response_missing', 'ownership_mismatch', 'base_unresolved', 'file_unresolved', 'path_rejected', 'not_regular_file'] as $case) {
     $db = new CDbConnection('sqlite::memory:');
     $db->tablePrefix = 'lime_';
     $db->setActive(true);
     $db->createCommand('CREATE TABLE lime_mjyplatformbridge_generation (survey_id integer, generation text)')->execute();
     if ($case !== 'generation_missing') $db->createCommand("INSERT INTO lime_mjyplatformbridge_generation VALUES (123, 'private-generation')")->execute();
-    $db->createCommand('CREATE TABLE lime_survey_123 (id integer, "123X1X1" text)')->execute();
-    $db->createCommand()->insert('lime_survey_123', ['id'=>7, '123X1X1'=>json_encode([['filename'=>'fu_private']])]);
-    if ($case === 'table_missing') $db->createCommand('DROP TABLE lime_survey_123')->execute();
+    $db->createCommand('CREATE TABLE lime_responses_123 (id integer, "123X1X1" text)')->execute();
+    $db->createCommand()->insert('lime_responses_123', ['id'=>7, '123X1X1'=>json_encode([['filename'=>'fu_private']])]);
+    if ($case === 'table_missing') $db->createCommand('DROP TABLE lime_responses_123')->execute();
+    if ($case === 'legacy_only') $db->createCommand()->renameTable('lime_responses_123', 'lime_survey_123');
     $dir = sys_get_temp_dir() . '/probe-' . bin2hex(random_bytes(8));
     $cleanupDir = $dir;
     mkdir($dir . '/surveys/123/files', 0700, true);
@@ -1551,9 +1552,11 @@ foreach (['ok', 'generation_missing', 'generation_mismatch', 'table_missing', 'f
 echo json_encode($out);
 """)
         for case, evidence in results.items():
-            self.assertEqual("locator_checks_pass" if case == "ok" else case, evidence["stage"])
+            self.assertEqual("locator_checks_pass" if case == "ok" else "table_missing" if case == "legacy_only" else case, evidence["stage"])
             self.assertTrue(all(isinstance(value, bool) for key, value in evidence.items() if key != "stage"))
             self.assertNotRegex(json.dumps(evidence), r"private|123X1X1|fu_|/surveys/|/probe-")
+        self.assertFalse(results["legacy_only"]["tablePresent"])
+        self.assertFalse(results["legacy_only"]["pathEvaluated"])
         self.assertFalse(results["generation_mismatch"]["ownershipEvaluated"])
         self.assertFalse(results["ownership_mismatch"]["pathEvaluated"])
         self.assertTrue(results["ok"]["pathEvaluated"])

@@ -73,7 +73,7 @@ function attachmentProbeChecks($db, array $query, string $uploadDir): array
     if (!$e['generationMatches']) return $e;
 
     $e['ownershipEvaluated'] = true;
-    $table = $db->tablePrefix . 'survey_' . (int)$query['sid'];
+    $table = $db->tablePrefix . 'responses_' . (int)$query['sid'];
     $schema = $db->getSchema()->getTable($table, true);
     $e['tablePresent'] = $schema !== null;
     $e['stage'] = 'table_missing';
