@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -327,12 +327,40 @@ test('tenant settings manages a synthetic organisation connection without contac
   await page.getByLabel('组织标识', { exact: true }).fill(corp);
   await page.getByLabel('应用标识', { exact: true }).fill('ci-app');
   await page.getByLabel('密钥引用名', { exact: true }).fill('CI_UNUSED_REF');
+  const created = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/v1/org-connections');
   await page.getByRole('button', { name: '创建连接' }).click();
+  const createResponse = await created;
+  expect(createResponse.status()).toBe(201);
+  const connection = await createResponse.json() as { id: string };
+  assertUuid(connection.id);
+  assertUuid(metadata.tenantId);
   const row = page.locator('li').filter({ has: page.getByText(corp, { exact: true }) });
   await expect(row).toBeVisible();
+  await row.getByRole('button', { name: '编辑连接' }).click();
+  await row.getByLabel('新的密钥引用名').fill('CI_ROTATED_REF');
+  await row.getByLabel('新的未知成员策略').selectOption('jit_staff');
+  await row.getByRole('button', { name: '保存连接设置' }).click();
+  await expect(row.getByText('CI_ROTATED_REF', { exact: true })).toBeVisible();
+  await expect(row.getByText('自动开通员工', { exact: true })).toBeVisible();
   await row.getByRole('button', { name: '停用连接' }).click();
   await row.getByRole('button', { name: '确认操作' }).click();
   await expect(row.getByText('已停用', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '刷新连接' }).click();
+  await expect(row.getByText('已停用', { exact: true })).toBeVisible();
+  await row.getByRole('button', { name: '启用连接' }).click();
+  await row.getByRole('button', { name: '确认操作' }).click();
+  await expect(row.getByText('已启用', { exact: true })).toBeVisible();
+  const sql = `SELECT set_config('app.tenant_id', '${metadata.tenantId}', false);
+    SELECT (SELECT count(*) FROM org_connection WHERE tenant_id='${metadata.tenantId}' AND id='${connection.id}'
+      AND secret_ref='CI_ROTATED_REF' AND unknown_user_policy='jit_staff' AND enabled=true),
+    (SELECT count(*) FROM audit_log WHERE tenant_id='${metadata.tenantId}' AND resource LIKE 'org_connection/${connection.id} %'
+      AND action='identity.org_connection.create'),
+    (SELECT count(*) FROM audit_log WHERE tenant_id='${metadata.tenantId}' AND resource LIKE 'org_connection/${connection.id} %'
+      AND action='identity.org_connection.update');`;
+  const evidence = execFileSync('docker', ['exec', '-i', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'), 'psql',
+    '-U', 'platform_owner', '-d', 'platform', '-At', '-v', 'ON_ERROR_STOP=1'], { input: sql, encoding: 'utf8' });
+  expect(evidence.trim().split('\n').at(-1)).toBe('1|1|3');
 });
 
 test('dashboard breakpoints and mobile navigation keep primary actions usable', async ({ page }) => {
