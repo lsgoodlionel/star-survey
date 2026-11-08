@@ -86,10 +86,14 @@ def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) 
     testcase.assertIn('exit "$result"', shell)
     positions = []
     for command in REQUIRED_LIFECYCLE_COMMANDS:
-        expected_count = 2 if command == "run_ctl uninstall" else 1
+        expected_count = 1
         testcase.assertEqual(expected_count, shell.count(command), f"required lifecycle command count changed: {command}")
         positions.append(shell.rindex(command))
     testcase.assertEqual(sorted(positions), positions, "native lifecycle command order changed")
+    testcase.assertIn('require_fixture_cleanup_proof\nrun_ctl uninstall', shell)
+    cleanup = shell[shell.index('collect_evidence() {'):shell.index('\ntrap collect_evidence EXIT')]
+    testcase.assertNotIn('run_ctl uninstall', cleanup)
+    testcase.assertNotIn('rm -rf', cleanup)
 
 
 def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dict) -> None:
@@ -305,6 +309,44 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    def test_unverified_cleanup_cannot_authorize_uninstall(self):
+        guard = self.text[self.text.index('require_fixture_cleanup_proof() {'):
+                          self.text.index('\ncollect_evidence() {')]
+        result = subprocess.run(['bash', '-c', guard + '\nrequire_fixture_cleanup_proof'],
+                                capture_output=True, text=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('cleanup is blocked', result.stderr)
+
+    def test_failed_cleanup_preserves_fixture_and_never_uninstalls(self):
+        cleanup = self.text[self.text.index('collect_evidence() {'):
+                            self.text.index('\ntrap collect_evidence EXIT')]
+        cases = [(7, '0', '0', 'failed', 7), (0, '1', '0', 'failed', 5),
+                 (0, '0', '0', 'failed', 5), (0, '0', '1', 'passed', 5)]
+        for original, scan_failure, docker_failure, initial_status, expected in cases:
+            with self.subTest(original=original, scan_failure=scan_failure, docker_failure=docker_failure), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / 'work').mkdir()
+                (root / 'work' / 'fixture').write_text('synthetic data')
+                (root / 'evidence').mkdir()
+                script = r'''work_root="$1/work"; evidence_root="$1/evidence"; target="$1/target"
+evidence_helper=fixture; acceptance_status="$INITIAL_STATUS"; hosts_marker=fixture
+evidence_secret_args() { :; }
+docker() { if [[ "$1" == ps && "$FAIL_DOCKER" != 1 ]]; then return 0; fi; return 1; }
+python3() { [[ "$2" != scan || "$FAIL_SCAN" != 1 ]]; }
+write_summary() { printf '%s %s' "$acceptance_status" "$1" > "$SUMMARY_CAPTURE"; }
+run_ctl() { printf 'unexpected' > "$UNINSTALL_CAPTURE"; }
+'''
+                env = {**os.environ, 'FAIL_SCAN': scan_failure, 'FAIL_DOCKER': docker_failure,
+                       'INITIAL_STATUS': initial_status,
+                       'SUMMARY_CAPTURE': str(root / 'summary'), 'UNINSTALL_CAPTURE': str(root / 'uninstall')}
+                result = subprocess.run(['bash', '-c', script + cleanup + '\n(exit "$2"); collect_evidence',
+                                         'fixture', str(root), str(original)], env=env,
+                                        capture_output=True, text=True)
+                self.assertEqual(expected, result.returncode, result.stderr)
+                self.assertEqual(f'failed {expected}', (root / 'summary').read_text())
+                self.assertEqual('synthetic data', (root / 'work' / 'fixture').read_text())
+                self.assertFalse((root / 'uninstall').exists())
 
     def test_script_is_valid_strict_shell_without_skip_or_fake_success_path(self):
         result = subprocess.run(["bash", "-n", str(SCRIPT_PATH)], capture_output=True, text=True, check=False)

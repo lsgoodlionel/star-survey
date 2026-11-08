@@ -112,13 +112,23 @@ write_summary() {
     --upgrade-data-evidence "$evidence_root/upgrade-data.json"
 }
 
+# Resource labels and fixture markers alone cannot prove that all writers and
+# restore helpers stopped. Keep uninstall blocked until an independently
+# verified containment and ownership protocol is implemented.
+require_fixture_cleanup_proof() {
+  printf 'Native fixture cleanup is blocked: exclusive ownership and restore quiescence are unverified.\n' >&2
+  return 1
+}
+
 collect_evidence() {
   local result=$?
   trap - EXIT
   set +e
-  sed -i.bak "/# $hosts_marker$/d" /etc/hosts
-  rm -f /etc/hosts.bak
-  docker ps --format '{"id":"{{.ID}}","image":"{{.Image}}","name":"{{.Names}}","state":"{{.State}}","health":"{{.Status}}"}' >"$work_root/services.jsonl"
+  # Preserve host and fixture state: cleanup cannot be safely authorized yet.
+  if ! docker ps --format '{"id":"{{.ID}}","image":"{{.Image}}","name":"{{.Names}}","state":"{{.State}}","health":"{{.Status}}"}' >"$work_root/services.jsonl"; then
+    result=5
+    acceptance_status="failed"
+  fi
   local args=()
   while IFS= read -r item; do args+=("$item"); done < <(evidence_secret_args)
   python3 "$evidence_helper" "${args[@]}" services --input "$work_root/services.jsonl" --output "$evidence_root/services.json"
@@ -127,29 +137,29 @@ collect_evidence() {
     result=5
     acceptance_status="failed"
   fi
-  rm -f "$work_root/services.jsonl"
   if [[ "$result" -ne 0 ]] && docker inspect --format '{{json .State.Health}}' survey-production-engine-1 >"$work_root/engine-health.json" 2>/dev/null; then
     if ! python3 "$evidence_helper" engine-health --input "$work_root/engine-health.json" --output "$evidence_root/engine-health.json"; then
       result=5
     fi
   fi
-  rm -f "$work_root/engine-health.json"
   if [[ "$result" -ne 0 ]] && docker inspect survey-production-publish-gateway-1 >/dev/null 2>&1; then
     if ! docker logs --tail 200 survey-production-publish-gateway-1 2>&1 | python3 "$evidence_helper" gateway-diagnostic --output "$evidence_root/gateway-diagnostic.json"; then
       result=5
     fi
   fi
+  if [[ "$result" -eq 0 && "$acceptance_status" != passed ]]; then result=5; fi
+  if [[ "$result" -ne 0 ]]; then acceptance_status="failed"; fi
   write_summary "$result"
   local summary_result=$?
   if [[ "$summary_result" -ne 0 ]]; then result=5; fi
   python3 "$evidence_helper" "${args[@]}" scan --directory "$evidence_root"
   local scan_result=$?
   if [[ "$scan_result" -ne 0 ]]; then result=5; fi
-  if [[ "$result" -ne 0 && -n "${ctl_bin:-}" && -f "$target/.surveyctl/state.json" ]]; then
-    run_ctl uninstall
+  if [[ "$result" -ne 0 ]]; then
+    acceptance_status="failed"
+    if ! write_summary "$result"; then result=5; fi
   fi
-  chmod -R a+rX "$evidence_root"
-  rm -rf "$work_root"
+  printf 'Native fixture and host state retained for investigation.\n' >&2
   exit "$result"
 }
 trap collect_evidence EXIT
@@ -319,5 +329,6 @@ last_step="doctor-restored"
 write_doctor_evidence "doctor-restored"
 
 last_step="uninstall"
+require_fixture_cleanup_proof
 run_ctl uninstall
 acceptance_status="passed"
