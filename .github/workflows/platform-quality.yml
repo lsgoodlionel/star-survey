@@ -167,11 +167,25 @@ jobs:
         id: admin_web_e2e
         run: platform/deploy/test/run-admin-web-e2e.sh --fresh
 
+      # 独立短保留期栈覆盖自然过期；不改变常规完整旅程的保留期。
+      - name: 导出自然过期真实浏览器验收
+        id: admin_web_expiry_e2e
+        run: platform/deploy/test/run-admin-web-expiry-e2e.sh
+
       - name: 上传脱敏失败证据
         if: "${{ failure() && steps.admin_web_e2e.outcome == 'failure' }}"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: admin-web-e2e-sanitized-failure-${{ matrix.db }}
+          path: platform/apps/admin-web/test-results/ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: 上传自然过期专项脱敏失败证据
+        if: "${{ failure() && steps.admin_web_expiry_e2e.outcome == 'failure' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: admin-web-expiry-sanitized-failure-${{ matrix.db }}
           path: platform/apps/admin-web/test-results/ci-artifacts/
           if-no-files-found: warn
           retention-days: 7

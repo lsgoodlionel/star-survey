@@ -1,0 +1,5 @@
+services:
+  platform:
+    environment:
+      PLATFORM_RESPONSE_EXPORT_RETENTION: PT30S
+      PLATFORM_RESPONSE_EXPORT_INTERVAL: PT2S
