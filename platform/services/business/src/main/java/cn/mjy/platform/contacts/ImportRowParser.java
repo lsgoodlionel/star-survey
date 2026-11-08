@@ -41,7 +41,9 @@ class ImportRowParser {
     }
 
     private List<String> parseCsv(String content) {
-        List<String> lines = content.lines().filter(line -> !line.isBlank()).toList();
+        // UTF-8 CSV files exported by spreadsheet tools may start with a BOM.
+        String csv = content.startsWith("\uFEFF") ? content.substring(1) : content;
+        List<String> lines = csv.lines().filter(line -> !line.isBlank()).toList();
         if (lines.isEmpty()) {
             throw new InvalidContactRequestException("csv must have a header row");
         }
