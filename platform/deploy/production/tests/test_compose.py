@@ -125,6 +125,7 @@ class ProductionComposeTest(unittest.TestCase):
                 "platform",
                 "publish-gateway",
                 "engine",
+                "engine-relay",
                 "engine-init",
                 "platform-db",
                 "engine-db",
@@ -159,8 +160,9 @@ class ProductionComposeTest(unittest.TestCase):
 
     def test_networks_and_persistent_volumes_are_isolated_by_data_class(self):
         config = self.render_compose()
-        self.assertEqual({"edge", "internal"}, set(config["networks"]))
+        self.assertEqual({"edge", "internal", "preview"}, set(config["networks"]))
         self.assertTrue(config["networks"]["internal"]["internal"])
+        self.assertTrue(config["networks"]["preview"]["internal"])
         self.assertEqual(
             {
                 "caddy-data",
@@ -177,11 +179,12 @@ class ProductionComposeTest(unittest.TestCase):
         )
         services = config["services"]
         expected_networks = {
-            "edge": {"edge"},
+            "edge": {"edge", "preview"},
             "admin-web": {"edge"},
             "platform": {"edge", "internal"},
-            "publish-gateway": {"internal"},
+            "publish-gateway": {"preview", "internal"},
             "engine": {"edge", "internal"},
+            "engine-relay": {"internal"},
             "engine-init": {"internal"},
             "platform-db": {"internal"},
             "engine-db": {"internal"},
@@ -346,6 +349,11 @@ class ProductionComposeTest(unittest.TestCase):
         self.assertNotIn("handle /v1*", caddyfile)
         self.assertIn("handle /d/*", caddyfile)
         self.assertIn("handle /a/*", caddyfile)
+        self.assertIn("path /v1/preview/access", caddyfile)
+        self.assertIn("method GET", caddyfile)
+        self.assertIn("header_down Location ^http://engine/(.*)$ /survey/$1", caddyfile)
+        gateway = self.render_compose()["services"]["publish-gateway"]
+        self.assertEqual("https://localhost", gateway["environment"]["PUBGW_PUBLIC_URL"])
         self.assertIn("handle_path /survey/*", caddyfile)
         self.assertIn("handle_path /engine-admin/*", caddyfile)
         self.assertIn("basic_auth", caddyfile)
@@ -466,7 +474,18 @@ class ProductionComposeTest(unittest.TestCase):
         admin_index = route_paths.index(("/engine-admin/*",))
         survey_index = route_paths.index(("/survey/*",))
         api_index = route_paths.index(("/v1", "/v1/*"))
+        preview_index = route_paths.index(("/v1/preview/access",))
         fallback_index = max(i for i, paths in enumerate(route_paths) if not paths)
+        preview_route = public_subroute["routes"][preview_index]
+        self.assertEqual(["GET"], preview_route["match"][0]["method"])
+        self.assertLess(preview_index, api_index)
+        proxy = next(node for node in self.walk_dicts(preview_route)
+                     if node.get("handler") == "reverse_proxy")
+        self.assertEqual("publish-gateway:8080", proxy["upstreams"][0]["dial"])
+        self.assertEqual(
+            [{"search_regexp": "^http://engine/(.*)$", "replace": "/survey/$1"}],
+            proxy["headers"]["response"]["replace"]["Location"],
+        )
         self.assertLess(admin_index, survey_index)
         self.assertLess(survey_index, api_index)
         self.assertLess(api_index, fallback_index)

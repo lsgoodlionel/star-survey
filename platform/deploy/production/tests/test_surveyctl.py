@@ -5,12 +5,14 @@ import importlib.util
 import io
 import json
 import os
+import signal
 from pathlib import Path
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -98,6 +100,8 @@ class FakeRunner:
         backup_schema="920",
         engine_init_exit_code=0,
         engine_init_health="",
+        configured_relay=True,
+        running_relay=True,
     ):
         self.commands = []
         self.calls = []
@@ -110,6 +114,8 @@ class FakeRunner:
         self.backup_schema = backup_schema
         self.engine_init_exit_code = engine_init_exit_code
         self.engine_init_health = engine_init_health
+        self.configured_relay = configured_relay
+        self.running_relay = running_relay
 
     def run(self, command, **kwargs):
         command = tuple(str(part) for part in command)
@@ -128,8 +134,17 @@ class FakeRunner:
             output = Path(command[command.index("--output") + 1])
             version = command[command.index("--version") + 1]
             write_fake_backup(output, version, self.backup_schema)
+        if "config" in command and "--services" in command:
+            services = {"edge", "admin-web", "platform", "publish-gateway", "engine",
+                        "platform-db", "engine-db", "engine-init"}
+            if self.configured_relay:
+                services.add("engine-relay")
+            return subprocess.CompletedProcess(command, 0, stdout="\n".join(
+                sorted(services)) + "\n", stderr="")
         if "ps" in command and "--format" in command:
             services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"]
+            if self.running_relay:
+                services.append("engine-relay")
             payload = [
                 {
                     "Service": service,
@@ -409,6 +424,410 @@ class SurveyctlAdversarialTest(unittest.TestCase):
                 with self.assertRaises(self.module.IntegrityError):
                     manager._verify_backup(backup, "0.2.0", "920")
 
+    def test_recovery_stops_target_relay_and_rejects_unverified_inventory(self):
+        module = self.module
+        class RecoveryRunner(FakeRunner):
+            def __init__(runner, *, mode='normal'):
+                super().__init__()
+                runner.mode = mode
+                runner.stopped = False
+            def run(runner, command, **kwargs):
+                if 'stop' in command and 'engine-relay' in command:
+                    if runner.mode == 'stop-error':
+                        raise subprocess.CalledProcessError(1, command)
+                    runner.stopped = True
+                if 'ps' in command and '--format' in command:
+                    rows = [{'Service': 'platform', 'State': 'running'},
+                            {'Service': 'engine-relay', 'ID': 'a' * 64 if not runner.stopped or runner.mode != 'replaced' else 'b' * 64, 'State': 'exited' if runner.stopped and runner.mode != 'restart' else 'running'}]
+                    if runner.mode == 'absent':
+                        rows = [rows[0]]
+                    if runner.mode == 'unknown':
+                        rows.append({'Service': 'unknown-writer', 'State': 'running'})
+                    if runner.mode == 'duplicate':
+                        rows.append({'Service': 'engine-relay', 'State': 'running'})
+                    return subprocess.CompletedProcess(command, 0, stdout=json.dumps(rows), stderr='')
+                return super().run(command, **kwargs)
+        for mode in ('normal', 'absent', 'stop-error', 'restart', 'replaced', 'unknown', 'duplicate'):
+            with self.subTest(mode=mode):
+                runner = RecoveryRunner(mode=mode)
+                manager = self.manager(runner=runner)
+                if mode in ('normal', 'absent'):
+                    self.assertTrue(manager._stop_new_writers_before_legacy_restore(['docker', 'compose']))
+                    self.assertEqual(mode == 'normal', runner.stopped)
+                else:
+                    with self.assertRaises(module.RuntimeHealthError):
+                        manager._stop_new_writers_before_legacy_restore(['docker', 'compose'])
+
+    def test_restore_only_never_calls_legacy_restore_when_writer_quiescence_fails(self):
+        manager = self.manager()
+        manifest = mock.Mock(version='0.3.0', rollback='restore-only')
+        failure = self.module.RuntimeHealthError('upgrade failed')
+        with mock.patch.object(manager, '_compose', return_value=['docker', 'compose']), \
+             mock.patch.object(manager, '_personnel_guard_enabled', return_value=False), \
+             mock.patch.object(manager, '_stop_new_writers_before_legacy_restore', side_effect=self.module.RuntimeHealthError('writer')) as stop, \
+             mock.patch.object(manager, 'restore') as restore, \
+             mock.patch.object(manager, '_stop_after_failed_recovery', side_effect=self.module.RuntimeHealthError('recovery required')):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                manager._recover_failed_upgrade(manifest, '0.2.0', 'backup', failure)
+            stop.assert_called_once()
+            restore.assert_not_called()
+
+    def test_restore_only_does_not_invoke_old_helper_after_relay_was_stopped(self):
+        manager = self.manager()
+        manifest = mock.Mock(version='0.3.0', rollback='restore-only')
+        failure = self.module.RuntimeHealthError('upgrade failed')
+        with mock.patch.object(manager, '_compose', return_value=['docker', 'compose']), \
+             mock.patch.object(manager, '_personnel_guard_enabled', return_value=False), \
+             mock.patch.object(manager, '_stop_new_writers_before_legacy_restore', return_value=True), \
+             mock.patch.object(manager, 'restore') as restore, \
+             mock.patch.object(manager, '_stop_after_failed_recovery', side_effect=self.module.RuntimeHealthError('recovery required')):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                manager._recover_failed_upgrade(manifest, '0.2.0', 'backup', failure)
+            restore.assert_not_called()
+
+    def test_recovery_required_blocks_mutating_commands_after_process_restart(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+        manager._write_state(status="recovery_required", recoveryBackup="preserved-backup")
+        state_path = self.target / ".surveyctl" / "state.json"
+        original_state = state_path.read_bytes()
+        original_current = (self.target / "current").read_bytes()
+        commands = (
+            ["upgrade", "--manifest", str(self.root / "nonexistent.json")],
+            ["upgrade", "--version", "0.3.0", "--manifest-sha256", "a" * 64],
+            ["rollback"],
+            ["backup", "--output", "unsafe-labeled-backup"],
+            ["restore", "preserved-backup"],
+            ["uninstall"],
+            ["uninstall", "--purge-data", "--confirm", f"PURGE {self.target}"],
+            ["setup-probe"],
+            ["doctor"],
+            ["install", "--manifest", str(manifest), "--public-host", "survey.example.com", "--admin-user", "operations", "--admin-email", "operations@example.com"],
+            ["install", "--version", "0.3.0", "--manifest-sha256", "a" * 64, "--public-host", "survey.example.com", "--admin-user", "operations", "--admin-email", "operations@example.com"],
+            ["install", "--offline", str(self.root / "nonexistent.tar"), "--public-host", "survey.example.com", "--admin-user", "operations", "--admin-email", "operations@example.com"],
+        )
+        for command in commands:
+            with self.subTest(command=command[0]):
+                result = subprocess.run([sys.executable, str(MODULE_PATH), "--target", str(self.target), *command],
+                                        capture_output=True, text=True, timeout=10,
+                                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn('recovery_required', result.stderr)
+                self.assertIn('post-backup writes may exist', result.stderr)
+                self.assertEqual(original_state, state_path.read_bytes())
+                self.assertEqual(original_current, (self.target / "current").read_bytes())
+        with self.assertRaises(self.module.InputError):
+            manager._write_state(status="uninstalled")
+        self.assertEqual(original_state, state_path.read_bytes())
+
+    def test_interruption_during_upgrade_leaves_persistent_latch(self):
+        initial, _ = self.write_bundle_manifest()
+        target_manifest, _ = self.write_bundle_manifest('0.3.0')
+        script = r'''import importlib.util, os, signal, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('survey_test_fixture', sys.argv[1])
+tests = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tests)
+module = tests.load_module()
+manager = module.SurveyManager(target=Path(sys.argv[2]), runner=tests.FakeRunner(),
+    host_probe=tests.FakeHostProbe(), source_dir=Path(sys.argv[3]))
+def interrupted(*args, **kwargs):
+    if sys.argv[6] in ('sigterm', 'sigkill'):
+        os.kill(os.getpid(), signal.SIGTERM if sys.argv[6] == 'sigterm' else signal.SIGKILL)
+    raise KeyboardInterrupt()
+if sys.argv[5] == 'stage':
+    manager._stage_release = interrupted
+else:
+    manager._wait_healthy = interrupted
+manager.upgrade(Path(sys.argv[4]))'''
+        for phase, interruption in ((p, i) for p in ('stage', 'after_start') for i in ('sigterm', 'sigkill', 'interrupt')):
+            with self.subTest(phase=phase, interruption=interruption):
+                target = self.root / ('survey-' + phase + '-' + interruption)
+                manager = self.module.SurveyManager(target=target, runner=FakeRunner(),
+                    host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+                manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+                result = subprocess.run([sys.executable, '-c', script, str(Path(__file__).resolve()),
+                                         str(target), str(PRODUCTION_DIR), str(target_manifest), phase, interruption],
+                                        capture_output=True, text=True, timeout=15,
+                                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+                if interruption in ('sigterm', 'sigkill'):
+                    self.assertEqual(-getattr(signal, 'SIGTERM' if interruption == 'sigterm' else 'SIGKILL'), result.returncode, result.stderr)
+                else:
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn('KeyboardInterrupt', result.stderr)
+                state = json.loads((target / '.surveyctl' / 'state.json').read_text())
+                self.assertEqual('upgrading', state['status'])
+                if phase == 'stage':
+                    self.assertFalse((target / 'releases' / '0.3.0').exists())
+                    self.assertIsNone(state.get('recoveryBackup'))
+                else:
+                    self.assertTrue((target / 'releases' / '0.3.0').exists())
+                    self.assertTrue((target / 'backups' / state['recoveryBackup']).is_dir())
+                commands = (["uninstall"], ["uninstall", "--purge-data", "--confirm", f"PURGE {target}"],
+                            ["rollback"], ["restore", "preserved-backup"],
+                            ["upgrade", "--manifest", str(target_manifest)],
+                            ["upgrade", "--version", "0.3.0", "--manifest-sha256", "a" * 64],
+                            ["backup", "--output", "unsafe-labeled-backup"], ["doctor"], ["setup-probe"],
+                            ["install", "--manifest", str(target_manifest), "--public-host", "survey.example.com", "--admin-user", "operations", "--admin-email", "operations@example.com"],
+                            ["install", "--version", "0.3.0", "--manifest-sha256", "a" * 64, "--public-host", "survey.example.com", "--admin-user", "operations", "--admin-email", "operations@example.com"],
+                            ["install", "--offline", str(self.root / "nonexistent.tar"), "--public-host", "survey.example.com", "--admin-user", "operations", "--admin-email", "operations@example.com"])
+                for command in commands:
+                    blocked = subprocess.run([sys.executable, str(MODULE_PATH), '--target', str(target), *command],
+                                             capture_output=True, text=True, timeout=10,
+                                             env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+                    self.assertNotEqual(0, blocked.returncode)
+                    self.assertTrue('unverified outcome' in blocked.stderr or 'upgrading' in blocked.stderr, blocked.stderr)
+                self.assertEqual(state, json.loads((target / '.surveyctl' / 'state.json').read_text()))
+
+    def test_intent_directory_fsync_failure_never_starts_staging(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        candidate, _ = self.write_bundle_manifest('0.3.0')
+        original_fsync = os.fsync
+        def fsync_or_fail_directory(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError('injected directory fsync failure')
+            return original_fsync(fd)
+        with mock.patch.object(self.module.os, 'fsync', side_effect=fsync_or_fail_directory), \
+             mock.patch.object(manager, '_stage_release') as stage:
+            with self.assertRaises(OSError):
+                manager.upgrade(candidate)
+        stage.assert_not_called()
+        # The rename may already be visible; it must never be treated as a
+        # successful upgrade or authorization to continue without rechecking.
+        self.assertEqual('healthy', manager._read_state()['status'])
+        self.assertEqual('pending', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+
+    def test_remote_upgrade_records_intent_before_staging_managed_downloads(self):
+        initial, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+        candidate, _ = self.write_bundle_manifest('0.3.0')
+        payload = candidate.read_bytes()
+        manager.release_client = FakeReleaseClient(payload=payload)
+        def interrupted_stage(*args, **kwargs):
+            self.assertEqual('upgrading', manager._read_state()['status'])
+            self.assertFalse((self.target / '.surveyctl' / 'downloads').exists())
+            raise self.module.RuntimeHealthError('fixture interrupted')
+        with mock.patch.object(manager, '_stage_release', side_effect=interrupted_stage):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                manager.upgrade_version('0.3.0', hashlib.sha256(payload).hexdigest())
+        self.assertEqual('upgrading', manager._read_state()['status'])
+
+    def test_unsafe_operation_lock_is_rejected_before_uninstall(self):
+        initial, _ = self.write_bundle_manifest()
+        for kind in ('symlink', 'fifo', 'hardlink', 'permissions'):
+            with self.subTest(kind=kind):
+                target = self.root / ('unsafe-lock-' + kind)
+                runner = FakeRunner()
+                manager = self.module.SurveyManager(target=target, runner=runner,
+                    host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+                manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+                lock = target / '.surveyctl' / 'operation.lock'
+                state = (target / '.surveyctl' / 'state.json').read_bytes()
+                if kind == 'permissions':
+                    lock.chmod(0o666)
+                else:
+                    lock.unlink()
+                    if kind == 'symlink':
+                        lock.symlink_to(self.root / 'outside')
+                    elif kind == 'fifo':
+                        os.mkfifo(lock, 0o600)
+                    else:
+                        outside = self.root / 'lock-hardlink-source'
+                        outside.write_bytes(b'')
+                        outside.chmod(0o600)
+                        os.link(outside, lock)
+                runner.commands.clear()
+                with self.assertRaises(self.module.IntegrityError):
+                    manager.uninstall(False, None)
+                self.assertEqual([], runner.commands)
+                self.assertEqual(state, (target / '.surveyctl' / 'state.json').read_bytes())
+
+    def test_real_process_lock_prevents_stale_state_mutations_and_releases_on_kill(self):
+        initial, _ = self.write_bundle_manifest()
+        candidate, _ = self.write_bundle_manifest('0.3.0')
+        script = r'''import importlib.util, os, sys, time
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('survey_test_fixture', sys.argv[1])
+tests = importlib.util.module_from_spec(spec); spec.loader.exec_module(tests)
+module = tests.load_module()
+manager = module.SurveyManager(target=Path(sys.argv[2]), runner=tests.FakeRunner(),
+    host_probe=tests.FakeHostProbe(), source_dir=Path(sys.argv[3]))
+ready = Path(sys.argv[5])
+def wait_here():
+    ready.write_text('ready')
+    while True: time.sleep(1)
+if sys.argv[6] == 'upgrade':
+    manager._stage_release = lambda *args, **kwargs: wait_here()
+    manager.upgrade(Path(sys.argv[4]))
+else:
+    original = manager._read_state
+    def read_then_wait(*args, **kwargs):
+        value = original(*args, **kwargs)
+        wait_here()
+        return value
+    manager._read_state = read_then_wait
+    if sys.argv[6] == 'uninstall': manager.uninstall(False, None)
+    else: manager.rollback()
+'''
+        for phase in ('uninstall', 'rollback', 'upgrade'):
+            with self.subTest(holder=phase):
+                target = self.root / ('lock-' + phase)
+                manager = self.module.SurveyManager(target=target, runner=FakeRunner(),
+                    host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+                manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
+                ready = self.root / ('ready-' + phase)
+                process = subprocess.Popen([sys.executable, '-c', script, str(Path(__file__).resolve()),
+                    str(target), str(PRODUCTION_DIR), str(candidate), str(ready), phase],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+                try:
+                    deadline = time.monotonic() + 8
+                    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue(ready.exists(), 'holder did not reach the locked phase')
+                    before = (target / '.surveyctl' / 'state.json').read_bytes()
+                    commands = (["upgrade", "--manifest", str(candidate)], ["rollback"], ["uninstall"])
+                    for command in commands:
+                        blocked = subprocess.run([sys.executable, str(MODULE_PATH), '--target', str(target), *command],
+                            capture_output=True, text=True, timeout=5,
+                            env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+                        self.assertNotEqual(0, blocked.returncode)
+                        if phase == 'upgrade' and command[0] == 'uninstall':
+                            self.assertIn('upgrading', blocked.stderr)
+                        else:
+                            self.assertIn('operation is in progress', blocked.stderr)
+                        self.assertEqual(before, (target / '.surveyctl' / 'state.json').read_bytes())
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
+                self.assertEqual(-signal.SIGKILL, process.returncode)
+                # OS lock is released on process death. The durable upgrade
+                # latch, if set, must still block a new mutating command.
+                if phase == 'upgrade':
+                    with self.assertRaisesRegex(self.module.InputError, 'unverified outcome'):
+                        with manager._mutation_lock():
+                            pass
+                else:
+                    with manager._mutation_lock():
+                        pass
+
+    def test_killed_controller_leaves_intent_while_child_survives(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        ready = self.root / 'intent-child-ready'
+        child_pid = self.root / 'intent-child-pid'
+        script = r'''import importlib.util, pathlib, subprocess, sys, time
+spec = importlib.util.spec_from_file_location('survey_test_fixture', sys.argv[1])
+tests = importlib.util.module_from_spec(spec); spec.loader.exec_module(tests)
+module = tests.load_module(); manager = module.SurveyManager(sys.argv[2])
+with manager._mutation_lock(operation='uninstall'):
+    manager._begin_operation()
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pathlib.Path(sys.argv[3]).write_text(str(child.pid))
+    pathlib.Path(sys.argv[4]).write_text('ready')
+    while True: time.sleep(1)
+'''
+        holder = subprocess.Popen([sys.executable, '-c', script, str(Path(__file__).resolve()), str(self.target), str(child_pid), str(ready)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        pid = None
+        try:
+            deadline = time.monotonic() + 8
+            while not ready.exists() and holder.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), 'controller did not reach the started phase')
+            pid = int(child_pid.read_text())
+            holder.kill(); holder.communicate(timeout=5)
+            os.kill(pid, 0)
+            for _ in range(2):
+                result = subprocess.run([sys.executable, str(MODULE_PATH), '--target', str(self.target), 'uninstall'], capture_output=True, text=True, timeout=5)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn('unverified outcome', result.stderr)
+                if pid is not None:
+                    os.kill(pid, signal.SIGTERM); pid = None
+            self.assertEqual('pending', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+        finally:
+            if holder.poll() is None:
+                holder.kill(); holder.communicate(timeout=5)
+            if pid is not None:
+                try: os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError: pass
+
+    def test_restore_local_rejections_remain_retryable_before_helper(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        with mock.patch.object(manager, '_run_helper') as helper:
+            with self.assertRaises(self.module.IntegrityError):
+                manager.restore('missing')
+            backup = self.target / 'backups' / 'corrupt'
+            write_fake_backup(backup)
+            (backup / 'payload.bin').write_bytes(b'tampered')
+            with self.assertRaises(self.module.IntegrityError):
+                manager.restore('corrupt')
+            helper.assert_not_called()
+        self.assertEqual('complete', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+        valid = self.target / 'backups' / 'valid'
+        write_fake_backup(valid)
+        manager.restore('valid')
+        self.assertEqual('complete', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+
+    def test_restore_verify_helper_interruption_keeps_pending(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        write_fake_backup(self.target / 'backups' / 'valid')
+        def interrupted(*args, **kwargs):
+            self.assertEqual('pending', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+            raise KeyboardInterrupt()
+        with mock.patch.object(manager, '_run_helper', side_effect=interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                manager.restore('valid')
+        with self.assertRaisesRegex(self.module.InputError, 'unverified outcome'):
+            manager.uninstall(False, None)
+
+    def test_killed_restore_controller_blocks_while_verify_child_survives(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        write_fake_backup(self.target / 'backups' / 'valid')
+        ready, child_file = self.root / 'verify-ready', self.root / 'verify-child'
+        script = r'''import importlib.util, pathlib, subprocess, sys, time
+spec = importlib.util.spec_from_file_location('survey_test_fixture', sys.argv[1])
+tests = importlib.util.module_from_spec(spec); spec.loader.exec_module(tests)
+module = tests.load_module()
+manager = module.SurveyManager(target=pathlib.Path(sys.argv[2]), runner=tests.FakeRunner(), host_probe=tests.FakeHostProbe(), source_dir=pathlib.Path(sys.argv[3]))
+def helper(command, *args, **kwargs):
+    assert 'verify' in command
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pathlib.Path(sys.argv[4]).write_text(str(child.pid)); pathlib.Path(sys.argv[5]).write_text('ready')
+    while True: time.sleep(1)
+manager._run_helper = helper
+manager.restore('valid')
+'''
+        holder = subprocess.Popen([sys.executable, '-c', script, str(Path(__file__).resolve()), str(self.target), str(PRODUCTION_DIR), str(child_file), str(ready)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        pid = None
+        try:
+            deadline = time.monotonic() + 8
+            while not ready.exists() and holder.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), 'verification helper was not reached')
+            pid = int(child_file.read_text())
+            holder.kill(); holder.wait(timeout=5); os.kill(pid, 0)
+            blocked = subprocess.run([sys.executable, str(MODULE_PATH), '--target', str(self.target), 'uninstall'], capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(0, blocked.returncode)
+            self.assertIn('unverified outcome', blocked.stderr)
+            self.assertEqual('pending', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+        finally:
+            if holder.poll() is None: holder.kill(); holder.wait(timeout=5)
+            if pid is not None:
+                try: os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError: pass
+
     def test_restore_only_upgrade_failure_never_starts_old_images_without_restore(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager()
@@ -416,13 +835,17 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         next_manifest, _ = self.write_bundle_manifest("0.3.0", rollback="restore-only")
         runner = FakeRunner(fail_when=lambda command: ("up" in command and "0.3.0" in " ".join(command))
                             or ("restore.py" in " ".join(command) and "restore" in command))
-        with self.assertRaises(self.module.RuntimeHealthError):
+        with self.assertRaises(self.module.RuntimeHealthError) as error:
             self.manager(runner=runner).upgrade(next_manifest)
+        self.assertIn("post-backup writes may exist", str(error.exception))
+        self.assertIn("do not overwrite data", str(error.exception))
+        self.assertFalse(any("restore.py" in " ".join(command) and "restore" in command for command in runner.commands))
         old_starts = [command for command in runner.commands if "up" in command and "0.2.0" in " ".join(command)]
         self.assertEqual([], old_starts)
         self.assertTrue(any("stop" in command for command in runner.commands))
         state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
         self.assertEqual("recovery_required", state["status"])
+        self.assertTrue((self.target / "backups" / state["recoveryBackup"]).is_dir())
 
     def test_health_requires_nonempty_healthy_status_for_exact_service_set(self):
         manifest, _ = self.write_bundle_manifest()
@@ -430,6 +853,27 @@ class SurveyctlAdversarialTest(unittest.TestCase):
             self.manager(runner=FakeRunner(empty_health=True)).install(
                 manifest, "survey.example.com", "operations", "operations@example.com"
             )
+
+    def test_health_uses_target_release_contract_for_legacy_and_relay_stacks(self):
+        old = self.manager(runner=FakeRunner(configured_relay=False, running_relay=False))
+        old._assert_healthy(["docker", "compose"], "legacy rollback")
+        new = self.manager(runner=FakeRunner(configured_relay=True, running_relay=True))
+        new._assert_healthy(["docker", "compose"], "new release")
+        missing = self.manager(runner=FakeRunner(configured_relay=True, running_relay=False))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            missing._assert_healthy(["docker", "compose"], "new release missing relay")
+        unexpected = self.manager(runner=FakeRunner(configured_relay=False, running_relay=True))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            unexpected._assert_healthy(["docker", "compose"], "legacy release extra relay")
+
+        class UnknownContractRunner(FakeRunner):
+            def run(runner, command, **kwargs):
+                if "config" in command and "--services" in command:
+                    return subprocess.CompletedProcess(command, 0, stdout="edge\nengine\n", stderr="")
+                return super().run(command, **kwargs)
+
+        with self.assertRaises(self.module.RuntimeHealthError):
+            self.manager(runner=UnknownContractRunner())._assert_healthy(["docker", "compose"], "unknown target")
 
     def test_malformed_nested_manifest_is_integrity_error_not_attribute_error(self):
         data = json.loads(FIXTURE_MANIFEST.read_text())
@@ -607,7 +1051,11 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         next_manifest, _ = self.write_bundle_manifest('0.3.0')
         with self.assertRaisesRegex(self.module.IntegrityError, 'controlled.*RPC'):
             manager.upgrade(next_manifest)
-        self.assertTrue(before == snapshot(), 'existing credentials, projections and state must remain unchanged')
+        after = snapshot()
+        state_key = str(manager.state_path.relative_to(self.target))
+        self.assertNotEqual(before.pop(state_key), after.pop(state_key))
+        self.assertEqual(before, after, 'existing credentials and runtime must remain unchanged')
+        self.assertEqual('upgrading', manager._read_state()['status'])
 
     def test_backup_failure_preserves_matching_rpc_credentials_and_runtime(self):
         initial, _ = self.write_bundle_manifest()
@@ -617,10 +1065,11 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         paths += [manager.state_path, manager.current_path]
         before = {p: p.read_bytes() for p in paths}
         next_manifest, _ = self.write_bundle_manifest('0.3.0')
-        with mock.patch.object(manager, 'backup', side_effect=self.module.RuntimeHealthError('fixture backup failure')):
+        with mock.patch.object(manager, '_backup_for_upgrade_or_manual', side_effect=self.module.RuntimeHealthError('fixture backup failure')):
             with self.assertRaises(self.module.RuntimeHealthError):
                 manager.upgrade(next_manifest)
-        self.assertTrue(all(p.read_bytes() == content for p, content in before.items()), 'backup failure must preserve existing runtime')
+        self.assertTrue(all(p.read_bytes() == content for p, content in before.items() if p != manager.state_path), 'backup failure must preserve existing runtime')
+        self.assertEqual('upgrading', manager._read_state()['status'])
 
     def test_legacy_gateway_username_requires_controlled_reconciliation(self):
         initial, _ = self.write_bundle_manifest()
@@ -637,7 +1086,9 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         next_manifest, _ = self.write_bundle_manifest('0.3.0')
         with self.assertRaisesRegex(self.module.IntegrityError, 'controlled RPC identity'):
             manager.upgrade(next_manifest)
-        self.assertTrue(before == (manager.state_path.read_bytes(), manager.current_path.read_bytes(), (current / 'engines.json').read_bytes()))
+        self.assertNotEqual(before[0], manager.state_path.read_bytes())
+        self.assertEqual(before[1:], (manager.current_path.read_bytes(), (current / 'engines.json').read_bytes()))
+        self.assertEqual('upgrading', manager._read_state()['status'])
 
     def test_staging_failure_preserves_rpc_secrets_and_runtime(self):
         initial, _ = self.write_bundle_manifest()
@@ -650,56 +1101,24 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         with mock.patch.object(manager, '_sync_runtime_secrets', side_effect=self.module.RuntimeHealthError('fixture stage failure')):
             with self.assertRaises(self.module.RuntimeHealthError):
                 manager.upgrade(next_manifest)
-        self.assertTrue(all(p.read_bytes() == content for p, content in before.items()), 'staging failure must preserve existing runtime')
+        self.assertTrue(all(p.read_bytes() == content for p, content in before.items() if p != manager.state_path), 'staging failure must preserve existing runtime')
+        self.assertEqual('upgrading', manager._read_state()['status'])
 
-    def test_failed_install_can_uninstall_without_current_pointer(self):
+    def test_failed_install_blocks_retries_and_uninstall_when_outcome_uncertain(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager(probe=FakeHostProbe(tls_valid=False))
         with self.assertRaises(self.module.RuntimeHealthError):
             manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
         self.assertFalse(manager.current_path.exists())
-        manager.uninstall(purge_data=False, confirmation=None)
-        self.assertEqual('uninstalled', json.loads(manager.state_path.read_text())['status'])
-
-    def test_failed_first_install_can_retry_new_version_without_rotating_credentials(self):
-        initial, _ = self.write_bundle_manifest()
-        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
-        with self.assertRaises(self.module.RuntimeHealthError):
-            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
-        self.assertFalse(manager.current_path.exists())
-        private = self.target / 'shared/secrets'
-        before = {p.name: p.read_bytes() for p in private.iterdir() if p.is_file()}
-        next_manifest, _ = self.write_bundle_manifest('0.3.0')
-        self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
-        self.assertEqual('0.3.0', manager.current_path.read_text().strip())
-        self.assertTrue(all((private / name).read_bytes() == value for name, value in before.items()))
-
-    def test_pointerless_failed_install_uninstall_then_reinstall_preserves_identity(self):
-        initial, _ = self.write_bundle_manifest()
-        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
-        with self.assertRaises(self.module.RuntimeHealthError):
-            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
-        manager.uninstall(False, None)
-        self.assertFalse(manager.current_path.exists())
-        private = self.target / 'shared/secrets'
-        before = {p.name: p.read_bytes() for p in private.iterdir() if p.is_file()}
-        next_manifest, _ = self.write_bundle_manifest('0.3.0')
-        self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
-        self.assertTrue(all((private / name).read_bytes() == value for name, value in before.items()))
-        self.assertEqual('0.3.0', manager.current_path.read_text().strip())
-
-    def test_pointerless_uninstall_lineage_still_rejects_tampered_release(self):
-        initial, _ = self.write_bundle_manifest()
-        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
-        with self.assertRaises(self.module.RuntimeHealthError):
-            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
-        manager.uninstall(False, None)
         state_before = manager.state_path.read_bytes()
-        (self.target / 'releases/0.2.0/engines.json').write_text('{}')
+        intent = self.target / '.surveyctl/operation.intent'
+        self.assertEqual('pending', json.loads(intent.read_text())['state'])
         next_manifest, _ = self.write_bundle_manifest('0.3.0')
-        with self.assertRaises(self.module.IntegrityError):
+        with self.assertRaisesRegex(self.module.InputError, 'do not remove it'):
+            manager.uninstall(False, None)
+        with self.assertRaisesRegex(self.module.InputError, 'controlled recovery is not yet available'):
             self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
-        self.assertTrue(state_before == manager.state_path.read_bytes())
+        self.assertEqual(state_before, manager.state_path.read_bytes())
         self.assertFalse(manager.current_path.exists())
 
     def test_ordinary_uninstall_with_removed_current_is_not_failed_install_lineage(self):
@@ -722,19 +1141,6 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         manager.install(next_manifest, 'survey.example.com', 'new-operations', 'operations@example.com')
         self.assertEqual('healthy', json.loads(manager.state_path.read_text())['status'])
         self.assertEqual('new-operations', json.loads((self.target / 'releases/0.3.0/engines.json').read_text())['production-engine-01']['user'])
-
-    def test_failed_first_install_with_mismatched_credentials_still_refuses_retry(self):
-        initial, _ = self.write_bundle_manifest()
-        manager = self.manager(probe=FakeHostProbe(tls_valid=False))
-        with self.assertRaises(self.module.RuntimeHealthError):
-            manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
-        gateway = self.target / 'shared/secrets/pubgw_engine_admin_password'
-        gateway.write_text('legacy-test-credential\n')
-        before = gateway.read_bytes(), manager.state_path.read_bytes()
-        next_manifest, _ = self.write_bundle_manifest('0.3.0')
-        with self.assertRaisesRegex(self.module.IntegrityError, 'controlled RPC credential'):
-            self.manager().install(next_manifest, 'survey.example.com', 'operations', 'operations@example.com')
-        self.assertTrue(before == (gateway.read_bytes(), manager.state_path.read_bytes()))
 
     def test_uninstall_without_purge_does_not_allow_missing_credentials_to_be_recreated(self):
         initial, _ = self.write_bundle_manifest()
@@ -1068,7 +1474,8 @@ class SurveyctlTest(unittest.TestCase):
         self.assertIn("pull", joined[0])
         self.assertIn("hash-password", joined[1])
         self.assertIn("up -d", joined[2])
-        self.assertIn("ps", joined[3])
+        self.assertIn("config --services", joined[3])
+        self.assertIn("ps", joined[4])
         self.assertTrue((secret_dir / "engine_admin_password_hash").read_text().startswith("$2a$14$"))
         admin_password = (secret_dir / "engine_admin_password").read_text().strip()
         self.assertTrue(all(admin_password not in value for value in joined))
@@ -1320,58 +1727,67 @@ class SurveyctlTest(unittest.TestCase):
         self.assertFalse((self.target / "shared" / "product-probe.json").exists())
         self.assertTrue((self.target / "shared" / "probe-run.json").exists())
 
-    def test_concurrent_first_machine_setup_uses_one_persisted_run(self):
+    def test_concurrent_machine_setup_rejects_second_operation(self):
         import base64
-        import uuid
         self.install()
         key = self.target / "shared" / "secrets" / "platform_probe_hmac_secret"
         key.write_text("isolated-probe-key-for-tests-only-000000000000")
         key.chmod(0o600)
         (self.target / "shared" / "probe-installation.json").write_text(json.dumps({"installationId": "10000000-0000-4000-8000-000000000001"}))
-        barrier = threading.Barrier(2)
-        generated = iter([uuid.UUID("10000000-0000-4000-8000-000000000010"), uuid.UUID("10000000-0000-4000-8000-000000000011")])
-        def new_uuid():
-            value = next(generated)
-            barrier.wait(timeout=5)
-            return value
+        entered, release = threading.Event(), threading.Event()
         seen = []
         def api_call(token, method, path, body=None):
             payload = token.split(".")[1]
             seen.append(json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["run_id"])
+            entered.set()
+            if not release.wait(timeout=10):
+                raise RuntimeError('test synchronization failed')
             return 200, {"tenantId": "11111111-1111-4111-8111-111111111111", "actorId": "production-probe-owner",
                          "engineSecret": (self.target / "shared" / "secrets" / "engine_instance_events_secret").read_text().strip()}
-        with mock.patch.object(self.module.uuid, "uuid4", side_effect=new_uuid), ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [pool.submit(self.manager().setup_probe, api_call) for _ in range(2)]
-            for future in futures:
-                future.result(timeout=10)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(self.manager().setup_probe, api_call)
+            try:
+                self.assertTrue(entered.wait(timeout=5))
+                with self.assertRaisesRegex(self.module.InputError, 'operation is in progress'):
+                    self.manager().setup_probe(api_call)
+            finally:
+                release.set()
+            first.result(timeout=10)
         persisted = json.loads((self.target / "shared" / "probe-run.json").read_text())["runId"]
-        self.assertEqual(seen, [persisted, persisted])
+        self.assertEqual(seen, [persisted])
 
     def test_helper_exit_codes_are_preserved_by_real_cli_without_traceback(self):
         helper_source = ("import pathlib,sys\n"
                          "target=pathlib.Path(sys.argv[sys.argv.index('--target')+1])\n"
                          "sys.exit(0 if 'verify' in sys.argv and (target/'allow-verify').exists() else (5 if 'verify' in sys.argv else 4))\n")
         manifest, _ = write_test_release(self.root, restore_source=helper_source.encode())
-        self.install(manifest)
-        backup = self.target / "backups" / "sample"
-        write_fake_backup(backup)
         for operation, expected in (
             ("verify", 5),
             ("restore", 4),
         ):
             with self.subTest(operation=operation):
+                target = self.root / ("helper-" + operation)
+                manager = self.module.SurveyManager(target=target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+                manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+                write_fake_backup(target / "backups" / "sample")
                 if operation == "restore":
-                    (self.target / "allow-verify").touch()
+                    (target / "allow-verify").touch()
                 result = subprocess.run(
-                    [sys.executable, str(MODULE_PATH), "--target", str(self.target), "restore", "sample"],
+                    [sys.executable, str(MODULE_PATH), "--target", str(target), "restore", "sample"],
                     capture_output=True, text=True,
                 )
                 self.assertEqual(expected, result.returncode, result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
-        backup_helper = self.target / "releases" / "0.2.0" / "backup.py"
+                self.assertEqual("pending", json.loads((target / ".surveyctl/operation.intent").read_text())["state"])
+                blocked = subprocess.run([sys.executable, str(MODULE_PATH), "--target", str(target), "uninstall"], capture_output=True, text=True)
+                self.assertIn("unverified outcome", blocked.stderr)
+        other_target = self.root / "helper-backup-target"
+        other_manager = self.module.SurveyManager(target=other_target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+        other_manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+        backup_helper = other_target / "releases" / "0.2.0" / "backup.py"
         backup_helper.write_text("import sys\nsys.exit(5)\n")
         result = subprocess.run(
-            [sys.executable, str(MODULE_PATH), "--target", str(self.target), "backup", "--output", "helper-integrity"],
+            [sys.executable, str(MODULE_PATH), "--target", str(other_target), "backup", "--output", "helper-integrity"],
             capture_output=True, text=True,
         )
         self.assertEqual(5, result.returncode, result.stderr)
@@ -1392,6 +1808,43 @@ class SurveyctlTest(unittest.TestCase):
         self.assertLess(next(i for i, value in enumerate(joined) if "backup" in value), next(i for i, value in enumerate(joined) if "pull" in value))
         self.assertLess(next(i for i, value in enumerate(joined) if "ps" in value), len(joined))
         self.assertEqual("0.3.0", (self.target / "current").read_text().strip())
+
+    def test_upgrade_from_legacy_and_failed_upgrade_recovers_legacy_topology(self):
+        self.runner.configured_relay = self.runner.running_relay = False
+        self.install()
+
+        class VersionRunner(FakeRunner):
+            def run(runner, command, **kwargs):
+                old = any("/releases/0.2.0/" in str(part) for part in command)
+                runner.configured_relay = runner.running_relay = not old
+                return super().run(command, **kwargs)
+
+        next_manifest = self.manifest(version="0.3.0", minimumSourceVersion="0.2.0")
+        failing = VersionRunner(fail_when=lambda command: "up" in command and "0.3.0" in " ".join(command))
+        with self.assertRaises(self.module.RuntimeHealthError):
+            self.manager(runner=failing).upgrade(next_manifest)
+        state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
+        self.assertEqual("upgrade_failed", state["status"])
+        self.assertEqual("0.2.0", state["version"])
+        self.assertTrue(any("config" in c and "--services" in c and "0.2.0" in " ".join(c)
+                            for c in failing.commands))
+
+    def test_successful_upgrade_from_legacy_checks_new_relay_topology(self):
+        self.runner.configured_relay = self.runner.running_relay = False
+        self.install()
+
+        class VersionRunner(FakeRunner):
+            def run(runner, command, **kwargs):
+                old = any("/releases/0.2.0/" in str(part) for part in command)
+                runner.configured_relay = runner.running_relay = not old
+                return super().run(command, **kwargs)
+
+        runner = VersionRunner()
+        next_manifest = self.manifest(version="0.3.0", minimumSourceVersion="0.2.0")
+        self.manager(runner=runner).upgrade(next_manifest)
+        self.assertEqual("0.3.0", (self.target / "current").read_text().strip())
+        self.assertTrue(any("config" in c and "--services" in c and "0.3.0" in " ".join(c)
+                            for c in runner.commands))
 
     def test_upgrade_refuses_a_lower_version(self):
         self.install()
@@ -1509,7 +1962,7 @@ class SurveyctlTest(unittest.TestCase):
         integrity.write_text(json.dumps(data))
         failing = FakeRunner(fail_when=lambda command: "up" in command and "0.3.0" in " ".join(command))
         candidate = self.manifest(version="0.3.0", minimumSourceVersion="0.2.0")
-        with self.assertRaisesRegex(self.module.RuntimeHealthError, "services stopped"):
+        with self.assertRaisesRegex(self.module.RuntimeHealthError, "service stop requested"):
             self.manager(runner=failing).upgrade(candidate)
         self.assertEqual("recovery_required", json.loads((self.target / ".surveyctl" / "state.json").read_text())["status"])
         self.assertFalse(any("up" in command and "releases/0.2.0/compose.yml" in " ".join(command) for command in failing.commands))

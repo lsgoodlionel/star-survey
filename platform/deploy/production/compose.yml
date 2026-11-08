@@ -28,10 +28,13 @@ services:
       - engine_admin_password_hash
     networks:
       - edge
+      - preview
     depends_on:
       admin-web:
         condition: service_healthy
       platform:
+        condition: service_healthy
+      publish-gateway:
         condition: service_healthy
       engine:
         condition: service_healthy
@@ -140,6 +143,7 @@ services:
     environment:
       PUBGW_ENGINES_CONFIG: /etc/survey/engines.json
       PUBGW_STATE_DIR: /var/lib/pubgw
+      PUBGW_PUBLIC_URL: https://${PUBLIC_HOST:?set PUBLIC_HOST}
     volumes:
       - ./init/run-with-secrets.sh:/opt/survey/run-with-secrets.sh:ro
       - ${ENGINES_CONFIG_FILE:?set ENGINES_CONFIG_FILE}:/etc/survey/engines.json:ro
@@ -149,6 +153,7 @@ services:
       - pubgw_engine_channel_secret
       - pubgw_engine_admin_password
     networks:
+      - preview
       - internal
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
@@ -211,6 +216,54 @@ services:
         limits:
           cpus: "2.00"
           memory: 1536M
+
+  engine-relay:
+    <<: *runtime-defaults
+    image: ${ENGINE_IMAGE:?set ENGINE_IMAGE to a fixed version or digest}
+    entrypoint: ["/bin/sh", "/opt/survey/run-with-secrets.sh"]
+    command:
+      - MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret
+      - --
+      - /bin/sh
+      - /opt/survey/event-relay.sh
+    environment:
+      ENGINE_DB_HOST: engine-db
+      ENGINE_DB_NAME: limesurvey
+      ENGINE_DB_USER: limesurvey
+      ENGINE_DB_PASSWORD_FILE: /run/secrets/engine_db_password
+      MJY_ENGINE_INSTANCE_ID: ${ENGINE_INSTANCE_ID:?set ENGINE_INSTANCE_ID}
+      MJY_PLATFORM_EVENTS_URL: http://platform:8080/internal/engine-events
+      ENGINE_ADMIN_USER: ${ENGINE_ADMIN_USER:?set ENGINE_ADMIN_USER}
+      YII_CONSOLE_COMMANDS: /opt/survey/commands
+    volumes:
+      - ./init/run-with-secrets.sh:/opt/survey/run-with-secrets.sh:ro
+      - ./init/event-relay.sh:/opt/survey/event-relay.sh:ro
+      - ./init/ProductionRelayCommand.php:/opt/survey/commands/ProductionRelayCommand.php:ro
+      - ./init/ProductionInitCommand.php:/opt/survey/commands/ProductionInitCommand.php:ro
+      - ./init/config.production.php:/var/www/html/application/config/config.php:ro
+      - engine-upload:/var/www/html/upload
+      - engine-runtime:/var/www/html/application/runtime
+    secrets:
+      - engine_db_password
+      - engine_instance_events_secret
+    networks:
+      - internal
+    depends_on:
+      engine:
+        condition: service_healthy
+      platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(is_file('/tmp/survey-event-relay-heartbeat') && time()-filemtime('/tmp/survey-event-relay-heartbeat') < 120 ? 0 : 1);"]
+      interval: 30s
+      timeout: 3s
+      start_period: 90s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
 
   engine-init:
     image: ${ENGINE_IMAGE:?set ENGINE_IMAGE to a fixed version or digest}
@@ -317,6 +370,8 @@ services:
 networks:
   edge:
   internal:
+    internal: true
+  preview:
     internal: true
 
 volumes:

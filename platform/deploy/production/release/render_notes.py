@@ -48,12 +48,12 @@ surveyctl doctor
 
 ## Upgrade
 
-Create and verify a backup before running:
+Create and verify a backup before upgrading. Verify the target release assets, then extract the matching architecture bundle into a separate directory and run its `./surveyctl` from that directory. Do not use the installed release's older CLI: it may not understand the target topology.
 
 ```bash
-surveyctl backup --output before-{version}
-surveyctl upgrade --manifest release.json
-surveyctl doctor
+./surveyctl backup --output before-{version}
+./surveyctl upgrade --manifest /path/to/verified/release.json
+./surveyctl doctor
 ```
 
 This release declares rollback policy `{rollback}`. When it is `restore-only`, recover with the verified pre-upgrade backup instead of starting older images against a migrated database.

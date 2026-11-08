@@ -854,7 +854,14 @@ def count_gateway_publish_calls(logs: str) -> int:
 def cmd_verify(args: argparse.Namespace) -> None:
     metadata = validate_metadata(_load_object(Path(args.metadata_file), "metadata"))
     result = validate_result(_load_object(Path(args.result_file), "browser result"))
-    validate_wave2_scenarios(_load_object(Path(args.wave2_evidence_file), "Wave 2 browser evidence"))
+    if args.verification_scope == "full":
+        expect(args.expected_gateway_publish_calls in (3, 4), "full gate requires full-suite publish count")
+        validate_wave2_scenarios(_load_object(Path(args.wave2_evidence_file), "Wave 2 browser evidence"))
+    elif args.verification_scope == "relay-diagnostic":
+        expect(args.expected_gateway_publish_calls == 1, "relay diagnostic requires its single-publish count")
+        print("  [scope] relay diagnostic: Wave 2 browser scenarios not assessed")
+    else:
+        raise StepFailed("unknown verification scope")
     owner = Api(args.base_url, mint_token(jwt_secret(), metadata["actorId"], metadata["tenantId"], []))
 
     status, survey = owner.call("GET", "/v1/surveys/{}".format(result["surveyId"]))
@@ -927,12 +934,13 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     verify.add_argument("--metadata-file", required=True)
     verify.add_argument("--result-file", required=True)
     verify.add_argument("--wave2-evidence-file", required=True)
+    verify.add_argument("--verification-scope", choices=("full", "relay-diagnostic"), default="full")
     verify.add_argument("--platform-db-container", required=True)
     verify.add_argument("--platform-db-name", default="platform")
     verify.add_argument("--engine-db-container", required=True)
     verify.add_argument("--engine-db-kind", choices=("mysql", "pgsql"), required=True)
     verify.add_argument("--gateway-container", required=True)
-    verify.add_argument("--expected-gateway-publish-calls", type=int, choices=(3, 4), default=3)
+    verify.add_argument("--expected-gateway-publish-calls", type=int, choices=(1, 3, 4), default=3)
     verify.set_defaults(handler=cmd_verify)
     return parser.parse_args(argv)
 
