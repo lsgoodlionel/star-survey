@@ -40,7 +40,7 @@ describe('browser gate security contract', () => {
     const config = await source('playwright.config.ts');
     const workflow = await source('../../../.github/workflows/platform-quality.yml');
 
-    expect(config).toContain("testMatch: [/authoring\\.spec\\.ts/, /redaction\\.spec\\.ts/]");
+    expect(config).toContain("testMatch: [/authoring\\.spec\\.ts/, /redaction\\.spec\\.ts/, /delivery-import\\.spec\\.ts/]");
     expect(workflow).toContain('id: admin_web_e2e');
     expect(workflow).toContain(
       'if: "${{ failure() && steps.admin_web_e2e.outcome == \'failure\' }}"',
