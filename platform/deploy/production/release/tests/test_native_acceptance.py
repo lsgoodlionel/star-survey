@@ -79,7 +79,9 @@ def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) 
     testcase.assertNotRegex(shell, r"(?m)\b(?:exit|return)(?=\s*(?:;|$))")
     testcase.assertNotRegex(shell, r"(?m)\bexec\b")
     exits = re.findall(r"(?m)\bexit\s+([^;\n]+)", shell)
-    testcase.assertEqual(["2", "2", '"$result"'], exits, "native acceptance exit propagation changed")
+    testcase.assertEqual(["1", "2", "2", '"$result"'], exits, "native acceptance exit propagation changed")
+    testcase.assertIn("# Do not touch the host until containment, recovery and cleanup are verified.\nprintf 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.\\n' >&2\nexit 1\n", shell)
+    testcase.assertLess(shell.index('exit 1'), shell.index('work_root='))
     testcase.assertEqual(1, shell.count('acceptance_status="passed"'))
     testcase.assertIn("trap collect_evidence EXIT", shell)
     testcase.assertIn("local result=$?", shell)
@@ -98,6 +100,9 @@ def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) 
 
 def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dict) -> None:
     job = workflow["jobs"]["native-acceptance"]
+    first = job['steps'][0]
+    testcase.assertEqual('Block native lifecycle before host mutation', first['name'])
+    testcase.assertEqual("echo 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.' >&2\nexit 1\n", first['run'])
     step = next(item for item in job["steps"] if item.get("name") == "Execute real clean-host install upgrade restore and uninstall")
     testcase.assertEqual("echo 'Native lifecycle blocked: recovery and safe cleanup are not independently verified.' >&2\nexit 1\n", step['run'])
     testcase.assertNotIn('sudo -E NATIVE_ACCEPTANCE_REAL=1', job_text(job))
@@ -198,6 +203,22 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn('candidate-assets/identity.json', script)
         assert_native_workflow_invocation(self, self.workflow)
 
+    def test_native_workflow_blocks_before_downloading_legacy_candidate(self):
+        step = self.workflow['jobs']['native-acceptance']['steps'][0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / 'executed'
+            legacy = root / 'legacy-orchestrator.sh'
+            legacy.write_text('#!/bin/sh\nprintf unsafe > "$MARKER"\n')
+            result = subprocess.run(['/bin/bash', '-c', step['run']], cwd=root,
+                                    env={**os.environ, 'MARKER': str(marker),
+                                         'CANDIDATE_RUN_ID': '12345'},
+                                    capture_output=True, text=True)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('blocked before host changes', result.stderr)
+            self.assertFalse(marker.exists())
+            self.assertTrue(legacy.exists())
+
     def test_native_job_uploads_only_fixed_failed_diagnostic(self):
         job = self.workflow["jobs"]["native-acceptance"]
         text = job_text(job)
@@ -244,7 +265,7 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
             self.assertNotIn(secret, diagnostic + result.stdout + result.stderr)
             payload = json.loads(diagnostic)
             self.assertEqual({'schemaVersion': 1, 'status': 'failed', 'reason': 'native-evidence-withheld',
-                              'runId': '123', 'attempt': '2', 'commit': 'a' * 40,
+                              'runId': '123', 'attempt': '2', 'workflowSha': 'a' * 40, 'candidateSha': None,
                               'ubuntu': '24.04', 'architecture': 'arm64'}, payload)
             spec = importlib.util.spec_from_file_location('native_diagnostic_validation', EVIDENCE_HELPER_PATH)
             validator = importlib.util.module_from_spec(spec)
@@ -376,6 +397,28 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    def test_script_refuses_before_any_host_command_or_fixture_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            marker = root / 'called'
+            fixture = root / 'existing-fixture'
+            fixture.write_text('synthetic data')
+            for name in ('docker', 'sudo', 'python3', 'mktemp', 'realpath', 'mkdir', 'rm', 'sed', 'cp', 'touch'):
+                fake = bin_dir / name
+                fake.write_text('#!/bin/sh\nprintf called > "$MARKER"\nexit 0\n')
+                fake.chmod(0o755)
+            env = {**os.environ, 'PATH': str(bin_dir), 'MARKER': str(marker),
+                   'NATIVE_ACCEPTANCE_REAL': '1', 'GITHUB_ACTIONS': 'true',
+                   'SURVEY_NATIVE_ACCEPTANCE': '1', 'RUNNER_TEMP': str(root)}
+            result = subprocess.run(['/bin/bash', str(SCRIPT_PATH)], cwd=root, env=env,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('blocked before host changes', result.stderr)
+            self.assertFalse(marker.exists())
+            self.assertEqual('synthetic data', fixture.read_text())
 
     def test_unverified_cleanup_cannot_authorize_uninstall(self):
         guard = self.text[self.text.index('require_fixture_cleanup_proof() {'):

@@ -684,6 +684,12 @@ jobs:
             architecture: arm64
             id: ubuntu-24-04-arm64
     steps:
+      - name: Block native lifecycle before host mutation
+        shell: bash
+        run: |
+          echo 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.' >&2
+          exit 1
+
       - name: Download the shared immutable candidate
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -797,7 +803,7 @@ jobs:
           case "$MATRIX_ARCHITECTURE" in amd64|arm64) ;; *) exit 1 ;; esac
           if ! [[ "$RUNNER_TEMP" == /* && "$RUNNER_TEMP" != *$'\n'* && "$RUNNER_TEMP" != *$'\r'* ]]; then exit 1; fi
           diagnostic_dir="$(mktemp -d "$RUNNER_TEMP/native-diagnostic.XXXXXXXX")"
-          printf '{"schemaVersion":1,"status":"failed","reason":"native-evidence-withheld","runId":"%s","attempt":"%s","commit":"%s","ubuntu":"%s","architecture":"%s"}\n' \
+          printf '{"schemaVersion":1,"status":"failed","reason":"native-evidence-withheld","runId":"%s","attempt":"%s","workflowSha":"%s","candidateSha":null,"ubuntu":"%s","architecture":"%s"}\n' \
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$MATRIX_UBUNTU" "$MATRIX_ARCHITECTURE" > "$diagnostic_dir/diagnostic.json"
           printf 'path=%s\n' "$diagnostic_dir/diagnostic.json" >> "$GITHUB_OUTPUT"
 

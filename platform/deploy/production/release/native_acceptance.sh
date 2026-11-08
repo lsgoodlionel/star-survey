@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Do not touch the host until containment, recovery and cleanup are verified.
+printf 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.\n' >&2
+exit 1
+
 [[ "${NATIVE_ACCEPTANCE_REAL:-}" == "1" ]]
 [[ "${GITHUB_ACTIONS:-}" == "true" ]]
 [[ "${SURVEY_NATIVE_ACCEPTANCE:-}" == "1" ]]
