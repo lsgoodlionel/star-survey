@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import csv
+import copy
 import io
 import zipfile
 import importlib.util
@@ -100,6 +101,32 @@ def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) 
 
 def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dict) -> None:
     job = workflow["jobs"]["native-acceptance"]
+    testcase.assertNotIn('continue-on-error', job)
+    diagnostics = {
+        'Prepare fail-closed native diagnostic': 'always()',
+        'Preserve fail-closed native diagnostic': "always() && steps.native_diagnostic.outcome == 'success'",
+    }
+    testcase.assertEqual(len(job['steps']), len({item.get('name') for item in job['steps']}))
+    for item in job['steps']:
+        testcase.assertNotIn('continue-on-error', item)
+        if item.get('name') in diagnostics:
+            testcase.assertEqual(diagnostics[item['name']], item.get('if'))
+        else:
+            testcase.assertNotIn('if', item, 'native host steps must retain implicit success()')
+    prepare = next(item for item in job['steps'] if item.get('name') == 'Prepare fail-closed native diagnostic')
+    testcase.assertEqual({'name', 'id', 'if', 'shell', 'env', 'run'}, set(prepare))
+    testcase.assertEqual('native_diagnostic', prepare.get('id'))
+    testcase.assertEqual('bash', prepare.get('shell'))
+    testcase.assertEqual({'MATRIX_UBUNTU': '${{ matrix.ubuntu }}',
+                          'MATRIX_ARCHITECTURE': '${{ matrix.architecture }}'}, prepare.get('env'))
+    testcase.assertEqual('62aace031efc6774343491a48c263fa59bdceba1249054dac3fde8fb708443a9',
+                         hashlib.sha256(prepare['run'].encode()).hexdigest())
+    upload = next(item for item in job['steps'] if item.get('name') == 'Preserve fail-closed native diagnostic')
+    testcase.assertEqual({'name', 'if', 'uses', 'with'}, set(upload))
+    testcase.assertEqual('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02', upload.get('uses'))
+    testcase.assertEqual({'name': 'native-acceptance-${{ matrix.ubuntu }}-${{ matrix.architecture }}',
+                          'path': '${{ steps.native_diagnostic.outputs.path }}',
+                          'if-no-files-found': 'error', 'retention-days': 30}, upload['with'])
     first = job['steps'][0]
     testcase.assertEqual('Block native lifecycle before host mutation', first['name'])
     testcase.assertEqual("echo 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.' >&2\nexit 1\n", first['run'])
@@ -218,6 +245,35 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
             self.assertIn('blocked before host changes', result.stderr)
             self.assertFalse(marker.exists())
             self.assertTrue(legacy.exists())
+
+    def test_native_workflow_rejects_error_suppression_and_host_bypass(self):
+        for name, field, value in [
+            ('Block native lifecycle before host mutation', 'continue-on-error', True),
+            ('Require ready native systemd and Docker', 'if', 'always()'),
+            ('Execute real clean-host install upgrade restore and uninstall', 'if', 'failure()'),
+            ('Download the shared immutable candidate', 'continue-on-error', True),
+        ]:
+            with self.subTest(name=name, field=field):
+                altered = copy.deepcopy(self.workflow)
+                step = next(s for s in altered['jobs']['native-acceptance']['steps'] if s.get('name') == name)
+                step[field] = value
+                with self.assertRaises(AssertionError):
+                    assert_native_workflow_invocation(self, altered)
+        altered = copy.deepcopy(self.workflow)
+        altered['jobs']['native-acceptance']['continue-on-error'] = True
+        with self.assertRaises(AssertionError):
+            assert_native_workflow_invocation(self, altered)
+        altered = copy.deepcopy(self.workflow)
+        altered['jobs']['native-acceptance']['steps'].append(
+            {'name': 'Prepare fail-closed native diagnostic', 'if': 'always()', 'run': 'sudo true'})
+        with self.assertRaises(AssertionError):
+            assert_native_workflow_invocation(self, altered)
+        altered = copy.deepcopy(self.workflow)
+        diagnostic = next(s for s in altered['jobs']['native-acceptance']['steps']
+                          if s.get('name') == 'Prepare fail-closed native diagnostic')
+        diagnostic['run'] += '\nsudo true\n'
+        with self.assertRaises(AssertionError):
+            assert_native_workflow_invocation(self, altered)
 
     def test_native_job_uploads_only_fixed_failed_diagnostic(self):
         job = self.workflow["jobs"]["native-acceptance"]
