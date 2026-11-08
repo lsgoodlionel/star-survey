@@ -1,4 +1,5 @@
 import subprocess
+import os
 import tempfile
 from pathlib import Path
 import unittest
@@ -60,6 +61,13 @@ cleanup_run 0'''
                                     capture_output=True, text=True)
             self.assertEqual(1, result.returncode)
             self.assertFalse(private.exists())
+
+    def test_conflicting_diagnostic_modes_fail_before_start(self):
+        env = os.environ.copy()
+        env.update(ADMIN_WEB_RELAY_DIAGNOSTIC='1', ADMIN_WEB_ATTACHMENT_DIAGNOSTIC='1')
+        result = subprocess.run(['bash', str(SCRIPT), '--fresh'], env=env, capture_output=True, text=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('diagnostics must run separately', result.stderr)
 
     def test_relay_preflight_rejection_does_not_call_compose_cleanup(self):
         with tempfile.TemporaryDirectory() as parent:

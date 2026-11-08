@@ -1,0 +1,16 @@
+# Test-only independent readers. Install in a disposable venv from official PyPI:
+# python -m pip install --only-binary=:all: --index-url https://pypi.org/simple -r this-file
+# CPython 3.9 macOS arm64 and CPython 3.11 Linux x86_64 wheel targets.
+openpyxl==3.1.5
+et-xmlfile==2.0.0
+python-docx==1.2.0
+lxml==6.0.2
+typing-extensions==4.15.0
+pyreadstat==1.2.8
+numpy==1.26.4
+# ReadStat1.2.8 reads into pandas; also used for independent SAV fixtures.
+pandas==2.2.3
+python-dateutil==2.9.0.post0
+pytz==2025.2
+tzdata==2025.2
+six==1.17.0

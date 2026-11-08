@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { responsePageSchema, responseSummarySchema } from '../src/shared/api/responses';
 import { redactSensitiveInputs } from './redaction';
 
 interface TestMetadata {
@@ -183,6 +184,94 @@ test('real data role sees only authorized response and export facts and actions'
     await expect(data.getByLabel('已完成 1')).toBeVisible();
   } finally {
     await data.context().close();
+  }
+});
+
+test('real statistics-only role keeps the summary and loses cached details and export access', async ({ browser }) => {
+  const metadata = await readMetadata();
+  const result = await readResult();
+  await seedScopedActors(metadata.tenantId, result.surveyId);
+
+  const data = await rolePage(browser, 'ADMIN_WEB_DATA_JWT_FILE');
+  let statisticsOnly = false;
+  try {
+    const token = await readPrivateToken('ADMIN_WEB_DATA_JWT_FILE');
+    await login(data, token, DATA_ACTOR, metadata.tenantId);
+    const responsePath = `/v1/surveys/${result.surveyId}/responses`;
+    const rawResponse = data.waitForResponse((response) =>
+      new URL(response.url()).pathname === responsePath && response.request().method() === 'GET',
+    );
+    await navigateToResponses(data, result.surveyId);
+    const raw = await rawResponse;
+    expect(raw.status()).toBe(200);
+    const parsedRaw = responsePageSchema.safeParse(await raw.json().catch(() => null));
+    if (!parsedRaw.success) throw new Error('invalid_response_page');
+    expect(parsedRaw.data.items.length).toBe(1);
+    expect(parsedRaw.data.items[0].state === 'engine_completed').toBe(true);
+    expect(parsedRaw.data.items[0].answersStatus === 'available').toBe(true);
+    expect(Object.keys(parsedRaw.data.items[0].answers ?? {}).length).toBeGreaterThan(0);
+    await expect(data.locator('.response-table-wrap tbody tr')).toHaveCount(1);
+    await expect(data.locator('.response-table-wrap time')).toHaveCount(2);
+    await expect(data.getByRole('button', { name: '创建导出任务' })).toBeVisible();
+
+    await setScopedDataRole(metadata.tenantId, result.surveyId, 'statistics_viewer');
+    statisticsOnly = true;
+    const summaryResponse = data.waitForResponse((response) =>
+      new URL(response.url()).pathname === `${responsePath}/summary` && response.request().method() === 'GET',
+    );
+    const deniedDetails = data.waitForResponse((response) =>
+      new URL(response.url()).pathname === responsePath && response.request().method() === 'GET',
+    );
+    // Keep the mounted page and its successful raw-data cache while refreshing authorization.
+    await data.getByRole('button', { name: '刷新答卷数据' }).click();
+    const summary = await summaryResponse;
+    expect(summary.status()).toBe(200);
+    const parsedSummary = responseSummarySchema.safeParse(await summary.json().catch(() => null));
+    if (!parsedSummary.success) throw new Error('invalid_response_summary');
+    expect(parsedSummary.data.surveyId === result.surveyId).toBe(true);
+    expect(parsedSummary.data.total.engineCompleted).toBe(1);
+    expect((await deniedDetails).status()).toBe(403);
+
+    const exportStatus = await data.evaluate(async ({ surveyId, token, requestId }) => {
+      try {
+        const response = await fetch(`/v1/surveys/${surveyId}/exports`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'Idempotency-Key': requestId,
+          },
+          body: JSON.stringify({ format: 'csv', filter: { states: null, versions: null }, templateVersion: null }),
+        });
+        return response.status;
+      } catch {
+        throw new Error('statistics_export_request_failed');
+      }
+    }, { surveyId: result.surveyId, token, requestId: randomUUID() });
+    expect(exportStatus).toBe(403);
+
+    await expect(data).toHaveURL(new RegExp(`/surveys/${result.surveyId}/responses$`));
+    await expect(data.getByText('答卷数据已更新', { exact: true })).toBeVisible();
+    await expect(data.getByLabel('已完成 1', { exact: true })).toBeVisible();
+    await expect(data.getByText('你可以查看统计摘要，但没有查看答卷明细和导出的权限。', { exact: true })).toBeVisible();
+    await expect(data.locator('.response-table-wrap')).toHaveCount(0);
+    await expect(data.locator('.responses-page tbody tr')).toHaveCount(0);
+    await expect(data.locator('.responses-page time')).toHaveCount(0);
+    await expect(data.getByRole('columnheader', { name: '开始/完成时间' })).toHaveCount(0);
+    for (const label of ['答卷状态', '发布版本', '开始时间起', '开始时间止', '完成时间起', '完成时间止', '导出格式']) {
+      await expect(data.getByLabel(label, { exact: true })).toHaveCount(0);
+    }
+    await expect(data.getByRole('button', { name: /选择显示字段|收起显示字段/ })).toHaveCount(0);
+    await expect(data.getByLabel('答卷分页', { exact: true })).toHaveCount(0);
+    await expect(data.locator('.export-workspace')).toHaveCount(0);
+    await expect(data.getByRole('button', { name: '创建导出任务' })).toHaveCount(0);
+  } finally {
+    try {
+      if (statisticsOnly) await setScopedDataRole(metadata.tenantId, result.surveyId, 'raw_data_viewer');
+    } finally {
+      await data.context().close();
+    }
   }
 });
 
@@ -531,6 +620,51 @@ BEGIN
   GET DIAGNOSTICS deleted_count = ROW_COUNT;
   IF deleted_count <> 1 THEN
     RAISE EXCEPTION 'expected one raw data grant to be revoked, got %', deleted_count;
+  END IF;
+END $$;
+COMMIT;`;
+  await run('docker', [
+    'exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'),
+    'psql', '-U', 'platform_owner', '-d', 'platform', '-v', 'ON_ERROR_STOP=1', '-q', '-c', sql,
+  ]);
+}
+
+async function setScopedDataRole(
+  tenantId: string,
+  surveyId: string,
+  role: 'raw_data_viewer' | 'statistics_viewer',
+) {
+  assertUuid(tenantId);
+  assertUuid(surveyId);
+  const previousRole = role === 'statistics_viewer' ? 'raw_data_viewer' : 'statistics_viewer';
+  // Change only the existing synthetic grant's role, preserving its ID, scope and metadata.
+  // An existing statistics grant or any other applicable grant fails the transition atomically.
+  const sql = `BEGIN;
+SELECT set_config('app.tenant_id', '${tenantId}', true);
+DO $$
+DECLARE changed_count integer;
+BEGIN
+  WITH RECURSIVE ancestors AS (
+    SELECT id, parent_id FROM access_resource WHERE tenant_id = '${tenantId}' AND id = '${surveyId}'
+    UNION ALL
+    SELECT parent.id, parent.parent_id
+    FROM access_resource parent
+    JOIN ancestors child ON child.parent_id = parent.id
+    WHERE parent.tenant_id = '${tenantId}'
+  ), root_project AS (
+    SELECT id FROM ancestors WHERE parent_id IS NULL
+  ), applicable_grants AS (
+    SELECT id FROM access_grant
+    WHERE tenant_id = '${tenantId}'::uuid AND actor_id = '${DATA_ACTOR}'
+      AND (resource_id IS NULL OR resource_id IN (SELECT id FROM ancestors))
+  )
+  UPDATE access_grant SET role_code = '${role}'
+  WHERE tenant_id = '${tenantId}'::uuid AND actor_id = '${DATA_ACTOR}' AND role_code = '${previousRole}'
+    AND resource_id IN (SELECT id FROM root_project)
+    AND (SELECT count(*) FROM applicable_grants) = 1;
+  GET DIAGNOSTICS changed_count = ROW_COUNT;
+  IF changed_count <> 1 THEN
+    RAISE EXCEPTION 'unexpected_scoped_data_role_count';
   END IF;
 END $$;
 COMMIT;`;

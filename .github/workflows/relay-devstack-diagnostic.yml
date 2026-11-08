@@ -1,6 +1,8 @@
 name: Development stack automatic relay diagnostic
 
 on:
+  pull_request:
+  workflow_dispatch:
   push:
     branches: [codex/relay-devstack-e2e]
 

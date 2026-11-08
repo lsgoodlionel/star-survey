@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+    <metadata>
+        <name>AttachmentLocatorProbe</name>
+        <type>plugin</type>
+        <creationDate>2026-11-07</creationDate>
+        <last_update>2026-11-07</last_update>
+        <author>MJY Platform</author>
+        <license>GNU General Public License version 2 or later</license>
+        <version>0.1.0</version>
+        <description><![CDATA[TEST ONLY: observes attachment locator checks after the original 404, without exposing request values. Mounted into isolated attachment CI only.]]></description>
+    </metadata>
+    <compatibility><version>7.0</version></compatibility>
+    <updaters disabled="disabled"></updaters>
+</config>

@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import stat
 import struct
 import subprocess
@@ -58,6 +59,36 @@ def png(width, height):
 
 
 class AdminWebGateTest(unittest.TestCase):
+    def test_engine_frame_policy_matches_production_and_keeps_inherited_defenses(self):
+        root = Path(__file__).parents[3]
+        nginx = (root / "platform/deploy/test/admin-web-e2e.nginx.conf").read_text()
+        production = (root / "platform/deploy/production/Caddyfile").read_text()
+        csp = re.search(r'Content-Security-Policy "([^"]+)"', production).group(1)
+        inherited = dict(re.findall(r'add_header ([\w-]+) "([^"]*)" always;', nginx.split("    location", 1)[0]))
+        locations = re.findall(r'    location ([^\n]+) \{\n(.*?)\n    \}', nginx, re.S)
+        engines = [body for path, body in locations if "proxy_pass ${ENGINE_UPSTREAM}" in body]
+        self.assertEqual(2, len(engines))
+        for body in engines:
+            with self.subTest(route=body.splitlines()[0]):
+                headers = dict(re.findall(r'add_header ([\w-]+) "([^"]*)" always;', body))
+                self.assertEqual("SAMEORIGIN", headers.get("X-Frame-Options"))
+                self.assertEqual(csp, headers.get("Content-Security-Policy"))
+                for key, value in inherited.items():
+                    if key != "X-Frame-Options":
+                        self.assertEqual(value, headers.get(key), key)
+        self.assertEqual(2, nginx.count('add_header X-Frame-Options "SAMEORIGIN" always;'))
+
+    def test_admin_frame_policy_stays_deny(self):
+        root = Path(__file__).parents[3]
+        nginx = (root / "platform/deploy/test/admin-web-e2e.nginx.conf").read_text()
+        self.assertIn('add_header X-Frame-Options "DENY" always;', nginx.split("    location", 1)[0])
+        for path, body in re.findall(r'    location ([^\n]+) \{\n(.*?)\n    \}', nginx, re.S):
+            if "proxy_pass ${ENGINE_UPSTREAM}" not in body:
+                self.assertNotIn("SAMEORIGIN", body, path)
+        admin = (root / "platform/apps/admin-web/nginx.conf").read_text()
+        self.assertIn('add_header X-Frame-Options "DENY" always;', admin)
+        self.assertIn("frame-ancestors 'none'", admin)
+
     def test_wave2_browser_evidence_requires_every_named_scenario(self):
         gate = load_gate()
         expected = {
@@ -1395,6 +1426,70 @@ main --fresh
             self.assertTrue(all(index < playwright_index for index in issue_indexes))
             self.assertLess(events.index("verify"), events.index("personnel-status"))
 
+    def test_attachment_diagnostic_finalization_requires_success_and_archives(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        for case in ("success", "missing-marker", "wrong-marker", "missing-root", "non-ci", "non-github", "archive-fails"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                trace = root / "trace"
+                trace.touch()
+                if case != "missing-marker":
+                    (root / "playwright-suite-success.txt").write_text("failed" if case == "wrong-marker" else "passed")
+                if case != "missing-root":
+                    (root / "run-root-resource-id.txt").write_text("11111111-1111-4111-8111-111111111111\n")
+                script = r'''
+source "$RUNNER"
+ADMIN_WEB_ATTACHMENT_DIAGNOSTIC=1
+CI=true
+GITHUB_ACTIONS=true
+[[ "$CASE" != non-ci ]] || CI=false
+[[ "$CASE" != non-github ]] || GITHUB_ACTIONS=false
+GATE=gate.py
+PLATFORM_URL=http://127.0.0.1:1
+ADMIN_WEB_METADATA_FILE=metadata.json
+ADMIN_WEB_RESULT_FILE=result.json
+PLATFORM_DB_CONTAINER=platform-db
+GATEWAY_CONTAINER=gateway
+ADMIN_WEB_JWT_FILE=owner.jwt
+ADMIN_WEB_TEST_RESULTS_DIR="$RESULTS"
+python3() {
+  case " $* " in
+    *" verify "*) echo verify >>"$TRACE"; return 77 ;;
+    *" archive-run-root "*)
+      echo archive >>"$TRACE"
+      [[ "$CASE" != archive-fails ]]
+      ;;
+  esac
+}
+verify_and_archive_run_root
+'''
+                completed = run_bash(script, {"RUNNER": str(runner), "RESULTS": directory, "TRACE": str(trace), "CASE": case})
+                self.assertEqual(case == "success", completed.returncode == 0, completed.stderr)
+                expected = ["archive"] if case in ("success", "archive-fails") else []
+                self.assertEqual(expected, trace.read_text().splitlines())
+
+    def test_diagnostic_completion_keeps_normal_full_and_wave3_routing(self):
+        runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
+        text = runner.read_text()
+        start = text.index('step "gate: platform API, platform DB, gateway and engine DB"')
+        end = text.index('\n}\n\nif [[ "${BASH_SOURCE', start)
+        completion = text[start:end]
+        for diagnostic, suite in (("1", "full"), ("", "full"), ("", "wave3")):
+            with self.subTest(diagnostic=diagnostic, suite=suite), tempfile.TemporaryDirectory() as directory:
+                trace = Path(directory, "trace")
+                script = r'''
+source "$RUNNER"
+ADMIN_WEB_ATTACHMENT_DIAGNOSTIC="$DIAGNOSTIC"
+E2E_SUITE="$SUITE"
+verify_and_archive_run_root() { echo verify-archive >>"$TRACE"; }
+run_personnel_status_test() { echo personnel >>"$TRACE"; }
+finish() {
+''' + completion + '\n}\nfinish\n'
+                result = run_bash(script, {"RUNNER": str(runner), "DIAGNOSTIC": diagnostic, "SUITE": suite, "TRACE": str(trace)})
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(["verify-archive", "personnel"] if not diagnostic and suite == "full" else ["verify-archive"], trace.read_text().splitlines())
+                self.assertEqual(bool(diagnostic), "full gate was not evaluated" in result.stderr)
+
     def test_post_playwright_verify_failure_does_not_archive(self):
         runner = Path(__file__).parents[2] / "deploy/test/run-admin-web-e2e.sh"
         with tempfile.TemporaryDirectory() as directory:
@@ -1507,6 +1602,201 @@ run_browser_tests
             self.assertFalse((results / "leak.txt").exists())
             self.assertFalse((results / "failure.png").exists())
 
+
+
+class AttachmentLocatorProbeTests(unittest.TestCase):
+    def php(self, body):
+        root = os.environ.get("ATTACHMENT_PROBE_TEST_ROOT", str(MODULE_PATH.parents[3]))
+        prefix = "$root = " + json.dumps(root) + "; require $root . '/platform/tests/fixtures/plugins/AttachmentLocatorProbe/AttachmentLocatorProbeChecks.php'; "
+        result = subprocess.run(["php", "-r", prefix + body], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("", result.stderr)
+        return json.loads(result.stdout)
+
+    def test_probe_reports_readonly_locator_boundaries_without_values(self):
+        results = self.php(r"""
+require $root . '/vendor/yiisoft/yii/framework/yii.php';
+$out = [];
+foreach (['ok', 'generation_missing', 'generation_mismatch', 'table_missing', 'legacy_only', 'field_missing', 'response_missing', 'ownership_mismatch', 'base_unresolved', 'file_unresolved', 'path_rejected', 'not_regular_file'] as $case) {
+    $db = new CDbConnection('sqlite::memory:');
+    $db->tablePrefix = 'lime_';
+    $db->setActive(true);
+    $db->createCommand('CREATE TABLE lime_mjyplatformbridge_generation (survey_id integer, generation text)')->execute();
+    if ($case !== 'generation_missing') $db->createCommand("INSERT INTO lime_mjyplatformbridge_generation VALUES (123, 'private-generation')")->execute();
+    $db->createCommand('CREATE TABLE lime_responses_123 (id integer, "123X1X1" text)')->execute();
+    $db->createCommand()->insert('lime_responses_123', ['id'=>7, '123X1X1'=>json_encode([['filename'=>'fu_private']])]);
+    if ($case === 'table_missing') $db->createCommand('DROP TABLE lime_responses_123')->execute();
+    if ($case === 'legacy_only') $db->createCommand()->renameTable('lime_responses_123', 'lime_survey_123');
+    $dir = sys_get_temp_dir() . '/probe-' . bin2hex(random_bytes(8));
+    $cleanupDir = $dir;
+    mkdir($dir . '/surveys/123/files', 0700, true);
+    file_put_contents($dir . '/surveys/123/files/fu_private', 'unread-private-content');
+    $q = ['sid'=>'123','generation'=>'private-generation','responseId'=>'7','field'=>'123X1X1','storedName'=>'fu_private'];
+    if ($case === 'generation_mismatch') $q['generation'] = 'different-private-generation';
+    if ($case === 'field_missing') $q['field'] = '123X1X2';
+    if ($case === 'response_missing') $q['responseId'] = '8';
+    if ($case === 'ownership_mismatch') $q['storedName'] = 'fu_other';
+    if ($case === 'base_unresolved') $dir .= '/missing';
+    if ($case === 'file_unresolved') unlink($dir . '/surveys/123/files/fu_private');
+    if ($case === 'path_rejected') { unlink($dir . '/surveys/123/files/fu_private'); file_put_contents($dir . '/outside', 'private'); symlink($dir . '/outside', $dir . '/surveys/123/files/fu_private'); }
+    if ($case === 'not_regular_file') { unlink($dir . '/surveys/123/files/fu_private'); mkdir($dir . '/surveys/123/files/fu_private'); }
+    $db->createCommand('PRAGMA query_only = ON')->execute();
+    $out[$case] = attachmentProbeChecks($db, $q, $dir);
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($cleanupDir, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST) as $item) {
+        if ($item->isDir() && !$item->isLink()) rmdir($item->getPathname()); else unlink($item->getPathname());
+    }
+    rmdir($cleanupDir);
+}
+echo json_encode($out);
+""")
+        for case, evidence in results.items():
+            self.assertEqual("locator_checks_pass" if case == "ok" else "table_missing" if case == "legacy_only" else case, evidence["stage"])
+            self.assertTrue(all(isinstance(value, bool) for key, value in evidence.items() if key != "stage"))
+            self.assertNotRegex(json.dumps(evidence), r"private|123X1X1|fu_|/surveys/|/probe-")
+        self.assertFalse(results["legacy_only"]["tablePresent"])
+        self.assertFalse(results["legacy_only"]["pathEvaluated"])
+        self.assertFalse(results["generation_mismatch"]["ownershipEvaluated"])
+        self.assertFalse(results["ownership_mismatch"]["pathEvaluated"])
+        self.assertTrue(results["ok"]["pathEvaluated"])
+        self.assertTrue(results["ok"]["regularFile"])
+
+    def test_probe_readonly_transaction_is_fail_closed_and_always_rolls_back(self):
+        result = self.php(r"""
+class ProbeTestTransaction { public $db; function __construct($db) { $this->db=$db; } function rollback() { $this->db->calls[]='rollback'; } }
+class ProbeTestCommand { public $db; function __construct($db) {$this->db=$db;} function execute() { if ($this->db->fail) throw new RuntimeException('private-error'); } }
+class ProbeTestDb {
+ public $calls=[]; public $fail=false; public $active=false; public $driver; public $schemaCachingDuration=4; public $queryCachingDuration=5;
+ function getDriverName() {return $this->driver;}
+ function getCurrentTransaction() {return $this->active ? new ProbeTestTransaction($this):null;}
+ function beginTransaction() {$this->calls[]='begin'; return new ProbeTestTransaction($this);}
+ function createCommand($sql) {$this->calls[]=$sql; return new ProbeTestCommand($this);}
+}
+$out=[];
+foreach (['mysql','pgsql'] as $driver) {
+ foreach ([false,true] as $fail) {
+  $db=new ProbeTestDb(); $db->driver=$driver; $db->fail=$fail;
+  $out[$driver . ($fail ? '_failed' : '')]=attachmentProbeReadOnly($db, function() use ($db) { $db->calls[]='read'; throw new RuntimeException('private-path'); });
+  $out[$driver . ($fail ? '_failed_calls' : '_calls')]=$db->calls;
+  $out[$driver . ($fail ? '_failed_cache' : '_cache')]=[$db->schemaCachingDuration,$db->queryCachingDuration];
+ }
+}
+$db=new ProbeTestDb();$db->driver='pgsql';$db->active=true;
+$out['active']=attachmentProbeReadOnly($db, function(){throw new RuntimeException('should not execute');});
+$out['active_calls']=$db->calls;
+echo json_encode($out);
+""")
+        self.assertEqual(["SET TRANSACTION READ ONLY", "begin", "read", "rollback"], result["mysql_calls"])
+        self.assertEqual(["begin", "SET TRANSACTION READ ONLY", "read", "rollback"], result["pgsql_calls"])
+        self.assertEqual(["SET TRANSACTION READ ONLY"], result["mysql_failed_calls"])
+        self.assertEqual(["begin", "SET TRANSACTION READ ONLY", "rollback"], result["pgsql_failed_calls"])
+        self.assertEqual([], result["active_calls"])
+        self.assertEqual({"stage": "evidence_unavailable"}, result["active"])
+        for driver in ("mysql", "pgsql"):
+            for suffix in ("", "_failed"):
+                self.assertEqual({"stage": "probe_failed"}, result[driver + suffix])
+                self.assertEqual([4,5], result[driver + suffix + "_cache"])
+        self.assertNotIn("private", json.dumps(result))
+
+    def test_probe_rejects_invalid_private_input_before_any_read(self):
+        result = self.php(r"""
+class ProbeNoRead {function __call($name, $args) {throw new RuntimeException('private-read');}}
+$valid=['sid'=>'123','generation'=>'generation','responseId'=>'7','field'=>'123X1X1','storedName'=>'fu_file'];
+$out=[];
+foreach ([[], $valid + ['sig'=>'private-signature'], array_merge($valid,['field'=>'token']), array_merge($valid,['storedName'=>'../private']), array_merge($valid,['sid'=>['123']])] as $q) $out[]=attachmentProbeChecks(new ProbeNoRead(), $q, '/private/root');
+echo json_encode($out);
+""")
+        self.assertEqual([{"stage":"evidence_unavailable"}] * 5, result)
+
+    def test_probe_reader_redacts_missing_malformed_and_unexpected_values(self):
+        runner = MODULE_PATH.parents[3] / 'platform/deploy/test/run-admin-web-e2e.sh'
+        for value, stage in (("", "evidence_unavailable"), ("private-path", "evidence_unavailable"),
+                             ('{"stage":"private-path"}', "evidence_unavailable"),
+                             ('{"stage":"file_unresolved","path":"private-path"}', "evidence_unavailable"),
+                             ('{"stage":"multiple_requests"}', "multiple_requests"),
+                             ('{"stage":"file_unresolved","fileResolved":false}', "file_unresolved")):
+            completed = run_bash(r'''
+source "$RUNNER"
+docker() { printf '%s' "$PROBE_OUTPUT"; }
+ADMIN_WEB_ATTACHMENT_DIAGNOSTIC=1
+run_attachment_locator_probe
+''', {"RUNNER": str(runner), "PROBE_OUTPUT": value})
+            self.assertEqual(0, completed.returncode)
+            self.assertEqual("", completed.stderr)
+            evidence = json.loads(completed.stdout.split('] ', 1)[1])
+            self.assertEqual(stage, evidence['stage'])
+            self.assertNotIn("private", completed.stdout)
+
+    def test_probe_shutdown_preserves_http_status_and_response_and_redacts_errors(self):
+        for status, fails in ((200, False), (404, False), (404, True)):
+            body = r"""
+require $root . '/vendor/yiisoft/yii/framework/yii.php';
+eval('namespace LimeSurvey\\PluginManager; class PluginBase { public function subscribe($a,$b) {} public function getEvent() { return new \\ProbeEvent(); } }');
+class ProbeEvent {function get($key) {return $key==='target' ? 'MjyQuestionExtensions':'attachmentFile';}}
+class ProbeDb {function getCurrentTransaction(){return null;} function getDriverName(){return 'sqlite';}}
+class ProbeApp {function getDb(){if ($GLOBALS['fails']) throw new RuntimeException('private-signature');return new ProbeDb();} function getConfig($key){return '/private-path';}}
+function App(){return new ProbeApp();}
+require $root . '/platform/tests/fixtures/plugins/AttachmentLocatorProbe/AttachmentLocatorProbe.php';
+class ProbeTestPlugin extends AttachmentLocatorProbe {protected function evidenceDirectory(): string {return $GLOBALS['probeDirectory'];}}
+$directory=sys_get_temp_dir().'/probe-web-'.bin2hex(random_bytes(4));mkdir($directory);chdir($directory);touch('enabletests');
+$GLOBALS['probeDirectory']=$directory.'/evidence';
+putenv('ADMIN_WEB_ATTACHMENT_LOCATOR_PROBE=1');
+$_GET=['sid'=>'123','generation'=>'private-generation','responseId'=>'7','field'=>'123X1X1','storedName'=>'fu_private','sig'=>'private-signature'];
+$plugin=new ProbeTestPlugin();$plugin->init();http_response_code(STATUS_VALUE);$plugin->observe();
+register_shutdown_function(function(){
+    $path=$GLOBALS['probeDirectory'].'/attachment-locator-probe.json';
+    if (http_response_code() !== STATUS_VALUE) exit(9);
+    if (STATUS_VALUE !== 404) {if (file_exists($path)) exit(10);unlink('enabletests');$cwd=getcwd();chdir(sys_get_temp_dir());rmdir($cwd);return;}
+    $evidence=json_decode(file_get_contents($path),true);
+    if ($evidence !== ['stage'=>($GLOBALS['fails']?'probe_failed':'evidence_unavailable')]) exit(11);
+    if ((fileperms($path)&0777)!==0600 || (fileperms(dirname($path))&0777)!==0700) exit(12);
+    unlink($path);rmdir(dirname($path));unlink('enabletests');$cwd=getcwd();chdir(sys_get_temp_dir());rmdir($cwd);
+});
+echo json_encode(['original_response'=>true]);
+"""
+            result = self.php("$GLOBALS['fails']=" + ("true;" if fails else "false;") + body.replace("STATUS_VALUE", str(status)))
+            self.assertEqual({"original_response": True}, result)
+
+    def test_probe_isolates_sql_error_logs_and_restores_original_logger(self):
+        result = self.php(r"""
+require $root . '/vendor/yiisoft/yii/framework/yii.php';
+$original=Yii::getLogger();Yii::log('keep-original-request', CLogger::LEVEL_WARNING);
+try { attachmentProbeSilently(function(){Yii::log('private-sql-and-bindings', CLogger::LEVEL_ERROR);throw new RuntimeException('private-error');}); } catch (Throwable $error) {}
+$logs=$original->getLogs();
+echo json_encode(['sameLogger'=>Yii::getLogger()===$original,'count'=>count($logs),'originalPreserved'=>$logs[0][0]==='keep-original-request']);
+""")
+        self.assertEqual({"sameLogger": True, "count": 1, "originalPreserved": True}, result)
+
+    def test_probe_plugin_is_discoverable_by_actual_engine_loader(self):
+        result = self.php(r"""
+require $root . '/vendor/yiisoft/yii/framework/yii.php';
+eval('namespace LimeSurvey\\PluginManager; abstract class PluginBase {}');
+class ProbeConfigApp {function getBasePath(){return $GLOBALS['root'].'/application';}}
+Yii::setApplication(new ProbeConfigApp());
+Yii::setPathOfAlias('probePlugins', $root . '/platform/tests/fixtures/plugins');
+require $root . '/application/models/ExtensionConfig.php';
+require $root . '/application/libraries/PluginManager/PluginManager.php';
+$manager=new LimeSurvey\PluginManager\PluginManager();
+$manager->pluginDirs=['user'=>'probePlugins'];
+$info=$manager->getPluginInfo('AttachmentLocatorProbe');
+echo json_encode(['discovered'=>is_array($info),'valid'=>is_array($info) && $info['extensionConfig']->validate(),
+    'compatible'=>is_array($info) && $info['isCompatible'],
+    'nameMatches'=>is_array($info) && $info['pluginName']==='AttachmentLocatorProbe']);
+""")
+        self.assertEqual({"discovered": True, "valid": True, "compatible": True, "nameMatches": True}, result)
+
+    def test_probe_runtime_isolated_and_no_response_or_private_value_output(self):
+        root = MODULE_PATH.parents[3]
+        plugin = (root / 'platform/tests/fixtures/plugins/AttachmentLocatorProbe/AttachmentLocatorProbe.php').read_text()
+        checks = (root / 'platform/tests/fixtures/plugins/AttachmentLocatorProbe/AttachmentLocatorProbeChecks.php').read_text()
+        runner = (root / 'platform/deploy/test/run-admin-web-e2e.sh').read_text()
+        self.assertIn("register_shutdown_function", plugin)
+        self.assertIn("http_response_code() !== 404", plugin)
+        self.assertIn("ob_end_clean()", plugin)
+        self.assertNotIn("->current(", checks + plugin)
+        self.assertNotRegex(checks, r"->(?:insert|update|delete|createTable|dropTable)\(")
+        self.assertIn("attachment-probe.compose.json", runner)
+        self.assertIn("AttachmentLocatorProbe:ro", runner)
+        self.assertIn("attachment-locator-probe.json", runner)
 
 if __name__ == "__main__":
     unittest.main()

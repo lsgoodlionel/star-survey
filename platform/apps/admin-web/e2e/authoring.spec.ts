@@ -265,7 +265,6 @@ test('author filters stable resources, restores archive, and publishes the same 
   } else {
     await completeLimeSurvey(respondentPage);
   }
-
   await respondentPage.close();
 
   await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', {

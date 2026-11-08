@@ -1,6 +1,7 @@
 package cn.mjy.platform.delivery;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.mjy.platform.engine.ResponseKey;
 import cn.mjy.platform.engine.ResponseProjection;
@@ -14,6 +15,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 /**
  * 经网关回读"这份答卷是用哪个邀请码答的"（ADR 0016 缺口 (b)）。
@@ -21,6 +25,7 @@ import org.junit.jupiter.api.Test;
  * <p>最要命的一条：读不到<b>不等于</b>没答完。把读取失败当成"没有完成记录"，
  * 催答就会朝一批其实已经答完的人发提醒。
  */
+@ExtendWith(OutputCaptureExtension.class)
 class GatewayRespondentIdentityResolverTest {
 
     private static final TenantId TENANT = TenantId.of(UUID.randomUUID().toString());
@@ -66,15 +71,17 @@ class GatewayRespondentIdentityResolverTest {
     }
 
     @Test
-    void anUnreachableGatewayIsNotReadAsNobodyHavingAnswered() {
+    void anUnreachableGatewayIsNotReadAsNobodyHavingAnswered(CapturedOutput output) {
         RecordingSource source = new RecordingSource(Map.of(),
-                new ResponseAnswersUnavailableException("gateway timed out"));
+                new ResponseAnswersUnavailableException("raw reply with synthetic-private-token"));
 
-        Map<Long, String> keys = new GatewayRespondentIdentityResolver(source)
-                .respondentKeysOf(TENANT, List.of(completed(1)));
-
-        // 空映射＝这一轮认不出任何人：对账跳过、不登记、下一轮重来。
-        assertThat(keys).isEmpty();
+        assertThatThrownBy(() -> new GatewayRespondentIdentityResolver(source)
+                .respondentKeysOf(TENANT, List.of(completed(1))))
+                .isInstanceOf(ResponseAnswersUnavailableException.class)
+                .hasMessage("respondent identity lookup unavailable")
+                .hasNoCause();
+        assertThat(source.asked).containsExactly(List.of(1L));
+        assertThat(output.getAll()).doesNotContain("raw reply", "synthetic-private-token");
     }
 
     @Test
