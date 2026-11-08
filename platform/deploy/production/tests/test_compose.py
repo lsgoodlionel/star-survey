@@ -6,6 +6,9 @@ import stat
 import subprocess
 import tempfile
 import unittest
+import uuid
+from unittest.mock import patch
+import yaml
 
 
 PRODUCTION_DIR = Path(__file__).resolve().parents[1]
@@ -16,10 +19,72 @@ FIXTURE_ENV = Path(__file__).resolve().parent / "fixtures" / "test.env"
 class ProductionComposeTest(unittest.TestCase):
     maxDiff = None
 
+    def assert_org_secret_bind_safe(self, mount):
+        # Compose versions may omit false-valued fields from config JSON. Check
+        # the authored long syntax as well as any rendered value; never treat
+        # a missing or true source setting as a safe default.
+        source = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+        authored = [entry for entry in source["services"]["platform"]["volumes"]
+                    if isinstance(entry, dict) and entry.get("target") == "/run/secrets/org-login"]
+        self.assertEqual(1, len(authored))
+        self.assertIs(authored[0]["bind"]["create_host_path"], False)
+        self.assertEqual("bind", mount["type"])
+        self.assertTrue(mount["read_only"])
+        self.assertIs(mount.get("bind", {}).get("create_host_path", False), False)
+
     def test_organization_login_returns_to_same_origin_admin_web(self):
         service = self.render_compose()["services"]["platform"]
         env = service["environment"]
         self.assertEqual(env["PLATFORM_PUBLIC_BASE_URL"], env["PLATFORM_ADMIN_WEB_BASE_URL"])
+
+    def test_org_secret_bind_check_rejects_unsafe_source_and_rendering(self):
+        source = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+        mount = next(entry for entry in source["services"]["platform"]["volumes"]
+                     if isinstance(entry, dict) and entry.get("target") == "/run/secrets/org-login")
+        rendered = {"type": "bind", "read_only": True, "bind": {}}
+        self.assert_org_secret_bind_safe(rendered)
+        with self.assertRaises(AssertionError):
+            self.assert_org_secret_bind_safe({**rendered, "bind": {"create_host_path": True}})
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary) / "compose.yml"
+            with patch(__name__ + ".COMPOSE_FILE", fixture):
+                mount["bind"]["create_host_path"] = True
+                fixture.write_text(yaml.safe_dump(source), encoding="utf-8")
+                with self.assertRaises(AssertionError):
+                    self.assert_org_secret_bind_safe(rendered)
+                del mount["bind"]["create_host_path"]
+                fixture.write_text(yaml.safe_dump(source), encoding="utf-8")
+                with self.assertRaises(KeyError):
+                    self.assert_org_secret_bind_safe(rendered)
+
+    def test_org_secret_missing_source_is_not_created_by_compose(self):
+        source = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+        mount = next(entry for entry in source["services"]["platform"]["volumes"]
+                     if isinstance(entry, dict) and entry.get("target") == "/run/secrets/org-login")
+        image = next(line.split("=", 1)[1] for line in FIXTURE_ENV.read_text().splitlines()
+                     if line.startswith("CADDY_IMAGE="))
+        project = "survey-bind-proof-" + uuid.uuid4().hex
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing"
+            mount["source"] = str(missing)
+            config = Path(temporary) / "compose.yml"
+            config.write_text(yaml.safe_dump({"services": {"probe": {
+                "image": image, "network_mode": "none", "volumes": [mount],
+            }}}), encoding="utf-8")
+            base = ["docker", "compose", "-p", project, "-f", str(config)]
+            # An existing local fixture image is required; never let a missing
+            # image count as proof that Compose rejected the missing bind.
+            inspected = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True)
+            self.assertEqual(0, inspected.returncode, inspected.stderr)
+            try:
+                result = subprocess.run(base + ["create", "--no-build", "--pull", "never"],
+                                        capture_output=True, text=True)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("bind", result.stderr.lower())
+                self.assertIn("exist", result.stderr.lower())
+                self.assertFalse(missing.exists())
+            finally:
+                subprocess.run(base + ["rm", "--stop", "--force"], capture_output=True, text=True)
 
     def render_compose(self, env_file=FIXTURE_ENV):
         result = subprocess.run(
@@ -52,8 +117,7 @@ class ProductionComposeTest(unittest.TestCase):
                   if mount.get("target") == "/run/secrets/org-login"]
         self.assertEqual(1, len(mounts))
         self.assertEqual("platform", mounts[0][0])
-        self.assertTrue(mounts[0][1]["read_only"])
-        self.assertFalse(mounts[0][1]["bind"]["create_host_path"])
+        self.assert_org_secret_bind_safe(mounts[0][1])
 
     def test_legacy_compose_environment_uses_bundled_empty_directory(self):
         lines = [line for line in FIXTURE_ENV.read_text().splitlines()
@@ -66,8 +130,7 @@ class ProductionComposeTest(unittest.TestCase):
         mount = next(m for m in rendered["services"]["platform"]["volumes"]
                      if m.get("target") == "/run/secrets/org-login")
         self.assertEqual((PRODUCTION_DIR / "org-login-empty").resolve(), Path(mount["source"]))
-        self.assertTrue(mount["read_only"])
-        self.assertFalse(mount["bind"]["create_host_path"])
+        self.assert_org_secret_bind_safe(mount)
         self.assertEqual(["README"], sorted(p.name for p in (PRODUCTION_DIR / "org-login-empty").iterdir()))
 
     def test_admin_starts_only_after_its_nginx_upstream_is_healthy(self):
