@@ -377,8 +377,6 @@ while (($#)); do
   esac
   shift
 done
-trap cleanup EXIT
-
 ensure_node22
 for tool in docker python3 curl npm node unzip; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
@@ -393,6 +391,7 @@ if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
   [[ -z "$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" ]] || fail "relay diagnostic network is not empty"
 fi
 
+trap cleanup EXIT
 WORK_DIR="$(mktemp -d)"
 export ADMIN_WEB_PORT="${ADMIN_WEB_PORT:-$(random_loopback_port)}"
 export ADMIN_WEB_PUBLIC_URL="http://127.0.0.1:$ADMIN_WEB_PORT"

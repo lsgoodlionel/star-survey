@@ -1,4 +1,5 @@
 import subprocess
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -41,6 +42,42 @@ cleanup_run 0'''
                                         capture_output=True, text=True)
                 self.assertEqual(0 if kind == 'none' else 1, result.returncode, result.stderr)
 
+
+    def test_cleanup_removes_private_files_even_if_relay_stop_fails(self):
+        with tempfile.TemporaryDirectory() as parent:
+            private = Path(parent) / 'private'
+            private.mkdir()
+            (private / 'fixture').write_text('private')
+            code = r'''source "$1"
+ADMIN_WEB_RELAY_DIAGNOSTIC=1
+COMPOSE_PROJECT_NAME=relay-ci-test
+COMPOSE=(fake_compose)
+WORK_DIR="$2"
+fake_compose() { return 1; }
+docker() { return 0; }
+cleanup_run 0'''
+            result = subprocess.run(['bash', '-c', code, 'relay-test', str(SCRIPT), str(private)],
+                                    capture_output=True, text=True)
+            self.assertEqual(1, result.returncode)
+            self.assertFalse(private.exists())
+
+    def test_relay_preflight_rejection_does_not_call_compose_cleanup(self):
+        with tempfile.TemporaryDirectory() as parent:
+            marker = Path(parent) / 'compose-called'
+            code = r'''source "$1"
+ADMIN_WEB_RELAY_DIAGNOSTIC=1
+unset GITHUB_ACTIONS RUNNER_ENVIRONMENT
+COMPOSE=(fake_compose)
+TEST_MARKER="$2"
+ensure_node22() { :; }
+docker() { return 0; }
+fake_compose() { : > "$TEST_MARKER"; }
+main --fresh'''
+            result = subprocess.run(['bash', '-c', code, 'relay-test', str(SCRIPT), str(marker)],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('requires a GitHub-hosted runner', result.stderr)
+            self.assertFalse(marker.exists())
 
     def test_mysql_worker_uses_same_test_database_credential_as_test_web(self):
         import re
