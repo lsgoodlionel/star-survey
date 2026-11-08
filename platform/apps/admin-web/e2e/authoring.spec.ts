@@ -1,3 +1,4 @@
+import { approvalJourney } from './approvalJourney';
 import { expect, test, type Download, type Locator, type Page, type Response, type TestInfo } from '@playwright/test';
 import { execFile } from 'node:child_process';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -202,13 +203,7 @@ test('author filters stable resources, restores archive, and publishes the same 
   await expect(page.getByRole('heading', { name: '答卷与导出' })).toBeVisible();
   await expect(page.getByLabel('已完成 0')).toBeVisible();
 
-  await clickAction(page.getByRole('link', { name: '发布与版本' }));
-  await clickAction(page.getByRole('button', { name: '提交审批' }));
-  await expect(page.getByRole('button', { name: '批准申请' })).toBeVisible();
-  await clickAction(page.getByRole('button', { name: '批准申请' }));
-  await expect(page.getByRole('button', { name: '发布问卷' })).toBeVisible();
-  await clickAction(page.getByRole('button', { name: '发布问卷' }));
-  await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+  const approvedMarker = await approvalJourney(page, surveyId, rootProjectId, me.tenantId, login, runText);
 
   await fillAction(page.getByLabel('链接名称'), '正式验收链接');
   const createLinkResponse = page.waitForResponse((response) =>
@@ -262,6 +257,7 @@ test('author filters stable resources, restores archive, and publishes the same 
 
   const respondentPage = await page.context().newPage();
   await respondentPage.goto(deliveryUrl!);
+  await expect(respondentPage.getByText(approvedMarker)).toBeVisible();
   const relayDiagnostic = process.env.ADMIN_WEB_RELAY_DIAGNOSTIC === '1';
   const sid = relayDiagnostic ? await publishedEngineSid(surveyId, me.tenantId) : 0;
   if (relayDiagnostic) {
@@ -269,6 +265,7 @@ test('author filters stable resources, restores archive, and publishes the same 
   } else {
     await completeLimeSurvey(respondentPage);
   }
+
   await respondentPage.close();
 
   await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', {

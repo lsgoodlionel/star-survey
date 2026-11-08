@@ -9,6 +9,7 @@ import {
   useSurveyShell,
 } from '../../app/surveyShellContext';
 import { useAuth } from '../auth/AuthProvider';
+import { approvalRequestsQueryKey, surveyOverviewQueryKey } from '../../shared/api/approvals';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient } from '../../shared/api/http';
 import {
@@ -226,6 +227,8 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   });
 
   function synchronizeDraftCache(saved: DraftView, savedTitle?: string) {
+    void queryClient.invalidateQueries({ queryKey: surveyOverviewQueryKey(tenantId, surveyId), exact: true });
+    void queryClient.invalidateQueries({ queryKey: approvalRequestsQueryKey(tenantId, surveyId), exact: true });
     queryClient.setQueryData(surveyDraftQueryKey(tenantId, surveyId), saved);
     queryClient.setQueryData<SurveyView>(
       surveyDetailQueryKey(tenantId, surveyId),
