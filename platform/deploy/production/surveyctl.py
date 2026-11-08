@@ -1225,6 +1225,7 @@ class SurveyManager:
         }
         runtime_secrets = self._sync_runtime_secrets()
         lines += [f"{key}={runtime_secrets / value}" for key, value in env_keys.items()]
+        lines.append(f"PLATFORM_ORG_SECRET_DIR_HOST={runtime_secrets / 'org-login'}")
         self._atomic_write(release / ".env", "\n".join(lines) + "\n")
         deployment_integrity = {
             "schemaVersion": 1,
@@ -1244,6 +1245,10 @@ class SurveyManager:
         # read-only projections, under host directories that remain 0700.
         self._managed("shared/secrets", must_exist=True)
         destination = self._mkdir("shared/runtime-secrets")
+        # Only this directory is mounted into the platform container. The 0700
+        # parent prevents unprivileged host traversal; the non-root container can
+        # traverse the bind mount and read explicitly provisioned 0444 files.
+        self._mkdir("shared/runtime-secrets/org-login", mode=0o755)
         for name in SECRET_NAMES:
             if name == "backup_encryption_key":
                 continue

@@ -1420,6 +1420,23 @@ class SurveyctlTest(unittest.TestCase):
         with self.assertRaises(self.module.EnvironmentError):
             manager.preflight(self.module.load_manifest(FIXTURE_MANIFEST), "survey.example.com")
 
+    def test_org_secret_directory_is_empty_private_and_survives_sync(self):
+        manager = self.manager()
+        manager.install(self.base_manifest, "survey.example.com", "operations", "operations@example.com")
+        parent = self.target / "shared/runtime-secrets"
+        directory = parent / "org-login"
+        self.assertEqual(0o700, stat.S_IMODE(parent.stat().st_mode))
+        self.assertEqual(0o755, stat.S_IMODE(directory.stat().st_mode))
+        self.assertEqual([], list(directory.iterdir()))
+        fixture = directory / "PLATFORM_ORG_SECRET_3F2A0C1E7B4D4E5F9A8B0C1D2E3F4A5B_WECOM"
+        fixture.write_text("synthetic-secret\n")
+        fixture.chmod(0o444)
+        manager._sync_runtime_secrets()
+        self.assertEqual("synthetic-secret\n", fixture.read_text())
+        env = (self.target / "releases/0.2.0/.env").read_text()
+        self.assertIn(f"PLATFORM_ORG_SECRET_DIR_HOST={directory}", env)
+        self.assertNotIn("synthetic-secret", env)
+
     def test_bind_mounts_are_readable_without_exposing_canonical_secrets(self):
         self.install()
         canonical = self.target / "shared/secrets"

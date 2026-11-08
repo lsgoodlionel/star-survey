@@ -43,6 +43,30 @@ class ProductionComposeTest(unittest.TestCase):
         self.assertNotIn("variable is not set", result.stderr)
         return json.loads(result.stdout)
 
+    def test_org_secrets_are_a_platform_only_read_only_mount(self):
+        services = self.render_compose()["services"]
+        platform = services["platform"]
+        self.assertEqual("/run/secrets/org-login", platform["environment"]["PLATFORM_ORG_SECRET_DIR"])
+        mounts = [(name, mount) for name, service in services.items()
+                  for mount in service.get("volumes", [])
+                  if mount.get("target") == "/run/secrets/org-login"]
+        self.assertEqual(1, len(mounts))
+        self.assertEqual("platform", mounts[0][0])
+        self.assertTrue(mounts[0][1]["read_only"])
+        self.assertFalse(mounts[0][1]["bind"]["create_host_path"])
+
+    def test_legacy_compose_environment_without_org_directory_fails_closed(self):
+        lines = [line for line in FIXTURE_ENV.read_text().splitlines()
+                 if not line.startswith("PLATFORM_ORG_SECRET_DIR_HOST=")]
+        with tempfile.TemporaryDirectory() as temporary:
+            env_file = Path(temporary) / "legacy.env"
+            env_file.write_text("\n".join(lines) + "\n")
+            result = subprocess.run(
+                ["docker", "compose", "--env-file", str(env_file), "-f", str(COMPOSE_FILE), "config"],
+                cwd=PRODUCTION_DIR, env={"PATH": os.environ.get("PATH", "")}, capture_output=True, text=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("PLATFORM_ORG_SECRET_DIR_HOST", result.stderr)
+
     def test_admin_starts_only_after_its_nginx_upstream_is_healthy(self):
         services = self.render_compose()["services"]
         self.assertEqual(
@@ -328,13 +352,12 @@ class ProductionComposeTest(unittest.TestCase):
 
         sensitive = re.compile(r"(PASSWORD|SECRET|TOKEN|PRIVATE_KEY)", re.I)
         for service_name, service in config["services"].items():
-            for assignment in service.get("environment", []):
-                key, _, value = assignment.partition("=")
+            for key, value in service.get("environment", {}).items():
                 if sensitive.search(key):
                     with self.subTest(service=service_name, key=key):
                         self.assertTrue(
-                            key.endswith("_FILE") or value.startswith("/run/secrets/"),
-                            assignment,
+                            key.endswith("_FILE") or (isinstance(value, str) and value.startswith("/run/secrets/")),
+                            key,
                         )
             for assignment in service.get("command") or []:
                 if "=" not in assignment:

@@ -90,6 +90,7 @@ services:
       PLATFORM_DB_OWNER_USER: platform_owner
       PLATFORM_PROBE_INSTALLATION_ID: ${PLATFORM_PROBE_INSTALLATION_ID:?set PLATFORM_PROBE_INSTALLATION_ID}
       PLATFORM_ADMIN_ENFORCE_PERSONNEL: ${PLATFORM_ADMIN_ENFORCE_PERSONNEL:-true}
+      PLATFORM_ORG_SECRET_DIR: /run/secrets/org-login
       PLATFORM_PUBLIC_BASE_URL: https://${PUBLIC_HOST:?set PUBLIC_HOST}
       PLATFORM_ADMIN_WEB_BASE_URL: https://${PUBLIC_HOST:?set PUBLIC_HOST}
       PLATFORM_PUBGW_URL: http://publish-gateway:8080
@@ -98,6 +99,12 @@ services:
       PLATFORM_DELIVERY_ENABLED: ${PLATFORM_DELIVERY_ENABLED:-false}
     volumes:
       - ./init/run-with-secrets.sh:/opt/survey/run-with-secrets.sh:ro
+      - type: bind
+        source: ${PLATFORM_ORG_SECRET_DIR_HOST:?set PLATFORM_ORG_SECRET_DIR_HOST}
+        target: /run/secrets/org-login
+        read_only: true
+        bind:
+          create_host_path: false
       - platform-assets:/var/lib/survey/assets
       - platform-exports:/var/lib/survey/exports
     secrets:
