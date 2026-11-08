@@ -46,12 +46,18 @@ docker run --pull never --rm --network "container:$CONTAINER" --user 1200:1201 -
 sid=$(python3 -c 'import json,sys;x=json.load(open(sys.argv[1]));assert isinstance(x["sid"],int) and x["sid"]>0;print(x["sid"])' "$work/evidence.json")
 completed=$(db_query "SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=$sid AND response_id=1 AND event_type='response.completed'")
 [[ "$completed" -ge 1 ]] || { echo 'real completion outbox event missing' >&2; exit 1; }
-docker exec "$CONTAINER" php application/commands/console.php plugin cron >/dev/null
+if ! docker exec "$CONTAINER" php application/commands/console.php plugin cron >"$work/relay-cron-1.log" 2>&1; then
+  echo "engine relay failed; private diagnostics retained in $work" >&2
+  exit 1
+fi
 count_events() { docker exec "$prefix-platform-db" psql -U postgres -d platform -Atqc "SELECT count(*) FROM engine_event_inbox WHERE engine_instance_id='isolated-engine' AND survey_id=$sid AND response_id=1"; }
 first=$(count_events)
 [[ "$first" -ge 1 ]] || { echo 'relay did not reach platform inbox' >&2; exit 1; }
 db_query "UPDATE lime_mjyplatformbridge_event_log SET delivered_at=NULL WHERE survey_id=$sid AND response_id=1" >/dev/null
-docker exec "$CONTAINER" php application/commands/console.php plugin cron >/dev/null
+if ! docker exec "$CONTAINER" php application/commands/console.php plugin cron >"$work/relay-cron-2.log" 2>&1; then
+  echo "engine relay failed; private diagnostics retained in $work" >&2
+  exit 1
+fi
 second=$(count_events)
 [[ "$first" = "$second" ]] || { echo 'replayed events duplicated platform inbox' >&2; exit 1; }
 printf 'real relay delivery and replay idempotence passed\n'
