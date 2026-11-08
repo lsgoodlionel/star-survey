@@ -56,7 +56,7 @@ Create and verify a backup before upgrading. Verify the target release assets, t
 ./surveyctl doctor
 ```
 
-This release declares rollback policy `{rollback}`. When it is `restore-only`, recover with the verified pre-upgrade backup instead of starting older images against a migrated database.
+This release declares rollback policy `{rollback}`. For `restore-only`, recovery is currently disabled. Preserve the installation, operation marker and verified pre-upgrade backup; do not start older images against a migrated database or bypass the block with an older controller or helper.
 
 ## Verification
 
@@ -73,7 +73,7 @@ cosign verify <image@sha256:digest> --bundle cosign-admin.sigstore.json
 - This is a single-host deployment, not high availability. Planned host maintenance interrupts authoring and responses.
 - Public ACME TLS and DNS ownership must be verified on the target server; CI uses a local trusted CA for the native matrix.
 - Keep backup encryption keys outside the server failure domain. A lost key makes encrypted backups unrecoverable.
-- The `{rollback}` policy applies. For `restore-only`, use the verified pre-upgrade backup; do not start older images against a migrated database.
+- The `{rollback}` policy applies. For `restore-only`, recovery remains disabled: preserve the installation, operation marker and verified pre-upgrade backup. Do not bypass the block with an older controller or helper.
 """
 
 

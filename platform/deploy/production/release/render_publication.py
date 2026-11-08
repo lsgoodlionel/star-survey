@@ -117,7 +117,7 @@ Minimum source version: `{minimum}`. Create and verify a backup before upgrading
 ./surveyctl doctor
 ```
 
-Rollback is `restore-only`: restore the verified pre-upgrade backup. Do not run older images against a migrated database.
+Rollback is `restore-only`, but recovery is currently disabled. Preserve the installation, operation marker and verified pre-upgrade backup. Do not run older images against a migrated database or bypass the block with an older controller or helper.
 
 ## Known issues and limits
 

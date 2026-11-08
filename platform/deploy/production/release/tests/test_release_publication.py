@@ -345,6 +345,11 @@ class PublicationMetadataAndReconciliationTest(unittest.TestCase):
             self.assertIn(required, stable_text)
         self.assertIn("--target-tag v1.2.3-rc.4", rc_text)
         self.assertNotIn("Stable promotion", rc_text)
+        for body in (rc_text, stable_text):
+            self.assertIn("recovery is currently disabled", body)
+            self.assertIn("Preserve the installation, operation marker and verified pre-upgrade backup", body)
+            self.assertIn("Do not run older images against a migrated database or bypass the block with an older controller or helper", body)
+            self.assertNotIn("restore the verified pre-upgrade backup", body)
 
     def test_renderer_rejects_stable_tag_or_readiness_identity_drift(self):
         for target, source, commit in (

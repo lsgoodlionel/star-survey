@@ -73,9 +73,9 @@ platform/deploy/production/surveyctl --target /opt/survey uninstall
 - `CONTROL-HMAC`：使用与载荷加密密钥分域派生的密钥，认证 canonical manifest 与 `SHA256SUMS`。
 - 两个数据库 dump 和七个卷归档的 `.enc` 文件。
 
-**当前手动恢复入口已关闭**：`surveyctl restore` 在检查或解密备份之前拒绝执行。升级失败且策略为 `restore-only` 时同样不会调用旧恢复助手；保留备份和 `recovery_required` 状态，不能用旧控制器或直接调用 helper 绕过。原生验收中的恢复步骤因而保持阻断。
+**当前手动恢复入口已关闭**：`surveyctl restore` 与此版本的 `restore.py restore` 在检查或解密备份之前拒绝执行。该限制不约束已发布旧 helper、直接导入内部类或宿主机管理员。升级失败且策略为 `restore-only` 时同样不会调用旧恢复助手；保留备份和 `recovery_required` 状态，不能用旧控制器或直接调用 helper 绕过。原生验收中的恢复步骤因而保持阻断。
 
-备份验证仍会认证控制元数据、inventory、checksum 和加密载荷；它会启动子进程并产生临时明文。控制器异常终止时 pending 标记阻断后续变更，但不证明所有后代退出或临时明文已清理。独立进程树隔离、崩溃清理、写入者静默及操作人维护窗口尚未证明，故不能将已有 helper 的校验能力描述为安全恢复已完成。
+备份验证仍会认证控制元数据、inventory、checksum 和加密载荷；它会启动子进程并产生临时明文。直接调用 helper 的 `verify` 不经过控制器操作锁和 pending 标记，不能作为受控恢复或静默证明，勿在真实安装上绕开控制器调用。控制器异常终止时 pending 标记阻断后续变更，但不证明所有后代退出或临时明文已清理。独立进程树隔离、崩溃清理、写入者静默及操作人维护窗口尚未证明，故不能将已有 helper 的校验能力描述为安全恢复已完成。
 
 `backup_encryption_key` 与数据同等重要：密钥丢失后备份不可恢复。密钥不得与备份保存在同一故障域；当前代码不替代外部离线保存和保留策略。
 

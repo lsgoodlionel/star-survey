@@ -482,6 +482,11 @@ class ReleaseBuilderTest(unittest.TestCase):
         for phrase in ("0.3.0-rc.1", "candidate", "surveyctl install", "surveyctl upgrade", "backup", "restore-only"):
             self.assertIn(phrase, notes)
         self.assertIn("Do not use the installed release's older CLI", notes)
+        self.assertIn("recovery is currently disabled", notes)
+        self.assertIn("Preserve the installation, operation marker and verified pre-upgrade backup", notes)
+        self.assertIn("do not start older images against a migrated database or bypass the block with an older controller or helper", notes)
+        self.assertNotIn("recover with the verified pre-upgrade backup", notes)
+        self.assertNotIn("use the verified pre-upgrade backup; do not start", notes)
         self.assertIn("./surveyctl upgrade --manifest /path/to/verified/release.json", notes)
         self.assertNotIn("0123456789abcdef0123456789abcdef01234567", notes)
 

@@ -142,6 +142,28 @@ class BackupRestoreTest(unittest.TestCase):
         (self.target / 'current').write_text(actual['version'])
         return output, release
 
+    def test_direct_restore_cli_is_disabled_before_manager_or_disk_access(self):
+        marker = self.root / 'unchanged'
+        marker.write_text('synthetic marker')
+        before = sorted(str(path.relative_to(self.root)) for path in self.root.rglob('*'))
+        with mock.patch.object(self.restore, 'RestoreManager') as manager, mock.patch('sys.stderr', new_callable=io.StringIO) as error:
+            code = self.restore.main(['restore', '--target', str(self.target), '--backup', str(self.target / 'backups' / 'unused')])
+        self.assertEqual(4, code)
+        self.assertIn('direct restore is disabled', error.getvalue())
+        manager.assert_not_called()
+        self.assertEqual(before, sorted(str(path.relative_to(self.root)) for path in self.root.rglob('*')))
+        self.assertEqual('synthetic marker', marker.read_text())
+
+    def test_direct_restore_real_cli_is_disabled_without_traceback(self):
+        target = self.root / 'nonexistent'
+        result = subprocess.run([sys.executable, str(PRODUCTION_DIR / 'restore.py'), 'restore',
+                                 '--target', str(target), '--backup', str(target / 'backups' / 'unused')],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(4, result.returncode)
+        self.assertIn('direct restore is disabled', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertFalse(target.exists())
+
     def test_actual_rc_manifest_verifies_backup_doctor_and_restore_call_chain(self):
         output, release = self.rc_upgrade_backup()
         runner = FakeRunner()
