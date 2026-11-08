@@ -8,7 +8,7 @@ set -Eeuo pipefail
 required_variables=(
   CANDIDATE_DIR CANDIDATE_IDENTITY CANDIDATE_MANIFEST_SHA256
   CANDIDATE_BUNDLE_SHA256 ADMIN_IMAGE_DIGEST PLATFORM_IMAGE_DIGEST
-  PUBLISH_GATEWAY_IMAGE_DIGEST EXPECTED_UBUNTU EXPECTED_ARCHITECTURE
+  PUBLISH_GATEWAY_IMAGE_DIGEST ENGINE_IMAGE_DIGEST EXPECTED_UBUNTU EXPECTED_ARCHITECTURE
   BASELINE_MODE SURVEY_ACCEPTANCE_PUBLIC_HOST SURVEY_ACCEPTANCE_ADMIN_EMAIL EVIDENCE_DIR
 )
 for variable in "${required_variables[@]}"; do
@@ -190,6 +190,7 @@ expected = {
     "admin": ("ADMIN_IMAGE", os.environ["ADMIN_IMAGE_DIGEST"]),
     "platform": ("PLATFORM_IMAGE", os.environ["PLATFORM_IMAGE_DIGEST"]),
     "publish-gateway": ("PUBLISH_GATEWAY_IMAGE", os.environ["PUBLISH_GATEWAY_IMAGE_DIGEST"]),
+    "engine": ("ENGINE_IMAGE", os.environ["ENGINE_IMAGE_DIGEST"]),
 }
 for name, (manifest_key, digest) in expected.items():
     value = identity.get("images", {}).get(name, {})
@@ -228,6 +229,8 @@ PY
 (cd "$candidate_release_dir" && sha256sum --check SHA256SUMS)
 candidate_bundle="$(jq -er --arg architecture "$EXPECTED_ARCHITECTURE" '.bundles[$architecture].name' "$identity_path")"
 [[ "$(sha256sum "$candidate_release_dir/$candidate_bundle" | awk '{print $1}')" == "$CANDIDATE_BUNDLE_SHA256" ]]
+python3 "$evidence_helper" fixture-owner-create --work "$work_root" --marker "$work_root/owner.json"
+python3 "$evidence_helper" fixture-owner-verify --work "$work_root" --marker "$work_root/owner.json"
 
 last_step="image-manifests"
 python3 - "$identity_path" <<'PY' >"$work_root/image-references"
