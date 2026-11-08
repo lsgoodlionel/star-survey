@@ -57,6 +57,12 @@ export default defineConfig({
       grep: /author filters stable resources, restores archive, and publishes the same survey/,
     },
     {
+      name: 'chromium-expiry',
+      dependencies: ['chromium-wave3-seed'],
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /natural-expiry\.spec\.ts/,
+    },
+    {
       name: 'chromium-wave3-data',
       dependencies: ['chromium-wave3-seed'],
       use: { ...devices['Desktop Chrome'] },
