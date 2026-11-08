@@ -56,6 +56,14 @@ class EnvironmentSecretResolverTest {
     }
 
     @Test
+    void legacyEmptyDirectoryConfigurationDoesNotFallBackToEnvironment() {
+        String name = EnvironmentSecretResolver.variableName(TENANT, "WECOM");
+        MockEnvironment env = new MockEnvironment().withProperty("PLATFORM_ORG_SECRET_DIR", "")
+                .withProperty(name, "stale-env");
+        assertThat(new EnvironmentSecretResolver(env).resolve(TENANT, "WECOM")).isEmpty();
+    }
+
+    @Test
     void unsafeOrMalformedFilesFailClosedWithoutEnvironmentFallback(@TempDir Path directory) throws Exception {
         String name = EnvironmentSecretResolver.variableName(TENANT, "WECOM");
         MockEnvironment env = new MockEnvironment().withProperty("PLATFORM_ORG_SECRET_DIR", directory.toString())

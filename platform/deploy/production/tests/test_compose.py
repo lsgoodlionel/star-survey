@@ -55,17 +55,20 @@ class ProductionComposeTest(unittest.TestCase):
         self.assertTrue(mounts[0][1]["read_only"])
         self.assertFalse(mounts[0][1]["bind"]["create_host_path"])
 
-    def test_legacy_compose_environment_without_org_directory_fails_closed(self):
+    def test_legacy_compose_environment_uses_bundled_empty_directory(self):
         lines = [line for line in FIXTURE_ENV.read_text().splitlines()
                  if not line.startswith("PLATFORM_ORG_SECRET_DIR_HOST=")]
         with tempfile.TemporaryDirectory() as temporary:
             env_file = Path(temporary) / "legacy.env"
             env_file.write_text("\n".join(lines) + "\n")
-            result = subprocess.run(
-                ["docker", "compose", "--env-file", str(env_file), "-f", str(COMPOSE_FILE), "config"],
-                cwd=PRODUCTION_DIR, env={"PATH": os.environ.get("PATH", "")}, capture_output=True, text=True)
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("PLATFORM_ORG_SECRET_DIR_HOST", result.stderr)
+            rendered = self.render_compose(env_file)
+        self.assertEqual("", rendered["services"]["platform"]["environment"]["PLATFORM_ORG_SECRET_DIR"])
+        mount = next(m for m in rendered["services"]["platform"]["volumes"]
+                     if m.get("target") == "/run/secrets/org-login")
+        self.assertEqual((PRODUCTION_DIR / "org-login-empty").resolve(), Path(mount["source"]))
+        self.assertTrue(mount["read_only"])
+        self.assertFalse(mount["bind"]["create_host_path"])
+        self.assertEqual(["README"], sorted(p.name for p in (PRODUCTION_DIR / "org-login-empty").iterdir()))
 
     def test_admin_starts_only_after_its_nginx_upstream_is_healthy(self):
         services = self.render_compose()["services"]

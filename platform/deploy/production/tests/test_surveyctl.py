@@ -38,7 +38,7 @@ def write_fake_backup(output, version="0.2.0", schema="920"):
     (output / "CONTROL-HMAC").write_text("0" * 64 + "\n")
 
 
-def write_test_release(root, version="0.2.0", rollback="compatible", restore_source=None, **updates):
+def write_test_release(root, version="0.2.0", rollback="compatible", restore_source=None, payload_overrides=None, **updates):
     bundle = Path(root) / f"survey-{version}-linux-arm64.tar.gz"
     files = {
         "compose.yml": b"name: verified-bundle\nservices: {}\n",
@@ -53,6 +53,8 @@ def write_test_release(root, version="0.2.0", rollback="compatible", restore_sou
         "engines.example.json": (PRODUCTION_DIR / 'engines.example.json').read_bytes(),
         "init/marker.txt": b"verified init\n",
     }
+    if payload_overrides:
+        files.update(payload_overrides)
     metadata = {
         "schemaVersion": 1,
         "version": version,

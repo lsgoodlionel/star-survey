@@ -50,6 +50,7 @@ RUNTIME_FILES = (
     "init/production-health.php",
     "init/run-with-secrets.sh",
     "init/start-edge.sh",
+    "org-login-empty/README",
     "release/native_acceptance.sh",
     "release/native_acceptance_evidence.py",
     "release/verify_release.sh",

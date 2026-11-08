@@ -353,7 +353,9 @@ class ReleaseBuilderTest(unittest.TestCase):
             "doctor.py",
             "bundle-metadata.json",
             "init/engine-init.sh",
+            "org-login-empty/README",
         } <= names)
+        self.assertEqual({"org-login-empty/README"}, {n for n in names if n.startswith("org-login-empty/")})
         forbidden_fragments = ("tests/", "fixtures/", "secrets/", "backups/", ".runtime/", ".env")
         self.assertFalse([name for name in names if any(fragment in name for fragment in forbidden_fragments)])
 
