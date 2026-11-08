@@ -13,6 +13,15 @@ import org.springframework.stereotype.Component;
 public class FakeSecretStore implements SecretResolver {
 
     private final Map<String, String> secrets = new ConcurrentHashMap<>();
+    private final Map<TenantId, SecretResolver> delegates = new ConcurrentHashMap<>();
+
+    void useResolver(TenantId tenant, SecretResolver resolver) {
+        delegates.put(tenant, resolver);
+    }
+
+    void clearResolver(TenantId tenant) {
+        delegates.remove(tenant);
+    }
 
     public void put(TenantId tenant, String secretRef, String value) {
         secrets.put(tenant + "|" + secretRef, value);
@@ -20,6 +29,8 @@ public class FakeSecretStore implements SecretResolver {
 
     @Override
     public Optional<String> resolve(TenantId tenant, String secretRef) {
-        return Optional.ofNullable(secrets.get(tenant + "|" + secretRef));
+        SecretResolver delegate = delegates.get(tenant);
+        return delegate == null ? Optional.ofNullable(secrets.get(tenant + "|" + secretRef))
+                : delegate.resolve(tenant, secretRef);
     }
 }
