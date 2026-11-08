@@ -386,9 +386,13 @@ docker info >/dev/null 2>&1 || fail "docker daemon is not running"
 if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
   [[ "${GITHUB_ACTIONS:-}" == "true" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]] || fail "relay diagnostic requires a GitHub-hosted runner"
   [[ "$COMPOSE_PROJECT_NAME" == relay-ci-* && "$SURVEY_TEST_PREFIX" == "$COMPOSE_PROJECT_NAME" ]] || fail "relay diagnostic requires its dedicated project"
-  [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" ]] || fail "relay diagnostic project is not empty"
-  [[ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" ]] || fail "relay diagnostic volumes are not empty"
-  [[ -z "$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" ]] || fail "relay diagnostic network is not empty"
+  local inventory
+  inventory="$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || fail "unable to inspect relay diagnostic containers"
+  [[ -z "$inventory" ]] || fail "relay diagnostic project is not empty"
+  inventory="$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || fail "unable to inspect relay diagnostic volumes"
+  [[ -z "$inventory" ]] || fail "relay diagnostic volumes are not empty"
+  inventory="$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || fail "unable to inspect relay diagnostic networks"
+  [[ -z "$inventory" ]] || fail "relay diagnostic network is not empty"
 fi
 
 trap cleanup EXIT

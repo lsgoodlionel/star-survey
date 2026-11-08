@@ -79,6 +79,25 @@ main --fresh'''
             self.assertIn('requires a GitHub-hosted runner', result.stderr)
             self.assertFalse(marker.exists())
 
+    def test_relay_preflight_refuses_uninspectable_project(self):
+        for failing, label in [('ps', 'containers'), ('volume', 'volumes'), ('network', 'networks')]:
+            with self.subTest(failing=failing):
+                code = r'''source "$1"
+ADMIN_WEB_RELAY_DIAGNOSTIC=1
+GITHUB_ACTIONS=true
+RUNNER_ENVIRONMENT=github-hosted
+SURVEY_TEST_PREFIX=relay-ci-fixture
+COMPOSE_PROJECT_NAME=relay-ci-fixture
+ensure_node22() { :; }
+docker() { if [[ "$1" == "$test_kind" ]]; then return 7; fi; return 0; }
+test_kind="$2"
+main --fresh'''
+                result = subprocess.run(['bash', '-c', code, 'relay-test', str(SCRIPT), failing],
+                                        capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f'unable to inspect relay diagnostic {label}', result.stderr)
+                self.assertNotIn('build jar', result.stderr)
+
     def test_mysql_worker_uses_same_test_database_credential_as_test_web(self):
         import re
         root = SCRIPT.parents[3]
