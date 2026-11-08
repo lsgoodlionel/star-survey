@@ -181,20 +181,70 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn("needs.policy.outputs.release == 'true'", publication["if"])
         self.assertIn("needs.policy.outputs.channel", publication["if"])
 
-    def test_native_job_runs_real_lifecycle_and_always_uploads_redacted_evidence(self):
+    def test_native_job_uploads_only_fixed_failed_diagnostic(self):
         job = self.workflow["jobs"]["native-acceptance"]
         text = job_text(job)
         self.assertIn("native_acceptance.sh", text)
         self.assertIn("sudo -E", text)
         self.assertIn("NATIVE_ACCEPTANCE_REAL=1", text)
-        upload = next(step for step in job["steps"] if step.get("name") == "Preserve redacted native acceptance evidence")
-        self.assertEqual("always()", upload["if"])
+        prepare = next(step for step in job["steps"] if step.get("id") == "native_diagnostic")
+        self.assertEqual("always()", prepare["if"])
+        uploads = [step for step in job['steps'] if 'actions/upload-artifact@' in step.get('uses', '')]
+        self.assertEqual(1, len(uploads))
+        upload = uploads[0]
+        self.assertEqual("always() && steps.native_diagnostic.outcome == 'success'", upload['if'])
+        self.assertEqual('${{ steps.native_diagnostic.outputs.path }}', upload['with']['path'])
+        self.assertNotEqual('native-evidence', upload['with']['path'])
         self.assertIn("native-acceptance-${{ matrix.ubuntu }}-${{ matrix.architecture }}", text)
         self.assertIn("if-no-files-found", text)
         self.assertNotIn("SURVEY_PRODUCTION_E2E", text)
         self.assertNotIn("skip", text.lower())
         self.assertNotIn("SURVEY_ACCEPTANCE_DNS_SUFFIX", text)
         self.assertIn("survey-native.test", text)
+
+    def test_native_public_diagnostic_excludes_unscanned_secret_and_fails_closed(self):
+        job = self.workflow['jobs']['native-acceptance']
+        script = next(step['run'] for step in job['steps'] if step.get('id') == 'native_diagnostic')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            untrusted = root / 'native-evidence'
+            untrusted.mkdir()
+            secret = 'synthetic-secret-do-not-publish-9fae1'
+            (untrusted / 'summary.json').write_text(secret)
+            (untrusted / 'raw.txt').write_text(secret)
+            output = root / 'github-output'
+            output.write_text('')
+            env = {**os.environ, 'RUNNER_TEMP': str(root), 'GITHUB_OUTPUT': str(output),
+                   'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a' * 40,
+                   'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
+                   'SYNTHETIC_SECRET': secret}
+            result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            path = Path(output.read_text().strip().removeprefix('path='))
+            self.assertEqual('diagnostic.json', path.name)
+            self.assertEqual([path], list(path.parent.iterdir()))
+            diagnostic = path.read_text()
+            self.assertNotIn(secret, diagnostic + result.stdout + result.stderr)
+            payload = json.loads(diagnostic)
+            self.assertEqual({'schemaVersion': 1, 'status': 'failed', 'reason': 'native-evidence-withheld',
+                              'runId': '123', 'attempt': '2', 'commit': 'a' * 40,
+                              'ubuntu': '24.04', 'architecture': 'arm64'}, payload)
+            spec = importlib.util.spec_from_file_location('native_diagnostic_validation', EVIDENCE_HELPER_PATH)
+            validator = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(validator)
+            with self.assertRaises(validator.EvidenceError):
+                validator.validate_evidence('summary', payload)
+            self.assertEqual(secret, (untrusted / 'raw.txt').read_text())
+            for key, bad in [('GITHUB_SHA', secret), ('GITHUB_RUN_ID', '0'),
+                             ('MATRIX_ARCHITECTURE', secret), ('MATRIX_UBUNTU', '20.04'),
+                             ('RUNNER_TEMP', str(root / 'missing')), ('GITHUB_OUTPUT', str(root))]:
+                with self.subTest(key=key):
+                    output.write_text('')
+                    rejected = subprocess.run(['bash', '-c', script], cwd=root,
+                                              env={**env, key: bad}, capture_output=True, text=True)
+                    self.assertNotEqual(0, rejected.returncode)
+                    self.assertEqual('', output.read_text())
+                    self.assertNotIn(secret, rejected.stdout + rejected.stderr)
 
     def test_tag_publication_gate_depends_on_the_complete_native_matrix(self):
         gate = self.workflow["jobs"]["release-ready"]

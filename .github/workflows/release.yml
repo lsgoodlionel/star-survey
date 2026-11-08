@@ -772,12 +772,35 @@ jobs:
           EVIDENCE_DIR: ${{ github.workspace }}/native-evidence
         run: sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh
 
-      - name: Preserve redacted native acceptance evidence
+      # Until evidence scanning, crash containment and ownership are proven as
+      # one lifecycle, never upload files from the untrusted evidence directory.
+      - name: Prepare fail-closed native diagnostic
+        id: native_diagnostic
         if: always()
+        shell: bash
+        env:
+          MATRIX_UBUNTU: ${{ matrix.ubuntu }}
+          MATRIX_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if ! [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then exit 1; fi
+          if ! [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then exit 1; fi
+          if ! [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then exit 1; fi
+          case "$MATRIX_UBUNTU" in '22.04'|'24.04') ;; *) exit 1 ;; esac
+          case "$MATRIX_ARCHITECTURE" in amd64|arm64) ;; *) exit 1 ;; esac
+          if ! [[ "$RUNNER_TEMP" == /* && "$RUNNER_TEMP" != *$'\n'* && "$RUNNER_TEMP" != *$'\r'* ]]; then exit 1; fi
+          diagnostic_dir="$(mktemp -d "$RUNNER_TEMP/native-diagnostic.XXXXXXXX")"
+          printf '{"schemaVersion":1,"status":"failed","reason":"native-evidence-withheld","runId":"%s","attempt":"%s","commit":"%s","ubuntu":"%s","architecture":"%s"}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$MATRIX_UBUNTU" "$MATRIX_ARCHITECTURE" > "$diagnostic_dir/diagnostic.json"
+          printf 'path=%s\n' "$diagnostic_dir/diagnostic.json" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve fail-closed native diagnostic
+        if: always() && steps.native_diagnostic.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: native-acceptance-${{ matrix.ubuntu }}-${{ matrix.architecture }}
-          path: native-evidence
+          path: ${{ steps.native_diagnostic.outputs.path }}
           if-no-files-found: error
           retention-days: 30
 
