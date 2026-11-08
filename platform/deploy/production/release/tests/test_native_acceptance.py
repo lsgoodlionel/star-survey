@@ -99,10 +99,8 @@ def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) 
 def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dict) -> None:
     job = workflow["jobs"]["native-acceptance"]
     step = next(item for item in job["steps"] if item.get("name") == "Execute real clean-host install upgrade restore and uninstall")
-    testcase.assertEqual(
-        "sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh",
-        step["run"],
-    )
+    testcase.assertEqual("echo 'Native lifecycle blocked: recovery and safe cleanup are not independently verified.' >&2\nexit 1\n", step['run'])
+    testcase.assertNotIn('sudo -E NATIVE_ACCEPTANCE_REAL=1', job_text(job))
 
 
 class NativeAcceptanceWorkflowTest(unittest.TestCase):
@@ -175,18 +173,37 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         native_text = job_text(self.workflow["jobs"]["native-acceptance"])
         self.assertIn("inputs.candidate_run_id", native_text)
         self.assertIn("github-token", native_text)
-        self.assertNotIn("actions/checkout@", native_text)
-        self.assertIn("orchestrator/release/native_acceptance.sh", native_text)
+        anchor = next(step for step in self.workflow['jobs']['native-acceptance']['steps']
+                      if step.get('name') == 'Check out the workflow trust anchor')
+        self.assertEqual('${{ github.sha }}', anchor['with']['ref'])
+        self.assertFalse(anchor['with']['persist-credentials'])
+        self.assertIn('verify_native_orchestrator.py', native_text)
+        self.assertNotIn('tar -xzf', native_text)
         publication = self.workflow["jobs"]["publication"]
         self.assertIn("needs.policy.outputs.release == 'true'", publication["if"])
         self.assertIn("needs.policy.outputs.channel", publication["if"])
 
+    def test_native_candidate_verification_precedes_any_host_lifecycle(self):
+        steps = self.workflow['jobs']['native-acceptance']['steps']
+        names = [step.get('name') for step in steps]
+        anchor = names.index('Check out the workflow trust anchor')
+        verify = names.index('Verify candidate native scripts against workflow source')
+        ready = names.index('Require ready native systemd and Docker')
+        lifecycle = names.index('Execute real clean-host install upgrade restore and uninstall')
+        self.assertLess(anchor, verify)
+        self.assertLess(verify, ready)
+        self.assertLess(ready, lifecycle)
+        script = steps[verify]['run']
+        self.assertIn('trusted-workflow-source/platform/deploy/production/release/verify_native_orchestrator.py', script)
+        self.assertIn('candidate-assets/identity.json', script)
+        assert_native_workflow_invocation(self, self.workflow)
+
     def test_native_job_uploads_only_fixed_failed_diagnostic(self):
         job = self.workflow["jobs"]["native-acceptance"]
         text = job_text(job)
-        self.assertIn("native_acceptance.sh", text)
-        self.assertIn("sudo -E", text)
-        self.assertIn("NATIVE_ACCEPTANCE_REAL=1", text)
+        self.assertIn("verify_native_orchestrator.py", text)
+        self.assertNotIn("sudo -E NATIVE_ACCEPTANCE_REAL=1", text)
+        assert_native_workflow_invocation(self, self.workflow)
         prepare = next(step for step in job["steps"] if step.get("id") == "native_diagnostic")
         self.assertEqual("always()", prepare["if"])
         uploads = [step for step in job['steps'] if 'actions/upload-artifact@' in step.get('uses', '')]

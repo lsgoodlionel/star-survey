@@ -693,6 +693,24 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
 
+      - name: Check out the workflow trust anchor
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          path: trusted-workflow-source
+          persist-credentials: false
+
+      - name: Verify candidate native scripts against workflow source
+        timeout-minutes: 5
+        shell: bash
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          python3 trusted-workflow-source/platform/deploy/production/release/verify_native_orchestrator.py \
+            candidate-assets/identity.json candidate-assets/candidate "$ARCHITECTURE" \
+            trusted-workflow-source/platform/deploy/production/release
+
       - name: Log in to GHCR for native image pulls
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -716,20 +734,6 @@ jobs:
           printf 'gateway-digest=%s\n' "$(jq -er '.images["publish-gateway"].digest' "$identity")" >> "$GITHUB_OUTPUT"
           printf 'engine-digest=%s\n' "$(jq -er '.images.engine.digest' "$identity")" >> "$GITHUB_OUTPUT"
           printf 'baseline-mode=%s\n' "$(jq -er '.baseline.mode' "$identity")" >> "$GITHUB_OUTPUT"
-
-      - name: Extract the checksum-bound acceptance orchestrator
-        shell: bash
-        env:
-          ARCHITECTURE: ${{ matrix.architecture }}
-          BUNDLE_SHA256: ${{ steps.identity.outputs.bundle-sha }}
-        run: |
-          set -euo pipefail
-          bundle="$(jq -er --arg architecture "$ARCHITECTURE" '.bundles[$architecture].name' candidate-assets/identity.json)"
-          [[ "$(sha256sum "candidate-assets/candidate/$bundle" | awk '{print $1}')" == "$BUNDLE_SHA256" ]]
-          mkdir -p orchestrator
-          tar -xzf "candidate-assets/candidate/$bundle" -C orchestrator \
-            release/native_acceptance.sh release/native_acceptance_evidence.py
-          chmod 0755 orchestrator/release/native_acceptance.sh orchestrator/release/native_acceptance_evidence.py
 
       - name: Require ready native systemd and Docker
         timeout-minutes: 4
@@ -770,7 +774,9 @@ jobs:
           SURVEY_ACCEPTANCE_EXPECTED_PUBLIC_ADDRESS: 127.0.0.1
           SURVEY_ACCEPTANCE_ADMIN_EMAIL: native-acceptance@example.com
           EVIDENCE_DIR: ${{ github.workspace }}/native-evidence
-        run: sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh
+        run: |
+          echo 'Native lifecycle blocked: recovery and safe cleanup are not independently verified.' >&2
+          exit 1
 
       # Until evidence scanning, crash containment and ownership are proven as
       # one lifecycle, never upload files from the untrusted evidence directory.
