@@ -35,6 +35,9 @@ final class PdfPageWriter {
     /** 一列至少留这么宽，否则窄屏下会挤成一个字一行。 */
     private static final double MIN_COLUMN = 36;
     private static final double BLOCK_GAP = 5;
+    // A string width is scaled once; character advances are scaled separately.
+    // Ignore sub-coordinate-precision rounding when deciding whether it fits.
+    private static final double WIDTH_EPSILON = 1e-7;
 
     private final PdfFontUse font;
     private final PageSink sink;
@@ -245,7 +248,7 @@ final class PdfPageWriter {
             i += Character.charCount(codePoint);
             String candidate = new String(Character.toChars(codePoint));
             double advance = font.width(candidate, size);
-            if (used + advance > available && !current.isEmpty()) {
+            if (used + advance > available + WIDTH_EPSILON && !current.isEmpty()) {
                 int cut = lastBreak > 0 ? lastBreak : current.length();
                 lines.add(current.substring(0, cut).stripTrailing());
                 current.delete(0, cut);
