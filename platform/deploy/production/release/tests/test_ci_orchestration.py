@@ -27,7 +27,7 @@ class CIOrchestrationTest(unittest.TestCase):
         ci = workflow('ci.yml')
         summary = ci['jobs']['summary']
         self.assertEqual('always()', summary['if'])
-        self.assertEqual({'changes', 'quality', 'images'}, set(summary['needs']))
+        self.assertEqual({'changes', 'quality', 'images', 'relay'}, set(summary['needs']))
         self.assertIn('plan.py summary', str(summary))
         self.assertIn('toJSON(needs)', str(summary))
         for name, job in workflow('platform-quality.yml')['jobs'].items():
