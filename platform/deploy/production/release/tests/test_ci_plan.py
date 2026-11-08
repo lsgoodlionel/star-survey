@@ -1,5 +1,9 @@
 import importlib.util
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -44,6 +48,43 @@ class CIPlanTest(unittest.TestCase):
         self.assertTrue(m.accept_results('docs', False, 'success', 'skipped', 'skipped'))
         self.assertFalse(m.accept_results('docs', False, 'failure', 'skipped', 'skipped'))
         self.assertFalse(m.accept_results('invalid', False, 'success', 'skipped', 'skipped'))
+
+    def test_relay_is_optional_but_requested_relay_must_succeed(self):
+        m = self.module
+        base = ('full', True, 'success', 'success', 'success')
+        self.assertTrue(m.accept_results(*base, relay_requested=False, relay='skipped'))
+        self.assertFalse(m.accept_results(*base, relay_requested=False, relay='success'))
+        self.assertTrue(m.accept_results(*base, relay_requested=True, relay='success'))
+        for status in ('failure', 'cancelled', 'skipped', None):
+            with self.subTest(status=status):
+                self.assertFalse(m.accept_results(*base, relay_requested=True, relay=status))
+
+    def test_manual_relay_reuses_isolated_diagnostic_and_preserves_triggers(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        original = (ROOT / '.github/workflows/relay-devstack-diagnostic.yml').read_text()
+        self.assertIn('  pull_request:\n  push:\n    branches: [main]\n', workflow)
+        self.assertIn('      run_relay:\n        description: Run the isolated dual-database relay diagnostic\n'
+                      '        type: boolean\n        default: false\n', workflow)
+        actual = workflow.split('  relay:\n', 1)[1].split('\n  summary:\n', 1)[0].strip()
+        expected = original.split('  real-relay:\n', 1)[1].strip()
+        guard = "if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_relay == true }}"
+        self.assertTrue(actual.startswith(guard + '\n'))
+        self.assertEqual(expected, actual[len(guard):].strip())
+        self.assertIn('needs: [changes, quality, images, relay]', workflow)
+
+    def test_summary_command_fails_closed_for_requested_relay(self):
+        needs = {'changes': {'result': 'success', 'outputs': {'profile': 'full', 'images': 'true'}},
+                 'quality': {'result': 'success'}, 'images': {'result': 'success'},
+                 'relay': {'result': 'success'}}
+        for requested, status, expected in [('true', 'success', 0), ('true', 'failure', 1),
+                                            ('true', 'skipped', 1), ('false', 'skipped', 0),
+                                            ('false', 'failure', 1), ('invalid', 'success', 1)]:
+            with self.subTest(requested=requested, status=status):
+                needs['relay']['result'] = status
+                result = subprocess.run([sys.executable, str(ROOT / 'scripts/ci/plan.py'), 'summary'],
+                                        env={**os.environ, 'CI_NEEDS': json.dumps(needs),
+                                             'RELAY_REQUESTED': requested}, capture_output=True, text=True)
+                self.assertEqual(expected, result.returncode, result.stderr)
 
     def test_pr_file_pages_match_count_and_head_or_use_full(self):
         event = {'pull_request': {'number': 28, 'head': {'sha': 'abc'}}}
