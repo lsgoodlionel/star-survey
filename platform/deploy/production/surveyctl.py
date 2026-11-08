@@ -1469,22 +1469,10 @@ class SurveyManager:
 
     @_locked_mutation(create_target=False)
     def restore(self, name) -> None:
-        state = self._read_state(require_current=True)
-        self._require_no_pending_recovery(state)
-        self._restore_for_failed_upgrade_or_manual(name, state)
-
-    def _restore_for_failed_upgrade_or_manual(self, name, state) -> None:
-        backup = self._backup_path(name)
-        metadata = self._verify_backup(backup)
-        if self._personnel_guard_enabled(state["version"], require_floor=True):
-            self._require_personnel_capability(self._release_manifest(metadata["version"]))
-        release = self._release_manifest(state["version"])
-        compatible_schemas = set(release.compatible_source_schemas) | {release.database_schema}
-        if metadata["databaseSchema"] not in compatible_schemas:
-            raise IntegrityError("backup database schema is incompatible with the installed release")
-        helper = self._release_dir(state["version"]) / "restore.py"
-        self._begin_operation()
-        self._run_helper([sys.executable, str(helper), "restore", "--target", str(self.target), "--backup", str(backup)], "restore failed")
+        # A released helper may outlive this controller and leave decrypted data;
+        # the installation lock does not prove that all writers are quiescent.
+        # Do not start even backup verification until containment is proven.
+        raise InputError("controlled restore is disabled until writer and helper isolation are verified")
 
     @staticmethod
     def _jwt(secret: bytes, actor: str, tenant: str, roles: list[str]) -> str:
@@ -1729,19 +1717,10 @@ class SurveyManager:
             raise failure
         if manifest.rollback == "restore-only":
             try:
-                if self._stop_new_writers_before_legacy_restore(new_compose):
-                    # Stopping a client container alone cannot prove that its
-                    # in-flight HTTP or database work has finished. Preserve
-                    # the verified backup rather than invoke an old helper
-                    # that cannot freeze the added writer.
-                    raise RuntimeHealthError("cross-version writer quiescence is unverified")
-                self._restore_for_failed_upgrade_or_manual(backup_name, self._read_state(require_current=True))
-                old_compose = self._compose(previous)
-                self._run(old_compose + ["up", "-d", "--remove-orphans"], "restored rollback start failed")
-                self._wait_healthy(old_compose, "restored rollback health check failed")
-                self._verify_public_tls(self._read_state()["publicHost"])
-                self._atomic_write(self.current_path, previous + "\n")
-                self._write_state(status="restored_after_failed_upgrade", version=previous)
+                self._stop_new_writers_before_legacy_restore(new_compose)
+                # Stopping the relay does not establish writer quiescence or
+                # contain the legacy helper's complete process tree.
+                raise RuntimeHealthError("cross-version writer quiescence is unverified")
             except SurveyctlError as recovery_error:
                 self._stop_after_failed_recovery(new_compose, previous, backup_name, recovery_error)
             raise failure

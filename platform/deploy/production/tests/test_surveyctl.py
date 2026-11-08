@@ -467,7 +467,7 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         with mock.patch.object(manager, '_compose', return_value=['docker', 'compose']), \
              mock.patch.object(manager, '_personnel_guard_enabled', return_value=False), \
              mock.patch.object(manager, '_stop_new_writers_before_legacy_restore', side_effect=self.module.RuntimeHealthError('writer')) as stop, \
-             mock.patch.object(manager, 'restore') as restore, \
+             mock.patch.object(manager, '_run_helper') as restore, \
              mock.patch.object(manager, '_stop_after_failed_recovery', side_effect=self.module.RuntimeHealthError('recovery required')):
             with self.assertRaises(self.module.RuntimeHealthError):
                 manager._recover_failed_upgrade(manifest, '0.2.0', 'backup', failure)
@@ -481,7 +481,7 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         with mock.patch.object(manager, '_compose', return_value=['docker', 'compose']), \
              mock.patch.object(manager, '_personnel_guard_enabled', return_value=False), \
              mock.patch.object(manager, '_stop_new_writers_before_legacy_restore', return_value=True), \
-             mock.patch.object(manager, 'restore') as restore, \
+             mock.patch.object(manager, '_run_helper') as restore, \
              mock.patch.object(manager, '_stop_after_failed_recovery', side_effect=self.module.RuntimeHealthError('recovery required')):
             with self.assertRaises(self.module.RuntimeHealthError):
                 manager._recover_failed_upgrade(manifest, '0.2.0', 'backup', failure)
@@ -759,40 +759,36 @@ with manager._mutation_lock(operation='uninstall'):
                 try: os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError: pass
 
-    def test_restore_local_rejections_remain_retryable_before_helper(self):
+    def test_backup_verification_rejects_corruption_before_helper(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager()
         manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        backup = self.target / 'backups' / 'corrupt'
+        write_fake_backup(backup)
+        (backup / 'payload.bin').write_bytes(b'tampered')
         with mock.patch.object(manager, '_run_helper') as helper:
-            with self.assertRaises(self.module.IntegrityError):
-                manager.restore('missing')
-            backup = self.target / 'backups' / 'corrupt'
-            write_fake_backup(backup)
-            (backup / 'payload.bin').write_bytes(b'tampered')
-            with self.assertRaises(self.module.IntegrityError):
-                manager.restore('corrupt')
+            with manager._mutation_lock(operation='verify-test'):
+                with self.assertRaises(self.module.IntegrityError):
+                    manager._verify_backup(backup)
             helper.assert_not_called()
-        self.assertEqual('complete', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
-        valid = self.target / 'backups' / 'valid'
-        write_fake_backup(valid)
-        manager.restore('valid')
-        self.assertEqual('complete', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
 
-    def test_restore_verify_helper_interruption_keeps_pending(self):
+    def test_backup_verify_helper_interruption_keeps_pending(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager()
         manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
-        write_fake_backup(self.target / 'backups' / 'valid')
+        backup = self.target / 'backups' / 'valid'
+        write_fake_backup(backup)
         def interrupted(*args, **kwargs):
             self.assertEqual('pending', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
             raise KeyboardInterrupt()
         with mock.patch.object(manager, '_run_helper', side_effect=interrupted):
             with self.assertRaises(KeyboardInterrupt):
-                manager.restore('valid')
+                with manager._mutation_lock(operation='verify-test'):
+                    manager._verify_backup(backup)
         with self.assertRaisesRegex(self.module.InputError, 'unverified outcome'):
             manager.uninstall(False, None)
 
-    def test_killed_restore_controller_blocks_while_verify_child_survives(self):
+    def test_killed_backup_verification_controller_blocks_while_child_survives(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager()
         manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
@@ -809,7 +805,8 @@ def helper(command, *args, **kwargs):
     pathlib.Path(sys.argv[4]).write_text(str(child.pid)); pathlib.Path(sys.argv[5]).write_text('ready')
     while True: time.sleep(1)
 manager._run_helper = helper
-manager.restore('valid')
+with manager._mutation_lock(operation='verify-test'):
+    manager._verify_backup(manager.target / 'backups' / 'valid')
 '''
         holder = subprocess.Popen([sys.executable, '-c', script, str(Path(__file__).resolve()), str(self.target), str(PRODUCTION_DIR), str(child_file), str(ready)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         pid = None
@@ -1780,26 +1777,15 @@ class SurveyctlTest(unittest.TestCase):
                          "target=pathlib.Path(sys.argv[sys.argv.index('--target')+1])\n"
                          "sys.exit(0 if 'verify' in sys.argv and (target/'allow-verify').exists() else (5 if 'verify' in sys.argv else 4))\n")
         manifest, _ = write_test_release(self.root, restore_source=helper_source.encode())
-        for operation, expected in (
-            ("verify", 5),
-            ("restore", 4),
-        ):
-            with self.subTest(operation=operation):
-                target = self.root / ("helper-" + operation)
-                manager = self.module.SurveyManager(target=target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
-                manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
-                write_fake_backup(target / "backups" / "sample")
-                if operation == "restore":
-                    (target / "allow-verify").touch()
-                result = subprocess.run(
-                    [sys.executable, str(MODULE_PATH), "--target", str(target), "restore", "sample"],
-                    capture_output=True, text=True,
-                )
-                self.assertEqual(expected, result.returncode, result.stderr)
-                self.assertNotIn("Traceback", result.stderr)
-                self.assertEqual("pending", json.loads((target / ".surveyctl/operation.intent").read_text())["state"])
-                blocked = subprocess.run([sys.executable, str(MODULE_PATH), "--target", str(target), "uninstall"], capture_output=True, text=True)
-                self.assertIn("unverified outcome", blocked.stderr)
+        target = self.root / "helper-restore-closed"
+        manager = self.module.SurveyManager(target=target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+        manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
+        write_fake_backup(target / "backups" / "sample")
+        result = subprocess.run([sys.executable, str(MODULE_PATH), "--target", str(target), "restore", "sample"], capture_output=True, text=True)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("controlled restore is disabled", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual("complete", json.loads((target / ".surveyctl/operation.intent").read_text())["state"])
         other_target = self.root / "helper-backup-target"
         other_manager = self.module.SurveyManager(target=other_target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
         other_manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
@@ -1987,12 +1973,27 @@ class SurveyctlTest(unittest.TestCase):
         self.assertFalse(any("up" in command and "releases/0.2.0/compose.yml" in " ".join(command) for command in failing.commands))
         self.assertTrue((self.target / ".surveyctl" / "auth-security-floor").is_file())
 
+    def test_manual_restore_is_closed_before_any_backup_or_helper_access(self):
+        self.install()
+        manager = self.manager()
+        before = (self.target / '.surveyctl' / 'state.json').read_bytes()
+        intent = (self.target / '.surveyctl' / 'operation.intent').read_bytes()
+        with mock.patch.object(manager, '_verify_backup') as verify, \
+             mock.patch.object(manager, '_run_helper') as helper:
+            with self.assertRaisesRegex(self.module.InputError, 'controlled restore is disabled'):
+                manager.restore('synthetic-backup')
+            verify.assert_not_called()
+            helper.assert_not_called()
+        self.assertEqual(before, (self.target / '.surveyctl' / 'state.json').read_bytes())
+        self.assertEqual(intent, (self.target / '.surveyctl' / 'operation.intent').read_bytes())
+
     def test_restore_status_doctor_and_logs_delegate_without_exposing_secrets(self):
         self.install()
         self.runner.commands.clear()
         manager = self.manager()
         manager.backup("sample")
-        manager.restore("sample")
+        with self.assertRaisesRegex(self.module.InputError, "controlled restore is disabled"):
+            manager.restore("sample")
         manager.status()
         manager.doctor()
         manager.logs("platform")
@@ -2004,21 +2005,20 @@ class SurveyctlTest(unittest.TestCase):
         for secret in (self.target / "shared" / "secrets").iterdir():
             self.assertNotIn(secret.read_text().strip(), output)
 
-    def test_restore_accepts_only_release_declared_source_schemas(self):
+    def test_restore_stays_closed_for_compatible_and_incompatible_backups(self):
         self.install()
         source = self.manifest(version="0.1.9")
         self.manager()._stage_release(self.module.load_manifest(source), "arm64", "survey.example.com", "operations", "operations@example.com")
         backup = self.target / "backups" / "older-compatible"
         write_fake_backup(backup, "0.1.9", "919")
-        self.runner.commands.clear()
-        self.manager().restore("older-compatible")
-        self.assertTrue(any("restore.py" in " ".join(command) for command in self.runner.commands))
-
-        manifest = json.loads((backup / "manifest.json").read_text())
-        manifest["databaseSchema"] = "918"
-        (backup / "manifest.json").write_text(json.dumps(manifest))
-        with self.assertRaises(self.module.IntegrityError):
-            self.manager().restore("older-compatible")
+        for schema in ("919", "918"):
+            data = json.loads((backup / "manifest.json").read_text())
+            data["databaseSchema"] = schema
+            (backup / "manifest.json").write_text(json.dumps(data))
+            self.runner.commands.clear()
+            with self.assertRaisesRegex(self.module.InputError, "controlled restore is disabled"):
+                self.manager().restore("older-compatible")
+            self.assertEqual([], self.runner.commands)
 
     def test_uninstall_preserves_data_and_purge_requires_exact_second_confirmation(self):
         self.install()
