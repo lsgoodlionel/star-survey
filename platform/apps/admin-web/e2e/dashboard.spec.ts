@@ -62,6 +62,55 @@ test('login lands on dashboard and real actions preserve recent work across relo
   await expect(page.getByRole('link', { name: '继续查看答卷' }).and(page.locator(`a[href="/surveys/${result.surveyId}/responses"]`))).toBeVisible();
 });
 
+test('short links fail identically after revocation or expiry and reject unauthorized changes', async ({ page }) => {
+  const metadata = await readMetadata();
+  const result = await readResult();
+  await seedScopedActors(metadata.tenantId, result.surveyId);
+  const owner = await readPrivateToken('ADMIN_WEB_JWT_FILE');
+  const data = await readPrivateToken('ADMIN_WEB_DATA_JWT_FILE');
+  const base = requiredEnv('ADMIN_WEB_BASE_URL');
+  const create = async (label: string) => {
+    const response = await page.request.post(`${base}/v1/delivery/surveys/${result.surveyId}/links`, {
+      headers: { Authorization: `Bearer ${owner}` }, data: { label, params: {}, ttlSeconds: 3600, shortLink: true },
+    });
+    expect(response.status()).toBe(201);
+    const link = await response.json() as { id: string; shortUrl: string; url: string };
+    assertUuid(link.id);
+    expect(link.shortUrl).toBeTruthy();
+    return link;
+  };
+  const revoked = await create('synthetic revoked');
+  const expired = await create('synthetic expired');
+  const valid = await create('synthetic valid');
+  const shortPath = (link: { shortUrl: string }) => new URL(link.shortUrl).pathname;
+  const live = await page.request.get(`${base}${shortPath(valid)}`, { maxRedirects: 0 });
+  expect(live.status()).toBe(302);
+  expect(live.headers().location).toBe(valid.url);
+  expect(live.headers()['cache-control']).toBe('no-store');
+  const forbidden = await page.request.delete(`${base}/v1/delivery/links/${revoked.id}`, {
+    headers: { Authorization: `Bearer ${data}` },
+  });
+  expect(forbidden.status()).toBe(403);
+  expect((await page.request.get(`${base}${shortPath(revoked)}`, { maxRedirects: 0 })).status()).toBe(302);
+  const done = await page.request.delete(`${base}/v1/delivery/links/${revoked.id}`, {
+    headers: { Authorization: `Bearer ${owner}` },
+  });
+  expect(done.status()).toBe(200);
+  assertUuid(metadata.tenantId);
+  await run('docker', ['exec', requiredEnv('ADMIN_WEB_PLATFORM_DB_CONTAINER'), 'psql', '-U', 'platform_owner',
+    '-d', 'platform', '-v', 'ON_ERROR_STOP=1', '-q', '-c', `BEGIN;
+SELECT set_config('app.tenant_id', '${metadata.tenantId}', true);
+UPDATE delivery_link SET expires_at = now() - interval '1 minute' WHERE id = '${expired.id}';
+COMMIT;`]);
+  const unknownPath = `${shortPath(valid).slice(0, -1)}${shortPath(valid).endsWith('2') ? '3' : '2'}`;
+  const failures = await Promise.all([shortPath(revoked), shortPath(expired), unknownPath].map(path =>
+    page.request.get(`${base}${path}`, { maxRedirects: 0 })));
+  for (const failure of failures) expect(failure.status()).toBe(404);
+  const bodies = await Promise.all(failures.map(failure => failure.text()));
+  expect(bodies[0]).toEqual(bodies[1]);
+  expect(bodies[1]).toEqual(bodies[2]);
+});
+
 test('tenant owner can view the current subscription in the real stack', async ({ page }) => {
   const metadata = await readMetadata();
   await login(page, await readPrivateToken('ADMIN_WEB_JWT_FILE'), metadata.actorId, metadata.tenantId);
