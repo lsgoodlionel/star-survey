@@ -8,7 +8,9 @@
 
 ## 1. 当前状态
 
-`main` @ `4206f24a`（[PR #8](https://github.com/lsgoodlionel/star-survey/pull/8) 已合并）· 更新 2026-10-09
+`main` @ `89ab428f1b` · 更新 2026-11-09（下列按日期的分支验收段落保留为历史记录）
+
+**2026-11-09 主线核对**：GitHub Project「Survey 开发与验收」中，Wave 2 模板与品牌（[#36](https://github.com/lsgoodlionel/star-survey/issues/36)）和 Wave 5 编辑器与高级题型（[#31](https://github.com/lsgoodlionel/star-survey/issues/31)）阶段为完成；Wave 0（[#37](https://github.com/lsgoodlionel/star-survey/issues/37)）、Wave 1（[#39](https://github.com/lsgoodlionel/star-survey/issues/39)）、Wave 3（[#38](https://github.com/lsgoodlionel/star-survey/issues/38)）、Wave 4（[#40](https://github.com/lsgoodlionel/star-survey/issues/40)）以及 Wave 6 原生生命周期（[#33](https://github.com/lsgoodlionel/star-survey/issues/33)）和 Release 准出（[#34](https://github.com/lsgoodlionel/star-survey/issues/34)）为验收中，Wave 6 运营后台与安全收口（[#32](https://github.com/lsgoodlionel/star-survey/issues/32)）为开发中。`v0.3.19-rc.1` 候选的四平台原生生命周期与升级验证通过；GitHub Release 发布步骤为 skipped，正式生产部署和公网 TLS 尚未执行。
 
 **2026-10-27 分支验收**：`feat/admin-product-alignment` @ `c80e9b406b` 已关闭 Wave 2 Task 7 带图真实预览 502 阻塞。隔离 MySQL/PostgreSQL 管理端真实浏览器均 19/19，覆盖品牌化正式答卷、两版发布和旧版图片字节固定；Java 1494 项/184 类、网关 1235 项、管理端 353 项与管理端静态/生产构建检查通过。Wave 2 Task 8 的生产 Caddy/doctor/备份恢复和独立复审仍待完成，能力状态不提升。[GitHub 平台质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40461852500)曾在 `db267ede9d` 全部通过（10/10 jobs）；后续以当前提交的在线 CI 结果为准。详见 [当前进度](../docs/agent/PROGRESS.md)。
 
@@ -24,7 +26,7 @@
 |---|---|
 | P0 基线与可行性 | ✅（供应商询证与法务意见待业务侧） |
 | P1 租户与平台骨架 | ✅ 闸门通过 |
-| P2 通用问卷与本土入口 | 🔄 Business Dashboard v1、管理端 Phase A+B、Wave 2 模板/品牌、Wave 3 数据及 Wave 4 通讯录投放蓝图本地功能已通过真实浏览器验收；Wave 3 正式生产、Wave 4 外部供应商延期项和 Wave 5–6 仍待后续证据 |
+| P2 通用问卷与本土入口 | 🔄 Business Dashboard v1、管理端 Phase A+B、Wave 2 模板/品牌、Wave 3 数据及 Wave 4 通讯录投放蓝图本地功能已通过真实浏览器验收；Wave 5 首批高级题型已完成功能与自动化验收；Wave 3 正式生产、Wave 4 外部供应商延期项和 Wave 6 仍待后续证据 |
 | P3 商业与业务应用 | 🔄 考试与测评（WP-09/10）已起步 |
 | P4–P5 | ⬜ |
 
@@ -298,7 +300,7 @@ Task 7 Dashboard 用户可见证据保留在 `platform/apps/admin-web/test-resul
 
 **功能缺口**
 
-- 管理端已交付题组与题目的 pointer 拖拽、键盘排序和移动端按钮替代操作；仍未交付高级题型可视化配置、真实 LimeSurvey 运行时预览和专门的屏幕阅读器审计。当前复杂题型仍是只读无损往返，现有入口明确标注为“快速预览”，仅使用本地草稿 renderer。
+- 管理端已交付题组与题目的 pointer 拖拽、键盘排序和移动端按钮替代操作，以及首批高级题型（折叠栏目、多级下拉、轮播图）的可视化配置（Wave 5，#31）；其他复杂题型仍是只读无损往返。问卷子页的“快速预览”仍只用本地草稿 renderer，同一页另提供基于 LimeSurvey 隔离运行时的“真实预览”。屏幕阅读器真人验收尚未完成（#41，已延期）。
 - PDF 导出已接入随交付嵌入的思源黑体子集（SIL OFL 1.1）；本地 PDF 单元测试通过，完整产品验收待续。
 - 附件打包卡在 `get_uploaded_files`——它一次把**整份答卷**的全部文件 base64 塞进一个 JSON 应答。
 - 字典节点上限 8000（由定义快照 1 MiB 倒推）：到区县够用，到乡镇街道不够。

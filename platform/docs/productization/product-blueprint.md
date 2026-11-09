@@ -35,11 +35,14 @@
 |---|---|---|---|
 | 工作台 | 我现在该继续什么？ | 最近问卷、待审批、发布异常、快捷入口 | 保留现有 `/workspace`，只展示真实数据 |
 | 问卷 | 如何创建、配置、预览和发布？ | 资源、模板、编辑、品牌、访问规则、发布与版本 | 问卷上下文可恢复，子页均为真实路由 |
-| 投放 | 如何找到受众并触达？ | 联系人、部门、标签、名单、链接、二维码、任务、催答 | Wave 4 闭环前不进入正式一级导航 |
-| 数据 | 回收了什么，如何交付？ | 答卷、摘要、字段、导出任务和下载 | Wave 3 闭环前不进入正式一级导航 |
+| 投放 | 如何找到受众并触达？ | 联系人、部门、标签、名单、链接、二维码、任务、催答 | 已进入一级导航 `/delivery`；生产验收见 Wave 4 记录 |
+| 数据 | 回收了什么，如何交付？ | 答卷、摘要、字段、导出任务和下载 | 已进入一级导航 `/data`，按数据权限显示；生产验收见 Wave 3 记录 |
 | 管理 | 谁能用、系统如何运行？ | 成员、组织连接、套餐、引擎实例、平台模板 | 按租户管理与平台运维分权 |
 
-当前正式业务工作区路由只有 `/workspace` 与 `/surveys/:surveyId/{edit,import,preview,publish,versions/:version}`。
+当前业务工作区路由（2026-11-09 对照 `platform/apps/admin-web/src/app/router.tsx`）：`/dashboard`、`/workspace`、`/templates`、
+`/templates/:templateId`、`/delivery`、`/data`、`/settings/{organization,members,email,subscription}`，以及
+`/surveys/:surveyId/{edit,branding,import,preview,publish,audience,responses,versions/:version}`；平台运维另有
+`/operations/{tenants,tenants/:tenantId,tenants/:tenantId/engines,plans}`。路由存在只说明页面已接入，不代表对应能力已生产验收。
 上表是 Wave 0-6 的目标 IA，不得把尚无页面的目标项写成当前路由。
 
 ### 3.2 一级导航规则
