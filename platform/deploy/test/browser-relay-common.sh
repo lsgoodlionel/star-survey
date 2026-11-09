@@ -8,6 +8,35 @@ validate_fixture_args() {
   [[ "$3" =~ ^sha256:[a-f0-9]{64}$ && "$4" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'local image IDs required' >&2; return 2; }
 }
 
+inspect_fixture_image() {
+  local image="$1" inspection
+  shift
+  inspection="$(docker image inspect "$image")" || return 1
+  python3 -c '
+import json, re, sys
+try:
+    data = json.load(sys.stdin)
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        raise ValueError("unexpected image inspection")
+    item = data[0]
+    image_id = item["Id"]
+    config = item["Config"]
+    if not isinstance(image_id, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) or not isinstance(config, dict):
+        raise ValueError("invalid image identity or config")
+    declared = config.get("Volumes")
+    if declared is None:
+        declared = {}
+    if not isinstance(declared, dict) or any(not isinstance(path, str) or not path.startswith("/") for path in declared):
+        raise ValueError("invalid volume declarations")
+    if not set(declared).issubset(set(sys.argv[1:])):
+        raise ValueError("uncontrolled image volume")
+    print(image_id)
+except (ValueError, KeyError, TypeError):
+    print("image volume inspection failed", file=sys.stderr)
+    sys.exit(1)
+' "$@" <<< "$inspection"
+}
+
 validate_gateway_user() {
   [[ "$1" =~ ^([1-9][0-9]{0,5}):([1-9][0-9]{0,5})$ ]] || { echo 'gateway must declare a non-root numeric user and group' >&2; return 1; }
   gateway_uid="${BASH_REMATCH[1]}"
@@ -139,9 +168,17 @@ init_fixture() {
   [[ "$endpoint" == unix:///* ]] || { echo 'local Unix Docker endpoint required' >&2; return 2; }
   docker info >/dev/null || return 2
   docker volume inspect "$maven_cache" >/dev/null || return 2
-  for image in "$gateway_image" "$web_image" survey-web python:3.11-slim postgres:16-alpine mariadb:10.11 maven:3.9-eclipse-temurin-21 selenium/standalone-firefox:latest; do
-    docker image inspect "$image" >/dev/null 2>&1 || { echo 'required local test image unavailable' >&2; return 2; }
-  done
+  # Every declared image volume must be exactly covered by a fixture mount.
+  # Resolve mutable local tags to immutable IDs before creating any resources.
+  gateway_image="$(inspect_fixture_image "$gateway_image" /var/lib/pubgw)" || return 2
+  web_image="$(inspect_fixture_image "$web_image" /var/www/html /var/www/html/tmp /var/www/html/tests/tmp /var/www/html/upload /var/www/html/application/config/config.php /var/www/html/plugins/FaultInjector)" || return 2
+  mariadb_image="$(inspect_fixture_image mariadb:10.11 /var/lib/mysql)" || return 2
+  postgres_image="$(inspect_fixture_image postgres:16-alpine /var/lib/postgresql/data)" || return 2
+  python_image="$(inspect_fixture_image python:3.11-slim)" || return 2
+  maven_image="$(inspect_fixture_image maven:3.9-eclipse-temurin-21)" || return 2
+  firefox_image="$(inspect_fixture_image selenium/standalone-firefox:latest)" || return 2
+  # lib.sh checks this tag before it will use the supplied web image.
+  docker image inspect survey-web >/dev/null 2>&1 || return 2
   local gateway_user
   gateway_user="$(docker image inspect -f '{{.Config.User}}' "$gateway_image")" || return 2
   validate_gateway_user "$gateway_user" || return 2
@@ -172,8 +209,10 @@ networks:
     internal: true
 services:
   test-db:
+    image: "$mariadb_image"
     pull_policy: never
   test-pg:
+    image: "$postgres_image"
     pull_policy: never
   test-web:
     image: "$web_image"

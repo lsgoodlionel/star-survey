@@ -24,10 +24,10 @@ validate_gateway_mount "$prefix-gateway" || { echo "gateway mount verification f
 for i in {1..60}; do [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prefix-gateway" 2>/dev/null || true)" == healthy ]] && break; sleep 1; done
 [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prefix-gateway")" == healthy ]]
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-proxy" --network "$network" --network-alias fault-proxy \
- -v "$REPO_ROOT/platform/tests/e2e/real_engine_reminder_fault_proxy.py:/fixture/fault-proxy.py:ro" python:3.11-slim python /fixture/fault-proxy.py >/dev/null
+ -v "$REPO_ROOT/platform/tests/e2e/real_engine_reminder_fault_proxy.py:/fixture/fault-proxy.py:ro" "$python_image" python /fixture/fault-proxy.py >/dev/null
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-platform-db" --network "$network" --tmpfs /var/lib/postgresql/data \
  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=postgres \
- -v "$REPO_ROOT/platform/deploy/platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro" postgres:16-alpine >/dev/null
+ -v "$REPO_ROOT/platform/deploy/platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro" "$postgres_image" >/dev/null
 for i in {1..60}; do docker exec "$prefix-platform-db" pg_isready -U postgres -d platform >/dev/null 2>&1 && break; sleep 1; done
 docker exec "$prefix-platform-db" pg_isready -U postgres -d platform >/dev/null
 # The platform JVM exposes its real event endpoint only on this internal test network.
@@ -36,7 +36,7 @@ docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-
  -e SURVEY_BROWSER_RELAY_FIXTURE=/fixture/evidence.json -e SURVEY_CRASH_PHASE=first -v "$work:/fixture" \
  -v "$REPO_ROOT/platform/services/business:/workspace" -v "${maven_cache}:/root/.m2/repository:ro" \
  -v "$REPO_ROOT/platform/deploy/platform-dev/maven-settings.xml:/root/.m2/settings.xml:ro" \
- -w /workspace maven:3.9-eclipse-temurin-21 mvn -o -B -q -Dtest=DeliveryBrowserRelayCrashIT test >/dev/null
+ -w /workspace "$maven_image" mvn -o -B -q -Dtest=DeliveryBrowserRelayCrashIT test >/dev/null
 for i in {1..180}; do
   [[ -f "$work/ready" ]] && break
   [[ "$(docker inspect -f '{{.State.Running}}' "$prefix-platform")" == true ]] || { docker logs "$prefix-platform" >&2; exit 1; }
@@ -45,7 +45,7 @@ done
 [[ -f "$work/ready" ]] || { echo 'platform test readiness timed out' >&2; exit 1; }
 docker run --pull never --rm --label "survey.fixture.run=$prefix" --name "$prefix-browser" --network "container:$CONTAINER" --user 1200:1201 --cap-drop ALL --security-opt no-new-privileges --shm-size 1g \
  -v "$work/evidence.json:/fixture/evidence.json:ro" -v "$REPO_ROOT/platform/tests/e2e/browser_relay_firefox.py:/fixture/browser.py:ro" \
- --entrypoint python3 selenium/standalone-firefox:latest /fixture/browser.py
+ --entrypoint python3 "$firefox_image" /fixture/browser.py
 sid=$(python3 -c 'import json,sys;x=json.load(open(sys.argv[1]));assert isinstance(x["sid"],int) and x["sid"]>0;print(x["sid"])' "$work/evidence.json")
 completed=$(db_query "SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=$sid AND response_id=1 AND event_type='response.completed'")
 [[ "$completed" -ge 1 ]] || { echo 'real completion outbox event missing' >&2; exit 1; }
@@ -83,7 +83,7 @@ docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-
  -e SURVEY_BROWSER_RELAY_FIXTURE=/fixture/evidence.json -e SURVEY_CRASH_PHASE=second -v "$work:/fixture" \
  -v "$REPO_ROOT/platform/services/business:/workspace" -v "${maven_cache}:/root/.m2/repository:ro" \
  -v "$REPO_ROOT/platform/deploy/platform-dev/maven-settings.xml:/root/.m2/settings.xml:ro" \
- -w /workspace maven:3.9-eclipse-temurin-21 mvn -o -B -q -Dtest=DeliveryBrowserRelayCrashIT test >/dev/null
+ -w /workspace "$maven_image" mvn -o -B -q -Dtest=DeliveryBrowserRelayCrashIT test >/dev/null
 exit_code=$(docker wait "$prefix-platform")
 docker logs "$prefix-platform" >&2
 [[ "$exit_code" == 0 ]]

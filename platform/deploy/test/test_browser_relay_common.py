@@ -50,6 +50,25 @@ cleanup_owned_fixture
             self.assertEqual(0, shell(script, marker, env={'SCENARIO': 'empty'}).returncode)
             self.assertFalse(Path(marker).exists())
 
+    def test_image_declarations_must_be_covered_and_inspectable(self):
+        import json
+        script = r'''docker() { [[ "$SCENARIO" != inspect_failure ]] || return 9; printf "%s" "$INSPECT_JSON"; }
+inspect_fixture_image synthetic-image /allowed /another
+'''
+        def image(volumes):
+            return [{"Id": IMAGE, "Config": {"Volumes": volumes}}]
+        for value in (image(None), image({}), image({"/allowed": {}}), image({"/allowed": {}, "/another": {}})):
+            with self.subTest(value=value):
+                result = shell(script, env={"INSPECT_JSON": json.dumps(value)})
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(IMAGE, result.stdout.strip())
+        for value in ([], [{}], image({"/allowed": {}, "/extra": {}}), image(["/allowed"]),
+                      image({"relative": {}}), [{"Id": "bad", "Config": {}}]):
+            with self.subTest(value=value):
+                self.assertNotEqual(0, shell(script, env={"INSPECT_JSON": json.dumps(value)}).returncode)
+        self.assertNotEqual(0, shell(script, env={"INSPECT_JSON": "malformed"}).returncode)
+        self.assertNotEqual(0, shell(script, env={"INSPECT_JSON": json.dumps(image({})), "SCENARIO": "inspect_failure"}).returncode)
+
     def test_gateway_user_must_be_explicit_nonroot_numeric(self):
         self.assertEqual(0, shell('validate_gateway_user "$1"', '10001:10001').returncode)
         for value in ('', 'root', '0:0', '10001:0', '0:10001', 'gateway', '10001', '1234567:10001'):
