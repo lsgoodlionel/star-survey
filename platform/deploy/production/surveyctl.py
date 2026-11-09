@@ -131,6 +131,12 @@ def _unique_json_fields(pairs):
     return result
 
 
+def _file_read_snapshot(info):
+    """Capture identity and mutation metadata; does not prove external exclusion."""
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def _regular_file(path: Path, label: str) -> None:
     try:
         metadata = path.lstat()
@@ -553,9 +559,11 @@ class SurveyManager:
                                     or intent_info.st_size > 1024):
                                 raise IntegrityError("installation operation intent is unsafe")
                             record = json.load(handle, object_pairs_hook=_unique_json_fields)
+                            finished_intent = os.fstat(handle.fileno())
                             observed_intent = os.stat(intent, follow_symlinks=False)
-                            if (intent_info.st_dev, intent_info.st_ino) != (observed_intent.st_dev, observed_intent.st_ino):
-                                raise IntegrityError("installation operation intent identity changed")
+                            if (_file_read_snapshot(intent_info) != _file_read_snapshot(finished_intent)
+                                    or _file_read_snapshot(intent_info) != _file_read_snapshot(observed_intent)):
+                                raise IntegrityError("installation operation intent identity changed or contents modified")
                     except (OSError, UnicodeError, ValueError) as exc:
                         raise IntegrityError("installation operation intent is unavailable or invalid") from exc
                     if (not isinstance(record, dict) or set(record) != {"schemaVersion", "state", "operation"}
@@ -652,21 +660,36 @@ class SurveyManager:
 
     def _read_state(self, require_current: bool = False) -> dict[str, Any]:
         state_path = self._managed(".surveyctl/state.json", must_exist=True)
-        _regular_file(state_path, "installation state")
+        control_fd = None
         try:
-            if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
+            if (not all(hasattr(os, flag) for flag in ('O_NOFOLLOW', 'O_NONBLOCK', 'O_DIRECTORY'))
+                    or os.open not in os.supports_dir_fd or os.stat not in os.supports_dir_fd):
                 raise IntegrityError("installation state cannot be opened safely")
-            fd = os.open(state_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            control_fd = os.open(state_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            control_info = os.fstat(control_fd)
+            if not stat.S_ISDIR(control_info.st_mode):
+                raise IntegrityError("installation control directory is unsafe")
+            _regular_file(state_path, "installation state")
+            fd = os.open(state_path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=control_fd)
             with os.fdopen(fd, 'r', encoding='utf-8') as handle:
                 opened = os.fstat(handle.fileno())
                 if not stat.S_ISREG(opened.st_mode) or opened.st_size <= 0:
                     raise IntegrityError("installation state is unsafe")
                 state = json.load(handle, object_pairs_hook=_unique_json_fields)
-                observed = os.stat(state_path, follow_symlinks=False)
-                if (opened.st_dev, opened.st_ino) != (observed.st_dev, observed.st_ino):
-                    raise IntegrityError("installation state identity changed")
+                finished = os.fstat(handle.fileno())
+                observed = os.stat(state_path.name, dir_fd=control_fd, follow_symlinks=False)
+                current_control = os.stat(state_path.parent, follow_symlinks=False)
+                if ((control_info.st_dev, control_info.st_ino) != (current_control.st_dev, current_control.st_ino)
+                        or not stat.S_ISDIR(current_control.st_mode)):
+                    raise IntegrityError("installation control directory identity changed")
+                if (_file_read_snapshot(opened) != _file_read_snapshot(finished)
+                        or _file_read_snapshot(opened) != _file_read_snapshot(observed)):
+                    raise IntegrityError("installation state identity changed or contents modified")
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             raise IntegrityError("installation state is corrupt") from exc
+        finally:
+            if control_fd is not None:
+                os.close(control_fd)
         if not isinstance(state, dict):
             raise IntegrityError("installation state must be an object")
         if 'dataPurged' in state and not isinstance(state['dataPurged'], bool):

@@ -308,6 +308,53 @@ class SurveyctlAdversarialTest(unittest.TestCase):
                     self.fail('replaced intent must block before mutation')
         self.assertEqual('pending', json.loads(intent.read_text())['state'])
 
+    def test_operation_intent_in_place_change_during_read_blocks_mutation(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        original_info = intent.stat()
+        original_load = self.module.json.load
+        def modify_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            replacement = json.dumps({'schemaVersion': 1, 'state': 'pending', 'operation': 'fixture'})
+            intent.write_text(replacement.ljust(original_info.st_size))
+            os.utime(intent, ns=(original_info.st_atime_ns, original_info.st_mtime_ns + 1_000_000_000))
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=modify_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'intent.*changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('changed intent must block before mutation')
+        self.assertEqual(original_info.st_ino, intent.stat().st_ino)
+        self.assertEqual(original_info.st_size, intent.stat().st_size)
+        self.assertEqual('pending', json.loads(intent.read_text())['state'])
+
+    def test_installation_state_in_place_change_during_read_is_rejected(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        state_path = self.target / '.surveyctl' / 'state.json'
+        state = json.loads(state_path.read_text())
+        state['status'] = 'recovery_required'
+        state['recoveryBackup'] = 'synthetic-fixture-backup'
+        state_path.write_text(state_path.read_text() + ' ' * 128)
+        original_info = state_path.stat()
+        self.assertLessEqual(len(json.dumps(state)), original_info.st_size)
+        original_load = self.module.json.load
+        def modify_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            state_path.write_text(json.dumps(state).ljust(original_info.st_size))
+            os.utime(state_path, ns=(original_info.st_atime_ns, original_info.st_mtime_ns + 1_000_000_000))
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=modify_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'state.*changed'):
+                manager._read_state()
+        self.assertEqual(original_info.st_ino, state_path.stat().st_ino)
+        self.assertEqual(original_info.st_size, state_path.stat().st_size)
+        self.assertEqual('recovery_required', json.loads(state_path.read_text())['status'])
+
     def test_verified_bundle_is_the_only_source_of_deployed_files(self):
         manifest, _ = self.write_bundle_manifest()
         self.manager().install(manifest, "survey.example.com", "operations", "operations@example.com")
@@ -470,6 +517,24 @@ class SurveyctlAdversarialTest(unittest.TestCase):
                 manager._read_state()
         self.assertFalse(replacement.exists())
         self.assertTrue(state_path.is_file())
+
+    def test_state_parent_directory_swap_after_validation_fails_closed(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        control = self.target / '.surveyctl'
+        moved = self.root / 'synthetic-relocated-control'
+        original_check = self.module._regular_file
+        def swap_parent_after_check(path, label):
+            original_check(path, label)
+            if label == 'installation state':
+                control.rename(moved)
+                control.symlink_to(moved, target_is_directory=True)
+        with mock.patch.object(self.module, '_regular_file', side_effect=swap_parent_after_check):
+            with self.assertRaises(self.module.IntegrityError):
+                manager._read_state()
+        self.assertTrue(control.is_symlink())
+        self.assertTrue((moved / 'state.json').is_file())
 
     def test_upgrade_requires_a_real_verified_backup_before_pull(self):
         manifest, _ = self.write_bundle_manifest()
