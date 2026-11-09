@@ -4,6 +4,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/browser-relay-common.sh"
 init_fixture "$@"
 prepare_test_stack
+# The private tmpfs hides checkout upload directories; restore the empty runtime layout.
+docker exec "$CONTAINER" mkdir -p /var/www/html/upload/{admintheme,global,labels,plugins,surveys,themes/survey/generalfiles,twig/extensions}
 enable_remote_control
 db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error) VALUES ('MjyPlatformBridge', 'user', 1, 0, '0.1.0', 0)" >/dev/null
 docker exec "$CONTAINER" rm -rf tmp/runtime/cache
