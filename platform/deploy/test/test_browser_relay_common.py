@@ -154,10 +154,13 @@ cleanup_owned_fixture() { return 1; }
 (exit 7)
 fixture_exit
 '''
-        result = shell(script)
-        self.assertEqual(5, result.returncode)
-        self.assertIn('original status=7', result.stderr)
-        self.assertIn('/synthetic/retained', result.stderr)
+        with tempfile.TemporaryDirectory() as tmp:
+            cleanup = Path(tmp) / 'cleanup'
+            result = shell(script, env={'SURVEY_CROSSLAYER_CLEANUP_FILE': str(cleanup)})
+            self.assertEqual(5, result.returncode)
+            self.assertIn('original status=7', result.stderr)
+            self.assertIn('/synthetic/retained', result.stderr)
+            self.assertEqual('unverified\n', cleanup.read_text())
 
 
 if __name__ == '__main__': unittest.main()
