@@ -412,6 +412,44 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         with self.assertRaises(self.module.InputError):
             manager.status()
 
+    def test_state_symlink_swap_after_validation_fails_closed(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        state_path = self.target / '.surveyctl' / 'state.json'
+        outside = self.root / 'synthetic-foreign-state.json'
+        outside.write_bytes(state_path.read_bytes())
+        manager._write_state(status='recovery_required', recoveryBackup='fixture-backup')
+        original_check = self.module._regular_file
+        def swap_after_check(path, label):
+            original_check(path, label)
+            if label == 'installation state':
+                path.unlink()
+                path.symlink_to(outside)
+        with mock.patch.object(self.module, '_regular_file', side_effect=swap_after_check):
+            with self.assertRaises(self.module.IntegrityError):
+                manager._read_state()
+        self.assertTrue(state_path.is_symlink())
+        self.assertTrue(outside.is_file())
+
+    def test_state_replacement_during_read_fails_closed(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        state_path = self.target / '.surveyctl' / 'state.json'
+        replacement = self.root / 'synthetic-replacement.json'
+        replacement.write_bytes(state_path.read_bytes())
+        original_load = self.module.json.load
+        def swap_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            os.replace(replacement, state_path)
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=swap_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'state identity changed'):
+                manager._read_state()
+        self.assertFalse(replacement.exists())
+        self.assertTrue(state_path.is_file())
+
     def test_upgrade_requires_a_real_verified_backup_before_pull(self):
         manifest, _ = self.write_bundle_manifest()
         runner = FakeRunner(create_backup=False)

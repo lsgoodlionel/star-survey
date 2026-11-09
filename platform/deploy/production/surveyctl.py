@@ -651,7 +651,17 @@ class SurveyManager:
         state_path = self._managed(".surveyctl/state.json", must_exist=True)
         _regular_file(state_path, "installation state")
         try:
-            state = json.loads(state_path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_fields)
+            if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
+                raise IntegrityError("installation state cannot be opened safely")
+            fd = os.open(state_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'r', encoding='utf-8') as handle:
+                opened = os.fstat(handle.fileno())
+                if not stat.S_ISREG(opened.st_mode) or opened.st_size <= 0:
+                    raise IntegrityError("installation state is unsafe")
+                state = json.load(handle, object_pairs_hook=_unique_json_fields)
+                observed = os.stat(state_path, follow_symlinks=False)
+                if (opened.st_dev, opened.st_ino) != (observed.st_dev, observed.st_ino):
+                    raise IntegrityError("installation state identity changed")
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             raise IntegrityError("installation state is corrupt") from exc
         if not isinstance(state, dict):
