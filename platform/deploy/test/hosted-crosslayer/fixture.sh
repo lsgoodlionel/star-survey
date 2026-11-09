@@ -65,11 +65,11 @@ case "${1:-}" in
     docker compose -f docker-compose.dev.yml build web >>"$log_dir/prepare.log" 2>&1
     docker build -t "$name-gateway" platform/tools/publish-gateway >>"$log_dir/prepare.log" 2>&1
     for mode in online offline; do
-      offline=(); [[ "$mode" != offline ]] || offline=(-o)
+      offline_flag=''; [[ "$mode" != offline ]] || offline_flag=-o
       docker run --pull never --rm --name "$container" --label "$label" \
         -v "$name:/root/.m2/repository" -v "$PWD/platform/services/business:/workspace" \
         -v "$PWD/platform/deploy/platform-dev/maven-settings.xml:/root/.m2/settings.xml:ro" \
-        -w /workspace maven:3.9-eclipse-temurin-21 mvn "${offline[@]}" -B -q -Dtest=ProbePayloadPolicyTest test >>"$log_dir/prepare.log" 2>&1
+        -w /workspace maven:3.9-eclipse-temurin-21 mvn ${offline_flag:+$offline_flag} -B -q -Dtest=ProbePayloadPolicyTest test >>"$log_dir/prepare.log" 2>&1
     done
     gateway="$(docker image inspect -f '{{.Id}}' "$name-gateway")"
     engine="$(docker image inspect -f '{{.Id}}' survey-web)"
