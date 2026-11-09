@@ -41,6 +41,18 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
     @Autowired
     OrgLoginProperties loginProperties;
 
+    @Autowired
+    OrgLoginHandoffRepository handoffs;
+
+    @Autowired
+    OrgBindingRepository bindings;
+
+    @Autowired
+    OrgSessionRepository sessions;
+
+    @Autowired
+    OrgLoginService login;
+
     record AdminCallback(String handoff, Cookie browser, URI location) {
     }
 
@@ -101,6 +113,55 @@ class OrgLoginHandoffTest extends OrgLoginTestSupport {
         mvc.perform(get("/v1/me").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.actorId").value(principal));
+    }
+
+    @Test
+    void aPendingHandoffAfterBindingRevocationIssuesNoUsableSession() throws Exception {
+        TenantId tenant = newTenant();
+        Org org = connect(tenant, "wecom", null);
+        String userId = unique("u");
+        UUID principal = UUID.fromString(preauthorize(org, userId));
+        AdminCallback callback = adminCallback(org, userId, startAdminWeb(tenant, org.connectionId()));
+        tenantScope.run(tenant, () -> bindings.revoke(tenant, principal, "admin", "test-cleanup"));
+
+        MvcResult result = exchange(tenant, callback.handoff(), callback.browser())
+                .andExpect(status().isOk()).andReturn();
+        String token = JsonPath.read(result.getResponse().getContentAsString(), "$.accessToken");
+        mvc.perform(get("/v1/me").header("Authorization", "Bearer " + token))
+                .andExpect(status().isUnauthorized());
+        assertThat(sessionCount(tenant)).isEqualTo(1);
+        exchange(tenant, callback.handoff(), callback.browser()).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void consumedHandoffCanIssueLateSessionButRevocationDeniesAndRecheckClosesIt() throws Exception {
+        TenantId tenant = newTenant();
+        Org org = connect(tenant, "wecom", null);
+        String userId = unique("u");
+        UUID principal = UUID.fromString(preauthorize(org, userId));
+        AdminCallback callback = adminCallback(org, userId, startAdminWeb(tenant, org.connectionId()));
+
+        // Deterministically interleave the actual exchange implementation at
+        // its consume/issue boundary; no timing or thread scheduling assumption.
+        var pending = tenantScope.call(tenant, () -> handoffs.consume(tenant, sha256(callback.handoff()),
+                sha256(callback.browser().getValue()), java.time.Instant.now())).orElseThrow();
+        tenantScope.run(tenant, () -> {
+            bindings.revoke(tenant, principal, "admin", "test-cleanup");
+            sessions.revokeAllOf(principal, "binding_revoked");
+        });
+        var signedIn = login.issue(new OrgLoginService.Authenticated(tenant, pending.principalId(),
+                pending.connectionId(), pending.provider()), "test-race");
+        assertThat(sessionCount(tenant)).isEqualTo(1);
+        mvc.perform(get("/v1/me").header("Authorization", "Bearer " + signedIn.accessToken()))
+                .andExpect(status().isUnauthorized());
+        int closed = tenantScope.call(tenant, () -> sessions.revokeAllOf(principal, "binding_revoked"));
+        assertThat(closed).isEqualTo(1);
+        assertThat(tenantScope.call(tenant, () -> jdbc.sql("SELECT COUNT(*) FROM org_login_session WHERE principal_id=:p AND revoked_at IS NULL")
+                .param("p", principal).query(Long.class).single())).isZero();
+        exchange(tenant, callback.handoff(), callback.browser()).andExpect(status().isBadRequest());
+        assertThat(tenantScope.call(tenant, () -> bindings.reinstate(principal, "test-reinstatement"))).isTrue();
+        mvc.perform(get("/v1/me").header("Authorization", "Bearer " + signedIn.accessToken()))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
