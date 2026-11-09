@@ -143,7 +143,7 @@ publication 采用可恢复的幂等发布：先查询现有 Release，规范化
 
 本地 verifier 递归枚举下载目录的所有 entry。除了清单精确列出的单链接普通文件，不允许额外目录、嵌套文件、symlink、hardlink、FIFO/socket/device，也拒绝大小写或 Unicode NFC 冲突路径。
 
-当前仓库没有因为本地实现或测试而创建真实 tag、GHCR 镜像或 GitHub Release。首次 RC 仍需在 GitHub Actions 中实际完成四节点矩阵，随后人工核对公网 TLS、备份密钥异地保存和 Release 资产，再决定是否创建稳定 tag。
+当前状态（2026-11-09 核对）：仓库已有 `v0.3.0-rc.1` 至 `v0.3.19-rc.1` 的候选 tag，尚无稳定 tag。`v0.3.19-rc.1`（commit `46766fd432`）在 [run 41942118701](https://github.com/lsgoodlionel/star-survey/actions/runs/41942118701) 中完成四镜像多架构构建、扫描、Cosign 签名与 attestation，以及四节点原生生命周期和升级验证，详见 Wave 6 的原生生命周期与 Release 准出记录；同一 run 的 GitHub Release 发布步骤为 skipped，仓库还没有 GitHub Release 对象。创建稳定 tag 前仍需人工核对公网 TLS、备份密钥异地保存和 Release 资产。
 
 ### Engine 运行镜像（2026-10-30）
 

@@ -23,6 +23,7 @@ import '../responses/responses.css';
 interface PublishedAccessPanelProps {
   api: ApiClient;
   published: boolean;
+  publishedVersion?: number | null;
   surveyId: string;
   tenantId: string;
   accessToken?: string;
@@ -33,6 +34,7 @@ interface PublishedAccessPanelProps {
 export function PublishedAccessPanel({
   api,
   published,
+  publishedVersion = null,
   surveyId,
   tenantId,
   accessToken,
@@ -44,7 +46,7 @@ export function PublishedAccessPanel({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const links = useQuery({
-    queryKey: deliveryLinksQueryKey(tenantId, surveyId),
+    queryKey: [...deliveryLinksQueryKey(tenantId, surveyId), publishedVersion],
     queryFn: ({ signal }) => listDeliveryLinks(api, surveyId, signal),
     enabled: published,
     retry: false,
@@ -60,7 +62,6 @@ export function PublishedAccessPanel({
     await Promise.all([
       queryClient.invalidateQueries({
         queryKey: deliveryLinksQueryKey(tenantId, surveyId),
-        exact: true,
       }),
       queryClient.invalidateQueries({
         queryKey: responseSummaryQueryKey(tenantId, surveyId),
@@ -253,8 +254,11 @@ function DeliveryQr({ link, load }: {
   link: LinkView;
   load: (linkId: string, signal: AbortSignal) => Promise<Blob>;
 }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const requestIdentity = useMemo(() => ({ linkId: link.id, route: link.url, loader: load }), [link.id, link.url, load]);
+  const [result, setResult] = useState<{
+    identity: object;
+    url: string | null;
+  } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -262,19 +266,21 @@ function DeliveryQr({ link, load }: {
     void load(link.id, controller.signal).then((blob) => {
       if (controller.signal.aborted) return;
       objectUrl = URL.createObjectURL(blob);
-      setUrl(objectUrl);
+      setResult({ identity: requestIdentity, url: objectUrl });
     }).catch(() => {
-      if (!controller.signal.aborted) setFailed(true);
+      if (!controller.signal.aborted) setResult({ identity: requestIdentity, url: null });
     });
     return () => {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [link.id, load]);
+  }, [link.id, load, requestIdentity]);
 
-  if (failed) return <span className="delivery-qr-error">二维码暂不可用</span>;
-  if (!url) return <span className="delivery-qr-loading">正在加载二维码</span>;
-  return <img className="delivery-qr" src={url} alt={`${link.label}二维码`} />;
+  // A new identity also prevents reviving a revoked blob if a route changes back.
+  const current = result?.identity === requestIdentity ? result : null;
+  if (!current) return <span className="delivery-qr-loading">正在加载二维码</span>;
+  if (!current.url) return <span className="delivery-qr-error">二维码暂不可用</span>;
+  return <img className="delivery-qr" src={current.url} alt={`${link.label}二维码`} />;
 }
 
 async function copyLink(

@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, test, vi } from 'vitest';
 import { ApiError } from '../../shared/api/errors';
@@ -85,7 +85,6 @@ describe('PublishedAccessPanel', () => {
     expect(await screen.findByText('客户邀请')).toBeInTheDocument();
     expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({
       queryKey: ['delivery-links', 'tenant-a', surveyId],
-      exact: true,
     }));
     expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({
       queryKey: ['responses', 'tenant-a', surveyId, 'summary'],
@@ -95,6 +94,90 @@ describe('PublishedAccessPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '撤销客户邀请链接' }));
     expect(await screen.findByText('链接已撤销')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '复制客户邀请链接' })).not.toBeInTheDocument();
+  });
+
+  test('reloads the QR for the same link after the published route changes', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL')
+      .mockReturnValueOnce('blob:old-route').mockReturnValueOnce('blob:new-route');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let resolveNew!: (value: Blob) => void;
+    const fetchQr = vi.fn()
+      .mockResolvedValueOnce(new Blob(['old']))
+      .mockImplementationOnce(() => new Promise<Blob>((resolve) => { resolveNew = resolve; }));
+    let currentLinks: LinkView[] = [activeLink];
+    const api = apiFrom((request) => {
+      if (request.path.includes('/delivery/')) return currentLinks;
+      if (request.path.includes('/responses/summary')) return summary;
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    const rendered = renderWithQuery(
+      <MemoryRouter><PublishedAccessPanel api={api} fetchQr={fetchQr} published surveyId={surveyId} tenantId="tenant-a" /></MemoryRouter>,
+    );
+    expect(await screen.findByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:old-route');
+    currentLinks = [{ ...activeLink, url: 'https://survey.example.test/s/new-version' }];
+    await act(async () => rendered.queryClient.invalidateQueries({ queryKey: ['delivery-links', 'tenant-a', surveyId] }));
+    await waitFor(() => expect(fetchQr).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('img', { name: '正式投放二维码' })).not.toBeInTheDocument();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:old-route');
+    await act(async () => resolveNew(new Blob(['new'])));
+    expect(await screen.findByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:new-route');
+    expect(createObjectURL).toHaveBeenCalledTimes(2);
+  });
+
+  test('ignores a delayed old QR response after the new route has loaded', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:new-route');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let resolveOld!: (value: Blob) => void;
+    const fetchQr = vi.fn()
+      .mockImplementationOnce(() => new Promise<Blob>((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(new Blob(['new']));
+    let currentLinks: LinkView[] = [activeLink];
+    const api = apiFrom((request) => {
+      if (request.path.includes('/delivery/')) return currentLinks;
+      if (request.path.includes('/responses/summary')) return summary;
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    const rendered = renderWithQuery(
+      <MemoryRouter><PublishedAccessPanel api={api} fetchQr={fetchQr} published surveyId={surveyId} tenantId="tenant-a" /></MemoryRouter>,
+    );
+    await waitFor(() => expect(fetchQr).toHaveBeenCalledTimes(1));
+    const oldSignal = fetchQr.mock.calls[0][1] as AbortSignal;
+    currentLinks = [{ ...activeLink, url: 'https://survey.example.test/s/new-version' }];
+    await act(async () => rendered.queryClient.invalidateQueries({ queryKey: ['delivery-links', 'tenant-a', surveyId] }));
+    expect(await screen.findByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:new-route');
+    expect(oldSignal.aborted).toBe(true);
+    await act(async () => resolveOld(new Blob(['old'])));
+    expect(screen.getByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:new-route');
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not revive a revoked QR when a route changes away and back', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValueOnce('blob:first').mockReturnValueOnce('blob:latest');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let resolveLatest!: (value: Blob) => void;
+    const fetchQr = vi.fn().mockResolvedValueOnce(new Blob(['first']))
+      .mockImplementationOnce(() => new Promise<Blob>(() => undefined))
+      .mockImplementationOnce(() => new Promise<Blob>((resolve) => { resolveLatest = resolve; }));
+    let currentLinks: LinkView[] = [activeLink];
+    const api = apiFrom((request) => {
+      if (request.path.includes('/delivery/')) return currentLinks;
+      if (request.path.includes('/responses/summary')) return summary;
+      throw new Error(`Unhandled request: ${request.path}`);
+    });
+    const rendered = renderWithQuery(
+      <MemoryRouter><PublishedAccessPanel api={api} fetchQr={fetchQr} published surveyId={surveyId} tenantId="tenant-a" /></MemoryRouter>,
+    );
+    expect(await screen.findByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:first');
+    currentLinks = [{ ...activeLink, url: 'https://survey.example.test/s/other' }];
+    await act(async () => rendered.queryClient.invalidateQueries({ queryKey: ['delivery-links', 'tenant-a', surveyId] }));
+    await waitFor(() => expect(fetchQr).toHaveBeenCalledTimes(2));
+    currentLinks = [activeLink];
+    await act(async () => rendered.queryClient.invalidateQueries({ queryKey: ['delivery-links', 'tenant-a', surveyId] }));
+    await waitFor(() => expect(fetchQr).toHaveBeenCalledTimes(3));
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:first');
+    expect(screen.queryByRole('img', { name: '正式投放二维码' })).not.toBeInTheDocument();
+    await act(async () => resolveLatest(new Blob(['latest'])));
+    expect(await screen.findByRole('img', { name: '正式投放二维码' })).toHaveAttribute('src', 'blob:latest');
   });
 
   test('keeps unpublished, forbidden and failed states distinct and actionable', async () => {

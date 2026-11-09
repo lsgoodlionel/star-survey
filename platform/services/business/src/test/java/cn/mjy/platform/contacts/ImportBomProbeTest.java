@@ -23,4 +23,14 @@ class ImportBomProbeTest {
                 .containsEntry("name", "Synthetic Person")
                 .containsEntry("email", "person@example.invalid");
     }
+
+    @Test
+    void jsonUtf8BomIsAcceptedAsValidJson() {
+        var parser = new ImportRowParser(JsonMapper.builder().build());
+        var rows = parser.parse("json", "﻿[{\"name\":\"Synthetic Person\",\"email\":\"person@example.invalid\"}]");
+        assertThat(rows).hasSize(1);
+        assertThat(parser.toColumns(rows.getFirst()))
+                .containsEntry("name", "Synthetic Person")
+                .containsEntry("email", "person@example.invalid");
+    }
 }

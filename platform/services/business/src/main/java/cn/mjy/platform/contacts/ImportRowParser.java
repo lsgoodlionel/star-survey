@@ -33,17 +33,17 @@ class ImportRowParser {
         if (content == null || content.isBlank()) {
             throw new InvalidContactRequestException("content is required");
         }
+        // UTF-8 files exported by spreadsheet tools and editors may start with a BOM.
+        String text = content.startsWith("\uFEFF") ? content.substring(1) : content;
         return switch (format == null ? "" : format) {
-            case CSV -> parseCsv(content);
-            case JSON -> parseJson(content);
+            case CSV -> parseCsv(text);
+            case JSON -> parseJson(text);
             default -> throw new InvalidContactRequestException("format must be csv or json");
         };
     }
 
     private List<String> parseCsv(String content) {
-        // UTF-8 CSV files exported by spreadsheet tools may start with a BOM.
-        String csv = content.startsWith("\uFEFF") ? content.substring(1) : content;
-        List<String> lines = csv.lines().filter(line -> !line.isBlank()).toList();
+        List<String> lines = content.lines().filter(line -> !line.isBlank()).toList();
         if (lines.isEmpty()) {
             throw new InvalidContactRequestException("csv must have a header row");
         }
