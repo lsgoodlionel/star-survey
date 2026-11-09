@@ -6,10 +6,11 @@ import sys
 
 STAGES = frozenset({
     'initialize', 'engine_install', 'engine_setup', 'survey_publish', 'gateway',
-    'platform_database', 'platform_ready', 'browser', 'outbox', 'relay_first',
+    'platform_database', 'platform_db_create', 'platform_db_wait', 'platform_ready', 'browser', 'outbox', 'relay_first',
     'relay_replay', 'worker_recovery', 'assertions',
 })
 CLEANUP = frozenset({'verified', 'unverified'})
+PLATFORM = frozenset({'created', 'running', 'exited', 'dead', 'restarting', 'paused', 'removing'})
 
 
 def read_category(path, allowed):
@@ -28,12 +29,13 @@ def read_category(path, allowed):
 
 
 def main():
-    if len(sys.argv) != 3:
-        print('stage=unknown cleanup=unknown')
+    if len(sys.argv) != 4:
+        print('stage=unknown cleanup=unknown platform=unknown')
         return
     stage = read_category(Path(sys.argv[1]), STAGES)
     cleanup = read_category(Path(sys.argv[2]), CLEANUP)
-    print(f'stage={stage} cleanup={cleanup}')
+    platform = read_category(Path(sys.argv[3]), PLATFORM)
+    print(f'stage={stage} cleanup={cleanup} platform={platform}')
 
 
 if __name__ == '__main__':

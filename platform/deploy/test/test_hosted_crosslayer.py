@@ -125,26 +125,40 @@ esac
         with tempfile.TemporaryDirectory() as tmp:
             stage = Path(tmp) / 'stage'
             cleanup = Path(tmp) / 'cleanup'
-            cases = [('browser', 'verified', 'stage=browser cleanup=verified'),
-                     ('fake-secret-token', 'fake-private-url', 'stage=unknown cleanup=unknown'),
-                     ('browser\nsecret', 'unverified\nsecret', 'stage=unknown cleanup=unknown'),
-                     ('x' * 100000, 'verified', 'stage=unknown cleanup=verified')]
+            cases = [('browser', 'verified', 'stage=browser cleanup=verified platform=unknown'),
+                     ('fake-secret-token', 'fake-private-url', 'stage=unknown cleanup=unknown platform=unknown'),
+                     ('browser\nsecret', 'unverified\nsecret', 'stage=unknown cleanup=unknown platform=unknown'),
+                     ('x' * 100000, 'verified', 'stage=unknown cleanup=verified platform=unknown')]
             for stage_text, cleanup_text, expected in cases:
                 with self.subTest(stage=stage_text[:20], cleanup=cleanup_text):
                     stage.write_text(stage_text)
                     cleanup.write_text(cleanup_text)
-                    result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup)], capture_output=True, text=True)
+                    result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup), str(Path(tmp) / 'missing-platform')], capture_output=True, text=True)
                     self.assertEqual(0, result.returncode)
                     self.assertEqual(expected + '\n', result.stdout)
                     self.assertEqual('', result.stderr)
             stage.unlink()
             stage.symlink_to(cleanup)
-            self.assertEqual('stage=unknown cleanup=verified\n', subprocess.run(
-                ['python3', str(reporter), str(stage), str(cleanup)], capture_output=True, text=True).stdout)
+            self.assertEqual('stage=unknown cleanup=verified platform=unknown\n', subprocess.run(
+                ['python3', str(reporter), str(stage), str(cleanup), str(Path(tmp) / 'missing-platform')], capture_output=True, text=True).stdout)
             stage.unlink()
             os.mkfifo(stage)
-            self.assertEqual('stage=unknown cleanup=verified\n', subprocess.run(
-                ['python3', str(reporter), str(stage), str(cleanup)], capture_output=True, text=True, timeout=2).stdout)
+            self.assertEqual('stage=unknown cleanup=verified platform=unknown\n', subprocess.run(
+                ['python3', str(reporter), str(stage), str(cleanup), str(Path(tmp) / 'missing-platform')], capture_output=True, text=True, timeout=2).stdout)
+
+    def test_platform_status_report_is_allowlisted(self):
+        reporter = ROOT / 'platform/deploy/test/hosted-crosslayer/report.py'
+        with tempfile.TemporaryDirectory() as tmp:
+            stage, cleanup, platform = (Path(tmp) / x for x in ('stage', 'cleanup', 'platform'))
+            stage.write_text('platform_db_create\n')
+            cleanup.write_text('verified\n')
+            platform.write_text('exited\n')
+            result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup), str(platform)], capture_output=True, text=True)
+            self.assertEqual('stage=platform_db_create cleanup=verified platform=exited\n', result.stdout)
+            platform.write_text('synthetic-secret\n')
+            result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup), str(platform)], capture_output=True, text=True)
+            self.assertEqual('stage=platform_db_create cleanup=verified platform=unknown\n', result.stdout)
+            self.assertNotIn('synthetic-secret', result.stdout + result.stderr)
 
     def test_invalid_identity_fails_before_docker(self):
         env = {**os.environ, 'GITHUB_RUN_ID': '../../wrong', 'GITHUB_RUN_ATTEMPT': '1',

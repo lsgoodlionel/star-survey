@@ -126,6 +126,22 @@ inspect_fixture_image synthetic-image /allowed /another
             self.assertNotEqual(0, shell('fixture_cleanup_record "$1"', 'unexpected', env=env).returncode)
             self.assertEqual('verified\n', Path(cleanup).read_text())
 
+    def test_platform_database_diagnostic_substages_and_state_are_fixed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = Path(tmp) / 'stage'
+            state = Path(tmp) / 'state'
+            env = {'SURVEY_CROSSLAYER_STAGE_FILE': str(stage), 'SURVEY_CROSSLAYER_PLATFORM_FILE': str(state)}
+            for name in ('platform_db_create', 'platform_db_wait'):
+                with self.subTest(name=name):
+                    self.assertEqual(0, shell('fixture_stage "$1"', name, env=env).returncode)
+                    self.assertEqual(name + '\n', stage.read_text())
+            self.assertEqual(0, shell('docker() { echo exited; }; fixture_platform_state synthetic', env=env).returncode)
+            self.assertEqual('exited\n', state.read_text())
+            self.assertEqual(0, shell('docker() { echo sensitive_value; }; fixture_platform_state synthetic', env=env).returncode)
+            self.assertEqual('unknown\n', state.read_text())
+            self.assertEqual(0, shell('docker() { return 1; }; fixture_platform_state synthetic', env=env).returncode)
+            self.assertEqual('unknown\n', state.read_text())
+
     def test_gateway_user_must_be_explicit_nonroot_numeric(self):
         self.assertEqual(0, shell('validate_gateway_user "$1"', '10001:10001').returncode)
         for value in ('', 'root', '0:0', '10001:0', '0:10001', 'gateway', '10001', '1234567:10001'):

@@ -3,10 +3,17 @@
 
 fixture_stage() {
   case "$1" in
-    initialize|engine_install|engine_setup|survey_publish|gateway|platform_database|platform_ready|browser|outbox|relay_first|relay_replay|worker_recovery|assertions) ;;
+    initialize|engine_install|engine_setup|survey_publish|gateway|platform_database|platform_db_create|platform_db_wait|platform_ready|browser|outbox|relay_first|relay_replay|worker_recovery|assertions) ;;
     *) return 1 ;;
   esac
   [[ -z "${SURVEY_CROSSLAYER_STAGE_FILE:-}" ]] || printf '%s\n' "$1" > "$SURVEY_CROSSLAYER_STAGE_FILE"
+}
+
+fixture_platform_state() {
+  local status
+  status="$(docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null)" || status=unknown
+  case "$status" in created|running|exited|dead|restarting|paused|removing) ;; *) status=unknown ;; esac
+  [[ -z "${SURVEY_CROSSLAYER_PLATFORM_FILE:-}" ]] || printf '%s\n' "$status" > "$SURVEY_CROSSLAYER_PLATFORM_FILE"
 }
 
 fixture_cleanup_record() {

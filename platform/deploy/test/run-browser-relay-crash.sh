@@ -30,12 +30,19 @@ for i in {1..60}; do [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prefix
 [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prefix-gateway")" == healthy ]]
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-proxy" --network "$network" --network-alias fault-proxy \
  -v "$REPO_ROOT/platform/tests/e2e/real_engine_reminder_fault_proxy.py:/fixture/fault-proxy.py:ro" "$python_image" python /fixture/fault-proxy.py >/dev/null
-fixture_stage platform_database
-docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-platform-db" --network "$network" --tmpfs /var/lib/postgresql/data \
+fixture_stage platform_db_create
+if ! docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-platform-db" --network "$network" --tmpfs /var/lib/postgresql/data \
  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=postgres \
- -v "$REPO_ROOT/platform/deploy/platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro" "$postgres_image" >/dev/null
+ -v "$REPO_ROOT/platform/deploy/platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro" "$postgres_image" >/dev/null; then
+  fixture_platform_state "$prefix-platform-db" || :
+  exit 1
+fi
+fixture_stage platform_db_wait
 for i in {1..60}; do docker exec "$prefix-platform-db" pg_isready -U postgres -d platform >/dev/null 2>&1 && break; sleep 1; done
-docker exec "$prefix-platform-db" pg_isready -U postgres -d platform >/dev/null
+if ! docker exec "$prefix-platform-db" pg_isready -U postgres -d platform >/dev/null; then
+  fixture_platform_state "$prefix-platform-db" || :
+  exit 1
+fi
 fixture_stage platform_ready
 # The platform JVM exposes its real event endpoint only on this internal test network.
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-platform" --network "$network" --network-alias platform \
