@@ -262,6 +262,32 @@ fixture_wait_platform_database synthetic
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(['owner', 'app'], log.read_text().splitlines())
 
+    def test_independent_database_owner_and_app_absences_fail_closed(self):
+        script = r'''sleep() { :; }
+docker() {
+  if [[ "$*" == *pg_isready* ]]; then return 0; fi
+  if [[ "$*" == *psql* && "$*" == *"-U platform_owner"* ]]; then
+    echo owner >> "$ROLE_LOG"
+    [[ "$SCENARIO" != missing_database && "$SCENARIO" != missing_owner ]]; return
+  fi
+  if [[ "$*" == *psql* && "$*" == *"-U platform_app"* ]]; then
+    echo app >> "$ROLE_LOG"
+    [[ "$SCENARIO" != missing_app ]]; return
+  fi
+  if [[ "$1" == inspect ]]; then echo running; return 0; fi
+  return 1
+}
+if fixture_wait_platform_database synthetic; then exit 88; fi
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            for scenario, expected in [('missing_database', ['owner']), ('missing_owner', ['owner']),
+                                       ('missing_app', ['owner', 'app'])]:
+                with self.subTest(scenario=scenario):
+                    log = Path(tmp) / scenario
+                    result = shell(script, env={'ROLE_LOG': str(log), 'SCENARIO': scenario})
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(expected, log.read_text().splitlines())
+
     def test_gateway_user_must_be_explicit_nonroot_numeric(self):
         self.assertEqual(0, shell('validate_gateway_user "$1"', '10001:10001').returncode)
         for value in ('', 'root', '0:0', '10001:0', '0:10001', 'gateway', '10001', '1234567:10001'):
