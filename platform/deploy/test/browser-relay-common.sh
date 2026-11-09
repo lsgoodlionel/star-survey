@@ -15,7 +15,7 @@ cleanup_owned_fixture() {
   volumes="$(docker volume ls --filter "label=com.docker.compose.project=$prefix" --format '{{.Name}}')" || return 1
   networks="$(docker network ls --no-trunc --filter "label=com.docker.compose.project=$prefix" --format '{{.ID}} {{.Name}}')" || return 1
   while IFS= read -r name; do
-    [[ -z "$name" || "$name" == "$prefix-platform" || "$name" == "$prefix-proxy" || "$name" == "$prefix-gateway" || "$name" == "$prefix-platform-db" ]] || return 1
+    [[ -z "$name" || "$name" == "$prefix-platform" || "$name" == "$prefix-proxy" || "$name" == "$prefix-gateway" || "$name" == "$prefix-platform-db" || "$name" == "$prefix-browser" ]] || return 1
     if [[ -n "$name" ]]; then
       id="$(docker inspect -f '{{.Id}}' "$name")" || return 1
       label="$(docker inspect -f '{{ index .Config.Labels "survey.fixture.run" }}' "$id")" || return 1

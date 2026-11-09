@@ -42,7 +42,7 @@ for i in {1..180}; do
   sleep 1
 done
 [[ -f "$work/ready" ]] || { echo 'platform test readiness timed out' >&2; exit 1; }
-docker run --pull never --rm --network "container:$CONTAINER" --user 1200:1201 --cap-drop ALL --security-opt no-new-privileges --shm-size 1g \
+docker run --pull never --rm --label "survey.fixture.run=$prefix" --name "$prefix-browser" --network "container:$CONTAINER" --user 1200:1201 --cap-drop ALL --security-opt no-new-privileges --shm-size 1g \
  -v "$work/evidence.json:/fixture/evidence.json:ro" -v "$REPO_ROOT/platform/tests/e2e/browser_relay_firefox.py:/fixture/browser.py:ro" \
  --entrypoint python3 selenium/standalone-firefox:latest /fixture/browser.py
 sid=$(python3 -c 'import json,sys;x=json.load(open(sys.argv[1]));assert isinstance(x["sid"],int) and x["sid"]>0;print(x["sid"])' "$work/evidence.json")
