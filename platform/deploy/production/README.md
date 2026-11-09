@@ -40,9 +40,47 @@ admin-web 的 nginx 在启动时解析 platform；Compose 要求 platform 健康
 
 包含新增事件中继的目标版本升级失败且要求 restore-only 时，控制器会请求停止目标服务、保留经过验证的升级前备份并进入 `recovery_required`；它不会自动调用旧版恢复助手，因为中继停止不证明所有在途写入已静默。备份之后可能已有新写入，直接恢复升级前备份会丢失这些写入；在确认实例、数据库写入者状态并评估和处理备份后数据前，禁止自动覆盖。该状态不代表服务已确认停止或备份已恢复。控制器在首次暂存或备份之前持久记录 `upgrading`，并在 `upgrading` 与 `recovery_required` 两种未完成状态下拒绝普通 install、upgrade、rollback、backup、restore、uninstall、setup-probe 和会执行主动探测的 doctor；受控恢复入口尚不可用，不能通过重启新控制器绕过检查。已发布的旧版 CLI 和旧 helper 无法被这一门禁约束。
 
-除升级状态外，新控制器在 install、upgrade、rollback、backup、restore、uninstall、setup-probe 以及执行主动业务探测的 doctor 首次实际变更前，还会持久记录未完成操作。操作失败或控制器中断后，结果可能未知，标记会阻止后续上述变更，即使进程锁已经释放；这不意味着子进程、Docker 操作或数据库写入已停止。纯参数校验失败且尚未开始变更时不会留下未完成标记。备份后的验证会启动子进程，在安装目录下创建私有临时目录并解密备份，因此在启动该验证前就会记录未完成操作；异常终止可能留下临时文件或存活的子进程，不能假定清理完成。`status` 和 `logs` 是只读查看命令，不属于这些主动变更入口；它们的结果也不能证明写入者静默。
+除升级状态外，新控制器在 install、upgrade、rollback、backup、restore、uninstall、setup-probe 以及执行主动业务探测的 doctor 首次实际变更前，还会持久记录未完成操作。操作失败或控制器中断后，结果可能未知，标记会阻止后续上述变更，即使进程锁已经释放；这不意味着子进程、Docker 操作或数据库写入已停止。纯参数校验失败且尚未开始变更时不会留下未完成标记。备份后的验证会启动子进程，在安装目录下创建私有临时目录并解密备份，因此在启动该验证前就会记录未完成操作；异常终止可能留下临时文件或存活的子进程，不能假定清理完成。`status` 和 `logs` 是只读查看命令，不属于这些主动变更入口；它们的结果也不能证明写入者静默。这两个命令要求 `current` 版本指针存在且与状态一致，首次安装失败时没有 `current`，它们会报指针错误，此时按下方“人工处置”中的只读命令查看。
 
 出现未完成操作或 `recovery_required` 时，保留安装目录、操作标记、状态和备份供核查；**不要手动删除或修改标记，也不要用旧版 CLI 或 helper 绕过门禁**。当前没有受控解除或自动恢复入口；重启、锁释放或服务看似正常都不能证明恢复完成。旧备份之后可能存在新写入，恢复前须单独评估数据保留与丢失范围。
+
+### 未完成操作与 `recovery_required` 的人工处置
+
+当前版本没有解除命令，下面的步骤只用于**判断状态、保留现场和上报**，不会也不能让安装恢复可用。以下示例中 `TARGET=/opt/survey`，`VERSION` 取自 `state.json` 的 `version` 字段。
+
+1. **判断属于哪种情况**（只读）：
+
+   ```bash
+   sudo cat "$TARGET/.surveyctl/state.json"
+   sudo cat "$TARGET/.surveyctl/operation.intent"
+   sudo cat "$TARGET/current"   # 首次安装失败时不存在
+   ```
+
+   | `state.json` 的 `status` | `operation.intent` | `current` | 含义 |
+   | --- | --- | --- | --- |
+   | `install_failed` | `pending`，`operation` 为 `install`、`install_version` 或 `install_offline` | 不存在 | 首次安装失败，例如 TLS 校验未通过；服务可能已部分启动，持久卷可能已创建 |
+   | `upgrading` | `pending` | 指向旧版本 | 升级在暂存、备份或切换途中中断，结果未知 |
+   | `recovery_required` | `pending` | 指向旧版本 | 升级失败且未能安全回到旧版本；`recoveryBackup` 是保留的升级前备份 |
+   | 其他（如 `healthy`、`upgrade_failed`） | `pending` | 视情况 | backup、doctor、setup-probe 等操作失败或被中断，结果未知 |
+
+2. **只读查看服务**：`current` 存在且与状态一致时用 `surveyctl status` 和 `surveyctl logs`；否则直接用该版本的 Compose 文件，只运行 `ps` 和 `logs`：
+
+   ```bash
+   REL="$TARGET/releases/$VERSION"
+   sudo docker compose --project-directory "$REL" --env-file "$REL/.env" -f "$REL/compose.yml" ps
+   sudo docker compose --project-directory "$REL" --env-file "$REL/.env" -f "$REL/compose.yml" logs --no-color --tail 200
+   ```
+
+3. **保留现场并上报**：把上述 `state.json`、`operation.intent` 的内容、`ps` 输出和截取的日志，连同执行的命令、时间和 `recoveryBackup` 名称，提交到 Wave 6 原生生命周期 issue（#33）或维护者指定的渠道。上报前删除日志中的密码、令牌和连接串；不要附上 `.env` 和 `shared/secrets/` 下的任何文件。
+
+4. **在维护者给出处置前，不要做以下操作**：
+   - 删除、修改或改名 `.surveyctl/` 下的任何文件，包括 `operation.intent`、`operation.lock`、`state.json`，以及 `current`；
+   - 运行 `docker compose up`、`down`、`rm`、`stop`，尤其是带 `-v` 的命令，它会删除持久卷；
+   - 换到另一个空目录重新 `install`：Compose 项目名固定为 `survey-production`，新安装会复用同名容器和数据卷；
+   - 使用旧版 `surveyctl` 或直接调用 `restore.py`、`backup.py` 等 helper；
+   - 在 `recovery_required` 下直接用 `recoveryBackup` 覆盖数据，备份之后的新写入会丢失。
+
+受控恢复入口提供之前，这类安装只能由维护者在评估数据后人工处理；进入正式 Release 前需要补上受控恢复，或经维护者确认接受这一限制。
 
 安装、升级和回滚启动后，对仍处于 running/starting 的服务最多等待 120 秒；只有全部既有健康检查通过且 engine-init 成功退出才继续。unhealthy、缺失服务或初始化异常仍阻断，status 保持即时检查。本次修复的四节点完整生产生命周期尚待独立验收；原生 admin 探针诊断不能替代 readiness。
 
