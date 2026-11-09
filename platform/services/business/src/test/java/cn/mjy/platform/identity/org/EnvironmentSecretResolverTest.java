@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.mjy.platform.shared.TenantId;
 import java.util.UUID;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 
@@ -39,4 +42,45 @@ class EnvironmentSecretResolverTest {
         assertThat(resolver.resolve(TENANT, "../PLATFORM_DB_OWNER_PASSWORD")).isEmpty();
         assertThat(resolver.resolve(TENANT, "lower")).isEmpty();
     }
+    @Test
+    void directoryIsAuthoritativeAndTenantScoped(@TempDir Path directory) throws Exception {
+        MockEnvironment env = new MockEnvironment()
+                .withProperty("PLATFORM_ORG_SECRET_DIR", directory.toString())
+                .withProperty(EnvironmentSecretResolver.variableName(TENANT, "WECOM"), "stale-env");
+        EnvironmentSecretResolver resolver = new EnvironmentSecretResolver(env);
+        assertThat(resolver.resolve(TENANT, "WECOM")).isEmpty();
+        Files.writeString(directory.resolve(EnvironmentSecretResolver.variableName(TENANT, "WECOM")), "synthetic-secret\n");
+        assertThat(resolver.resolve(TENANT, "WECOM")).contains("synthetic-secret");
+        assertThat(resolver.resolve(TenantId.random(), "WECOM")).isEmpty();
+        assertThat(resolver.resolve(TENANT, "../WECOM")).isEmpty();
+    }
+
+    @Test
+    void legacyEmptyDirectoryConfigurationDoesNotFallBackToEnvironment() {
+        String name = EnvironmentSecretResolver.variableName(TENANT, "WECOM");
+        MockEnvironment env = new MockEnvironment().withProperty("PLATFORM_ORG_SECRET_DIR", "")
+                .withProperty(name, "stale-env");
+        assertThat(new EnvironmentSecretResolver(env).resolve(TENANT, "WECOM")).isEmpty();
+    }
+
+    @Test
+    void unsafeOrMalformedFilesFailClosedWithoutEnvironmentFallback(@TempDir Path directory) throws Exception {
+        String name = EnvironmentSecretResolver.variableName(TENANT, "WECOM");
+        MockEnvironment env = new MockEnvironment().withProperty("PLATFORM_ORG_SECRET_DIR", directory.toString())
+                .withProperty(name, "stale-env");
+        EnvironmentSecretResolver resolver = new EnvironmentSecretResolver(env);
+        Path file = directory.resolve(name);
+        Path target = directory.resolve("target");
+        Files.writeString(target, "synthetic-secret");
+        Files.createSymbolicLink(file, target);
+        assertThat(resolver.resolve(TENANT, "WECOM")).isEmpty();
+        Files.delete(file);
+        Files.writeString(file, "x".repeat(4097));
+        assertThat(resolver.resolve(TENANT, "WECOM")).isEmpty();
+        Files.writeString(file, "two\nlines");
+        assertThat(resolver.resolve(TENANT, "WECOM")).isEmpty();
+        Files.write(file, new byte[] {(byte) 0xff});
+        assertThat(resolver.resolve(TENANT, "WECOM")).isEmpty();
+    }
+
 }

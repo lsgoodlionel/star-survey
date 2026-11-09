@@ -266,6 +266,16 @@ class ReleasePublicationWorkflowTest(unittest.TestCase):
             with self.subTest(index=index), self.assertRaises(AssertionError):
                 assert_publication_contract(self, mutation)
 
+    def test_upgrade_instructions_use_verified_target_bundle_cli(self):
+        for path in (RENDER_NOTES_PATH, RENDER_PUBLICATION_PATH):
+            with self.subTest(path=path.name):
+                text = path.read_text(encoding="utf-8")
+                upgrade = text.split("## Upgrade", 1)[1].split("## ", 1)[0]
+                self.assertIn("Verify the target release assets", upgrade)
+                self.assertIn("matching architecture bundle", upgrade)
+                self.assertIn("Do not use the installed release's older CLI", upgrade)
+                self.assertIn("./surveyctl upgrade --manifest /path/to/verified/release.json", upgrade)
+
     def test_release_notes_cover_operational_limits_and_verification_commands(self):
         text = RENDER_NOTES_PATH.read_text(encoding="utf-8") + RENDER_PUBLICATION_PATH.read_text(encoding="utf-8")
         for phrase in (
@@ -335,6 +345,11 @@ class PublicationMetadataAndReconciliationTest(unittest.TestCase):
             self.assertIn(required, stable_text)
         self.assertIn("--target-tag v1.2.3-rc.4", rc_text)
         self.assertNotIn("Stable promotion", rc_text)
+        for body in (rc_text, stable_text):
+            self.assertIn("recovery is currently disabled", body)
+            self.assertIn("Preserve the installation, operation marker and verified pre-upgrade backup", body)
+            self.assertIn("Do not run older images against a migrated database or bypass the block with an older controller or helper", body)
+            self.assertNotIn("restore the verified pre-upgrade backup", body)
 
     def test_renderer_rejects_stable_tag_or_readiness_identity_drift(self):
         for target, source, commit in (

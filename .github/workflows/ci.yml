@@ -5,6 +5,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_relay:
+        description: Run the isolated dual-database relay diagnostic
+        type: boolean
+        default: false
+      run_crosslayer:
+        description: Run the isolated MariaDB and PostgreSQL browser relay diagnostics
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -49,14 +58,66 @@ jobs:
     with:
       version: build-${{ github.sha }}
 
+  relay:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_relay == true }}
+    name: Development stack relay (${{ matrix.db }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [mysql, pgsql]
+    env:
+      TEST_DB: ${{ matrix.db }}
+      ADMIN_WEB_RELAY_DIAGNOSTIC: '1'
+      SURVEY_TEST_PREFIX: relay-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.db }}
+      COMPOSE_PROJECT_NAME: relay-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.db }}
+      ADMIN_WEB_CI_ARTIFACT_DIR: platform/apps/admin-web/test-results/ci-artifacts
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: platform/apps/admin-web/package-lock.json
+      - name: Check diagnostic cleanup failure handling
+        run: python3 -m unittest discover -s platform/deploy/test -p test_relay_diagnostic.py
+      - name: Install application dependencies
+        working-directory: platform/apps/admin-web
+        run: npm ci
+      - name: Install browser
+        working-directory: platform/apps/admin-web
+        run: npx playwright install --with-deps chromium
+      - name: Exercise production worker in isolated development stack
+        id: relay
+        run: platform/deploy/test/run-admin-web-e2e.sh --fresh
+      - name: Upload sanitized failure evidence
+        if: ${{ failure() && steps.relay.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: relay-devstack-sanitized-${{ matrix.db }}
+          path: platform/apps/admin-web/test-results/ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  crosslayer:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_crosslayer == true }}
+    name: Isolated browser relay diagnostics
+    uses: ./.github/workflows/browser-relay-crosslayer.yml
+
   summary:
     name: Survey CI required
     if: always()
-    needs: [changes, quality, images]
+    needs: [changes, quality, images, relay, crosslayer]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: 核对必需作业与按规则跳过项
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
+          RELAY_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.run_relay == true }}
+          CROSSLAYER_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.run_crosslayer == true }}
         run: python3 scripts/ci/plan.py summary

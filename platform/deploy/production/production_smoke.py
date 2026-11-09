@@ -328,6 +328,17 @@ def main():
         manager._write_state(status='healthy')
         stage = 'machine-setup'
         manager.setup_probe()
+        stage = 'recovery-relay-stop-guard'
+        # Real disposable Compose topology: verify the new recovery guard
+        # can stop and identify the live relay before it could invoke an old
+        # restore helper, then restart it and require full service health.
+        manager._stop_new_writers_before_legacy_restore(compose)
+        run(compose + ['up', '-d', '--no-deps', 'engine-relay'])
+        manager._wait_healthy(compose, 'relay did not recover after stop guard')
+        (evidence / 'recovery-relay-stop.json').write_text(json.dumps({
+            'scope': 'source-built-compose-relay-stop-restart', 'status': 'passed',
+            'crossVersionRestoreVerified': False, 'databaseQuiescenceVerified': False,
+        }, indent=2) + '\n')
         stage = 'gateway-rpc-authentication'
         check_gateway_rpc(compose)
         stage = 'doctor'

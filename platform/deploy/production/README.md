@@ -36,6 +36,14 @@ SMTP 服务端接受仅表示“已提交 SMTP”，不表示进入收件箱或�
 
 admin-web 的 nginx 在启动时解析 platform；Compose 要求 platform 健康后才启动 admin-web，避免上游 DNS 尚未注册导致反复退出。原健康探针和参数保持不变。
 
+升级时先验证目标版本发布资产，将匹配主机架构的目标版本 bundle 解压到独立目录，并使用该目录中的 `./surveyctl` 执行升级；不要使用当前安装的旧版 CLI，旧版可能无法识别目标服务拓扑。以下源码路径命令仅在该源码与经过验证的目标版本一致时适用。
+
+包含新增事件中继的目标版本升级失败且要求 restore-only 时，控制器会请求停止目标服务、保留经过验证的升级前备份并进入 `recovery_required`；它不会自动调用旧版恢复助手，因为中继停止不证明所有在途写入已静默。备份之后可能已有新写入，直接恢复升级前备份会丢失这些写入；在确认实例、数据库写入者状态并评估和处理备份后数据前，禁止自动覆盖。该状态不代表服务已确认停止或备份已恢复。控制器在首次暂存或备份之前持久记录 `upgrading`，并在 `upgrading` 与 `recovery_required` 两种未完成状态下拒绝普通 install、upgrade、rollback、backup、restore、uninstall、setup-probe 和会执行主动探测的 doctor；受控恢复入口尚不可用，不能通过重启新控制器绕过检查。已发布的旧版 CLI 和旧 helper 无法被这一门禁约束。
+
+除升级状态外，新控制器在 install、upgrade、rollback、backup、restore、uninstall、setup-probe 以及执行主动业务探测的 doctor 首次实际变更前，还会持久记录未完成操作。操作失败或控制器中断后，结果可能未知，标记会阻止后续上述变更，即使进程锁已经释放；这不意味着子进程、Docker 操作或数据库写入已停止。纯参数校验失败且尚未开始变更时不会留下未完成标记。备份后的验证会启动子进程，在安装目录下创建私有临时目录并解密备份，因此在启动该验证前就会记录未完成操作；异常终止可能留下临时文件或存活的子进程，不能假定清理完成。`status` 和 `logs` 是只读查看命令，不属于这些主动变更入口；它们的结果也不能证明写入者静默。
+
+出现未完成操作或 `recovery_required` 时，保留安装目录、操作标记、状态和备份供核查；**不要手动删除或修改标记，也不要用旧版 CLI 或 helper 绕过门禁**。当前没有受控解除或自动恢复入口；重启、锁释放或服务看似正常都不能证明恢复完成。旧备份之后可能存在新写入，恢复前须单独评估数据保留与丢失范围。
+
 安装、升级和回滚启动后，对仍处于 running/starting 的服务最多等待 120 秒；只有全部既有健康检查通过且 engine-init 成功退出才继续。unhealthy、缺失服务或初始化异常仍阻断，status 保持即时检查。本次修复的四节点完整生产生命周期尚待独立验收；原生 admin 探针诊断不能替代 readiness。
 
 ```bash
@@ -51,7 +59,6 @@ platform/deploy/production/surveyctl --target /opt/survey setup-probe
 platform/deploy/production/surveyctl --target /opt/survey doctor
 platform/deploy/production/surveyctl --target /opt/survey backup --output manual-before-change
 platform/deploy/production/surveyctl --target /opt/survey upgrade --manifest /secure/release/survey-X.Y.Z-release.json
-platform/deploy/production/surveyctl --target /opt/survey restore manual-before-change
 platform/deploy/production/surveyctl --target /opt/survey uninstall
 ```
 
@@ -66,7 +73,9 @@ platform/deploy/production/surveyctl --target /opt/survey uninstall
 - `CONTROL-HMAC`：使用与载荷加密密钥分域派生的密钥，认证 canonical manifest 与 `SHA256SUMS`。
 - 两个数据库 dump 和七个卷归档的 `.enc` 文件。
 
-恢复先校验路径、认证控制元数据、inventory、checksum、载荷加密认证、应用版本/schema 兼容范围及 Release/镜像身份。七个卷归档会在任何 Docker 操作前建立完整的 Unicode NFC + casefold 规范路径树，只允许规范化相对路径的普通文件和目录；路径穿越、链接、特殊文件、重复/大小写/Unicode 碰撞、任意顺序的 file-parent/child 冲突、成员数/体积超限和异常膨胀率均会阻断。随后才恢复到随机命名的隔离 Compose project。隔离栈全部健康后会创建自动安全备份，随后才停止现有生产 project 并写入生产卷。隔离验证失败不会停止或改写现有栈；生产应用阶段失败会自动回灌安全备份并恢复旧栈，安全备份保留供人工复核。
+**当前手动恢复入口已关闭**：`surveyctl restore` 与此版本的 `restore.py restore` 在检查或解密备份之前拒绝执行。该限制不约束已发布旧 helper、直接导入内部类或宿主机管理员。升级失败且策略为 `restore-only` 时同样不会调用旧恢复助手；保留备份和 `recovery_required` 状态，不能用旧控制器或直接调用 helper 绕过。原生验收中的恢复步骤因而保持阻断。
+
+备份验证仍会认证控制元数据、inventory、checksum 和加密载荷；它会启动子进程并产生临时明文。直接调用 helper 的 `verify` 不经过控制器操作锁和 pending 标记，不能作为受控恢复或静默证明，勿在真实安装上绕开控制器调用。控制器异常终止时 pending 标记阻断后续变更，但不证明所有后代退出或临时明文已清理。独立进程树隔离、崩溃清理、写入者静默及操作人维护窗口尚未证明，故不能将已有 helper 的校验能力描述为安全恢复已完成。
 
 `backup_encryption_key` 与数据同等重要：密钥丢失后备份不可恢复。密钥不得与备份保存在同一故障域；当前代码不替代外部离线保存和保留策略。
 

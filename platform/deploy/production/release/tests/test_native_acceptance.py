@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import csv
+import copy
 import io
 import zipfile
 import importlib.util
@@ -79,26 +80,59 @@ def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) 
     testcase.assertNotRegex(shell, r"(?m)\b(?:exit|return)(?=\s*(?:;|$))")
     testcase.assertNotRegex(shell, r"(?m)\bexec\b")
     exits = re.findall(r"(?m)\bexit\s+([^;\n]+)", shell)
-    testcase.assertEqual(["2", "2", '"$result"'], exits, "native acceptance exit propagation changed")
+    testcase.assertEqual(["1", "2", "2", '"$result"'], exits, "native acceptance exit propagation changed")
+    testcase.assertIn("# Do not touch the host until containment, recovery and cleanup are verified.\nprintf 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.\\n' >&2\nexit 1\n", shell)
+    testcase.assertLess(shell.index('exit 1'), shell.index('work_root='))
     testcase.assertEqual(1, shell.count('acceptance_status="passed"'))
     testcase.assertIn("trap collect_evidence EXIT", shell)
     testcase.assertIn("local result=$?", shell)
     testcase.assertIn('exit "$result"', shell)
     positions = []
     for command in REQUIRED_LIFECYCLE_COMMANDS:
-        expected_count = 2 if command == "run_ctl uninstall" else 1
+        expected_count = 1
         testcase.assertEqual(expected_count, shell.count(command), f"required lifecycle command count changed: {command}")
         positions.append(shell.rindex(command))
     testcase.assertEqual(sorted(positions), positions, "native lifecycle command order changed")
+    testcase.assertIn('require_fixture_cleanup_proof\nrun_ctl uninstall', shell)
+    cleanup = shell[shell.index('collect_evidence() {'):shell.index('\ntrap collect_evidence EXIT')]
+    testcase.assertNotIn('run_ctl uninstall', cleanup)
+    testcase.assertNotIn('rm -rf', cleanup)
 
 
 def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dict) -> None:
     job = workflow["jobs"]["native-acceptance"]
+    testcase.assertNotIn('continue-on-error', job)
+    diagnostics = {
+        'Prepare fail-closed native diagnostic': 'always()',
+        'Preserve fail-closed native diagnostic': "always() && steps.native_diagnostic.outcome == 'success'",
+    }
+    testcase.assertEqual(len(job['steps']), len({item.get('name') for item in job['steps']}))
+    for item in job['steps']:
+        testcase.assertNotIn('continue-on-error', item)
+        if item.get('name') in diagnostics:
+            testcase.assertEqual(diagnostics[item['name']], item.get('if'))
+        else:
+            testcase.assertNotIn('if', item, 'native host steps must retain implicit success()')
+    prepare = next(item for item in job['steps'] if item.get('name') == 'Prepare fail-closed native diagnostic')
+    testcase.assertEqual({'name', 'id', 'if', 'shell', 'env', 'run'}, set(prepare))
+    testcase.assertEqual('native_diagnostic', prepare.get('id'))
+    testcase.assertEqual('bash', prepare.get('shell'))
+    testcase.assertEqual({'MATRIX_UBUNTU': '${{ matrix.ubuntu }}',
+                          'MATRIX_ARCHITECTURE': '${{ matrix.architecture }}'}, prepare.get('env'))
+    testcase.assertEqual('62aace031efc6774343491a48c263fa59bdceba1249054dac3fde8fb708443a9',
+                         hashlib.sha256(prepare['run'].encode()).hexdigest())
+    upload = next(item for item in job['steps'] if item.get('name') == 'Preserve fail-closed native diagnostic')
+    testcase.assertEqual({'name', 'if', 'uses', 'with'}, set(upload))
+    testcase.assertEqual('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02', upload.get('uses'))
+    testcase.assertEqual({'name': 'native-acceptance-${{ matrix.ubuntu }}-${{ matrix.architecture }}',
+                          'path': '${{ steps.native_diagnostic.outputs.path }}',
+                          'if-no-files-found': 'error', 'retention-days': 30}, upload['with'])
+    first = job['steps'][0]
+    testcase.assertEqual('Block native lifecycle before host mutation', first['name'])
+    testcase.assertEqual("echo 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.' >&2\nexit 1\n", first['run'])
     step = next(item for item in job["steps"] if item.get("name") == "Execute real clean-host install upgrade restore and uninstall")
-    testcase.assertEqual(
-        "sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh",
-        step["run"],
-    )
+    testcase.assertEqual("echo 'Native lifecycle blocked: recovery and safe cleanup are not independently verified.' >&2\nexit 1\n", step['run'])
+    testcase.assertNotIn('sudo -E NATIVE_ACCEPTANCE_REAL=1', job_text(job))
 
 
 class NativeAcceptanceWorkflowTest(unittest.TestCase):
@@ -171,26 +205,140 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         native_text = job_text(self.workflow["jobs"]["native-acceptance"])
         self.assertIn("inputs.candidate_run_id", native_text)
         self.assertIn("github-token", native_text)
-        self.assertNotIn("actions/checkout@", native_text)
-        self.assertIn("orchestrator/release/native_acceptance.sh", native_text)
+        anchor = next(step for step in self.workflow['jobs']['native-acceptance']['steps']
+                      if step.get('name') == 'Check out the workflow trust anchor')
+        self.assertEqual('${{ github.sha }}', anchor['with']['ref'])
+        self.assertFalse(anchor['with']['persist-credentials'])
+        self.assertIn('verify_native_orchestrator.py', native_text)
+        self.assertNotIn('tar -xzf', native_text)
         publication = self.workflow["jobs"]["publication"]
         self.assertIn("needs.policy.outputs.release == 'true'", publication["if"])
         self.assertIn("needs.policy.outputs.channel", publication["if"])
 
-    def test_native_job_runs_real_lifecycle_and_always_uploads_redacted_evidence(self):
+    def test_native_candidate_verification_precedes_any_host_lifecycle(self):
+        steps = self.workflow['jobs']['native-acceptance']['steps']
+        names = [step.get('name') for step in steps]
+        anchor = names.index('Check out the workflow trust anchor')
+        verify = names.index('Verify candidate native scripts against workflow source')
+        ready = names.index('Require ready native systemd and Docker')
+        lifecycle = names.index('Execute real clean-host install upgrade restore and uninstall')
+        self.assertLess(anchor, verify)
+        self.assertLess(verify, ready)
+        self.assertLess(ready, lifecycle)
+        script = steps[verify]['run']
+        self.assertIn('trusted-workflow-source/platform/deploy/production/release/verify_native_orchestrator.py', script)
+        self.assertIn('candidate-assets/identity.json', script)
+        assert_native_workflow_invocation(self, self.workflow)
+
+    def test_native_workflow_blocks_before_downloading_legacy_candidate(self):
+        step = self.workflow['jobs']['native-acceptance']['steps'][0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / 'executed'
+            legacy = root / 'legacy-orchestrator.sh'
+            legacy.write_text('#!/bin/sh\nprintf unsafe > "$MARKER"\n')
+            result = subprocess.run(['/bin/bash', '-c', step['run']], cwd=root,
+                                    env={**os.environ, 'MARKER': str(marker),
+                                         'CANDIDATE_RUN_ID': '12345'},
+                                    capture_output=True, text=True)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('blocked before host changes', result.stderr)
+            self.assertFalse(marker.exists())
+            self.assertTrue(legacy.exists())
+
+    def test_native_workflow_rejects_error_suppression_and_host_bypass(self):
+        for name, field, value in [
+            ('Block native lifecycle before host mutation', 'continue-on-error', True),
+            ('Require ready native systemd and Docker', 'if', 'always()'),
+            ('Execute real clean-host install upgrade restore and uninstall', 'if', 'failure()'),
+            ('Download the shared immutable candidate', 'continue-on-error', True),
+        ]:
+            with self.subTest(name=name, field=field):
+                altered = copy.deepcopy(self.workflow)
+                step = next(s for s in altered['jobs']['native-acceptance']['steps'] if s.get('name') == name)
+                step[field] = value
+                with self.assertRaises(AssertionError):
+                    assert_native_workflow_invocation(self, altered)
+        altered = copy.deepcopy(self.workflow)
+        altered['jobs']['native-acceptance']['continue-on-error'] = True
+        with self.assertRaises(AssertionError):
+            assert_native_workflow_invocation(self, altered)
+        altered = copy.deepcopy(self.workflow)
+        altered['jobs']['native-acceptance']['steps'].append(
+            {'name': 'Prepare fail-closed native diagnostic', 'if': 'always()', 'run': 'sudo true'})
+        with self.assertRaises(AssertionError):
+            assert_native_workflow_invocation(self, altered)
+        altered = copy.deepcopy(self.workflow)
+        diagnostic = next(s for s in altered['jobs']['native-acceptance']['steps']
+                          if s.get('name') == 'Prepare fail-closed native diagnostic')
+        diagnostic['run'] += '\nsudo true\n'
+        with self.assertRaises(AssertionError):
+            assert_native_workflow_invocation(self, altered)
+
+    def test_native_job_uploads_only_fixed_failed_diagnostic(self):
         job = self.workflow["jobs"]["native-acceptance"]
         text = job_text(job)
-        self.assertIn("native_acceptance.sh", text)
-        self.assertIn("sudo -E", text)
-        self.assertIn("NATIVE_ACCEPTANCE_REAL=1", text)
-        upload = next(step for step in job["steps"] if step.get("name") == "Preserve redacted native acceptance evidence")
-        self.assertEqual("always()", upload["if"])
+        self.assertIn("verify_native_orchestrator.py", text)
+        self.assertNotIn("sudo -E NATIVE_ACCEPTANCE_REAL=1", text)
+        assert_native_workflow_invocation(self, self.workflow)
+        prepare = next(step for step in job["steps"] if step.get("id") == "native_diagnostic")
+        self.assertEqual("always()", prepare["if"])
+        uploads = [step for step in job['steps'] if 'actions/upload-artifact@' in step.get('uses', '')]
+        self.assertEqual(1, len(uploads))
+        upload = uploads[0]
+        self.assertEqual("always() && steps.native_diagnostic.outcome == 'success'", upload['if'])
+        self.assertEqual('${{ steps.native_diagnostic.outputs.path }}', upload['with']['path'])
+        self.assertNotEqual('native-evidence', upload['with']['path'])
         self.assertIn("native-acceptance-${{ matrix.ubuntu }}-${{ matrix.architecture }}", text)
         self.assertIn("if-no-files-found", text)
         self.assertNotIn("SURVEY_PRODUCTION_E2E", text)
         self.assertNotIn("skip", text.lower())
         self.assertNotIn("SURVEY_ACCEPTANCE_DNS_SUFFIX", text)
         self.assertIn("survey-native.test", text)
+
+    def test_native_public_diagnostic_excludes_unscanned_secret_and_fails_closed(self):
+        job = self.workflow['jobs']['native-acceptance']
+        script = next(step['run'] for step in job['steps'] if step.get('id') == 'native_diagnostic')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            untrusted = root / 'native-evidence'
+            untrusted.mkdir()
+            secret = 'synthetic-secret-do-not-publish-9fae1'
+            (untrusted / 'summary.json').write_text(secret)
+            (untrusted / 'raw.txt').write_text(secret)
+            output = root / 'github-output'
+            output.write_text('')
+            env = {**os.environ, 'RUNNER_TEMP': str(root), 'GITHUB_OUTPUT': str(output),
+                   'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a' * 40,
+                   'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
+                   'SYNTHETIC_SECRET': secret}
+            result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            path = Path(output.read_text().strip().removeprefix('path='))
+            self.assertEqual('diagnostic.json', path.name)
+            self.assertEqual([path], list(path.parent.iterdir()))
+            diagnostic = path.read_text()
+            self.assertNotIn(secret, diagnostic + result.stdout + result.stderr)
+            payload = json.loads(diagnostic)
+            self.assertEqual({'schemaVersion': 1, 'status': 'failed', 'reason': 'native-evidence-withheld',
+                              'runId': '123', 'attempt': '2', 'workflowSha': 'a' * 40, 'candidateSha': None,
+                              'ubuntu': '24.04', 'architecture': 'arm64'}, payload)
+            spec = importlib.util.spec_from_file_location('native_diagnostic_validation', EVIDENCE_HELPER_PATH)
+            validator = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(validator)
+            with self.assertRaises(validator.EvidenceError):
+                validator.validate_evidence('summary', payload)
+            self.assertEqual(secret, (untrusted / 'raw.txt').read_text())
+            for key, bad in [('GITHUB_SHA', secret), ('GITHUB_RUN_ID', '0'),
+                             ('MATRIX_ARCHITECTURE', secret), ('MATRIX_UBUNTU', '20.04'),
+                             ('RUNNER_TEMP', str(root / 'missing')), ('GITHUB_OUTPUT', str(root))]:
+                with self.subTest(key=key):
+                    output.write_text('')
+                    rejected = subprocess.run(['bash', '-c', script], cwd=root,
+                                              env={**env, key: bad}, capture_output=True, text=True)
+                    self.assertNotEqual(0, rejected.returncode)
+                    self.assertEqual('', output.read_text())
+                    self.assertNotIn(secret, rejected.stdout + rejected.stderr)
 
     def test_tag_publication_gate_depends_on_the_complete_native_matrix(self):
         gate = self.workflow["jobs"]["release-ready"]
@@ -306,6 +454,66 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
     def setUpClass(cls):
         cls.text = SCRIPT_PATH.read_text(encoding="utf-8")
 
+    def test_script_refuses_before_any_host_command_or_fixture_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            marker = root / 'called'
+            fixture = root / 'existing-fixture'
+            fixture.write_text('synthetic data')
+            for name in ('docker', 'sudo', 'python3', 'mktemp', 'realpath', 'mkdir', 'rm', 'sed', 'cp', 'touch'):
+                fake = bin_dir / name
+                fake.write_text('#!/bin/sh\nprintf called > "$MARKER"\nexit 0\n')
+                fake.chmod(0o755)
+            env = {**os.environ, 'PATH': str(bin_dir), 'MARKER': str(marker),
+                   'NATIVE_ACCEPTANCE_REAL': '1', 'GITHUB_ACTIONS': 'true',
+                   'SURVEY_NATIVE_ACCEPTANCE': '1', 'RUNNER_TEMP': str(root)}
+            result = subprocess.run(['/bin/bash', str(SCRIPT_PATH)], cwd=root, env=env,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('blocked before host changes', result.stderr)
+            self.assertFalse(marker.exists())
+            self.assertEqual('synthetic data', fixture.read_text())
+
+    def test_unverified_cleanup_cannot_authorize_uninstall(self):
+        guard = self.text[self.text.index('require_fixture_cleanup_proof() {'):
+                          self.text.index('\ncollect_evidence() {')]
+        result = subprocess.run(['bash', '-c', guard + '\nrequire_fixture_cleanup_proof'],
+                                capture_output=True, text=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('cleanup is blocked', result.stderr)
+
+    def test_failed_cleanup_preserves_fixture_and_never_uninstalls(self):
+        cleanup = self.text[self.text.index('collect_evidence() {'):
+                            self.text.index('\ntrap collect_evidence EXIT')]
+        cases = [(7, '0', '0', 'failed', 7), (0, '1', '0', 'failed', 5),
+                 (0, '0', '0', 'failed', 5), (0, '0', '1', 'passed', 5)]
+        for original, scan_failure, docker_failure, initial_status, expected in cases:
+            with self.subTest(original=original, scan_failure=scan_failure, docker_failure=docker_failure), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / 'work').mkdir()
+                (root / 'work' / 'fixture').write_text('synthetic data')
+                (root / 'evidence').mkdir()
+                script = r'''work_root="$1/work"; evidence_root="$1/evidence"; target="$1/target"
+evidence_helper=fixture; acceptance_status="$INITIAL_STATUS"; hosts_marker=fixture
+evidence_secret_args() { :; }
+docker() { if [[ "$1" == ps && "$FAIL_DOCKER" != 1 ]]; then return 0; fi; return 1; }
+python3() { [[ "$2" != scan || "$FAIL_SCAN" != 1 ]]; }
+write_summary() { printf '%s %s' "$acceptance_status" "$1" > "$SUMMARY_CAPTURE"; }
+run_ctl() { printf 'unexpected' > "$UNINSTALL_CAPTURE"; }
+'''
+                env = {**os.environ, 'FAIL_SCAN': scan_failure, 'FAIL_DOCKER': docker_failure,
+                       'INITIAL_STATUS': initial_status,
+                       'SUMMARY_CAPTURE': str(root / 'summary'), 'UNINSTALL_CAPTURE': str(root / 'uninstall')}
+                result = subprocess.run(['bash', '-c', script + cleanup + '\n(exit "$2"); collect_evidence',
+                                         'fixture', str(root), str(original)], env=env,
+                                        capture_output=True, text=True)
+                self.assertEqual(expected, result.returncode, result.stderr)
+                self.assertEqual(f'failed {expected}', (root / 'summary').read_text())
+                self.assertEqual('synthetic data', (root / 'work' / 'fixture').read_text())
+                self.assertFalse((root / 'uninstall').exists())
+
     def test_script_is_valid_strict_shell_without_skip_or_fake_success_path(self):
         result = subprocess.run(["bash", "-n", str(SCRIPT_PATH)], capture_output=True, text=True, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
@@ -374,6 +582,11 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
             self.assertIn(command, calls)
         self.assertIn("survey-restore-", self.text)
         self.assertIn("BASELINE_MODE", self.text)
+
+    def test_clean_host_check_precedes_any_test_installation(self):
+        self.assertLess(self.text.index('"$evidence_helper" clean-host'), self.text.index('work_root='))
+        self.assertLess(self.text.index('export DOCKER_HOST=unix:///var/run/docker.sock'), self.text.index('run_ctl install'))
+        self.assertLess(self.text.index('export COMPOSE_PROJECT_NAME=survey-production'), self.text.index('run_ctl install'))
 
     def test_script_redacts_diagnostics_and_writes_success_or_failure_summary(self):
         self.assertIn("native_acceptance_evidence.py", self.text)
@@ -528,6 +741,127 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         cls.module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = cls.module
         spec.loader.exec_module(cls.module)
+
+    def test_fixture_owner_binding_rejects_identity_and_path_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            work = parent / 'survey-native-acceptance.test'
+            work.mkdir(mode=0o700)
+            marker = work / 'owner.json'
+            env = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+                   'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey',
+                   'GITHUB_RUN_ID': '12345', 'GITHUB_RUN_ATTEMPT': '1',
+                   'CANDIDATE_MANIFEST_SHA256': 'a' * 64,
+                   'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
+                   'ADMIN_IMAGE_DIGEST': 'sha256:' + '1' * 64,
+                   'PLATFORM_IMAGE_DIGEST': 'sha256:' + '2' * 64,
+                   'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + '3' * 64,
+                   'ENGINE_IMAGE_DIGEST': 'sha256:' + '4' * 64,
+                   'EXPECTED_UBUNTU': '24.04', 'EXPECTED_ARCHITECTURE': 'arm64',
+                   'COMPOSE_PROJECT_NAME': 'survey-production',
+                   'DOCKER_HOST': 'unix:///var/run/docker.sock', 'RUNNER_TEMP': str(parent)}
+            with mock.patch.dict(os.environ, env, clear=True):
+                with mock.patch.object(self.module, 'require_clean_native_host') as preflight:
+                    self.module.write_fixture_owner(work, marker)
+                    preflight.assert_called_once()
+                self.module.verify_fixture_owner(work, work / 'primary', marker)
+                for key, value in [('GITHUB_RUN_ID', '999'), ('GITHUB_RUN_ATTEMPT', '2'),
+                                   ('GITHUB_REPOSITORY', 'other/repository'),
+                                   ('CANDIDATE_MANIFEST_SHA256', 'c' * 64),
+                                   ('CANDIDATE_BUNDLE_SHA256', 'd' * 64),
+                                   ('ADMIN_IMAGE_DIGEST', 'sha256:' + '5' * 64),
+                                   ('PLATFORM_IMAGE_DIGEST', 'sha256:' + '5' * 64),
+                                   ('PUBLISH_GATEWAY_IMAGE_DIGEST', 'sha256:' + '5' * 64),
+                                   ('ENGINE_IMAGE_DIGEST', 'sha256:' + '5' * 64),
+                                   ('COMPOSE_PROJECT_NAME', 'other'), ('DOCKER_HOST', 'tcp://remote')]:
+                    with self.subTest(field=key), mock.patch.dict(os.environ, {key: value}):
+                        with self.assertRaises(self.module.EvidenceError):
+                            self.module.verify_fixture_owner(work, work / 'primary', marker)
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_owner(work, parent / 'other', marker)
+                saved = marker.read_text()
+                marker.write_text('{}')
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_owner(work, work / 'primary', marker)
+                marker.write_text(saved)
+                marker.chmod(0o644)
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_owner(work, work / 'primary', marker)
+                marker.unlink()
+                marker.symlink_to(parent / 'outside')
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_fixture_owner(work, work / 'primary', marker)
+                marker.unlink()
+                os.mkfifo(marker, 0o600)
+                script = (
+                    'import importlib.util,sys; from pathlib import Path; '
+                    's=importlib.util.spec_from_file_location("fixture",sys.argv[1]); '
+                    'm=importlib.util.module_from_spec(s); s.loader.exec_module(m); '
+                    'w=Path(sys.argv[2]); '
+                    'm.verify_fixture_owner(w,w/"primary",w/"owner.json")'
+                )
+                result = subprocess.run([sys.executable, '-c', script, str(EVIDENCE_HELPER_PATH), str(work)],
+                                        env=dict(os.environ), capture_output=True, text=True, timeout=3)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn('EvidenceError', result.stderr)
+                marker.unlink()
+                work.chmod(0o755)
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.write_fixture_owner(work, marker)
+
+    def test_clean_host_guard_fails_closed_on_nonhosted_or_existing_resources(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        with mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted'}):
+            with mock.patch.object(self.module.subprocess, 'run', return_value=completed) as run:
+                self.module.require_clean_native_host()
+                self.assertEqual(6, run.call_count)
+                for call in run.call_args_list:
+                    self.assertEqual(['docker', '--host', 'unix:///var/run/docker.sock'], call.args[0][:3])
+                    self.assertTrue(call.kwargs['check'])
+                commands = [call.args[0][3:] for call in run.call_args_list]
+                self.assertEqual([
+                    ['ps', '-aq', '--filter', 'label=com.docker.compose.project=survey-production'],
+                    ['ps', '-aq', '--filter', 'name=^/survey-production-'],
+                    ['volume', 'ls', '-q', '--filter', 'label=com.docker.compose.project=survey-production'],
+                    ['volume', 'ls', '-q', '--filter', 'name=^survey-production_'],
+                    ['network', 'ls', '-q', '--filter', 'label=com.docker.compose.project=survey-production'],
+                    ['network', 'ls', '-q', '--filter', 'name=^survey-production_'],
+                ], commands)
+            for position in range(6):
+                responses = [completed] * 6
+                responses[position] = subprocess.CompletedProcess([], 0, stdout='existing-resource\n', stderr='')
+                with self.subTest(position=position), mock.patch.object(self.module.subprocess, 'run', side_effect=responses):
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.require_clean_native_host()
+            with mock.patch.object(self.module.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'docker')):
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.require_clean_native_host()
+        with mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'self-hosted'}):
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.require_clean_native_host()
+        with mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+                                          'DOCKER_CONTEXT': 'remote'}):
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.require_clean_native_host()
+        for override in ('other-project', ''):
+            with self.subTest(project_override=override), mock.patch.dict(os.environ,
+                    {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+                     'COMPOSE_PROJECT_NAME': override}, clear=True):
+                with mock.patch.object(self.module.subprocess, 'run', return_value=completed) as run:
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.require_clean_native_host()
+                    run.assert_not_called()
+
+    def test_fixed_project_environment_overrides_env_file_and_compose_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / '.env').write_text('COMPOSE_PROJECT_NAME=other-project\n')
+            (root / 'compose.yml').write_text('name: another-project\nservices:\n  fixture:\n    image: fixture:test\n')
+            result = subprocess.run(['docker', 'compose', '--env-file', str(root / '.env'), '-f',
+                                     str(root / 'compose.yml'), 'config', '--format', 'json'],
+                                    env={'PATH': os.environ['PATH'], 'COMPOSE_PROJECT_NAME': 'survey-production'},
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual('survey-production', json.loads(result.stdout)['name'])
 
     def test_engine_health_evidence_never_copies_probe_output(self):
         with tempfile.TemporaryDirectory() as temporary:

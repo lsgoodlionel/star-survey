@@ -114,7 +114,9 @@ class ReleaseBuilderTest(unittest.TestCase):
             self.assertLess(module._version_key('0.3.17-rc.0'), floor)
             self.assertGreater(module._version_key('0.3.17'), floor)
             self.assertGreater(module._version_key(loaded.version), floor)
-            manager = module.SurveyManager((self.root / ('floor-target-' + arch)).resolve())
+            target = (self.root / ('floor-target-' + arch)).resolve()
+            (target / '.surveyctl').mkdir(parents=True, mode=0o700)
+            manager = module.SurveyManager(target)
             state = {'version': '0.3.17-rc.0', 'publicHost': 'fixture.test'}
             with mock.patch.object(manager, '_read_state', side_effect=lambda **kwargs: dict(state)), \
                  mock.patch.object(manager, '_personnel_guard_enabled', return_value=False), \
@@ -351,7 +353,9 @@ class ReleaseBuilderTest(unittest.TestCase):
             "doctor.py",
             "bundle-metadata.json",
             "init/engine-init.sh",
+            "org-login-empty/README",
         } <= names)
+        self.assertEqual({"org-login-empty/README"}, {n for n in names if n.startswith("org-login-empty/")})
         forbidden_fragments = ("tests/", "fixtures/", "secrets/", "backups/", ".runtime/", ".env")
         self.assertFalse([name for name in names if any(fragment in name for fragment in forbidden_fragments)])
 
@@ -477,6 +481,13 @@ class ReleaseBuilderTest(unittest.TestCase):
         notes = (output / "release-notes.md").read_text(encoding="utf-8")
         for phrase in ("0.3.0-rc.1", "candidate", "surveyctl install", "surveyctl upgrade", "backup", "restore-only"):
             self.assertIn(phrase, notes)
+        self.assertIn("Do not use the installed release's older CLI", notes)
+        self.assertIn("recovery is currently disabled", notes)
+        self.assertIn("Preserve the installation, operation marker and verified pre-upgrade backup", notes)
+        self.assertIn("do not start older images against a migrated database or bypass the block with an older controller or helper", notes)
+        self.assertNotIn("recover with the verified pre-upgrade backup", notes)
+        self.assertNotIn("use the verified pre-upgrade backup; do not start", notes)
+        self.assertIn("./surveyctl upgrade --manifest /path/to/verified/release.json", notes)
         self.assertNotIn("0123456789abcdef0123456789abcdef01234567", notes)
 
 

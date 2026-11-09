@@ -27,12 +27,22 @@ class CIOrchestrationTest(unittest.TestCase):
         ci = workflow('ci.yml')
         summary = ci['jobs']['summary']
         self.assertEqual('always()', summary['if'])
-        self.assertEqual({'changes', 'quality', 'images'}, set(summary['needs']))
+        self.assertEqual({'changes', 'quality', 'images', 'relay', 'crosslayer'}, set(summary['needs']))
         self.assertIn('plan.py summary', str(summary))
         self.assertIn('toJSON(needs)', str(summary))
         for name, job in workflow('platform-quality.yml')['jobs'].items():
             if name != 'productization-production':
                 self.assertIn("inputs.profile != 'policy'", job['if'])
+
+    def test_combined_candidate_runs_attachment_and_relay_diagnostics(self):
+        quality = workflow('platform-quality.yml')
+        attachment = quality['jobs']['attachment-diagnostic']
+        self.assertEqual("inputs.profile != 'policy'", attachment['if'])
+        self.assertEqual(['mysql', 'pgsql'], attachment['strategy']['matrix']['db'])
+        relay = workflow('relay-devstack-diagnostic.yml')
+        self.assertIn('pull_request', relay['on'])
+        self.assertEqual(['mysql', 'pgsql'], relay['jobs']['real-relay']['strategy']['matrix']['db'])
+        self.assertEqual('1', relay['jobs']['real-relay']['env']['ADMIN_WEB_RELAY_DIAGNOSTIC'])
 
     def test_image_build_is_readonly_reusable_and_shared(self):
         ci, release, images = map(workflow, ['ci.yml', 'release.yml', 'build-images.yml'])

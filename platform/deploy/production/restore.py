@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify and restore a production backup through an isolated Compose project."""
+"""Verify a production backup; the direct restore command is disabled."""
 
 from __future__ import annotations
 
@@ -36,8 +36,8 @@ DEFAULT_ARCHIVE_LIMITS = {
     "max_expansion_ratio": 100,
     "expansion_slack_bytes": 1024 * 1024,
 }
-APP_SERVICES = ("admin-web", "platform", "publish-gateway", "engine-init", "engine")
-HEALTHY_SERVICES = {"admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"}
+APP_SERVICES = ("admin-web", "platform", "publish-gateway", "engine-init", "engine", "engine-relay")
+HEALTHY_SERVICES = {"admin-web", "platform", "publish-gateway", "engine", "engine-relay", "platform-db", "engine-db"}
 
 
 class RestoreError(Exception):
@@ -494,7 +494,7 @@ COMMIT;
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Restore a verified Survey production backup")
+    parser = argparse.ArgumentParser(description="Verify a Survey backup; direct restore is disabled")
     sub = parser.add_subparsers(dest="command", required=True)
     restore = sub.add_parser("restore")
     restore.add_argument("--target", required=True)
@@ -507,12 +507,14 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    # Backup verification remains in use, but launching the legacy restore
+    # helper directly would bypass the controller's fail-closed boundary.
+    if args.command == "restore":
+        print("restore failed: direct restore is disabled until containment is verified", file=sys.stderr)
+        return 4
     try:
         manager = RestoreManager(args.target)
-        if args.command == "verify":
-            manager.verify_only(args.backup)
-        else:
-            manager.restore(args.backup)
+        manager.verify_only(args.backup)
         return 0
     except RestoreIntegrityError as exc:
         print(f"restore failed: {exc}", file=sys.stderr)

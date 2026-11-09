@@ -118,6 +118,39 @@ COMMIT;`)).trim()) as Record<string, number>;
     };
     const v1 = await save(`审批前稿${marker}`);
     await pristine();
+    const withdrawn = await submit();
+    expect(withdrawn).toMatchObject({ applicant: editorId, draftVersion: v1.version, status: 'pending' });
+    const unauthorizedWithdraw = await api(reviewer, reviewerToken, `/v1/publish-approvals/${withdrawn.id}/withdraw`, 'POST');
+    expect(unauthorizedWithdraw.status).toBe(403);
+    await navigate(editor, `/surveys/${surveyId}/publish`);
+    const withdrawalResponse = editor.waitForResponse(r => new URL(r.url()).pathname === `/v1/publish-approvals/${withdrawn.id}/withdraw` && r.request().method() === 'POST');
+    await editor.getByRole('button', { name: '撤回申请', exact: true }).click();
+    expect((await withdrawalResponse).status()).toBe(200);
+    const withdrawnDetail = approvalDetailSchema.parse(await get(`/v1/publish-approvals/${withdrawn.id}`));
+    expect(withdrawnDetail.request.status).toBe('withdrawn');
+    expect(withdrawnDetail.history.map(({ event, actor }) => ({ event, actor }))).toEqual([
+      { event: 'submitted', actor: editorId }, { event: 'withdrawn', actor: editorId },
+    ]);
+    expect((await api(reviewer, reviewerToken, `/v1/publish-approvals/${withdrawn.id}/approve`, 'POST')).status).toBe(409);
+    await pristine();
+
+    const rejected = await submit();
+    const unauthorizedReject = await api(editor, editorToken, `/v1/publish-approvals/${rejected.id}/reject`, 'POST', { reason: '无权驳回' });
+    expect(unauthorizedReject.status).toBe(403);
+    await navigate(reviewer, `/surveys/${surveyId}/publish`);
+    await reviewer.getByRole('button', { name: '驳回申请', exact: true }).click();
+    await reviewer.getByLabel('驳回原因').fill('请修订问卷内容');
+    const rejectResponse = reviewer.waitForResponse(r => new URL(r.url()).pathname === `/v1/publish-approvals/${rejected.id}/reject` && r.request().method() === 'POST');
+    await reviewer.getByRole('button', { name: '确认驳回', exact: true }).click();
+    expect((await rejectResponse).status()).toBe(200);
+    const rejectedDetail = approvalDetailSchema.parse(await get(`/v1/publish-approvals/${rejected.id}`));
+    expect(rejectedDetail.request).toMatchObject({ status: 'rejected', decidedBy: reviewerId, reason: '请修订问卷内容' });
+    expect(rejectedDetail.history.map(({ event, actor }) => ({ event, actor }))).toEqual([
+      { event: 'submitted', actor: editorId }, { event: 'rejected', actor: reviewerId },
+    ]);
+    expect((await api(editor, editorToken, `${survey}/publish`, 'POST')).status).toBe(403);
+    await pristine();
+
     const a1 = await submit();
     expect(a1).toMatchObject({ applicant: editorId, draftVersion: v1.version, status: 'pending' });
     await approve(a1.id);

@@ -27,7 +27,7 @@ import uuid
 from restore import RestoreIntegrityError, RestoreManager
 
 
-LONG_RUNNING = {"edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"}
+LONG_RUNNING = {"edge", "admin-web", "platform", "publish-gateway", "engine", "engine-relay", "platform-db", "engine-db"}
 EXPECTED_VOLUMES = {
     "caddy-data", "caddy-config", "platform-db-data", "platform-assets", "platform-exports",
     "publish-gateway-state", "engine-db-data", "engine-upload", "engine-runtime",
@@ -482,7 +482,8 @@ class Doctor:
             if ports:
                 exposed[name] = sorted(str(item.get("published")) for item in ports if isinstance(item, dict))
         ports_ok = exposed == {"edge": ["443", "80"]}
-        internal = config.get("networks", {}).get("internal", {}).get("internal") is True
+        internal = all(config.get("networks", {}).get(name, {}).get("internal") is True
+                       for name in ("internal", "preview"))
         db_internal = all(not services.get(name, {}).get("ports") and "internal" in services.get(name, {}).get("networks", []) for name in ("platform-db", "engine-db"))
         return (
             self._check("ports", "ok" if ports_ok else "blocked", "only the edge service publishes ports 80 and 443" if ports_ok else "unexpected host port exposure detected"),
@@ -526,8 +527,9 @@ class Doctor:
         except json.JSONDecodeError as exc:
             raise DoctorRuntimeError("runtime container inspection is invalid") from exc
         allowed_networks = {
-            "edge": {"edge"}, "admin-web": {"edge"}, "platform": {"edge", "internal"},
-            "publish-gateway": {"internal"}, "engine": {"edge", "internal"},
+            "edge": {"edge", "preview"}, "admin-web": {"edge"}, "platform": {"edge", "internal"},
+            "publish-gateway": {"preview", "internal"}, "engine": {"edge", "internal"},
+            "engine-relay": {"internal"},
             "engine-init": {"internal"}, "platform-db": {"internal"}, "engine-db": {"internal"},
         }
         bad = []

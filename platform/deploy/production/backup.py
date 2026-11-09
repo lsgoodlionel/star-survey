@@ -19,7 +19,7 @@ import time
 
 
 MIN_FREE_BYTES = 512 * 1024**2
-WRITER_SERVICES = ("edge", "admin-web", "platform", "publish-gateway", "engine")
+WRITER_SERVICES = ("edge", "admin-web", "platform", "publish-gateway", "engine", "engine-relay")
 VOLUME_SOURCES = {
     "caddy-data.tar": ("edge", "/data"),
     "caddy-config.tar": ("edge", "/config"),

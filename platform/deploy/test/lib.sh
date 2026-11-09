@@ -29,6 +29,9 @@ prepare_test_stack() {
     config_changed=true
   fi
   cp "$TEST_DIR/config.$TEST_DB.php" "$TEST_DIR/.runtime/config.php"
+  if [[ "${SURVEY_BROWSER_RELAY_SYNTHETIC_CONFIG:-}" == 1 ]]; then
+    browser_relay_make_synthetic_config_readable "$TEST_DIR/config.$TEST_DB.php" "$TEST_DIR/.runtime/config.php" "$TEST_DB" || return 1
+  fi
 
   # Docker Desktop cannot create a nested file mount target inside the bind-mounted
   # checkout. A fresh checkout lacks this ignored file; preserve any existing config.

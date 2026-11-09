@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Do not touch the host until containment, recovery and cleanup are verified.
+printf 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.\n' >&2
+exit 1
+
 [[ "${NATIVE_ACCEPTANCE_REAL:-}" == "1" ]]
 [[ "${GITHUB_ACTIONS:-}" == "true" ]]
 [[ "${SURVEY_NATIVE_ACCEPTANCE:-}" == "1" ]]
@@ -8,7 +12,7 @@ set -Eeuo pipefail
 required_variables=(
   CANDIDATE_DIR CANDIDATE_IDENTITY CANDIDATE_MANIFEST_SHA256
   CANDIDATE_BUNDLE_SHA256 ADMIN_IMAGE_DIGEST PLATFORM_IMAGE_DIGEST
-  PUBLISH_GATEWAY_IMAGE_DIGEST EXPECTED_UBUNTU EXPECTED_ARCHITECTURE
+  PUBLISH_GATEWAY_IMAGE_DIGEST ENGINE_IMAGE_DIGEST EXPECTED_UBUNTU EXPECTED_ARCHITECTURE
   BASELINE_MODE SURVEY_ACCEPTANCE_PUBLIC_HOST SURVEY_ACCEPTANCE_ADMIN_EMAIL EVIDENCE_DIR
 )
 for variable in "${required_variables[@]}"; do
@@ -25,6 +29,10 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 evidence_helper="$script_dir/native_acceptance_evidence.py"
+[[ -f "$evidence_helper" ]]
+python3 "$evidence_helper" clean-host
+export DOCKER_HOST=unix:///var/run/docker.sock
+export COMPOSE_PROJECT_NAME=survey-production
 candidate_root="$(realpath "$CANDIDATE_DIR")"
 identity_path="$(realpath "$CANDIDATE_IDENTITY")"
 evidence_root="$(realpath -m "$EVIDENCE_DIR")"
@@ -108,13 +116,23 @@ write_summary() {
     --upgrade-data-evidence "$evidence_root/upgrade-data.json"
 }
 
+# Resource labels and fixture markers alone cannot prove that all writers and
+# restore helpers stopped. Keep uninstall blocked until an independently
+# verified containment and ownership protocol is implemented.
+require_fixture_cleanup_proof() {
+  printf 'Native fixture cleanup is blocked: exclusive ownership and restore quiescence are unverified.\n' >&2
+  return 1
+}
+
 collect_evidence() {
   local result=$?
   trap - EXIT
   set +e
-  sed -i.bak "/# $hosts_marker$/d" /etc/hosts
-  rm -f /etc/hosts.bak
-  docker ps --format '{"id":"{{.ID}}","image":"{{.Image}}","name":"{{.Names}}","state":"{{.State}}","health":"{{.Status}}"}' >"$work_root/services.jsonl"
+  # Preserve host and fixture state: cleanup cannot be safely authorized yet.
+  if ! docker ps --format '{"id":"{{.ID}}","image":"{{.Image}}","name":"{{.Names}}","state":"{{.State}}","health":"{{.Status}}"}' >"$work_root/services.jsonl"; then
+    result=5
+    acceptance_status="failed"
+  fi
   local args=()
   while IFS= read -r item; do args+=("$item"); done < <(evidence_secret_args)
   python3 "$evidence_helper" "${args[@]}" services --input "$work_root/services.jsonl" --output "$evidence_root/services.json"
@@ -123,29 +141,29 @@ collect_evidence() {
     result=5
     acceptance_status="failed"
   fi
-  rm -f "$work_root/services.jsonl"
   if [[ "$result" -ne 0 ]] && docker inspect --format '{{json .State.Health}}' survey-production-engine-1 >"$work_root/engine-health.json" 2>/dev/null; then
     if ! python3 "$evidence_helper" engine-health --input "$work_root/engine-health.json" --output "$evidence_root/engine-health.json"; then
       result=5
     fi
   fi
-  rm -f "$work_root/engine-health.json"
   if [[ "$result" -ne 0 ]] && docker inspect survey-production-publish-gateway-1 >/dev/null 2>&1; then
     if ! docker logs --tail 200 survey-production-publish-gateway-1 2>&1 | python3 "$evidence_helper" gateway-diagnostic --output "$evidence_root/gateway-diagnostic.json"; then
       result=5
     fi
   fi
+  if [[ "$result" -eq 0 && "$acceptance_status" != passed ]]; then result=5; fi
+  if [[ "$result" -ne 0 ]]; then acceptance_status="failed"; fi
   write_summary "$result"
   local summary_result=$?
   if [[ "$summary_result" -ne 0 ]]; then result=5; fi
   python3 "$evidence_helper" "${args[@]}" scan --directory "$evidence_root"
   local scan_result=$?
   if [[ "$scan_result" -ne 0 ]]; then result=5; fi
-  if [[ "$result" -ne 0 && -n "${ctl_bin:-}" && -f "$target/.surveyctl/state.json" ]]; then
-    run_ctl uninstall
+  if [[ "$result" -ne 0 ]]; then
+    acceptance_status="failed"
+    if ! write_summary "$result"; then result=5; fi
   fi
-  chmod -R a+rX "$evidence_root"
-  rm -rf "$work_root"
+  printf 'Native fixture and host state retained for investigation.\n' >&2
   exit "$result"
 }
 trap collect_evidence EXIT
@@ -186,6 +204,7 @@ expected = {
     "admin": ("ADMIN_IMAGE", os.environ["ADMIN_IMAGE_DIGEST"]),
     "platform": ("PLATFORM_IMAGE", os.environ["PLATFORM_IMAGE_DIGEST"]),
     "publish-gateway": ("PUBLISH_GATEWAY_IMAGE", os.environ["PUBLISH_GATEWAY_IMAGE_DIGEST"]),
+    "engine": ("ENGINE_IMAGE", os.environ["ENGINE_IMAGE_DIGEST"]),
 }
 for name, (manifest_key, digest) in expected.items():
     value = identity.get("images", {}).get(name, {})
@@ -224,6 +243,8 @@ PY
 (cd "$candidate_release_dir" && sha256sum --check SHA256SUMS)
 candidate_bundle="$(jq -er --arg architecture "$EXPECTED_ARCHITECTURE" '.bundles[$architecture].name' "$identity_path")"
 [[ "$(sha256sum "$candidate_release_dir/$candidate_bundle" | awk '{print $1}')" == "$CANDIDATE_BUNDLE_SHA256" ]]
+python3 "$evidence_helper" fixture-owner-create --work "$work_root" --marker "$work_root/owner.json"
+python3 "$evidence_helper" fixture-owner-verify --work "$work_root" --marker "$work_root/owner.json"
 
 last_step="image-manifests"
 python3 - "$identity_path" <<'PY' >"$work_root/image-references"
@@ -312,5 +333,6 @@ last_step="doctor-restored"
 write_doctor_evidence "doctor-restored"
 
 last_step="uninstall"
+require_fixture_cleanup_proof
 run_ctl uninstall
 acceptance_status="passed"

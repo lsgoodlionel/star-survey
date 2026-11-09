@@ -64,15 +64,39 @@ cleanup_run() {
     echo "ADMIN_WEB_E2E_KEEP=1: leaving only compose resources running; private files were removed" >&2
     return 0
   fi
-  "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  local cleanup_status=0 remaining
+  if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+    if ! "${COMPOSE[@]}" --profile relay-test down -v --remove-orphans >/dev/null 2>&1; then
+      echo "relay diagnostic cleanup: compose down failed" >&2
+      cleanup_status=1
+    fi
+    for resource in container volume network; do
+      case "$resource" in
+        container) remaining="$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || cleanup_status=1 ;;
+        volume) remaining="$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || cleanup_status=1 ;;
+        network) remaining="$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || cleanup_status=1 ;;
+      esac
+      if [[ -n "$remaining" ]]; then
+        echo "relay diagnostic cleanup: ${resource} resources remain" >&2
+        cleanup_status=1
+      fi
+    done
+    if [[ "$cleanup_status" == 0 ]]; then echo "relay diagnostic cleanup: project resources absent" >&2; fi
+  else
+    "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
   [[ -z "$WORK_DIR" ]] || rm -rf "$WORK_DIR"
+  return "$cleanup_status"
   return 0
 }
 
 cleanup() {
   local status=$?
-  cleanup_run "$status"
-  return "$status"
+  cleanup_run "$status" || status=1
+  # Returning from an EXIT trap preserves the original exit code; explicitly
+  # exit so failed diagnostic cleanup cannot be reported as a passing run.
+  trap - EXIT
+  exit "$status"
 }
 
 wait_healthy() {
@@ -189,6 +213,8 @@ run_playwright() {
     if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]]; then
       [[ "${CI:-}" == "true" && "${GITHUB_ACTIONS:-}" == "true" ]] || fail "attachment diagnostic requires GitHub CI"
       npm run e2e -- --project=chromium-attachment-diagnostic --retries=0
+    elif [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+      npm run e2e -- --project=chromium-desktop --retries=0 --grep 'author filters stable resources, restores archive, and publishes the same survey'
     elif [[ "$E2E_SUITE" == "wave3" ]]; then
       npm run e2e -- --project=chromium-wave3-data
     else
@@ -250,14 +276,76 @@ run_browser_tests() {
   issue_browser_token admin-web-e2e-reviewer "$ADMIN_WEB_REVIEWER_JWT_FILE"
   issue_browser_token admin-web-e2e-data "$ADMIN_WEB_DATA_JWT_FILE"
   issue_browser_token admin-web-e2e-operator "$ADMIN_WEB_OPERATOR_JWT_FILE"
-  (
-    while true; do
-      docker exec "$CONTAINER" php application/commands/console.php plugin cron >/dev/null 2>&1 || true
+  if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+    "${COMPOSE[@]}" --profile relay-test up -d --no-deps test-relay >/dev/null
+    export ADMIN_WEB_RELAY_CONTAINER ADMIN_WEB_PLATFORM_CONTAINER
+    ADMIN_WEB_RELAY_CONTAINER="$("${COMPOSE[@]}" --profile relay-test ps -q test-relay)"
+    ADMIN_WEB_PLATFORM_CONTAINER="$("${COMPOSE[@]}" ps -q platform)"
+    [[ "$ADMIN_WEB_RELAY_CONTAINER" =~ ^[0-9a-f]{64}$ && "$ADMIN_WEB_PLATFORM_CONTAINER" =~ ^[0-9a-f]{64}$ ]] || fail "diagnostic container identity is invalid"
+    # The first preview assertion reads the event table. Do not race the
+    # worker's first startup; record only bounded classifications on failure.
+    local ready=false attempt relay_state
+    for ((attempt = 1; attempt <= 45; attempt++)); do
+      if db_query 'SELECT COUNT(*) FROM lime_mjyplatformbridge_event_log' >/dev/null 2>&1 \
+          && docker exec "$ADMIN_WEB_RELAY_CONTAINER" test -f /tmp/survey-event-relay-heartbeat >/dev/null 2>&1; then
+        ready=true
+        break
+      fi
+      relay_state="$(docker inspect -f '{{.State.Status}}' "$ADMIN_WEB_RELAY_CONTAINER" 2>/dev/null || printf unavailable)"
+      [[ "$relay_state" == running ]] || break
       sleep 2
     done
-  ) &
-  ENGINE_RELAY_PID=$!
+    if [[ "$ready" != true ]]; then
+      relay_state="$(docker inspect -f '{{.State.Status}}' "$ADMIN_WEB_RELAY_CONTAINER" 2>/dev/null || printf unavailable)"
+      docker logs "$ADMIN_WEB_RELAY_CONTAINER" >"$WORK_DIR/relay-private.log" 2>&1 || true
+      python3 - "$WORK_DIR/relay-private.log" "$relay_state" <<'PY'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text(errors='replace').lower()
+categories = ['event bridge is not active', 'event bridge could not be loaded',
+              'event reconciliation failed', 'event relay failed', 'unknown command',
+              'not defined', 'no such file or directory', 'fatal error',
+              'database connection failed']
+print('relay diagnostic state:', sys.argv[2])
+print('relay diagnostic categories:', ','.join(x for x in categories if x in text) or 'unclassified')
+PY
+      fail "automatic relay did not complete its first iteration with initialized event schema"
+    fi
+  else
+    (
+      while true; do
+        docker exec "$CONTAINER" php application/commands/console.php plugin cron >/dev/null 2>&1 || true
+        sleep 2
+      done
+    ) &
+    ENGINE_RELAY_PID=$!
+  fi
   if ! run_playwright; then
+    if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+      docker logs "$ADMIN_WEB_RELAY_CONTAINER" >"$WORK_DIR/relay-private.log" 2>&1 || true
+      python3 - "$WORK_DIR/relay-private.log" <<'PYLOG'
+import collections, pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text(errors='replace')
+counts = collections.Counter()
+for line in text.splitlines():
+    if re.fullmatch(r'event relay rejected HTTP [1-5][0-9]{2}', line):
+        counts[line] += 1
+    elif line in ('event relay transport failed', 'event relay failed',
+                  'event reconciliation failed', 'event bridge is not active',
+                  'event bridge could not be loaded'):
+        counts[line] += 1
+for category, count in sorted(counts.items()):
+    print('relay diagnostic category:', category, 'count:', count)
+if not counts:
+    print('relay diagnostic category: none observed')
+PYLOG
+      local event_counts
+      event_counts="$(db_query "SELECT COUNT(*), SUM(CASE WHEN delivered_at IS NULL THEN 1 ELSE 0 END), SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) FROM lime_mjyplatformbridge_event_log" 2>/dev/null)" || event_counts="unavailable"
+      if [[ "$event_counts" =~ ^[0-9[:space:]\|NULL]+$ ]]; then
+        echo "relay diagnostic event counts (total/pending/delivered): $event_counts" >&2
+      else
+        echo "relay diagnostic event counts: unavailable" >&2
+      fi
+    fi
     stop_engine_relay
     run_attachment_locator_probe
     export_failure_artifacts || true
@@ -268,8 +356,14 @@ run_browser_tests() {
   if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" != "1" ]]; then
     [[ -f "$ADMIN_WEB_RESULT_FILE" ]] || fail "Playwright did not write the redacted result"
   fi
-  export_failure_artifacts
-  sanitize_test_artifacts false
+  if ! export_failure_artifacts; then
+    echo "sanitized evidence export failed" >&2
+    return 1
+  fi
+  if ! sanitize_test_artifacts false; then
+    echo "artifact sanitization failed" >&2
+    return 1
+  fi
 }
 
 verify_and_archive_run_root() {
@@ -277,19 +371,24 @@ verify_and_archive_run_root() {
   local root_id_file="$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
   local expected_publish_calls=4
   if [[ "$E2E_SUITE" == "wave3" ]]; then expected_publish_calls=3; fi
+  local verification_scope=full
+  if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+    verification_scope=relay-diagnostic
+    expected_publish_calls=1
+  fi
   [[ -f "$success_marker" && "$(<"$success_marker")" == "passed" ]] \
     || fail "Playwright did not write a valid suite success marker"
   [[ -f "$root_id_file" ]] || fail "Playwright did not write run root evidence"
 
   if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]]; then
     [[ "${CI:-}" == "true" && "${GITHUB_ACTIONS:-}" == "true" ]] || fail "attachment diagnostic requires GitHub CI"
-    # This project proves its own upload/ZIP contract, not the ordinary suite's result.json.
-    # Full quality still runs independently; the success/root evidence and archive below remain required.
+    # Attachment project verifies its own upload/ZIP contract; archive remains required.
   else
     python3 "$GATE" --base-url "$PLATFORM_URL" verify \
       --metadata-file "$ADMIN_WEB_METADATA_FILE" \
       --result-file "$ADMIN_WEB_RESULT_FILE" \
       --wave2-evidence-file "$ADMIN_WEB_TEST_RESULTS_DIR/wave2-scenarios.json" \
+      --verification-scope "$verification_scope" \
       --platform-db-container "$PLATFORM_DB_CONTAINER" \
       --platform-db-name platform \
       --engine-db-container "$TEST_PREFIX-$DB_SERVICE" \
@@ -333,14 +432,28 @@ while (($#)); do
   esac
   shift
 done
-trap cleanup EXIT
-
+if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" && "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+  fail "attachment and relay diagnostics must run separately"
+fi
 ensure_node22
 for tool in docker python3 curl npm node unzip; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 docker info >/dev/null 2>&1 || fail "docker daemon is not running"
 
+if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+  [[ "${GITHUB_ACTIONS:-}" == "true" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]] || fail "relay diagnostic requires a GitHub-hosted runner"
+  [[ "$COMPOSE_PROJECT_NAME" == relay-ci-* && "$SURVEY_TEST_PREFIX" == "$COMPOSE_PROJECT_NAME" ]] || fail "relay diagnostic requires its dedicated project"
+  local inventory
+  inventory="$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || fail "unable to inspect relay diagnostic containers"
+  [[ -z "$inventory" ]] || fail "relay diagnostic project is not empty"
+  inventory="$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || fail "unable to inspect relay diagnostic volumes"
+  [[ -z "$inventory" ]] || fail "relay diagnostic volumes are not empty"
+  inventory="$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" || fail "unable to inspect relay diagnostic networks"
+  [[ -z "$inventory" ]] || fail "relay diagnostic network is not empty"
+fi
+
+trap cleanup EXIT
 WORK_DIR="$(mktemp -d)"
 configure_attachment_locator_probe
 export ADMIN_WEB_PORT="${ADMIN_WEB_PORT:-$(random_loopback_port)}"
@@ -429,6 +542,12 @@ db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version
 if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]]; then
   db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
             VALUES ('AttachmentLocatorProbe', 'user', 1, 100, '0.1.0', 0)" >/dev/null
+elif [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+  # Install fixture schema without dispatching or delivering events.
+  if ! docker exec -e YII_CONSOLE_COMMANDS=/var/www/html/platform/deploy/production/init \
+      "$CONTAINER" php application/commands/console.php productionInit plugins >"$WORK_DIR/plugin-init-private.log" 2>&1; then
+    fail "production plugin fixture initialization failed"
+  fi
 fi
 docker exec "$CONTAINER" php platform/tools/engine-theme/install-survey-theme.php zh-business >/dev/null
 docker exec "$CONTAINER" php platform/tests/e2e/install_question_themes.php mjy-collapsible mjy-cascading-select mjy-carousel >/dev/null
@@ -454,13 +573,15 @@ run_browser_tests
 step "gate: platform API, platform DB, gateway and engine DB"
 verify_and_archive_run_root
 
-if [[ "$E2E_SUITE" == "full" && "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" != "1" ]]; then
+if [[ "$E2E_SUITE" == "full" && "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" != "1" && "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" != "1" ]]; then
   step "browser: personnel grant, tenant status and revocation under enforced guard"
   run_personnel_status_test
 fi
 
 if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]]; then
   echo "Attachment diagnostic passed ($TEST_DB); full gate was not evaluated" >&2
+elif [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
+  echo "Relay diagnostic passed ($TEST_DB); full gate was not evaluated" >&2
 else
   echo "Admin web real-stack e2e passed ($TEST_DB); private credentials and temporary results will now be removed" >&2
 fi

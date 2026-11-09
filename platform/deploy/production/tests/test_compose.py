@@ -6,6 +6,9 @@ import stat
 import subprocess
 import tempfile
 import unittest
+import uuid
+from unittest.mock import patch
+import yaml
 
 
 PRODUCTION_DIR = Path(__file__).resolve().parents[1]
@@ -16,10 +19,72 @@ FIXTURE_ENV = Path(__file__).resolve().parent / "fixtures" / "test.env"
 class ProductionComposeTest(unittest.TestCase):
     maxDiff = None
 
+    def assert_org_secret_bind_safe(self, mount):
+        # Compose versions may omit false-valued fields from config JSON. Check
+        # the authored long syntax as well as any rendered value; never treat
+        # a missing or true source setting as a safe default.
+        source = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+        authored = [entry for entry in source["services"]["platform"]["volumes"]
+                    if isinstance(entry, dict) and entry.get("target") == "/run/secrets/org-login"]
+        self.assertEqual(1, len(authored))
+        self.assertIs(authored[0]["bind"]["create_host_path"], False)
+        self.assertEqual("bind", mount["type"])
+        self.assertTrue(mount["read_only"])
+        self.assertIs(mount.get("bind", {}).get("create_host_path", False), False)
+
     def test_organization_login_returns_to_same_origin_admin_web(self):
         service = self.render_compose()["services"]["platform"]
         env = service["environment"]
         self.assertEqual(env["PLATFORM_PUBLIC_BASE_URL"], env["PLATFORM_ADMIN_WEB_BASE_URL"])
+
+    def test_org_secret_bind_check_rejects_unsafe_source_and_rendering(self):
+        source = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+        mount = next(entry for entry in source["services"]["platform"]["volumes"]
+                     if isinstance(entry, dict) and entry.get("target") == "/run/secrets/org-login")
+        rendered = {"type": "bind", "read_only": True, "bind": {}}
+        self.assert_org_secret_bind_safe(rendered)
+        with self.assertRaises(AssertionError):
+            self.assert_org_secret_bind_safe({**rendered, "bind": {"create_host_path": True}})
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary) / "compose.yml"
+            with patch(__name__ + ".COMPOSE_FILE", fixture):
+                mount["bind"]["create_host_path"] = True
+                fixture.write_text(yaml.safe_dump(source), encoding="utf-8")
+                with self.assertRaises(AssertionError):
+                    self.assert_org_secret_bind_safe(rendered)
+                del mount["bind"]["create_host_path"]
+                fixture.write_text(yaml.safe_dump(source), encoding="utf-8")
+                with self.assertRaises(KeyError):
+                    self.assert_org_secret_bind_safe(rendered)
+
+    def test_org_secret_missing_source_is_not_created_by_compose(self):
+        source = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+        mount = next(entry for entry in source["services"]["platform"]["volumes"]
+                     if isinstance(entry, dict) and entry.get("target") == "/run/secrets/org-login")
+        image = next(line.split("=", 1)[1] for line in FIXTURE_ENV.read_text().splitlines()
+                     if line.startswith("CADDY_IMAGE="))
+        project = "survey-bind-proof-" + uuid.uuid4().hex
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing"
+            mount["source"] = str(missing)
+            config = Path(temporary) / "compose.yml"
+            config.write_text(yaml.safe_dump({"services": {"probe": {
+                "image": image, "network_mode": "none", "volumes": [mount],
+            }}}), encoding="utf-8")
+            base = ["docker", "compose", "-p", project, "-f", str(config)]
+            # An existing local fixture image is required; never let a missing
+            # image count as proof that Compose rejected the missing bind.
+            inspected = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True)
+            self.assertEqual(0, inspected.returncode, inspected.stderr)
+            try:
+                result = subprocess.run(base + ["create", "--no-build", "--pull", "never"],
+                                        capture_output=True, text=True)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("bind", result.stderr.lower())
+                self.assertIn("exist", result.stderr.lower())
+                self.assertFalse(missing.exists())
+            finally:
+                subprocess.run(base + ["rm", "--stop", "--force"], capture_output=True, text=True)
 
     def render_compose(self, env_file=FIXTURE_ENV):
         result = subprocess.run(
@@ -42,6 +107,31 @@ class ProductionComposeTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("variable is not set", result.stderr)
         return json.loads(result.stdout)
+
+    def test_org_secrets_are_a_platform_only_read_only_mount(self):
+        services = self.render_compose()["services"]
+        platform = services["platform"]
+        self.assertEqual("/run/secrets/org-login", platform["environment"]["PLATFORM_ORG_SECRET_DIR"])
+        mounts = [(name, mount) for name, service in services.items()
+                  for mount in service.get("volumes", [])
+                  if mount.get("target") == "/run/secrets/org-login"]
+        self.assertEqual(1, len(mounts))
+        self.assertEqual("platform", mounts[0][0])
+        self.assert_org_secret_bind_safe(mounts[0][1])
+
+    def test_legacy_compose_environment_uses_bundled_empty_directory(self):
+        lines = [line for line in FIXTURE_ENV.read_text().splitlines()
+                 if not line.startswith("PLATFORM_ORG_SECRET_DIR_HOST=")]
+        with tempfile.TemporaryDirectory() as temporary:
+            env_file = Path(temporary) / "legacy.env"
+            env_file.write_text("\n".join(lines) + "\n")
+            rendered = self.render_compose(env_file)
+        self.assertEqual("", rendered["services"]["platform"]["environment"]["PLATFORM_ORG_SECRET_DIR"])
+        mount = next(m for m in rendered["services"]["platform"]["volumes"]
+                     if m.get("target") == "/run/secrets/org-login")
+        self.assertEqual((PRODUCTION_DIR / "org-login-empty").resolve(), Path(mount["source"]))
+        self.assert_org_secret_bind_safe(mount)
+        self.assertEqual(["README"], sorted(p.name for p in (PRODUCTION_DIR / "org-login-empty").iterdir()))
 
     def test_admin_starts_only_after_its_nginx_upstream_is_healthy(self):
         services = self.render_compose()["services"]
@@ -125,6 +215,7 @@ class ProductionComposeTest(unittest.TestCase):
                 "platform",
                 "publish-gateway",
                 "engine",
+                "engine-relay",
                 "engine-init",
                 "platform-db",
                 "engine-db",
@@ -159,8 +250,9 @@ class ProductionComposeTest(unittest.TestCase):
 
     def test_networks_and_persistent_volumes_are_isolated_by_data_class(self):
         config = self.render_compose()
-        self.assertEqual({"edge", "internal"}, set(config["networks"]))
+        self.assertEqual({"edge", "internal", "preview"}, set(config["networks"]))
         self.assertTrue(config["networks"]["internal"]["internal"])
+        self.assertTrue(config["networks"]["preview"]["internal"])
         self.assertEqual(
             {
                 "caddy-data",
@@ -177,11 +269,12 @@ class ProductionComposeTest(unittest.TestCase):
         )
         services = config["services"]
         expected_networks = {
-            "edge": {"edge"},
+            "edge": {"edge", "preview"},
             "admin-web": {"edge"},
             "platform": {"edge", "internal"},
-            "publish-gateway": {"internal"},
+            "publish-gateway": {"preview", "internal"},
             "engine": {"edge", "internal"},
+            "engine-relay": {"internal"},
             "engine-init": {"internal"},
             "platform-db": {"internal"},
             "engine-db": {"internal"},
@@ -325,13 +418,12 @@ class ProductionComposeTest(unittest.TestCase):
 
         sensitive = re.compile(r"(PASSWORD|SECRET|TOKEN|PRIVATE_KEY)", re.I)
         for service_name, service in config["services"].items():
-            for assignment in service.get("environment", []):
-                key, _, value = assignment.partition("=")
+            for key, value in service.get("environment", {}).items():
                 if sensitive.search(key):
                     with self.subTest(service=service_name, key=key):
                         self.assertTrue(
-                            key.endswith("_FILE") or value.startswith("/run/secrets/"),
-                            assignment,
+                            key.endswith("_FILE") or (isinstance(value, str) and value.startswith("/run/secrets/")),
+                            key,
                         )
             for assignment in service.get("command") or []:
                 if "=" not in assignment:
@@ -346,6 +438,11 @@ class ProductionComposeTest(unittest.TestCase):
         self.assertNotIn("handle /v1*", caddyfile)
         self.assertIn("handle /d/*", caddyfile)
         self.assertIn("handle /a/*", caddyfile)
+        self.assertIn("path /v1/preview/access", caddyfile)
+        self.assertIn("method GET", caddyfile)
+        self.assertIn("header_down Location ^http://engine/(.*)$ /survey/$1", caddyfile)
+        gateway = self.render_compose()["services"]["publish-gateway"]
+        self.assertEqual("https://localhost", gateway["environment"]["PUBGW_PUBLIC_URL"])
         self.assertIn("handle_path /survey/*", caddyfile)
         self.assertIn("handle_path /engine-admin/*", caddyfile)
         self.assertIn("basic_auth", caddyfile)
@@ -466,7 +563,18 @@ class ProductionComposeTest(unittest.TestCase):
         admin_index = route_paths.index(("/engine-admin/*",))
         survey_index = route_paths.index(("/survey/*",))
         api_index = route_paths.index(("/v1", "/v1/*"))
+        preview_index = route_paths.index(("/v1/preview/access",))
         fallback_index = max(i for i, paths in enumerate(route_paths) if not paths)
+        preview_route = public_subroute["routes"][preview_index]
+        self.assertEqual(["GET"], preview_route["match"][0]["method"])
+        self.assertLess(preview_index, api_index)
+        proxy = next(node for node in self.walk_dicts(preview_route)
+                     if node.get("handler") == "reverse_proxy")
+        self.assertEqual("publish-gateway:8080", proxy["upstreams"][0]["dial"])
+        self.assertEqual(
+            [{"search_regexp": "^http://engine/(.*)$", "replace": "/survey/$1"}],
+            proxy["headers"]["response"]["replace"]["Location"],
+        )
         self.assertLess(admin_index, survey_index)
         self.assertLess(survey_index, api_index)
         self.assertLess(api_index, fallback_index)

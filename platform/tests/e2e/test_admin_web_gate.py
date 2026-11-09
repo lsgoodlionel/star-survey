@@ -104,6 +104,40 @@ class AdminWebGateTest(unittest.TestCase):
                 gate.validate_wave2_scenarios({"schemaVersion": 1,
                     "scenarios": sorted(expected - {"asset-version-pinning"})})
 
+    def test_relay_gate_skips_only_wave2_and_keeps_full_gate_strict(self):
+        gate = load_gate()
+        args = Namespace(metadata_file='metadata', result_file='result',
+                         wave2_evidence_file='wave2', verification_scope='relay-diagnostic',
+                         expected_gateway_publish_calls=1, base_url='http://localhost')
+        with mock.patch.object(gate, '_load_object', return_value={}) as load, \
+             mock.patch.object(gate, 'validate_metadata', return_value={'actorId': 'a', 'tenantId': 't'}), \
+             mock.patch.object(gate, 'validate_result', return_value={}), \
+             mock.patch.object(gate, 'jwt_secret', return_value='test'), \
+             mock.patch.object(gate, 'mint_token', return_value='test'), \
+             mock.patch.object(gate, 'Api', side_effect=RuntimeError('api reached')):
+            with self.assertRaisesRegex(RuntimeError, 'api reached'):
+                gate.cmd_verify(args)
+            self.assertEqual(2, load.call_count)
+        args.verification_scope = 'full'
+        with mock.patch.object(gate, '_load_object', return_value={}), \
+             mock.patch.object(gate, 'validate_metadata', return_value={}), \
+             mock.patch.object(gate, 'validate_result', return_value={}):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(gate.StepFailed):
+                gate.cmd_verify(args)
+        args.expected_gateway_publish_calls = 3
+        with mock.patch.object(gate, '_load_object', side_effect=[{}, {}, gate.StepFailed('missing wave2')]) as load, \
+             mock.patch.object(gate, 'validate_metadata', return_value={}), \
+             mock.patch.object(gate, 'validate_result', return_value={}):
+            with self.assertRaises(gate.StepFailed):
+                gate.cmd_verify(args)
+            self.assertEqual(3, load.call_count)
+        args.verification_scope = 'relay-diagnostic'
+        with mock.patch.object(gate, '_load_object', return_value={}), \
+             mock.patch.object(gate, 'validate_metadata', return_value={}), \
+             mock.patch.object(gate, 'validate_result', return_value={}):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(gate.StepFailed):
+                gate.cmd_verify(args)
+
     def test_issue_browser_token_accepts_a_scoped_test_actor(self):
         gate = load_gate()
         tenant_id = "11111111-1111-4111-8111-111111111111"
