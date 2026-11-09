@@ -10,6 +10,10 @@ on:
         description: Run the isolated dual-database relay diagnostic
         type: boolean
         default: false
+      run_crosslayer:
+        description: Run the isolated MariaDB and PostgreSQL browser relay diagnostics
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -99,10 +103,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  crosslayer:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_crosslayer == true }}
+    name: Isolated browser relay diagnostics
+    uses: ./.github/workflows/browser-relay-crosslayer.yml
+
   summary:
     name: Survey CI required
     if: always()
-    needs: [changes, quality, images, relay]
+    needs: [changes, quality, images, relay, crosslayer]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -110,4 +119,5 @@ jobs:
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
           RELAY_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.run_relay == true }}
+          CROSSLAYER_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.run_crosslayer == true }}
         run: python3 scripts/ci/plan.py summary

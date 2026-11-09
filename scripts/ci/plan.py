@@ -58,12 +58,14 @@ def changed_paths(event_name, event, api):
     return None
 
 
-def accept_results(profile, images, changes, quality, build, relay_requested=False, relay='skipped'):
+def accept_results(profile, images, changes, quality, build, relay_requested=False, relay='skipped',
+                   crosslayer_requested=False, crosslayer='skipped'):
     if profile not in {'full', 'policy', 'docs'} or changes != 'success':
         return False
     return (quality == ('skipped' if profile == 'docs' else 'success')
             and build == ('success' if images else 'skipped')
-            and relay == ('success' if relay_requested else 'skipped'))
+            and relay == ('success' if relay_requested else 'skipped')
+            and crosslayer == ('success' if crosslayer_requested else 'skipped'))
 
 
 def main():
@@ -71,10 +73,12 @@ def main():
         needs = json.loads(os.environ['CI_NEEDS'])
         outputs = needs['changes']['outputs']
         relay_requested = os.environ.get('RELAY_REQUESTED')
-        ok = (relay_requested in {'true', 'false'} and
+        crosslayer_requested = os.environ.get('CROSSLAYER_REQUESTED')
+        ok = (relay_requested in {'true', 'false'} and crosslayer_requested in {'true', 'false'} and
               accept_results(outputs.get('profile'), outputs.get('images') == 'true',
                              needs['changes']['result'], needs['quality']['result'], needs['images']['result'],
-                             relay_requested == 'true', needs['relay']['result']))
+                             relay_requested == 'true', needs['relay']['result'],
+                             crosslayer_requested == 'true', needs['crosslayer']['result']))
         print(json.dumps({'accepted': ok, 'jobs': needs}, ensure_ascii=False))
         return 0 if ok else 1
     event_name = os.environ['GITHUB_EVENT_NAME']

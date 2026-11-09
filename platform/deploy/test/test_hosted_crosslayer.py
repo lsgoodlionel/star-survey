@@ -13,11 +13,14 @@ NAME = 'survey-crosslayer-123-1-mariadb-reminder'
 class HostedCrosslayerTest(unittest.TestCase):
     def test_workflow_is_explicit_manual_and_does_not_publish(self):
         text = WORKFLOW.read_text()
-        self.assertIn('  workflow_dispatch:', text)
+        self.assertNotIn('  workflow_dispatch:', text)
+        self.assertIn('  workflow_call:', text)
         self.assertNotIn('  push:', text)
         self.assertNotIn('  pull_request:', text)
         self.assertIn('engine: [mariadb, postgresql]', text)
         self.assertIn('scenario: [reminder, crash]', text)
+        self.assertIn('fail-fast: false', text)
+        self.assertNotIn('continue-on-error', text)
         self.assertIn('persist-credentials: false', text)
         self.assertIn('contents: read', text)
         self.assertIn("always() && steps.prepare.outcome != 'skipped'", text)
