@@ -575,6 +575,21 @@ class SurveyManager:
                         raise InputError("an earlier operation has an unverified outcome; preserve the installation and operation marker, do not remove it; controlled recovery is not yet available")
                 if self.state_path.exists() or self.state_path.is_symlink():
                     self._require_no_pending_recovery(self._read_state())
+                # Recheck after reading mutable state: a lock on a displaced file
+                # must not be mistaken for exclusion on the current path.
+                try:
+                    final_control = os.stat(control, follow_symlinks=False)
+                    final_lock = os.lstat(lock_path)
+                except OSError as exc:
+                    raise IntegrityError("installation operation lock or control directory unavailable") from exc
+                if (not stat.S_ISDIR(final_control.st_mode)
+                        or (control_info.st_dev, control_info.st_ino) != (final_control.st_dev, final_control.st_ino)
+                        or final_control.st_uid != os.geteuid() or final_control.st_mode & 0o022):
+                    raise IntegrityError("installation control directory identity changed")
+                if (not stat.S_ISREG(final_lock.st_mode) or final_lock.st_nlink != 1
+                        or final_lock.st_uid != os.geteuid() or final_lock.st_mode & 0o077
+                        or (info.st_dev, info.st_ino) != (final_lock.st_dev, final_lock.st_ino)):
+                    raise IntegrityError("installation operation lock identity changed")
                 self._operation_intent = intent
                 self._operation_name = operation
                 self._operation_started = False

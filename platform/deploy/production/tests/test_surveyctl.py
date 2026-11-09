@@ -355,6 +355,46 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.assertEqual(original_info.st_size, state_path.stat().st_size)
         self.assertEqual('recovery_required', json.loads(state_path.read_text())['status'])
 
+    def test_operation_lock_control_directory_swap_blocks_before_yield(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        moved = self.root / 'synthetic-moved-control'
+        original_load = self.module.json.load
+        def swap_parent_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            control.rename(moved)
+            control.symlink_to(moved, target_is_directory=True)
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=swap_parent_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'control directory identity changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('changed control directory must block before yielding')
+        self.assertTrue(control.is_symlink())
+        self.assertTrue((moved / 'operation.intent').is_file())
+
+    def test_operation_lock_replacement_blocks_before_yield(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        original_load = self.module.json.load
+        def replace_lock_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            lock = control / 'operation.lock'
+            lock.rename(control / 'original.lock')
+            lock.touch(mode=0o600)
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=replace_lock_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'operation lock identity changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('replaced lock must block before yielding')
+
     def test_verified_bundle_is_the_only_source_of_deployed_files(self):
         manifest, _ = self.write_bundle_manifest()
         self.manager().install(manifest, "survey.example.com", "operations", "operations@example.com")
