@@ -355,6 +355,56 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.assertEqual(original_info.st_size, state_path.stat().st_size)
         self.assertEqual('recovery_required', json.loads(state_path.read_text())['status'])
 
+    def test_intent_ctime_detects_in_place_change_with_restored_mtime(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        original_info = intent.stat()
+        original_load = self.module.json.load
+        def modify_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            changed = json.dumps({'schemaVersion': 1, 'state': 'pending', 'operation': 'fixture'})
+            intent.write_text(changed.ljust(original_info.st_size))
+            os.utime(intent, ns=(original_info.st_atime_ns, original_info.st_mtime_ns))
+            observed = intent.stat()
+            self.assertEqual(original_info.st_ino, observed.st_ino)
+            self.assertEqual(original_info.st_size, observed.st_size)
+            self.assertEqual(original_info.st_mtime_ns, observed.st_mtime_ns)
+            self.assertEqual(self.module._file_read_snapshot(original_info)[:-1],
+                             self.module._file_read_snapshot(observed)[:-1])
+            if observed.st_ctime_ns == original_info.st_ctime_ns:
+                self.skipTest('filesystem did not expose a distinct ctime for the modification')
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=modify_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'intent.*changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('ctime change must block mutation')
+        self.assertEqual('pending', json.loads(intent.read_text())['state'])
+
+    def test_intent_permission_change_during_read_blocks_mutation(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        original_load = self.module.json.load
+        def change_mode_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            intent.chmod(0o644)
+            return result
+        # Mask ctime to prove the permission field itself triggers rejection.
+        snapshot = self.module._file_read_snapshot
+        with mock.patch.object(self.module, '_file_read_snapshot', side_effect=lambda info: snapshot(info)[:-1]):
+            with mock.patch.object(self.module.json, 'load', side_effect=change_mode_after_read):
+                with self.assertRaisesRegex(self.module.IntegrityError, 'intent.*changed'):
+                    with self.manager()._mutation_lock(operation='fixture'):
+                        self.fail('permission change must block mutation')
+        self.assertEqual(0o644, stat.S_IMODE(intent.stat().st_mode))
+
     def test_operation_lock_control_directory_swap_blocks_before_yield(self):
         self.target.mkdir(mode=0o700)
         control = self.target / '.surveyctl'
