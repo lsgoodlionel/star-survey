@@ -21,6 +21,51 @@ fixture_docker_error() {
   python3 "$REPO_ROOT/platform/deploy/test/hosted-crosslayer/classify_docker_error.py" "$1" > "$SURVEY_CROSSLAYER_ERROR_FILE"
 }
 
+fixture_probe_record() {
+  local phase="$1" first="$2" count="$3" rc="$4" elapsed="$5"
+  case "$phase" in start|loop|confirm) ;; *) return 1 ;; esac
+  case "$first" in yes|no) ;; *) return 1 ;; esac
+  [[ "$count" =~ ^[0-9]{1,2}$ && "$count" -le 60 ]] || return 1
+  case "$rc" in 0|1|2|3|other|unknown) ;; *) return 1 ;; esac
+  [[ "$elapsed" =~ ^[0-9]{1,4}$ && "$elapsed" -le 3600 ]] || return 1
+  [[ -z "${SURVEY_CROSSLAYER_PROBE_FILE:-}" ]] || printf 'probe_phase=%s first_ready=%s attempt_count=%s pg_isready_rc=%s elapsed=%s\n' "$phase" "$first" "$count" "$rc" "$elapsed" > "$SURVEY_CROSSLAYER_PROBE_FILE"
+}
+
+fixture_wait_platform_database() {
+  local container="$1" attempt=0 rc=unknown first=no started=$SECONDS elapsed=0
+  fixture_stage platform_db_wait || return 1
+  for attempt in {1..60}; do
+    elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
+    fixture_probe_record loop "$first" "$attempt" unknown "$elapsed" || return 1
+    if docker exec "$container" pg_isready -U postgres -d platform >/dev/null 2>&1; then
+      rc=0; first=yes
+      elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
+      fixture_probe_record loop "$first" "$attempt" "$rc" "$elapsed" || return 1
+      break
+    else
+      rc=$?
+      case "$rc" in 0|1|2|3) ;; *) rc=other ;; esac
+      elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
+      fixture_probe_record loop "$first" "$attempt" "$rc" "$elapsed" || return 1
+    fi
+    sleep 1 || return 1
+  done
+  elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
+  fixture_probe_record confirm "$first" "$attempt" unknown "$elapsed" || return 1
+  if docker exec "$container" pg_isready -U postgres -d platform >/dev/null; then
+    rc=0
+  else
+    rc=$?
+    case "$rc" in 0|1|2|3) ;; *) rc=other ;; esac
+    elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
+    fixture_probe_record confirm "$first" "$attempt" "$rc" "$elapsed" || return 1
+    fixture_platform_state "$container" || :
+    return 1
+  fi
+  elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
+  fixture_probe_record confirm "$first" "$attempt" "$rc" "$elapsed"
+}
+
 fixture_cleanup_record() {
   case "$1" in verified|unverified) ;; *) return 1 ;; esac
   [[ -z "${SURVEY_CROSSLAYER_CLEANUP_FILE:-}" ]] || printf '%s\n' "$1" > "$SURVEY_CROSSLAYER_CLEANUP_FILE"

@@ -142,6 +142,38 @@ inspect_fixture_image synthetic-image /allowed /another
             self.assertEqual(0, shell('docker() { return 1; }; fixture_platform_state synthetic', env=env).returncode)
             self.assertEqual('unknown\n', state.read_text())
 
+    def test_probe_start_records_run_failure_without_ready_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / 'probe'
+            result = shell('fixture_probe_record start no 0 unknown 0', env={'SURVEY_CROSSLAYER_PROBE_FILE': str(probe)})
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual('probe_phase=start first_ready=no attempt_count=0 pg_isready_rc=unknown elapsed=0\n', probe.read_text())
+            self.assertNotEqual(0, shell('fixture_probe_record start no 61 unknown 0', env={'SURVEY_CROSSLAYER_PROBE_FILE': str(probe)}).returncode)
+            self.assertNotEqual(0, shell('fixture_probe_record start no 0 secret 0', env={'SURVEY_CROSSLAYER_PROBE_FILE': str(probe)}).returncode)
+
+    def test_platform_probe_records_first_ready_then_confirmation_failure(self):
+        script = r'''calls=0
+sleep() { :; }
+docker() {
+  if [[ "$1" == exec ]]; then calls=$((calls+1)); [[ "$calls" == 1 ]] && return 0; return 2; fi
+  if [[ "$1" == inspect ]]; then echo exited; return 0; fi
+  return 1
+}
+if fixture_wait_platform_database synthetic; then exit 88; fi
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / 'probe'
+            state = Path(tmp) / 'platform'
+            result = shell(script, env={'SURVEY_CROSSLAYER_PROBE_FILE': str(probe), 'SURVEY_CROSSLAYER_PLATFORM_FILE': str(state)})
+            self.assertEqual(0, result.returncode, result.stderr)
+            fields = dict(part.split('=', 1) for part in probe.read_text().split())
+            self.assertEqual('confirm', fields['probe_phase'])
+            self.assertEqual('yes', fields['first_ready'])
+            self.assertEqual('1', fields['attempt_count'])
+            self.assertEqual('2', fields['pg_isready_rc'])
+            self.assertTrue(fields['elapsed'].isdigit())
+            self.assertEqual('exited\n', state.read_text())
+
     def test_gateway_user_must_be_explicit_nonroot_numeric(self):
         self.assertEqual(0, shell('validate_gateway_user "$1"', '10001:10001').returncode)
         for value in ('', 'root', '0:0', '10001:0', '0:10001', 'gateway', '10001', '1234567:10001'):

@@ -180,6 +180,20 @@ esac
             path.symlink_to(Path(tmp) / 'absent')
             self.assertEqual('unknown\n', subprocess.run(['python3', str(classifier), str(path)], capture_output=True, text=True).stdout)
 
+    def test_probe_report_is_bounded_and_rejects_secret_values(self):
+        reporter = ROOT / 'platform/deploy/test/hosted-crosslayer/report.py'
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / str(i) for i in range(5)]
+            for path, value in zip(paths, ['platform_db_wait', 'verified', 'running', 'other',
+                                          'probe_phase=confirm first_ready=yes attempt_count=1 pg_isready_rc=2 elapsed=4']):
+                path.write_text(value + '\n')
+            result = subprocess.run(['python3', str(reporter), *map(str, paths)], capture_output=True, text=True)
+            self.assertIn('probe_phase=confirm first_ready=yes attempt_count=1 pg_isready_rc=2 elapsed=4', result.stdout)
+            paths[-1].write_text('probe_phase=secret-token first_ready=yes attempt_count=10000 pg_isready_rc=2 elapsed=4')
+            result = subprocess.run(['python3', str(reporter), *map(str, paths)], capture_output=True, text=True)
+            self.assertIn('probe_phase=unknown', result.stdout)
+            self.assertNotIn('secret-token', result.stdout + result.stderr)
+
     def test_invalid_identity_fails_before_docker(self):
         env = {**os.environ, 'GITHUB_RUN_ID': '../../wrong', 'GITHUB_RUN_ATTEMPT': '1',
                'FIXTURE_ENGINE': 'mariadb', 'FIXTURE_SCENARIO': 'reminder', 'RUNNER_TEMP': '/tmp'}
