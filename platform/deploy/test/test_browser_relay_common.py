@@ -174,6 +174,42 @@ if fixture_wait_platform_database synthetic; then exit 88; fi
             self.assertTrue(fields['elapsed'].isdigit())
             self.assertEqual('exited\n', state.read_text())
 
+    def test_platform_probe_delayed_ready_and_exhaustion(self):
+        script = r'''calls=0
+sleep() { :; }
+docker() {
+  if [[ "$1" == inspect ]]; then echo running; return 0; fi
+  calls=$((calls+1))
+  if [[ "$SCENARIO" == delayed ]]; then [[ "$calls" -ge 3 ]]; return; fi
+  if [[ "$calls" -le 60 ]]; then return 1; fi
+  return 2
+}
+if [[ "$SCENARIO" == delayed ]]; then
+  fixture_wait_platform_database synthetic || exit 88
+else
+  if fixture_wait_platform_database synthetic; then exit 89; fi
+fi
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            for scenario, expected in [('delayed', ('confirm', 'yes', '3', '0')),
+                                       ('exhausted', ('confirm', 'no', '60', '2'))]:
+                with self.subTest(scenario=scenario):
+                    path = Path(tmp) / scenario
+                    result = shell(script, env={'SURVEY_CROSSLAYER_PROBE_FILE': str(path), 'SCENARIO': scenario})
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    fields = dict(part.split('=', 1) for part in path.read_text().split())
+                    self.assertEqual(expected, tuple(fields[k] for k in ('probe_phase', 'first_ready', 'attempt_count', 'pg_isready_rc')))
+
+    def test_unwritable_probe_fails_before_readiness_call(self):
+        script = r'''docker() { touch "$CALL_MARKER"; }
+if fixture_wait_platform_database synthetic; then exit 88; fi
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / 'called'
+            result = shell(script, env={'SURVEY_CROSSLAYER_PROBE_FILE': '/dev/null/unwritable', 'CALL_MARKER': str(marker)})
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertFalse(marker.exists())
+
     def test_gateway_user_must_be_explicit_nonroot_numeric(self):
         self.assertEqual(0, shell('validate_gateway_user "$1"', '10001:10001').returncode)
         for value in ('', 'root', '0:0', '10001:0', '0:10001', 'gateway', '10001', '1234567:10001'):
