@@ -543,10 +543,20 @@ class SurveyManager:
                                     or intent_info.st_uid != os.geteuid() or intent_info.st_mode & 0o077
                                     or intent_info.st_size > 1024):
                                 raise IntegrityError("installation operation intent is unsafe")
-                            record = json.load(handle)
+                            def unique_fields(pairs):
+                                result = {}
+                                for key, value in pairs:
+                                    if key in result:
+                                        raise ValueError('duplicate operation intent field')
+                                    result[key] = value
+                                return result
+                            record = json.load(handle, object_pairs_hook=unique_fields)
                     except (OSError, UnicodeError, ValueError) as exc:
                         raise IntegrityError("installation operation intent is unavailable or invalid") from exc
-                    if not isinstance(record, dict) or set(record) != {"schemaVersion", "state", "operation"} or record.get("schemaVersion") != 1 or record.get("state") not in {"pending", "complete"} or not isinstance(record.get("operation"), str):
+                    if (not isinstance(record, dict) or set(record) != {"schemaVersion", "state", "operation"}
+                            or type(record.get("schemaVersion")) is not int or record["schemaVersion"] != 1
+                            or record.get("state") not in {"pending", "complete"}
+                            or not isinstance(record.get("operation"), str)):
                         raise IntegrityError("installation operation intent is invalid")
                     if record['state'] == 'pending':
                         raise InputError("an earlier operation has an unverified outcome; preserve the installation and operation marker, do not remove it; controlled recovery is not yet available")

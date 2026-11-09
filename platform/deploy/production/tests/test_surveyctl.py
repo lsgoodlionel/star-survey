@@ -230,6 +230,45 @@ class SurveyctlAdversarialTest(unittest.TestCase):
     def write_bundle_manifest(self, version="0.2.0", rollback="compatible"):
         return write_test_release(self.root, version, rollback)
 
+    def test_operation_intent_schema_requires_exact_integer_version(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        manager = self.manager()
+        for value in (True, 1.0, False, '1', None, 2):
+            with self.subTest(schema=value):
+                payload = json.dumps({'schemaVersion': value, 'state': 'complete', 'operation': 'fixture'})
+                intent.write_text(payload)
+                intent.chmod(0o600)
+                with self.assertRaisesRegex(self.module.IntegrityError, 'intent is invalid'):
+                    with manager._mutation_lock(operation='fixture'):
+                        self.fail('invalid intent must block before any mutation')
+                self.assertEqual(payload, intent.read_text())
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        with manager._mutation_lock(operation='fixture'):
+            pass
+
+    def test_operation_intent_duplicate_fields_are_rejected_without_mutation(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        manager = self.manager()
+        for payload in (
+            '{"schemaVersion":1,"state":"pending","state":"complete","operation":"fixture"}',
+            '{"schemaVersion":2,"schemaVersion":1,"state":"complete","operation":"fixture"}',
+            '{"schemaVersion":1,"state":"complete","operation":"unsafe","operation":"fixture"}',
+        ):
+            with self.subTest(payload=payload):
+                intent.write_text(payload)
+                intent.chmod(0o600)
+                with self.assertRaisesRegex(self.module.IntegrityError, 'intent'):
+                    with manager._mutation_lock(operation='fixture'):
+                        self.fail('ambiguous intent must block before any mutation')
+                self.assertEqual(payload, intent.read_text())
+
     def test_verified_bundle_is_the_only_source_of_deployed_files(self):
         manifest, _ = self.write_bundle_manifest()
         self.manager().install(manifest, "survey.example.com", "operations", "operations@example.com")

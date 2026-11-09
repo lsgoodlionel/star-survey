@@ -575,3 +575,7 @@ After independent review/merge, only the actual main commit with complete succes
 - 后续夹具修复：PostgreSQL 初始化期间旧 socket 就绪探针可能早于最终 TCP 服务返回成功；隔离真实红绿测试复现了这一缺陷。修复后检查 TCP 及虚构 owner/app 角色连接，单独缺库、缺 owner、缺 app 均失败关闭。此前托管原始日志不足以证明每次历史失败均由该竞态引起。
 - 精确提交 `e114758997b647bb305c8a13f38ef08c092316c8` 的完整托管质量及四格跨层测试连续两次通过：[42567019678](https://github.com/lsgoodlionel/star-survey/actions/runs/42567019678)、[42568796157](https://github.com/lsgoodlionel/star-survey/actions/runs/42568796157)。随后创建草稿 [PR #99](https://github.com/lsgoodlionel/star-survey/pull/99)。这两次结果仅适用于 e114758，不自动适用于后续文档或其他提交。
 - 并行更新后的 main `6b2dd5506ec346df96ff91d015289313738014c1` 包含候选尚未完整纳入的 #92 JSON BOM、#93 文档、#96 QR 缓存修复及 #98 文档；三方预检发现 #96 在 `template-branding.spec.ts` 和 `PublishPage.test.tsx` 的 import 存在文本冲突，需人工整合。未将 main 合入候选。恢复保持关闭，未合并或发布。
+
+## 操作意图失败关闭补强（2026-11-09，本地待审）
+
+基于 main `20fbabb1548c5c5166fb8c56efb95394205c5d45`：隔离测试发现操作意图读取将 JSON 布尔值 `true` 或浮点数 `1.0` 当作整数版本 1，且重复字段可让后面的 `complete` 遮蔽前面的 `pending`。修复仅要求版本为精确整数 1 并拒绝重复 JSON 字段；不修改锁、正常意图写入、恢复或卸载授权。故障先行测试复现问题并验证修复，控制器/配置套件 222 项中 221 通过、真实原生验收按既有条件跳过 1 项；Release/工作流策略 166 项通过。结果均为隔离本地验证，不证明真实 Ubuntu 恢复或整体验收；受控恢复、原生生命周期和卸载保护保持原状。变更尚未推送、合并或发布。
