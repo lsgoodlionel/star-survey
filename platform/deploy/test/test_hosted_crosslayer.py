@@ -75,6 +75,36 @@ esac
             result = subprocess.run(['bash', str(SCRIPT), 'cleanup'], env={**base, 'SCENARIO': 'ok'}, capture_output=True)
             self.assertEqual(0, result.returncode)
 
+    def test_prepare_records_owned_cache_and_checks_online_then_offline(self):
+        fake = r'''#!/usr/bin/env bash
+set -eu
+printf "%s\n" "$*" >> "$CALLS"
+case "$1:$2" in
+  volume:ls|ps:-aq) ;;
+  volume:create|pull:*|compose:*|build:*|run:*) ;;
+  volume:inspect) echo "$FIXTURE_NAME" ;;
+  image:inspect) printf 'sha256:%064d\n' 0 ;;
+  *) exit 9 ;;
+esac
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            docker = d / 'docker'
+            docker.write_text(fake)
+            docker.chmod(0o700)
+            output = d / 'outputs'
+            env = {**os.environ, 'PATH': f'{d}:' + os.environ['PATH'], 'GITHUB_RUN_ID': '123',
+                   'GITHUB_RUN_ATTEMPT': '1', 'FIXTURE_ENGINE': 'mariadb', 'FIXTURE_SCENARIO': 'reminder',
+                   'RUNNER_TEMP': tmp, 'GITHUB_OUTPUT': str(output), 'FIXTURE_NAME': NAME, 'CALLS': str(d / 'calls')}
+            result = subprocess.run(['bash', str(SCRIPT), 'prepare'], cwd=ROOT, env=env, capture_output=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(NAME, (d / f'survey-crosslayer-private-{NAME}/owned-volume').read_text().strip())
+            self.assertIn('cache=' + NAME, output.read_text())
+            calls = (d / 'calls').read_text()
+            self.assertEqual(2, calls.count('-Dtest=ProbePayloadPolicyTest'))
+            self.assertIn('mvn -o -B -q -Dtest=ProbePayloadPolicyTest', calls)
+            self.assertNotIn(' push ', calls)
+
     def test_invalid_identity_fails_before_docker(self):
         env = {**os.environ, 'GITHUB_RUN_ID': '../../wrong', 'GITHUB_RUN_ATTEMPT': '1',
                'FIXTURE_ENGINE': 'mariadb', 'FIXTURE_SCENARIO': 'reminder', 'RUNNER_TEMP': '/tmp'}
