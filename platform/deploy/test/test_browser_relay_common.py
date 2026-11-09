@@ -50,6 +50,22 @@ cleanup_owned_fixture
             self.assertEqual(0, shell(script, marker, env={'SCENARIO': 'empty'}).returncode)
             self.assertFalse(Path(marker).exists())
 
+    def test_gateway_mount_validation_fails_closed(self):
+        script = r'''docker() { [[ "$SCENARIO" != inspect_failure ]] || return 9; printf "%s" "$INSPECT_JSON"; }
+validate_gateway_mount synthetic-gateway
+'''
+        import json
+        valid = [{"HostConfig": {"Tmpfs": {"/var/lib/pubgw": ""}}, "Mounts": []}]
+        bad = [[], [{}], [{"HostConfig": {"Tmpfs": {}}, "Mounts": []}],
+               [{"HostConfig": {"Tmpfs": {"/var/lib/pubgw": ""}},
+                 "Mounts": [{"Destination": "/var/lib/pubgw", "Type": "volume"}]}]]
+        self.assertEqual(0, shell(script, env={"INSPECT_JSON": json.dumps(valid)}).returncode)
+        for value in bad:
+            with self.subTest(value=value):
+                self.assertNotEqual(0, shell(script, env={"INSPECT_JSON": json.dumps(value)}).returncode)
+        self.assertNotEqual(0, shell(script, env={"INSPECT_JSON": "not-json"}).returncode)
+        self.assertNotEqual(0, shell(script, env={"INSPECT_JSON": json.dumps(valid), "SCENARIO": "inspect_failure"}).returncode)
+
     def test_cleanup_failure_cannot_hide_original_failure(self):
         script = r'''work=/synthetic/retained
 cleanup_owned_fixture() { return 1; }

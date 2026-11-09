@@ -15,11 +15,12 @@ ENGINE_CONTAINER="$CONTAINER" ENGINE_DB_CONTAINER="$prefix-$DB_SERVICE" EVIDENCE
 printf '{"isolated-engine":{"rpcUrl":"http://%s/index.php/admin/remotecontrol","user":"admin","passwordEnv":"ENGINE_PASSWORD"}}\n' "$CONTAINER" > "$work/engines.json"
 chmod 644 "$work/engines.json"
 image="$gateway_image"
-docker create --pull never --label "survey.fixture.run=$prefix" --name "$prefix-gateway" --network "$network" --network-alias real-gateway \
+docker create --pull never --label "survey.fixture.run=$prefix" --name "$prefix-gateway" --network "$network" --network-alias real-gateway --tmpfs /var/lib/pubgw \
  -e PUBGW_SHARED_SECRET=synthetic-gateway-secret-0123456789abcdef -e PUBGW_ENGINES_CONFIG=/app/engines.json \
  -e ENGINE_PASSWORD=password "$image" >/dev/null
 docker cp "$work/engines.json" "$prefix-gateway:/app/engines.json"
 docker start "$prefix-gateway" >/dev/null
+validate_gateway_mount "$prefix-gateway" || { echo "gateway mount verification failed" >&2; exit 1; }
 for i in {1..60}; do [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prefix-gateway" 2>/dev/null || true)" == healthy ]] && break; sleep 1; done
 [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prefix-gateway")" == healthy ]]
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-proxy" --network "$network" --network-alias fault-proxy \

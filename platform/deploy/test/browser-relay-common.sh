@@ -8,6 +8,29 @@ validate_fixture_args() {
   [[ "$3" =~ ^sha256:[a-f0-9]{64}$ && "$4" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'local image IDs required' >&2; return 2; }
 }
 
+validate_gateway_mount() {
+  # Inspect without printing environment values or gateway configuration.
+  local inspection
+  inspection="$(docker inspect "$1")" || return 1
+  python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if not isinstance(data, list) or len(data) != 1:
+        raise ValueError("unexpected inspect result")
+    item = data[0]
+    tmpfs = item["HostConfig"]["Tmpfs"]
+    mounts = item["Mounts"]
+    if not isinstance(tmpfs, dict) or "/var/lib/pubgw" not in tmpfs:
+        raise ValueError("gateway tmpfs missing")
+    if not isinstance(mounts, list) or any(m.get("Destination") == "/var/lib/pubgw" and m.get("Type") != "tmpfs" for m in mounts):
+        raise ValueError("gateway path has a non-tmpfs mount")
+except (ValueError, KeyError, TypeError, AttributeError):
+    print("gateway mount validation failed", file=sys.stderr)
+    sys.exit(1)
+' <<< "$inspection"
+}
+
 cleanup_owned_fixture() {
   local manual containers volumes networks name id label
   manual="$(docker ps -a --no-trunc --filter "label=survey.fixture.run=$prefix" --format '{{.Names}}')" || return 1
