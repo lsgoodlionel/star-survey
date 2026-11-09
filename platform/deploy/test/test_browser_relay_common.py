@@ -69,6 +69,50 @@ inspect_fixture_image synthetic-image /allowed /another
         self.assertNotEqual(0, shell(script, env={"INSPECT_JSON": "malformed"}).returncode)
         self.assertNotEqual(0, shell(script, env={"INSPECT_JSON": json.dumps(image({})), "SCENARIO": "inspect_failure"}).returncode)
 
+    def test_only_audited_synthetic_configs_become_readable(self):
+        import shutil
+        import stat
+        repo = COMMON.parents[3]
+        compose = (repo / 'docker-compose.dev.yml').read_text()
+        test_web = compose.split('  test-web:', 1)[1].split('\n  # Optional', 1)[0]
+        self.assertIn('ENGINE_DB_ROOT_PASSWORD: root', test_web)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private = root / 'private-evidence'
+            private.mkdir(mode=0o700)
+            runtime = root / '.runtime'
+            runtime.mkdir(mode=0o700)
+            for engine in ('mysql', 'pgsql'):
+                with self.subTest(engine=engine):
+                    source = root / f'config.{engine}.php'
+                    target = runtime / 'config.php'
+                    shutil.copyfile(COMMON.parent / source.name, source)
+                    shutil.copyfile(source, target)
+                    target.chmod(0o600)
+                    result = shell('browser_relay_make_synthetic_config_readable "$@"', str(source), str(target), engine)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(0o644, stat.S_IMODE(target.stat().st_mode))
+                    self.assertEqual(0o700, stat.S_IMODE(private.stat().st_mode))
+                    self.assertEqual(0o700, stat.S_IMODE(runtime.stat().st_mode))
+                    target.write_text(target.read_text() + "\npassword=synthetic-tamper-example\n")
+                    target.chmod(0o600)
+                    self.assertNotEqual(0, shell('browser_relay_make_synthetic_config_readable "$@"', str(source), str(target), engine).returncode)
+                    self.assertEqual(0o600, stat.S_IMODE(target.stat().st_mode))
+                    target.unlink()
+                    shutil.copyfile(source, target)
+                    source.write_text(source.read_text() + "\nsecret=synthetic-tamper-example\n")
+                    target.chmod(0o600)
+                    self.assertNotEqual(0, shell('browser_relay_make_synthetic_config_readable "$@"', str(source), str(target), engine).returncode)
+                    self.assertEqual(0o600, stat.S_IMODE(target.stat().st_mode))
+                    target.unlink()
+                    shutil.copyfile(COMMON.parent / source.name, source)
+                    os.link(source, target)
+                    self.assertNotEqual(0, shell('browser_relay_make_synthetic_config_readable "$@"', str(source), str(target), engine).returncode)
+                    target.unlink()
+                    target.symlink_to(source)
+                    self.assertNotEqual(0, shell('browser_relay_make_synthetic_config_readable "$@"', str(source), str(target), engine).returncode)
+                    target.unlink()
+
     def test_gateway_user_must_be_explicit_nonroot_numeric(self):
         self.assertEqual(0, shell('validate_gateway_user "$1"', '10001:10001').returncode)
         for value in ('', 'root', '0:0', '10001:0', '0:10001', 'gateway', '10001', '1234567:10001'):

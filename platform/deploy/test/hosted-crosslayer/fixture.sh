@@ -7,6 +7,8 @@ set -euo pipefail
 name="survey-crosslayer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${FIXTURE_ENGINE}-${FIXTURE_SCENARIO}"
 label="survey.hosted.crosslayer=$name"
 container="$name-prep"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$script_dir/browser-relay-common.sh"
 log_dir="${RUNNER_TEMP:?}/survey-crosslayer-private-$name"
 
 cleanup() {
@@ -62,6 +64,9 @@ case "${1:-}" in
     for image in mariadb:10.11 postgres:16-alpine python:3.11-slim maven:3.9-eclipse-temurin-21 selenium/standalone-firefox:latest; do
       docker pull "$image" >>"$log_dir/prepare.log" 2>&1
     done
+    # Before the first Maven container, reject image-declared volumes and pin
+    # the inspected local image ID so a tag change cannot bypass the check.
+    maven_image="$(inspect_fixture_image maven:3.9-eclipse-temurin-21)" || exit 1
     docker compose -f docker-compose.dev.yml build web >>"$log_dir/prepare.log" 2>&1
     docker build -t "$name-gateway" platform/tools/publish-gateway >>"$log_dir/prepare.log" 2>&1
     for mode in online offline; do
@@ -69,7 +74,7 @@ case "${1:-}" in
       docker run --pull never --rm --name "$container" --label "$label" \
         -v "$name:/root/.m2/repository" -v "$PWD/platform/services/business:/workspace" \
         -v "$PWD/platform/deploy/platform-dev/maven-settings.xml:/root/.m2/settings.xml:ro" \
-        -w /workspace maven:3.9-eclipse-temurin-21 mvn ${offline_flag:+$offline_flag} -B -q -Dtest=ProbePayloadPolicyTest test >>"$log_dir/prepare.log" 2>&1
+        -w /workspace "$maven_image" mvn ${offline_flag:+$offline_flag} -B -q -Dtest=ProbePayloadPolicyTest test >>"$log_dir/prepare.log" 2>&1
     done
     gateway="$(docker image inspect -f '{{.Id}}' "$name-gateway")"
     engine="$(docker image inspect -f '{{.Id}}' survey-web)"

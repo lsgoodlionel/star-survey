@@ -86,7 +86,10 @@ case "$1:$2" in
   volume:ls|ps:-aq) ;;
   volume:create|pull:*|compose:*|build:*|run:*) ;;
   volume:inspect) echo "$FIXTURE_NAME" ;;
-  image:inspect) printf 'sha256:%064d\n' 0 ;;
+  image:inspect)
+    if [[ "$*" == *" -f "* ]]; then printf 'sha256:%064d\n' 0
+    elif [[ "${EXTRA_VOLUME:-}" == 1 ]]; then printf '[{"Id":"sha256:%064d","Config":{"Volumes":{"/uncontrolled":{}}}}]\n' 0
+    else printf '[{"Id":"sha256:%064d","Config":{"Volumes":null}}]\n' 0; fi ;;
   *) exit 9 ;;
 esac
 '''
@@ -107,6 +110,15 @@ esac
             self.assertEqual(2, calls.count('-Dtest=ProbePayloadPolicyTest'))
             self.assertIn('mvn -o -B -q -Dtest=ProbePayloadPolicyTest', calls)
             self.assertNotIn(' push ', calls)
+            # A Maven image declaring an unknown volume must fail before any
+            # dependency container starts, even if preparation has begun.
+            (d / 'calls').write_text('')
+            other_output = d / 'outputs2'
+            env2 = {**env, 'GITHUB_RUN_ID': '124', 'GITHUB_OUTPUT': str(other_output),
+                    'FIXTURE_NAME': NAME.replace('-123-', '-124-'), 'EXTRA_VOLUME': '1'}
+            result = subprocess.run(['bash', str(SCRIPT), 'prepare'], cwd=ROOT, env=env2, capture_output=True)
+            self.assertNotEqual(0, result.returncode)
+            self.assertNotIn('run --pull', (d / 'calls').read_text())
 
     def test_invalid_identity_fails_before_docker(self):
         env = {**os.environ, 'GITHUB_RUN_ID': '../../wrong', 'GITHUB_RUN_ATTEMPT': '1',

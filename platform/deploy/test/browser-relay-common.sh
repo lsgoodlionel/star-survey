@@ -37,6 +37,34 @@ except (ValueError, KeyError, TypeError):
 ' "$@" <<< "$inspection"
 }
 
+browser_relay_make_synthetic_config_readable() {
+  # Only these audited, fixed test templates can be made readable. Never
+  # chmod a production or dynamically generated config or the evidence tree.
+  python3 - "$1" "$2" "$3" <<'PYCONFIG'
+import hashlib, os, pathlib, stat, sys
+expected = {
+    "mysql": "47fe777e2387d941b7a0f33b3e12d25a9958c13f405785513963bfb8e1060607",
+    "pgsql": "b41d9c6644a9dc4eed412dded9b458a9283ad4292918a1f4b229d32ee5faf668",
+}
+try:
+    source, target, engine = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+    if engine not in expected or source.name != f"config.{engine}.php" or target.name != "config.php" or target.parent.name != ".runtime":
+        raise ValueError("unexpected config location")
+    for path in (source, target):
+        st = path.lstat()
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise ValueError("unsafe config file")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected[engine]:
+            raise ValueError("config is not the audited synthetic template")
+    os.chmod(target, 0o644, follow_symlinks=False)
+    if stat.S_IMODE(target.lstat().st_mode) != 0o644:
+        raise ValueError("config permissions were not applied")
+except (OSError, ValueError):
+    print("synthetic configuration validation failed", file=sys.stderr)
+    sys.exit(1)
+PYCONFIG
+}
+
 validate_gateway_user() {
   [[ "$1" =~ ^([1-9][0-9]{0,5}):([1-9][0-9]{0,5})$ ]] || { echo 'gateway must declare a non-root numeric user and group' >&2; return 1; }
   gateway_uid="${BASH_REMATCH[1]}"
@@ -201,6 +229,7 @@ init_fixture() {
   [[ "$work" == /* && "$work" != *:* && "$work" != *$'\n'* && "$work" != *$'\r'* ]] || return 2
   is_fresh=true
   source "$REPO_ROOT/platform/deploy/test/lib.sh"
+  SURVEY_BROWSER_RELAY_SYNTHETIC_CONFIG=1
   local event_secret
   event_secret="$(python3 -c 'import hashlib,hmac;print(hmac.new(b"synthetic-engine-master-secret-0123456789abcdef",b"mjy-engine-events/v1/isolated-engine",hashlib.sha256).hexdigest())')"
   cat > "$work/internal.yml" <<YAML
