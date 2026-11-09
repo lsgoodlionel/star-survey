@@ -1,0 +1,50 @@
+name: Isolated browser relay diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crosslayer:
+    name: ${{ matrix.engine }} / ${{ matrix.scenario }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [mariadb, postgresql]
+        scenario: [reminder, crash]
+    env:
+      FIXTURE_ENGINE: ${{ matrix.engine }}
+      FIXTURE_SCENARIO: ${{ matrix.scenario }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Check fixture guards
+        run: |
+          python3 -m unittest discover -s platform/deploy/test -p test_browser_relay_common.py
+          python3 -m unittest discover -s platform/deploy/test -p test_hosted_crosslayer.py
+      - name: Prepare local test images and offline dependencies
+        id: prepare
+        run: bash platform/deploy/test/hosted-crosslayer/fixture.sh prepare
+      - name: Exercise browser relay and synthetic delivery
+        env:
+          CACHE: ${{ steps.prepare.outputs.cache }}
+          GATEWAY_IMAGE: ${{ steps.prepare.outputs.gateway }}
+          ENGINE_IMAGE: ${{ steps.prepare.outputs.engine }}
+          SURVEY_DISPOSABLE_CHECKOUT: 'YES'
+        run: |
+          set -euo pipefail
+          case "$FIXTURE_ENGINE" in mariadb) db=mysql ;; postgresql) db=pgsql ;; *) exit 2 ;; esac
+          log="$RUNNER_TEMP/crosslayer-fixture.log"
+          if ! bash "platform/deploy/test/run-browser-relay-$FIXTURE_SCENARIO.sh" "$db" "$CACHE" "$GATEWAY_IMAGE" "$ENGINE_IMAGE" >"$log" 2>&1; then
+            echo 'Isolated test failed; detailed output remains private on the disposable runner.' >&2
+            exit 1
+          fi
+          echo 'Isolated synthetic test passed.'
+      - name: Remove only the owned dependency fixture
+        if: ${{ always() && steps.prepare.outcome != 'skipped' }}
+        run: bash platform/deploy/test/hosted-crosslayer/fixture.sh cleanup
