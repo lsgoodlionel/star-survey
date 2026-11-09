@@ -143,6 +143,8 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId, 
     enabled: Boolean(currentJobId),
     initialData: currentJob && currentJob.jobId === currentJobId ? currentJob : undefined,
     retry: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === 'queued' || status === 'running' ? 1_500 : false;
@@ -408,7 +410,7 @@ export function ResponsesPage({ api, exportClient, surveyId, tenantId, actorId, 
               <ExportJob
                 job={visibleJob}
                 cancelling={cancelJob.isPending}
-                downloading={downloadJob.isPending}
+                downloading={downloadJob.isPending || job.isFetching}
                 onCancel={() => {
                   cancelJob.reset();
                   cancelJob.mutate(visibleJob.jobId);

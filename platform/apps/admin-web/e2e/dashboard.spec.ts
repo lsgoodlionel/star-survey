@@ -295,16 +295,15 @@ test('data export faults cancel safely, expose terminal state, and reauthorize e
     await expect(data.locator('.export-job')).toContainText('导出失败');
     await expect(data.getByRole('alert')).toHaveText('导出失败，请按当前筛选重新创建任务。');
     await expect(data.getByRole('button', { name: '下载导出文件' })).toHaveCount(0);
+    const afterFailed = await recoverExportFromTerminal(data, result.surveyId, faults.failed);
 
     await restoreExportJob(data, metadata.tenantId, result.surveyId, faults.expired);
     await expect(data.locator('.export-job')).toContainText('文件已过期');
     await expect(data.getByText('导出文件已过期，请重新创建任务。')).toBeVisible();
     await expect(data.getByRole('button', { name: '下载导出文件' })).toHaveCount(0);
 
-    await data.evaluate((key) => sessionStorage.removeItem(key), exportStorageKey(metadata.tenantId, result.surveyId));
-    await navigateToResponses(data, result.surveyId);
-    await data.getByRole('button', { name: '创建导出任务' }).click();
-    await expect(data.locator('.export-job')).toContainText('导出完成', { timeout: 60_000 });
+    const afterExpired = await recoverExportFromTerminal(data, result.surveyId, faults.expired);
+    expect(afterExpired).not.toBe(afterFailed);
 
     await revokeDataExportPermission(metadata.tenantId, result.surveyId);
     const denied = data.waitForResponse((response) => response.url().includes('/download')
@@ -514,6 +513,65 @@ COMMIT;`;
     'psql', '-U', 'platform_owner', '-d', 'platform', '-v', 'ON_ERROR_STOP=1', '-q', '-c', sql,
   ]);
   return { queued, failed, expired };
+}
+
+async function recoverExportFromTerminal(page: Page, surveyId: string, oldId: string): Promise<string> {
+  await page.getByLabel('答卷状态').selectOption('engine_completed');
+  await page.locator('.response-filters label').filter({ hasText: '发布版本' }).locator('select').selectOption('1');
+  const answer = page.locator('.response-answers > div').filter({ has: page.locator('dd', { hasText: /^A1$/ }) }).first();
+  await expect(answer).toBeVisible();
+  const question = (await answer.locator('dt').textContent())?.trim() ?? '';
+  expect(question).not.toBe('');
+  const responsePromise = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === `/v1/surveys/${surveyId}/exports` && response.request().method() === 'POST');
+  await page.getByRole('button', { name: '创建导出任务' }).click();
+  const response = await responsePromise;
+  expect(response.status()).toBe(202);
+  expect(response.request().postDataJSON()).toEqual({ format: 'csv', filter: { states: ['engine_completed'], versions: [1] }, templateVersion: null });
+  const created = await response.json() as { jobId: string };
+  assertUuid(created.jobId);
+  expect(created.jobId).not.toBe(oldId);
+  await expect(page.locator('.export-job')).toContainText('导出完成', { timeout: 60_000 });
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: '下载导出文件' }).click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  expect(path).not.toBeNull();
+  const responses = await readExportCsv(path!, 'responses.csv');
+  const fields = await readExportCsv(path!, 'fields.csv');
+  const code = fields[0].indexOf('questioncode');
+  const fieldname = fields[0].indexOf('fieldname');
+  const column = fields[0].indexOf('column');
+  expect(Math.min(code, fieldname, column)).toBeGreaterThanOrEqual(0);
+  const field = fields.slice(1).find((row) => row[code] === question || row[fieldname] === question || row[column] === question);
+  expect(field).toBeDefined();
+  const valueIndex = responses[0].indexOf(field![column]);
+  expect(valueIndex).toBeGreaterThanOrEqual(0);
+  expect(responses).toHaveLength(3);
+  expect(responses[2][valueIndex]).toBe('A1');
+  return created.jobId;
+}
+
+async function readExportCsv(path: string, entry: string): Promise<string[][]> {
+  const bytes = await new Promise<Buffer>((resolve, reject) => {
+    execFile('unzip', ['-p', path, entry], { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout) => error ? reject(error) : resolve(stdout));
+  });
+  expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+  const text = bytes.subarray(3).toString('utf8');
+  const rows: string[][] = [];
+  let row: string[] = [], cell = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      if (quoted && text[i + 1] === '"') { cell += '"'; i++; } else quoted = !quoted;
+    } else if (c === ',' && !quoted) { row.push(cell); cell = ''; }
+    else if (c === '\r' && text[i + 1] === '\n' && !quoted) { row.push(cell); rows.push(row); row = []; cell = ''; i++; }
+    else cell += c;
+  }
+  expect(quoted).toBe(false);
+  if (cell || row.length) rows.push([...row, cell]);
+  return rows;
 }
 
 async function restoreExportJob(page: Page, tenantId: string, surveyId: string, jobId: string) {

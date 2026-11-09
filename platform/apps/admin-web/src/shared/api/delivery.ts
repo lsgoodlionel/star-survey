@@ -304,7 +304,7 @@ export async function fetchDeliveryQr(
       async (signal) => {
         const response = await (client.fetchImpl ?? fetch)(
           `/v1/delivery/links/${encodeURIComponent(linkId)}/qr?${search.toString()}`,
-          { headers, credentials: 'same-origin', signal },
+          { headers, credentials: 'same-origin', cache: 'no-store', signal },
         );
         if (response.status === 401) await client.onUnauthorized?.(token);
         if (!response.ok) throw apiErrorForStatus(response.status, await readErrorPayload(response));

@@ -33,7 +33,7 @@ export default defineConfig({
     {
       name: 'chromium-desktop',
       use: { ...devices['Desktop Chrome'] },
-      testMatch: [/authoring\.spec\.ts/, /redaction\.spec\.ts/],
+      testMatch: [/authoring\.spec\.ts/, /redaction\.spec\.ts/, /delivery-import\.spec\.ts/],
       grepInvert: /@mobile/,
     },
     {
@@ -60,6 +60,12 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
       testMatch: /authoring\.spec\.ts/,
       grep: /author filters stable resources, restores archive, and publishes the same survey/,
+    },
+    {
+      name: 'chromium-expiry',
+      dependencies: ['chromium-wave3-seed'],
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /natural-expiry\.spec\.ts/,
     },
     {
       name: 'chromium-wave3-data',

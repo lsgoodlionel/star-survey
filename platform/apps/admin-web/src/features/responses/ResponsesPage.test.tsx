@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation, useSearchParams } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SurveyShellContext, type RecentWorkReadiness } from '../../app/surveyShellContext';
 import { ApiError } from '../../shared/api/errors';
-import type { ExportClient, ExportJobView } from '../../shared/api/exports';
+import { exportJobQueryKey, type ExportClient, type ExportJobView } from '../../shared/api/exports';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
 import { responsePageQueryKey, responseSummaryQueryKey } from '../../shared/api/responses';
 import { renderWithQuery } from '../../test/render';
@@ -144,6 +144,28 @@ describe('ResponsesPage', () => {
       expect(screen.getByRole('button', { name: '下载导出文件' })).toBeInTheDocument();
     } finally {
       sessionStorage.removeItem(key);
+    }
+  });
+  test('refreshes a recently cached completed job on return before enabling download', async () => {
+    const key = `survey-export:tenant-a:actor-a:${surveyId}`;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 } } });
+    queryClient.setQueryData(exportJobQueryKey('tenant-a', surveyId, jobId), baseJob('completed'));
+    const refresh = deferred<ExportJobView>();
+    const get = vi.fn().mockReturnValue(refresh.promise);
+    sessionStorage.setItem(key, jobId);
+    try {
+      render(<QueryClientProvider client={queryClient}><MemoryRouter>
+        <ResponsesPage api={responseApi()} exportClient={exportClient({ get })}
+          surveyId={surveyId} tenantId="tenant-a" actorId="actor-a" />
+      </MemoryRouter></QueryClientProvider>);
+      await waitFor(() => expect(get).toHaveBeenCalledWith(jobId, expect.any(AbortSignal)));
+      expect(screen.getByRole('button', { name: '下载导出文件' })).toBeDisabled();
+      refresh.resolve(baseJob('expired'));
+      expect(await screen.findByText('文件已过期')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '下载导出文件' })).not.toBeInTheDocument();
+    } finally {
+      sessionStorage.removeItem(key);
+      queryClient.clear();
     }
   });
   test('combines time filters and uses published field labels with a selectable column', async () => {
@@ -527,6 +549,7 @@ describe('ResponsesPage', () => {
     await screen.findByRole('heading', { name: '创建导出' });
     fireEvent.click(screen.getByRole('button', { name: '创建导出任务' }));
     expect(await screen.findByText('导出完成')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: '下载导出文件' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '下载导出文件' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('无权执行当前操作');

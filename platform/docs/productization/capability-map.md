@@ -20,7 +20,7 @@
 | 审批与发布 | `R01-07`, `R01-09` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 通讯录与投放 | `R05-04`, `R05-05`, `R05-06`, `R18-01`, `R18-02`, `R18-03`, `R18-06` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 4 |
 | 投放链接与二维码 | `R05-01`, `R05-07`, `R05-08` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
-| 编辑 | `R01-04`, `R01-05`, `R01-08` | 完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 5 |
+| 编辑 | `R01-04`, `R01-05`, `R01-08` | 完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 6 |
 | 导出 | `R06-02`, `R06-03`, `R06-04`, `R06-05`, `R06-06`, `R06-07` | 部分完成 | 完成 | 部分完成 | 未开始 | 部分完成 | Wave 3 |
 | 导入 | `R01-02` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 5 |
 | 预览 | `R01-07` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
@@ -68,8 +68,9 @@
 ### 编辑 (`editing`)
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/survey/SurveyController.java`](../../services/business/src/main/java/cn/mjy/platform/survey/SurveyController.java) 定位 `public class SurveyController`：草稿读取、保存和版本控制接口已存在。
-- **流程** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `#### Step 3：问卷编辑`：核查报告确认基础作者链路可用，同时记录 Phase C 缺口。
-- **前端** （实现）[`platform/apps/admin-web/src/features/editor/EditorPage.tsx`](../../apps/admin-web/src/features/editor/EditorPage.tsx) 定位 `export function EditorRoutePage`：基础题型编辑、排序和保存已接入；高级题型仍只读。
+- **流程** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `#### Step 3：问卷编辑`：2026-10-09 核查报告记录了当时的 Phase C 缺口；Wave 5 首批功能与自动化阶段后续已完成。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/authoring.spec.ts`](../../apps/admin-web/e2e/authoring.spec.ts) 定位 `Wave 5 advanced questions survive authoring, isolated preview and published response`：Wave 5 首批三种题型的配置、隔离预览、发布、作答和回读由双库浏览器阶段验收覆盖；生产及真人屏幕阅读证据仍单列。
+- **前端** （实现）[`platform/apps/admin-web/src/features/editor/EditorPage.tsx`](../../apps/admin-web/src/features/editor/EditorPage.tsx) 定位 `export function EditorRoutePage`：基础题型编辑、排序和保存已接入；首批折叠栏目、多级下拉和轮播图已支持可视化配置，其余高级题型仍需逐项核对。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R01-04 |`：基础编辑需求已编号。
 
 ### 导出 (`exports`)

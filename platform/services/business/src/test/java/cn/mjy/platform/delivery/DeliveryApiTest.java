@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -98,12 +99,14 @@ class DeliveryApiTest {
                         .header("Authorization", bearer(p.owner())))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.IMAGE_PNG))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
                 .andReturn().getResponse().getContentAsByteArray();
         assertThat(png).startsWith((byte) 0x89, (byte) 'P', (byte) 'N', (byte) 'G');
 
         String svg = mvc.perform(get("/v1/delivery/links/" + linkId + "/qr?format=svg")
                         .header("Authorization", bearer(p.owner())))
                 .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(svg).startsWith("<?xml").contains("<svg");
 

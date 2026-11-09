@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ApiError } from '../../shared/api/errors';
 import type { ApiClient, ApiRequest } from '../../shared/api/http';
-import { approvalRequestsQueryKey, surveyOverviewQueryKey, publishSurvey, versionQueryKey } from '../../shared/api/approvals';
+import { approvalRequestsQueryKey, publishSurvey, surveyOverviewQueryKey, versionQueryKey } from '../../shared/api/approvals';
 import { renderWithQuery } from '../../test/render';
 import { createAppRoutes } from '../../app/router';
 import { PublishPage } from './PublishPage';
@@ -705,6 +705,26 @@ describe('PublishPage', () => {
     await screen.findByRole('heading', { name: '可执行操作' });
     expect(screen.queryByRole('button', { name: '提交审批' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发布问卷' })).not.toBeInTheDocument();
+  });
+
+  test('reloads delivery links when a new version becomes published', async () => {
+    let route = 'https://survey.example.test/s/version-one';
+    const linkId = '44444444-4444-4444-8444-444444444444';
+    const api = standardApi({
+      [`GET /v1/surveys/${surveyId}`]: () => ({ ...baseSurvey, status: 'published', publishedVersion: 1 }),
+      [`GET /v1/delivery/surveys/${surveyId}/links`]: () => [{
+        id: linkId, surveyId, label: '正式投放', signedParams: {}, url: route, shortUrl: null,
+        expiresAt: null, revokedAt: null, createdAt: '2026-10-09T08:00:00Z',
+      }],
+    });
+    const rendered = renderWithQuery(<PublishPage actorId="author-1" api={api} surveyId={surveyId} tenantId="tenant-a" />);
+    expect(await screen.findByRole('link', { name: route })).toBeInTheDocument();
+    route = 'https://survey.example.test/s/version-two';
+    act(() => rendered.queryClient.setQueryData(surveyOverviewQueryKey('tenant-a', surveyId), {
+      ...baseSurvey, status: 'published', publishedVersion: 2,
+    }));
+    expect(await screen.findByRole('link', { name: route })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'https://survey.example.test/s/version-one' })).not.toBeInTheDocument();
   });
 
   test('announcesPublishStatusChangesToAssistiveTechnology', async () => {

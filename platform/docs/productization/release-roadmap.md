@@ -131,6 +131,8 @@
 
 准出条件：三种题型完成配置、保存、隔离真实预览、发布、作答和回读；未知字段无损；专项可访问性和多视口浏览器验收通过。
 
+2026-11-02 阶段记录：[PR #30](https://github.com/lsgoodlionel/star-survey/pull/30) 已合并，[#31](https://github.com/lsgoodlionel/star-survey/issues/31) 记录三种题型配置至回读、未知字段往返、多视口与双库浏览器自动化验收完成。该阶段结论不替代候选和生产证据；真人屏幕阅读单列 [#41](https://github.com/lsgoodlionel/star-survey/issues/41)，按用户决定延期、不标通过。
+
 ### Wave 6：运营后台与生产验收
 
 依赖：Wave 0 生命周期基座以及 Wave 1-5 的最小业务旅程。
