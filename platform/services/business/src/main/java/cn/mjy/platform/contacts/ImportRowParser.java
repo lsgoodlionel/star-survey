@@ -33,9 +33,11 @@ class ImportRowParser {
         if (content == null || content.isBlank()) {
             throw new InvalidContactRequestException("content is required");
         }
+        // UTF-8 files exported by spreadsheet tools and editors may start with a BOM.
+        String text = content.startsWith("\uFEFF") ? content.substring(1) : content;
         return switch (format == null ? "" : format) {
-            case CSV -> parseCsv(content);
-            case JSON -> parseJson(content);
+            case CSV -> parseCsv(text);
+            case JSON -> parseJson(text);
             default -> throw new InvalidContactRequestException("format must be csv or json");
         };
     }

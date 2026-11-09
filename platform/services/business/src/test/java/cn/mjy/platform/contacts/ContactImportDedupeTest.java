@@ -122,6 +122,21 @@ class ContactImportDedupeTest {
     }
 
     @Test
+    void utf8BomCsvPersistsFirstColumnAndReportsCorrectCounts() {
+        TenantContext owner = fixture.newTenant();
+        UUID list = fixture.list(owner, "BOM acceptance", ContactKind.RESPONDENT, DedupeKey.EMAIL).id();
+        ImportJobView job = runCsv(owner, list, "\ufeffname,email\nSynthetic Person,person@example.invalid\n");
+        assertThat(job.status()).isEqualTo("completed");
+        assertThat(job.created()).isEqualTo(1);
+        assertThat(job.invalid()).isZero();
+        var saved = contacts.search(owner, ContactQuery.all().inList(list)).items();
+        assertThat(saved).hasSize(1);
+        assertThat(saved.getFirst().displayName()).isEqualTo("Synthetic Person");
+        assertThat(imports.outcomes(owner, job.jobId(), 1, 50)).extracting(ImportRowOutcome::outcome)
+                .containsExactly("created");
+    }
+
+    @Test
     void aRowPointingAtAnUnknownOrgUnitIsInvalidNotFatal() {
         TenantContext owner = fixture.newTenant();
         UUID list = fixture.list(owner, "受众", ContactKind.RESPONDENT, DedupeKey.EMAIL).id();
@@ -156,6 +171,23 @@ class ContactImportDedupeTest {
         assertThat(done.created()).isEqualTo(1);
         assertThat(done.duplicate()).isEqualTo(1);
         assertThat(done.invalid()).isEqualTo(1);
+    }
+
+    @Test
+    void utf8BomJsonImportsLikePlainJson() {
+        TenantContext owner = fixture.newTenant();
+        UUID list = fixture.list(owner, "BOM JSON acceptance", ContactKind.RESPONDENT, DedupeKey.EMAIL).id();
+        String body = "﻿[{\"name\":\"Synthetic Person\",\"email\":\"person@example.invalid\"}]";
+        ImportJobView job = imports.submit(owner, list, new ImportRequest("json", body), null);
+        worker.process(owner.tenantId(), job.jobId(), 100);
+        ImportJobView done = imports.status(owner, job.jobId());
+
+        assertThat(done.status()).isEqualTo("completed");
+        assertThat(done.created()).isEqualTo(1);
+        assertThat(done.invalid()).isZero();
+        var saved = contacts.search(owner, ContactQuery.all().inList(list)).items();
+        assertThat(saved).hasSize(1);
+        assertThat(saved.getFirst().displayName()).isEqualTo("Synthetic Person");
     }
 
     @Test
