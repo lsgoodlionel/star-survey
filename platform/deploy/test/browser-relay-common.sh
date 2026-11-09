@@ -16,6 +16,11 @@ fixture_platform_state() {
   [[ -z "${SURVEY_CROSSLAYER_PLATFORM_FILE:-}" ]] || printf '%s\n' "$status" > "$SURVEY_CROSSLAYER_PLATFORM_FILE"
 }
 
+fixture_docker_error() {
+  [[ -z "${SURVEY_CROSSLAYER_ERROR_FILE:-}" ]] && return 0
+  python3 "$REPO_ROOT/platform/deploy/test/hosted-crosslayer/classify_docker_error.py" "$1" > "$SURVEY_CROSSLAYER_ERROR_FILE"
+}
+
 fixture_cleanup_record() {
   case "$1" in verified|unverified) ;; *) return 1 ;; esac
   [[ -z "${SURVEY_CROSSLAYER_CLEANUP_FILE:-}" ]] || printf '%s\n' "$1" > "$SURVEY_CROSSLAYER_CLEANUP_FILE"

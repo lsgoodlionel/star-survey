@@ -11,6 +11,7 @@ STAGES = frozenset({
 })
 CLEANUP = frozenset({'verified', 'unverified'})
 PLATFORM = frozenset({'created', 'running', 'exited', 'dead', 'restarting', 'paused', 'removing'})
+ERRORS = frozenset({'no_space', 'permission', 'memory', 'missing_image', 'invalid_mount', 'missing_network', 'multiple', 'other'})
 
 
 def read_category(path, allowed):
@@ -29,13 +30,14 @@ def read_category(path, allowed):
 
 
 def main():
-    if len(sys.argv) != 4:
-        print('stage=unknown cleanup=unknown platform=unknown')
+    if len(sys.argv) != 5:
+        print('stage=unknown cleanup=unknown platform=unknown docker_error=unknown')
         return
     stage = read_category(Path(sys.argv[1]), STAGES)
     cleanup = read_category(Path(sys.argv[2]), CLEANUP)
     platform = read_category(Path(sys.argv[3]), PLATFORM)
-    print(f'stage={stage} cleanup={cleanup} platform={platform}')
+    error = read_category(Path(sys.argv[4]), ERRORS)
+    print(f'stage={stage} cleanup={cleanup} platform={platform} docker_error={error}')
 
 
 if __name__ == '__main__':

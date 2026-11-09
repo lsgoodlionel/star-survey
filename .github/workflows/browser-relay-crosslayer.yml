@@ -45,9 +45,10 @@ jobs:
           export SURVEY_CROSSLAYER_STAGE_FILE="$diag_dir/stage"
           export SURVEY_CROSSLAYER_CLEANUP_FILE="$diag_dir/cleanup"
           export SURVEY_CROSSLAYER_PLATFORM_FILE="$diag_dir/platform"
+          export SURVEY_CROSSLAYER_ERROR_FILE="$diag_dir/docker-error"
           if ! bash "platform/deploy/test/run-browser-relay-$FIXTURE_SCENARIO.sh" "$db" "$CACHE" "$GATEWAY_IMAGE" "$ENGINE_IMAGE" >"$log" 2>&1; then
             echo 'Isolated test failed; detailed output remains private on the disposable runner.' >&2
-            python3 platform/deploy/test/hosted-crosslayer/report.py "$SURVEY_CROSSLAYER_STAGE_FILE" "$SURVEY_CROSSLAYER_CLEANUP_FILE" "$SURVEY_CROSSLAYER_PLATFORM_FILE"
+            python3 platform/deploy/test/hosted-crosslayer/report.py "$SURVEY_CROSSLAYER_STAGE_FILE" "$SURVEY_CROSSLAYER_CLEANUP_FILE" "$SURVEY_CROSSLAYER_PLATFORM_FILE" "$SURVEY_CROSSLAYER_ERROR_FILE"
             exit 1
           fi
           echo 'Isolated synthetic test passed.'

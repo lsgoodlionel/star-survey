@@ -33,7 +33,8 @@ docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-
 fixture_stage platform_db_create
 if ! docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-platform-db" --network "$network" --tmpfs /var/lib/postgresql/data \
  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=postgres \
- -v "$REPO_ROOT/platform/deploy/platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro" "$postgres_image" >/dev/null; then
+ -v "$REPO_ROOT/platform/deploy/platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro" "$postgres_image" >/dev/null 2>"$work/platform-db-create.log"; then
+  fixture_docker_error "$work/platform-db-create.log" || :
   fixture_platform_state "$prefix-platform-db" || :
   exit 1
 fi

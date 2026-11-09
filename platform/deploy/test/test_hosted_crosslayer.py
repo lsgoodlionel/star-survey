@@ -125,26 +125,26 @@ esac
         with tempfile.TemporaryDirectory() as tmp:
             stage = Path(tmp) / 'stage'
             cleanup = Path(tmp) / 'cleanup'
-            cases = [('browser', 'verified', 'stage=browser cleanup=verified platform=unknown'),
-                     ('fake-secret-token', 'fake-private-url', 'stage=unknown cleanup=unknown platform=unknown'),
-                     ('browser\nsecret', 'unverified\nsecret', 'stage=unknown cleanup=unknown platform=unknown'),
-                     ('x' * 100000, 'verified', 'stage=unknown cleanup=verified platform=unknown')]
+            cases = [('browser', 'verified', 'stage=browser cleanup=verified platform=unknown docker_error=unknown'),
+                     ('fake-secret-token', 'fake-private-url', 'stage=unknown cleanup=unknown platform=unknown docker_error=unknown'),
+                     ('browser\nsecret', 'unverified\nsecret', 'stage=unknown cleanup=unknown platform=unknown docker_error=unknown'),
+                     ('x' * 100000, 'verified', 'stage=unknown cleanup=verified platform=unknown docker_error=unknown')]
             for stage_text, cleanup_text, expected in cases:
                 with self.subTest(stage=stage_text[:20], cleanup=cleanup_text):
                     stage.write_text(stage_text)
                     cleanup.write_text(cleanup_text)
-                    result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup), str(Path(tmp) / 'missing-platform')], capture_output=True, text=True)
+                    result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup), str(Path(tmp) / 'missing-platform'), str(Path(tmp) / 'missing-error')], capture_output=True, text=True)
                     self.assertEqual(0, result.returncode)
                     self.assertEqual(expected + '\n', result.stdout)
                     self.assertEqual('', result.stderr)
             stage.unlink()
             stage.symlink_to(cleanup)
-            self.assertEqual('stage=unknown cleanup=verified platform=unknown\n', subprocess.run(
-                ['python3', str(reporter), str(stage), str(cleanup), str(Path(tmp) / 'missing-platform')], capture_output=True, text=True).stdout)
+            self.assertEqual('stage=unknown cleanup=verified platform=unknown docker_error=unknown\n', subprocess.run(
+                ['python3', str(reporter), str(stage), str(cleanup), str(Path(tmp) / 'missing-platform'), str(Path(tmp) / 'missing-error')], capture_output=True, text=True).stdout)
             stage.unlink()
             os.mkfifo(stage)
-            self.assertEqual('stage=unknown cleanup=verified platform=unknown\n', subprocess.run(
-                ['python3', str(reporter), str(stage), str(cleanup), str(Path(tmp) / 'missing-platform')], capture_output=True, text=True, timeout=2).stdout)
+            self.assertEqual('stage=unknown cleanup=verified platform=unknown docker_error=unknown\n', subprocess.run(
+                ['python3', str(reporter), str(stage), str(cleanup), str(Path(tmp) / 'missing-platform'), str(Path(tmp) / 'missing-error')], capture_output=True, text=True, timeout=2).stdout)
 
     def test_platform_status_report_is_allowlisted(self):
         reporter = ROOT / 'platform/deploy/test/hosted-crosslayer/report.py'
@@ -153,12 +153,32 @@ esac
             stage.write_text('platform_db_create\n')
             cleanup.write_text('verified\n')
             platform.write_text('exited\n')
-            result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup), str(platform)], capture_output=True, text=True)
-            self.assertEqual('stage=platform_db_create cleanup=verified platform=exited\n', result.stdout)
+            result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup), str(platform), str(Path(tmp) / 'missing-error')], capture_output=True, text=True)
+            self.assertEqual('stage=platform_db_create cleanup=verified platform=exited docker_error=unknown\n', result.stdout)
             platform.write_text('synthetic-secret\n')
-            result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup), str(platform)], capture_output=True, text=True)
-            self.assertEqual('stage=platform_db_create cleanup=verified platform=unknown\n', result.stdout)
+            result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup), str(platform), str(Path(tmp) / 'missing-error')], capture_output=True, text=True)
+            self.assertEqual('stage=platform_db_create cleanup=verified platform=unknown docker_error=unknown\n', result.stdout)
             self.assertNotIn('synthetic-secret', result.stdout + result.stderr)
+
+    def test_docker_error_classifier_exposes_fixed_labels_only(self):
+        classifier = ROOT / 'platform/deploy/test/hosted-crosslayer/classify_docker_error.py'
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'private-log'
+            for text, expected in [('synthetic-token-123 no space left on device https://private.invalid', 'no_space'),
+                                   ('permission denied synthetic-secret', 'permission'),
+                                   ('unrecognized synthetic-secret', 'other'),
+                                   ('permission denied; no space left on device', 'multiple')]:
+                with self.subTest(expected=expected):
+                    path.write_text(text)
+                    result = subprocess.run(['python3', str(classifier), str(path)], capture_output=True, text=True)
+                    self.assertEqual(expected + '\n', result.stdout)
+                    self.assertEqual('', result.stderr)
+                    self.assertNotIn('synthetic', result.stdout)
+            path.write_text('x' * 262145)
+            self.assertEqual('unknown\n', subprocess.run(['python3', str(classifier), str(path)], capture_output=True, text=True).stdout)
+            path.unlink()
+            path.symlink_to(Path(tmp) / 'absent')
+            self.assertEqual('unknown\n', subprocess.run(['python3', str(classifier), str(path)], capture_output=True, text=True).stdout)
 
     def test_invalid_identity_fails_before_docker(self):
         env = {**os.environ, 'GITHUB_RUN_ID': '../../wrong', 'GITHUB_RUN_ATTEMPT': '1',
