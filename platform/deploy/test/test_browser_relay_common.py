@@ -210,6 +210,58 @@ if fixture_wait_platform_database synthetic; then exit 88; fi
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertFalse(marker.exists())
 
+    def test_temporary_socket_readiness_does_not_release_fixture(self):
+        script = r'''calls=0
+sleep() { :; }
+docker() {
+  if [[ "$1" == exec && "$*" == *pg_isready* ]]; then
+    if [[ "$*" != *"-h 127.0.0.1"* ]]; then return 0; fi
+    calls=$((calls+1)); [[ "$calls" -ge 2 ]]; return
+  fi
+  return 0
+}
+fixture_wait_platform_database synthetic
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / 'probe'
+            result = shell(script, env={'SURVEY_CROSSLAYER_PROBE_FILE': str(probe)})
+            self.assertEqual(0, result.returncode, result.stderr)
+            fields = dict(part.split('=', 1) for part in probe.read_text().split())
+            self.assertEqual('2', fields['attempt_count'])
+            self.assertEqual('0', fields['pg_isready_rc'])
+
+    def test_missing_platform_role_fails_closed_after_tcp_ready(self):
+        script = r'''sleep() { :; }
+docker() {
+  if [[ "$*" == *pg_isready* ]]; then return 0; fi
+  if [[ "$*" == *psql* ]]; then return 1; fi
+  if [[ "$1" == inspect ]]; then echo running; return 0; fi
+  return 1
+}
+if fixture_wait_platform_database synthetic; then exit 88; fi
+'''
+        result = shell(script)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_ready_requires_both_real_fixture_roles(self):
+        script = r'''docker() {
+  if [[ "$*" == *pg_isready* ]]; then [[ "$*" == *"-h 127.0.0.1"* ]]; return; fi
+  if [[ "$*" == *psql* ]]; then
+    case "$*" in
+      *"PGPASSWORD=platform_owner"*"-U platform_owner"*) echo owner >> "$ROLE_LOG"; return 0 ;;
+      *"PGPASSWORD=platform_app"*"-U platform_app"*) echo app >> "$ROLE_LOG"; return 0 ;;
+    esac
+  fi
+  return 1
+}
+fixture_wait_platform_database synthetic
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'roles'
+            result = shell(script, env={'ROLE_LOG': str(log)})
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(['owner', 'app'], log.read_text().splitlines())
+
     def test_gateway_user_must_be_explicit_nonroot_numeric(self):
         self.assertEqual(0, shell('validate_gateway_user "$1"', '10001:10001').returncode)
         for value in ('', 'root', '0:0', '10001:0', '0:10001', 'gateway', '10001', '1234567:10001'):

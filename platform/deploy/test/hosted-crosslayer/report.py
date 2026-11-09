@@ -6,7 +6,7 @@ import sys
 
 STAGES = frozenset({
     'initialize', 'engine_install', 'engine_setup', 'survey_publish', 'gateway',
-    'platform_database', 'platform_db_create', 'platform_db_wait', 'platform_ready', 'browser', 'outbox', 'relay_first',
+    'platform_database', 'platform_db_create', 'platform_db_wait', 'platform_db_roles', 'platform_ready', 'browser', 'outbox', 'relay_first',
     'relay_replay', 'worker_recovery', 'assertions',
 })
 CLEANUP = frozenset({'verified', 'unverified'})

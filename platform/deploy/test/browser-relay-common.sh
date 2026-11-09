@@ -3,7 +3,7 @@
 
 fixture_stage() {
   case "$1" in
-    initialize|engine_install|engine_setup|survey_publish|gateway|platform_database|platform_db_create|platform_db_wait|platform_ready|browser|outbox|relay_first|relay_replay|worker_recovery|assertions) ;;
+    initialize|engine_install|engine_setup|survey_publish|gateway|platform_database|platform_db_create|platform_db_wait|platform_db_roles|platform_ready|browser|outbox|relay_first|relay_replay|worker_recovery|assertions) ;;
     *) return 1 ;;
   esac
   [[ -z "${SURVEY_CROSSLAYER_STAGE_FILE:-}" ]] || printf '%s\n' "$1" > "$SURVEY_CROSSLAYER_STAGE_FILE"
@@ -37,7 +37,7 @@ fixture_wait_platform_database() {
   for attempt in {1..60}; do
     elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
     fixture_probe_record loop "$first" "$attempt" unknown "$elapsed" || return 1
-    if docker exec "$container" pg_isready -U postgres -d platform >/dev/null 2>&1; then
+    if docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -d platform >/dev/null 2>&1; then
       rc=0; first=yes
       elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
       fixture_probe_record loop "$first" "$attempt" "$rc" "$elapsed" || return 1
@@ -52,7 +52,7 @@ fixture_wait_platform_database() {
   done
   elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
   fixture_probe_record confirm "$first" "$attempt" unknown "$elapsed" || return 1
-  if docker exec "$container" pg_isready -U postgres -d platform >/dev/null; then
+  if docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -d platform >/dev/null; then
     rc=0
   else
     rc=$?
@@ -63,7 +63,18 @@ fixture_wait_platform_database() {
     return 1
   fi
   elapsed=$((SECONDS-started)); (( elapsed <= 3600 )) || elapsed=3600
-  fixture_probe_record confirm "$first" "$attempt" "$rc" "$elapsed"
+  fixture_probe_record confirm "$first" "$attempt" "$rc" "$elapsed" || return 1
+  # pg_isready only checks server status; verify the synthetic database and
+  # both identities used by the platform over the final TCP listener.
+  fixture_stage platform_db_roles || return 1
+  local role
+  for role in platform_owner platform_app; do
+    if ! docker exec -e "PGPASSWORD=$role" -e PGCONNECT_TIMEOUT=3 "$container" \
+      psql -X -w -h 127.0.0.1 -U "$role" -d platform -v ON_ERROR_STOP=1 -Atqc 'SELECT 1' >/dev/null 2>&1; then
+      fixture_platform_state "$container" || :
+      return 1
+    fi
+  done
 }
 
 fixture_cleanup_record() {
