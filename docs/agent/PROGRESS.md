@@ -560,3 +560,13 @@ rc17 artifact13289572394 remains unexpired with unchanged archive metadata diges
 Failure-first registration regression failed before the policy entry existed. It executes the actual resolver against the real policy and checks all seven emitted mode/source/version/floor/run/commit/hash values, plus unchanged rc18/rc17 entries. Targeted tests pass:36 native-policy/continuity,9 provenance,15 builder/bundled-restore contracts (60). Only three files: policy, policy test, progress. Restore's RC minimum fix is inherited from main; no runtime, version comparator, doctor, security floor, auth, credentials or publication change.
 
 After independent review/merge, only the actual main commit with complete successful gates and rechecked unused tag may be selected for a future candidate. Ubuntu22.04/24.04 x amd64/arm64 must install rc17, verify business/doctor/backup, upgrade to repaired candidate, prove same-response/export continuity, pass doctor-upgraded, complete authenticated restore/doctor-restored and safe uninstall, then aggregate/readiness/final signed asset verification. The rc18 failure was before payload decryption, not proof of damaged backup. This strategy does not establish recovery or release acceptance. Public ACME, personnel deployment prerequisites, manual VoiceOver41 and explicit publication approval remain separate unmet gates. Parent reviews/merges; no test tag, candidate, production or Release action is authorized by this PR itself.
+
+## 统一候选与验收进展（2026-11-03 至 2026-11-09）
+
+- 11 月 3–4 日：Wave 6 的恢复、原生安装和真实升级相关问题及候选策略见上文各条。历史候选验证与本条统一候选是不同提交，不应互相替代。
+- 11 月 5 日：rc.19 曾完成四平台候选生命周期验证（见 Issue #33 的历史证据）。当前统一候选后来针对恢复安全边界保留失败关闭，因此不能把旧候选结果当作当前提交的恢复通过。
+- 11 月 7–9 日：在隔离环境整合审批、发布、中继、联系人导入、导出恢复、自然过期及相关测试；原生入口加固与跨层测试随后合入本地统一候选。业务数据、账户和投递均为虚构或本地替身，未作生产部署。邮件、短信与真人屏幕阅读继续按既定范围延期。
+- 本地 `505e62022b2c57870afb3e95d8fec070516b6928` 的浏览器作答、中继及催答/进程中断四格测试通过：引擎数据库为 MariaDB 10.11 或 PostgreSQL，平台数据库均为 PostgreSQL。它们不是该提交的托管结果，也不证明真实供应商投递或正式身份验收。
+- 公开隔离分支候选 `f835ef286b18943ac811cb0355cb93d37e7e3c8c` 的 [托管运行 42546302739](https://github.com/lsgoodlionel/star-survey/actions/runs/42546302739) 失败：PostgreSQL 两格及 MariaDB 中断格通过，MariaDB 催答格失败；两项质量检查分别因新增脚本缺可执行位和编排测试未登记新作业失败。双引擎附件专项通过，受依赖影响的部分质量和镜像验证跳过。不得记为完整通过。
+- 本地已修复上述两项明确定位的质量问题，并添加只输出固定阶段与清理状态的失败诊断；MariaDB 催答原始失败日志未上传，本地再次运行通过，根因仍未知。新的诊断不输出测试令牌、路径或原始异常。最终候选仍须在同一精确提交上连续两次通过完整托管质量及四格测试；只有完成后才能创建草稿 PR。
+- 当前受控恢复保持阻断；正式组织身份、当前候选的原生 Ubuntu 验证、发行前条件和用户参与验收仍需按实际状态单独关闭。未执行生产恢复或发布。历史测试镜像是本地测试制品，不视为签名发行制品。
