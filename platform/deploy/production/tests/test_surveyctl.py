@@ -287,6 +287,27 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         with manager._mutation_lock(operation='fixture'):
             pass
 
+    def test_operation_intent_replacement_during_read_blocks_mutation(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        replacement = self.root / 'synthetic-pending.intent'
+        replacement.write_text(json.dumps({'schemaVersion': 1, 'state': 'pending', 'operation': 'fixture'}))
+        replacement.chmod(0o600)
+        original_load = self.module.json.load
+        def swap_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            os.replace(replacement, intent)
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=swap_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'intent identity changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('replaced intent must block before mutation')
+        self.assertEqual('pending', json.loads(intent.read_text())['state'])
+
     def test_verified_bundle_is_the_only_source_of_deployed_files(self):
         manifest, _ = self.write_bundle_manifest()
         self.manager().install(manifest, "survey.example.com", "operations", "operations@example.com")

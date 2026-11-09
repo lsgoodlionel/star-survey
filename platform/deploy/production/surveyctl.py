@@ -553,6 +553,9 @@ class SurveyManager:
                                     or intent_info.st_size > 1024):
                                 raise IntegrityError("installation operation intent is unsafe")
                             record = json.load(handle, object_pairs_hook=_unique_json_fields)
+                            observed_intent = os.stat(intent, follow_symlinks=False)
+                            if (intent_info.st_dev, intent_info.st_ino) != (observed_intent.st_dev, observed_intent.st_ino):
+                                raise IntegrityError("installation operation intent identity changed")
                     except (OSError, UnicodeError, ValueError) as exc:
                         raise IntegrityError("installation operation intent is unavailable or invalid") from exc
                     if (not isinstance(record, dict) or set(record) != {"schemaVersion", "state", "operation"}
