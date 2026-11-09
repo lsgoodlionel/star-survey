@@ -33,8 +33,8 @@ public class DeliveryLinkController {
 
     private static final MediaType PNG = MediaType.IMAGE_PNG;
     private static final MediaType SVG = MediaType.valueOf("image/svg+xml");
-    /** 二维码图片可以放心缓存：内容只随链接本身变化，而链接一旦建好就不再改。 */
-    private static final String QR_CACHE_CONTROL = "private, max-age=3600";
+    /** 二维码包含作答地址；同一链接在重新发布后可能指向新的引擎版本。 */
+    private static final String QR_CACHE_CONTROL = "no-store";
 
     private final DeliveryLinkService links;
     private final CurrentTenant currentTenant;

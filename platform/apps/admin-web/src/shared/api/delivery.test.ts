@@ -206,7 +206,7 @@ test('loads the server generated QR as an authenticated blob', async () => {
     const [path, init] = fetchImpl.mock.calls[0] ?? [];
     expect(path).toBe('/v1/delivery/links/link%2Fid/qr?format=svg&moduleSize=8');
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer jwt-token');
-    expect(init).toMatchObject({ credentials: 'same-origin' });
+    expect(init).toMatchObject({ credentials: 'same-origin', cache: 'no-store' });
     expect(removeEventListener).toHaveBeenCalledWith('abort', expect.any(Function));
     expect(vi.getTimerCount()).toBe(0);
   } finally {

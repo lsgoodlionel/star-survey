@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import jsQR from 'jsqr';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -225,6 +226,13 @@ test('branded copy previews and publishes with language and pinned image bytes',
   await page.getByRole('button', { name: '创建链接' }).click();
   const delivery = page.getByRole('list', { name: '投放链接' }).getByRole('link').first();
   await expect(delivery).toBeVisible();
+  const qr = page.getByRole('img', { name: '品牌验收链接二维码' });
+  await expect(qr).toBeVisible();
+  const linksV1 = await page.request.get(`${env('ADMIN_WEB_BASE_URL')}/v1/delivery/surveys/${copiedSurveyId}/links`,
+    { headers: { Authorization: `Bearer ${token}` } });
+  expect(linksV1.status()).toBe(200);
+  const [linkV1] = await linksV1.json() as { id: string; url: string }[];
+  await expect.poll(async () => (await decodeQrImage(qr)) === linkV1.url).toBe(true);
   const deliveryUrl = await delivery.getAttribute('href');
   expect(deliveryUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
   const respondent = await page.context().newPage();
@@ -283,6 +291,14 @@ test('branded copy previews and publishes with language and pinned image bytes',
   await page.getByRole('button', { name: '发布问卷' }).click();
   expect((await publishV2).ok()).toBe(true);
   await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+  await expect.poll(async () => {
+    const response = await page.request.get(`${env('ADMIN_WEB_BASE_URL')}/v1/delivery/surveys/${copiedSurveyId}/links`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok()) return false;
+    const links = await response.json() as { id: string; url: string }[];
+    const current = links.find((link) => link.id === linkV1.id);
+    return !!current && current.url !== linkV1.url && (await decodeQrImage(qr)) === current.url;
+  }, { timeout: 60_000 }).toBe(true);
   const versions = await page.request.get(`${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${copiedSurveyId}/versions`,
     { headers: { Authorization: `Bearer ${token}` } });
   expect(versions.status()).toBe(200);
@@ -644,4 +660,18 @@ function crc32(data: Buffer) {
     for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
   }
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+async function decodeQrImage(image: Locator): Promise<string | null> {
+  const pixels = await image.evaluate((element: HTMLImageElement) => {
+    if (!element.complete || element.naturalWidth === 0) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = element.naturalWidth;
+    canvas.height = element.naturalHeight;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('QR canvas is unavailable');
+    context.drawImage(element, 0, 0);
+    return { data: Array.from(context.getImageData(0, 0, canvas.width, canvas.height).data), width: canvas.width, height: canvas.height };
+  });
+  return pixels ? jsQR(Uint8ClampedArray.from(pixels.data), pixels.width, pixels.height)?.data ?? null : null;
 }

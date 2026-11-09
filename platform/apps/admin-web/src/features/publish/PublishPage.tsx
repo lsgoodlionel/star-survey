@@ -230,7 +230,8 @@ export function PublishPage({ actorId, api, surveyId, tenantId, accessToken, onU
         accessToken={accessToken}
         api={api}
         onUnauthorized={onUnauthorized}
-        published={(versions.data?.length ?? 0) > 0}
+        published={overview.data.publishedVersion !== null || (versions.data?.length ?? 0) > 0}
+        publishedVersion={overview.data.publishedVersion}
         surveyId={surveyId}
         tenantId={tenantId}
       />
