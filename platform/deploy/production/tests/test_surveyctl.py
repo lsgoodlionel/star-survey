@@ -269,6 +269,24 @@ class SurveyctlAdversarialTest(unittest.TestCase):
                         self.fail('ambiguous intent must block before any mutation')
                 self.assertEqual(payload, intent.read_text())
 
+    def test_duplicate_installation_state_fields_block_mutation(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        state_path = self.target / '.surveyctl' / 'state.json'
+        original = state_path.read_text()
+        for injected in ('"status":"recovery_required",', '"version":"9.9.9",'):
+            with self.subTest(injected=injected):
+                payload = '{' + injected + original.lstrip()[1:]
+                state_path.write_text(payload)
+                with self.assertRaisesRegex(self.module.IntegrityError, 'installation state is corrupt'):
+                    with manager._mutation_lock(operation='fixture'):
+                        self.fail('ambiguous installation state must block before mutation')
+                self.assertEqual(payload, state_path.read_text())
+        state_path.write_text(original)
+        with manager._mutation_lock(operation='fixture'):
+            pass
+
     def test_verified_bundle_is_the_only_source_of_deployed_files(self):
         manifest, _ = self.write_bundle_manifest()
         self.manager().install(manifest, "survey.example.com", "operations", "operations@example.com")

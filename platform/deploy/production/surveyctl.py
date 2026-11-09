@@ -122,6 +122,15 @@ def _version_key(value: str) -> tuple[int, int, int, int, int]:
     return int(major), int(minor), int(patch), 1 if rc is None else 0, int(rc or 0)
 
 
+def _unique_json_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate JSON field')
+        result[key] = value
+    return result
+
+
 def _regular_file(path: Path, label: str) -> None:
     try:
         metadata = path.lstat()
@@ -543,14 +552,7 @@ class SurveyManager:
                                     or intent_info.st_uid != os.geteuid() or intent_info.st_mode & 0o077
                                     or intent_info.st_size > 1024):
                                 raise IntegrityError("installation operation intent is unsafe")
-                            def unique_fields(pairs):
-                                result = {}
-                                for key, value in pairs:
-                                    if key in result:
-                                        raise ValueError('duplicate operation intent field')
-                                    result[key] = value
-                                return result
-                            record = json.load(handle, object_pairs_hook=unique_fields)
+                            record = json.load(handle, object_pairs_hook=_unique_json_fields)
                     except (OSError, UnicodeError, ValueError) as exc:
                         raise IntegrityError("installation operation intent is unavailable or invalid") from exc
                     if (not isinstance(record, dict) or set(record) != {"schemaVersion", "state", "operation"}
@@ -649,8 +651,8 @@ class SurveyManager:
         state_path = self._managed(".surveyctl/state.json", must_exist=True)
         _regular_file(state_path, "installation state")
         try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            state = json.loads(state_path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_fields)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
             raise IntegrityError("installation state is corrupt") from exc
         if not isinstance(state, dict):
             raise IntegrityError("installation state must be an object")
