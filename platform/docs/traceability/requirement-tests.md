@@ -238,7 +238,7 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 |---|---|---|---|
 | R18-01 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/contacts/ContactImportDedupeTest.java::importDedupesAgainstExistingContactsAndWithinTheFileByTheConfiguredKey` | 全量增量同步的去重键 |
 | R18-01 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/contacts/ContactImportDedupeTest.java::invalidRowsAreReportedWithoutAbortingTheImport` | 异常行可定位且不中断导入 |
-| R18-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 已发布问卷内提交一行 CSV，真实 worker 完成导入后仅显示第 1 个数据行的结果，再继续保存 audience 与无 provider 投放失败路径 |
+| R18-01 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 保留问卷内单行 CSV → audience → 无 provider 失败路径；desktop 的 delivery-import.spec.ts 另验证 CSV/JSON 各 6 个数据行的新增、更新、重复、坏邮箱和缺去重键，结果不回显姓名/邮箱，完成后自动刷新名单，新页面真实 GET 对账 3 个联系人 ID 与内容。仅隔离源码栈和虚构联系人，不代表候选正式身份或外部投递验收 |
 | R18-01 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/identity/org/OrgDepartureTest.java::departureRemovesTheMemberAndFreesTheSeat` | 离职后立即失权 |
 | R18-02 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/contacts/ContactTagTest.java::anotherTenantsTagCannotBeAssigned` | 标签权限隔离 |
 | R18-02 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/contacts/ContactOrgUnitScopeTest.java::aDepartmentAdminSeesOnlyItsOwnDepartmentAndDescendants` | 部门级数据范围 |
