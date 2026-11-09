@@ -33,7 +33,7 @@ docker exec "$prefix-platform-db" pg_isready -U postgres -d platform >/dev/null
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-platform" --network "$network" --network-alias platform \
  -e "PLATFORM_DB_URL=jdbc:postgresql://$prefix-platform-db:5432/platform" \
  -e SURVEY_BROWSER_RELAY_FIXTURE=/fixture/evidence.json -e SURVEY_CRASH_PHASE=first -v "$work:/fixture" \
- -v "$REPO_ROOT/platform/services/business:/workspace" -v ${maven_cache}:/root/.m2/repository:ro \
+ -v "$REPO_ROOT/platform/services/business:/workspace" -v "${maven_cache}:/root/.m2/repository:ro" \
  -v "$REPO_ROOT/platform/deploy/platform-dev/maven-settings.xml:/root/.m2/settings.xml:ro" \
  -w /workspace maven:3.9-eclipse-temurin-21 mvn -o -B -q -Dtest=DeliveryBrowserRelayCrashIT test >/dev/null
 for i in {1..180}; do
@@ -43,7 +43,7 @@ for i in {1..180}; do
 done
 [[ -f "$work/ready" ]] || { echo 'platform test readiness timed out' >&2; exit 1; }
 docker run --pull never --rm --network "container:$CONTAINER" --user 1200:1201 --cap-drop ALL --security-opt no-new-privileges --shm-size 1g \
- -v "$work/evidence.json:/fixture/evidence.json:ro" -v $REPO_ROOT/platform/tests/e2e/browser_relay_firefox.py:/fixture/browser.py:ro \
+ -v "$work/evidence.json:/fixture/evidence.json:ro" -v "$REPO_ROOT/platform/tests/e2e/browser_relay_firefox.py:/fixture/browser.py:ro" \
  --entrypoint python3 selenium/standalone-firefox:latest /fixture/browser.py
 sid=$(python3 -c 'import json,sys;x=json.load(open(sys.argv[1]));assert isinstance(x["sid"],int) and x["sid"]>0;print(x["sid"])' "$work/evidence.json")
 completed=$(db_query "SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=$sid AND response_id=1 AND event_type='response.completed'")
@@ -80,7 +80,7 @@ echo 'killed worker after synthetic provider acceptance'
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-platform" --network "$network" --network-alias platform \
  -e "PLATFORM_DB_URL=jdbc:postgresql://$prefix-platform-db:5432/platform" \
  -e SURVEY_BROWSER_RELAY_FIXTURE=/fixture/evidence.json -e SURVEY_CRASH_PHASE=second -v "$work:/fixture" \
- -v "$REPO_ROOT/platform/services/business:/workspace" -v ${maven_cache}:/root/.m2/repository:ro \
+ -v "$REPO_ROOT/platform/services/business:/workspace" -v "${maven_cache}:/root/.m2/repository:ro" \
  -v "$REPO_ROOT/platform/deploy/platform-dev/maven-settings.xml:/root/.m2/settings.xml:ro" \
  -w /workspace maven:3.9-eclipse-temurin-21 mvn -o -B -q -Dtest=DeliveryBrowserRelayCrashIT test >/dev/null
 exit_code=$(docker wait "$prefix-platform")
