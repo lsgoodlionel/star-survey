@@ -50,14 +50,20 @@ cleanup_owned_fixture
             self.assertEqual(0, shell(script, marker, env={'SCENARIO': 'empty'}).returncode)
             self.assertFalse(Path(marker).exists())
 
+    def test_gateway_user_must_be_explicit_nonroot_numeric(self):
+        self.assertEqual(0, shell('validate_gateway_user "$1"', '10001:10001').returncode)
+        for value in ('', 'root', '0:0', '10001:0', '0:10001', 'gateway', '10001', '1234567:10001'):
+            with self.subTest(value=value):
+                self.assertNotEqual(0, shell('validate_gateway_user "$1"', value).returncode)
+
     def test_gateway_mount_validation_fails_closed(self):
         script = r'''docker() { [[ "$SCENARIO" != inspect_failure ]] || return 9; printf "%s" "$INSPECT_JSON"; }
-validate_gateway_mount synthetic-gateway
+gateway_uid=10001 gateway_gid=10001 validate_gateway_mount synthetic-gateway
 '''
         import json
-        valid = [{"HostConfig": {"Tmpfs": {"/var/lib/pubgw": ""}}, "Mounts": []}]
+        valid = [{"HostConfig": {"Tmpfs": {"/var/lib/pubgw": "uid=10001,gid=10001,mode=0700"}}, "Mounts": []}]
         bad = [[], [{}], [{"HostConfig": {"Tmpfs": {}}, "Mounts": []}],
-               [{"HostConfig": {"Tmpfs": {"/var/lib/pubgw": ""}},
+               [{"HostConfig": {"Tmpfs": {"/var/lib/pubgw": "uid=10001,gid=10001,mode=0700"}},
                  "Mounts": [{"Destination": "/var/lib/pubgw", "Type": "volume"}]}]]
         self.assertEqual(0, shell(script, env={"INSPECT_JSON": json.dumps(valid)}).returncode)
         for value in bad:

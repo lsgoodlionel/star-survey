@@ -8,6 +8,12 @@ validate_fixture_args() {
   [[ "$3" =~ ^sha256:[a-f0-9]{64}$ && "$4" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'local image IDs required' >&2; return 2; }
 }
 
+validate_gateway_user() {
+  [[ "$1" =~ ^([1-9][0-9]{0,5}):([1-9][0-9]{0,5})$ ]] || { echo 'gateway must declare a non-root numeric user and group' >&2; return 1; }
+  gateway_uid="${BASH_REMATCH[1]}"
+  gateway_gid="${BASH_REMATCH[2]}"
+}
+
 validate_gateway_mount() {
   # Inspect without printing environment values or gateway configuration.
   local inspection
@@ -21,14 +27,14 @@ try:
     item = data[0]
     tmpfs = item["HostConfig"]["Tmpfs"]
     mounts = item["Mounts"]
-    if not isinstance(tmpfs, dict) or "/var/lib/pubgw" not in tmpfs:
+    if not isinstance(tmpfs, dict) or tmpfs.get("/var/lib/pubgw") != sys.argv[1]:
         raise ValueError("gateway tmpfs missing")
     if not isinstance(mounts, list) or any(m.get("Destination") == "/var/lib/pubgw" and m.get("Type") != "tmpfs" for m in mounts):
         raise ValueError("gateway path has a non-tmpfs mount")
 except (ValueError, KeyError, TypeError, AttributeError):
     print("gateway mount validation failed", file=sys.stderr)
     sys.exit(1)
-' <<< "$inspection"
+' "uid=$gateway_uid,gid=$gateway_gid,mode=0700" <<< "$inspection"
 }
 
 cleanup_owned_fixture() {
@@ -136,6 +142,9 @@ init_fixture() {
   for image in "$gateway_image" "$web_image" survey-web python:3.11-slim postgres:16-alpine mariadb:10.11 maven:3.9-eclipse-temurin-21 selenium/standalone-firefox:latest; do
     docker image inspect "$image" >/dev/null 2>&1 || { echo 'required local test image unavailable' >&2; return 2; }
   done
+  local gateway_user
+  gateway_user="$(docker image inspect -f '{{.Config.User}}' "$gateway_image")" || return 2
+  validate_gateway_user "$gateway_user" || return 2
   prefix="survey-browser-relay-it-$(python3 -c 'import secrets; print(secrets.token_hex(12))')"
   [[ "$prefix" =~ ^survey-browser-relay-it-[a-f0-9]{24}$ ]] || return 2
   export SURVEY_TEST_PREFIX="$prefix" COMPOSE_PROJECT_NAME="$prefix"

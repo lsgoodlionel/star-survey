@@ -15,7 +15,7 @@ ENGINE_CONTAINER="$CONTAINER" ENGINE_DB_CONTAINER="$prefix-$DB_SERVICE" EVIDENCE
 printf '{"isolated-engine":{"rpcUrl":"http://%s/index.php/admin/remotecontrol","user":"admin","passwordEnv":"ENGINE_PASSWORD"}}\n' "$CONTAINER" > "$work/engines.json"
 chmod 644 "$work/engines.json"
 image="$gateway_image"
-docker create --pull never --label "survey.fixture.run=$prefix" --name "$prefix-gateway" --network "$network" --network-alias real-gateway --tmpfs /var/lib/pubgw \
+docker create --pull never --label "survey.fixture.run=$prefix" --name "$prefix-gateway" --network "$network" --network-alias real-gateway --tmpfs "/var/lib/pubgw:uid=$gateway_uid,gid=$gateway_gid,mode=0700" \
  -e PUBGW_SHARED_SECRET=synthetic-gateway-secret-0123456789abcdef -e PUBGW_ENGINES_CONFIG=/app/engines.json \
  -e ENGINE_PASSWORD=password "$image" >/dev/null
 docker cp "$work/engines.json" "$prefix-gateway:/app/engines.json"
