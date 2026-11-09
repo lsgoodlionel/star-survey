@@ -90,7 +90,8 @@ services:
       PLATFORM_DB_OWNER_USER: platform_owner
       PLATFORM_PROBE_INSTALLATION_ID: ${PLATFORM_PROBE_INSTALLATION_ID:?set PLATFORM_PROBE_INSTALLATION_ID}
       PLATFORM_ADMIN_ENFORCE_PERSONNEL: ${PLATFORM_ADMIN_ENFORCE_PERSONNEL:-true}
-      # Legacy installers do not set the host path: keep file lookup disabled.
+      # Legacy installers do not set the host path. The variable is then empty,
+      # which disables both file and environment lookup: org secrets fail closed.
       PLATFORM_ORG_SECRET_DIR: ${PLATFORM_ORG_SECRET_DIR_HOST:+/run/secrets/org-login}
       PLATFORM_PUBLIC_BASE_URL: https://${PUBLIC_HOST:?set PUBLIC_HOST}
       PLATFORM_ADMIN_WEB_BASE_URL: https://${PUBLIC_HOST:?set PUBLIC_HOST}
