@@ -113,6 +113,19 @@ inspect_fixture_image synthetic-image /allowed /another
                     self.assertNotEqual(0, shell('browser_relay_make_synthetic_config_readable "$@"', str(source), str(target), engine).returncode)
                     target.unlink()
 
+    def test_fixed_stage_and_cleanup_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = str(Path(tmp) / 'stage')
+            cleanup = str(Path(tmp) / 'cleanup')
+            env = {'SURVEY_CROSSLAYER_STAGE_FILE': stage, 'SURVEY_CROSSLAYER_CLEANUP_FILE': cleanup}
+            self.assertEqual(0, shell('fixture_stage browser; fixture_cleanup_record verified', env=env).returncode)
+            self.assertEqual('browser\n', Path(stage).read_text())
+            self.assertEqual('verified\n', Path(cleanup).read_text())
+            self.assertNotEqual(0, shell('fixture_stage "$1"', 'secret-value', env=env).returncode)
+            self.assertEqual('browser\n', Path(stage).read_text())
+            self.assertNotEqual(0, shell('fixture_cleanup_record "$1"', 'unexpected', env=env).returncode)
+            self.assertEqual('verified\n', Path(cleanup).read_text())
+
     def test_gateway_user_must_be_explicit_nonroot_numeric(self):
         self.assertEqual(0, shell('validate_gateway_user "$1"', '10001:10001').returncode)
         for value in ('', 'root', '0:0', '10001:0', '0:10001', 'gateway', '10001', '1234567:10001'):

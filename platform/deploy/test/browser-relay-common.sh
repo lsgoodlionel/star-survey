@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 # Synthetic-only integration fixture; source and call init_fixture.
 
+fixture_stage() {
+  case "$1" in
+    initialize|engine_install|engine_setup|survey_publish|gateway|platform_database|platform_ready|browser|outbox|relay_first|relay_replay|worker_recovery|assertions) ;;
+    *) return 1 ;;
+  esac
+  [[ -z "${SURVEY_CROSSLAYER_STAGE_FILE:-}" ]] || printf '%s\n' "$1" > "$SURVEY_CROSSLAYER_STAGE_FILE"
+}
+
+fixture_cleanup_record() {
+  case "$1" in verified|unverified) ;; *) return 1 ;; esac
+  [[ -z "${SURVEY_CROSSLAYER_CLEANUP_FILE:-}" ]] || printf '%s\n' "$1" > "$SURVEY_CROSSLAYER_CLEANUP_FILE"
+}
+
 validate_fixture_args() {
   [[ "$#" == 4 ]] || { echo 'usage: <mysql|pgsql> <maven-volume> <gateway-image-id> <engine-image-id>' >&2; return 2; }
   [[ "$1" == mysql || "$1" == pgsql ]] || { echo 'unsupported engine' >&2; return 2; }
@@ -170,9 +183,11 @@ fixture_exit() {
   set +e
   cleanup_owned_fixture || cleanup_status=$?
   if [[ "$cleanup_status" != 0 ]]; then
+    fixture_cleanup_record unverified || :
     printf 'Fixture cleanup unverified; original status=%s; resources and work retained: %s\n' "$original" "$work" >&2
     exit 5
   fi
+  fixture_cleanup_record verified || :
   printf 'Fixture resources absent; private work retained: %s\n' "$work" >&2
   exit "$original"
 }

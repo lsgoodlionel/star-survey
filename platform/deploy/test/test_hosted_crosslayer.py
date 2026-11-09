@@ -120,6 +120,32 @@ esac
             self.assertNotEqual(0, result.returncode)
             self.assertNotIn('run --pull', (d / 'calls').read_text())
 
+    def test_reporter_emits_only_allowlisted_categories(self):
+        reporter = ROOT / 'platform/deploy/test/hosted-crosslayer/report.py'
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = Path(tmp) / 'stage'
+            cleanup = Path(tmp) / 'cleanup'
+            cases = [('browser', 'verified', 'stage=browser cleanup=verified'),
+                     ('fake-secret-token', 'fake-private-url', 'stage=unknown cleanup=unknown'),
+                     ('browser\nsecret', 'unverified\nsecret', 'stage=unknown cleanup=unknown'),
+                     ('x' * 100000, 'verified', 'stage=unknown cleanup=verified')]
+            for stage_text, cleanup_text, expected in cases:
+                with self.subTest(stage=stage_text[:20], cleanup=cleanup_text):
+                    stage.write_text(stage_text)
+                    cleanup.write_text(cleanup_text)
+                    result = subprocess.run(['python3', str(reporter), str(stage), str(cleanup)], capture_output=True, text=True)
+                    self.assertEqual(0, result.returncode)
+                    self.assertEqual(expected + '\n', result.stdout)
+                    self.assertEqual('', result.stderr)
+            stage.unlink()
+            stage.symlink_to(cleanup)
+            self.assertEqual('stage=unknown cleanup=verified\n', subprocess.run(
+                ['python3', str(reporter), str(stage), str(cleanup)], capture_output=True, text=True).stdout)
+            stage.unlink()
+            os.mkfifo(stage)
+            self.assertEqual('stage=unknown cleanup=verified\n', subprocess.run(
+                ['python3', str(reporter), str(stage), str(cleanup)], capture_output=True, text=True, timeout=2).stdout)
+
     def test_invalid_identity_fails_before_docker(self):
         env = {**os.environ, 'GITHUB_RUN_ID': '../../wrong', 'GITHUB_RUN_ATTEMPT': '1',
                'FIXTURE_ENGINE': 'mariadb', 'FIXTURE_SCENARIO': 'reminder', 'RUNNER_TEMP': '/tmp'}

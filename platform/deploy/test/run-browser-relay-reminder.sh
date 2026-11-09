@@ -2,18 +2,23 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/browser-relay-common.sh"
+fixture_stage initialize
 init_fixture "$@"
+fixture_stage engine_install
 prepare_test_stack
 # The private tmpfs hides checkout upload directories; restore the empty runtime layout.
 docker exec "$CONTAINER" mkdir -p /var/www/html/upload/{admintheme,global,labels,plugins,surveys,themes/survey/generalfiles,twig/extensions}
+fixture_stage engine_setup
 enable_remote_control
 db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error) VALUES ('MjyPlatformBridge', 'user', 1, 0, '0.1.0', 0)" >/dev/null
 docker exec "$CONTAINER" rm -rf tmp/runtime/cache
 network=$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$CONTAINER")
 [[ "$(docker network inspect -f '{{.Internal}}' "$network")" == true ]]
+fixture_stage survey_publish
 ENGINE_CONTAINER="$CONTAINER" ENGINE_DB_CONTAINER="$prefix-$DB_SERVICE" EVIDENCE_FILE="$work/evidence.json" TEST_DB="$TEST_DB" python3 "$REPO_ROOT/platform/tests/e2e/browser_relay_prepare.py"
 printf '{"isolated-engine":{"rpcUrl":"http://%s/index.php/admin/remotecontrol","user":"admin","passwordEnv":"ENGINE_PASSWORD"}}\n' "$CONTAINER" > "$work/engines.json"
 chmod 644 "$work/engines.json"
+fixture_stage gateway
 image="$gateway_image"
 docker create --pull never --label "survey.fixture.run=$prefix" --name "$prefix-gateway" --network "$network" --network-alias real-gateway --tmpfs "/var/lib/pubgw:uid=$gateway_uid,gid=$gateway_gid,mode=0700" \
  -e PUBGW_SHARED_SECRET=synthetic-gateway-secret-0123456789abcdef -e PUBGW_ENGINES_CONFIG=/app/engines.json \
@@ -25,11 +30,13 @@ for i in {1..60}; do [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prefix
 [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prefix-gateway")" == healthy ]]
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-proxy" --network "$network" --network-alias fault-proxy \
  -v "$REPO_ROOT/platform/tests/e2e/real_engine_reminder_fault_proxy.py:/fixture/fault-proxy.py:ro" "$python_image" python /fixture/fault-proxy.py >/dev/null
+fixture_stage platform_database
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-platform-db" --network "$network" --tmpfs /var/lib/postgresql/data \
  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=postgres \
  -v "$REPO_ROOT/platform/deploy/platform-dev/init-db.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro" "$postgres_image" >/dev/null
 for i in {1..60}; do docker exec "$prefix-platform-db" pg_isready -U postgres -d platform >/dev/null 2>&1 && break; sleep 1; done
 docker exec "$prefix-platform-db" pg_isready -U postgres -d platform >/dev/null
+fixture_stage platform_ready
 # The platform JVM exposes its real event endpoint only on this internal test network.
 docker run --pull never -d --label "survey.fixture.run=$prefix" --name "$prefix-platform" --network "$network" --network-alias platform \
  -e "PLATFORM_DB_URL=jdbc:postgresql://$prefix-platform-db:5432/platform" \
@@ -43,12 +50,15 @@ for i in {1..180}; do
   sleep 1
 done
 [[ -f "$work/ready" ]] || { echo 'platform test readiness timed out' >&2; exit 1; }
+fixture_stage browser
 docker run --pull never --rm --label "survey.fixture.run=$prefix" --name "$prefix-browser" --network "container:$CONTAINER" --user 1200:1201 --cap-drop ALL --security-opt no-new-privileges --shm-size 1g \
  -v "$work/evidence.json:/fixture/evidence.json:ro" -v "$REPO_ROOT/platform/tests/e2e/browser_relay_firefox.py:/fixture/browser.py:ro" \
  --entrypoint python3 "$firefox_image" /fixture/browser.py
+fixture_stage outbox
 sid=$(python3 -c 'import json,sys;x=json.load(open(sys.argv[1]));assert isinstance(x["sid"],int) and x["sid"]>0;print(x["sid"])' "$work/evidence.json")
 completed=$(db_query "SELECT count(*) FROM lime_mjyplatformbridge_event_log WHERE survey_id=$sid AND response_id=1 AND event_type='response.completed'")
 [[ "$completed" -ge 1 ]] || { echo 'real completion outbox event missing' >&2; exit 1; }
+fixture_stage relay_first
 if ! docker exec "$CONTAINER" php application/commands/console.php plugin cron >"$work/relay-cron-1.log" 2>&1; then
   echo "engine relay failed; private diagnostics retained in $work" >&2
   exit 1
@@ -56,6 +66,7 @@ fi
 count_events() { docker exec "$prefix-platform-db" psql -U postgres -d platform -Atqc "SELECT count(*) FROM engine_event_inbox WHERE engine_instance_id='isolated-engine' AND survey_id=$sid AND response_id=1"; }
 first=$(count_events)
 [[ "$first" -ge 1 ]] || { echo 'relay did not reach platform inbox' >&2; exit 1; }
+fixture_stage relay_replay
 db_query "UPDATE lime_mjyplatformbridge_event_log SET delivered_at=NULL WHERE survey_id=$sid AND response_id=1" >/dev/null
 if ! docker exec "$CONTAINER" php application/commands/console.php plugin cron >"$work/relay-cron-2.log" 2>&1; then
   echo "engine relay failed; private diagnostics retained in $work" >&2
@@ -65,6 +76,7 @@ second=$(count_events)
 [[ "$first" = "$second" ]] || { echo 'replayed events duplicated platform inbox' >&2; exit 1; }
 printf 'real relay delivery and replay idempotence passed\n'
 touch "$work/browser-relay-complete"
+fixture_stage assertions
 exit_code=$(docker wait "$prefix-platform")
 docker logs "$prefix-platform" >&2
 [[ "$exit_code" == 0 ]]
