@@ -50,7 +50,7 @@ class MjyAttachmentFileEndpointTest extends TestBaseClass
 
     private static function responseTable(): string
     {
-        return \App()->getDb()->tablePrefix . 'survey_' . self::SURVEY_ID;
+        return \App()->getDb()->tablePrefix . 'responses_' . self::SURVEY_ID;
     }
 
     private static function createResponseTable(): void
@@ -76,7 +76,7 @@ class MjyAttachmentFileEndpointTest extends TestBaseClass
 
     private static function removeTree(string $path): void
     {
-        if (!is_dir($path)) {
+        if (is_link($path) || !is_dir($path)) {
             @unlink($path);
             return;
         }
@@ -152,6 +152,57 @@ class MjyAttachmentFileEndpointTest extends TestBaseClass
     }
 
     // ---- 定位器本身 ----
+
+    /** 对照真实引擎命名，不调用会查询数据库及刷新模型的 model()。 */
+    public function testResponseTableMatchesTheCurrentEngineModel(): void
+    {
+        $modelClass = new \ReflectionClass(\SurveyDynamic::class);
+        $sid = $modelClass->getProperty('sid');
+        $sid->setAccessible(true);
+        $previous = $sid->getValue();
+        try {
+            $sid->setValue(null, self::SURVEY_ID);
+            $model = $modelClass->newInstanceWithoutConstructor();
+            $table = str_replace(['{{', '}}'], [\App()->getDb()->tablePrefix, ''], $model->tableName());
+            $this->assertSame(self::responseTable(), $table);
+        } finally {
+            $sid->setValue(null, $previous);
+        }
+    }
+
+    /** 旧表即使有同一答卷和文件也不构成当前引擎的归属证据。 */
+    public function testAFileListedOnlyInTheLegacyTableIsGone(): void
+    {
+        $this->seed(7, [self::STORED_NAME]);
+        $db = \App()->getDb();
+        $legacy = $db->tablePrefix . 'survey_' . self::SURVEY_ID;
+        $db->createCommand()->renameTable(self::responseTable(), $legacy);
+        $db->getSchema()->refresh();
+        try {
+            $this->assertNull($db->getSchema()->getTable(self::responseTable()));
+            $this->assertNotNull($db->getSchema()->getTable($legacy));
+            $this->assertNotFound($this->endpoint()->handle($this->signed($this->params()), self::NOW));
+        } finally {
+            $db->createCommand()->renameTable($legacy, self::responseTable());
+            $db->getSchema()->refresh();
+        }
+    }
+
+    public function testALinkOutsideTheSurveyDirectoryIsGone(): void
+    {
+        $this->seed(7, [self::STORED_NAME], false);
+        $outside = self::$uploadDir . '/outside';
+        file_put_contents($outside, self::CONTENT);
+        symlink($outside, self::$uploadDir . '/surveys/' . self::SURVEY_ID . '/files/' . self::STORED_NAME);
+        $this->assertNotFound($this->endpoint()->handle($this->signed($this->params()), self::NOW));
+    }
+
+    public function testADirectoryIsNotAnAttachment(): void
+    {
+        $this->seed(7, [self::STORED_NAME], false);
+        mkdir(self::$uploadDir . '/surveys/' . self::SURVEY_ID . '/files/' . self::STORED_NAME);
+        $this->assertNotFound($this->endpoint()->handle($this->signed($this->params()), self::NOW));
+    }
 
     /** 三道闸门都过时给出上传目录里的那个绝对路径。 */
     public function testTheLocatorResolvesAListedFile(): void

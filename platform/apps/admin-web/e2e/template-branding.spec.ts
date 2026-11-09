@@ -1,12 +1,13 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import jsQR from 'jsqr';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { deflateSync, inflateRawSync } from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { redactSensitiveInputs } from './redaction';
+import { fieldDictionarySchema, responsePageSchema, type ResponseRow } from '../src/shared/api/responses';
 
 const scenarios = new Set<string>();
 const required = [
@@ -19,12 +20,41 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 let copiedSurveyId = '';
 let templateId = '';
 let platformTemplateId = '';
+let exportReaderDirectory = '';
+let exportReaderPython = '';
+const exportEvidenceRoot = join(process.cwd(), '../../tests/e2e');
 
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(240_000);
 
 test.beforeAll(async () => {
+  test.setTimeout(660_000);
   const run = promisify(execFile);
+  let readerSetupStage = 'environment';
+  let readerSetupComplete = false;
+  try {
+    exportReaderDirectory = await mkdtemp(join(env('ADMIN_WEB_TEST_RESULTS_DIR'), 'export-readers-'));
+    exportReaderPython = join(exportReaderDirectory, 'bin/python');
+    await run('python3', ['-m', 'venv', exportReaderDirectory], { timeout: 30_000 });
+    readerSetupStage = 'dependencies';
+    await run(exportReaderPython, ['-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=:all:',
+      '--index-url', 'https://pypi.org/simple', '-r', join(exportEvidenceRoot, 'export-evidence-requirements.txt')],
+    { timeout: 600_000, maxBuffer: 1024 * 1024 });
+    readerSetupStage = 'regressions';
+    await run(exportReaderPython, ['-m', 'unittest', 'discover', '-s', exportEvidenceRoot,
+      '-p', 'test_export_content_evidence.py', '-q'], { timeout: 30_000 });
+    process.stdout.write('[export-content] independent-reader-regressions:ok\n');
+    readerSetupComplete = true;
+  } catch (error) {
+    if (readerSetupStage === 'regressions' && typeof error === 'object' && error !== null
+        && 'stderr' in error && typeof error.stderr === 'string') {
+      const failed = [...error.stderr.matchAll(/^(?:FAIL|ERROR): (test_[a-z0-9_]+)/gm)]
+        .map((match) => match[1]).slice(0, 30);
+      process.stdout.write(`[export-content] reader-regressions:failed tests=${[...new Set(failed)].join(',') || 'unknown'}\n`);
+    }
+  }
+  // This boundary retains only the closed stage, never a subprocess error or cause.
+  if (!readerSetupComplete) throw new Error(`Independent export reader ${readerSetupStage} failed`);
   const gate = join(process.cwd(), '../../tests/e2e/admin_web_gate.py');
   for (const [actor, file] of [
     ['admin-web-e2e-owner', 'ADMIN_WEB_JWT_FILE'],
@@ -37,9 +67,14 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  if (required.some((scenario) => !scenarios.has(scenario))) return;
-  await writeFile(join(env('ADMIN_WEB_TEST_RESULTS_DIR'), 'wave2-scenarios.json'),
-    `${JSON.stringify({ schemaVersion: 1, scenarios: [...scenarios].sort() })}\n`, { mode: 0o600 });
+  try {
+    if (required.every((scenario) => scenarios.has(scenario))) {
+      await writeFile(join(env('ADMIN_WEB_TEST_RESULTS_DIR'), 'wave2-scenarios.json'),
+        `${JSON.stringify({ schemaVersion: 1, scenarios: [...scenarios].sort() })}\n`, { mode: 0o600 });
+    }
+  } finally {
+    if (exportReaderDirectory) await rm(exportReaderDirectory, { recursive: true, force: true });
+  }
 });
 
 test('tenant template lifecycle copies a real survey and preserves brand draft context', async ({ page }) => {
@@ -263,7 +298,9 @@ test('branded copy previews and publishes with language and pinned image bytes',
   await assertNoThirdPartyUrls(fresh);
   await switchToEnglish(fresh);
   await expectEnglishQuestion(fresh);
-  await fresh.locator('input[type="radio"]:visible').first().check();
+  const firstAnswer = fresh.locator('input[type="radio"]:visible').first();
+  expect(await firstAnswer.getAttribute('value')).toBe('A1');
+  await firstAnswer.check();
   for (let step = 0; step < 4; step += 1) {
     const submit = fresh.locator('#ls-button-submit:visible, #ls-button-next:visible, button[type="submit"]:visible, input[type="submit"]:visible').last();
     if (await submit.count() === 0) break;
@@ -319,7 +356,9 @@ test('branded copy previews and publishes with language and pinned image bytes',
   expect(createHash('sha256').update(await version1Image.body()).digest('hex')).toBe(beforeHash);
   await switchToEnglish(version2);
   await expectEnglishQuestion(version2);
-  await version2.locator('input[type="radio"]:visible').first().check();
+  const secondAnswer = version2.locator('input[type="radio"]:visible').nth(1);
+  expect(await secondAnswer.getAttribute('value')).toBe('A2');
+  await secondAnswer.check();
   for (let step = 0; step < 4; step += 1) {
     const submit = version2.locator('#ls-button-submit:visible, #ls-button-next:visible, button[type="submit"]:visible, input[type="submit"]:visible').last();
     if (await submit.count() === 0) break;
@@ -345,6 +384,7 @@ test('branded copy previews and publishes with language and pinned image bytes',
   await expect(page.locator('.response-table-wrap tbody')).toContainText('版本 2');
   await versionFilter.selectOption('');
   await expect(page.locator('.response-table-wrap tbody tr')).toHaveCount(2);
+  const exportExpected = await syntheticExportExpectation(page, copiedSurveyId, token);
   for (const [format, label, suffix] of [
     ['csv', 'CSV 数据包', '.zip'], ['xlsx', 'Excel 工作簿', '.xlsx'],
     ['sav', 'SPSS 数据包', '.sav.zip'], ['docx', 'Word 答卷文档', '.docx'],
@@ -362,7 +402,23 @@ test('branded copy previews and publishes with language and pinned image bytes',
     await page.getByRole('button', { name: '下载导出文件' }).click();
     const file = await downloadPromise;
     expect(file.suggestedFilename()).toMatch(new RegExp(`${suffix.replaceAll('.', '\\.')}$`));
-    expect((await stat(await file.path())).size).toBeGreaterThan(0);
+    const filePath = await file.path();
+    expect((await stat(filePath)).size).toBeGreaterThan(0);
+    if (['xlsx', 'sav', 'docx', 'pdf', 'report-docx'].includes(format)) {
+      await verifyDownloadedExport(format, filePath, exportExpected);
+    }
+    if (format === 'pdf') {
+      // Independent Poppler reader checks extractable Chinese from the actual downloaded file.
+      const { stdout } = await promisify(execFile)('pdftotext', ['-enc', 'UTF-8', filePath, '-'], { timeout: 15_000 });
+      for (const label of ['答卷信息', '版本', '答卷号', '作答状态']) expect(stdout.includes(label)).toBe(true);
+    }
+    if (format === 'report-docx') {
+      const entries = readZipEntries(await readFile(filePath));
+      const xml = entries.get('word/document.xml')?.toString('utf8') ?? '';
+      // Check label and value in the same table row, not merely anywhere in the document.
+      const totalRow = xml.match(/<w:tr>[^]*?<\/w:tr>/g)?.find((row) => row.includes('答卷总数')) ?? '';
+      expect(/<w:t(?: [^>]*)?>2<\/w:t>/.test(totalRow)).toBe(true);
+    }
   }
 
   await page.getByLabel('导出格式').selectOption('docx');
@@ -514,6 +570,132 @@ async function assertNoThirdPartyUrls(page: Page) {
     });
   });
   expect(external).toEqual([]);
+}
+
+async function syntheticExportExpectation(page: Page, surveyId: string, token: string) {
+  const base = env('ADMIN_WEB_BASE_URL');
+  const headers = { Authorization: `Bearer ${token}` };
+  const [response, dictionary] = await Promise.all([
+    page.request.get(`${base}/v1/surveys/${surveyId}/responses?limit=50`, { headers }),
+    page.request.get(`${base}/v1/surveys/${surveyId}/fields`, { headers }),
+  ]);
+  if (!response.ok() || !dictionary.ok()) throw new Error('Synthetic export oracle unavailable');
+  const pageData = responsePageSchema.parse(await response.json());
+  const definition = fieldDictionarySchema.parse(await dictionary.json());
+  const sources = [...definition.versions].sort((a, b) => a.version - b.version);
+  const records = [...pageData.items].sort((a, b) => a.version - b.version || a.responseId - b.responseId);
+  if (pageData.nextCursor !== null || records.length !== 2 || sources.length !== 2
+      || sources[0].version !== 1 || sources[1].version !== 2
+      || records[0].version !== 1 || records[1].version !== 2) {
+    throw new Error('Synthetic export oracle must contain exactly both versions');
+  }
+  const labels: Record<string, string> = {};
+  const fields = sources.flatMap((source) => {
+    const seen = new Set<string>();
+    return source.fields.map((field) => {
+      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(field.code) || field.aid !== '' || field.scale !== 0
+          || field.sensitive || seen.has(field.code)) throw new Error('Unsupported synthetic export field');
+      seen.add(field.code);
+      labels[field.code] ??= field.label;
+      return { version: source.version, sid: source.engineSid, column: field.code,
+        fieldname: field.fieldname, questioncode: field.code, type: field.type,
+        aid: field.aid, scale: field.scale, label: field.label, sensitive: false, masking: '',
+        options: field.options.map((option) => `${option.code}=${option.text}`).join('; ') };
+    });
+  });
+  const rows = records.map((record) => {
+    const source = sources.find((item) => item.version === record.version)!;
+    const question = source.fields.find((field) => field.code === 'Q1');
+    const knownAnswer = record.version === 1 ? 'A1' : 'A2';
+    if (record.engineSid !== source.engineSid || record.state !== 'engine_completed'
+        || record.answersStatus !== 'available' || !question || record.answers?.[question.fieldname] !== knownAnswer) {
+      throw new Error('Synthetic submitted answer does not match the oracle');
+    }
+    const answers = Object.fromEntries(Object.keys(labels).map((code) => {
+      const field = source.fields.find((item) => item.code === code);
+      return [code, field ? record.answers?.[field.fieldname] ?? '' : ''];
+    }));
+    return { version: record.version, sid: record.engineSid, responseid: record.responseId,
+      generation: record.generation, state: record.state, answersstatus: record.answersStatus, answers };
+  });
+  await verifyResponseQueryBoundaries(page, surveyId, token, records);
+  return { rows, fields, labels };
+}
+
+async function verifyResponseQueryBoundaries(page: Page, surveyId: string, token: string, known: ResponseRow[]) {
+  const endpoint = `${env('ADMIN_WEB_BASE_URL')}/v1/surveys/${surveyId}/responses`;
+  const headers = { Authorization: `Bearer ${token}` };
+  const query = async (params: Record<string, string>) => {
+    const response = await page.request.get(`${endpoint}?${new URLSearchParams(params)}`, { headers });
+    expect(response.status()).toBe(200);
+    expect(response.headers()['cache-control']?.includes('no-store')).toBe(true);
+    return responsePageSchema.parse(await response.json());
+  };
+  // Compare complete rows from independently observed real submissions, without
+  // printing identities, cursors or answer values on an assertion failure.
+  const sameRows = (actual: ResponseRow[], expected: ResponseRow[]) =>
+    JSON.stringify(actual) === JSON.stringify(expected);
+  const first = await query({ limit: '1' });
+  expect(sameRows(first.items, known.slice(0, 1))).toBe(true);
+  expect(typeof first.nextCursor === 'string' && first.nextCursor.length > 0).toBe(true);
+  const second = await query({ limit: '1', cursor: first.nextCursor! });
+  expect(sameRows(second.items, known.slice(1))).toBe(true);
+  expect(second.nextCursor === null).toBe(true);
+  expect(sameRows([...first.items, ...second.items], known)).toBe(true);
+  const repeated = await query({ limit: '1', cursor: first.nextCursor! });
+  expect(sameRows(repeated.items, second.items) && repeated.nextCursor === null).toBe(true);
+
+  for (const row of known) {
+    expect(row.completedAt !== null).toBe(true);
+    const combined = await query({ limit: '1', state: 'engine_completed', version: String(row.version),
+      startedFrom: row.startedAt, startedTo: row.startedAt,
+      completedFrom: row.completedAt!, completedTo: row.completedAt! });
+    expect(sameRows(combined.items, [row]) && combined.nextCursor === null).toBe(true);
+  }
+  const beforeEveryStart = new Date(Math.min(...known.map((row) => Date.parse(row.startedAt))) - 1000).toISOString();
+  const emptyQueries: Record<string, string>[] = [{ limit: '1', state: 'in_progress' }, { limit: '1', startedTo: beforeEveryStart }];
+  for (const params of emptyQueries) {
+    const empty = await query(params);
+    expect(empty.items.length === 0 && empty.nextCursor === null).toBe(true);
+  }
+  // Rejected queries must stay errors, rather than silently widening the range.
+  const rejectedQueries: Record<string, string>[] = [{ limit: '0' }, { startedFrom: known[0].startedAt, startedTo: beforeEveryStart }];
+  for (const params of rejectedQueries) {
+    const rejected = await page.request.get(`${endpoint}?${new URLSearchParams(params)}`, { headers });
+    expect(rejected.status()).toBe(400);
+  }
+  process.stdout.write('[response-query] cross-version-pagination-and-composite-filters:ok rows=2\n');
+}
+
+async function verifyDownloadedExport(format: string, download: string, expected: Awaited<ReturnType<typeof syntheticExportExpectation>>) {
+  const oracle = join(exportReaderDirectory, 'expected.json');
+  await writeFile(oracle, JSON.stringify(expected), { mode: 0o600, flag: 'wx' });
+  let failureCategory: string | undefined;
+  try {
+    const { stdout } = await promisify(execFile)(exportReaderPython,
+      [join(exportEvidenceRoot, 'export_content_evidence.py'), format, download, oracle],
+      { timeout: 30_000, maxBuffer: 16_384 });
+    const result = JSON.parse(stdout) as { ok?: boolean; format?: string; rows?: number; fields?: number };
+    if (result.ok !== true || result.format !== format || result.rows !== expected.rows.length
+        || result.fields !== (['docx', 'pdf', 'report-docx'].includes(format) ? 0 : expected.fields.length)) throw new Error('Invalid reader success evidence');
+    process.stdout.write(`[export-content] ${format}:ok rows=${result.rows} fields=${result.fields}\n`);
+  } catch (error) {
+    let category = 'reader_failure';
+    const allowed = new Set(['arguments', 'expectation', 'archive', 'structure', 'columns',
+      'rows', 'fields', 'mapping', 'content', 'dependency', 'reader']);
+    if (typeof error === 'object' && error !== null && 'stdout' in error
+        && typeof error.stdout === 'string' && error.stdout.length <= 16_384) {
+      try {
+        const result = JSON.parse(error.stdout) as { ok?: boolean; category?: string };
+        if (result.ok === false && result.category && allowed.has(result.category)) category = result.category;
+      } catch { /* Raw reader messages and paths are never emitted. */ }
+    }
+    failureCategory = category;
+  } finally {
+    await unlink(oracle);
+  }
+  // Report the closed result after cleanup without retaining raw subprocess output.
+  if (failureCategory) throw new Error(`Downloaded export content verification failed (${format}): ${failureCategory}`);
 }
 
 async function switchToEnglish(page: Page) {

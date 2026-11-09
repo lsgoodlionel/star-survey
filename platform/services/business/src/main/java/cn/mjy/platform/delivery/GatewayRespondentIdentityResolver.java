@@ -6,8 +6,6 @@ import cn.mjy.platform.response.ResponseAnswersUnavailableException;
 import cn.mjy.platform.shared.TenantId;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 
@@ -24,8 +22,6 @@ import org.springframework.stereotype.Component;
 @Conditional(PublishGatewayConfigured.class)
 class GatewayRespondentIdentityResolver implements RespondentIdentityResolver {
 
-    private static final Logger log = LoggerFactory.getLogger(GatewayRespondentIdentityResolver.class);
-
     private final RespondentSource answers;
 
     GatewayRespondentIdentityResolver(RespondentSource answers) {
@@ -41,12 +37,11 @@ class GatewayRespondentIdentityResolver implements RespondentIdentityResolver {
         List<Long> ids = responses.stream().map(response -> response.key().responseId()).toList();
         try {
             return answers.readRespondents(first.key().engineInstanceId(), first.key().surveyId(), ids);
-        } catch (ResponseAnswersUnavailableException e) {
-            // 读不到就当作这一轮认不出任何人：对账不前进游标、不登记完成，下一轮重来。
-            // 绝不能把"读不到"解释成"这些人都没答完"，那会误发一批催答。
-            log.warn("could not read respondents on {} sid {}: {}", first.key().engineInstanceId(),
-                    first.key().surveyId(), e.getMessage());
-            return Map.of();
+        } catch (ResponseAnswersUnavailableException ignored) {
+            // 不可用不等于合法的匿名空映射：抛出异常让对账事务回滚，游标留待下一轮重试。
+            // DeliveryWorker 会跳过本租户本轮催答和发送，继续其他租户。
+            // Worker 会记录异常；这里不携带源异常正文或 cause，防止泄露令牌或原始网关内容。
+            throw new ResponseAnswersUnavailableException("respondent identity lookup unavailable");
         }
     }
 }

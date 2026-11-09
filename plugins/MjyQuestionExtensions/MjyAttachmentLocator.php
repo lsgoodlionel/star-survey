@@ -61,7 +61,8 @@ class MjyAttachmentLocator
      */
     private function answerColumn(int $surveyId, int $responseId, string $field): ?string
     {
-        $table = $this->db->tablePrefix . 'survey_' . $surveyId;
+        // 与当前 SurveyDynamic::tableName() 一致；不回退旧表，避免把旧答卷当作归属证据。
+        $table = $this->db->tablePrefix . 'responses_' . $surveyId;
         $schema = $this->db->getSchema()->getTable($table);
         if ($schema === null || !isset($schema->columns[$field])) {
             return null;
