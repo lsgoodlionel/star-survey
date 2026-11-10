@@ -230,6 +230,28 @@ class ProductionComposeTest(unittest.TestCase):
         }
         self.assertEqual({("80", "80"), ("443", "443")}, published)
 
+    def test_non_root_application_services_drop_all_capabilities(self):
+        # These images run as a fixed non-root user and need no Linux capability.
+        # Dropping the whole bounding set keeps NET_RAW, CHOWN, DAC_OVERRIDE etc.
+        # out of reach even if an image regresses to root. edge, engine and the
+        # databases start as root to switch users and are deliberately excluded.
+        repo_root = PRODUCTION_DIR.parents[2]
+        dockerfiles = {
+            "admin-web": repo_root / "platform/apps/admin-web/Dockerfile",
+            "platform": repo_root / "platform/services/business/Dockerfile",
+            "publish-gateway": repo_root / "platform/tools/publish-gateway/Dockerfile",
+        }
+        authored = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))["services"]
+        for name, dockerfile in dockerfiles.items():
+            with self.subTest(service=name):
+                users = re.findall(r"^USER\s+(\S+)", dockerfile.read_text(encoding="utf-8"), re.M)
+                self.assertTrue(users, f"{dockerfile} must declare a runtime USER")
+                self.assertNotIn(users[-1].split(":")[0], {"0", "root"})
+                service = authored[name]
+                self.assertEqual(["ALL"], service.get("cap_drop"))
+                self.assertNotIn("cap_add", service)
+                self.assertIn("no-new-privileges:true", service.get("security_opt", []))
+
     def test_services_have_operational_guards(self):
         services = self.render_compose()["services"]
         for name, service in services.items():
