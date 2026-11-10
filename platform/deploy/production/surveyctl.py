@@ -122,6 +122,21 @@ def _version_key(value: str) -> tuple[int, int, int, int, int]:
     return int(major), int(minor), int(patch), 1 if rc is None else 0, int(rc or 0)
 
 
+def _unique_json_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate JSON field')
+        result[key] = value
+    return result
+
+
+def _file_read_snapshot(info):
+    """Capture identity and mutation metadata; does not prove external exclusion."""
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def _regular_file(path: Path, label: str) -> None:
     try:
         metadata = path.lstat()
@@ -543,15 +558,38 @@ class SurveyManager:
                                     or intent_info.st_uid != os.geteuid() or intent_info.st_mode & 0o077
                                     or intent_info.st_size > 1024):
                                 raise IntegrityError("installation operation intent is unsafe")
-                            record = json.load(handle)
+                            record = json.load(handle, object_pairs_hook=_unique_json_fields)
+                            finished_intent = os.fstat(handle.fileno())
+                            observed_intent = os.stat(intent, follow_symlinks=False)
+                            if (_file_read_snapshot(intent_info) != _file_read_snapshot(finished_intent)
+                                    or _file_read_snapshot(intent_info) != _file_read_snapshot(observed_intent)):
+                                raise IntegrityError("installation operation intent identity changed or contents modified")
                     except (OSError, UnicodeError, ValueError) as exc:
                         raise IntegrityError("installation operation intent is unavailable or invalid") from exc
-                    if not isinstance(record, dict) or set(record) != {"schemaVersion", "state", "operation"} or record.get("schemaVersion") != 1 or record.get("state") not in {"pending", "complete"} or not isinstance(record.get("operation"), str):
+                    if (not isinstance(record, dict) or set(record) != {"schemaVersion", "state", "operation"}
+                            or type(record.get("schemaVersion")) is not int or record["schemaVersion"] != 1
+                            or record.get("state") not in {"pending", "complete"}
+                            or not isinstance(record.get("operation"), str)):
                         raise IntegrityError("installation operation intent is invalid")
                     if record['state'] == 'pending':
                         raise InputError("an earlier operation has an unverified outcome; preserve the installation and operation marker, do not remove it; controlled recovery is not yet available")
                 if self.state_path.exists() or self.state_path.is_symlink():
                     self._require_no_pending_recovery(self._read_state())
+                # Recheck after reading mutable state: a lock on a displaced file
+                # must not be mistaken for exclusion on the current path.
+                try:
+                    final_control = os.stat(control, follow_symlinks=False)
+                    final_lock = os.lstat(lock_path)
+                except OSError as exc:
+                    raise IntegrityError("installation operation lock or control directory unavailable") from exc
+                if (not stat.S_ISDIR(final_control.st_mode)
+                        or (control_info.st_dev, control_info.st_ino) != (final_control.st_dev, final_control.st_ino)
+                        or final_control.st_uid != os.geteuid() or final_control.st_mode & 0o022):
+                    raise IntegrityError("installation control directory identity changed")
+                if (not stat.S_ISREG(final_lock.st_mode) or final_lock.st_nlink != 1
+                        or final_lock.st_uid != os.geteuid() or final_lock.st_mode & 0o077
+                        or (info.st_dev, info.st_ino) != (final_lock.st_dev, final_lock.st_ino)):
+                    raise IntegrityError("installation operation lock identity changed")
                 self._operation_intent = intent
                 self._operation_name = operation
                 self._operation_started = False
@@ -637,11 +675,36 @@ class SurveyManager:
 
     def _read_state(self, require_current: bool = False) -> dict[str, Any]:
         state_path = self._managed(".surveyctl/state.json", must_exist=True)
-        _regular_file(state_path, "installation state")
+        control_fd = None
         try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            if (not all(hasattr(os, flag) for flag in ('O_NOFOLLOW', 'O_NONBLOCK', 'O_DIRECTORY'))
+                    or os.open not in os.supports_dir_fd or os.stat not in os.supports_dir_fd):
+                raise IntegrityError("installation state cannot be opened safely")
+            control_fd = os.open(state_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            control_info = os.fstat(control_fd)
+            if not stat.S_ISDIR(control_info.st_mode):
+                raise IntegrityError("installation control directory is unsafe")
+            _regular_file(state_path, "installation state")
+            fd = os.open(state_path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=control_fd)
+            with os.fdopen(fd, 'r', encoding='utf-8') as handle:
+                opened = os.fstat(handle.fileno())
+                if not stat.S_ISREG(opened.st_mode) or opened.st_size <= 0:
+                    raise IntegrityError("installation state is unsafe")
+                state = json.load(handle, object_pairs_hook=_unique_json_fields)
+                finished = os.fstat(handle.fileno())
+                observed = os.stat(state_path.name, dir_fd=control_fd, follow_symlinks=False)
+                current_control = os.stat(state_path.parent, follow_symlinks=False)
+                if ((control_info.st_dev, control_info.st_ino) != (current_control.st_dev, current_control.st_ino)
+                        or not stat.S_ISDIR(current_control.st_mode)):
+                    raise IntegrityError("installation control directory identity changed")
+                if (_file_read_snapshot(opened) != _file_read_snapshot(finished)
+                        or _file_read_snapshot(opened) != _file_read_snapshot(observed)):
+                    raise IntegrityError("installation state identity changed or contents modified")
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
             raise IntegrityError("installation state is corrupt") from exc
+        finally:
+            if control_fd is not None:
+                os.close(control_fd)
         if not isinstance(state, dict):
             raise IntegrityError("installation state must be an object")
         if 'dataPurged' in state and not isinstance(state['dataPurged'], bool):

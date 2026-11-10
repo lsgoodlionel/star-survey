@@ -230,6 +230,221 @@ class SurveyctlAdversarialTest(unittest.TestCase):
     def write_bundle_manifest(self, version="0.2.0", rollback="compatible"):
         return write_test_release(self.root, version, rollback)
 
+    def test_operation_intent_schema_requires_exact_integer_version(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        manager = self.manager()
+        for value in (True, 1.0, False, '1', None, 2):
+            with self.subTest(schema=value):
+                payload = json.dumps({'schemaVersion': value, 'state': 'complete', 'operation': 'fixture'})
+                intent.write_text(payload)
+                intent.chmod(0o600)
+                with self.assertRaisesRegex(self.module.IntegrityError, 'intent is invalid'):
+                    with manager._mutation_lock(operation='fixture'):
+                        self.fail('invalid intent must block before any mutation')
+                self.assertEqual(payload, intent.read_text())
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        with manager._mutation_lock(operation='fixture'):
+            pass
+
+    def test_operation_intent_duplicate_fields_are_rejected_without_mutation(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        manager = self.manager()
+        for payload in (
+            '{"schemaVersion":1,"state":"pending","state":"complete","operation":"fixture"}',
+            '{"schemaVersion":2,"schemaVersion":1,"state":"complete","operation":"fixture"}',
+            '{"schemaVersion":1,"state":"complete","operation":"unsafe","operation":"fixture"}',
+        ):
+            with self.subTest(payload=payload):
+                intent.write_text(payload)
+                intent.chmod(0o600)
+                with self.assertRaisesRegex(self.module.IntegrityError, 'intent'):
+                    with manager._mutation_lock(operation='fixture'):
+                        self.fail('ambiguous intent must block before any mutation')
+                self.assertEqual(payload, intent.read_text())
+
+    def test_duplicate_installation_state_fields_block_mutation(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        state_path = self.target / '.surveyctl' / 'state.json'
+        original = state_path.read_text()
+        for injected in ('"status":"recovery_required",', '"version":"9.9.9",'):
+            with self.subTest(injected=injected):
+                payload = '{' + injected + original.lstrip()[1:]
+                state_path.write_text(payload)
+                with self.assertRaisesRegex(self.module.IntegrityError, 'installation state is corrupt'):
+                    with manager._mutation_lock(operation='fixture'):
+                        self.fail('ambiguous installation state must block before mutation')
+                self.assertEqual(payload, state_path.read_text())
+        state_path.write_text(original)
+        with manager._mutation_lock(operation='fixture'):
+            pass
+
+    def test_operation_intent_replacement_during_read_blocks_mutation(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        replacement = self.root / 'synthetic-pending.intent'
+        replacement.write_text(json.dumps({'schemaVersion': 1, 'state': 'pending', 'operation': 'fixture'}))
+        replacement.chmod(0o600)
+        original_load = self.module.json.load
+        def swap_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            os.replace(replacement, intent)
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=swap_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'intent identity changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('replaced intent must block before mutation')
+        self.assertEqual('pending', json.loads(intent.read_text())['state'])
+
+    def test_operation_intent_in_place_change_during_read_blocks_mutation(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        original_info = intent.stat()
+        original_load = self.module.json.load
+        def modify_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            replacement = json.dumps({'schemaVersion': 1, 'state': 'pending', 'operation': 'fixture'})
+            intent.write_text(replacement.ljust(original_info.st_size))
+            os.utime(intent, ns=(original_info.st_atime_ns, original_info.st_mtime_ns + 1_000_000_000))
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=modify_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'intent.*changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('changed intent must block before mutation')
+        self.assertEqual(original_info.st_ino, intent.stat().st_ino)
+        self.assertEqual(original_info.st_size, intent.stat().st_size)
+        self.assertEqual('pending', json.loads(intent.read_text())['state'])
+
+    def test_installation_state_in_place_change_during_read_is_rejected(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        state_path = self.target / '.surveyctl' / 'state.json'
+        state = json.loads(state_path.read_text())
+        state['status'] = 'recovery_required'
+        state['recoveryBackup'] = 'synthetic-fixture-backup'
+        state_path.write_text(state_path.read_text() + ' ' * 128)
+        original_info = state_path.stat()
+        self.assertLessEqual(len(json.dumps(state)), original_info.st_size)
+        original_load = self.module.json.load
+        def modify_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            state_path.write_text(json.dumps(state).ljust(original_info.st_size))
+            os.utime(state_path, ns=(original_info.st_atime_ns, original_info.st_mtime_ns + 1_000_000_000))
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=modify_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'state.*changed'):
+                manager._read_state()
+        self.assertEqual(original_info.st_ino, state_path.stat().st_ino)
+        self.assertEqual(original_info.st_size, state_path.stat().st_size)
+        self.assertEqual('recovery_required', json.loads(state_path.read_text())['status'])
+
+    def test_intent_ctime_detects_in_place_change_with_restored_mtime(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        original_info = intent.stat()
+        original_load = self.module.json.load
+        def modify_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            changed = json.dumps({'schemaVersion': 1, 'state': 'pending', 'operation': 'fixture'})
+            intent.write_text(changed.ljust(original_info.st_size))
+            os.utime(intent, ns=(original_info.st_atime_ns, original_info.st_mtime_ns))
+            observed = intent.stat()
+            self.assertEqual(original_info.st_ino, observed.st_ino)
+            self.assertEqual(original_info.st_size, observed.st_size)
+            self.assertEqual(original_info.st_mtime_ns, observed.st_mtime_ns)
+            self.assertEqual(self.module._file_read_snapshot(original_info)[:-1],
+                             self.module._file_read_snapshot(observed)[:-1])
+            if observed.st_ctime_ns == original_info.st_ctime_ns:
+                self.skipTest('filesystem did not expose a distinct ctime for the modification')
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=modify_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'intent.*changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('ctime change must block mutation')
+        self.assertEqual('pending', json.loads(intent.read_text())['state'])
+
+    def test_intent_permission_change_during_read_blocks_mutation(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        original_load = self.module.json.load
+        def change_mode_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            intent.chmod(0o644)
+            return result
+        # Mask ctime to prove the permission field itself triggers rejection.
+        snapshot = self.module._file_read_snapshot
+        with mock.patch.object(self.module, '_file_read_snapshot', side_effect=lambda info: snapshot(info)[:-1]):
+            with mock.patch.object(self.module.json, 'load', side_effect=change_mode_after_read):
+                with self.assertRaisesRegex(self.module.IntegrityError, 'intent.*changed'):
+                    with self.manager()._mutation_lock(operation='fixture'):
+                        self.fail('permission change must block mutation')
+        self.assertEqual(0o644, stat.S_IMODE(intent.stat().st_mode))
+
+    def test_operation_lock_control_directory_swap_blocks_before_yield(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        moved = self.root / 'synthetic-moved-control'
+        original_load = self.module.json.load
+        def swap_parent_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            control.rename(moved)
+            control.symlink_to(moved, target_is_directory=True)
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=swap_parent_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'control directory identity changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('changed control directory must block before yielding')
+        self.assertTrue(control.is_symlink())
+        self.assertTrue((moved / 'operation.intent').is_file())
+
+    def test_operation_lock_replacement_blocks_before_yield(self):
+        self.target.mkdir(mode=0o700)
+        control = self.target / '.surveyctl'
+        control.mkdir(mode=0o700)
+        intent = control / 'operation.intent'
+        intent.write_text(json.dumps({'schemaVersion': 1, 'state': 'complete', 'operation': 'fixture'}))
+        intent.chmod(0o600)
+        original_load = self.module.json.load
+        def replace_lock_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            lock = control / 'operation.lock'
+            lock.rename(control / 'original.lock')
+            lock.touch(mode=0o600)
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=replace_lock_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'operation lock identity changed'):
+                with self.manager()._mutation_lock(operation='fixture'):
+                    self.fail('replaced lock must block before yielding')
+
     def test_verified_bundle_is_the_only_source_of_deployed_files(self):
         manifest, _ = self.write_bundle_manifest()
         self.manager().install(manifest, "survey.example.com", "operations", "operations@example.com")
@@ -354,6 +569,62 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         current.symlink_to(outside)
         with self.assertRaises(self.module.InputError):
             manager.status()
+
+    def test_state_symlink_swap_after_validation_fails_closed(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        state_path = self.target / '.surveyctl' / 'state.json'
+        outside = self.root / 'synthetic-foreign-state.json'
+        outside.write_bytes(state_path.read_bytes())
+        manager._write_state(status='recovery_required', recoveryBackup='fixture-backup')
+        original_check = self.module._regular_file
+        def swap_after_check(path, label):
+            original_check(path, label)
+            if label == 'installation state':
+                path.unlink()
+                path.symlink_to(outside)
+        with mock.patch.object(self.module, '_regular_file', side_effect=swap_after_check):
+            with self.assertRaises(self.module.IntegrityError):
+                manager._read_state()
+        self.assertTrue(state_path.is_symlink())
+        self.assertTrue(outside.is_file())
+
+    def test_state_replacement_during_read_fails_closed(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        state_path = self.target / '.surveyctl' / 'state.json'
+        replacement = self.root / 'synthetic-replacement.json'
+        replacement.write_bytes(state_path.read_bytes())
+        original_load = self.module.json.load
+        def swap_after_read(handle, *args, **kwargs):
+            result = original_load(handle, *args, **kwargs)
+            os.replace(replacement, state_path)
+            return result
+        with mock.patch.object(self.module.json, 'load', side_effect=swap_after_read):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'state identity changed'):
+                manager._read_state()
+        self.assertFalse(replacement.exists())
+        self.assertTrue(state_path.is_file())
+
+    def test_state_parent_directory_swap_after_validation_fails_closed(self):
+        manifest, _ = self.write_bundle_manifest()
+        manager = self.manager()
+        manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        control = self.target / '.surveyctl'
+        moved = self.root / 'synthetic-relocated-control'
+        original_check = self.module._regular_file
+        def swap_parent_after_check(path, label):
+            original_check(path, label)
+            if label == 'installation state':
+                control.rename(moved)
+                control.symlink_to(moved, target_is_directory=True)
+        with mock.patch.object(self.module, '_regular_file', side_effect=swap_parent_after_check):
+            with self.assertRaises(self.module.IntegrityError):
+                manager._read_state()
+        self.assertTrue(control.is_symlink())
+        self.assertTrue((moved / 'state.json').is_file())
 
     def test_upgrade_requires_a_real_verified_backup_before_pull(self):
         manifest, _ = self.write_bundle_manifest()
