@@ -3,6 +3,8 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
+import os
 
 SOURCE = Path(__file__).resolve().parents[1] / 'owned_children.py'
 
@@ -151,6 +153,16 @@ class OwnedChildrenTest(unittest.TestCase):
         token = self.created()
         with self.assertRaises(self.module.ChildBoundaryError):
             self.journal.not_started(token)
+
+    def test_controller_actor_comes_from_kernel_observations_and_rejects_identity_switch(self):
+        pid, parent = os.getpid(), os.getppid()
+        values = {pid: {'pid': pid, 'start': '100', 'parentPid': parent, 'state': 'S'},
+            parent: {'pid': parent, 'start': '90', 'parentPid': 1, 'state': 'S'}}
+        with mock.patch.object(self.module, 'read_process_identity', side_effect=lambda number: values.get(number)):
+            guard = self.module.ControllerProcessGuard()
+            self.assertEqual(pid, guard.check()['pid'])
+            values[pid]['start'] = '101'
+            with self.assertRaises(self.module.ChildBoundaryError): guard.check()
 
 
 if __name__ == '__main__':

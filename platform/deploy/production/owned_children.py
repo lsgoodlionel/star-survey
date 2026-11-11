@@ -100,6 +100,28 @@ class GuardedProcess:
         return deepcopy(self._actor)
 
 
+class ControllerProcessGuard:
+    """Top-level controller identity, not a claim of parent-death containment."""
+    def __init__(self):
+        if threading.current_thread() is not threading.main_thread():
+            raise ChildBoundaryError('controller requires its main thread')
+        current, parent = read_process_identity(os.getpid()), read_process_identity(os.getppid())
+        if current is None or parent is None:
+            raise ChildBoundaryError('controller process identity is unavailable')
+        self.actor = {'pid': current['pid'], 'start': current['start'],
+            'parentPid': parent['pid'], 'parentStart': parent['start']}
+        self.check()
+
+    def check(self):
+        current, parent = read_process_identity(os.getpid()), read_process_identity(self.actor['parentPid'])
+        if (threading.current_thread() is not threading.main_thread() or current is None or parent is None
+                or current['pid'] != self.actor['pid'] or current['start'] != self.actor['start']
+                or current['parentPid'] != self.actor['parentPid'] or parent['start'] != self.actor['parentStart']
+                or current['state'] in ('Z', 'X') or parent['state'] in ('Z', 'X')):
+            raise ChildBoundaryError('controller process or parent identity changed')
+        return deepcopy(self.actor)
+
+
 class ChildJournal:
     """One guarded writer, bounded children, no adoption of a prior journal.
 
