@@ -82,6 +82,22 @@ admin-web 的 nginx 在启动时解析 platform；Compose 要求 platform 健康
 
 受控恢复入口提供之前，这类安装只能由维护者在评估数据后人工处理；进入正式 Release 前需要补上受控恢复，或经维护者确认接受这一限制。
 
+### 只读的新目标恢复计划
+
+含此切片的控制器提供只读 `recovery-plan`，在失败安装没有 `current` 时也可观察已有现场：
+
+```bash
+sudo surveyctl --target /opt/survey recovery-plan --destination /opt/survey-recovered
+# 可选：仅观察某份备份的 metadata；不会解密或验证备份认证
+sudo surveyctl --target /opt/survey recovery-plan --destination /opt/survey-recovered --backup before-upgrade
+```
+
+目标必须尚不存在、无符号链接，并且不与原安装目录重叠；不会创建它。命令仅在已有私有锁上取得短暂 flock，读取有界文件并复查身份/元数据，不启动 Docker/helper、不读密钥、不写安装目录、目标或操作标记。异常、锁冲突、替换或不安全文件均失败关闭。旧控制器可能没有此命令；不要更换旧工具去绕过现有门禁。
+
+输出始终为 `status=execution-blocked`、`executable=false`。退出 0 表示只读观察完成，**不是恢复或清理成功**。备份 metadata 指纹不代表 HMAC、签名、密文或卷内容验证；观察指纹不是授权、租约，也不能证明旧 helper/外部写入者停止。同权限写入者或管理员仍可能在检查后改变现场，不能把这份计划直接交给旧 restore helper 执行。
+
+受控执行、原地恢复、标记解除及卸载仍保持既有阻断。后续按[受控恢复计划](../../../docs/superpowers/plans/2026-11-11-wave6-controlled-recovery.md)在全新隔离目标证明来源、helper/明文 containment、人员失效、数据和资源清理，再考虑接通执行；Release 工作流不在本切片修改范围。
+
 安装、升级和回滚启动后，对仍处于 running/starting 的服务最多等待 120 秒；只有全部既有健康检查通过且 engine-init 成功退出才继续。unhealthy、缺失服务或初始化异常仍阻断，status 保持即时检查。本次修复的四节点完整生产生命周期尚待独立验收；原生 admin 探针诊断不能替代 readiness。
 
 ```bash
