@@ -1,0 +1,109 @@
+name: Project · 合并后同步 PR 卡片
+
+# Owner decision 2026-11-11 (#116, P2 / Q5): after a PR is merged into main,
+# set only that PR's card on Project 1 to "完成". Stage issues stay manual.
+# Runs on push to main, so only the workflow definition already on main runs
+# with the secret. Missing secret or API failure is reported as "pending sync".
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: project-sync-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: 同步已合并 PR 的看板状态（只提示失败）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # No checkout: only the GitHub API is needed.
+      - name: 把本次合并的 PR 卡片设为完成
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+          PROJECT_ID: PVT_kwHOC4nO4M4BpzDd
+          STATUS_FIELD_ID: PVTSSF_lAHOC4nO4M4BpzDdzhoM-D8
+          DONE_OPTION_ID: '98236657'
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          def rest(path):
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/' + path,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json'})
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.loads(response.read())
+              except urllib.error.HTTPError as error:
+                  raise RuntimeError(f'GitHub API failed: HTTP {error.code}') from None
+
+          def graphql(query, variables):
+              request = urllib.request.Request(
+                  'https://api.github.com/graphql',
+                  data=json.dumps({'query': query, 'variables': variables}).encode(),
+                  method='POST',
+                  headers={'Authorization': 'Bearer ' + os.environ['PROJECT_TOKEN'],
+                           'Content-Type': 'application/json'})
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      body = json.loads(response.read())
+              except urllib.error.HTTPError as error:
+                  raise RuntimeError(f'GraphQL failed: HTTP {error.code}') from None
+              if body.get('errors'):
+                  raise RuntimeError('GraphQL returned errors')
+              return body['data']
+
+          ITEMS = '''query($node: ID!) { node(id: $node) { ... on PullRequest {
+            projectItems(first: 20) { nodes { id project { id } } } } } }'''
+          SET = '''mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+            updateProjectV2ItemFieldValue(input: {projectId: $project, itemId: $item, fieldId: $field,
+              value: {singleSelectOptionId: $option}}) { projectV2Item { id } } }'''
+
+          def merged_prs(sha):
+              return [pr for pr in rest(f'commits/{sha}/pulls')
+                      if pr.get('merged_at') and pr.get('merge_commit_sha') == sha
+                      and pr.get('base', {}).get('ref') == 'main']
+
+          def sync(pr):
+              data = graphql(ITEMS, {'node': pr['node_id']})
+              items = [item['id'] for item in data['node']['projectItems']['nodes']
+                       if item['project']['id'] == os.environ['PROJECT_ID']]
+              if not items:
+                  return f"#{pr['number']} 不在看板上，未改动"
+              graphql(SET, {'project': os.environ['PROJECT_ID'], 'item': items[0],
+                            'field': os.environ['STATUS_FIELD_ID'], 'option': os.environ['DONE_OPTION_ID']})
+              return f"#{pr['number']} 卡片已设为完成"
+
+          def main():
+              lines = ['## 看板同步（只同步 PR 卡片，阶段 Issue 仍人工维护）', '']
+              if not os.environ.get('PROJECT_TOKEN'):
+                  print('::notice::未配置 PROJECT_SYNC_TOKEN：看板待同步')
+                  lines.append('**待同步**：未配置 `PROJECT_SYNC_TOKEN`，本次没有改动看板。')
+              else:
+                  try:
+                      prs = merged_prs(os.environ['GITHUB_SHA'])
+                      lines += [sync(pr) for pr in prs] or ['本次推送不是 PR 合并，未改动看板。']
+                  except Exception as error:  # Never claim the board is in sync on failure.
+                      print(f'::notice::看板待同步：{type(error).__name__}')
+                      lines.append(f'**待同步**：API 调用失败（{type(error).__name__}），看板状态未确认。')
+              text = '\n'.join(lines) + '\n'
+              summary = os.environ.get('GITHUB_STEP_SUMMARY')
+              if summary:
+                  with open(summary, 'a', encoding='utf-8') as handle:
+                      handle.write(text)
+              print(text)
+
+          if __name__ == '__main__':
+              main()
+          PY
