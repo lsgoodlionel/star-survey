@@ -281,6 +281,22 @@ class PrivateStoreTest(unittest.TestCase):
         self.store.save({'phase': 'claim-pending'})
         self.assertEqual({'phase': 'claim-pending'}, self.store.load())
         self.assertEqual(0o600, stat.S_IMODE(self.path.stat().st_mode))
+    def test_child_receipts_cannot_overwrite_the_owner_or_operation_gate(self):
+        self.store.save({'phase': 'ready'})
+        gate = self.control / 'operation.intent'
+        gate.write_bytes(b'preserve-pending')
+        gate.chmod(0o600)
+        for role in ('child', 'exec', 'launch'):
+            name = 'runtime-' + role + '-' + 'a' * 32 + '.json'
+            child = self.module.PrivateStore(self.target, name=name)
+            child.save({'phase': 'pending'})
+            self.assertEqual({'phase': 'pending'}, child.load())
+        for name in ('', 'runtime-owner.json', 'operation.intent', '../foreign', '/tmp/foreign',
+                     'runtime-child-' + 'a' * 31 + '.json', True):
+            with self.subTest(name=name), self.assertRaises(self.module.OwnershipError):
+                self.module.PrivateStore(self.target, name=name)
+        self.assertEqual({'phase': 'ready'}, self.store.load())
+        self.assertEqual(b'preserve-pending', gate.read_bytes())
     def test_shared_write_or_read_record_is_not_repaired_or_replaced(self):
         self.path.write_text('{"x":1}')
         self.path.chmod(0o644)

@@ -181,10 +181,14 @@ class PrivateStore:
     NAME = 'runtime-owner.json'
     LIMIT = 65536
 
-    def __init__(self, target):
+    def __init__(self, target, *, name=None):
         self.target = Path(target)
         if not self.target.is_absolute() or '..' in self.target.parts:
             raise OwnershipError('ownership store path is invalid')
+        if name is not None:
+            if not isinstance(name, str) or not re.fullmatch(r'runtime-(?:child|exec|launch)-[0-9a-f]{32}\.json', name):
+                raise OwnershipError('child receipt name is invalid')
+            self.NAME = name
         self.control = self.target / '.surveyctl'
 
     @staticmethod

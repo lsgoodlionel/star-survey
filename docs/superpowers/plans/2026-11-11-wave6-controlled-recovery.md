@@ -107,3 +107,13 @@ Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→h
 首个注入补丁仅修改候选backup.AuthenticatedOpenSSLCipher的runner/参数桥，未选择新的运行入口：3项先红后绿的合成回归验证匿名参数交接、原HMAC字节封装、认证失败不启动runner、失败仍传播且清除自身cipher临时文件；既有backup/restore 43项通过。该回归的fake runner不证明真实OpenSSL或子进程收束，后续需真实FD继承/父死亡约束及受控binary执行、容量限制与结束回执。
 
 后续实施包保持单一写入者：①主线程受控launcher先持久化pending，再启动受父死亡约束的child，记录PID/starttime之后才释放启动管道；已结束/未知结果分别记录，不能从空进程集合猜成功。②OpenSSL只接收受控输入/输出/密钥FD，不将密钥值放argv或日志；限制文件大小及运行时间，失败先确认已知child结束再释放lease。③Docker exec创建/启动/结束绑定实际ExecID、containerID和固定profile；失联保留pending，不靠CLI零退出。④controller在创建起记录实际资源，已知失败才允许受控精确清理并验证后置条件；unknown/pending仍拒绝，不手动删marker。⑤最后才改运行接线和打包清单，并与Claude协调；Release/恢复/原生门禁不在本窗口解除。
+
+### 受控 OpenSSL 子进程切片（未接产品控制器）
+
+`owned_children.py`核对Linux主线程PID/starttime及父死亡/no-new-privileges约束；私有child receipt先pending、再记录实际PID/starttime、持久化released后才允许stdin释放。`owned_crypto.py`只提供固定encrypt/decrypt profile，拒绝自定义OpenSSL环境；实际bootstrap核对FD/二进制身份、输入封印、文件预算和时间上限，再以FD执行固定OpenSSL。未知终止或结束观察失败不能变成KnownCryptoFailure，保留released，不声称可释放明文lease。实际controller还必须持有这些lease并完成受控错误接线，当前没有启用。
+
+新增回归先复现“退出0但仍活着/无法查询”误分类，修复后7项executor测试通过；child journal11项、匿名workspace14项、receipt名称38项、cipher桥5项和旧backup/restore43项通过。真实Linux实验还复现首次加密0、解密1：OpenSSL fd:读取会消耗共享密钥FD偏移。bootstrap在每次exec前将密钥offset归零后，同一密钥的真实往返退出码0/0。没有改密钥内容、HMAC、加密格式或旧包。
+
+真实入口为`tests/integration/owned_crypto_native.py --image python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e`。只用本地固定镜像和合成数据，非特权65534、无网络/端口/host挂载、只读rootfs、有限tmpfs/PID/CPU/内存；独立核对自己创建的容器身份及隔离属性。最新实测真实往返、截断密文拒绝、超时child已结束、tmp顶层没有额外命名文件、测试容器删除均通过，exit0。各模块运行前后及容器内SHA一致；crypto模块649dbf55…、bootstrap627a983f…；该实验不验证备份HMAC、更不替代产品清理或四平台准出。`/tmp`顶层检查不证明进程无其他FD副本。非作者复核发现外层仅核bool类型会接受false的P2，现增加独立全部为true及严格0/0退出检查，并补失败证据负例；不能靠子进程exit0兜底。
+
+并行状态复查：远端main9b3b4e080dff合入#127，仅协作提示/看板及其测试，与本切片无文件重叠；#125保持Draft及原head9f8c7c7b，不把WIP分支组件绿灯回填为其controller已交付。当前未打包新运行入口，Docker exec、实际backup/verify helper、失败安装和卸载后置核验尚未闭环，方案B/恢复/native/上传/稳定版门禁全部保持。Release仍由Claude负责。
