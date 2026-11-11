@@ -62,6 +62,20 @@ class CohortProbe:
                 or not self._ended(actor['pid'], actor['start'], owner=not retired)):
             return False
         suffix = record['operationId'].replace('-', '') + '.json'
+        if record.get('kind') == 'controlled-container-helper':
+            if (name != 'runtime-launch-' + suffix or set(record) != {'schemaVersion', 'kind', 'operationId',
+                    'installationId', 'owner', 'daemonId', 'profile', 'image', 'phase', 'containerId', 'exitCode'}
+                    or record['daemonId'] != owner['daemonId'] or record['profile'] != 'caddy-hash'
+                    or record['phase'] not in ('completed', 'failed') or type(record['exitCode']) is not int
+                    or not 0 <= record['exitCode'] <= 255
+                    or record['phase'] == 'completed' and record['exitCode'] != 0
+                    or not isinstance(record['image'], str) or record['image'].startswith('-')
+                    or not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', record['image'])
+                    or not isinstance(record['containerId'], str) or not ownership.HEX64.fullmatch(record['containerId'])):
+                return False
+            # A terminal flag or stopped container is insufficient: a retained
+            # container can be started again. Pending never reaches this check.
+            return self.api.container_absent(record['containerId']) is True
         if record.get('kind') == 'controlled-docker-exec':
             if (name != 'runtime-exec-' + suffix or set(record) != {'schemaVersion', 'kind', 'operationId', 'installationId',
                     'owner', 'daemonId', 'containerId', 'profile', 'phase', 'execId', 'exitCode'}

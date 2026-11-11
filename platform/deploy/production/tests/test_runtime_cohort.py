@@ -74,6 +74,29 @@ class RuntimeCohortTest(unittest.TestCase):
         self.absent = True
         self.assertEqual('unknown', self.probe())
 
+    def test_hash_helper_requires_terminal_receipt_and_original_container_absence(self):
+        self.owner()
+        value = {'schemaVersion': 1, 'kind': 'controlled-container-helper',
+            'operationId': '00000000-0000-4000-8000-000000000001', 'installationId': self.installation,
+            'owner': {'pid': 44, 'start': '440', 'parentPid': 33, 'parentStart': '330'},
+            'daemonId': 'daemon-fixture', 'profile': 'caddy-hash',
+            'image': 'caddy@sha256:' + 'd' * 64, 'phase': 'completed',
+            'containerId': 'c' * 64, 'exitCode': 0}
+        store = self.store_type(self.target, name='runtime-launch-' + value['operationId'].replace('-', '') + '.json')
+        store.save(value)
+        self.assertEqual('unknown', self.probe())  # Even a stopped helper could restart.
+        self.absent = True
+        self.assertEqual('quiescent', self.probe())
+        for updates in ({'phase': 'released'}, {'exitCode': False}, {'exitCode': 1},
+                        {'daemonId': 'other'}, {'profile': 'arbitrary'}, {'image': 'caddy:latest'},
+                        {'containerId': 'not-an-id'}, {'unexpected': True}):
+            store.save(dict(value, **updates))
+            self.assertEqual('unknown', self.probe(), updates)
+        store.save(dict(value, phase='failed', exitCode=126))
+        self.assertEqual('quiescent', self.probe())  # Known failed/removed is ended, not a success.
+        self.live[44] = {'pid': 44, 'start': '440', 'parentPid': 33, 'state': 'S'}
+        self.assertEqual('unknown', self.probe())
+
     def test_wrong_installation_bool_status_unknown_files_and_replaced_lock_are_rejected(self):
         self.owner(); self.receipt(installationId='00000000-0000-4000-8000-000000000003')
         self.assertEqual('unknown', self.probe())
