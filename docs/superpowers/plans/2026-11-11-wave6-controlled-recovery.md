@@ -69,3 +69,5 @@ rc20 run42790836656 的四个 Native job 都在 `Block native lifecycle before h
 下一运行接入包必须包括：由已验签 Compose/manifest 产生闭合 contract；创建前归属与实际创建回执；controller/helper 的受控启动链与 Docker exec 身份/结束回执；删除前后核验。PGID、一次 ps 或当前 ExecIDs 为空均不能证明任意旧直接工具未来不会并发；单栈唯一入口是受控启动链的信任边界，不是扫描所得证明。已签 rc19 backup helper 使用 Compose exec、部分 pause 后才标记恢复责任，并在 finally 以服务名 unpause/up --remove-orphans；这些实际调用也须被适配器约束或明确调整跨版本 helper 执行契约，不能静默修改旧包或宣称已有回执。
 
 本节只是实现/测试范围，不是运行许可或已完成安全证明；四道原生/清理阻断保持，Release 仍由 Claude 负责。已保存的保守测试在 main4756b6dc 上有两项预期安全断言失败，失败安装保留及 restore 拒绝不改 state/intent 通过；尚无真实 Docker 清理验收。
+
+组件PR另在现有 production-smoke workflow 增加独立 ownership-protocol job：GitHub hosted Ubuntu24.04，contents:read，无OIDC/registry登录/持久凭据，先跑定向回归，再按固定Alpine digest获取测试镜像，执行随机空资源正常旅程并上传单份固定JSON。新增成本为一个轻量节点及一次小镜像拉取，不构建产品或触发Release；真实运行结果以该PR精确head的CI为准。10分钟job终止/runner中断可能阻止finally及JSON完成，此时不得宣称清理已验证；宿主销毁不是产品清理证明。
