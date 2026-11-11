@@ -1,9 +1,9 @@
 # 多 Agent / 多人协同开发工作流（star-survey 实施版）
 
-> 状态：**草案 v4（2026-11-11）**。v1 由 Claude Code 起草，v2–v4 按 Codex 的三轮独立协议审查（[PR #115 评论](https://github.com/lsgoodlionel/star-survey/pull/115)）修订，待 Owner 决定。
+> 状态：**v1.0，Owner 于 2026-11-11 批准**（[§14 逐项决定](https://github.com/lsgoodlionel/star-survey/issues/116#issuecomment-6791322338)）。草案由 Claude Code 起草，按 Codex 的三轮独立协议审查（[PR #115 评论](https://github.com/lsgoodlionel/star-survey/pull/115)）修订。
 > 关系：[`AGENTS.md`](../../AGENTS.md) 是**硬规则**（必须遵守）；本文是**协作协议**（如何分工、交接、留痕）。两者冲突时以 `AGENTS.md` 为准。
 > 来源：通用的 GitHub 多 Agent 协作方案，加上 2026-11-02 至 11-11 间 Claude Code 与 Codex 协作推进 Wave 0–6 和首个 Release 的实际经验（#37–#41、#83–#117）。
-> 本文中的机制**都是约定或建议**，标注「可选」的自动化在 Owner 批准前不会实施。
+> 本文中的机制都是约定。自动化只有 §12 中 Owner 已批准的两项（Q3 冲突提示、Q5 看板同步，只提示不拦截），其余「可选」项仍需 Owner 另行批准。
 
 ---
 
@@ -53,7 +53,7 @@
   - `labeler.yml`：PR 打标签和冲突提示；
   - `review-labeler.yml`：approve 后更新标签；
   - `codex-autofix.yml`：手动触发，最多改 5 个文件、最多两次，失败即停，不自动合并。使用前要先读失败日志、实际的 workflow 和脚本以及对应的 run。自动修复的输出**不等于**审查或 CI 已通过。
-- **治理约束**：`docs/agent/PROJECT_MEMORY.md` 记录了 **2026-10-28 Owner 决定移除自建控制平面及其治理 CI**。因此本文所有新增的自动化都是可选项，需要 Owner 另外明确决定。
+- **治理约束**：`docs/agent/PROJECT_MEMORY.md` 记录了 **2026-10-28 Owner 决定移除自建控制平面及其治理 CI**。2026-11-11 Owner 只对 Q3 冲突提示和 Q5 看板同步两项做了细化（只提示不拦截，先实测用量），其余自动化仍然不引入。
 - **上游文件**：根目录的 `CONTRIBUTING.md` 和 `.github/pull_request_template.md` 来自 LimeSurvey vendor 快照（`836af0f8a9`），**不改**。
 - **执行环境**：
   - 仓库外的方案文档（例如 02 需求矩阵原件）在 Owner 的 Mac 上；
@@ -80,17 +80,19 @@
 
 **环境绑定任务**：需要特定机器、真实凭据或外部环境的步骤，标为 `env:mac` 等标签，由**能访问该环境的执行者**来做（通常是 Codex），不默认要求 Owner 动手。真实凭据和生产步骤仍需按 §8 取得**具体授权**。
 
-### 3.2 责任区（截至 2026-11-11；以当前认领和 Owner 指派为准）
+### 3.2 责任区（Owner 于 2026-11-11 确认；以当前认领和 Owner 指派为准）
 
 | 责任区 | 默认负责人 | 典型路径 | 典型 Issue |
 |---|---|---|---|
-| Release 工作流、tag、候选登记、发布说明、Release 发布 | Claude Code | `.github/workflows/release.yml`、`.github/release/`、`platform/deploy/production/release/` | #34 |
-| 生产控制器、受控恢复、原生生命周期、安装目录安全 | Codex | `platform/deploy/production/surveyctl.py`、`backup.py`、`restore.py` 及其测试 | #33、#108、#109、#114 |
-| Wave 1/3/4 验收对账与产品修复 | Codex | `platform/apps/admin-web/`、`platform/services/business/` 中的对应功能 | #38、#39、#40 |
-| 下一版本范围盘点 | Codex（等 Owner 定范围） | `platform/docs/productization/` | #106、#107 |
-| 需求追溯（reqtrace） | Codex（由 #112 指派） | `platform/tools/traceability/` | #112、#117 |
-| 生产 Compose 与 Caddy 静态加固 | 最近一次由 Claude Code 负责（#104） | `platform/deploy/production/compose.yml`、`Caddyfile` | #37 |
-| 人工验收、发布批准、生产与公网 | **Owner** | — | #41、#34 |
+| Release 工作流、tag、候选登记、发布说明、Release 发布 | Claude Code | `.github/workflows/release.yml`、`.github/release/`、`platform/deploy/production/release/` | #34、#119 |
+| 下一版本范围文档（W01–W20 盘点与决策清单） | Claude Code（#121 移交） | `platform/docs/productization/next-version-gap-intake.md` | #106 |
+| 阶段记录、Wiki、看板对齐 | Claude Code | 各阶段 Issue 的「当前状态」、Wiki `Wave-Status` | #32–#40 |
+| 非作者复核 | Claude Code 与 Codex 互相复核 | — | 各 PR |
+| 核心问卷实现（编辑器、访问策略、作答、导出等） | Codex | `platform/apps/admin-web/`、`platform/services/business/`、`platform/tools/publish-gateway/` | #106（A 组切片）、#38、#39、#40 |
+| 生产控制器、受控恢复、原生生命周期、安装目录安全 | Codex | `platform/deploy/production/surveyctl.py`、`backup.py`、`restore.py` 及其测试 | #33 |
+| 需求追溯（reqtrace） | Codex | `platform/tools/traceability/` | #112、#117 |
+| 生产 Compose 与 Caddy 静态加固 | 最近一次由 Claude Code 负责（#104），按认领 | `platform/deploy/production/compose.yml`、`Caddyfile` | #37 |
+| 人工验收、合并授权、发布批准、生产与公网、仓库设置 | **Owner** | — | #41、#34 |
 
 **规则**：
 1. 在别人的责任区里发现问题，**不要直接改**。新开一个 Issue，写清问题、利用条件、建议的修法和验收标准，放进看板，并与相关 Issue 互相引用（例如 #109）。
@@ -318,10 +320,10 @@
 
 | 阶段 | 内容 | 执行者 | 前提 |
 |---|---|---|---|
-| **P0（只靠约定）** | 本文定稿并合并；按 §5、§7、§9 执行 | Claude、Codex | Owner 批准本文 |
-| **P1（模板与标签）** | 新增 §5 列出的标签；在 `.github/ISSUE_TEMPLATE/` 下新增「任务」「交接」「环境绑定任务」三个模板（不动上游 PR 模板）；一行 `CLAUDE.md`；可选的 `.github/agent-lanes.yml` | Claude 起草，Owner 批准 | — |
-| **P2（轻量自动化，可选）** | Q3、Q4、Q5 中「以后可选」的部分，逐项单独决定 | 起草后由 Owner 决定 | **Owner 明确推翻或细化 2026-10-28 的「移除治理 CI」决定**，并逐项确认权限和成本 |
-| **P3（身份与保护）** | 每个 Agent 一个 GitHub App 身份（PAT 只能限权，不能区分身份）；为 `main` 建 ruleset（要求 PR、要求审批、要求检查通过、禁止 force push）；目标是 Release 发布只由 Owner 执行，具体靠什么控制实现、是否有效，要先设计并实测（§11 Q1） | Owner | Q1 的设计与验证完成 |
+| **P0（只靠约定）** | 本文定稿并合并；按 §5、§7、§9 执行 | Claude、Codex | ✅ Owner 已批准（2026-11-11） |
+| **P1（模板与标签）** | 新增 §5 列出的标签；在 `.github/ISSUE_TEMPLATE/` 下新增「任务」「交接」「环境绑定任务」三个模板（不动上游 PR 模板）；一行 `CLAUDE.md`；可选的 `.github/agent-lanes.yml` | Claude 起草，Owner 批准 | ✅ Owner 决定全部新增，合并前给 Owner 看 |
+| **P2（轻量自动化）** | ✅ 只引入 **Q3 冲突提示**和 **Q5 看板同步**，只提示不拦截，先实测用量；Q4 不引入 | Claude 起草，Owner 批准 PR | Owner 已细化 2026-10-28 的决定，仅限这两项；PR 中写明权限、凭据和成本 |
+| **P3（身份与保护）** | ✅ 第一步：为 `main` 开**基础 ruleset**，即禁止 force push、禁止删除、必须通过 `Survey CI required`，**不要求审批**。以后再做：每个 Agent 的 GitHub App 身份（PAT 只能限权，不能区分身份）、要求审批，以及让 Release 只由 Owner 发布（§11 Q1，要先设计并实测） | Claude 写设置步骤，**Owner 自己操作** | 基础 ruleset 无前提；其余项要等 Q1 的设计与验证 |
 
 ---
 
@@ -342,10 +344,16 @@
 
 ---
 
-## 14. 待 Owner 决策
+## 14. Owner 决定（2026-11-11）
 
-1. 是否批准本文作为协作协议（P0）。
-2. 是否新增 §5 的标签、Issue 模板和 `CLAUDE.md`（P1）。
-3. 是否、以及在哪些具体项上重新引入轻量治理自动化（P2）。
-4. 是否为每个 Agent 建立独立身份，并为 `main` 启用 ruleset（P3）。
-5. 责任区表（§3.2）是否需要调整。
+[原始记录](https://github.com/lsgoodlionel/star-survey/issues/116#issuecomment-6791322338)
+
+| # | 事项 | 决定 |
+|---|---|---|
+| 1 | 责任区表（§3.2） | 按建议更新（见 §3.2） |
+| 2 | P1 标签、Issue 模板、`CLAUDE.md` | 全部新增，由 Claude 起 PR，合并前给 Owner 看 |
+| 3 | P2 轻量自动化 | 只引入 Q3 冲突提示和 Q5 看板同步，只提示不拦截，先实测用量 |
+| 4 | P3 身份与保护 | 先只开基础 ruleset（不要求审批），由 Owner 自己在 GitHub 设置中操作；App 身份以后再做 |
+| 5 | P0 批准本文 | 批准，改完后合并 |
+
+这些决定不授权 Agent 修改仓库设置或权限；P1、P2 的改动各自走 PR、CI、复核和合并授权。
