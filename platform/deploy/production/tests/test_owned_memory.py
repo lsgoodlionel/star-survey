@@ -216,6 +216,88 @@ class AnonymousWorkspaceTest(unittest.TestCase):
             with self.assertRaises(OSError): os.fstat(value)
         workspace.close()
 
+    def test_anchor_close_failure_blocks_recreation_and_never_retries_close(self):
+        for operation in ('unlink', 'close'):
+            for replaced in (False, True):
+                with self.subTest(operation=operation, replaced=replaced):
+                    workspace = self.module.AnonymousWorkspace(_backend=PortableFDBackend())
+                    path = workspace / 'payload'
+                    with path.open('xb') as handle: handle.write(b'owned')
+                    public, anchor = path._entry['fd'], path._entry['anchor']
+                    identity, close, attempts = path._entry['identity'], os.close, []
+                    with tempfile.TemporaryFile() as foreign:
+                        def fail_reference(fd):
+                            if fd == anchor:
+                                attempts.append(fd)
+                                if replaced:
+                                    close(fd)
+                                    os.dup2(foreign.fileno(), fd, inheritable=False)
+                                raise OSError('synthetic uncertain close')
+                            close(fd)
+                        try:
+                            with mock.patch.object(self.module.os, 'close', side_effect=fail_reference):
+                                with self.assertRaises(self.module.WorkspaceError):
+                                    (path.unlink if operation == 'unlink' else workspace.close)()
+                                self.assertTrue(workspace._close_failed)
+                                self.assertIsNone(path._entry['fd'])
+                                self.assertEqual(anchor, path._entry['anchor'])
+                                self.assertEqual(identity, path._entry['identity'])
+                                with mock.patch.object(workspace._backend, 'create') as allocate:
+                                    for action in (lambda: path.open('xb'), lambda: workspace / 'other', workspace.close):
+                                        with self.assertRaises(self.module.WorkspaceError): action()
+                                    with self.assertRaises(self.module.WorkspaceError):
+                                        with path.export_for_child(write=True): pass
+                                    allocate.assert_not_called()
+                                self.assertEqual([anchor], attempts)
+                            os.fstat(anchor)  # Unknown outcome is not a licence to close again.
+                            if replaced:
+                                os.pwrite(anchor, b'foreign', 0)
+                                self.assertEqual(b'foreign', os.pread(foreign.fileno(), 7, 0))
+                            with self.assertRaises(OSError): os.fstat(public)
+                        finally:
+                            close(anchor)  # Independent fault-fixture disposal, not workspace recovery.
+
+    def test_allocation_cleanup_unknown_preserves_references_without_retry(self):
+        workspace = self.module.AnonymousWorkspace(_backend=PortableFDBackend())
+        path = workspace / 'payload'
+        close, attempts = os.close, []
+        def fail_close(fd):
+            attempts.append(fd)
+            raise OSError('synthetic cleanup failure')
+        # Backend allocation happens first; fault injection then concerns only
+        # the workspace's own duplicate and its error-cleanup path.
+        fd = PortableFDBackend().create('allocation-cleanup-fault')
+        workspace._backend = mock.Mock()
+        workspace._backend.create.return_value = fd
+        try:
+            with mock.patch.object(self.module.os, 'set_inheritable', side_effect=[None, OSError('protection failure')]), \
+                 mock.patch.object(self.module.os, 'close', side_effect=fail_close):
+                with self.assertRaises(self.module.WorkspaceError): path.open('xb')
+                self.assertTrue(workspace._close_failed)
+                self.assertEqual(fd, path._entry['fd'])
+                self.assertEqual([path._entry['anchor']], attempts)
+                for action in (lambda: path.open('xb'), workspace.close):
+                    with self.assertRaises(self.module.WorkspaceError): action()
+                self.assertEqual(1, len(attempts))
+        finally:
+            close(path._entry['anchor'])
+            close(fd)
+
+    def test_new_allocation_after_known_retirement_has_its_own_close_attempt(self):
+        workspace = self.workspace()
+        path = workspace / 'payload'
+        with path.open('xb') as handle: handle.write(b'owned')
+        path.unlink()
+        fd = PortableFDBackend().create('new-allocation')
+        backend = mock.Mock()
+        backend.create.return_value = fd
+        workspace._backend = backend
+        with mock.patch.object(self.module.os, 'set_inheritable', side_effect=[None, OSError('protection failure')]):
+            with self.assertRaises(OSError): path.open('xb')
+        self.assertFalse(workspace._close_failed)
+        self.assertIsNone(path._entry['anchor'])
+        with self.assertRaises(OSError): os.fstat(fd)
+
     def test_no_disk_fallback_when_linux_memfd_is_unavailable(self):
         from unittest import mock
         with mock.patch.object(self.module.os, 'memfd_create', None, create=True):

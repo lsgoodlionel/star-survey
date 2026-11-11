@@ -103,16 +103,29 @@ class AnonymousWorkspace:
         return info
 
     def _close_anchor(self, entry):
+        if entry.get('anchor_close_attempted'):
+            raise WorkspaceError('anonymous reference close outcome is unknown; retry forbidden')
         self._anchor_info(entry)
-        os.close(entry['anchor'])
+        entry['anchor_close_attempted'] = True  # Before close; failure may mean the FD was released.
+        try:
+            os.close(entry['anchor'])
+        except BaseException as exc:
+            self._close_failed = True
+            if isinstance(exc, OSError):
+                raise WorkspaceError('anonymous reference retirement is unverified') from exc
+            raise
         entry['anchor'] = None
 
     def _retire(self, entry):
         self._check(entry)
-        os.close(entry['fd'])
-        entry['fd'] = None
-        self._close_anchor(entry)
-        entry.update(identity=None, sealed=False)
+        try:
+            os.close(entry['fd'])
+            entry['fd'] = None
+            self._close_anchor(entry)
+            entry.update(identity=None, sealed=False)
+        except BaseException:
+            self._close_failed = True
+            raise
 
     def _total(self):
         return sum(self._check(entry).st_size for entry in self._entries.values() if entry['fd'] is not None)
@@ -126,30 +139,41 @@ class AnonymousWorkspace:
             if name not in self._entries:
                 if len(self._entries) >= self.max_files or self._exports:
                     raise WorkspaceError('anonymous file set is full or exported')
-                self._entries[name] = {'fd': None, 'anchor': None, 'identity': None, 'sealed': False, 'handles': 0}
+                self._entries[name] = {'fd': None, 'anchor': None, 'identity': None,
+                                      'anchor_close_attempted': False, 'sealed': False, 'handles': 0}
             return AnonymousFile(self, name, self._entries[name])
 
     def _create(self, entry):
         self._live()
         if self._exports:
             raise WorkspaceError('cannot allocate during a child export')
+        if entry['fd'] is not None or entry.get('anchor') is not None:
+            raise WorkspaceError('anonymous allocation cannot overwrite retained references')
+        entry['anchor_close_attempted'] = False  # A new allocation after fully verified retirement.
         fd = self._backend.create('survey-plain-' + self._nonce)
-        anchor = None
+        anchor, identity = None, None
         try:
             os.set_inheritable(fd, False)
             os.fchmod(fd, 0o600)
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 0 or info.st_size != 0:
                 raise WorkspaceError('backend did not create an empty anonymous file')
+            identity = self._identity(info)
             anchor = os.dup(fd)  # Python's dup is non-inheritable; never exported.
             os.set_inheritable(anchor, False)
-            entry.update(fd=fd, anchor=anchor, identity=self._identity(info), sealed=False)
+            entry.update(fd=fd, anchor=anchor, identity=identity, anchor_close_attempted=False, sealed=False)
             self._check(entry)
         except BaseException:
-            if anchor is not None:
-                os.close(anchor)
-            os.close(fd)
-            entry.update(fd=None, anchor=None, identity=None)
+            # Preserve partially allocated references if cleanup itself is unknown.
+            entry.update(fd=fd, anchor=anchor, identity=identity)
+            try:
+                if anchor is not None:
+                    self._close_anchor(entry)
+                os.close(fd)
+                entry.update(fd=None, anchor=None, identity=None)
+            except BaseException:
+                self._close_failed = True
+                raise
             raise
 
     @contextmanager
@@ -211,7 +235,7 @@ class AnonymousWorkspace:
                     failed = True
                     # Release only the independently validated private reference;
                     # never the foreign public FD. The workspace stays failed.
-                    if entry.get('anchor') is not None:
+                    if entry.get('anchor') is not None and not entry.get('anchor_close_attempted'):
                         try:
                             self._close_anchor(entry)
                         except (OSError, WorkspaceError):

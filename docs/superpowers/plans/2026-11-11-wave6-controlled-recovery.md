@@ -183,3 +183,7 @@ Owner另明确批准FD身份安全限定修复。原head72c94843的真实维护/
 匿名workspace现在为每个文件保留独立、不可继承且不导出的私有duplicate，持续钉住原inode，防止公开FD关闭后原对象释放并被重用。原FD与reference均需匹配已记录身份/私有匿名条件；原FD被外来对象替换时不关闭外来FD，只释放仍可独立验证的本方reference，workspace永久failed，不能恢复成成功。reference自身未知则保留未知状态，不猜测close。正常close/unlink及分配/protection失败均测试两FD释放；无磁盘fallback。边界明确不防御任意同进程代码并发篡改FD表，尤其检查后再替换或同时替换两FD，不承诺此类竞态安全。
 
 先红新增引用/释放测试，保留原replacement安全断言；18项便携workspace、82项owned组件测试通过。真实非root/ALL-drop/NNP/network-none/readonly Linux memfd入口扩为9项：identityPinnedAcrossReplacement、foreignReplacementRejected、noReferenceDescriptorLeaks等均true，exit0、源码前后SHA一致、临时容器cleanup verified，JSON `/tmp/survey-pr129-memfd-pin-20261111.json`。真实memfd路径验证原对象存活时外来同mode/uid匿名文件身份不同，不把它追溯当旧CI inode重用记录。入口已接既有ownership质量job，精确提交的Linux在线结果仍需核实，未扩大权限、未操作Release/候选/生产，全部资格门禁保留。
+
+独立复核后，故障注入确认了部分退役缺口：public FD已关闭但anchor close失败时，unlink未封锁workspace；workspace.close还可能再次尝试同一anchor。先红覆盖unlink/close、close前报错及close后号码已被外来FD复用四种组合。现在close前记录anchor_close_attempted，任何退役close未知立即永久failed，保留FD/identity记录；不重试、不允许同名/新文件或export，不将未知状态改为成功。分配错误清理也保留部分引用，不能覆盖，只有完整已验证退役后的新分配可重置尝试标记。正常清理仍释放已验证本方FD，未知引用保留至进程退出，不能称无残留。
+
+21项便携workspace、85项owned测试通过；真实Linux memfd新增uncertainRetirementBlocksReuse（实际close后dup2外来FD再注入错误），十项全true，源码前后SHA一致、容器清理verified，最终JSON `/tmp/survey-pr129-memfd-retirement-final-20261111.json`。独立故障夹具显式清理其自建FD，不是产品恢复流程，也未清除产品未知标记。上一head130a09ff的smoke43115963126已通过，新增故障语义仍需新head的CI及独立复核，不能继承旧绿色结果。按Owner最新指示，解除恢复、原生或发布门禁前必须先说明具体操作并取得同意；本轮全部保留，不合并、不发布，Release仍由Claude负责。

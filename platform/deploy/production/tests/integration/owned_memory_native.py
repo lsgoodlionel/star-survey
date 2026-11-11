@@ -19,7 +19,7 @@ import uuid
 CHECKS = ('privateAnonymousNonInheritable', 'kernelWriteSealEnforced',
           'childBudgetEnforced', 'originalDescriptorGone', 'noNamedWorkspaceFiles',
           'privateReferenceNonInheritable', 'identityPinnedAcrossReplacement',
-          'foreignReplacementRejected', 'noReferenceDescriptorLeaks')
+          'foreignReplacementRejected', 'noReferenceDescriptorLeaks', 'uncertainRetirementBlocksReuse')
 CHILD_BUDGET = '''
 import errno, os, resource, signal, sys
 fd, limit = int(sys.argv[1]), int(sys.argv[2])
@@ -106,6 +106,39 @@ def native_check():
             if foreign != public: os.close(public)
             os.close(foreign)
         summary['noReferenceDescriptorLeaks'] = all(released) and set(os.listdir('/proc/self/fd')) == before
+        before = set(os.listdir('/proc/self/fd'))
+        uncertain = module.AnonymousWorkspace(max_bytes=32)
+        path = uncertain / 'close-fault'
+        with path.open('xb') as handle: handle.write(b'owned')
+        public, reference = path._entry['fd'], path._entry['anchor']
+        identity, close, attempts = path._entry['identity'], os.close, []
+        foreign = os.memfd_create('close-fault-foreign', os.MFD_CLOEXEC)
+        def uncertain_close(fd):
+            if fd == reference:
+                attempts.append(fd)
+                close(fd)
+                os.dup2(foreign, fd, inheritable=False)
+                raise OSError('synthetic close outcome unknown')
+            close(fd)
+        try:
+            module.os.close = uncertain_close
+            rejected = []
+            for action in (path.unlink, lambda: path.open('xb'), lambda: uncertain / 'new', uncertain.close):
+                try:
+                    result = action()
+                    if hasattr(result, 'close'): result.close()
+                    rejected.append(False)
+                except module.WorkspaceError: rejected.append(True)
+            os.pwrite(reference, b'foreign', 0)
+            summary['uncertainRetirementBlocksReuse'] = (all(rejected) and uncertain._close_failed
+                and path._entry['fd'] is None and path._entry['anchor'] == reference
+                and path._entry['identity'] == identity and attempts == [reference]
+                and os.pread(foreign, 7, 0) == b'foreign')
+        finally:
+            module.os.close = close
+            close(reference)  # Independent disposal of the injected foreign FD.
+            close(foreign)
+        summary['noReferenceDescriptorLeaks'] &= set(os.listdir('/proc/self/fd')) == before
         summary['noNamedWorkspaceFiles'] = not list(Path('/tmp').iterdir())
     except Exception:
         summary['failure'] = 'native-check-failed'
