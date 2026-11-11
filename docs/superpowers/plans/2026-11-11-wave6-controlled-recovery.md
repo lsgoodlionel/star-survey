@@ -125,3 +125,9 @@ Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→h
 非作者复核确认两个P2均先红后修复：另一uid可写非sticky祖先及操作中root替换；密文FIFO阻塞。适配器现核对完整祖先，持固定私有目录FD，所有密文open/stat/unlink均相对dir_fd、NOFOLLOW/NONBLOCK及普通单链接/权限核验，xb独占创建，仅删除本次记录dev/ino的文件，拒绝未知碰撞；权限通过FD fchmod，不追随路径。backup.py仅新增默认行为不变的_secure_output hook。对象close前核对FD，未知child时拒绝close；构造失败关闭目录FD。
 
 7项适配器测试（合成executor）含原HMAC字节、篡改拒绝不启动child、未知持有/复用拒绝、立即封key、外来参数/路径拒绝、祖先及中途替换拒绝、FIFO拒绝；owned总40项、原backup/restore43项通过。真实native入口还在同一受限容器内执行现有HMAC封装的实际OpenSSL往返及篡改拒绝，无child新增，所有receipt completed，容器删除单独确认。源码hash前/后/容器内绑定；不替代完整备份/数据库/归档验证、helper父死亡集成、Docker exec或安装/卸载证明。未产生新PR/候选/Release，#125冻结待Owner决定，WIP仅作后续集成基础。
+
+### 匿名 verify-only 调用链（未启用controller）
+
+`owned_backup_verify.ControlledVerifier`固定cipher/workspace/backup位置及封写key，继承原manifest/HMAC/source release/version/schema/personnel floor与归档验证，显式拒绝restore，没有CLI或legacy fallback。`restore.py`仅将tarfile读取改为fileobj，支持匿名文件，现有格式和恶意成员拒绝不变。未知child异常继续上抛并持lease，不归类为普通解密失败。非作者限定增量复核未确认阻断。
+
+2项新增合成回归先红后绿，含完整payload验证不创建磁盘明文、错backup及已通过认证的路径穿越归档拒绝；owned总42项、旧backup/restore43项通过。真实受限Linux入口还以实际OpenSSL加密/解密全部9份合成payload，经完整verify_only检查，18项child receipt全部completed，容器清理verified；9个模块运行前/后/容器内SHA一致。合成PGDMP/SQL头仅证明既有格式验证，**不代表真实数据库可恢复**。最终verifier SHA b0ab7dba…、adapter9a9886f7…、restore5c16412e…；控制器、可信候选/源安装绑定、Docker exec及失败安装/卸载仍未闭环，门禁不变。

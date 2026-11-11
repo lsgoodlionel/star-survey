@@ -270,7 +270,7 @@ class RestoreManager:
         explicit = {}
         spellings = {}
         try:
-            with tarfile.open(archive_path, mode="r:*") as archive:
+            with archive_path.open('rb') as source, tarfile.open(fileobj=source, mode="r:*") as archive:
                 for member in archive:
                     count += 1
                     if count > limits["max_members"]:

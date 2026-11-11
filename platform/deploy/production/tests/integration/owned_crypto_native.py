@@ -13,9 +13,9 @@ import sys
 import uuid
 
 MODULES = ('owned_memory.py', 'owned_children.py', 'owned_crypto.py', 'owned_crypto_child.py',
-           'runtime_ownership.py', 'owned_cipher_adapter.py', 'backup.py')
+           'runtime_ownership.py', 'owned_cipher_adapter.py', 'backup.py', 'restore.py', 'owned_backup_verify.py')
 CHECKS = ('roundTrip', 'truncatedCipherRejected', 'deadlineChildEnded', 'noNamedPlaintext',
-          'authenticatedRoundTrip', 'badHmacStartsNoChild')
+          'authenticatedRoundTrip', 'badHmacStartsNoChild', 'allSyntheticPayloadFormatsVerified')
 
 
 def passed(report, hashes):
@@ -91,7 +91,47 @@ def inside():
         except BackupError:
             report['badHmacStartsNoChild'] = len(store.load()['children']) == 2
         cipher.close()
-    report['noNamedPlaintext'] = (all(path.name in ('code', 'receipts', 'encrypted') for path in Path('/tmp').iterdir())
+    import io, tarfile
+    from backup import IMAGE_KEYS, VOLUME_SOURCES, rewrite_authenticated_control
+    from owned_backup_verify import ControlledVerifier
+    target = Path('/tmp/verify-target')
+    target.mkdir(mode=0o700)
+    release = target / 'releases' / '0.2.0'
+    release.mkdir(mode=0o700, parents=True)
+    images = {name: 'synthetic/' + name.lower() + '@sha256:' + 'a' * 64 for name in IMAGE_KEYS}
+    release_bytes = json.dumps({'version': '0.2.0', 'minimumSourceVersion': '0.1.0',
+        'database': {'schema': '920', 'compatibleSourceSchemas': ['920']}, 'images': images}).encode()
+    (release / 'release.json').write_bytes(release_bytes)
+    (release / '.env').write_text('PUBLIC_HOST=synthetic.invalid\n')
+    (release / 'compose.yml').write_text('services: {}\n')
+    (target / 'current').write_text('0.2.0\n')
+    payload_root = target / 'backups' / 'synthetic'
+    payload_root.mkdir(mode=0o700, parents=True)
+    store = PrivateStore(root, name='runtime-child-' + uuid.uuid4().hex + '.json')
+    journal = ChildJournal(store, guard, operation_id=str(uuid.uuid4()), installation_id=str(uuid.uuid4()))
+    with AnonymousWorkspace(max_bytes=1024 * 1024) as workspace:
+        cipher = ControlledCipher(workspace, OpenSSLProcess(journal, guard), payload_root, b'd' * 64)
+        tar = io.BytesIO()
+        with tarfile.open(fileobj=tar, mode='w') as archive:
+            member = tarfile.TarInfo('synthetic.txt'); member.size = 1
+            archive.addfile(member, io.BytesIO(b'x'))
+        payloads = dict({'postgres.dump': b'PGDMP\x00synthetic', 'mariadb.sql': b'-- MariaDB dump\n'},
+            **{name: tar.getvalue() for name in VOLUME_SOURCES})
+        for name, data in payloads.items():
+            plain = workspace / ('input-' + name)
+            with plain.open('xb') as handle:
+                handle.write(data)
+            cipher.encrypt(plain, payload_root / (name + '.enc'), cipher.key)
+            plain.unlink()
+        rewrite_authenticated_control(payload_root, cipher.key, {'schemaVersion': 2,
+            'version': '0.2.0', 'databaseSchema': '920', 'releaseManifestSha256': hashlib.sha256(release_bytes).hexdigest(),
+            'images': images, 'files': {}})
+        metadata = ControlledVerifier(target, cipher).verify_only(payload_root)
+        report['allSyntheticPayloadFormatsVerified'] = (metadata['version'] == '0.2.0'
+            and len(store.load()['children']) == 2 * len(payloads)
+            and all(item['phase'] == 'completed' for item in store.load()['children']))
+        cipher.close()
+    report['noNamedPlaintext'] = (all(path.name in ('code', 'receipts', 'encrypted', 'verify-target') for path in Path('/tmp').iterdir())
         and {path.name for path in encrypted_root.iterdir()} == {'postgres.dump.enc'})
     report['sourceHashes'] = {name: hashlib.sha256((Path('/tmp/code') / name).read_bytes()).hexdigest() for name in MODULES}
     print(json.dumps(report, sort_keys=True))
