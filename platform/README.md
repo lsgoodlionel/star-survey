@@ -336,3 +336,5 @@ PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh --expect-te
 - 提交标记 `[codex-fix-attempt: N]` 最多到 2；再次失败则在 PR 报告，合并由人工执行。支持 `workflow_dispatch` 手动运行，需填失败的运行 ID。
 - 启用前设置 Actions secrets：`OPENAI_API_KEY`、`SURVEY_AUTOFIX_PUSH_TOKEN`（仅授予本仓库 Contents 写权限的 fine-grained PAT）。后者必须能触发后续 CI；默认 `GITHUB_TOKEN` 推送无法形成循环。工作流文件须位于默认分支才能手动触发或接收 `workflow_run`。
 - 自动修复先解析失败步骤日志中的测试命令与文件行号；仅将最多 5 个已跟踪源码文件放入隔离工作区供 Codex 修改。无法确定范围、修改了其他文件或生成新文件时停止并报告，不推送补丁。
+
+需求追溯校验默认读取仓库内 `platform/docs/traceability/02-全量需求追踪矩阵.md`；缺失或格式无效时失败。可用 `REQUIREMENT_MATRIX` 指定另一份本地矩阵。
