@@ -131,6 +131,13 @@ class AdminWebGateTest(unittest.TestCase):
             with self.assertRaises(gate.StepFailed):
                 gate.cmd_verify(args)
             self.assertEqual(3, load.call_count)
+        args.expected_gateway_publish_calls = 5
+        with mock.patch.object(gate, '_load_object', side_effect=[{}, {}, gate.StepFailed('missing wave2')]) as load, \
+             mock.patch.object(gate, 'validate_metadata', return_value={}), \
+             mock.patch.object(gate, 'validate_result', return_value={}):
+            with self.assertRaisesRegex(gate.StepFailed, 'missing wave2'):
+                gate.cmd_verify(args)
+            self.assertEqual(3, load.call_count)
         args.verification_scope = 'relay-diagnostic'
         with mock.patch.object(gate, '_load_object', return_value={}), \
              mock.patch.object(gate, 'validate_metadata', return_value={}), \
@@ -365,12 +372,12 @@ class AdminWebGateTest(unittest.TestCase):
         engine_db = {"active": "Y", "surveyCount": 1}
 
         gate.validate_evidence(metadata, result, api, platform_db, engine_db, gateway_publish_calls=3)
-        # Wave 5 adds one real publish; the full suite still requires an exact count.
+        # Wave 5 and W03 each add one real publish; the full suite keeps an exact count.
         gate.validate_evidence(metadata, result, api, platform_db, engine_db,
-                               gateway_publish_calls=4, expected_gateway_publish_calls=4)
+                               gateway_publish_calls=5, expected_gateway_publish_calls=5)
         with self.assertRaises(gate.StepFailed):
             gate.validate_evidence(metadata, result, api, platform_db, engine_db,
-                                   gateway_publish_calls=3, expected_gateway_publish_calls=4)
+                                   gateway_publish_calls=4, expected_gateway_publish_calls=5)
 
         with self.assertRaises(gate.StepFailed):
             gate.validate_evidence(metadata, result, api, platform_db, engine_db, gateway_publish_calls=1)
