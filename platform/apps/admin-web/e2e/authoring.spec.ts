@@ -1194,6 +1194,11 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
       .not.toBe('none');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
+  await clickAction(page.getByRole('tab', { name: '属性' }));
+  const deviceLimitInput = page.getByLabel('同一设备最多提交次数');
+  await deviceLimitInput.scrollIntoViewIfNeeded();
+  await assertUsable(deviceLimitInput);
+  await assertTouchTarget(deviceLimitInput);
   await assertUsable(page.getByRole('button', { name: '保存草稿' }));
 });
 
@@ -1637,10 +1642,16 @@ async function assertUsable(locator: Locator) {
   expect(box).not.toBeNull();
   expect(box!.width).toBeGreaterThanOrEqual(24);
   expect(box!.height).toBeGreaterThanOrEqual(24);
-  expect(await locator.evaluate((element, point) => {
-    const hit = document.elementFromPoint(point.x, point.y);
+  expect(await locator.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const left = Math.max(0, rect.left);
+    const right = Math.min(window.innerWidth, rect.right);
+    const top = Math.max(0, rect.top);
+    const bottom = Math.min(window.innerHeight, rect.bottom);
+    if (right <= left || bottom <= top) return false;
+    const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
     return hit === element || (hit !== null && element.contains(hit));
-  }, { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 })).toBe(true);
+  })).toBe(true);
 }
 
 function surveyIdFrom(url: string) {
