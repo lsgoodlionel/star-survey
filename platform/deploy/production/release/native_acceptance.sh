@@ -326,11 +326,13 @@ if [[ "$BASELINE_MODE" == predecessor ]]; then
   upgrade_verified=true
 fi
 
-last_step="restore-target-survey-restore-project"
-run_ctl restore "$backup_name"
+# #119 option B: lifecycle acceptance is separate from recovery. Restore must
+# stay refused by the candidate controller and leave its control state intact.
+last_step="restore-refused"
+python3 "$evidence_helper" restore-refused --ctl "$ctl_bin" --target "$target" --backup "$backup_name"
 
-last_step="doctor-restored"
-write_doctor_evidence "doctor-restored"
+last_step="doctor-final"
+write_doctor_evidence "doctor-final"
 
 last_step="uninstall"
 require_fixture_cleanup_proof

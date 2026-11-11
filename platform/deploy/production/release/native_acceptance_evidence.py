@@ -53,7 +53,12 @@ SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
-DOCTOR_FILE = re.compile(r"doctor-(installed|upgraded|restored)\.json")
+DOCTOR_FILE = re.compile(r"doctor-(installed|upgraded|final)\.json")
+# #119 option B: native acceptance proves restore stays refused, not that it recovers.
+RESTORE_REFUSAL = "controlled restore is disabled until writer and helper isolation are verified"
+# surveyctl reports InputError with EXIT_INPUT=2 and one stderr line.
+RESTORE_REFUSAL_EXIT_CODE = 2
+BACKUP_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 RUNNERS = {
     ("22.04", "amd64"),
     ("24.04", "amd64"),
@@ -102,6 +107,43 @@ def require_clean_native_host() -> None:
             raise EvidenceError('native host resource preflight failed') from exc
         if result.stdout.strip():
             raise EvidenceError('native host already contains production-project resources')
+
+
+def _control_state_snapshot(target: Path) -> dict[str, Any]:
+    control = target / '.surveyctl'
+    if control.is_symlink() or not control.is_dir():
+        raise EvidenceError('restore refusal requires the installed control directory')
+    hashes = {}
+    for name in ('operation.intent', 'state.json'):
+        path = control / name
+        if path.is_symlink() or not path.is_file():
+            raise EvidenceError(f'restore refusal requires installed control state: {name}')
+        hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {'hashes': hashes, 'entries': sorted(item.name for item in control.iterdir())}
+
+
+def require_restore_refused(ctl: Path, target: Path, backup: str) -> None:
+    """Require the candidate controller to refuse restore without changing durable state.
+
+    Option B in #119 separates lifecycle acceptance from recovery: restore must
+    stay unavailable, and the refusal must not latch pending or recovery markers.
+    """
+    if not BACKUP_NAME.fullmatch(backup):
+        raise EvidenceError('restore refusal backup name is invalid')
+    before = _control_state_snapshot(target)
+    try:
+        result = subprocess.run([str(ctl), '--target', str(target), 'restore', backup],
+                                check=False, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise EvidenceError('restore refusal check could not run the controller') from exc
+    if result.returncode == 0:
+        raise EvidenceError('restore ran although controlled recovery is unavailable')
+    # Compare the complete raw output: no stripping, no other exit status.
+    if (result.returncode != RESTORE_REFUSAL_EXIT_CODE or result.stdout != ''
+            or result.stderr != 'surveyctl: ' + RESTORE_REFUSAL + '\n'):
+        raise EvidenceError('restore failed for a reason other than the controlled refusal')
+    if _control_state_snapshot(target) != before:
+        raise EvidenceError('restore refusal changed installation control state')
 
 
 def require_no_restore_resources() -> None:
@@ -1076,6 +1118,10 @@ def parser() -> argparse.ArgumentParser:
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser('clean-host')
     sub.add_parser('clean-restore')
+    refused = sub.add_parser('restore-refused')
+    refused.add_argument('--ctl', type=Path, required=True)
+    refused.add_argument('--target', type=Path, required=True)
+    refused.add_argument('--backup', required=True)
     for action in ('fixture-owner-create', 'fixture-owner-verify', 'fixture-volumes-create', 'fixture-volumes-verify'):
         owner = sub.add_parser(action)
         owner.add_argument('--work', type=Path, required=True)
@@ -1130,6 +1176,8 @@ def main() -> int:
             require_clean_native_host()
         elif args.command == 'clean-restore':
             require_no_restore_resources()
+        elif args.command == 'restore-refused':
+            require_restore_refused(args.ctl, args.target, args.backup)
         elif args.command == 'fixture-owner-create':
             write_fixture_owner(args.work, args.marker)
         elif args.command == 'fixture-owner-verify':
