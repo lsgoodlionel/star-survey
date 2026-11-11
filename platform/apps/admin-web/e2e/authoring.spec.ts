@@ -548,16 +548,18 @@ test('W04 time windows persist through authoring and govern published responses'
     const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`) && response.request().method() === 'POST');
     await clickAction(page.getByRole('button', { name: '创建链接' }));
     const link = await readCreatedDeliveryLink(await linkResponse);
-    const responsesBefore = (await readPreviewIsolationSnapshot(surveyId, me.tenantId)).responses;
+    const engineSid = await publishedEngineSid(surveyId, me.tenantId);
+    const responseCount = async () => Number(await platformQuery(me.tenantId,
+      `SELECT count(*) FROM response_projection WHERE tenant_id='${me.tenantId}' AND survey_id=${engineSid};`));
+    const responsesBefore = await responseCount();
     const respondent = await page.context().newPage();
     await respondent.goto(link.url);
     if (scenario.outcome === 'allow') {
       await completeLimeSurvey(respondent);
-      await expect.poll(async () => (await readPreviewIsolationSnapshot(surveyId, me.tenantId)).responses,
-        { timeout: 60_000 }).toBe(responsesBefore + 1);
+      await expect.poll(responseCount, { timeout: 60_000 }).toBe(responsesBefore + 1);
     } else {
       await expect(respondent.locator('body')).toContainText(scenario.outcome === 'future' ? '尚未开放' : '截止');
-      expect((await readPreviewIsolationSnapshot(surveyId, me.tenantId)).responses).toBe(responsesBefore);
+      expect(await responseCount()).toBe(responsesBefore);
     }
     await respondent.close();
   }
