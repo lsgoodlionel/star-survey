@@ -63,7 +63,8 @@ class NativeCandidateIntegrityTest(unittest.TestCase):
         finally:
             sys.path.pop(0)
         source = release.parent
-        files = {name: (source / name).read_bytes() for name in builder.RUNTIME_FILES}
+        owned = builder.owned_runtime_files((source / 'surveyctl.py').read_bytes())
+        files = {name: (source / name).read_bytes() for name in (*builder.RUNTIME_FILES, *owned)}
         path = self.candidate / 'builder-fixture.tar.gz'
         builder.build_tarball(path, files, 0)
         self.identity.write_text(json.dumps({'bundles': {'amd64': {'name': path.name,

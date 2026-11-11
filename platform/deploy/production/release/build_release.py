@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import gzip
 import hashlib
 import io
@@ -59,6 +60,11 @@ RUNTIME_FILES = (
     "surveyctl",
     "surveyctl.py",
 )
+# surveyctl.py declares the support modules it admits by exact name before import;
+# the bundle follows that declaration so the two lists cannot drift apart.
+OWNED_RUNTIME_DECLARATION = "OWNED_RUNTIME_FILES"
+OWNED_RUNTIME_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\.py")
+OWNED_RUNTIME_LIMIT = 64
 SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?")
 STABLE_SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -216,6 +222,45 @@ def read_regular_unlinked_file(
         raise ReleaseBuildError(f"required production runtime file cannot be read safely: {label}") from exc
 
 
+def owned_runtime_files(controller_source: bytes) -> tuple[str, ...]:
+    """Statically read surveyctl's owned-module declaration; it is never executed."""
+    try:
+        tree = ast.parse(controller_source, filename="surveyctl.py")
+    except (SyntaxError, ValueError) as exc:
+        raise ReleaseBuildError("surveyctl.py cannot be parsed for its owned runtime declaration") from exc
+    bindings = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets = [node.target]
+        else:
+            continue
+        if any(isinstance(target, ast.Name) and target.id == OWNED_RUNTIME_DECLARATION for target in targets):
+            bindings.append(node)
+    if not bindings:
+        return ()
+    node = bindings[0]
+    if len(bindings) != 1 or not isinstance(node, ast.Assign) or len(node.targets) != 1:
+        raise ReleaseBuildError("surveyctl.py must bind OWNED_RUNTIME_FILES exactly once")
+    if not isinstance(node.value, (ast.Set, ast.Tuple, ast.List)):
+        raise ReleaseBuildError("OWNED_RUNTIME_FILES must be a literal collection of file names")
+    names: list[str] = []
+    for element in node.value.elts:
+        if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            raise ReleaseBuildError("OWNED_RUNTIME_FILES must contain only string literals")
+        if not OWNED_RUNTIME_NAME.fullmatch(element.value):
+            raise ReleaseBuildError(f"OWNED_RUNTIME_FILES names an unsupported runtime file: {element.value!r}")
+        names.append(element.value)
+    if len(names) != len(set(names)):
+        raise ReleaseBuildError("OWNED_RUNTIME_FILES contains duplicate names")
+    if len(names) > OWNED_RUNTIME_LIMIT:
+        raise ReleaseBuildError("OWNED_RUNTIME_FILES exceeds the supported module count")
+    if "surveyctl.py" not in names:
+        raise ReleaseBuildError("OWNED_RUNTIME_FILES must include surveyctl.py")
+    return tuple(sorted(names))
+
+
 def collect_runtime(
     source: Path,
     trusted_root: Path,
@@ -225,17 +270,29 @@ def collect_runtime(
     canonical_root = source
     files: dict[str, bytes] = {}
     for name in RUNTIME_FILES:
-        current = source
-        for component in PurePosixPath(name).parts[:-1]:
-            current /= component
-            require_directory(current, current.relative_to(source).as_posix())
-            try:
-                current.resolve(strict=True).relative_to(canonical_root)
-            except (OSError, ValueError) as exc:
-                raise ReleaseBuildError(f"required production runtime directory escapes its source root: {name}") from exc
-        path = source / name
-        files[name] = read_regular_unlinked_file(path, name, canonical_root, after_open)
+        files[name] = read_runtime_file(source, canonical_root, name, after_open)
+    for name in owned_runtime_files(files["surveyctl.py"]):
+        if name not in files:
+            files[name] = read_runtime_file(source, canonical_root, name, after_open)
     return files
+
+
+def read_runtime_file(
+    source: Path,
+    canonical_root: Path,
+    name: str,
+    after_open: ReadValidationHook | None,
+) -> bytes:
+    current = source
+    for component in PurePosixPath(name).parts[:-1]:
+        current /= component
+        require_directory(current, current.relative_to(source).as_posix())
+        try:
+            current.resolve(strict=True).relative_to(canonical_root)
+        except (OSError, ValueError) as exc:
+            raise ReleaseBuildError(f"required production runtime directory escapes its source root: {name}") from exc
+    path = source / name
+    return read_regular_unlinked_file(path, name, canonical_root, after_open)
 
 
 def canonicalize_schemas(values: Iterable[str]) -> list[str]:
