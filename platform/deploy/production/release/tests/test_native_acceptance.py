@@ -889,6 +889,12 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
 
             cases = {
                 'restore ran': {'return_value': subprocess.CompletedProcess([], 0, stdout='', stderr='')},
+                'killed by signal': {'return_value': subprocess.CompletedProcess([], -9, stdout='', stderr=refusal)},
+                'other exit code': {'return_value': subprocess.CompletedProcess([], 4, stdout='', stderr=refusal)},
+                'whitespace stdout': {'return_value': subprocess.CompletedProcess([], 2, stdout=' \n', stderr=refusal)},
+                'padded stderr': {'return_value': subprocess.CompletedProcess([], 2, stdout='', stderr='  ' + refusal)},
+                'extra blank line': {'return_value': subprocess.CompletedProcess([], 2, stdout='', stderr=refusal + '\n')},
+                'missing newline': {'return_value': subprocess.CompletedProcess([], 2, stdout='', stderr=refusal.rstrip('\n'))},
                 'other failure': {'return_value': subprocess.CompletedProcess([], 2, stdout='', stderr='surveyctl: backup does not exist\n')},
                 'extra output': {'return_value': subprocess.CompletedProcess([], 2, stdout='restoring\n', stderr=refusal)},
                 'intent changed': {'side_effect': mutate('operation.intent')},
@@ -919,6 +925,9 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
     def test_restore_refusal_message_matches_the_controller(self):
         controller = (ROOT / 'platform/deploy/production/surveyctl.py').read_text(encoding='utf-8')
         self.assertIn('raise InputError("' + self.module.RESTORE_REFUSAL + '")', controller)
+        self.assertIn('print(f"surveyctl: {exc}", file=sys.stderr)', controller)
+        self.assertIn('EXIT_SUCCESS, EXIT_INPUT, EXIT_ENVIRONMENT, EXIT_RUNTIME, EXIT_INTEGRITY = 0, 2, 3, 4, 5', controller)
+        self.assertEqual(2, self.module.RESTORE_REFUSAL_EXIT_CODE)
 
     def test_restore_cleanup_check_rejects_orphans_and_query_failures(self):
         empty = subprocess.CompletedProcess([], 0, stdout='', stderr='')

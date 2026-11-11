@@ -56,6 +56,8 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 DOCTOR_FILE = re.compile(r"doctor-(installed|upgraded|final)\.json")
 # #119 option B: native acceptance proves restore stays refused, not that it recovers.
 RESTORE_REFUSAL = "controlled restore is disabled until writer and helper isolation are verified"
+# surveyctl reports InputError with EXIT_INPUT=2 and one stderr line.
+RESTORE_REFUSAL_EXIT_CODE = 2
 BACKUP_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 RUNNERS = {
     ("22.04", "amd64"),
@@ -136,7 +138,9 @@ def require_restore_refused(ctl: Path, target: Path, backup: str) -> None:
         raise EvidenceError('restore refusal check could not run the controller') from exc
     if result.returncode == 0:
         raise EvidenceError('restore ran although controlled recovery is unavailable')
-    if result.stdout.strip() or result.stderr.strip() != 'surveyctl: ' + RESTORE_REFUSAL:
+    # Compare the complete raw output: no stripping, no other exit status.
+    if (result.returncode != RESTORE_REFUSAL_EXIT_CODE or result.stdout != ''
+            or result.stderr != 'surveyctl: ' + RESTORE_REFUSAL + '\n'):
         raise EvidenceError('restore failed for a reason other than the controlled refusal')
     if _control_state_snapshot(target) != before:
         raise EvidenceError('restore refusal changed installation control state')
