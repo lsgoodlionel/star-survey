@@ -515,9 +515,10 @@ class SurveyManager:
                 # the method repeats the authoritative check after locking.
                 self._assert_target_available()
                 self.target.mkdir(mode=0o700, parents=True, exist_ok=True)
-            self._reject_symlink_components(self.target)
+            self._assert_trusted_path(self.target)
             if not self.target.is_dir():
                 raise InputError("installation target is unavailable")
+            target_info = os.lstat(self.target)
             control = self._managed(".surveyctl")
             if create_target:
                 control.mkdir(mode=0o700, exist_ok=True)
@@ -590,6 +591,10 @@ class SurveyManager:
                         or final_lock.st_uid != os.geteuid() or final_lock.st_mode & 0o077
                         or (info.st_dev, info.st_ino) != (final_lock.st_dev, final_lock.st_ino)):
                     raise IntegrityError("installation operation lock identity changed")
+                self._assert_trusted_path(self.target)
+                final_target = os.lstat(self.target)
+                if (target_info.st_dev, target_info.st_ino) != (final_target.st_dev, final_target.st_ino):
+                    raise IntegrityError("installation target identity changed")
                 self._operation_intent = intent
                 self._operation_name = operation
                 self._operation_started = False
@@ -781,6 +786,31 @@ class SurveyManager:
             if not current.exists():
                 break
 
+    def _assert_trusted_path(self, path: Path) -> None:
+        """Reject replacement authority outside the invoking installation owner.
+
+        Root-owned sticky ancestors (e.g. /tmp) may contain a private owned
+        target. Sticky permissions never exempt the target or its descendants.
+        This is not isolation from the same uid, root, or a Docker administrator.
+        """
+        self._reject_symlink_components(path)
+        for current in (*reversed(path.parents), path):
+            try:
+                info = os.lstat(current)
+            except FileNotFoundError:
+                break
+            inside = current == self.target or self.target in current.parents
+            if inside:
+                owner_ok = info.st_uid == os.geteuid()
+                writable_ok = not info.st_mode & 0o022
+            else:
+                owner_ok = info.st_uid in {0, os.geteuid()}
+                writable_ok = not info.st_mode & 0o022 or (
+                    info.st_uid == 0 and stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISVTX)
+            if (not owner_ok or not writable_ok or stat.S_ISLNK(info.st_mode)
+                    or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))):
+                raise IntegrityError("installation path ownership or permissions are unsafe")
+
     def _managed(self, relative: str | Path, *, must_exist: bool = False) -> Path:
         relative_path = Path(relative)
         if relative_path.is_absolute() or ".." in relative_path.parts:
@@ -788,7 +818,7 @@ class SurveyManager:
         candidate = self.target / relative_path
         if os.path.commonpath([self.target, candidate]) != str(self.target):
             raise InputError("managed path escapes the target")
-        self._reject_symlink_components(candidate)
+        self._assert_trusted_path(candidate)
         if must_exist and not candidate.exists():
             raise InputError(f"managed path does not exist: {relative_path}")
         return candidate
@@ -803,7 +833,7 @@ class SurveyManager:
         return path
 
     def _assert_target_available(self) -> None:
-        self._reject_symlink_components(self.target)
+        self._assert_trusted_path(self.target)
         if self.state_path.exists() or self.state_path.is_symlink():
             self._require_no_pending_recovery(self._read_state())
             return
@@ -1004,7 +1034,9 @@ class SurveyManager:
 
     def _verify_staged_release(self, release: Path, version: str) -> None:
         self._reject_symlink_components(release)
+        self._assert_trusted_path(release)
         for path in release.rglob("*"):
+            self._assert_trusted_path(path)
             if path.is_symlink():
                 raise IntegrityError("staged release contains a symbolic link")
         manifest = load_manifest(release / "release.json")
@@ -1066,6 +1098,13 @@ class SurveyManager:
             return self.runner.run(command, cwd=self.target, **kwargs)
         except (OSError, subprocess.CalledProcessError) as exc:
             raise RuntimeHealthError(runtime_message) from exc
+
+    def _checked_helper(self, version: str, name: str) -> Path:
+        release = self._release_dir(version)
+        self._verify_staged_release(release, version)
+        helper = self._managed(Path("releases") / version / name, must_exist=True)
+        _regular_file(helper, "installed helper")
+        return helper
 
     def _run_helper(self, command: list[str], runtime_message: str, **kwargs):
         try:
@@ -1642,7 +1681,7 @@ class SurveyManager:
             _regular_file(path, f"backup {name}")
             self._reject_symlink_components(path)
         state = self._read_state(require_current=True)
-        helper = self._release_dir(state["version"]) / "restore.py"
+        helper = self._checked_helper(state["version"], "restore.py")
         # The helper decrypts into a private temporary directory and can
         # outlive this controller; pure inventory checks above are read-only.
         self._begin_operation()
@@ -1662,9 +1701,14 @@ class SurveyManager:
         output = self._backup_path(name)
         if output.exists() or output.is_symlink():
             raise InputError("backup destination already exists")
+        # Known configuration/integrity failures are read-only preflight errors,
+        # not evidence of an interrupted helper. Do not latch them as pending.
+        self._checked_helper(state["version"], "backup.py")
         self._begin_operation()
         self._mkdir("backups")
-        helper = self._release_dir(state["version"]) / "backup.py"
+        # Recheck at the launch boundary: drift after intent is an uncertain
+        # operation and must retain its durable pending marker on failure.
+        helper = self._checked_helper(state["version"], "backup.py")
         self._run_helper([sys.executable, str(helper), "backup", "--target", str(self.target), "--output", str(output), "--version", state["version"]], "backup failed")
         self._verify_backup(output, state["version"], state["databaseSchema"])
         return output
@@ -2009,7 +2053,7 @@ class SurveyManager:
     def doctor(self) -> None:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
-        helper = self._release_dir(state["version"]) / "doctor.py"
+        helper = self._checked_helper(state["version"], "doctor.py")
         self._begin_operation()
         try:
             result = self._run([sys.executable, str(helper), "--target", str(self.target), "--redact"], "doctor checks failed", capture_output=True)
