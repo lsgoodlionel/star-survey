@@ -129,7 +129,7 @@
    - `Harness Drill` 之类的测试或演练身份**不是真人**，也不能当作真实的验收身份；
    - 真实的测试人、复核人、操作者，和合成或演练得到的证据，必须分开标注；
    - 不要把模拟结果写成生产结果或真人验收。
-4. **标签**（P1 阶段新增，等待批准）：`agent:claude`、`agent:codex`、`needs:owner`、`env:mac`、`lane:*`、`handoff`。
+4. **标签**（P1，Owner 2026-11-11 批准）：`agent:claude`、`agent:codex`、`needs:owner`、`env:mac`、`handoff`。`lane:*` 暂不建，责任区以 §3.2 为准。Issue 模板见 `.github/ISSUE_TEMPLATE/`（任务、交接、环境绑定任务）。
 5. **分支命名**：现在的 `claude/<slug>`、`codex/<slug>` 继续沿用。新分支建议用 `<agent>/<issue>-<slug>`；人类用 `human/<name>/<slug>`。不要再用 `fix/` 这类看不出执行者的前缀。
 6. **可追溯**：在 PR 或评论里写明基线 SHA。会话 ID 可选，写不写都行。
 
