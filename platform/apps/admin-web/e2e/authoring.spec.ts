@@ -442,6 +442,7 @@ test('a single-choice display condition is authored and works in isolated previe
   await page.getByLabel('前置题目').selectOption('QTRIGGER');
   await expect(page.getByLabel('触发选项')).toHaveValue('A1');
   await saveAndReloadDraft(page, surveyId);
+  await clickAction(page.getByRole('button', { name: /请说明原因/ }));
   await expect(page.getByLabel('前置题目')).toHaveValue('QTRIGGER');
 
   await clickAction(page.getByRole('link', { name: '快速预览' }));
