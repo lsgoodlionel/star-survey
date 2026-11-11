@@ -1,8 +1,10 @@
 """Synthetic native component success cannot qualify installation or recovery."""
 from copy import deepcopy
 import importlib.util
+import json
 from pathlib import Path
 import unittest
+import tempfile
 
 SPEC = importlib.util.spec_from_file_location('maintenance_native',
     Path(__file__).parent / 'integration/owned_maintenance_native.py')
@@ -12,6 +14,19 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
     def setUp(self):
         self.module = importlib.util.module_from_spec(SPEC)
         SPEC.loader.exec_module(self.module)
+
+    def test_component_manifest_capability_matches_its_actual_platform_digest(self):
+        images = json.loads((Path(__file__).parent / 'fixtures/release.json').read_text())['images']
+        images['PLATFORM_IMAGE'] = 'python@sha256:' + 'b' * 64
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path, _ = self.module.write_component_release(Path(directory), images, {}, 'amd64')
+            controller = self.module.load_module()
+            manifest = controller.load_manifest(manifest_path)
+            controller.SurveyManager._require_personnel_capability(manifest)
+            self.assertEqual(images['PLATFORM_IMAGE'], manifest.raw['securityCapabilities']['platform-admin-session-v1'])
+            manifest.raw['securityCapabilities']['platform-admin-session-v1'] = 'python@sha256:' + 'c' * 64
+            with self.assertRaises(controller.InputError):
+                controller.SurveyManager._require_personnel_capability(manifest)
 
     def test_only_complete_scoped_evidence_passes(self):
         report = {'schemaVersion': 1, 'scope': 'recorded-maintenance-real-database-components',

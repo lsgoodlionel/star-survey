@@ -194,6 +194,14 @@ def topology(namespace, target, images):
     return {'name': namespace, 'services': services, 'volumes': volumes, 'secrets': secrets}
 
 
+def write_component_release(work, images, payload, architecture):
+    # Synthetic parser fixture, not a signed capability assertion. Keep it bound
+    # to this fixture's image so the real safety check is exercised unchanged.
+    return write_test_release(work, images=images, payload_overrides=payload,
+                              securityCapabilities={'platform-admin-session-v1': images['PLATFORM_IMAGE']},
+                              _fixture_owned_support=True, _fixture_architecture=architecture)
+
+
 def run_case(images, scenario):
     namespace = 'survey-control-fixture-' + uuid.uuid4().hex
     ownership.PROJECT, ownership.CLAIM_NAME = namespace, namespace + '-ownership-v1'
@@ -212,8 +220,8 @@ def run_case(images, scenario):
         payload = {'compose.yml': json.dumps(compose).encode(),
             'init/fixture-pg.sql': b"CREATE TABLE owned_fixture(id int primary key, answer text); INSERT INTO owned_fixture VALUES(1,'fixture-answer'); CREATE TABLE flyway_schema_history(installed_rank int,version text,success boolean); INSERT INTO flyway_schema_history VALUES(1,'920',true);\n",
             'init/fixture-mdb.sql': b"USE limesurvey; CREATE TABLE owned_fixture(id int primary key, answer text); INSERT INTO owned_fixture VALUES(1,'fixture-answer');\n"}
-        manifest_path, bundle = write_test_release(work, images=images, payload_overrides=payload,
-            _fixture_owned_support=True, _fixture_architecture='arm64' if os.uname().machine == 'aarch64' else 'amd64')
+        manifest_path, bundle = write_component_release(work, images, payload,
+            'arm64' if os.uname().machine == 'aarch64' else 'amd64')
         manifest = module.load_manifest(manifest_path)
         stage = 'initialize'
         with manager._mutation_lock(create_target=True, operation='install'):

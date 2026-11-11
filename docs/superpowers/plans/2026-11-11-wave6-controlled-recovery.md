@@ -167,3 +167,5 @@ WIP 在真实 operation.lock 下连接 RuntimeController：卸载在 intent 前�
 新增 `tests/integration/owned_maintenance_native.py` 将实际Linux guard/Caddy hash、PG16.15/MariaDB10.11.19 dump、完整匿名verify、七份tar根文件精确内容、保留卷/purge及doctor拒绝/保持pending接到现有production-smoke的ownership质量job。只拉固定工具/DB镜像，权限仍contents read，只上传白名单JSON，不上传目录/日志/密钥/dump。该入口使用合成manifest/初始化SQL和Python占位服务，明确 defaultInstall/business/restore/release 均未取得资格；doctor仅TLS=false的拒绝场景。证据校验器拒绝bool schema、1代替true、缺项/空报告及误标资格。本机辅助cp/GET比较未确认非空源，不能计作内容布局通过；已停止重复本地探针，由该Linux入口严格校验真实卷内容。**新入口尚待精确head的GitHub CI，不能写已通过**。
 
 Claude接续点：`release/build_release.py:RUNTIME_FILES` 尚需在独立审查后包含 `surveyctl.OWNED_RUNTIME_FILES` 的13个新增模块；当前不会绕过缺模块的failclosed检查，也未修改Release工作流/打包文件。已有source-production smoke的旧入口不证明这些默认入口。后续仍需完整默认安装/正向业务doctor、故障矩阵、实际包及B原生验收；owned升级接线也未据此完成。#125仍冻结原Draft，恢复/native/上传/stable门禁保持，未触发标签、GHCR、Release或生产操作。
+
+Owner明确授权后已创建Draft PR #129（初始head `2f35d871c9d4691be3de79ab93205d223f5deecd`）。首次Linux维护job `43102867372` 两场景均在initialize被人员能力绑定校验拒绝（surveyctl.py:1195），独立Docker清理均verified；尚未进入数据库备份。根因为合成夹具替换images后仍沿用旧平台digest的能力声明。定向回归复现同一拒绝后，仅修正合成manifest声明绑定测试镜像；错误digest负例继续拒绝，产品校验未改，四项证据测试通过。修复后的在线真实维护结果仍待验证，不能把本次旧失败或其他smoke通过当作本路径通过。
