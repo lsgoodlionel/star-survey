@@ -110,6 +110,37 @@ afterEach(() => {
 });
 
 describe('EditorPage', () => {
+  test('authors an IP denial list without replacing time or access rules', async () => {
+    const source = structuredClone(gatewayFixture) as Record<string, unknown>;
+    source.policy = { policyVersion: 1, window: { opensAt: '2026-11-12T09:00', timezone: 'Asia/Shanghai' },
+      access: { captcha: true }, network: { allowIps: ['10.0.0.0/8'] } };
+    let saved: Record<string, unknown> | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        saved = (request.body as { definition: Record<string, unknown> }).definition;
+        return { surveyId, version: 5, definition: saved };
+      },
+    });
+    renderEditor(api);
+    const input = await screen.findByLabelText('拒绝访问的 IP/CIDR');
+    fireEvent.change(input, { target: { value: '127.0.0.0/8\n::1' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    expect(saved?.policy).toEqual({ ...source.policy as Record<string, unknown>,
+      network: { allowIps: ['10.0.0.0/8'], denyIps: ['127.0.0.0/8', '::1'] },
+    });
+  });
+
+  test('keeps unsupported IP network rules read only', async () => {
+    const source = structuredClone(gatewayFixture) as Record<string, unknown>;
+    source.policy = { policyVersion: 1, network: { denyIps: ['::1'], futureRule: true } };
+    const api = editorApi({ [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }) });
+    renderEditor(api);
+    expect(await screen.findByLabelText('拒绝访问的 IP/CIDR')).toBeDisabled();
+    expect(screen.getByText('现有网络策略格式无法在此编辑；原设置会保留。')).toBeVisible();
+  });
+
   test('authors a time window without replacing other access policy rules', async () => {
     const source = structuredClone(gatewayFixture) as Record<string, unknown>;
     source.policy = { policyVersion: 1, access: { captcha: true }, network: { denyIps: ['127.0.0.0/8'] } };

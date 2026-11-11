@@ -1,17 +1,20 @@
 import type { EditableSurveyDefinition } from './model/definition';
 import { readTimeWindow, type TimeWindow } from './model/timeWindow';
+import { readIpDenyList } from './model/ipDenyList';
 
 interface PropertiesPanelProps {
   definition: EditableSurveyDefinition;
   disabled: boolean;
   onChange(update: Pick<EditableSurveyDefinition, 'description' | 'language' | 'title'>): void;
   onTimeWindowChange(window: TimeWindow | null): void;
+  onIpDenyListChange(denyIps: string[]): void;
 }
 
-export function PropertiesPanel({ definition, disabled, onChange, onTimeWindowChange }: PropertiesPanelProps) {
+export function PropertiesPanel({ definition, disabled, onChange, onTimeWindowChange, onIpDenyListChange }: PropertiesPanelProps) {
   const timeWindow = readTimeWindow(definition);
   const window = timeWindow.window;
   const windowDisabled = disabled || !timeWindow.editable;
+  const ipDenyList = readIpDenyList(definition);
   return (
     <div className="editor-properties">
       <h2>问卷属性</h2>
@@ -59,6 +62,15 @@ export function PropertiesPanel({ definition, disabled, onChange, onTimeWindowCh
             onChange={(event) => onTimeWindowChange({ ...window, timezone: event.target.value })} /></label>
           <p>时区使用 IANA 名称；夏令时不存在或重叠的时刻由服务端拒绝。</p>
         </> : null}
+      </fieldset>
+      <fieldset>
+        <legend>网络访问</legend>
+        {!ipDenyList.editable ? <p role="alert">现有网络策略格式无法在此编辑；原设置会保留。</p> : null}
+        <label>拒绝访问的 IP/CIDR
+          <textarea rows={4} value={ipDenyList.denyIps.join('\n')} disabled={disabled || !ipDenyList.editable}
+            onChange={(event) => onIpDenyListChange(event.target.value === '' ? [] : event.target.value.split(/\r?\n/))} />
+        </label>
+        <p>每行一个 IPv4、IPv6 地址或 CIDR；不能留空行。不合法地址由发布网关拒绝，保存草稿不代表规则已生效。</p>
       </fieldset>
       <div>
         <p>语言：<span>{languageLabel(definition.language)}</span></p>
