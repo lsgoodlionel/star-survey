@@ -47,13 +47,16 @@ jobs:
 
       # 需求↔测试映射（R23-12）。每道闸门都有一条「人为制造不一致、断言它报错」的用例。
       - name: 需求追溯校验器的用例
+        env:
+          REQUIREMENT_MATRIX: ""
         working-directory: platform/tools/traceability
         run: python3 -m unittest discover -s tests -t . -q
 
       # 真正的闸门：登记表声称的测试必须还在，零散注释里的需求编号必须真的存在。
-      # 这里读不到仓库外的 02 矩阵（检出里没有方案文档目录），第六道闸门会明确打印「跳过」；
-      # 前五道照常生效，编号一律按仓库内的 requirement-index.md 快照校验。
+      # 第六道闸门要求仓库内矩阵存在并与索引一致，缺失时失败。
       - name: 需求追溯校验
+        env:
+          REQUIREMENT_MATRIX: ""
         working-directory: platform/tools/traceability
         run: python3 -m reqtrace.cli check
 

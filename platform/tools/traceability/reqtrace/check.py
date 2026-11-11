@@ -7,16 +7,17 @@
 3. 登记的定位符必须指到真实存在的测试（测试改名／删掉 → 声称的覆盖变成空话）；
 4. 自有源码里出现的需求编号必须在索引里（零散注释里的拼写错）；
 5. 题型主题声明的需求必须有测试证据（新主题只写实现不写证据）；
-6. 仓库内索引快照必须与仓库外的 02 矩阵一致（矩阵改了快照没跟上）。
+6. 仓库内索引快照必须与指定的 02 矩阵一致（矩阵改了快照没跟上）。
 
-第 6 道在矩阵读不到时**跳过**——CI 的检出里没有方案文档目录。前 5 道任何环境都生效。
+默认检查无法读取矩阵时失败；显式传入 None 的调用方可模拟跳过。
 """
 
+import os
 from pathlib import Path
 from typing import Any, List, NamedTuple
 
 from . import code_claims, references
-from .index import Index, load_matrix, parse_index, reconcile
+from .index import Index, MATRIX_ENV, MATRIX_FILE, parse_index, parse_matrix, reconcile
 from .locators import resolve_all
 from .registry import covered_requirements, duplicate_entries, parse_registry
 
@@ -50,8 +51,8 @@ def load_index(repo_root: Path) -> Index:
 def run(repo_root: Path, matrix: Any = _UNSET) -> Report:
     """跑完六道闸门。
 
-    ``matrix`` 不传＝自己去磁盘找 02 矩阵；传 ``Index``＝用这一份（测试伪造矩阵）；
-    传 ``None``＝调用方已确认读不到，第六道闸门跳过（测试模拟 CI 的检出）。
+    ``matrix`` 不传＝优先环境变量，否则读取仓库内矩阵；缺失或无效时报错。
+    传 ``Index``＝用这一份；传 ``None``＝显式跳过（仅供调用方模拟）。
     """
     index = load_index(repo_root)
     known = set(index.ids)
@@ -83,7 +84,13 @@ def run(repo_root: Path, matrix: Any = _UNSET) -> Report:
     problems.extend(code_claims.missing_evidence(claims, covered))
 
     if matrix is _UNSET:
-        matrix = load_matrix()
+        override = os.environ.get(MATRIX_ENV)
+        matrix_file = Path(override) if override else repo_root / MATRIX_FILE
+        try:
+            matrix = parse_matrix(matrix_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            matrix = None
+            problems.append("02 矩阵缺失、不可读或格式无效")
     if matrix is not None:
         problems.extend(reconcile(index, matrix))
 

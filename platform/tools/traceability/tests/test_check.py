@@ -70,9 +70,12 @@ class RepositoryTest(unittest.TestCase):
         """扫描前缀写错就会一个文件都扫不到——那也是「零问题」。"""
         self.assertGreater(check.run(REPO_ROOT).referenced_count, 50)
 
-    @unittest.skipIf(load_matrix() is None, "本机读不到 02 矩阵（CI 上正常）")
-    def test_the_snapshot_still_matches_the_matrix_outside_the_repository(self):
-        self.assertTrue(check.run(REPO_ROOT).matrix_checked)
+    def test_the_snapshot_still_matches_the_repository_matrix(self):
+        self.assertTrue((REPO_ROOT / check.MATRIX_FILE).is_file())
+        report = check.run(REPO_ROOT)
+        self.assertTrue(report.matrix_checked)
+        self.assertEqual([], report.problems)
+
 
 
 class GatesGoRedTest(unittest.TestCase):
