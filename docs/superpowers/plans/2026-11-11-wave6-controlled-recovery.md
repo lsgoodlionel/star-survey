@@ -45,3 +45,27 @@ rc20 run42790836656 的四个 Native job 都在 `Block native lifecycle before h
 首批失败测试验证入口不存在；随后补读取竞态、不安全路径/权限/锁、无 current、备份 metadata 非认证、CLI 和真实运行时清单测试。保留既有命令集合精确断言，显式增加新命令，不删除断言。测试仅用临时合成目录，无真实密钥或数据库。本 PR 不证明执行恢复、清理、原生、正式身份或生产准出通过。精确 head、实际运行和剩余项同步到 PR 与 #33，#33 保持验收中。
 
 本地最终回归：控制器130项、Release/工作流167项通过；不重复跑本地完整产品/双库套件，托管 CI 以实际提交为准。
+
+## 2026-11-11：方案 B 的既有范围核对与最小清理边界（待实现）
+
+依据已确认生产设计的单机目标/非高可用范围、单机实施计划的 `surveyctl` 唯一运维入口，以及 #119 的 Owner 选择 B。本候选只需先证明单一生产栈的受控安装、升级、备份、诊断、卸载；没有证据表明已承诺同一 Docker daemon 上任意旧工具并发隔离。保留固定 `survey-production` 以兼容前代 helper 可作为本阶段最小方案，但**不能将现场排他性当作假定**。平台多租户/引擎实例管理不是多个 Compose 安装并发的承诺。
+
+1. 新安装先获得 daemon 级原子归属、持久创建意图与私有身份记录；跨 target 争用仅一个成功，未知/既有对象不认领。固定名非运行容器是待验证的最小 claim 候选，不启动服务、不带挂载/网络/端口/特权；镜像必须来自既有可信 manifest 且明确可用。绑定 daemon、安装随机 ID、规范 target、claim 容器 ID；超时/响应丢失保持未知及 pending，不猜测成功或清空后重试。
+2. 创建前/删除前对容器（含 stopped/created）、网络及成员、卷及挂载作 closed inventory，绑定实际创建记录。容器/网络使用实际 ID；命名卷不能虚构不可变 ID，须用名称、安装标记、driver、创建及挂载事实交叉核对，并承认同名重建限制。外来/额外/漂移对象、查询失败一律拒绝变更；不将未知对象交给 `--remove-orphans` 顺手删除。
+3. 删除后有界核验：非零、未知、查询失败或残留不能写 uninstalled。普通卸载保留数据和卷集合，其归属记录不能释放后被其他 target 误用；purge 才要求受管卷和数据清除，并保留原精确确认。claim 最后处理，未知结果保留 pending 和现场。
+4. 本轮 controller/helper/Docker exec 必须纳入可观测 cohort；未知旧工具/writer/exec 不放行。backup 的部分 pause、dump/加密失败、unpause/health/up 失败或未知，以及控制器终止都要故障注入；不能用服务名回退、签名资产、零退出或一次性 host 代替对象身份/收束证明。失败安装 pending 仍拒绝清理；只能记录失败并保留，不记成功清理。
+5. 未来 stable 恢复仍按已定要求使用新项目名、新卷和新目标，保留全部六项证明；本固定项目范围不得沿用到恢复副本。若实际证明旧 helper 无法安全纳入 cohort，才需就跨版本 helper 执行契约或候选兼容范围提出具体选择，不能预先以范围不清停止所有验证。
+
+### B 归属协议的组件证据（2026-11-11，尚未接入控制器）
+
+独立 `fix/wave6-runtime-ownership` 分支新增协议、私有 ledger 与 Docker 适配器；35 项定向测试覆盖先持久化 pending、跨目标争用、未知创建结果不认领、未知 cohort/查询失败拒绝删除、前后身份漂移、残留与 claim 最后删除。私有记录拒绝不安全权限、符号/硬链接、FIFO、重复字段、超大内容及观察期间改写。非作者只读审查未确认组件阻断，不能等同运行验收。
+
+显式入口 `platform/deploy/production/tests/integration/runtime_ownership_docker.py --image REPO@sha256:DIGEST` 使用已经存在且无 image-declared VOLUME 的镜像，仅创建不启动的随机 `survey-owner-fixture-*` 容器及一个空 local 卷、一个不连接容器的 internal bridge，无挂载/端口、不拉镜像；不操作实际固定生产命名空间。开发机 Docker Desktop client/server 29.9.3（Linux arm64 daemon）上使用本地 Alpine digest `294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6`：真实 daemon 单赢家、普通卸载保留同一卷及 claim、随后 purge 精确删除容器/网络/卷/claim 和最终不存在均通过，exit 0。`--fail-after-create` 故意失败保留 exit 1，测试夹具自身清理另外 verified，不冒称产品失败安装清理通过。首轮因 macOS `/var` 符号链接被正确拒绝；只修正新建夹具 root 的规范路径，不放宽生产 no-follow 检查。
+
+独立复审另发现夹具未知创建结果可能误报清理成功：create 已成功但回复丢失时 `owned` 尚无 ID。两个回归先红后绿；最终独立查询随机 namespace 的全部容器（含停止态）、网络、卷，残留/任一查询失败/格式异常皆报 failed-or-unknown，未知对象只观察、不认领删除，且某类失败仍核对其他类。非作者增量复审确认该误报路径闭合；真实故意失败是在登记之后注入，并非真实丢回复或宿主崩溃实验。
+
+此入口的 unknown cohort 是显式测试注入，**没有证明真实 helper/宿主进程收束**；镜像仅为本地测试材料，不是候选供应链证据。不证明生产服务/有数据卷生命周期、控制器接入、已签前代 helper 或四平台验收。现有两个控制器保守卸载失败回归仍保留，不能以组件绿灯替代。所有 restore/native/证据上传/清理门禁不变，Release 仍由 Claude 负责。
+
+下一运行接入包必须包括：由已验签 Compose/manifest 产生闭合 contract；创建前归属与实际创建回执；controller/helper 的受控启动链与 Docker exec 身份/结束回执；删除前后核验。PGID、一次 ps 或当前 ExecIDs 为空均不能证明任意旧直接工具未来不会并发；单栈唯一入口是受控启动链的信任边界，不是扫描所得证明。已签 rc19 backup helper 使用 Compose exec、部分 pause 后才标记恢复责任，并在 finally 以服务名 unpause/up --remove-orphans；这些实际调用也须被适配器约束或明确调整跨版本 helper 执行契约，不能静默修改旧包或宣称已有回执。
+
+本节只是实现/测试范围，不是运行许可或已完成安全证明；四道原生/清理阻断保持，Release 仍由 Claude 负责。已保存的保守测试在 main4756b6dc 上有两项预期安全断言失败，失败安装保留及 restore 拒绝不改 state/intent 通过；尚无真实 Docker 清理验收。
