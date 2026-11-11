@@ -184,11 +184,11 @@ class GatesGoRedTest(unittest.TestCase):
         report = check.run(self.root, matrix=wider)
         self.assertTrue(any("R01-03" in problem for problem in report.problems), report.problems)
 
-    def test_the_matrix_check_is_skipped_rather_than_faked_when_it_is_unreachable(self):
-        """CI 的检出里没有方案文档目录：那一道闸门应当明确跳过，而不是悄悄算通过。"""
+    def test_explicit_none_cannot_bypass_matrix_gate(self):
+        """显式传入 None 也不能让缺失矩阵被当作通过。"""
         report = check.run(self.root, matrix=None)
         self.assertFalse(report.matrix_checked)
-        self.assertEqual([], report.problems)
+        self.assertTrue(any("02 矩阵" in problem for problem in report.problems), report.problems)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@
 5. 题型主题声明的需求必须有测试证据（新主题只写实现不写证据）；
 6. 仓库内索引快照必须与指定的 02 矩阵一致（矩阵改了快照没跟上）。
 
-默认检查无法读取矩阵时失败；显式传入 None 的调用方可模拟跳过。
+无法读取矩阵或显式传入 None 时失败。
 """
 
 import os
@@ -52,7 +52,7 @@ def run(repo_root: Path, matrix: Any = _UNSET) -> Report:
     """跑完六道闸门。
 
     ``matrix`` 不传＝优先环境变量，否则读取仓库内矩阵；缺失或无效时报错。
-    传 ``Index``＝用这一份；传 ``None``＝显式跳过（仅供调用方模拟）。
+    传 ``Index``＝用这一份；传 ``None``＝矩阵缺失，返回问题。
     """
     index = load_index(repo_root)
     known = set(index.ids)
@@ -90,8 +90,9 @@ def run(repo_root: Path, matrix: Any = _UNSET) -> Report:
             matrix = parse_matrix(matrix_file.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, ValueError):
             matrix = None
-            problems.append("02 矩阵缺失、不可读或格式无效")
-    if matrix is not None:
+    if matrix is None:
+        problems.append("02 矩阵缺失、不可读或格式无效")
+    else:
         problems.extend(reconcile(index, matrix))
 
     return Report(
