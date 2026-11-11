@@ -2808,6 +2808,30 @@ class RecoveryReservationTest(unittest.TestCase):
         self.assertEqual(before, self.source_bytes())
         self.runner.run.assert_not_called()
 
+    def test_interrupt_before_first_record_never_allows_ordinary_install_adoption(self):
+        before = self.source_bytes()
+        mkdir, opened = self.ctl.os.mkdir, self.ctl.os.open
+        for phase in ("control-directory", "first-record"):
+            self.destination = self.root / f"interrupted-{phase}"
+            def fail_mkdir(name, *args, **kwargs):
+                if phase == "control-directory" and name == ".surveyctl":
+                    raise OSError("synthetic pre-record interruption")
+                return mkdir(name, *args, **kwargs)
+            def fail_open(name, flags, *args, **kwargs):
+                if phase == "first-record" and name == "recovery.reservation.json" and flags & os.O_CREAT:
+                    raise OSError("synthetic pre-record interruption")
+                return opened(name, flags, *args, **kwargs)
+            with self.subTest(phase=phase):
+                with mock.patch.object(self.ctl.os, "mkdir", side_effect=fail_mkdir), \
+                        mock.patch.object(self.ctl.os, "open", side_effect=fail_open):
+                    with self.assertRaises(self.ctl.IntegrityError):
+                        self.reserve()
+                self.assertEqual(before, self.source_bytes())
+                self.runner.run.assert_not_called()
+                with self.assertRaises(self.ctl.InputError):
+                    with self.ctl.SurveyManager(self.destination)._mutation_lock(create_target=True, operation="install"):
+                        pass  # No helper or runtime is started; only test adoption.
+
     def test_fsync_failure_preserves_partial_target_and_original_marker(self):
         before = self.source_bytes()
         with mock.patch.object(self.ctl.os, 'fsync', side_effect=OSError('synthetic failure')):
