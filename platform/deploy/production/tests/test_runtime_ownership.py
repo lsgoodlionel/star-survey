@@ -154,6 +154,28 @@ class OwnershipProtocolTest(unittest.TestCase):
         with self.assertRaises(self.module.OwnershipError): self.protocol.cleanup(True)
         self.assertEqual('cleanup-pending', self.store.record['phase'])
         self.assertEqual([], self.daemon.claim_deletes)
+    def test_non_purge_mutation_cannot_lose_or_replace_a_recorded_volume(self):
+        for operation in ('backup', 'upgrade', 'install', 'doctor'):
+            for replacement in ({}, {'survey-production_data': 'e' * 64}):
+                with self.subTest(operation=operation, replacement=replacement):
+                    self.setUp()
+                    self.populate()
+                    def effect():
+                        self.daemon.snapshot['volumes'] = replacement.copy()
+                    with self.assertRaises(self.module.OwnershipError):
+                        self.protocol.mutate(operation, effect)
+                    self.assertEqual('mutation-pending', self.store.record['phase'])
+                    self.assertEqual({'survey-production_data': 'd' * 64}, self.store.record['resources']['volumes'])
+                    self.assertEqual([], self.daemon.remove_calls)
+
+    def test_non_purge_mutation_can_add_a_declared_volume_while_preserving_old_identity(self):
+        self.populate()
+        def effect():
+            self.daemon.snapshot['volumes']['survey-production_added'] = 'e' * 64
+        self.protocol.mutate('upgrade', effect)
+        self.assertEqual('ready', self.store.record['phase'])
+        self.assertEqual({'survey-production_data': 'd' * 64, 'survey-production_added': 'e' * 64},
+                         self.store.record['resources']['volumes'])
     def test_ordinary_uninstall_retains_volume_identity_and_claim(self):
         self.populate()
         self.protocol.cleanup(False)

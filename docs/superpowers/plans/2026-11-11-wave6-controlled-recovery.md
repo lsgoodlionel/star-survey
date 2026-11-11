@@ -58,7 +58,7 @@ rc20 run42790836656 的四个 Native job 都在 `Block native lifecycle before h
 
 ### B 归属协议的组件证据（2026-11-11，尚未接入控制器）
 
-独立 `fix/wave6-runtime-ownership` 分支新增协议、私有 ledger 与 Docker 适配器；35 项定向测试覆盖先持久化 pending、跨目标争用、未知创建结果不认领、未知 cohort/查询失败拒绝删除、前后身份漂移、残留与 claim 最后删除。私有记录拒绝不安全权限、符号/硬链接、FIFO、重复字段、超大内容及观察期间改写。非作者只读审查未确认组件阻断，不能等同运行验收。
+独立 `fix/wave6-runtime-ownership` 分支新增协议、私有 ledger 与 Docker 适配器；37 项定向测试覆盖先持久化 pending、跨目标争用、未知创建结果不认领、未知 cohort/查询失败拒绝删除、前后身份漂移、残留与 claim 最后删除。私有记录拒绝不安全权限、符号/硬链接、FIFO、重复字段、超大内容及观察期间改写。非作者只读审查未确认组件阻断，不能等同运行验收。
 
 显式入口 `platform/deploy/production/tests/integration/runtime_ownership_docker.py --image REPO@sha256:DIGEST` 使用已经存在且无 image-declared VOLUME 的镜像，仅创建不启动的随机 `survey-owner-fixture-*` 容器及一个空 local 卷、一个不连接容器的 internal bridge，无挂载/端口、不拉镜像；不操作实际固定生产命名空间。开发机 Docker Desktop client/server 29.9.3（Linux arm64 daemon）上使用本地 Alpine digest `294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6`：真实 daemon 单赢家、普通卸载保留同一卷及 claim、随后 purge 精确删除容器/网络/卷/claim 和最终不存在均通过，exit 0。`--fail-after-create` 故意失败保留 exit 1，测试夹具自身清理另外 verified，不冒称产品失败安装清理通过。首轮因 macOS `/var` 符号链接被正确拒绝；只修正新建夹具 root 的规范路径，不放宽生产 no-follow 检查。
 
@@ -87,3 +87,5 @@ rc20 run42790836656 的四个 Native job 都在 `Block native lifecycle before h
 Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→helper→实际exec的OpenSSL链在测试controller遭SIGKILL后均不再存活，使用PID/starttime观察；OpenSSL仅用固定合成零密钥将/dev/zero处理到/dev/null，不是产品加密设置或真实数据。(2)父进程在bootstrap设置约束前已死亡，子进程校验父身份后拒绝继续。(3)故意绕过bootstrap、另起session的未包裹子进程确实存活，这是负控制，用于证明不能只约束直接helper；随后仅终止自己已记录的测试进程。(4)进程结束与容器删除后不存在分别核验通过。
 
 [Linux手册](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)说明此设置在fork子进程中清除、通常跨exec保留，父线程提前死亡还需另行检查；实验结果与此一致。因此该机制**不足以独立证明任意旧helper收束**：需要已审查的每一条实际子进程启动及Docker exec路径都纳入可信bootstrap/receipt，不能把PGID/父死亡约束名称或本实验exit0当完整证明。尚未接入controller/旧helper，也没有验证真实备份/解密明文、Docker exec生命周期、Ubuntu四平台或崩溃恢复；临时合成文件和进程实验不解除任何门禁。
+
+组件增量复核另确认非purge mutation 的后验条件缺口：effect成功后原卷消失/可观察指纹改变仍可写ready。8个operation×丢失/替换负例先红；修改为每个原卷名称/指纹必须在post snapshot原样保留，允许新增已声明卷，异常保持mutation-pending。37测试通过；这只证明可观察身份保留，不证明卷内容未被修改，也不解决同名重建指纹碰撞局限。
