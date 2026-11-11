@@ -369,7 +369,7 @@ PYLOG
 verify_and_archive_run_root() {
   local success_marker="$ADMIN_WEB_TEST_RESULTS_DIR/playwright-suite-success.txt"
   local root_id_file="$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
-  local expected_publish_calls=5
+  local expected_publish_calls=8
   if [[ "$E2E_SUITE" == "wave3" ]]; then expected_publish_calls=3; fi
   local verification_scope=full
   if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then
@@ -539,6 +539,11 @@ db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version
 db_query "DELETE FROM lime_plugins WHERE name = 'MjyQuestionExtensions'" >/dev/null
 db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
           VALUES ('MjyQuestionExtensions', 'user', 1, 0, '0.1.0', 0)" >/dev/null
+if [[ "$E2E_SUITE" == "full" ]]; then
+  db_query "DELETE FROM lime_plugins WHERE name = 'MjyRuntimePolicy'" >/dev/null
+  db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
+            VALUES ('MjyRuntimePolicy', 'user', 1, 0, '0.1.0', 0)" >/dev/null
+fi
 if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" == "1" ]]; then
   db_query "INSERT INTO lime_plugins (name, plugin_type, active, priority, version, load_error)
             VALUES ('AttachmentLocatorProbe', 'user', 1, 100, '0.1.0', 0)" >/dev/null
