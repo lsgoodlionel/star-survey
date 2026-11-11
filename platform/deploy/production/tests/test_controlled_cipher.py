@@ -37,7 +37,7 @@ class ControlledCipherHandoffTest(unittest.TestCase):
         self.addCleanup(self.workspace.close)
         self.calls = []
 
-    def runner(self, *, fail=False):
+    def runner(self, *, fail=False, decrypt_partial=False, uncertain=False):
         owner = self
         class Runner:
             def run(self, command, **kwargs):
@@ -50,8 +50,16 @@ class ControlledCipherHandoffTest(unittest.TestCase):
                     owner.assertIsInstance(source, owner.memory.ChildArgument)
                     owner.assertEqual(b'fixture-ciphertext', source.file.read_bytes())
                     owner.assertIsInstance(target, owner.memory.ChildArgument)
+                    if uncertain:
+                        owner.uncertain_export = target.file._workspace.export_files(
+                            inputs=(source.file,), output=target.file)
+                        leases = owner.uncertain_export.__enter__()
+                        os.pwrite(leases[-1].fd, b'partial', 0)
+                        raise RuntimeError('synthetic execution outcome is unknown')
                     with target.file.open('wb') as output:
                         output.write(b'fixture-plaintext')
+                    if decrypt_partial:
+                        raise subprocess.CalledProcessError(1, ['openssl'])
                 else:
                     owner.assertIsInstance(source, owner.memory.ChildArgument)
                     owner.assertEqual(b'fixture-plaintext', source.file.read_bytes())
@@ -100,6 +108,39 @@ class ControlledCipherHandoffTest(unittest.TestCase):
         with self.assertRaises(self.backup.BackupError):
             cipher.encrypt(plain, self.root / 'failed.enc', self.key)
         self.assertEqual({'fixture-key'}, {path.name for path in self.root.iterdir()})
+
+    def fixture_encrypted(self):
+        data = b'SURVEYBK1' + b'fixture-ciphertext'
+        mac_key = hashlib.sha256(self.key.read_bytes() + b'\x00survey-backup-hmac').digest()
+        source = self.root / 'encrypted.enc'
+        source.write_bytes(data + hmac.new(mac_key, data, hashlib.sha256).digest())
+        return source
+
+    def test_confirmed_failed_decrypt_removes_its_partial_anonymous_output(self):
+        source, target = self.fixture_encrypted(), self.workspace / 'payload'
+        cipher = self.backup.AuthenticatedOpenSSLCipher(runner=self.runner(decrypt_partial=True))
+        with self.assertRaises(self.backup.BackupError):
+            cipher.decrypt(source, target, self.key)
+        with self.assertRaises(FileNotFoundError):
+            target.stat()
+        with self.assertRaises(FileNotFoundError):
+            target.with_suffix('.cipher').stat()
+
+    def test_unknown_decrypt_retains_the_export_and_cannot_claim_cleanup(self):
+        source, target = self.fixture_encrypted(), self.workspace / 'payload'
+        cipher = self.backup.AuthenticatedOpenSSLCipher(runner=self.runner(uncertain=True))
+        try:
+            with self.assertRaises(self.memory.WorkspaceError):
+                cipher.decrypt(source, target, self.key)
+            with self.assertRaises(self.memory.WorkspaceError):
+                self.workspace.close()
+            with self.assertRaises(self.memory.WorkspaceError):
+                target.read_bytes()
+        finally:
+            # Only now simulate the separate executor confirming its child ended.
+            self.uncertain_export.__exit__(None, None, None)
+        target.unlink()
+        target.with_suffix('.cipher').unlink()
 
 
 if __name__ == '__main__':
