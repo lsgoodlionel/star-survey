@@ -751,6 +751,106 @@ class SurveyManager:
             for fd in reversed(descriptors):
                 os.close(fd)  # Closing the held descriptor also releases its flock.
 
+    def recovery_reserve(self, destination: Path | str, observed_source_sha256: str,
+                         backup: str | None = None) -> dict[str, Any]:
+        """Record a new filesystem target, never an authorization to restore.
+
+        No runtime resource exists yet. Interrupted/ambiguous initialization is
+        retained, not adopted or removed. This is not a fence against old tools
+        or same-permission writers; the execution gates stay closed.
+        """
+        if (not isinstance(observed_source_sha256, str)
+                or re.fullmatch(r'[0-9a-f]{64}', observed_source_sha256) is None):
+            raise InputError('observed source fingerprint must be a lowercase SHA256')
+        observation = self.recovery_plan(destination, backup)
+        if not secrets.compare_digest(observation['source']['snapshotSha256'], observed_source_sha256):
+            raise IntegrityError('source observation changed; no recovery target was reserved')
+        destination = Path(observation['destination'])
+        fds, chain, files = [], [], []
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+        def identity(info):
+            return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
+
+        def open_directory(name, parent=None):
+            fd = os.open(name, flags, **({'dir_fd': parent} if parent is not None else {}))
+            fds.append(fd)
+            if not stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise IntegrityError('recovery target directory is unsafe')
+            chain.append((parent, name, fd, identity(os.fstat(fd))))
+            return fd
+
+        def recheck_directories():
+            for parent, name, fd, expected in chain:
+                observed = os.stat(name, follow_symlinks=False, **({'dir_fd': parent} if parent is not None else {}))
+                if identity(observed) != expected or identity(os.fstat(fd)) != expected:
+                    raise IntegrityError('recovery reservation directory identity changed')
+
+        def recheck_target(target, control):
+            if set(os.listdir(target)) != {'.surveyctl'} or set(os.listdir(control)) != {name for name, _ in files}:
+                raise IntegrityError('recovery reservation contains unexpected entries')
+            for name, expected in files:
+                if _file_read_snapshot(os.stat(name, dir_fd=control, follow_symlinks=False)) != expected:
+                    raise IntegrityError('recovery reservation file changed during initialization')
+
+        def write_new(name, payload, parent):
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+            with os.fdopen(fd, 'wb') as handle:
+                handle.write(payload); handle.flush(); os.fsync(handle.fileno())
+                info = os.fstat(handle.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid()
+                        or info.st_mode & 0o077 or info.st_size != len(payload)):
+                    raise IntegrityError('new recovery reservation file is unsafe')
+                files.append((name, _file_read_snapshot(info)))
+
+        try:
+            parent = open_directory(destination.anchor)
+            for component in destination.parent.parts[1:]:
+                parent = open_directory(component, parent)
+            parent_info = os.fstat(parent)
+            if parent_info.st_uid != os.geteuid() or parent_info.st_mode & 0o022:
+                raise IntegrityError('recovery destination parent must be owned and not group/world writable')
+            recheck_directories()
+            try:
+                os.mkdir(destination.name, mode=0o700, dir_fd=parent)
+            except FileExistsError as exc:
+                raise InputError('recovery destination already exists; it will not be adopted') from exc
+            target = open_directory(destination.name, parent)
+            if os.listdir(target):
+                raise IntegrityError('new recovery destination is not empty')
+            target_info = os.fstat(target)
+            if target_info.st_uid != os.geteuid() or stat.S_IMODE(target_info.st_mode) != 0o700:
+                raise IntegrityError('new recovery destination permissions are unsafe')
+            os.mkdir('.surveyctl', mode=0o700, dir_fd=target)
+            control = open_directory('.surveyctl', target)
+            control_info = os.fstat(control)
+            if control_info.st_uid != os.geteuid() or stat.S_IMODE(control_info.st_mode) != 0o700:
+                raise IntegrityError('new recovery control permissions are unsafe')
+            nonce = uuid.uuid4().hex
+            record = {'schemaVersion': 1, 'state': 'reserved-not-authorized', 'executable': False,
+                      'reservationId': nonce, 'projectProposal': 'survey-recovery-' + nonce,
+                      'sourceObservationSha256': observed_source_sha256,
+                      'targetIdentity': [target_info.st_dev, target_info.st_ino],
+                      'controlIdentity': [control_info.st_dev, control_info.st_ino],
+                      'backupAuthenticated': False, 'runtimeResourcesCreated': False}
+            # An unknown private record blocks normal target adoption as soon as
+            # it exists. It is never a completed-operation or restore marker.
+            write_new('recovery.reservation.json', (json.dumps(record, sort_keys=True) + '\n').encode(), control)
+            write_new('operation.lock', b'', control)
+            write_new('operation.intent', b'{"schemaVersion":1,"state":"pending","operation":"recovery_reserve"}\n', control)
+            recheck_target(target, control)
+            os.fsync(control); os.fsync(target); os.fsync(parent)
+            recheck_directories()
+            recheck_target(target, control)
+            return {'schemaVersion': 1, 'status': 'reserved-not-authorized', 'executable': False,
+                    'reservationId': nonce, 'projectProposal': record['projectProposal'],
+                    'sourceObservationSha256': observed_source_sha256}
+        except OSError as exc:
+            raise IntegrityError('recovery target reservation failed; preserve any partial target, do not remove markers') from exc
+        finally:
+            for fd in reversed(fds):
+                os.close(fd)
+
     def _begin_operation(self) -> None:
         """Persist an unfinished operation before touching managed data or services."""
         if not self._mutation_depth:
@@ -2136,6 +2236,10 @@ def build_parser() -> argparse.ArgumentParser:
     recovery = sub.add_parser("recovery-plan", help="read-only new-target proposal; recovery execution remains blocked")
     recovery.add_argument("--destination", required=True)
     recovery.add_argument("--backup")
+    reserve = sub.add_parser("recovery-reserve", help="record a new private target; restoration remains blocked")
+    reserve.add_argument("--destination", required=True)
+    reserve.add_argument("--observed-source-sha256", required=True)
+    reserve.add_argument("--backup")
     sub.add_parser("status")
     sub.add_parser("doctor")
     logs = sub.add_parser("logs")
@@ -2172,6 +2276,8 @@ def main(argv=None) -> int:
             manager.restore(args.backup)
         elif args.command == "recovery-plan":
             print(json.dumps(manager.recovery_plan(args.destination, args.backup), sort_keys=True))
+        elif args.command == "recovery-reserve":
+            print(json.dumps(manager.recovery_reserve(args.destination, args.observed_source_sha256, args.backup), sort_keys=True))
         elif args.command == "status":
             manager.status()
         elif args.command == "doctor":
