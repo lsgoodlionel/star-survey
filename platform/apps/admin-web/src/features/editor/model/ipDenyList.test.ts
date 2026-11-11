@@ -32,6 +32,15 @@ describe('editable IP denial policy', () => {
     expect(serializeDefinition(cleared)).toEqual({ ...source, policy: { policyVersion: 1,
       network: { regionUnknown: 'allow' },
     } });
+    expect(validateIpDenyList(cleared)).toContain('清空 IP 拒绝清单后，网络策略没有有效规则');
+    const emptyAllow = parseDefinition({ ...source, policy: { policyVersion: 1,
+      network: { denyIps: ['::1'], allowIps: [], allowRegions: [], denyRegions: [] },
+    } });
+    expect(validateIpDenyList(updateIpDenyList(emptyAllow, []))).toContain('清空 IP 拒绝清单后，网络策略没有有效规则');
+    const activeAllow = parseDefinition({ ...source, policy: { policyVersion: 1,
+      network: { denyIps: ['::1'], allowIps: ['10.0.0.0/8'] },
+    } });
+    expect(validateIpDenyList(updateIpDenyList(activeAllow, []))).toEqual([]);
   });
 
   test('does not save an empty line as a network rule', () => {

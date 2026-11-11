@@ -141,6 +141,21 @@ describe('EditorPage', () => {
     expect(screen.getByText('现有网络策略格式无法在此编辑；原设置会保留。')).toBeVisible();
   });
 
+  test('blocks saving an IP denial clear that leaves an empty network policy', async () => {
+    const source = structuredClone(gatewayFixture) as Record<string, unknown>;
+    source.policy = { policyVersion: 1, network: { denyIps: ['::1'], regionUnknown: 'allow' } };
+    let submissions = 0;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: () => { submissions += 1; throw new Error('must not save'); },
+    });
+    renderEditor(api);
+    fireEvent.change(await screen.findByLabelText('拒绝访问的 IP/CIDR'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('清空 IP 拒绝清单后，网络策略没有有效规则');
+    expect(submissions).toBe(0);
+  });
+
   test('authors a time window without replacing other access policy rules', async () => {
     const source = structuredClone(gatewayFixture) as Record<string, unknown>;
     source.policy = { policyVersion: 1, access: { captcha: true }, network: { denyIps: ['127.0.0.0/8'] } };

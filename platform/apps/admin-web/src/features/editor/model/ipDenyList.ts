@@ -45,5 +45,12 @@ export function updateIpDenyList(definition: EditableSurveyDefinition, denyIps: 
 export function validateIpDenyList(definition: EditableSurveyDefinition): string[] {
   const state = readIpDenyList(definition);
   if (!state.editable) return [];
-  return state.denyIps.some((value) => !value.trim()) ? ['IP 拒绝清单不能包含空行'] : [];
+  const errors = state.denyIps.some((value) => !value.trim()) ? ['IP 拒绝清单不能包含空行'] : [];
+  const policy = definition.source.policy;
+  const network = object(policy) ? policy.network : undefined;
+  if (object(network) && !['allowIps', 'denyIps', 'allowRegions', 'denyRegions'].some((key) =>
+    Array.isArray(network[key]) && network[key].length > 0)) {
+    errors.push('清空 IP 拒绝清单后，网络策略没有有效规则');
+  }
+  return errors;
 }

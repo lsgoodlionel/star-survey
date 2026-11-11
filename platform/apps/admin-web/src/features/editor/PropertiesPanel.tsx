@@ -70,7 +70,7 @@ export function PropertiesPanel({ definition, disabled, onChange, onTimeWindowCh
           <textarea rows={4} value={ipDenyList.denyIps.join('\n')} disabled={disabled || !ipDenyList.editable}
             onChange={(event) => onIpDenyListChange(event.target.value === '' ? [] : event.target.value.split(/\r?\n/))} />
         </label>
-        <p>每行一个 IPv4、IPv6 地址或 CIDR；不能留空行。不合法地址由发布网关拒绝，保存草稿不代表规则已生效。</p>
+        <p>每行一个 IPv4、IPv6 地址或 CIDR；不能留空行。若清空后只剩无效网络设置，请恢复拒绝项或先移除其它设置。不合法地址由发布网关拒绝，保存草稿不代表规则已生效。</p>
       </fieldset>
       <div>
         <p>语言：<span>{languageLabel(definition.language)}</span></p>
