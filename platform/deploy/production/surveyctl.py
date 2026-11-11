@@ -777,12 +777,20 @@ class SurveyManager:
         def identity(info):
             return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
 
-        def open_directory(name, parent=None):
+        def open_directory(name, parent=None, *, ancestor=False):
             fd = os.open(name, flags, **({'dir_fd': parent} if parent is not None else {}))
             fds.append(fd)
-            if not stat.S_ISDIR(os.fstat(fd).st_mode):
-                raise IntegrityError('recovery target directory is unsafe')
-            chain.append((parent, name, fd, identity(os.fstat(fd))))
+            info = os.fstat(fd)
+            # A private immediate parent is insufficient if another uid can
+            # rename it through an unsafe ancestor. Match installation trust:
+            # root/current uid ancestors, no shared writes except root-owned
+            # sticky ancestors; the new target/control never get that exception.
+            owners = {0, os.geteuid()} if ancestor else {os.geteuid()}
+            writable_ok = not info.st_mode & 0o022 or (
+                ancestor and info.st_uid == 0 and info.st_mode & stat.S_ISVTX)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid not in owners or not writable_ok:
+                raise IntegrityError('recovery target directory ownership or permissions are unsafe')
+            chain.append((parent, name, fd, identity(info)))
             return fd
 
         def recheck_directories():
@@ -809,9 +817,9 @@ class SurveyManager:
                 files.append((name, _file_read_snapshot(info)))
 
         try:
-            parent = open_directory(destination.anchor)
+            parent = open_directory(destination.anchor, ancestor=True)
             for component in destination.parent.parts[1:]:
-                parent = open_directory(component, parent)
+                parent = open_directory(component, parent, ancestor=True)
             parent_info = os.fstat(parent)
             if parent_info.st_uid != os.geteuid() or parent_info.st_mode & 0o022:
                 raise IntegrityError('recovery destination parent must be owned and not group/world writable')
