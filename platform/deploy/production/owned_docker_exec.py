@@ -154,6 +154,12 @@ class _UnixConnection(http.client.HTTPConnection):
         self.sock.connect('/var/run/docker.sock')
 
 
+class DockerRequestTimeout(TimeoutError):
+    def __init__(self, operation):
+        self.operation = operation
+        super().__init__('Docker response deadline exceeded; outcome remains unknown')
+
+
 class LocalDockerAPI:
     VERSION = '/v1.47'
 
@@ -170,10 +176,18 @@ class LocalDockerAPI:
 
     def _json(self, method, path, body=None, *, accepted=(200, 201)):
         connection = self._connect()
+        # Connect/request retain the five-second transport timeout. Only this
+        # fixed, bodyless stop acknowledgement may wait beyond its 20s grace.
+        stop = (method == 'POST' and body is None
+                and re.fullmatch(r'/containers/[0-9a-f]{64}/stop\?t=20', path) is not None)
         try:
             data = None if body is None else json.dumps(body, allow_nan=False).encode('ascii')
             connection.request(method, self.VERSION + path, data, {'Content-Type': 'application/json'})
+            if stop:
+                connection.sock.settimeout(25)
             response = connection.getresponse()
+            if stop and response.status not in (204, 304):
+                raise ExecProtocolError('Docker stop acknowledgement was not accepted')
             if response.status not in accepted:
                 raise ExecProtocolError('Docker request was not accepted')
             if response.status in (204, 304):
@@ -183,6 +197,8 @@ class LocalDockerAPI:
                 raise ExecProtocolError('Docker metadata exceeded its bound')
             from runtime_ownership import PrivateStore
             return json.loads(raw, object_pairs_hook=PrivateStore._unique)
+        except TimeoutError as exc:
+            raise DockerRequestTimeout('container-stop' if stop else 'docker-json') from exc
         finally:
             connection.close()
 

@@ -1,5 +1,6 @@
 """Mutation dispatch cannot fall back to an untracked host CLI."""
 import importlib
+from copy import deepcopy
 from pathlib import Path
 import subprocess
 import sys
@@ -28,6 +29,67 @@ class RuntimeDockerTest(unittest.TestCase):
         self.api_failure = False
         self.driver = self.module.APIOwnershipDriver(Runner(), {'services': {'platform': {}},
             'networks': {}, 'volumes': {}}, lambda: 'quiescent', api=API())
+
+    def transport(self, delay):
+        module = importlib.import_module('owned_docker_exec')
+        connections = []
+        class Connection:
+            def __init__(self, host, timeout):
+                self.timeout, self.sock, self.closed, self.requests = timeout, None, False, []
+                connections.append(self)
+            def request(self, method, path, *args):
+                self.requests.append((method, path))
+                self.sock = self
+            def settimeout(self, timeout): self.timeout = timeout
+            def getresponse(self):
+                if delay > self.timeout: raise TimeoutError('synthetic delayed daemon')
+                return type('Response', (), {'status': 204})()
+            def close(self): self.closed = True
+        return module, connections, patch.object(module, '_UnixConnection', side_effect=Connection)
+
+    def test_only_exact_stop_gets_budget_beyond_its_twenty_second_grace(self):
+        module, connections, transport = self.transport(9)
+        with transport:
+            self.assertIsNone(module.LocalDockerAPI()._json('POST', '/containers/' + 'a' * 64 + '/stop?t=20', accepted=(204,)))
+        self.assertEqual(25, connections[0].timeout)
+        self.assertEqual(1, len(connections[0].requests))
+        self.assertTrue(connections[0].closed)
+
+    def test_other_routes_and_methods_keep_the_five_second_budget(self):
+        module, connections, transport = self.transport(9)
+        cid = 'a' * 64
+        with transport:
+            for method, path in (('DELETE', '/containers/' + cid), ('GET', '/containers/' + cid + '/json'),
+                                 ('GET', '/containers/' + cid + '/stop?t=20'),
+                                 ('POST', '/containers/' + cid + '/stop?t=21'),
+                                 ('POST', '/containers/' + cid + '/stop?t=20&other=1')):
+                with self.assertRaises(TimeoutError): module.LocalDockerAPI()._json(method, path)
+            with self.assertRaises(TimeoutError):
+                module.LocalDockerAPI()._json('POST', '/containers/' + cid + '/stop?t=20', body={})
+        self.assertTrue(all(c.timeout == 5 and c.closed and len(c.requests) == 1 for c in connections))
+
+    def test_stop_budget_expiry_is_unknown_and_never_replayed(self):
+        module, connections, transport = self.transport(26)
+        expected = {'containers': {'a' * 64: 'fingerprint'}, 'networks': {}, 'volumes': {}}
+        self.driver.observe = lambda: dict(deepcopy(expected), cohort='quiescent', foreign=False)
+        self.driver._container = lambda cid: ('fingerprint', False, 'running')
+        protocol = object.__new__(self.module.ownership.OwnershipProtocol)
+        protocol.driver = self.driver
+        protocol.preflight_cleanup = lambda purge: {'phase': 'ready', 'daemonId': 'fixture', 'resources': deepcopy(expected)}
+        saved = []
+        protocol._save = lambda record: saved.append(deepcopy(record))
+        with transport:
+            self.driver.api = module.LocalDockerAPI()
+            with self.assertRaises(self.module.ownership.OwnershipError) as failure:
+                protocol.cleanup(False)
+        self.assertIsInstance(failure.exception.__cause__, TimeoutError)
+        self.assertEqual('container-stop', failure.exception.__cause__.operation)
+        self.assertEqual(1, len(connections))
+        self.assertEqual(1, len(connections[0].requests))
+        self.assertTrue(connections[0].closed)
+        self.assertEqual([], self.cli)
+        self.assertEqual(['cleanup-pending'], [row['phase'] for row in saved])
+        self.assertEqual(expected, saved[0]['resources'])
 
     def test_stop_and_exact_removal_use_api_and_lost_reply_has_no_cli_fallback(self):
         for command in (['container', 'stop', '--time', '20', 'a' * 64], ['container', 'rm', 'a' * 64],

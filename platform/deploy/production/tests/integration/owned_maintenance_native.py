@@ -27,7 +27,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'tests'), str(Path(__file__).parent)]
 import runtime_ownership as ownership
 from backup import VOLUME_SOURCES
 from owned_children import read_process_identity
-from owned_docker_exec import LocalDockerAPI
+from owned_docker_exec import LocalDockerAPI, DockerRequestTimeout
 from runtime_controller_native import namespace_empty, remove_and_confirm
 from test_surveyctl import load_module, write_test_release
 
@@ -304,9 +304,11 @@ def run_case(images, scenario):
         if all(result.get(k) is True for k in REQUIRED[scenario]): result['status'] = 'passed'
     except Exception as exc:
         result.update(failureStage=stage, failureClass=type(exc).__name__)
-        chain, locations = [], []
+        chain, locations, operations = [], [], []
         allowed = {Path(__file__).name, 'runtime_controller_native.py', *module.OWNED_RUNTIME_FILES}
         while exc is not None and len(chain) < 6:
+            if isinstance(exc, DockerRequestTimeout) and exc.operation in ('container-stop', 'docker-json'):
+                operations.append(exc.operation)
             chain.append(type(exc).__name__)
             trace, frames = exc.__traceback__, []
             while trace:
@@ -317,6 +319,7 @@ def run_case(images, scenario):
             exc = exc.__cause__
         result['failureClasses'] = chain  # No messages, logs, SQL, HTTP bodies or credentials.
         result['failureLocations'] = locations
+        result['failureOperations'] = operations  # Fixed enums only; never paths or request bodies.
         try:
             codes, phases = [], []
             for path in manager.control_dir.glob('runtime-*.json'):

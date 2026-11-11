@@ -171,3 +171,9 @@ Claude接续点：`release/build_release.py:RUNTIME_FILES` 尚需在独立审查
 Owner明确授权后已创建Draft PR #129（初始head `2f35d871c9d4691be3de79ab93205d223f5deecd`）。首次Linux维护job `43102867372` 两场景均在initialize被人员能力绑定校验拒绝（surveyctl.py:1195），独立Docker清理均verified；尚未进入数据库备份。根因为合成夹具替换images后仍沿用旧平台digest的能力声明。定向回归复现同一拒绝后，仅修正合成manifest声明绑定测试镜像；错误digest负例继续拒绝，产品校验未改，四项证据测试通过。修复后的在线真实维护结果仍待验证，不能把本次旧失败或其他smoke通过当作本路径通过。
 
 第二轮 `43103485356` 已通过真实AMD64 Caddy hash，但在backup失败；UncertainMaintenance位于writer恢复检查，fixtureCleanup为unknown-or-refused，不能称已清理。隔离真实Docker明确返回暂停容器Status=paused/Running=true/Paused=true，恢复后running且该临时容器清理verified。以同状态模型复现本轮代码在pause观察及finally恢复前拒绝本轮已登记CID。仅对本次paused集合中的CID、真实Paused=true且原归属/指纹/exec检查全满足时允许paused状态；外部暂停仍拒绝。11项定向维护测试通过，未知/丢失RPC的保守语义不变；修复后完整链仍须在线验证，不断言这是唯一后续缺陷。
+
+Owner明确批准一轮限定超时修复后，核对原head `bb6a89089c4ca35fbace1a45caa1a6f5099b633c` 未变。其维护证据run43104179073确认真实hash、backupVerified、archiveContentsVerified及restore拒绝均true，失败推进至uninstall的Docker响应等待超时；清理unknown-or-refused，旧证据没有请求方法，不能证明当时一定是stop。另完整CI43104179354有独立FD复用单测EBADF失败（test_owned_memory.py:147），本轮不扩大修复范围，也不跳过或声称全绿。
+
+定向模型先红证明9秒stop响应被原5秒传输预算拒绝。修复仅为无body的固定POST `/containers/<64hex>/stop?t=20` 提供25秒响应等待，连接/发送保留5秒，其他请求保持原5秒；只接受204/304无body确认。该预算不是整次卸载硬时限，也不改变daemon的20秒grace。超时固定分类container-stop/docker-json，不保留路径、请求体或异常原文；原有unknown语义不变，无重试或CLI fallback。实际cleanup调用链的超预算负例证明只有一次stop、保留cleanup-pending及原资源、不发删除请求。10项runtime_docker、12项exec、4项维护证据回归通过。
+
+真实本机Linux Docker组件实验（`/tmp/survey-pr129-stop-budget-20261111.json`）：随机自建非root、network-none、无端口/宿主挂载、只读、ALL-drop容器忽略TERM；一次stop实际20.08秒收到确认、精确退出检查通过，再删除并核验无残留，未重放未知mutation。不代表旧CI唯一根因、完整卸载、数据库生命周期或四平台通过。修复后精确head仍需GitHub CI；恢复与发布门禁保留，未触碰Claude Release。
