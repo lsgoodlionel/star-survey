@@ -79,3 +79,11 @@ rc20 run42790836656 的四个 Native job 都在 `Block native lifecycle before h
 3. **最小候选方向**：先隔离验证受控launcher加载经过现有签名/manifest校验且明确兼容的旧helper原字节，通过内部runner限制其Docker操作；旧包不改、不重签。与“改用候选helper并显式声明旧state/格式兼容”相比，该方向保留旧格式实现，但须逐项证明注入覆盖全部实际调用；不支持的版本/调用拒绝，不能悄悄回退原CLI。若真实旧包API不兼容，再向Owner给出这两种精确执行契约的证据及差异，而非笼统重选单/多栈。
 4. **真实receipt，不靠空集合**：Docker exec需绑定实际ExecID、容器ID及结束状态，未知创建/启动/投递结果保持pending；当前无ExecIDs不代表本轮已结束。受控Python/OpenSSL启动链需记录PID/starttime并验证整个允许cohort收束；PGID本身不是containment。Linux无新增特权的父死亡约束/受控child bootstrap仅为待验证机制，须真实SIGKILL、子进程失败、controller死亡及异常派生负例；不得仅凭扫描或PDEATHSIG名称宣称通过，也不引入#102已拒绝的特权实验。
 5. **保持原安全职责**：部分pause、丢回复、dump/加密失败、unpause/health/up异常均需真实组件故障注入；未知writer/exec/资源不主动kill或删除。验证私有工作区及明文清理必须建立在已证明cohort结束之上，不能以TemporaryDirectory finally或宿主销毁替代。备份HMAC、源manifest、schema、人员floor、restore拒绝及六项stable证明不变。此包只在隔离代码/合成数据验证，不启动真实组织或发布流程。
+
+### 非特权父死亡机制可行性（2026-11-11，非产品containment证明）
+
+可重复入口：`python3 -B platform/deploy/production/tests/integration/helper_parent_death_probe.py --docker-fixture python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e`。仅使用本地已有镜像，随机自建容器，uid65534、cap-drop ALL/no-new-privileges、只读rootfs、无网络/端口/主机挂载，有限PID/CPU/内存及tmpfs；拒绝隐式VOLUME，按本轮捕获ID/标签/镜像/隔离参数核验清理，不拉镜像或改变主机权限。没有production/Release/凭据操作。
+
+Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→helper→实际exec的OpenSSL链在测试controller遭SIGKILL后均不再存活，使用PID/starttime观察；OpenSSL仅用固定合成零密钥将/dev/zero处理到/dev/null，不是产品加密设置或真实数据。(2)父进程在bootstrap设置约束前已死亡，子进程校验父身份后拒绝继续。(3)故意绕过bootstrap、另起session的未包裹子进程确实存活，这是负控制，用于证明不能只约束直接helper；随后仅终止自己已记录的测试进程。(4)进程结束与容器删除后不存在分别核验通过。
+
+[Linux手册](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)说明此设置在fork子进程中清除、通常跨exec保留，父线程提前死亡还需另行检查；实验结果与此一致。因此该机制**不足以独立证明任意旧helper收束**：需要已审查的每一条实际子进程启动及Docker exec路径都纳入可信bootstrap/receipt，不能把PGID/父死亡约束名称或本实验exit0当完整证明。尚未接入controller/旧helper，也没有验证真实备份/解密明文、Docker exec生命周期、Ubuntu四平台或崩溃恢复；临时合成文件和进程实验不解除任何门禁。
