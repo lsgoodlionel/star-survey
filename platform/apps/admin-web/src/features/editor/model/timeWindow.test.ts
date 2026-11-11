@@ -32,6 +32,7 @@ describe('editable access time window', () => {
     expect(validateTimeWindow(updateTimeWindow(original, { opensAt: '2026-11-13T09:00', closesAt: '2026-11-12T09:00', timezone: 'Asia/Shanghai' }))).toContain('截止时间必须晚于开放时间');
     expect(validateTimeWindow(updateTimeWindow(original, { opensAt: '2026-11-12T09:00', closesAt: '2026-11-12T09:00:00', timezone: 'Asia/Shanghai' }))).toContain('截止时间必须晚于开放时间');
     expect(validateTimeWindow(updateTimeWindow(original, { opensAt: '2026-11-12T09:00', timezone: 'Moon/Base' }))).toContain('时区须为有效的 IANA 时区名称');
+    expect(validateTimeWindow(updateTimeWindow(original, { opensAt: '2026-11-12T09:00', timezone: '+08:00' }))).toContain('时区须为有效的 IANA 时区名称');
     const withSetting = { ...original, settings: { ...original.settings, startdate: '2026-11-12 00:00:00' } };
     expect(validateTimeWindow(updateTimeWindow(withSetting, { opensAt: '2026-11-12T09:00', timezone: 'Asia/Shanghai' }))).toContain('时间窗不能与原生开始或截止设置同时使用');
   });
@@ -41,5 +42,15 @@ describe('editable access time window', () => {
     const definition = parseDefinition(source);
     expect(readTimeWindow(definition).editable).toBe(false);
     expect(updateTimeWindow(definition, { opensAt: '2026-11-12T09:00', timezone: 'Asia/Shanghai' })).toBe(definition);
+  });
+
+  test('keeps an unknown time window field read only and unchanged', () => {
+    const source = { ...structuredClone(gatewayFixture), policy: { policyVersion: 1,
+      window: { opensAt: '2026-11-12T09:00', timezone: 'Asia/Shanghai', futureRule: { keep: true } },
+    } };
+    const definition = parseDefinition(source);
+    expect(readTimeWindow(definition).editable).toBe(false);
+    expect(updateTimeWindow(definition, { closesAt: '2026-11-13T18:00', timezone: 'Asia/Shanghai' })).toBe(definition);
+    expect(serializeDefinition(definition)).toEqual(source);
   });
 });

@@ -22,6 +22,7 @@ export function readTimeWindow(definition: EditableSurveyDefinition): TimeWindow
   const window = policy.window;
   if (window === undefined) return { editable: true, window: null };
   if (!object(window)
+    || Object.keys(window).some((key) => !['opensAt', 'closesAt', 'timezone'].includes(key))
     || (window.opensAt !== undefined && typeof window.opensAt !== 'string')
     || (window.closesAt !== undefined && typeof window.closesAt !== 'string')
     || (window.timezone !== undefined && typeof window.timezone !== 'string')) {
@@ -64,7 +65,10 @@ export function validateTimeWindow(definition: EditableSurveyDefinition): string
   if ([window.opensAt, window.closesAt].some((value) => value && !format.test(value))) {
     errors.push('开放时间和截止时间须为不带偏移的本地日期时间');
   }
-  try { new Intl.DateTimeFormat('en', { timeZone: window.timezone }); }
+  try {
+    if (window.timezone !== 'UTC' && !window.timezone.includes('/')) throw new RangeError('not an IANA region');
+    new Intl.DateTimeFormat('en', { timeZone: window.timezone });
+  }
   catch { errors.push('时区须为有效的 IANA 时区名称'); }
   const withSeconds = (value: string) => value.length === 16 ? `${value}:00` : value;
   if (window.opensAt && window.closesAt && withSeconds(window.opensAt) >= withSeconds(window.closesAt)) {
