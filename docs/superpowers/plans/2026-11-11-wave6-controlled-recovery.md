@@ -86,6 +86,8 @@ rc20 run42790836656 的四个 Native job 都在 `Block native lifecycle before h
 
 Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→helper→实际exec的OpenSSL链在测试controller遭SIGKILL后均不再存活，使用PID/starttime观察；OpenSSL仅用固定合成零密钥将/dev/zero处理到/dev/null，不是产品加密设置或真实数据。(2)父进程在bootstrap设置约束前已死亡，子进程校验父身份后拒绝继续。(3)故意绕过bootstrap、另起session的未包裹子进程确实存活，这是负控制，用于证明不能只约束直接helper；随后仅终止自己已记录的测试进程。(4)进程结束与容器删除后不存在分别核验通过。
 
+最终重跑将宿主读取的源码SHA与容器内SOURCE字节的SHA相互核对，运行前/后及容器结果均为`1619e4e65915c5ba4a8f351a7511a559dad0aa79421a94b2786284a8af22f38a`，exit0；脱敏记录在本机`/tmp/survey-parent-bound-proof-fys84h2t/proof.json`。同时在启动前和清理时实际核对capDrop/capAdd、SecurityOpt、唯一tmpfs/无端口或设备、PID/内存/CPU上限以及原身份/私有PID模式/无bind/只读/uid；并非仅相信命令参数。5项纯Mock/编译回归包括真实换行、合法镜像名及空白拒绝；新增缺失/错误源码绑定与10种隔离属性漂移先红后绿，漂移必须在start前拒绝。此处不验证任意现存容器：内部worker入口只供本宿主受控启动链使用，不能凭uid或/.dockerenv替代宿主的隔离核验。
+
 [Linux手册](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)说明此设置在fork子进程中清除、通常跨exec保留，父线程提前死亡还需另行检查；实验结果与此一致。因此该机制**不足以独立证明任意旧helper收束**：需要已审查的每一条实际子进程启动及Docker exec路径都纳入可信bootstrap/receipt，不能把PGID/父死亡约束名称或本实验exit0当完整证明。尚未接入controller/旧helper，也没有验证真实备份/解密明文、Docker exec生命周期、Ubuntu四平台或崩溃恢复；临时合成文件和进程实验不解除任何门禁。
 
 组件增量复核另确认非purge mutation 的后验条件缺口：effect成功后原卷消失/可观察指纹改变仍可写ready。8个operation×丢失/替换负例先红；修改为每个原卷名称/指纹必须在post snapshot原样保留，允许新增已声明卷，异常保持mutation-pending。37测试通过；这只证明可观察身份保留，不证明卷内容未被修改，也不解决同名重建指纹碰撞局限。

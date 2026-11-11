@@ -5,6 +5,7 @@ The host launcher creates only its own non-root container, without host mounts,
 network, ports or extra capabilities. Never a product containment acceptance.
 """
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -97,6 +98,7 @@ def worker(role, parent, start, directory):
 
 def main():
     summary = {'schemaVersion': 1, 'scope': 'unprivileged-parent-death-feasibility-only',
+               'sourceSha256': hashlib.sha256(SOURCE.encode('utf-8')).hexdigest(),
                'protectedChainEnded': False, 'opensslExecObserved': False, 'earlyParentRefused': False,
                'unwrappedChildEscapeObserved': False, 'cleanup': 'unknown'}
     records, parents = [], []
@@ -179,12 +181,28 @@ def docker_fixture(image):
             '"fixture":{{json (index .Config.Labels "io.survey.fixture")}},"running":{{json .State.Running}},'
             '"pidMode":{{json .HostConfig.PidMode}},"readOnly":{{json .HostConfig.ReadonlyRootfs}},'
             '"network":{{json .HostConfig.NetworkMode}},"privileged":{{json .HostConfig.Privileged}},'
-            '"binds":{{json .HostConfig.Binds}},"user":{{json .Config.User}}}')
+            '"binds":{{json .HostConfig.Binds}},"user":{{json .Config.User}},'
+            '"capDrop":{{json .HostConfig.CapDrop}},"capAdd":{{json .HostConfig.CapAdd}},'
+            '"securityOpt":{{json .HostConfig.SecurityOpt}},"tmpfs":{{json .HostConfig.Tmpfs}},'
+            '"ports":{{json .HostConfig.PortBindings}},"pidsLimit":{{json .HostConfig.PidsLimit}},'
+            '"memory":{{json .HostConfig.Memory}},"nanoCpus":{{json .HostConfig.NanoCpus}},'
+            '"devices":{{json .HostConfig.Devices}},"deviceRequests":{{json .HostConfig.DeviceRequests}}}')
         item = json.loads(docker(['container', 'inspect', '--format', template, cid]))
+        tmpfs = item.get('tmpfs') if isinstance(item, dict) else None
+        tokens = tmpfs['/tmp'].split(',') if (isinstance(tmpfs, dict) and set(tmpfs) == {'/tmp'}
+            and isinstance(tmpfs['/tmp'], str)) else []
+        expected_tmpfs = {'rw', 'nosuid', 'nodev', 'noexec', 'size=16m'}
         if (item['id'] != cid or item['name'] != '/' + namespace or item['image'] != image
                 or item['fixture'] != namespace or item['pidMode'] not in ('', 'private')
                 or item['readOnly'] is not True or item['network'] != 'none'
-                or item['privileged'] is not False or item['binds'] not in ([], None) or item['user'] != '65534:65534'):
+                or item['privileged'] is not False or item['binds'] not in ([], None) or item['user'] != '65534:65534'
+                or item.get('capDrop') != ['ALL'] or item.get('capAdd') not in ([], None)
+                or item.get('securityOpt') not in (['no-new-privileges:true'], ['no-new-privileges'])
+                or len(tokens) != len(expected_tmpfs) or set(tokens) != expected_tmpfs
+                or item.get('ports') not in ({}, None) or item.get('devices') not in ([], None)
+                or item.get('deviceRequests') not in ([], None)
+                or any(type(item.get(key)) is not int or item[key] != value
+                       for key, value in (('pidsLimit', 32), ('memory', 134217728), ('nanoCpus', 1000000000)))):
             raise RuntimeError('fixture identity or isolation changed')
         return item
     try:
@@ -199,15 +217,17 @@ def docker_fixture(image):
             raise RuntimeError('fixture creation outcome is unknown')
         inspect()
         source = Path(__file__).read_text()
+        source_sha = hashlib.sha256(source.encode('utf-8')).hexdigest()
         result = subprocess.run(command + ['container', 'start', '--attach', '--interactive', cid],
             input='SOURCE=' + repr(source) + '\nexec(compile(SOURCE,"<isolated-parent-probe>","exec"))\n',
             check=False, text=True, capture_output=True, timeout=90)
         evidence = json.loads(result.stdout)
-        keys = {'schemaVersion', 'scope', 'protectedChainEnded', 'opensslExecObserved', 'earlyParentRefused',
+        keys = {'schemaVersion', 'scope', 'sourceSha256', 'protectedChainEnded', 'opensslExecObserved', 'earlyParentRefused',
             'unwrappedChildEscapeObserved', 'cleanup'}
         if (not isinstance(evidence, dict) or set(evidence) != keys or type(evidence['schemaVersion']) is not int
                 or evidence['schemaVersion'] != 1 or evidence['scope'] != 'unprivileged-parent-death-feasibility-only'
-                or any(type(evidence[key]) is not bool for key in keys - {'schemaVersion', 'scope', 'cleanup'})
+                or evidence['sourceSha256'] != source_sha
+                or any(type(evidence[key]) is not bool for key in keys - {'schemaVersion', 'scope', 'cleanup', 'sourceSha256'})
                 or evidence['cleanup'] not in ('unknown', 'verified-processes-ended', 'failed-or-unknown')):
             raise RuntimeError('fixture evidence is unavailable or malformed')
         report.update(exitCode=result.returncode, evidence=evidence)
