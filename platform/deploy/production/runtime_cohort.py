@@ -1,0 +1,143 @@
+"""Observe registered maintenance cohorts under the real installation lock.
+
+Only a fresh, empty-generation startup can have no owner record. This is not
+legacy process discovery: controller code must never launch unregistered old
+helpers after adopting this protocol, and a previous pending intent blocks it.
+"""
+import hashlib
+import os
+import re
+import stat
+import uuid
+from pathlib import Path
+
+import runtime_ownership as ownership
+from owned_children import read_process_identity, _pid, _start
+from owned_docker_exec import LocalDockerAPI, PROFILES
+
+
+def _uuid(value):
+    return ownership.canonical_uuid(value)
+
+
+class CohortProbe:
+    def __init__(self, target, lock_fd, active_lock, *, api=None, fresh=False, _process_reader=None):
+        self.target, self.fd, self.active = Path(target), lock_fd, active_lock
+        self.api, self.fresh = api or LocalDockerAPI(), fresh is True
+        self.reader = _process_reader or read_process_identity
+        self.lock_identity = self._lock()
+
+    def _lock(self):
+        if type(self.fd) is not int or self.fd <= 2 or not callable(self.active) or self.active() is not True:
+            raise ownership.OwnershipError('cohort requires the active controller lock')
+        info = os.fstat(self.fd)
+        path = os.lstat(self.target / '.surveyctl/operation.lock')
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077 or (info.st_dev, info.st_ino) != (path.st_dev, path.st_ino)):
+            raise ownership.OwnershipError('cohort lock identity is unsafe')
+        return info.st_dev, info.st_ino, info.st_mode, info.st_uid
+
+    def _ended(self, pid, start, *, owner=False):
+        if not _pid(pid) or not _start(start):
+            return False
+        value = self.reader(pid)
+        if value is None:
+            return True
+        if (not isinstance(value, dict) or set(value) != {'pid', 'start', 'state', 'parentPid'}
+                or value['pid'] != pid or not _start(value['start'])
+                or value['state'] not in {'R', 'S', 'D', 'T', 't', 'I', 'W', 'P', 'Z', 'X'}):
+            return False
+        return (value['start'] != start or value['state'] in ('Z', 'X')
+            or owner and pid == os.getpid() and value['start'] == start)
+
+    def _receipt(self, name, record, owner):
+        if (not isinstance(record, dict) or type(record.get('schemaVersion')) is not int or record['schemaVersion'] != 1
+                or not _uuid(record.get('operationId'))
+                or record.get('installationId') not in [owner['installationId'], *owner.get('retiredInstallations', [])]):
+            return False
+        retired = record['installationId'] != owner['installationId']
+        actor = record.get('owner')
+        if (not isinstance(actor, dict) or set(actor) != {'pid', 'start', 'parentPid', 'parentStart'}
+                or not _pid(actor['parentPid']) or not _start(actor['parentStart'])
+                or not self._ended(actor['pid'], actor['start'], owner=not retired)):
+            return False
+        suffix = record['operationId'].replace('-', '') + '.json'
+        if record.get('kind') == 'controlled-docker-exec':
+            if (name != 'runtime-exec-' + suffix or set(record) != {'schemaVersion', 'kind', 'operationId', 'installationId',
+                    'owner', 'daemonId', 'containerId', 'profile', 'phase', 'execId', 'exitCode'}
+                    or record['daemonId'] != owner['daemonId'] or record['phase'] not in ('completed', 'failed')
+                    or record['profile'] not in PROFILES or type(record['exitCode']) is not int
+                    or not 0 <= record['exitCode'] <= 255 or record['phase'] == 'completed' and record['exitCode'] != 0
+                    or not isinstance(record['execId'], str) or not ownership.HEX64.fullmatch(record['execId'])
+                    or not isinstance(record['containerId'], str) or not ownership.HEX64.fullmatch(record['containerId'])):
+                return False
+            if self.api.container_absent(record['containerId']) is True:
+                return True  # Immutable original container gone; this exec cannot start again.
+            if retired:
+                return False
+            ended = self.api.inspect(record['execId'])
+            return (isinstance(ended, dict) and ended.get('ID') == record['execId']
+                and ended.get('ContainerID') == record['containerId'] and ended.get('Running') is False
+                and type(ended.get('ExitCode')) is int and ended['ExitCode'] == record['exitCode'])
+        if record.get('kind') == 'controlled-helper-children':
+            if (name != 'runtime-child-' + suffix or set(record) != {'schemaVersion', 'kind', 'operationId',
+                    'installationId', 'owner', 'children'} or not isinstance(record['children'], list)
+                    or len(record['children']) > 64):
+                return False
+            for number, entry in enumerate(record['children'], 1):
+                if (not isinstance(entry, dict) or set(entry) != {'sequence', 'profile', 'phase', 'pid', 'start', 'exitCode', 'reason'}
+                        or type(entry['sequence']) is not int or entry['sequence'] != number
+                        or entry['profile'] not in ('openssl-encrypt', 'openssl-decrypt')):
+                    return False
+                if entry['phase'] == 'not-started':
+                    if entry['pid'] is not None or entry['start'] is not None or entry['exitCode'] is not None or entry['reason'] != 'bootstrap':
+                        return False
+                elif (entry['phase'] not in ('completed', 'failed') or type(entry['exitCode']) is not int
+                        or not -64 <= entry['exitCode'] <= 255 or not self._ended(entry['pid'], entry['start'])
+                        or entry['phase'] == 'completed' and (entry['exitCode'] != 0 or entry['reason'] != 'completed')
+                        or entry['phase'] == 'failed' and entry['reason'] not in ('exit', 'deadline', 'bootstrap', 'journal')):
+                    return False
+            return True
+        return False  # Unknown launch formats never become evidence by being absent.
+
+    def __call__(self):
+        try:
+            if self._lock() != self.lock_identity:
+                return 'unknown'
+            store = ownership.PrivateStore(self.target)
+            parent, chain = store._open_parent()
+            try:
+                names = sorted(os.listdir(parent))
+                if len(names) > 256:
+                    return 'unknown'
+                owner = store.load()
+                receipt_names = [name for name in names if name.lstrip('.').startswith('runtime-')
+                    and name not in ('runtime-owner.json', 'runtime-contract.json', 'runtime-owner.compose.json')]
+                if owner is None:
+                    return ('quiescent' if self.fresh and not receipt_names
+                        and not os.path.lexists(self.target / '.surveyctl/state.json')
+                        and not os.path.lexists(self.target / 'current') else 'unknown')
+                keys = {'schemaVersion', 'project', 'daemonId', 'installationId', 'targetSha256', 'claimId', 'image', 'phase', 'resources'}
+                retired = owner.get('retiredInstallations', [])
+                if (set(owner) not in (keys, keys | {'retiredInstallations'}) or type(owner['schemaVersion']) is not int
+                        or owner['schemaVersion'] != 1 or owner['project'] != ownership.PROJECT
+                        or not _uuid(owner['installationId']) or owner['daemonId'] != self.api.identity()
+                        or owner['targetSha256'] != hashlib.sha256(str(self.target).encode()).hexdigest()
+                        or owner['phase'] not in ownership.PHASES or not isinstance(retired, list)
+                        or len(retired) > 16 or len(set(retired)) != len(retired)
+                        or any(not _uuid(value) or value == owner['installationId'] for value in retired)):
+                    return 'unknown'
+                for name in receipt_names:
+                    if not re.fullmatch(r'runtime-(?:child|exec|launch)-[0-9a-f]{32}\.json', name):
+                        return 'unknown'
+                    record = ownership.PrivateStore(self.target, name=name).load()
+                    if not self._receipt(name, record, owner):
+                        return 'unknown'
+                if names != sorted(os.listdir(parent)) or self._lock() != self.lock_identity:
+                    return 'unknown'
+                store._recheck(parent, chain)
+                return 'quiescent'
+            finally:
+                os.close(parent)
+        except Exception:
+            return 'unknown'
