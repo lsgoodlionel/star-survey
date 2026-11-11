@@ -19,11 +19,26 @@ class OwnershipError(RuntimeError):
     pass
 
 
+class SettledMutationFailure(OwnershipError):
+    """Internal caller proved all mutating requests ended before this failure.
+
+    Never use for a lost reply, failed startup command, unknown helper/exec, or
+    a guessed empty inventory. Post-observation must still succeed.
+    """
+
+
 PROJECT = 'survey-production'
 CLAIM_NAME = PROJECT + '-ownership-v1'
 KINDS = ('containers', 'networks', 'volumes')
 HEX64 = re.compile(r'[0-9a-f]{64}')
-PHASES = {'claim-pending', 'ready', 'mutation-pending', 'cleanup-pending', 'retained-data', 'removed'}
+PHASES = {'claim-pending', 'ready', 'mutation-pending', 'settled-failure', 'cleanup-pending', 'retained-data', 'removed'}
+
+
+def canonical_uuid(value):
+    try:
+        return isinstance(value, str) and str(uuid.UUID(value)) == value
+    except ValueError:
+        return False
 
 
 class OwnershipProtocol:
@@ -91,7 +106,7 @@ class OwnershipProtocol:
         record = self._call(self.store.load)
         keys = {'schemaVersion', 'project', 'daemonId', 'installationId', 'targetSha256',
                 'claimId', 'image', 'phase', 'resources'}
-        if (not isinstance(record, dict) or set(record) != keys
+        if (not isinstance(record, dict) or set(record) not in (keys, keys | {'retiredInstallations'})
                 or type(record['schemaVersion']) is not int or record['schemaVersion'] != 1
                 or record['project'] != PROJECT or not isinstance(record['phase'], str) or record['phase'] not in PHASES
                 or record['phase'] not in phases or record['targetSha256'] != self.target_hash
@@ -103,16 +118,30 @@ class OwnershipProtocol:
                 raise ValueError('noncanonical identity')
         except (ValueError, TypeError, AttributeError) as exc:
             raise OwnershipError('installation identity is invalid') from exc
+        retired = record.get('retiredInstallations', [])
+        if (not isinstance(retired, list) or len(retired) > 16
+                or any(not canonical_uuid(value) or value == record['installationId'] for value in retired)
+                or len(set(retired)) != len(retired)):
+            raise OwnershipError('retired installation history is invalid')
         self._resources(record['resources'])
-        self._assert_claim(record)
+        if record['phase'] == 'removed':
+            if any(record['resources'][kind] for kind in KINDS) or self._call(self.driver.inspect_claim, record['claimId']) is not None:
+                raise OwnershipError('removed generation still has runtime resources or claim')
+        else:
+            self._assert_claim(record)
         if self._observe() != record['resources']:
             raise OwnershipError('resource identity drifted or an unknown object is present')
         return deepcopy(record)
 
     def acquire(self):
         # No existing record or object is adopted, including a lost create reply.
-        if self._call(self.store.load) is not None:
-            raise OwnershipError('existing ownership intent cannot be adopted')
+        previous = self._call(self.store.load)
+        retired = None
+        if previous is not None:
+            previous = self._record({'removed'})
+            retired = previous.get('retiredInstallations', []) + [previous['installationId']]
+            if len(retired) > 16:
+                raise OwnershipError('closed generation history limit reached; use a new target')
         daemon = self._daemon()
         empty = self._observe()
         if any(empty[kind] for kind in KINDS):
@@ -120,6 +149,8 @@ class OwnershipProtocol:
         record = {'schemaVersion': 1, 'project': PROJECT, 'daemonId': daemon,
                   'installationId': str(uuid.uuid4()), 'targetSha256': self.target_hash,
                   'claimId': None, 'image': self.image, 'phase': 'claim-pending', 'resources': empty}
+        if retired:
+            record['retiredInstallations'] = retired
         self._save(record)
         claim_id = self._call(self.driver.create_claim, CLAIM_NAME, self._binding(record), self.image)
         if not isinstance(claim_id, str) or not HEX64.fullmatch(claim_id):
@@ -135,10 +166,16 @@ class OwnershipProtocol:
     def mutate(self, operation, effect):
         if not isinstance(operation, str) or operation not in {'install', 'upgrade', 'backup', 'doctor'} or not callable(effect):
             raise OwnershipError('unsupported owned mutation')
-        record = self._record({'ready'})
+        record = self._record({'ready', 'retained-data'} if operation == 'install' else {'ready'})
         record['phase'] = 'mutation-pending'
         self._save(record)
-        self._call(effect)
+        settled = None
+        try:
+            effect()
+        except SettledMutationFailure as exc:
+            settled = exc
+        except Exception as exc:
+            raise OwnershipError('mutation failed or its outcome is unknown') from exc
         if self._daemon() != record['daemonId']:
             raise OwnershipError('daemon changed during mutation')
         self._assert_claim(record)
@@ -146,13 +183,20 @@ class OwnershipProtocol:
         if any(observed['volumes'].get(name) != fingerprint
                for name, fingerprint in record['resources']['volumes'].items()):
             raise OwnershipError('non-purge mutation lost or replaced a recorded volume')
-        record.update(phase='ready', resources=observed)
+        record.update(phase='settled-failure' if settled else 'ready', resources=observed)
         self._save(record)
+        if settled:
+            raise settled
 
-    def cleanup(self, purge):
+    def preflight_cleanup(self, purge):
         if type(purge) is not bool:
             raise OwnershipError('cleanup mode is invalid')
-        record = self._record({'ready', 'retained-data'})
+        return self._record({'ready', 'retained-data', 'settled-failure'})
+
+    def cleanup(self, purge, after_resources=None):
+        if after_resources is not None and (purge is not True or not callable(after_resources)):
+            raise OwnershipError('host purge callback requires explicit purge')
+        record = self.preflight_cleanup(purge)
         expected = {kind: {} for kind in KINDS}
         if not purge:
             expected['volumes'] = deepcopy(record['resources']['volumes'])
@@ -165,6 +209,13 @@ class OwnershipProtocol:
         if self._observe() != expected:
             raise OwnershipError('cleanup outcome is unverified or resources remain')
         if purge:
+            if after_resources is not None:
+                self._call(after_resources)
+                if self._daemon() != record['daemonId']:
+                    raise OwnershipError('daemon changed during host purge')
+                self._assert_claim(record)
+                if self._observe() != expected:
+                    raise OwnershipError('runtime changed during host purge')
             self._call(self.driver.delete_claim, record['claimId'])
             if self._call(self.driver.inspect_claim, record['claimId']) is not None:
                 raise OwnershipError('claim removal is unverified')
@@ -186,7 +237,8 @@ class PrivateStore:
         if not self.target.is_absolute() or '..' in self.target.parts:
             raise OwnershipError('ownership store path is invalid')
         if name is not None:
-            if not isinstance(name, str) or not re.fullmatch(r'runtime-(?:child|exec|launch)-[0-9a-f]{32}\.json', name):
+            if (not isinstance(name, str) or name not in {'runtime-contract.json', 'runtime-owner.compose.json'}
+                    and not re.fullmatch(r'runtime-(?:child|exec|launch)-[0-9a-f]{32}\.json', name)):
                 raise OwnershipError('child receipt name is invalid')
             self.NAME = name
         self.control = self.target / '.surveyctl'

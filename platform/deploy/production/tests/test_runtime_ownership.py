@@ -35,6 +35,7 @@ class Daemon:
         self.keep_resources = False
         self.remove_calls = []
         self.claim_deletes = []
+        self.created_claims = 0
     def identity(self):
         if self.fail_query: raise OSError('synthetic unavailable')
         return 'daemon-fixture'
@@ -44,7 +45,9 @@ class Daemon:
     def create_claim(self, name, binding, image):
         with self.lock:
             if self.claims: raise FileExistsError('claim occupied')
-            claim = {'id': 'c' * 64, 'name': name, 'binding': copy.deepcopy(binding),
+            identity = 'c' * 64 if self.created_claims == 0 else f'{self.created_claims:064x}'
+            self.created_claims += 1
+            claim = {'id': identity, 'name': name, 'binding': copy.deepcopy(binding),
                      'image': image, 'stopped': True, 'isolated': True}
             self.claims[claim['id']] = claim
             if self.unknown_create: raise TimeoutError('lost response after create')
@@ -238,6 +241,79 @@ class OwnershipProtocolTest(unittest.TestCase):
         with self.assertRaises(self.module.OwnershipError): self.protocol.cleanup(True)
         self.assertEqual('cleanup-pending', self.store.record['phase'])
         self.assertEqual([], self.daemon.claim_deletes)
+
+    def test_host_purge_failure_keeps_claim_and_pending_after_resource_removal(self):
+        self.populate()
+        def host_failed():
+            self.assertFalse(any(self.daemon.snapshot[key] for key in ('containers', 'networks', 'volumes')))
+            self.assertEqual([], self.daemon.claim_deletes)
+            raise PermissionError('synthetic host data remains')
+        with self.assertRaises(self.module.OwnershipError):
+            self.protocol.cleanup(True, host_failed)
+        self.assertEqual('cleanup-pending', self.store.record['phase'])
+        self.assertEqual([], self.daemon.claim_deletes)
+
+    def test_host_purge_callback_cannot_hide_new_resources_before_claim_release(self):
+        self.populate()
+        def changed():
+            self.daemon.snapshot['containers'] = {'e' * 64: 'f' * 64}
+        with self.assertRaises(self.module.OwnershipError):
+            self.protocol.cleanup(True, changed)
+        self.assertEqual('cleanup-pending', self.store.record['phase'])
+        self.assertEqual([], self.daemon.claim_deletes)
+
+    def test_settled_failure_can_only_clean_after_closed_post_observation(self):
+        self.acquire()
+        def failed_health():
+            self.daemon.snapshot.update(containers={'1' * 64: 'a' * 64},
+                networks={'2' * 64: 'b' * 64}, volumes={'survey-production_data': 'd' * 64})
+            raise self.module.SettledMutationFailure('known startup finished; health failed')
+        with self.assertRaises(self.module.SettledMutationFailure):
+            self.protocol.mutate('install', failed_health)
+        self.assertEqual('settled-failure', self.store.record['phase'])
+        self.protocol.cleanup(False)
+        self.assertEqual('retained-data', self.store.record['phase'])
+        self.assertEqual({'survey-production_data': 'd' * 64}, self.store.record['resources']['volumes'])
+
+    def test_unknown_or_unobserved_failure_never_becomes_settled_cleanup_permission(self):
+        for unknown in (True, False):
+            with self.subTest(unknown=unknown):
+                self.setUp(); self.acquire()
+                def failed():
+                    self.daemon.snapshot['containers'] = {'1' * 64: 'a' * 64}
+                    if unknown:
+                        raise TimeoutError('unverified create response')
+                    self.daemon.snapshot['cohort'] = 'unknown'
+                    raise self.module.SettledMutationFailure('cannot override actual cohort')
+                with self.assertRaises(self.module.OwnershipError): self.protocol.mutate('install', failed)
+                self.assertEqual('mutation-pending', self.store.record['phase'])
+                with self.assertRaises(self.module.OwnershipError): self.protocol.cleanup(False)
+                self.assertEqual([], self.daemon.remove_calls)
+
+    def test_new_generation_only_after_full_verified_purge_preserves_history(self):
+        self.populate()
+        old = self.store.record['installationId']
+        self.protocol.cleanup(True)
+        self.protocol.acquire()
+        self.assertNotEqual(old, self.store.record['installationId'])
+        self.assertEqual([old], self.store.record['retiredInstallations'])
+        self.assertEqual('ready', self.store.record['phase'])
+
+    def test_retained_generation_can_reinstall_without_dropping_original_volume(self):
+        self.populate()
+        old = self.store.record['installationId']
+        self.protocol.cleanup(False)
+        self.protocol.mutate('install', lambda: self.daemon.snapshot['containers'].update({'3' * 64: 'c' * 64}))
+        self.assertEqual(old, self.store.record['installationId'])
+        self.assertEqual({'survey-production_data': 'd' * 64}, self.store.record['resources']['volumes'])
+
+    def test_malformed_closed_generation_history_is_a_typed_refusal(self):
+        self.acquire()
+        for value in ([{}], ['invalid'], [True], None):
+            with self.subTest(value=value):
+                self.store.record['retiredInstallations'] = value
+                with self.assertRaises(self.module.OwnershipError): self.protocol.preflight_cleanup(False)
+        self.assertEqual([], self.daemon.remove_calls)
     def test_lost_claim_delete_reply_is_not_recorded_as_removed(self):
         self.populate()
         delete = self.daemon.delete_claim
