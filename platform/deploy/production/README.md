@@ -14,6 +14,14 @@ Release manifest、校验过的架构 bundle 和固定 digest 镜像；服务器
 - 网关需要的生成配置 `engines.json` 为 `0644`，所在 release 目录保持 `0700`。这些权限用于让非 root 容器读取单文件挂载，不应放宽宿主目录权限。
 - 组织登录的管理端交接地址使用与 `PUBLIC_HOST` 相同的 HTTPS 根地址；实际组织连接、成员授权和供应商凭据仍需另行配置并验证。
 
+## 安装目录信任边界
+
+安装根目录、其 `releases/`、版本目录和 helper 必须由运行 surveyctl 的有效用户拥有，且禁止组或其他用户写入（不得有 `0022` 权限位）。预建空目标也受相同限制；控制器拒绝不安全目录，不会自动 chmod/chown 修复已有现场。以 root 执行时，不接受普通用户拥有的安装树或可替换安装树的祖先。目标之外的祖先只允许 root 或执行用户拥有且不可被其他用户写入；root 拥有的 sticky 临时祖先（例如 `/tmp`）可容纳私有目标，目标本身不享有此例外。
+
+只读共享配置/挂载所需的 `0755` 目录、`0644`/`0444` 文件仍可接受。backup、verify 和 doctor 启动安装包内 helper 前，复核安装路径权限及 bundle/生成配置完整性；在锁定后也复核目标目录身份。异常保留操作标记和现场，须由受控运维核实，不应删除标记或放宽权限强行继续。
+
+这些检查约束不同用户通过可写路径替换 helper 的风险，不隔离同一 uid、root、宿主或 Docker 管理员，也不使旧 CLI 自动遵守新控制器的锁。入口 surveyctl 本身必须由部署管理员从已校验的可信制品启动。
+
 ## 可选 SMTP Email 投递
 
 基础 `compose.yml` 默认以 `PLATFORM_DELIVERY_ENABLED=false` 停止后台批量投递 worker。管理员可在管理端的“邮件服务设置”页按租户保存供应商、发件邮箱和授权凭据；读取页面只显示脱敏状态，凭据不会回显。保存配置后可在同页填写收件地址、主题和纯文本正文，明确点击“发送测试邮件”进行一次真实 SMTP 提交；“仅验证登录”只建立并认证 SMTP 会话，不发送邮件。此能力要求部署侧提供权限为 `0600`、长度至少 32 字节的 `PLATFORM_DELIVERY_SECRET_FILE`：平台按租户派生 AES-GCM 密钥加密 SMTP 凭据，缺失时保存和读取已保存凭据都会失败关闭，绝不降级为明文或浏览器持久化。至少一个租户完成登录验证和测试发送后，运维人员才可将 `PLATFORM_DELIVERY_ENABLED=true` 并重启 platform 服务，启用批量任务消费。
@@ -81,6 +89,22 @@ admin-web 的 nginx 在启动时解析 platform；Compose 要求 platform 健康
    - 在 `recovery_required` 下直接用 `recoveryBackup` 覆盖数据，备份之后的新写入会丢失。
 
 受控恢复入口提供之前，这类安装只能由维护者在评估数据后人工处理；进入正式 Release 前需要补上受控恢复，或经维护者确认接受这一限制。
+
+### 只读的新目标恢复计划
+
+含此切片的控制器提供只读 `recovery-plan`，在失败安装没有 `current` 时也可观察已有现场：
+
+```bash
+sudo surveyctl --target /opt/survey recovery-plan --destination /opt/survey-recovered
+# 可选：仅观察某份备份的 metadata；不会解密或验证备份认证
+sudo surveyctl --target /opt/survey recovery-plan --destination /opt/survey-recovered --backup before-upgrade
+```
+
+目标必须尚不存在、无符号链接，并且不与原安装目录重叠；不会创建它。命令仅在已有私有锁上取得短暂 flock，读取有界文件并复查身份/元数据，不启动 Docker/helper、不读密钥、不写安装目录、目标或操作标记。异常、锁冲突、替换或不安全文件均失败关闭。旧控制器可能没有此命令；不要更换旧工具去绕过现有门禁。
+
+输出始终为 `status=execution-blocked`、`executable=false`。退出 0 表示只读观察完成，**不是恢复或清理成功**。备份 metadata 指纹不代表 HMAC、签名、密文或卷内容验证；观察指纹不是授权、租约，也不能证明旧 helper/外部写入者停止。同权限写入者或管理员仍可能在检查后改变现场，不能把这份计划直接交给旧 restore helper 执行。
+
+受控执行、原地恢复、标记解除及卸载仍保持既有阻断。后续按[受控恢复计划](../../../docs/superpowers/plans/2026-11-11-wave6-controlled-recovery.md)在全新隔离目标证明来源、helper/明文 containment、人员失效、数据和资源清理，再考虑接通执行；Release 工作流不在本切片修改范围。
 
 安装、升级和回滚启动后，对仍处于 running/starting 的服务最多等待 120 秒；只有全部既有健康检查通过且 engine-init 成功退出才继续。unhealthy、缺失服务或初始化异常仍阻断，status 保持即时检查。本次修复的四节点完整生产生命周期尚待独立验收；原生 admin 探针诊断不能替代 readiness。
 

@@ -46,9 +46,41 @@ def body_sha256(value: str) -> str:
     return hashlib.sha256(normalize_body(value).encode("utf-8")).hexdigest()
 
 
+#: Phrase that candidates built with the controlled-recovery block put in their own
+#: build-time release-notes.md (see render_notes.py). Older candidates lack it.
+RECOVERY_BLOCKED_MARKER = "recovery is currently disabled"
+
+RECOVERY_BLOCKED_GUIDANCE = (
+    "Rollback is `restore-only`, but recovery is currently disabled. Preserve the installation, "
+    "operation marker and verified pre-upgrade backup. Do not run older images against a migrated "
+    "database or bypass the block with an older controller or helper."
+)
+
+RECOVERY_LEGACY_GUIDANCE = (
+    "Rollback is `restore-only`, and this candidate's controller still runs recovery: `surveyctl restore` "
+    "restores a verified backup, and a failed upgrade automatically restores the pre-upgrade backup "
+    "before restarting the previous release. Later controllers block recovery until writer and helper "
+    "isolation are verified, so use this candidate for artifact verification and non-destructive review, "
+    "not to validate or overwrite production data through its restore path. Preserve the installation, "
+    "operation marker and verified pre-upgrade backup. Do not run older images against a migrated database."
+)
+
+
+def candidate_recovery_blocked(assets: Path) -> bool:
+    """Read the candidate's own checksum-bound build-time notes, not the promoting source."""
+    notes = assets / "release-notes.md"
+    if notes.is_symlink() or not notes.is_file():
+        fail("candidate release-notes.md is missing")
+    try:
+        text = notes.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        fail(f"candidate release-notes.md is unreadable: {exc}")
+    return RECOVERY_BLOCKED_MARKER in text
+
+
 def render_body(
     manifest: dict[str, Any], readiness: dict[str, Any], repository: str,
-    target_tag: str, source_tag: str, target_commit: str,
+    target_tag: str, source_tag: str, target_commit: str, recovery_blocked: bool = True,
 ) -> str:
     rollback = manifest.get("database", {}).get("rollback")
     minimum = manifest.get("minimumSourceVersion")
@@ -62,11 +94,10 @@ def render_body(
         f"- `{record['name']}`: `sha256:{record['sha256']}`"
         for _, record in sorted(bundles.items())
     )
-    image_lines = "\n".join(
-        f"- `{key}`: `{images[key]}`"
-        for key in ("ADMIN_IMAGE", "PLATFORM_IMAGE", "PUBLISH_GATEWAY_IMAGE")
-        if key in images
-    )
+    application_images = ("ADMIN_IMAGE", "PLATFORM_IMAGE", "PUBLISH_GATEWAY_IMAGE", "ENGINE_IMAGE")
+    if not isinstance(images, dict) or any(not isinstance(images.get(key), str) for key in application_images):
+        fail("release manifest application image identity is incomplete")
+    image_lines = "\n".join(f"- `{key}`: `{images[key]}`" for key in application_images)
     stable = STABLE_TAG.fullmatch(target_tag) is not None
     if stable:
         channel = f"""## Stable promotion
@@ -117,7 +148,7 @@ Minimum source version: `{minimum}`. Create and verify a backup before upgrading
 ./surveyctl doctor
 ```
 
-Rollback is `restore-only`, but recovery is currently disabled. Preserve the installation, operation marker and verified pre-upgrade backup. Do not run older images against a migrated database or bypass the block with an older controller or helper.
+{RECOVERY_BLOCKED_GUIDANCE if recovery_blocked else RECOVERY_LEGACY_GUIDANCE}
 
 ## Known issues and limits
 
@@ -157,6 +188,7 @@ def render(args: argparse.Namespace) -> int:
 
     body = render_body(
         manifest, readiness, args.repository, args.target_tag, args.source_tag, args.target_commit,
+        recovery_blocked=candidate_recovery_blocked(args.assets),
     )
     metadata = {
         "schemaVersion": 1,

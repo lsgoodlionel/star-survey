@@ -1,14 +1,7 @@
-"""需求编号索引：仓库内快照，以及与仓库外那份 02 矩阵的对账。
+"""解析需求矩阵并生成仓库内编号索引。
 
-为什么要在仓库里留一份快照：需求矩阵
-`02-全量需求追踪矩阵.md` 不在本仓库里（在方案文档目录），CI 的检出里根本没有它。
-若校验直接去读那个绝对路径，CI 只能跳过——那就等于没有校验。所以把「有哪些编号」
-物化成 `platform/docs/traceability/requirement-index.md`，连矩阵原文的 SHA-256 一起写下：
-
-* CI（矩阵不可达）：编号一律按快照校验，能抓住拼错与凭空发明的编号；
-* 本地（矩阵可达）：额外把快照与矩阵重新对一遍，矩阵改了而快照没跟上就报错。
-
-快照本身不许手改——它由矩阵生成，改矩阵后用 `python3 -m reqtrace.cli sync` 重生成。
+默认使用检出内矩阵，可显式通过环境变量指定其他文件。
+索引由矩阵生成，变更后使用 sync 重生成。
 """
 
 import hashlib
@@ -31,12 +24,10 @@ _INDEX_ROW = re.compile(r"^\|\s*(R\d{2}-\d{2})\s*\|\s*WP-\d{2}\s*\|([^|]*)\|")
 #: 快照头部记录矩阵原文的摘要，用来判断快照是不是过期了。
 _DIGEST_LINE = re.compile(r"^-\s*矩阵原文 SHA-256：`([0-9a-f]{64})`\s*$", re.M)
 
-#: 方案文档不在仓库里。默认路径与 `platform/README.md` 里写的是同一处；
-#: 换机器或换目录时用环境变量覆盖，不要改代码。
+#: Environment override is explicit; otherwise resolve against the checkout.
 MATRIX_ENV = "REQUIREMENT_MATRIX"
-DEFAULT_MATRIX = Path(
-    "/Users/lionel/Documents/MJY 2/LimeSurvey本土化方案/02-全量需求追踪矩阵.md"
-)
+MATRIX_FILE = Path("platform/docs/traceability/02-全量需求追踪矩阵.md")
+DEFAULT_MATRIX = Path(__file__).resolve().parents[4] / MATRIX_FILE
 
 
 class Requirement(NamedTuple):
@@ -105,15 +96,15 @@ def parse_index(text: str) -> Index:
     return Index(tuple(requirements), digest_match.group(1) if digest_match else None)
 
 
-def matrix_path() -> Path:
+def matrix_path(repo_root: Optional[Path] = None) -> Path:
     """矩阵原文的位置：环境变量优先，否则用默认路径。"""
     override = os.environ.get(MATRIX_ENV)
-    return Path(override) if override else DEFAULT_MATRIX
+    return Path(override) if override else (repo_root / MATRIX_FILE if repo_root is not None else DEFAULT_MATRIX)
 
 
-def load_matrix() -> Optional[Index]:
-    """读矩阵原文；读不到（CI 的检出里就是读不到）返回 ``None``。"""
-    path = matrix_path()
+def load_matrix(repo_root: Optional[Path] = None) -> Optional[Index]:
+    """读矩阵原文；文件不可用时返回 ``None``。"""
+    path = matrix_path(repo_root)
     if not path.is_file():
         return None
     return parse_matrix(path.read_text(encoding="utf-8"))
@@ -125,7 +116,7 @@ def render_index(matrix: Index) -> str:
         "# 需求编号索引（由 02 矩阵生成，勿手改）",
         "",
         "本文件是 `02-全量需求追踪矩阵.md` 里**需求编号**的仓库内快照。",
-        "存在的唯一理由：矩阵不在本仓库，CI 的检出里读不到它，而编号校验必须在 CI 里生效。",
+        "快照由仓库内矩阵生成，仅作为需求编号索引。",
         "",
         "- 矩阵原文 SHA-256：`{}`".format(matrix.digest),
         "- 条目数：{}".format(len(matrix.requirements)),
