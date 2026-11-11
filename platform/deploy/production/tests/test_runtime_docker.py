@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -18,13 +19,13 @@ class RuntimeDockerTest(unittest.TestCase):
             _id = staticmethod(self.module.LocalDockerAPI._id)
             def _json(self, method, path, body=None, **kwargs):
                 owner.calls.append((method, path, body, kwargs))
-                if owner.fail: raise OSError('synthetic lost reply')
+                if owner.api_failure: raise OSError('synthetic lost reply')
                 return {'Id': 'c' * 64, 'Warnings': []} if method == 'POST' and '/create?' in path else None
         class Runner:
             def run(self, command, **kwargs):
                 owner.cli.append(command)
                 return subprocess.CompletedProcess(command, 0, 'null', '')
-        self.fail = False
+        self.api_failure = False
         self.driver = self.module.APIOwnershipDriver(Runner(), {'services': {'platform': {}},
             'networks': {}, 'volumes': {}}, lambda: 'quiescent', api=API())
 
@@ -35,7 +36,7 @@ class RuntimeDockerTest(unittest.TestCase):
         self.assertEqual([], self.cli)
         self.assertTrue(self.calls[1][1].endswith('?force=false&v=false'))
         self.assertTrue(self.calls[-1][1].endswith('?force=false'))
-        self.fail = True
+        self.api_failure = True
         with self.assertRaises(OSError): self.driver._query(['container', 'rm', 'a' * 64])
         self.assertEqual([], self.cli)
 
@@ -58,6 +59,47 @@ class RuntimeDockerTest(unittest.TestCase):
         self.assertNotIn('Mounts', body['HostConfig'])
         self.assertNotIn('Volumes', body)
         self.assertEqual(['/bin/true'], body['Entrypoint'])
+
+    def test_idle_snapshot_can_follow_a_finished_transient_exec_but_never_adopts_it(self):
+        cid, eid = 'c' * 64, 'e' * 64
+        snapshots = [[eid], []]
+        def sample(identity):
+            execs = snapshots.pop(0)
+            self.driver._last_container_snapshot = {'id': cid, 'execs': execs, 'paused': False, 'status': 'running'}
+            return 'f' * 64, bool(execs), 'running'
+        self.driver.idle_sleep = lambda seconds: None
+        with patch.object(self.module.ownership.DockerOwnershipDriver, '_container', side_effect=sample) as query:
+            self.assertEqual(('f' * 64, False, 'running'), self.driver._container(cid))
+            self.assertEqual(2, query.call_count)
+        self.assertEqual([], self.calls)
+
+    def test_active_or_paused_unknown_exec_never_becomes_an_idle_snapshot(self):
+        cid, eid = 'c' * 64, 'e' * 64
+        for paused in (False, True):
+            def sample(identity):
+                self.driver._last_container_snapshot = {'id': cid, 'execs': [eid], 'paused': paused, 'status': 'running'}
+                return 'f' * 64, True, 'running'
+            self.driver.idle_sleep = lambda seconds: None
+            with patch.object(self.module.ownership.DockerOwnershipDriver, '_container', side_effect=sample) as query:
+                self.assertTrue(self.driver._container(cid)[1])
+                self.assertLessEqual(query.call_count, 50)
+                if paused: self.assertEqual(1, query.call_count)
+        self.assertEqual([], self.calls)
+
+    def test_expected_created_exec_does_not_deadlock_waiting_for_its_own_start(self):
+        cid, eid = 'c' * 64, 'e' * 64
+        def sample(identity):
+            self.driver._last_container_snapshot = {'id': cid, 'execs': [eid], 'paused': False, 'status': 'running'}
+            return 'f' * 64, True, 'running'
+        with patch.object(self.module.ownership.DockerOwnershipDriver, '_container', side_effect=sample) as query:
+            self.assertTrue(self.driver._container(cid, allowed_exec=eid)[1])
+            self.assertEqual(1, query.call_count)
+
+    def test_pending_private_cohort_is_not_cleared_by_idle_container_snapshots(self):
+        self.driver.probe = lambda: 'unknown'
+        self.driver._rows = lambda kind: []
+        self.assertEqual('unknown', self.driver.observe()['cohort'])
+        self.assertEqual([], self.calls)
 
 
 if __name__ == '__main__':

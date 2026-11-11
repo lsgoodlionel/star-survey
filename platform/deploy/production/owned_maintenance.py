@@ -41,10 +41,11 @@ class OwnedMaintenance:
         self.sleep = time.sleep
         self.services = {}
         for cid in self.record['resources']['containers']:
-            row = self.driver._json(['container', 'inspect', '--format', self.driver.CONTAINER, cid])
-            name = row.get('service') if isinstance(row, dict) else None
-            if (name not in runtime.data['contract']['services'] or name in self.services
-                    or not self.container_check(cid, require_running=False)):
+            if not self.container_check(cid, require_running=False):
+                raise OwnershipError('maintenance container mapping is not bound')
+            row = self.driver._last_container_snapshot
+            name = row.get('service')
+            if name not in runtime.data['contract']['services'] or name in self.services:
                 raise OwnershipError('maintenance container mapping is not uniquely bound')
             self.services[name] = cid
         if not self.services or set(self.services) != set(runtime.data['contract']['services']):
@@ -63,8 +64,9 @@ class OwnedMaintenance:
         try:
             self._identity()
             if cid not in self.record['resources']['containers']: return False
-            fingerprint, _, state = self.driver._container(cid)
-            row = self.driver._json(['container', 'inspect', '--format', self.driver.CONTAINER, cid])
+            fingerprint, _, state = self.driver._container(cid, allowed_exec=allowed_exec,
+                                                          allow_paused=allow_paused and cid in self.paused)
+            row = self.driver._last_container_snapshot
             execs = row.get('execs')
             return (fingerprint == self.record['resources']['containers'][cid]
                 and (state == 'running' or not require_running and state == 'exited')
@@ -98,6 +100,7 @@ class OwnedMaintenance:
 
     @contextmanager
     def frozen_writers(self):
+        if self.uncertain: raise UncertainMaintenance('prior maintenance remains unverified')
         writers = [self.services[name] for name in WRITER_SERVICES if name in self.services]
         if not writers: raise OwnershipError('no verified source writers are configured')
         try:
@@ -132,6 +135,7 @@ class OwnedMaintenance:
                 raise UncertainMaintenance('writer resume or health recovery is unverified; preserve markers')
 
     def archive(self, cid, path, output, maximum):
+        if self.uncertain: raise UncertainMaintenance('prior maintenance remains unverified')
         service = next((name for name, identity in self.services.items() if identity == cid), None)
         if ((service, path) not in set(VOLUME_SOURCES.values()) or type(maximum) is not int
                 or not 1 <= maximum <= 2**30 or not self.container_check(cid, allow_paused=True)):
@@ -172,6 +176,7 @@ class OwnedMaintenance:
 
     @contextmanager
     def cipher_session(self, root):
+        if self.uncertain: raise UncertainMaintenance('prior maintenance remains unverified')
         workspace, cipher = AnonymousWorkspace(), None
         self.held.append(workspace)
         try:
@@ -193,6 +198,7 @@ class OwnedMaintenance:
                     raise UncertainMaintenance('anonymous workspace cleanup is unverified') from exc
 
     def exec_file(self, profile, service, plain, *, body=None):
+        if self.uncertain: raise UncertainMaintenance('prior maintenance remains unverified')
         if service not in self.services: raise OwnershipError('exec service is not in the source contract')
         operation = str(uuid.uuid4())
         store = PrivateStore(self.manager.target, name='runtime-exec-' + operation.replace('-', '') + '.json')
@@ -212,6 +218,7 @@ class OwnedMaintenance:
         export.__exit__(None, None, None); self.held.remove(export)
 
     def exec_bytes(self, profile, service, *, body=None):
+        if self.uncertain: raise UncertainMaintenance('prior maintenance remains unverified')
         workspace = AnonymousWorkspace(max_bytes=1024 * 1024, max_files=1)
         self.held.append(workspace)
         try:
@@ -223,6 +230,7 @@ class OwnedMaintenance:
                 workspace.close(); self.held.remove(workspace)
 
     def _perform(self, kind, effect):
+        if self.uncertain: raise UncertainMaintenance('prior maintenance remains unverified')
         result = []
         def run():
             try: result.append(effect())

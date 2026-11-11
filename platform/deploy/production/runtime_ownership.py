@@ -529,6 +529,7 @@ class DockerOwnershipDriver:
                    or item['status'] not in {'running', 'created', 'exited', 'dead'})
         stable = {key: item[key] for key in ('id', 'name', 'image', 'project', 'service', 'workingDir', 'owner')}
         stable['mounts'] = canonical(mounts)
+        self._last_container_snapshot = deepcopy(item)  # Validated projection only, never Env/raw inspect.
         return self._fingerprint(stable), unknown, item['status']
 
     def _network(self, identity, owned_ids):

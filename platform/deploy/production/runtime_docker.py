@@ -5,6 +5,7 @@ are never part of their returned observations. Claim image is already local.
 """
 from copy import deepcopy
 import re
+import time
 from urllib.parse import quote
 
 import runtime_ownership as ownership
@@ -29,6 +30,29 @@ class APIOwnershipDriver(ownership.DockerOwnershipDriver):
     def __init__(self, runner, contract, cohort_probe, *, api=None):
         super().__init__(ReadOnlyDockerRunner(runner), contract, cohort_probe)
         self.api = api or LocalDockerAPI()
+        self.idle_sleep = time.sleep
+
+    def _container(self, identity, *, allowed_exec=None, allow_paused=False):
+        if (allowed_exec is not None and (not isinstance(allowed_exec, str)
+                or not ownership.HEX64.fullmatch(allowed_exec)) or type(allow_paused) is not bool):
+            raise ownership.OwnershipError('container observation allowance is invalid')
+        deadline = time.monotonic() + 5
+        for attempt in range(50):
+            result = super()._container(identity)
+            row = getattr(self, '_last_container_snapshot', None)
+            active = row.get('execs') if isinstance(row, dict) and row.get('id') == identity else None
+            # Daemon health probes also register ExecIDs. No ID is adopted,
+            # whitelisted or marked ended here: read again until the actual
+            # snapshot has no other exec. Private pending receipts are still
+            # rejected independently by the unchanged cohort/ownership gates.
+            retry = (result[1] and isinstance(active, list) and active
+                and all(isinstance(value, str) and ownership.HEX64.fullmatch(value) for value in active)
+                and any(value != allowed_exec for value in active)
+                and type(row.get('paused')) is bool and (not row['paused'] or allow_paused)
+                and row.get('status') in {'running', 'created', 'exited', 'dead'})
+            if not retry or attempt == 49 or time.monotonic() >= deadline:
+                return result
+            self.idle_sleep(.1)
 
     def _query(self, arguments):
         args = list(arguments)

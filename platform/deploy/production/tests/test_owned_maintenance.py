@@ -45,7 +45,9 @@ class MaintenanceTest(unittest.TestCase):
                 return None
         class Driver:
             CONTAINER = 'fixed-fixture-projection'
-            def _container(self, cid): return cid, cid in owner.paused, 'running'
+            def _container(self, cid, **kwargs):
+                self._last_container_snapshot = self._json(['fixture-projection', cid])
+                return cid, cid in owner.paused, 'running'
             def _json(self, args):
                 cid = args[-1]
                 return {'id': cid, 'service': next(k for k, v in owner.ids.items() if v == cid),
@@ -78,7 +80,7 @@ class MaintenanceTest(unittest.TestCase):
 
     def test_foreign_exec_or_replaced_fingerprint_is_refused(self):
         self.assertTrue(self.operation.container_check(self.ids['platform-db']))
-        self.runtime.driver._container = lambda cid: ('different', False, 'running')
+        self.runtime.driver._container = lambda cid, **kwargs: ('different', False, 'running')
         self.assertFalse(self.operation.container_check(self.ids['platform-db']))
 
     def test_only_the_one_recorded_exec_may_be_present(self):
@@ -154,6 +156,19 @@ class MaintenanceTest(unittest.TestCase):
                 self.operation.preflight_backup(self.target / 'backups/first')
             effect.assert_not_called()
         self.assertFalse((self.target / 'backups').exists())
+
+    def test_unknown_operation_cannot_launch_another_exec_or_plaintext_session(self):
+        self.operation.uncertain = True
+        with patch.object(self.module, 'AnonymousWorkspace') as workspace, \
+             patch.object(self.module, 'OwnedDockerExec') as executor:
+            with self.assertRaises(self.module.UncertainMaintenance):
+                self.operation.exec_bytes('postgres-schema', 'platform-db')
+            with self.assertRaises(self.module.UncertainMaintenance):
+                with self.operation.cipher_session(self.target): pass
+            with self.assertRaises(self.module.UncertainMaintenance):
+                self.operation.exec_file('postgres-dump', 'platform-db', None)
+            workspace.assert_not_called()
+            executor.assert_not_called()
 
 
 class BackupErrorForTest(Exception):
