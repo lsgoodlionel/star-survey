@@ -11,7 +11,7 @@ export interface DefinitionValidationIssue {
 }
 
 type QuestionUpdate = Partial<
-  Pick<EditableQuestion, 'answers' | 'code' | 'mandatory' | 'other' | 'text' | 'themeOptions' | 'slideIds'>
+  Pick<EditableQuestion, 'answers' | 'code' | 'condition' | 'mandatory' | 'other' | 'text' | 'themeOptions' | 'slideIds'>
 >;
 
 /** 保留服务端保存前后仍对应同一选项的会话身份；重新载入则有意生成新身份。 */
@@ -138,6 +138,7 @@ export function validateDefinition(
 function ownedQuestionUpdate(update: QuestionUpdate): QuestionUpdate {
   const owned: QuestionUpdate = {};
   if (update.code !== undefined) owned.code = update.code;
+  if (update.condition !== undefined) owned.condition = update.condition;
   if (update.text !== undefined) owned.text = update.text;
   if (update.mandatory !== undefined) owned.mandatory = update.mandatory;
   if (update.other !== undefined) owned.other = update.other;

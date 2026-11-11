@@ -15,6 +15,7 @@ export interface EditableQuestion {
   text: string;
   editable: boolean;
   mandatory?: boolean;
+  condition?: string;
   other?: boolean;
   answers?: EditableChoice[];
   themeOptions?: JsonObject;
@@ -130,6 +131,7 @@ function parseQuestion(value: unknown): EditableQuestion {
     text: stringValue(source.text, '题目文本'),
     editable,
     mandatory: editable && typeof source.mandatory === 'boolean' ? source.mandatory : undefined,
+    condition: editable && typeof source.condition === 'string' ? source.condition : undefined,
     other: editable && typeof source.other === 'boolean' ? source.other : undefined,
     answers,
     themeOptions: ['mjy-collapsible', 'mjy-cascading-select', 'mjy-carousel'].includes(String(source.theme)) && source.themeOptions && typeof source.themeOptions === 'object' && !Array.isArray(source.themeOptions)
@@ -164,6 +166,8 @@ function serializeQuestion(question: EditableQuestion): JsonObject {
   serialized.code = question.code;
   serialized.text = question.text;
   setOptional(serialized, 'mandatory', question.mandatory);
+  if (question.condition === '') delete serialized.condition;
+  else setOptional(serialized, 'condition', question.condition);
   setOptional(serialized, 'other', question.other);
   if (question.themeOptions !== undefined) serialized.themeOptions = cloneJson(question.themeOptions);
   if (question.answers !== undefined) {
