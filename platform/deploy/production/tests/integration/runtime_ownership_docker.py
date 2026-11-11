@@ -8,6 +8,7 @@ and a fresh fixture label check; failures are reported separately. Creates one
 empty local volume and one private bridge; neither is attached to a container.
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -83,6 +84,7 @@ def cleanup_fixture(docker, owned, namespace):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', required=True)
+    parser.add_argument('--api-mutations', action='store_true', help='use Engine API for create/stop/remove, never host CLI mutations')
     parser.add_argument('--fail-after-create', action='store_true',
         help='inject a fixture failure and independently test harness cleanup (must exit 1)')
     args = parser.parse_args()
@@ -95,6 +97,16 @@ def main():
     namespace = 'survey-owner-fixture-' + uuid.uuid4().hex
     module.PROJECT = namespace
     module.CLAIM_NAME = namespace + '-ownership-v1'
+    driver_class = module.DockerOwnershipDriver
+    if args.api_mutations:
+        # Alias the privately loaded fixture module before importing the API
+        # adapter: every inherited global must use this random namespace.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        sys.modules['runtime_ownership'] = module
+        import runtime_docker
+        if runtime_docker.ownership is not module or not module.PROJECT.startswith('survey-owner-fixture-'):
+            raise RuntimeError('API fixture namespace binding failed')
+        driver_class = runtime_docker.APIOwnershipDriver
     label = 'io.survey.fixture=' + namespace
     environment = dict(os.environ, DOCKER_HOST=module.DockerOwnershipDriver.HOST)
     if os.environ.get('DOCKER_CONTEXT'):
@@ -112,6 +124,10 @@ def main():
     summary = {'schemaVersion': 1, 'scope': 'isolated-daemon-protocol-only',
                'mutualExclusion': False, 'unknownCohortRefused': False,
                'retainedVolumeVerified': False, 'resourceRemovalVerified': False, 'cleanup': 'not-attempted'}
+    source_paths = [Path(__file__).resolve().parents[2] / name for name in (
+        ('runtime_ownership.py', 'runtime_docker.py', 'owned_docker_exec.py') if args.api_mutations else ('runtime_ownership.py',))]
+    source_hashes = lambda: {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in source_paths}
+    summary.update(mutations='engine-api' if args.api_mutations else 'cli-fixture', sourceBefore=source_hashes())
     stage = 'image-inspect'
     success = False
     try:
@@ -130,7 +146,7 @@ def main():
                 'workingDirs': [str(target) for target in targets], 'mounts': []}},
                 'networks': {namespace + '_internal': {'logical': 'internal', 'driver': 'bridge', 'internal': True}},
                 'volumes': {namespace + '_data': {'logical': 'data', 'driver': 'local'}}}
-            drivers = [module.DockerOwnershipDriver(Runner(), contract, lambda: cohort[0]) for _ in targets]
+            drivers = [driver_class(Runner(), contract, lambda: cohort[0]) for _ in targets]
             stores = [module.PrivateStore(target) for target in targets]
             protocols = [module.OwnershipProtocol(target, driver, store, args.image)
                 for target, driver, store in zip(targets, drivers, stores)]
@@ -226,8 +242,9 @@ def main():
     finally:
         cleanup_ok = cleanup_fixture(docker, owned, namespace)
         summary['cleanup'] = 'verified' if cleanup_ok else 'failed-or-unknown'
+    summary['sourceAfter'] = source_hashes()
     print(json.dumps(summary, sort_keys=True))
-    return 0 if success and cleanup_ok else 1
+    return 0 if success and cleanup_ok and summary['sourceBefore'] == summary['sourceAfter'] else 1
 
 
 if __name__ == '__main__':

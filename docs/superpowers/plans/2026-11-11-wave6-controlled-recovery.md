@@ -134,7 +134,7 @@ Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→h
 
 ### 实际 Engine ExecID 与输出完成协议（接入中）
 
-`owned_docker_exec.py`固定本地unix socket/API1.47，拒绝外部DOCKER_HOST/context；仅静态预检/PG/MariaDB dump profiles，128秒以内的容器内timeout组，不将实际口令放请求命令或日志。私有receipt先create-pending、实际ExecID持久化created、再released后才start；精确核对daemon/ExecID/containerID/Running/严格整数ExitCode。未启动与已确认结束的失败区别于未知结果；未知/查询失败保留released和调用者的lease，不能从空ExecIDs或CLI退出猜结束。旧receipt不能换输出后重用。Docker API错误body和stderr不记录，stdout按匿名FD预算及multiplex帧有界接收。
+`owned_docker_exec.py`固定本地unix socket/API1.47，拒绝外部DOCKER_HOST/context；仅静态预检/PG/MariaDB dump profiles，容器内timeout组为5或120秒，HTTP请求另有超时及有界查询次数，**不是端到端128秒硬上限**；不将实际口令放请求命令或日志。私有receipt先create-pending、实际ExecID持久化created、再released后才start；精确核对daemon/ExecID/containerID/Running/严格整数ExitCode。未启动与已确认结束的失败区别于未知结果；未知/查询失败保留released和调用者的lease，不能从空ExecIDs或CLI退出猜结束。旧receipt不能换输出后重用。Docker API错误body和stderr不记录，stdout按匿名FD预算及multiplex帧有界接收。
 
 非作者复核发现并已复现：完整帧边界断流后exec最终0会误收缺尾dump。修复为本次随机nonce与payload SHA256的固定尾记录：容器内固定bash pipefail管道把同一输出经tee到原stdout和sha256sum，只在生产者/tee/hash均成功后输出尾记录；不落命名明文或把dump装入shell变量。接收端剥离/严格验证nonce/hash/尾记录，缺失/伪造/截断不能因后续exit0转绿。nonce只是本次流边界元数据，不是访问凭据或来源认证；源容器仍需真实安装归属及冻结writer约束。首次shell FD3时序错误已用固定合成echo最小复现，改为先exec复制FD再命令替换后真实通过。
 

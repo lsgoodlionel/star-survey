@@ -5,6 +5,7 @@ the output lease after UncertainExec. This module cannot assert global cohort
 quiescence or make an unknown operation safe to clean up.
 """
 from copy import deepcopy
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import http.client
@@ -139,14 +140,16 @@ class LocalDockerAPI:
             raise ExecProtocolError('Docker identity is invalid')
         return identity
 
-    def _json(self, method, path, body=None):
+    def _json(self, method, path, body=None, *, accepted=(200, 201)):
         connection = self._connect()
         try:
             data = None if body is None else json.dumps(body, allow_nan=False).encode('ascii')
             connection.request(method, self.VERSION + path, data, {'Content-Type': 'application/json'})
             response = connection.getresponse()
-            if response.status not in (200, 201):
+            if response.status not in accepted:
                 raise ExecProtocolError('Docker request was not accepted')
+            if response.status in (204, 304):
+                return None
             raw = response.read(65537)
             if len(raw) > 65536:
                 raise ExecProtocolError('Docker metadata exceeded its bound')
@@ -174,6 +177,42 @@ class LocalDockerAPI:
         if not isinstance(raw, dict):
             raise ExecProtocolError('exec inspection is invalid')
         return {key: raw.get(key) for key in ('ID', 'ContainerID', 'Running', 'ExitCode')}
+
+    def container_absent(self, identity):
+        connection = self._connect()
+        try:
+            connection.request('GET', self.VERSION + '/containers/' + self._id(identity) + '/json')
+            response = connection.getresponse()
+            if response.status not in (200, 404):
+                raise ExecProtocolError('container presence is unverified')
+            return response.status == 404  # Do not read Config.Env or raw body.
+        finally:
+            connection.close()
+
+    @contextmanager
+    def attach_input(self, identity):
+        connection = self._connect()
+        try:
+            connection.request('POST', self.VERSION + '/containers/' + self._id(identity)
+                + '/attach?logs=0&stream=1&stdin=1&stdout=1&stderr=1', headers={
+                    'Connection': 'Upgrade', 'Upgrade': 'tcp'})
+            raw_socket = connection.sock
+            response = connection.getresponse()
+            if response.status != 101 or response.fp is None:
+                raise ExecProtocolError('container input attachment was not established')
+            raw_socket.settimeout(31)  # Helper's own timeout is 30 seconds; not a lifecycle hard limit.
+            class Channel:
+                def finish(self, payload, limit):
+                    if not isinstance(payload, bytes) or len(payload) > 1025:
+                        raise ExecProtocolError('helper input exceeded its bound')
+                    raw_socket.sendall(payload)
+                    raw_socket.shutdown(socket.SHUT_WR)
+                    chunks = []
+                    read_stream(response.fp, chunks.append, limit)
+                    return b''.join(chunks)
+            yield Channel()
+        finally:
+            connection.close()
 
     def stream(self, identity, output, limit):
         connection = self._connect()
