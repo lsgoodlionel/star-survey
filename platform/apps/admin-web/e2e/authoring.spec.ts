@@ -434,11 +434,14 @@ test('a single-choice display condition is authored and works in isolated previe
 
   await page.getByLabel('添加题型').selectOption('L');
   await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByLabel('题目编码')).toHaveValue('Q2');
   await fillAction(page.getByLabel('题目编码'), 'QTRIGGER');
   await fillAction(page.getByLabel('题目文本'), '是否继续');
   await page.getByLabel('添加题型').selectOption('S');
   await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByLabel('题目编码')).toHaveValue('Q3');
   await fillAction(page.getByLabel('题目文本'), '请说明原因');
+  await expect(page.getByLabel('前置题目').locator('option[value="QTRIGGER"]')).toHaveCount(1);
   await page.getByLabel('前置题目').selectOption('QTRIGGER');
   await expect(page.getByLabel('触发选项')).toHaveValue('A1');
   const saveRequest = page.waitForRequest((request) => request.url().includes(`/v1/surveys/${surveyId}/draft`)
