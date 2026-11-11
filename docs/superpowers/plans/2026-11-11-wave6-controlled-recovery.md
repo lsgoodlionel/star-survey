@@ -23,7 +23,7 @@ rc20 run42790836656 的四个 Native job 都在 `Block native lifecycle before h
 
 基于 main4756b6dc（含#108/#114/#117）在独立分支接续。`recovery-reserve` 必须收到明确的新目标和之前的观察指纹，重新观察并核对后才创建目录；观察哈希不升级为备份认证或执行授权。通过 no-follow 目录描述符遍历全链，逐层检查root/执行用户属主与禁止共享写权限，目标之外root-owned sticky祖先可例外，直接父目录仍须归执行用户所有且无组/其他用户写权限，创建能力仍由操作系统权限判断。
 
-原子创建全新目标及控制目录，生成随机reservation ID和项目名提案，先以独占方式写reservation记录，再写空锁及pending意图；目录0700/文件0600，文件和目录fsync后重新核对整条路径身份、文件元数据及精确清单。既有目标、重复/并发、改写、路径替换、fsync失败都不接管或删除现场，原实例及marker保持不变。成功只代表`reserved-not-authorized/executable=false`；不调用Docker/helper、不读密钥、不认证/解密备份、不创建运行资源。
+先在目标父目录中原子创建随机私有暂存及控制目录，生成reservation ID和项目名提案，以独占方式写reservation记录、空锁及pending意图；目录0700/文件0600，文件和目录fsync后重新核对整条路径身份、文件元数据及精确清单。随后用Ubuntu renameat2(RENAME_NOREPLACE)或macOS开发平台renameatx_np(RENAME_EXCL)不可覆盖公布完整目标，再fsync父目录并复核；接口/文件系统不支持就失败，绝不回退普通rename。首记录前失败不暴露可被普通安装采纳的空目标，失败暂存保留，其保留命名空间及内部路径由普通安装入口明确拒绝（含首记录前空目录）；重试可另建暂存而不接管旧残留。既有目标、重复/并发、改写、路径替换、fsync失败都不接管或删除现场，原实例及marker保持不变。成功只代表`reserved-not-authorized/executable=false`；不调用Docker/helper、不读密钥、不认证/解密备份、不创建运行资源。
 
 针对原保留草稿，新增失败回归证明0775/0777或外来属主的更外层祖先会被私有直接父目录掩盖，再补逐层检查。原有用例覆盖竞争单赢家、指纹过期、目标替换、最终flush期间记录改写、写入失败保留、CLI与源字节不变。下一执行入口必须重新认证来源和目标/资源归属，不能把本记录或一次目录快照当作永久隔离租约。
 

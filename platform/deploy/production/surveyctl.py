@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 from contextlib import contextmanager
 import fcntl
 from functools import wraps
@@ -129,6 +131,28 @@ def _unique_json_fields(pairs):
             raise ValueError('duplicate JSON field')
         result[key] = value
     return result
+
+
+def _publish_directory_noreplace(parent_fd: int, source: str, destination: str) -> None:
+    """Atomically expose a complete reservation; never replace an existing path.
+
+    Production Ubuntu uses renameat2(RENAME_NOREPLACE); the local macOS
+    development path uses renameatx_np(RENAME_EXCL). Unsupported kernels or
+    filesystems fail closed. There is deliberately no check-then-rename fallback.
+    """
+    library = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux"):
+        operation, flag = getattr(library, "renameat2", None), 1
+    elif sys.platform == "darwin":
+        operation, flag = getattr(library, "renameatx_np", None), 4
+    else:
+        operation, flag = None, 0
+    if operation is None:
+        raise OSError(errno.ENOTSUP, "exclusive directory publication is unavailable")
+    operation.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    operation.restype = ctypes.c_int
+    if operation(parent_fd, os.fsencode(source), parent_fd, os.fsencode(destination), flag) != 0:
+        raise OSError(ctypes.get_errno(), "exclusive directory publication failed")
 
 
 def _file_read_snapshot(info):
@@ -825,10 +849,17 @@ class SurveyManager:
                 raise IntegrityError('recovery destination parent must be owned and not group/world writable')
             recheck_directories()
             try:
-                os.mkdir(destination.name, mode=0o700, dir_fd=parent)
-            except FileExistsError as exc:
-                raise InputError('recovery destination already exists; it will not be adopted') from exc
-            target = open_directory(destination.name, parent)
+                os.stat(destination.name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise InputError('recovery destination already exists; it will not be adopted')
+            # Keep incomplete initialization out of the offered installation
+            # path. Interrupted private stages are retained, never adopted.
+            stage_name = '.surveyctl-recovery-' + uuid.uuid4().hex
+            os.mkdir(stage_name, mode=0o700, dir_fd=parent)
+            target_index = len(chain)
+            target = open_directory(stage_name, parent)
             if os.listdir(target):
                 raise IntegrityError('new recovery destination is not empty')
             target_info = os.fstat(target)
@@ -855,11 +886,20 @@ class SurveyManager:
             os.fsync(control); os.fsync(target); os.fsync(parent)
             recheck_directories()
             recheck_target(target, control)
+            try:
+                _publish_directory_noreplace(parent, stage_name, destination.name)
+            except FileExistsError as exc:
+                raise InputError('recovery destination appeared; preserve the private staging directory') from exc
+            original = chain[target_index]
+            chain[target_index] = (parent, destination.name, target, original[3])
+            os.fsync(parent)
+            recheck_directories()
+            recheck_target(target, control)
             return {'schemaVersion': 1, 'status': 'reserved-not-authorized', 'executable': False,
                     'reservationId': nonce, 'projectProposal': record['projectProposal'],
                     'sourceObservationSha256': observed_source_sha256}
         except OSError as exc:
-            raise IntegrityError('recovery target reservation failed; preserve any partial target, do not remove markers') from exc
+            raise IntegrityError('recovery target reservation failed; preserve private staging and any published target, do not remove markers') from exc
         finally:
             for fd in reversed(fds):
                 os.close(fd)
@@ -941,6 +981,11 @@ class SurveyManager:
         return path
 
     def _assert_target_available(self) -> None:
+        # Private recovery initialization may be interrupted before its first
+        # file exists. Reserve this namespace (including descendants) so such
+        # partial stages can never be adopted as ordinary installations.
+        if any(re.fullmatch(r"\.surveyctl-recovery-[0-9a-f]{32}", part) for part in self.target.parts):
+            raise InputError("private recovery staging cannot be installed or adopted")
         self._assert_trusted_path(self.target)
         if self.state_path.exists() or self.state_path.is_symlink():
             self._require_no_pending_recovery(self._read_state())

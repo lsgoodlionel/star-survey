@@ -2828,18 +2828,33 @@ class RecoveryReservationTest(unittest.TestCase):
                         self.reserve()
                 self.assertEqual(before, self.source_bytes())
                 self.runner.run.assert_not_called()
-                with self.assertRaises(self.ctl.InputError):
-                    with self.ctl.SurveyManager(self.destination)._mutation_lock(create_target=True, operation="install"):
-                        pass  # No helper or runtime is started; only test adoption.
+                # Stronger publication invariant: no partially initialized
+                # installation target is visible at all; only a private sibling.
+                self.assertFalse(self.destination.exists())
+                stages = list(self.root.glob(".surveyctl-recovery-*"))
+                self.assertTrue(stages)
+                for stage in stages:
+                    for offered in (stage, stage / "nested-install"):
+                        with self.assertRaises(self.ctl.InputError):
+                            with self.ctl.SurveyManager(offered)._mutation_lock(create_target=True, operation="install"):
+                                pass
+                    self.assertFalse((stage / "nested-install").exists())
 
     def test_fsync_failure_preserves_partial_target_and_original_marker(self):
         before = self.source_bytes()
         with mock.patch.object(self.ctl.os, 'fsync', side_effect=OSError('synthetic failure')):
             with self.assertRaises(self.ctl.IntegrityError): self.reserve()
-        self.assertTrue(self.destination.exists())
-        self.assertTrue((self.destination / '.surveyctl/recovery.reservation.json').exists())
+        self.assertFalse(self.destination.exists())
+        stages = list(self.root.glob(".surveyctl-recovery-*"))
+        self.assertEqual(1, len(stages))
+        marker = stages[0] / '.surveyctl/recovery.reservation.json'
+        self.assertTrue(marker.exists())
+        partial = marker.read_bytes()
         self.assertEqual(before, self.source_bytes())
-        with self.assertRaises(self.ctl.InputError): self.reserve()
+        # Retrying is a fresh reservation, not adoption of the private partial.
+        self.reserve()
+        self.assertEqual(partial, marker.read_bytes())
+        self.assertNotEqual(stages[0].stat().st_ino, self.destination.stat().st_ino)
         self.runner.run.assert_not_called()
 
     def test_replaced_target_is_not_followed_cleaned_or_reported_successful(self):
@@ -2847,14 +2862,17 @@ class RecoveryReservationTest(unittest.TestCase):
         moved = self.root / 'preserved-original-reservation'
         def intercept(name, flags, *args, **kwargs):
             if name == 'operation.lock' and flags & os.O_CREAT:
-                self.destination.rename(moved)
-                self.destination.mkdir(mode=0o700)
-                (self.destination / 'foreign-sentinel').write_text('preserve')
+                stage = next(self.root.glob(".surveyctl-recovery-*"))
+                self.displaced_stage = stage
+                stage.rename(moved)
+                stage.mkdir(mode=0o700)
+                (stage / 'foreign-sentinel').write_text('preserve')
             return opened(name, flags, *args, **kwargs)
         with mock.patch.object(self.ctl.os, 'open', side_effect=intercept):
             with self.assertRaises(self.ctl.IntegrityError): self.reserve()
-        self.assertEqual(['foreign-sentinel'], [p.name for p in self.destination.iterdir()])
-        self.assertEqual('preserve', (self.destination / 'foreign-sentinel').read_text())
+        self.assertFalse(self.destination.exists())
+        self.assertEqual(['foreign-sentinel'], [p.name for p in self.displaced_stage.iterdir()])
+        self.assertEqual('preserve', (self.displaced_stage / 'foreign-sentinel').read_text())
         self.assertTrue((moved / '.surveyctl/recovery.reservation.json').exists())
 
     def test_record_change_during_final_directory_flush_never_returns_success(self):
@@ -2864,13 +2882,48 @@ class RecoveryReservationTest(unittest.TestCase):
         def intercept(fd):
             flush(fd)
             info = os.fstat(fd)
-            if (info.st_dev, info.st_ino) == parent_identity:
+            if (info.st_dev, info.st_ino) == parent_identity and self.destination.exists():
                 marker.write_text(marker.read_text().replace('"runtimeResourcesCreated": false', '"runtimeResourcesCreated": true'))
         before = self.source_bytes()
         with mock.patch.object(self.ctl.os, 'fsync', side_effect=intercept):
             with self.assertRaises(self.ctl.IntegrityError): self.reserve()
         self.assertEqual(before, self.source_bytes())
         self.assertTrue(json.loads(marker.read_text())['runtimeResourcesCreated'])
+        self.runner.run.assert_not_called()
+
+    def test_atomic_publication_never_overwrites_a_racing_target(self):
+        publish = self.ctl._publish_directory_noreplace
+        before = self.source_bytes()
+        for populated in (False, True):
+            self.destination = self.root / f"racing-{populated}"
+            saved = []
+            def create_competitor(fd, source, destination):
+                self.destination.mkdir(mode=0o700)
+                saved.append(self.destination.stat().st_ino)
+                if populated:
+                    (self.destination / "foreign-sentinel").write_text("preserve")
+                publish(fd, source, destination)
+            with self.subTest(populated=populated):
+                with mock.patch.object(self.ctl, "_publish_directory_noreplace", side_effect=create_competitor):
+                    with self.assertRaises(self.ctl.InputError):
+                        self.reserve()
+                self.assertEqual(saved[0], self.destination.stat().st_ino)
+                self.assertEqual(["foreign-sentinel"] if populated else [], [p.name for p in self.destination.iterdir()])
+                if populated:
+                    self.assertEqual("preserve", (self.destination / "foreign-sentinel").read_text())
+                self.assertEqual(before, self.source_bytes())
+        self.assertEqual(2, len(list(self.root.glob(".surveyctl-recovery-*"))))
+        self.runner.run.assert_not_called()
+
+    def test_missing_atomic_primitive_refuses_without_rename_fallback(self):
+        before = self.source_bytes()
+        with mock.patch.object(self.ctl.ctypes, "CDLL", return_value=object()), \
+                mock.patch.object(self.ctl.os, "rename", side_effect=AssertionError("unsafe fallback")):
+            with self.assertRaises(self.ctl.IntegrityError):
+                self.reserve()
+        self.assertFalse(self.destination.exists())
+        self.assertEqual(1, len(list(self.root.glob(".surveyctl-recovery-*"))))
+        self.assertEqual(before, self.source_bytes())
         self.runner.run.assert_not_called()
 
     def test_cli_success_only_records_a_non_executable_reservation(self):
