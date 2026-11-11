@@ -17,7 +17,7 @@ W01–W20 来自 2026-10-27 问卷星公开资料整理；其 Survey 对照使�
 | --- | --- | --- | --- |
 | W01 | 产品类型 | 原蓝图仅产品化调查主链；考试、360、投票、支付等未纳入旧范围 | 逐产品线确定目标与独立契约 |
 | W02 | 创建与内容 | 编辑、导入、模板、品牌有旧 Wave 交付；题库、批量录题等未逐项核实 | 拆题型/素材/题库/迁移清单 |
-| W03 | 题型与逻辑 | Wave 5 首批折叠栏目、多级下拉、轮播图有双库浏览器阶段证据；发布网关已有 v2 条件逻辑 DSL 与校验/编译测试，但编辑器原先没有题目条件配置。草稿 #110 正补前置单选显示条件（未合并），其余复杂逻辑未知 | 逐题型验证配置至导出纵向旅程 |
+| W03 | 题型与逻辑 | Wave 5 首批折叠栏目、多级下拉、轮播图有双库浏览器阶段证据；发布网关已有 v2 条件逻辑 DSL 与校验/编译测试，但编辑器原先没有题目条件配置。#110 前置单选显示条件已合并（`fea42272a3`），其余复杂逻辑未知 | 逐题型验证配置至导出纵向旅程 |
 | W04 | 填写治理 | 发布、受众和作答主链有实现；设备限制等公开细项未知 | 对照服务端策略、失败和越权 |
 | W05 | 分发入口 | 链接、二维码、名单、批量任务已进入旧 Wave；真实 SMS/其他供应商由 #35 延期 | 核对嵌入、参数、渠道与回执 |
 | W06 | 回收交付 | Wave 3 答卷、摘要、多格式导出有源码测试；正式身份不可变候选旅程见 #38 | 按格式、权限与失败恢复验收 |
@@ -46,7 +46,7 @@ W01–W20 来自 2026-10-27 问卷星公开资料整理；其 Survey 对照使�
 | W02 模板、批量导入 | 已实现且有阶段验证 | [模板品牌浏览器旅程](../../apps/admin-web/e2e/template-branding.spec.ts)、[导入页](../../apps/admin-web/src/features/import/ImportPage.tsx) | 逐格式/失败行/版本候选复核 |
 | W02 题库、问卷转移、企业素材库 | 未知 | 公开目录已有；本轮未定位完整自有管理端旅程 | 拆原子任务并核对 API、界面和权限 |
 | W03 基础题与首批高级题 | 已实现且有阶段验证 | [编辑器](../../apps/admin-web/src/features/editor/EditorPage.tsx)提供 X/L/M/S/T 与三种主题；[Wave 5 双库旅程](../../apps/admin-web/e2e/authoring.spec.ts) | 其他题型逐项核对，不能按题型总数推断 |
-| W03 前置单选显示条件 | 已实现但未验收（草稿） | [网关 DSL 契约](../../contracts/survey-logic-dsl-v1.md)已有；[PR #110](https://github.com/lsgoodlionel/star-survey/pull/110)新增编辑器与浏览器测试；早先 head 的双库浏览器与非作者只读复审已通过，2026-11-11 合入 main 后的新 head `7ac2d4862e` 须按精确 head 重新核对 CI 与整合差异；PR 仍草稿未合并 | 最新 head 核验并人工合并后再判阶段交付 |
+| W03 前置单选显示条件 | 已实现但未验收（草稿） | [网关 DSL 契约](../../contracts/survey-logic-dsl-v1.md)已有；[PR #110](https://github.com/lsgoodlionel/star-survey/pull/110)新增编辑器与浏览器测试；精确 head `7ac2d4862e` 经非作者复核后，于 2026-11-11 人工合并为 `fea42272a3` | 已交付代码切片；正式身份候选验收另行进行 |
 | W03 复杂条件、校验、计分 | 后端有契约；管理端旅程未验证 | [DSL v2 契约](../../contracts/survey-logic-dsl-v1.md)、[网关测试](../../tools/publish-gateway/tests/test_logic_publish.py)；当前编辑器无相应完整配置路径 | 逐项做安全可视配置、发布拒绝与答卷回读 |
 | W04 时间窗、验证码、邀请码、限制及网络规则 | 服务端已有 `policy` v1 保存、编译和插件执行；尚无管理端策略配置旅程 | [访问策略契约](../../contracts/survey-access-policy-v1.md)、[双库 HTTP 端到端驱动](../../deploy/test/run-access-policy.sh)覆盖策略执行；[正式链接面板](../../apps/admin-web/src/features/publish/PublishedAccessPanel.tsx)目前只创建/撤销链接，未暴露策略字段 | 先按来源逐项确认策略范围与权限；管理端从单一时间窗起切片，验证草稿保存→发布→真实作答允许/拒绝、时区边界与越权，双库浏览器准出。编辑器文件与 #110 重叠，待其审查收口后再动实现 |
 | W05 链接、二维码、名单投放 | 已实现且有阶段验证 | [投放工作区](../../apps/admin-web/src/features/delivery/DeliveryWorkspacePage.tsx)、[主作者浏览器旅程](../../apps/admin-web/e2e/authoring.spec.ts)、[#40](https://github.com/lsgoodlionel/star-survey/issues/40) | 正式运营身份不可变候选验收 |
@@ -66,8 +66,8 @@ W01–W20 来自 2026-10-27 问卷星公开资料整理；其 Survey 对照使�
 
 | 编号 | 子项 | 当前判断 | 建议 | 请 Owner 决定 |
 | --- | --- | --- | --- | --- |
-| A1 | W03 前置单选显示条件 | #110 草稿，未合并 | 纳入（已在进行） | 无需新决定，按合并授权处理 |
-| A2 | W04 开放时间窗（R04-04） | 服务端已有，管理端无配置 | 纳入，作为 W04 首切片（见下节任务包） | 是否纳入 |
+| A1 | W03 前置单选显示条件 | #110 已合并（`fea42272a3`） | 纳入（已在进行） | 无需新决定 |
+| A2 | W04 开放时间窗（R04-04） | 服务端已有；管理端配置见草稿 [PR #123](https://github.com/lsgoodlionel/star-survey/pull/123) | 纳入，作为 W04 首切片（见下节任务包） | 是否纳入 |
 | A3 | W04 密码、邀请、设备/IP、地域、答卷时长 | 服务端契约已有，管理端无旅程 | 纳入候选，排在 A2 之后逐项切片 | 纳入哪几项 |
 | A4 | W03 复杂条件、校验、计分 | 后端有契约，编辑器无完整配置 | 纳入候选，先做条件组合与校验 | 是否纳入；计分是否本版 |
 | A5 | W02 题库、问卷转移、企业素材库 | 未知 | 先核查，再决定 | 是否授权先做核查 |
@@ -137,4 +137,4 @@ Owner 原话「按建议回复」，即按上面 A–D 的建议执行，记录�
 3. **短切片实现**：优先选择不与现行工作树冲突的核心链缺口；写失败测试，再补三端契约和实现。数据库旅程按既有约定做 MySQL/PostgreSQL 真实浏览器验证；精确 head CI 与独立审查后才判断阶段状态。
 4. **门禁分离**：PR/CI 绿只证明对应代码切片；正式身份不可变候选、人工读屏（#41 的 rc19 记录已通过）、原生生命周期、供应商和生产各保留独立证据。Release 工作流由 Claude Code 负责，本草案不修改或触发。
 
-首个 W03 前置单选显示条件切片见 [draft PR #110](https://github.com/lsgoodlionel/star-survey/pull/110)：早先 head 的 CI 与非作者只读复审已通过，最新整合 head 须重新核对，仍未合并，不算交付完成。下一步勾选和责任归属见 [Issue #106](https://github.com/lsgoodlionel/star-survey/issues/106)。本页不更新 `capabilities.json`、旧蓝图或 Release 配置。
+首个 W03 前置单选显示条件切片 [PR #110](https://github.com/lsgoodlionel/star-survey/pull/110) 已合并（`fea42272a3`）；W04 开放时间窗切片见草稿 [PR #123](https://github.com/lsgoodlionel/star-survey/pull/123)，未合并前不算交付完成。下一步勾选和责任归属见 [Issue #106](https://github.com/lsgoodlionel/star-survey/issues/106)。本页不更新 `capabilities.json`、旧蓝图或 Release 配置。
