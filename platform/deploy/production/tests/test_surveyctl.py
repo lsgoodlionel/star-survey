@@ -1638,6 +1638,53 @@ class SurveyctlTest(unittest.TestCase):
                                 manager._verify_backup(backup, "0.2.0", "920")
                     self.assertEqual([], self.runner.commands)
 
+    def test_backup_preflight_failure_preserves_complete_intent_and_allows_retry(self):
+        for index, failure in enumerate(("helper-mode", "release-mode", "helper-content")):
+            self.target = self.root / f"preflight-{index}"
+            self.install()
+            intent = self.target / ".surveyctl/operation.intent"
+            before = intent.read_bytes()
+            path = self.target / ("releases/0.2.0" if failure == "release-mode" else "releases/0.2.0/backup.py")
+            mode = stat.S_IMODE(path.stat().st_mode)
+            content = path.read_bytes() if path.is_file() else None
+            if failure == "helper-content":
+                path.write_bytes(b"# harmless changed helper\n")
+            else:
+                path.chmod(mode | 0o020)
+            self.runner.commands.clear()
+            with self.subTest(failure=failure):
+                with self.assertRaises(self.module.IntegrityError):
+                    self.manager().backup("preflight-only")
+                self.assertEqual(before, intent.read_bytes())
+                self.assertFalse((self.target / "backups").exists())
+                self.assertEqual([], self.runner.commands)
+                if content is not None:
+                    path.write_bytes(content)
+                path.chmod(mode)
+                self.manager().status()
+                self.assertEqual(before, intent.read_bytes())
+                self.manager().backup("retry-after-preflight")
+                self.assertEqual("complete", json.loads(intent.read_text())["state"])
+
+    def test_backup_drift_after_intent_stays_pending_without_helper_execution(self):
+        self.install()
+        manager = self.manager()
+        original_begin = manager._begin_operation
+        helper = self.target / "releases/0.2.0/backup.py"
+        def drift_after_begin():
+            original_begin()
+            helper.chmod(0o664)
+        self.runner.commands.clear()
+        with mock.patch.object(manager, "_begin_operation", side_effect=drift_after_begin):
+            with self.assertRaises(self.module.IntegrityError):
+                manager.backup("drift")
+        self.assertEqual([], self.runner.commands)
+        intent = self.target / ".surveyctl/operation.intent"
+        self.assertEqual("pending", json.loads(intent.read_text())["state"])
+        helper.chmod(0o644)
+        with self.assertRaisesRegex(self.module.InputError, "unverified outcome"):
+            self.manager().doctor()
+
     def test_target_replacement_after_lock_is_rejected_before_yield(self):
         self.install()
         original_load = self.module.json.load

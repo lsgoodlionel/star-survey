@@ -1701,8 +1701,13 @@ class SurveyManager:
         output = self._backup_path(name)
         if output.exists() or output.is_symlink():
             raise InputError("backup destination already exists")
+        # Known configuration/integrity failures are read-only preflight errors,
+        # not evidence of an interrupted helper. Do not latch them as pending.
+        self._checked_helper(state["version"], "backup.py")
         self._begin_operation()
         self._mkdir("backups")
+        # Recheck at the launch boundary: drift after intent is an uncertain
+        # operation and must retain its durable pending marker on failure.
         helper = self._checked_helper(state["version"], "backup.py")
         self._run_helper([sys.executable, str(helper), "backup", "--target", str(self.target), "--output", str(output), "--version", state["version"]], "backup failed")
         self._verify_backup(output, state["version"], state["databaseSchema"])

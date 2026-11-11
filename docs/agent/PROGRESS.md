@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-11 Wave6 #114 增量修正待合并阻断：Claude 对 eb69387146 指出 backup 先落 pending 再检查 helper。三类新回归先证明 helper/版本目录权限或 helper 内容预检失败会错误改变 complete intent；现将只读完整性预检置于 intent 前，启动前仍复核，后发漂移保持 pending 且不执行 helper。恢复合法文件后可执行真实控制器备份重试，不删除标记。最终139项控制器通过；旧head完整CI42933984585、smoke42933984549等全绿不能覆盖这次新问题或新head。升级在 intent 前已通过人员配置读取校验当前release树，不增加要求current的全局锁预检，保留失败安装/无current恢复观察边界。#108仍须先人工合并，#114后续整合main并复审；Release及原生/恢复/清理门禁未动。
+
 2026-11-11 Wave6 #109 安装路径/helper 信任边界修订（待独立审查及 GitHub CI）：基于 #108 head133933f76 的独立后继分支，先复现组可写空目标仍能安装。补有效用户属主/禁止组与其他用户写入的祖先、目标及已安装路径校验；锁后复核目标 inode；backup/verify/doctor 执行前同时验证 bundle/配置与路径，保留合法只读挂载权限。已有 helper 退出码测试改为将固定 exit5 helper 纳入校验 bundle，而非安装后篡改它，原退出码断言保留。本地137项控制器（7项新增）及167项release/工作流契约均通过，独立静态复审无确认阻断，GitHub CI仍待。合成路径/属主/权限/替换与 helper 完整性回归不代表 root 攻击实验、真实恢复或原生验收；Release/tag/生产及其他工作树未动。
 
 2026-11-07 Wave 1 本地双数据库专项通过，但标准托管 full 仍待执行。未改变六个代码/测试文件的 PostgreSQL 项目 approval-w1-20261107-cachefix-pg1 浏览器 1 项通过（50.9 秒），总运行及清理 75 秒；原跨层 validator 确认恰好一次正式发布，archive 成功，项目容器/卷/网络均为 0。执行前后 hash 一致，私有证据为 /tmp/survey-wave1-pg-proof.faKid3。结合上述 MySQL 结果，只能证明双库下这条 Wave 1 业务链，不能代替标准 full 全套门禁。
