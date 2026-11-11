@@ -1,0 +1,108 @@
+name: PR · 文件重叠提示
+
+# Owner decision 2026-11-11 (#116, P2 / Q3): hint only, never block.
+# Read-only token, no checkout; API failure is reported as "not checked".
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-overlap-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  overlap:
+    name: 与其他开放 PR 的文件重叠（只提示）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # No checkout: the hint needs only the GitHub API.
+      - name: 列出与其他开放 PR 重叠的文件
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import urllib.error
+          import urllib.request
+
+          MAX_OPEN_PRS = 30
+          MAX_FILE_PAGES = 30
+
+          def api(path):
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/' + path,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json'})
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.loads(response.read())
+              except urllib.error.HTTPError as error:
+                  raise RuntimeError(f'GitHub API failed: HTTP {error.code}') from None
+
+          def changed_files(number):
+              files = set()
+              for page in range(1, MAX_FILE_PAGES + 1):
+                  batch = api(f'pulls/{int(number)}/files?per_page=100&page={page}')
+                  for item in batch:
+                      files.add(item['filename'])
+                      if item.get('previous_filename'):
+                          files.add(item['previous_filename'])
+                  if len(batch) < 100:
+                      return files, True
+              return files, False
+
+          def overlaps(number, others):
+              """Return (rows, complete) where rows are (other PR, shared files)."""
+              mine, complete = changed_files(number)
+              rows = []
+              for pr in others[:MAX_OPEN_PRS]:
+                  if int(pr['number']) == int(number):
+                      continue
+                  theirs, other_complete = changed_files(pr['number'])
+                  complete = complete and other_complete
+                  shared = sorted(mine & theirs)
+                  if shared:
+                      rows.append((pr, shared))
+              return rows, complete and len(others) <= MAX_OPEN_PRS
+
+          def report(number, rows, complete):
+              lines = [f'## PR #{number} 与其他开放 PR 的文件重叠（只提示，不拦截）', '']
+              if rows:
+                  for pr, shared in rows:
+                      lines.append(f"- #{pr['number']}（{'Draft' if pr.get('draft') else 'Ready'}）：{len(shared)} 个文件")
+                      lines.extend(f'  - `{name}`' for name in shared[:20])
+                      if len(shared) > 20:
+                          lines.append(f'  - ……另有 {len(shared) - 20} 个')
+                      print(f"::warning::与 #{pr['number']} 有 {len(shared)} 个重叠文件；合并顺序请在 Issue 中协调")
+              else:
+                  lines.append('没有发现文件重叠。注意：没有文件重叠不代表没有语义或接口冲突。')
+              if not complete:
+                  lines += ['', '**部分未检查**：开放 PR 或文件数超过上限，结果不完整，不能当作无重叠。']
+              return '\n'.join(lines) + '\n'
+
+          def main():
+              event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+              number = int(event['pull_request']['number'])
+              try:
+                  others = api('pulls?state=open&base=main&per_page=100')
+                  rows, complete = overlaps(number, others)
+                  text = report(number, rows, complete)
+              except Exception as error:  # Hint only: never block, never claim "no overlap".
+                  print(f'::notice::文件重叠未检查：{type(error).__name__}')
+                  text = f'## PR #{number} 文件重叠：**未检查**\n\nGitHub API 调用失败（{type(error).__name__}），不能当作无重叠。\n'
+              summary = os.environ.get('GITHUB_STEP_SUMMARY')
+              if summary:
+                  with open(summary, 'a', encoding='utf-8') as handle:
+                      handle.write(text)
+              print(text)
+
+          if __name__ == '__main__':
+              main()
+          PY
