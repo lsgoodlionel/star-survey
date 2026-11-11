@@ -131,3 +131,13 @@ Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→h
 `owned_backup_verify.ControlledVerifier`固定cipher/workspace/backup位置及封写key，继承原manifest/HMAC/source release/version/schema/personnel floor与归档验证，显式拒绝restore，没有CLI或legacy fallback。`restore.py`仅将tarfile读取改为fileobj，支持匿名文件，现有格式和恶意成员拒绝不变。未知child异常继续上抛并持lease，不归类为普通解密失败。非作者限定增量复核未确认阻断。
 
 2项新增合成回归先红后绿，含完整payload验证不创建磁盘明文、错backup及已通过认证的路径穿越归档拒绝；owned总42项、旧backup/restore43项通过。真实受限Linux入口还以实际OpenSSL加密/解密全部9份合成payload，经完整verify_only检查，18项child receipt全部completed，容器清理verified；9个模块运行前/后/容器内SHA一致。合成PGDMP/SQL头仅证明既有格式验证，**不代表真实数据库可恢复**。最终verifier SHA b0ab7dba…、adapter9a9886f7…、restore5c16412e…；控制器、可信候选/源安装绑定、Docker exec及失败安装/卸载仍未闭环，门禁不变。
+
+### 实际 Engine ExecID 与输出完成协议（接入中）
+
+`owned_docker_exec.py`固定本地unix socket/API1.47，拒绝外部DOCKER_HOST/context；仅静态预检/PG/MariaDB dump profiles，128秒以内的容器内timeout组，不将实际口令放请求命令或日志。私有receipt先create-pending、实际ExecID持久化created、再released后才start；精确核对daemon/ExecID/containerID/Running/严格整数ExitCode。未启动与已确认结束的失败区别于未知结果；未知/查询失败保留released和调用者的lease，不能从空ExecIDs或CLI退出猜结束。旧receipt不能换输出后重用。Docker API错误body和stderr不记录，stdout按匿名FD预算及multiplex帧有界接收。
+
+非作者复核发现并已复现：完整帧边界断流后exec最终0会误收缺尾dump。修复为本次随机nonce与payload SHA256的固定尾记录：容器内固定bash pipefail管道把同一输出经tee到原stdout和sha256sum，只在生产者/tee/hash均成功后输出尾记录；不落命名明文或把dump装入shell变量。接收端剥离/严格验证nonce/hash/尾记录，缺失/伪造/截断不能因后续exit0转绿。nonce只是本次流边界元数据，不是访问凭据或来源认证；源容器仍需真实安装归属及冻结writer约束。首次shell FD3时序错误已用固定合成echo最小复现，改为先exec复制FD再命令替换后真实通过。
+
+9项定向测试通过，覆盖持久化先后、未知启动/结束、wrong ID/container/bool exit、非零与重复journal、帧截断/配额，以及完整帧EOF→running→exit0、分片/错nonce/hash/缺尾。真实入口`tests/integration/owned_exec_native.py --image python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e`：本地已有镜像、随机自建非特权无网络/挂载/端口容器，实际预检ExecID结束0、缺pg_dump程序127、外来CID拒绝未start、容器清理均true；源码前/后SHA一致（模块bb12289b…）。guard明确为fixture注入，**不证明真实helper进程cohort、业务数据库dump或全局收束**。协议不是备份可恢复性证明，全部产品门禁仍保留。
+
+依据：[Engine API1.47](https://docs.docker.com/reference/api/engine/version/v1.47/)、[Moby exec生命周期](https://github.com/moby/moby/blob/v28.5.2/daemon/exec.go)、[精确ExecInspect实现](https://github.com/moby/moby/blob/v28.5.2/daemon/inspect.go)。后者在从未运行时ExitCode仍未设置，不能把Running=false单独作为完成。非升级raw stream无总长度，故必须有应用层完成证明。
