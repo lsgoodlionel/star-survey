@@ -62,7 +62,7 @@ class OwnershipProtocol:
             for identity, fingerprint in objects.items():
                 valid_id = (isinstance(identity, str) and (
                     bool(HEX64.fullmatch(identity)) if kind != 'volumes' else
-                    bool(re.fullmatch(r'survey-production_[A-Za-z0-9_.-]{1,128}', identity))))
+                    bool(re.fullmatch(re.escape(PROJECT) + r'_[A-Za-z0-9_.-]{1,128}', identity))))
                 if not valid_id or not isinstance(fingerprint, str) or not HEX64.fullmatch(fingerprint):
                     raise OwnershipError('resource identity is invalid')
         return deepcopy(value)
@@ -510,7 +510,7 @@ class DockerOwnershipDriver:
             for item in self._rows(kind):
                 identity = item['id'] if kind == 'networks' else item['name']
                 valid = (isinstance(identity, str) and (bool(HEX64.fullmatch(identity)) if kind == 'networks'
-                         else bool(re.fullmatch(r'survey-production_[A-Za-z0-9_.-]{1,128}', identity))))
+                         else bool(re.fullmatch(re.escape(PROJECT) + r'_[A-Za-z0-9_.-]{1,128}', identity))))
                 if not valid: raise OwnershipError('resource list identity is invalid')
                 if identity in result[kind]: raise OwnershipError('duplicate resource identity')
                 if kind == 'networks': fingerprint, _ = self._network(identity, result['containers'])

@@ -117,6 +117,13 @@ class OwnershipProtocolTest(unittest.TestCase):
         with self.assertRaises(self.module.OwnershipError): self.acquire()
         self.assertIsNone(self.store.record)
         self.assertEqual({}, self.daemon.claims)
+    def test_volume_identity_must_follow_the_exact_bound_project_namespace(self):
+        with mock.patch.object(self.module, 'PROJECT', 'survey-owner-fixture-123'):
+            self.protocol._resources({'containers': {}, 'networks': {},
+                'volumes': {'survey-owner-fixture-123_data': 'd' * 64}})
+            for name in ('survey-production_data', 'survey-owner-fixture-1234_data', '../data'):
+                with self.subTest(name=name), self.assertRaises(self.module.OwnershipError):
+                    self.protocol._resources({'containers': {}, 'networks': {}, 'volumes': {name: 'd' * 64}})
     def test_discovery_failure_never_calls_delete(self):
         self.populate()
         before = self.store.load()
@@ -389,5 +396,35 @@ class DockerAdapterTest(unittest.TestCase):
         result = driver.observe()
         self.assertEqual('unknown', result['cohort'])
         self.assertEqual({}, result['containers'])
+
+class FixtureCleanupTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = MODULE.parent / 'tests/integration/runtime_ownership_docker.py'
+        spec = importlib.util.spec_from_file_location('ownership_daemon_fixture', path)
+        cls.fixture = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.fixture)
+
+    def test_unknown_create_reply_cannot_claim_cleanup_verified(self):
+        namespace = 'survey-owner-fixture-' + 'a' * 32
+        calls = []
+        def docker(arguments):
+            calls.append(arguments)
+            if arguments[:2] == ['network', 'ls']:
+                return json.dumps({'name': namespace + '_internal'})
+            return ''
+        self.assertFalse(self.fixture.cleanup_fixture(docker, [], namespace))
+        self.assertFalse(any('rm' in command for command in calls))
+
+    def test_unknown_inventory_result_is_not_clean_and_other_kinds_are_checked(self):
+        namespace = 'survey-owner-fixture-' + 'a' * 32
+        calls = []
+        def docker(arguments):
+            calls.append(arguments)
+            if arguments[0] == 'container':
+                raise TimeoutError('synthetic unavailable')
+            return ''
+        self.assertFalse(self.fixture.cleanup_fixture(docker, [], namespace))
+        self.assertEqual({'container', 'network', 'volume'}, {command[0] for command in calls})
 
 if __name__ == '__main__': unittest.main()
