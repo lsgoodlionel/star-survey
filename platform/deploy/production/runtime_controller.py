@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import uuid
 
 import runtime_ownership as ownership
 from runtime_cohort import CohortProbe
@@ -198,6 +200,59 @@ class RuntimeController:
             self._save_source(self.next_data)
             return effect()
         return self.protocol.mutate('install', bound_effect)
+
+    @staticmethod
+    def _private_bytes(path, maximum):
+        fd = None
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            before = os.fstat(fd)
+            def snapshot(info):
+                return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink,
+                    info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                    or before.st_nlink != 1 or before.st_mode & 0o077 or not 1 <= before.st_size <= maximum
+                    or snapshot(os.lstat(path)) != snapshot(before)):
+                raise ownership.OwnershipError('hash input is not a bounded private regular file')
+            value = os.read(fd, maximum + 1)
+            if (len(value) != before.st_size or snapshot(os.fstat(fd)) != snapshot(before)
+                    or snapshot(os.lstat(path)) != snapshot(before)):
+                raise ownership.OwnershipError('hash input changed during the bounded read')
+            return value
+        except OSError as exc:
+            raise ownership.OwnershipError('hash input is unavailable or unsafe') from exc
+        finally:
+            if fd is not None: os.close(fd)
+
+    def ensure_admin_hash(self):
+        from owned_children import ControllerProcessGuard
+        from owned_container_hash import OwnedContainerHash
+        # Source, lock/cohort and creation claim are rechecked before a helper
+        # may be admitted. A released/unknown receipt blocks the next call.
+        self._load(self.manager, self.data['version'])
+        self.preflight_cleanup(False)
+        path = self.manager._managed('shared/secrets/engine_admin_password_hash')
+        pattern = rb'\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}\n'
+        if os.path.lexists(path):
+            if re.fullmatch(pattern, self._private_bytes(path, 61)) is None:
+                raise ownership.OwnershipError('existing administrator hash is invalid; preserve it for reconciliation')
+            self.manager._sync_runtime_secrets()
+            return
+        image = self.manager._release_manifest(self.data['version']).raw['images']['CADDY_IMAGE']
+        password = self._private_bytes(self.manager._managed('shared/secrets/engine_admin_password'), 1025)
+        password = password[:-1] if password.endswith(b'\n') else password
+        operation = str(uuid.uuid4())
+        store = ownership.PrivateStore(self.manager.target, name='runtime-launch-' + operation.replace('-', '') + '.json')
+        helper = OwnedContainerHash(self.probe.api, store, ControllerProcessGuard(), operation_id=operation,
+            installation_id=self.store.load()['installationId'], image=image,
+            target_sha256=hashlib.sha256(str(self.manager.target).encode()).hexdigest())
+        output = helper.run(password)  # Unknown state propagates with its durable receipt.
+        if re.fullmatch(pattern, output) is None:
+            raise ownership.OwnershipError('controlled hash output is invalid')
+        if os.path.lexists(path):
+            raise ownership.OwnershipError('administrator hash appeared during helper execution; preserve evidence')
+        self.manager._atomic_write(path, output.decode('ascii'))
+        self.manager._sync_runtime_secrets()
 
     def preflight_cleanup(self, purge):
         return self.protocol.preflight_cleanup(purge)

@@ -9,6 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from test_runtime_ownership import Daemon
 
@@ -98,6 +99,61 @@ class RuntimeControllerTest(unittest.TestCase):
                     self.config['services']['platform']['volumes'] = [{'type': 'bind', 'source': '/outside', 'target': '/state'}]
                 with self.assertRaises(self.module.ownership.OwnershipError): self.prepare()
                 self.assertEqual({}, self.daemon.claims)
+
+    def test_hash_bridge_uses_bound_image_and_retains_unknown_helper_failure(self):
+        runtime = self.prepare()
+        secret = self.target / 'shared/secrets'
+        secret.mkdir(parents=True, mode=0o700)
+        password = secret / 'engine_admin_password'
+        password.write_bytes(b'x' * 64 + b'\n'); password.chmod(0o600)
+        self.manager._managed = lambda name, **kwargs: self.target / name
+        def atomic_fixture(path, value):
+            path.write_text(value)
+            path.chmod(0o600)
+        self.manager._atomic_write = atomic_fixture
+        sync = []
+        self.manager._sync_runtime_secrets = lambda: sync.append(True)
+        self.manager._release_manifest = lambda version: SimpleNamespace(raw={'images': {
+            'ADMIN_IMAGE': IMAGE, 'CADDY_IMAGE': 'caddy@sha256:' + 'd' * 64}}, sha256='c' * 64)
+        calls = []
+        class Helper:
+            def __init__(self, api, store, guard, **kwargs):
+                calls.append((api, store, kwargs))
+            def run(self, value):
+                if value != b'x' * 64: raise AssertionError('wrong synthetic input')
+                raise RuntimeError('synthetic unknown result')
+        # Bridge-only unit test; a real Linux guard/helper is separately needed.
+        with patch('owned_children.ControllerProcessGuard'), patch('owned_container_hash.OwnedContainerHash', Helper):
+            with self.assertRaisesRegex(RuntimeError, 'synthetic unknown result'): runtime.ensure_admin_hash()
+        self.assertEqual('caddy@sha256:' + 'd' * 64, calls[0][2]['image'])
+        self.assertEqual(runtime.store.load()['installationId'], calls[0][2]['installation_id'])
+        self.assertEqual([], sync)
+        self.assertFalse((secret / 'engine_admin_password_hash').exists())
+        self.assertEqual('ready', runtime.store.load()['phase'])
+        class CompletedHelper(Helper):
+            def run(self, value): return b'$2a$14$' + b'x' * 53 + b'\n'
+        with patch('owned_children.ControllerProcessGuard'), patch('owned_container_hash.OwnedContainerHash', CompletedHelper):
+            runtime.ensure_admin_hash()
+        self.assertEqual(b'$2a$14$' + b'x' * 53 + b'\n', (secret / 'engine_admin_password_hash').read_bytes())
+        self.assertEqual([True], sync)
+        with patch('owned_container_hash.OwnedContainerHash') as helper:
+            runtime.ensure_admin_hash()
+            helper.assert_not_called()
+        self.assertEqual([True, True], sync)
+
+    def test_hash_bridge_rejects_fifo_and_invalid_existing_hash_without_launch(self):
+        runtime = self.prepare()
+        secret = self.target / 'shared/secrets'
+        secret.mkdir(parents=True, mode=0o700)
+        path = secret / 'engine_admin_password_hash'
+        self.manager._managed = lambda name, **kwargs: self.target / name
+        for special in (False, True):
+            if special: os.mkfifo(path, 0o600)
+            else: path.write_bytes(b'invalid\n'); path.chmod(0o600)
+            with patch('owned_container_hash.OwnedContainerHash') as helper:
+                with self.assertRaises(self.module.ownership.OwnershipError): runtime.ensure_admin_hash()
+                helper.assert_not_called()
+            path.unlink()
 
 
 if __name__ == '__main__':
