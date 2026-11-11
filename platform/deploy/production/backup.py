@@ -61,6 +61,17 @@ class CommandRunner:
 class AuthenticatedOpenSSLCipher:
     MAGIC = b"SURVEYBK1"
 
+    def __init__(self, runner=None):
+        self.runner = runner or CommandRunner()
+
+    @staticmethod
+    def _command_path(path):
+        opaque = getattr(path, 'child_argument', None)
+        return opaque() if callable(opaque) else os.fspath(path)
+
+    def _password_argument(self, key_file):
+        return f"file:{key_file}"
+
     def _key(self, key_file: Path) -> bytes:
         try:
             key = key_file.read_bytes().strip()
@@ -76,10 +87,10 @@ class AuthenticatedOpenSSLCipher:
         temporary = destination.with_suffix(destination.suffix + ".cipher")
         command = [
             "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-salt",
-            "-in", str(source), "-out", str(temporary), "-pass", f"file:{key_file}",
+            "-in", self._command_path(source), "-out", self._command_path(temporary), "-pass", self._password_argument(key_file),
         ]
         try:
-            subprocess.run(command, check=True, capture_output=True)
+            self.runner.run(command, check=True, capture_output=True)
             authenticator = hmac.new(mac_key, self.MAGIC, hashlib.sha256)
             with temporary.open("rb") as ciphertext, destination.open("xb") as output:
                 output.write(self.MAGIC)
@@ -119,9 +130,9 @@ class AuthenticatedOpenSSLCipher:
                 supplied = encrypted.read(32)
             if len(supplied) != 32 or not secrets.compare_digest(supplied, authenticator.digest()):
                 raise BackupError("encrypted backup payload authentication failed")
-            subprocess.run([
+            self.runner.run([
                 "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
-                "-in", str(temporary), "-out", str(destination), "-pass", f"file:{key_file}",
+                "-in", self._command_path(temporary), "-out", self._command_path(destination), "-pass", self._password_argument(key_file),
             ], check=True, capture_output=True)
         except BackupError:
             destination.unlink(missing_ok=True)

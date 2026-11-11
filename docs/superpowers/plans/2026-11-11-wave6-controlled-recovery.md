@@ -99,3 +99,11 @@ Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→h
 14项定向回归通过（开发机portable匿名FD注入仅验证逻辑，不冒称memfd/seal证明）。真实入口：`python3 -B platform/deploy/production/tests/integration/owned_memory_native.py --image python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e`。Docker29.9.3/Linux arm64、随机65534用户容器、无网络/主机挂载/端口、cap-drop ALL及只读rootfs/有限tmpfs，未拉镜像。最终模块SHA`46ce9e30cd42fc68a6964b8dd1254af256ba3ca7336c07c81b60724dd67e9154`、probe SHA`bede3eed5ced3de43650873da498002435fc093b6f89abb5bdd421c9fa7dbd19`，运行前后/容器内均匹配；内核封印拒绝写、RLIMIT拒绝超量、原FD身份消失、无命名工作区文件及测试容器清理均通过，exit0。非作者只读复核无确认新增阻断，未代跑实测。
 
 该lease不启动/终止子进程，不能仅凭关闭父FD证明其他进程无副本；必须继续与实际helper/crypto runner及Docker exec回执组合验证。当前不改控制器、旧包、备份格式或Release，未打包/未接原生门禁，不将本内核实验标为明文生命周期、B清理或stable六项证明通过。
+
+### 受控helper接入顺序与兼容契约（开发中）
+
+候选自带的受控helper代码与经过校验的源安装state/manifest分开绑定，旧发行包不改、不重签。相较在旧模块里替换全局Path/tempfile语义，采用显式依赖注入：候选cipher支持受控runner及opaque FD参数，后续workspace/runner由可信控制器构造；不能从请求体或环境标记声称安全。未建立候选代码身份、源manifest、子进程回执和实际拓扑前，不能启用该路径，也不回退旧CLI。现有备份magic/AES-CBC/PBKDF2/HMAC及源manifest/schema/floor不变，跨版本兼容必须独立测试。源码对账还发现rc19 backup与当前版本的writer列表相差engine-relay；受控路径必须从已验证的源Compose选择完整writer集合，不能盲用候选常量暂停不存在的服务或漏暂停真实writer。
+
+首个注入补丁仅修改候选backup.AuthenticatedOpenSSLCipher的runner/参数桥，未选择新的运行入口：3项先红后绿的合成回归验证匿名参数交接、原HMAC字节封装、认证失败不启动runner、失败仍传播且清除自身cipher临时文件；既有backup/restore 43项通过。该回归的fake runner不证明真实OpenSSL或子进程收束，后续需真实FD继承/父死亡约束及受控binary执行、容量限制与结束回执。
+
+后续实施包保持单一写入者：①主线程受控launcher先持久化pending，再启动受父死亡约束的child，记录PID/starttime之后才释放启动管道；已结束/未知结果分别记录，不能从空进程集合猜成功。②OpenSSL只接收受控输入/输出/密钥FD，不将密钥值放argv或日志；限制文件大小及运行时间，失败先确认已知child结束再释放lease。③Docker exec创建/启动/结束绑定实际ExecID、containerID和固定profile；失联保留pending，不靠CLI零退出。④controller在创建起记录实际资源，已知失败才允许受控精确清理并验证后置条件；unknown/pending仍拒绝，不手动删marker。⑤最后才改运行接线和打包清单，并与Claude协调；Release/恢复/原生门禁不在本窗口解除。
