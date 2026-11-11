@@ -2457,6 +2457,17 @@ class SurveyctlTest(unittest.TestCase):
             self.manager().uninstall(False, None)
         self.assertNotEqual("uninstalled", self.manager()._read_state()["status"])
 
+    def test_disabled_restore_refusal_preserves_state_and_complete_intent(self):
+        self.install()
+        state = self.target / ".surveyctl/state.json"
+        intent = self.target / ".surveyctl/operation.intent"
+        before = (state.read_bytes(), intent.read_bytes())
+        self.runner.commands.clear()
+        with self.assertRaisesRegex(self.module.InputError, "controlled restore is disabled"):
+            self.manager().restore("nonexistent-backup")
+        self.assertEqual(before, (state.read_bytes(), intent.read_bytes()))
+        self.assertEqual([], self.runner.commands)
+
     def test_failed_install_cleanup_never_issues_runtime_mutation(self):
         with self.assertRaises(self.module.RuntimeHealthError):
             self.manager(probe=FakeHostProbe(tls_valid=False)).install(
