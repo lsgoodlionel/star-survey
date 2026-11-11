@@ -5,14 +5,16 @@ import { ReadOnlyQuestion } from './ReadOnlyQuestion';
 
 interface QuestionEditorProps {
   question: EditableQuestion;
+  supportsLogic: boolean;
+  conditionSources: EditableQuestion[];
   api: ApiClient;
   tenantId: string;
   disabled: boolean;
-  onChange(update: Partial<Pick<EditableQuestion, 'answers' | 'code' | 'mandatory' | 'other' | 'text' | 'themeOptions' | 'slideIds'>>): void;
+  onChange(update: Partial<Pick<EditableQuestion, 'answers' | 'code' | 'condition' | 'mandatory' | 'other' | 'text' | 'themeOptions' | 'slideIds'>>): void;
   onSlideAssetChange(questionUuid: string, slideId: string, assetId: string): void;
 }
 
-export function QuestionEditor({ question, api, tenantId, disabled, onChange, onSlideAssetChange }: QuestionEditorProps) {
+export function QuestionEditor({ question, supportsLogic, conditionSources, api, tenantId, disabled, onChange, onSlideAssetChange }: QuestionEditorProps) {
   if (!question.editable) return <ReadOnlyQuestion question={question} />;
   if (question.source.theme === 'mjy-carousel' && (!Array.isArray(question.themeOptions?.slides)
     || question.themeOptions.slides.some((slide) => !slide || typeof slide !== 'object' || Array.isArray(slide)))) {
@@ -24,6 +26,11 @@ export function QuestionEditor({ question, api, tenantId, disabled, onChange, on
   }
   const labels: Record<string, string> = { X: '说明文字', L: '单选题', M: '多选题', S: '短文本题', T: '长文本题',
     'mjy-collapsible': '折叠栏目', 'mjy-cascading-select': '多级下拉', 'mjy-carousel': '轮播图' };
+  const simpleCondition = /^(?:q\("([0-9a-fA-F-]{36})"\)|([A-Za-z][A-Za-z0-9]*)) == "([A-Za-z0-9]{1,5})"$/.exec(question.condition ?? '');
+  const selectedSource = simpleCondition ? conditionSources.find((source) =>
+    (simpleCondition[1] ? source.uuid === simpleCondition[1] : source.code === simpleCondition[2])
+    && source.answers?.some((answer) => answer.code === simpleCondition[3])) : undefined;
+  const complexCondition = Boolean(question.condition && !selectedSource);
 
   return (
     <div className="question-editor">
@@ -52,6 +59,32 @@ export function QuestionEditor({ question, api, tenantId, disabled, onChange, on
           onChange={(event) => onChange({ text: event.target.value })}
         />
       </label>
+      {supportsLogic ? (
+        <fieldset disabled={disabled}>
+          <legend>显示条件</legend>
+          {complexCondition ? (
+            <p role="status">现有复杂显示条件会保持原样。若需改成单选条件，请先清除。</p>
+          ) : null}
+          <label>前置题目
+            <select aria-label="前置题目" disabled={complexCondition} value={selectedSource?.code ?? ''} onChange={(event) => {
+              const source = conditionSources.find((item) => item.code === event.target.value);
+              const answer = source?.answers?.find((item) => /^[A-Za-z0-9]{1,5}$/.test(item.code));
+              onChange({ condition: source && answer ? `q(${JSON.stringify(source.uuid)}) == ${JSON.stringify(answer.code)}` : '' });
+            }}>
+              <option value="">始终显示</option>
+              {conditionSources.map((source) => <option key={source.uuid} value={source.code}>{source.text}</option>)}
+            </select>
+          </label>
+          {selectedSource ? <label>触发选项
+            <select aria-label="触发选项" value={simpleCondition?.[3] ?? ''} onChange={(event) =>
+              onChange({ condition: `q(${JSON.stringify(selectedSource.uuid)}) == ${JSON.stringify(event.target.value)}` })}>
+              {selectedSource.answers?.filter((answer) => /^[A-Za-z0-9]{1,5}$/.test(answer.code))
+                .map((answer) => <option key={answer.code} value={answer.code}>{answer.text}</option>)}
+            </select>
+          </label> : null}
+          {complexCondition ? <button type="button" onClick={() => onChange({ condition: '' })}>清除显示条件</button> : null}
+        </fieldset>
+      ) : null}
       {question.type === 'X' && question.source.theme === 'mjy-collapsible' && question.themeOptions ? (
         <fieldset disabled={disabled}>
           <legend>折叠栏目</legend>

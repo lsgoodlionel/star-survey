@@ -258,6 +258,89 @@ describe('EditorPage', () => {
     expect(screen.getByRole('status', { name: '保存状态' })).toHaveTextContent('未保存');
     expect(screen.getByText('简体中文')).toBeInTheDocument();
   });
+  test('authors a v2 question condition and saves the DSL without losing unknown fields', async () => {
+    const source = structuredClone(gatewayFixture);
+    source.definitionVersion = 2;
+    const question = source.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    question.condition = 'true';
+    question.futureLogic = { keep: true };
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    expect(await screen.findByText('现有复杂显示条件会保持原样。若需改成单选条件，请先清除。')).toBeInTheDocument();
+    expect(screen.getByLabelText('前置题目')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '清除显示条件' }));
+    fireEvent.change(screen.getByLabelText('前置题目'), { target: { value: 'QSINGLE' } });
+    expect(screen.getByLabelText('触发选项')).toHaveValue('A1');
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    expect(saved.condition).toBe(`q("${singleUuid}") == "A1"`);
+    expect(saved.futureLogic).toEqual({ keep: true });
+  });
+  test('uses a stable source UUID when the question code is a DSL keyword and later changes', async () => {
+    const source = structuredClone(gatewayFixture);
+    source.definitionVersion = 2;
+    source.groups[0].questions[0].code = 'and';
+    const target = source.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    target.condition = 'true';
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    await screen.findByText('现有复杂显示条件会保持原样。若需改成单选条件，请先清除。');
+    fireEvent.click(screen.getByRole('button', { name: '清除显示条件' }));
+    fireEvent.change(screen.getByLabelText('前置题目'), { target: { value: 'and' } });
+    expect(screen.getByLabelText('触发选项')).toHaveValue('A1');
+    fireEvent.click(screen.getByRole('button', { name: 'and Pick exactly one' }));
+    fireEvent.change(screen.getByLabelText('题目编码'), { target: { value: 'QRENAMED' } });
+    fireEvent.click(screen.getByRole('button', { name: 'QTEXT Say something short' }));
+    expect(screen.getByLabelText('前置题目')).toHaveValue('QRENAMED');
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    expect(saved.condition).toBe(`q("${singleUuid}") == "A1"`);
+  });
+  test.each(['1', '01'])('recognizes a valid numeric answer code %s in an existing condition', async (answerCode) => {
+    const source = structuredClone(gatewayFixture);
+    source.definitionVersion = 2;
+    const trigger = source.groups[0].questions.find((item) => item.uuid === singleUuid)! as Record<string, unknown>;
+    (trigger.answers as Array<{ code: string }>)[0].code = answerCode;
+    const target = source.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    target.condition = `QSINGLE == "${answerCode}"`;
+    target.futureLogic = { keep: true };
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    expect(await screen.findByLabelText('前置题目')).toHaveValue('QSINGLE');
+    expect(screen.getByLabelText('触发选项')).toHaveValue(answerCode);
+    expect(screen.queryByText('现有复杂显示条件会保持原样。若需改成单选条件，请先清除。')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('前置题目'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('前置题目'), { target: { value: 'QSINGLE' } });
+    expect(screen.getByLabelText('触发选项')).toHaveValue(answerCode);
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    expect(saved.condition).toBe(`q("${singleUuid}") == "${answerCode}"`);
+    expect(saved.futureLogic).toEqual({ keep: true });
+  });
   test('configures a collapsible section while preserving unknown options', async () => {
     const source = structuredClone(gatewayFixture);
     const question = source.groups[0].questions.find((item) => item.uuid === noteUuid)! as Record<string, unknown>;
