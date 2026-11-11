@@ -59,6 +59,26 @@ class OwnedDockerExecTest(unittest.TestCase):
         with (self.workspace / 'dump').export_for_child(write=True) as lease:
             return self.executor.execute('postgres-dump', self.container, lease)
 
+    def test_diagnostic_profiles_are_fixed_and_close_body_is_strictly_bounded(self):
+        nonce = 'a' * 64
+        for profile in ('postgres-schema', 'engine-status', 'engine-event-cron'):
+            self.assertIn('/usr/bin/timeout', self.module.command_for(profile, nonce))
+        body = {'requestId': '00000000-0000-4000-8000-000000000003',
+                'engineInstanceId': 'production-engine-01', 'surveyId': 123}
+        command = self.module.command_for('gateway-close', nonce, body=body)
+        self.assertIn('http://127.0.0.1:8080/v1/close', command[5])
+        for updates in ({'surveyId': True}, {'surveyId': 0}, {'engineInstanceId': 'bad/route'},
+                        {'requestId': 'bad'}, {'url': 'http://elsewhere'}):
+            with self.assertRaises(ValueError):
+                self.module.command_for('gateway-close', nonce, body=dict(body, **updates))
+        with self.assertRaises(ValueError): self.module.command_for('postgres-dump', nonce, body=body)
+
+    def test_bad_close_parameters_cannot_create_an_exec(self):
+        with (self.workspace / 'close').export_for_child(write=True) as lease:
+            with self.assertRaises(self.module.KnownExecFailure):
+                self.executor.execute('gateway-close', self.container, lease, body={'surveyId': True})
+        self.assertEqual([], self.events)
+
     def test_start_follows_persisted_id_and_released_receipt_then_exact_end(self):
         self.execute()
         self.assertEqual(['create', 'start'], self.events)

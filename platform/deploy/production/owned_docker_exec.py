@@ -35,11 +35,27 @@ class UncertainExec(RuntimeError):
 
 
 HEX = re.compile(r'[0-9a-f]{64}')
+CLOSE_SCRIPT = (
+    "import hashlib,hmac,json,sys,time,urllib.request;"
+    "b=sys.argv[1].encode();t=str(int(time.time()));"
+    "s=open('/run/secrets/platform_pubgw_secret','rb').read().strip();"
+    "q=urllib.request.Request('http://127.0.0.1:8080/v1/close',data=b,method='POST',headers={"
+    "'Content-Type':'application/json','X-Pubgw-Timestamp':t,'X-Pubgw-Signature':"
+    "hmac.new(s,t.encode()+b'.'+b,hashlib.sha256).hexdigest()});"
+    "r=urllib.request.urlopen(q,timeout=60);sys.exit(0 if r.status==200 else 1)"
+)
 PROFILES = {
     'exec-preflight': (5, ['/bin/echo', 'survey-owned-exec-v1']),
     'postgres-dump': (120, ['pg_dump', '-U', 'postgres', '--format=custom', '--serializable-deferrable', 'platform']),
     'mariadb-dump': (120, ['/bin/sh', '-c',
         'exec mariadb-dump --single-transaction --quick --skip-lock-tables -u root --password="$(cat /run/secrets/engine_db_root_password)" limesurvey']),
+    'postgres-schema': (15, ['psql', '-U', 'postgres', '-d', 'platform', '-Atqc',
+        'SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1']),
+    'engine-status': (30, ['php', 'application/commands/console.php', 'productionInit', 'status']),
+    'engine-event-cron': (75, ['/bin/sh', '/opt/survey/run-with-secrets.sh',
+        'MJY_PLATFORM_EVENTS_SECRET=/run/secrets/engine_instance_events_secret', '--',
+        'php', 'application/commands/console.php', 'plugin', 'cron']),
+    'gateway-close': (75, ['python', '-c', CLOSE_SCRIPT]),
 }
 
 
@@ -72,8 +88,18 @@ class PayloadProof:
         self.closed = True
 
 
-def command_for(profile, nonce):
+def command_for(profile, nonce, *, body=None):
     seconds, command = PROFILES[profile]
+    if profile == 'gateway-close':
+        if (not isinstance(body, dict) or set(body) != {'requestId', 'engineInstanceId', 'surveyId'}
+                or not isinstance(body['requestId'], str) or str(uuid.UUID(body['requestId'])) != body['requestId']
+                or not isinstance(body['engineInstanceId'], str)
+                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}', body['engineInstanceId'])
+                or type(body['surveyId']) is not int or not 1 <= body['surveyId'] <= 2**31 - 1):
+            raise ValueError('probe close binding is invalid')
+        command = [*command, json.dumps(body, sort_keys=True, separators=(',', ':'))]
+    elif body is not None:
+        raise ValueError('this fixed exec profile has no parameters')
     # fd3 is the original stdout. tee sends the same bytes to fd3 and sha256sum;
     # command substitution captures only the digest, never the dump. pipefail
     # forbids an end record when dump/tee/hash fails. No named plaintext/tempfile.
@@ -251,7 +277,7 @@ class OwnedDockerExec:
             raise ExecProtocolError('exec receipt publication is unverified')
         self.saved = deepcopy(record)
 
-    def execute(self, profile, container, output):
+    def execute(self, profile, container, output, *, body=None):
         released = False
         try:
             if (self.saved is not None or not isinstance(profile, str) or profile not in PROFILES
@@ -264,6 +290,8 @@ class OwnedDockerExec:
                     or info.st_mode & 0o077 or info.st_size != 0
                     or fcntl.fcntl(output.fd, fcntl.F_GETFL) & os.O_ACCMODE not in (os.O_WRONLY, os.O_RDWR)):
                 raise ValueError('exec output is not an empty private anonymous file')
+            nonce = secrets.token_hex(32)  # Per-stream boundary metadata, not a credential.
+            command = command_for(profile, nonce, body=body)  # Validate before creating any exec.
             daemon = self.api.identity()
             if self.check(container, None) is not True:
                 raise ValueError('container is not bound to this operation')
@@ -271,8 +299,7 @@ class OwnedDockerExec:
                 'installationId': self.installation, 'owner': self.actor, 'daemonId': daemon,
                 'containerId': container, 'profile': profile, 'phase': 'create-pending', 'execId': None, 'exitCode': None}
             self._save(record)
-            nonce = secrets.token_hex(32)  # Per-stream boundary metadata, not a credential.
-            identity = self.api.create(container, command_for(profile, nonce))
+            identity = self.api.create(container, command)
             if not isinstance(identity, str) or not HEX.fullmatch(identity):
                 raise ValueError('exec identity is invalid')
             record.update(phase='created', execId=identity)
