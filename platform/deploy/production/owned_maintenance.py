@@ -69,7 +69,8 @@ class OwnedMaintenance:
             row = self.driver._last_container_snapshot
             execs = row.get('execs')
             return (fingerprint == self.record['resources']['containers'][cid]
-                and (state == 'running' or not require_running and state == 'exited')
+                and (state == 'running' or not require_running and state == 'exited'
+                     or state == 'paused' and row.get('paused') is True and allow_paused and cid in self.paused)
                 and row.get('id') == cid and type(row.get('paused')) is bool
                 and (not row['paused'] or allow_paused and cid in self.paused)
                 and (execs in (None, []) or isinstance(execs, list)

@@ -78,6 +78,22 @@ class MaintenanceTest(unittest.TestCase):
         self.assertTrue(self.paused)
         self.assertTrue(self.operation.uncertain)
 
+    def test_recorded_pause_uses_docker_paused_status_and_still_resumes(self):
+        observe = self.runtime.driver._container
+        def actual_status(cid, **kwargs):
+            fingerprint, unknown, _ = observe(cid, **kwargs)
+            return fingerprint, unknown, 'paused' if cid in self.paused else 'running'
+        self.runtime.driver._container = actual_status
+        with self.operation.frozen_writers():
+            self.assertTrue(self.paused)
+            for cid in self.paused:
+                self.assertFalse(self.operation.container_check(cid))
+                self.assertTrue(self.operation.container_check(cid, allow_paused=True))
+        self.assertEqual(set(), self.paused)
+        self.assertFalse(self.operation.uncertain)
+        self.paused.add(self.ids['platform'])  # External pause was never registered by this operation.
+        self.assertFalse(self.operation.container_check(self.ids['platform'], allow_paused=True))
+
     def test_foreign_exec_or_replaced_fingerprint_is_refused(self):
         self.assertTrue(self.operation.container_check(self.ids['platform-db']))
         self.runtime.driver._container = lambda cid, **kwargs: ('different', False, 'running')

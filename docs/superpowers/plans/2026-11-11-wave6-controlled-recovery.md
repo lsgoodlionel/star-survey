@@ -169,3 +169,5 @@ WIP 在真实 operation.lock 下连接 RuntimeController：卸载在 intent 前�
 Claude接续点：`release/build_release.py:RUNTIME_FILES` 尚需在独立审查后包含 `surveyctl.OWNED_RUNTIME_FILES` 的13个新增模块；当前不会绕过缺模块的failclosed检查，也未修改Release工作流/打包文件。已有source-production smoke的旧入口不证明这些默认入口。后续仍需完整默认安装/正向业务doctor、故障矩阵、实际包及B原生验收；owned升级接线也未据此完成。#125仍冻结原Draft，恢复/native/上传/stable门禁保持，未触发标签、GHCR、Release或生产操作。
 
 Owner明确授权后已创建Draft PR #129（初始head `2f35d871c9d4691be3de79ab93205d223f5deecd`）。首次Linux维护job `43102867372` 两场景均在initialize被人员能力绑定校验拒绝（surveyctl.py:1195），独立Docker清理均verified；尚未进入数据库备份。根因为合成夹具替换images后仍沿用旧平台digest的能力声明。定向回归复现同一拒绝后，仅修正合成manifest声明绑定测试镜像；错误digest负例继续拒绝，产品校验未改，四项证据测试通过。修复后的在线真实维护结果仍待验证，不能把本次旧失败或其他smoke通过当作本路径通过。
+
+第二轮 `43103485356` 已通过真实AMD64 Caddy hash，但在backup失败；UncertainMaintenance位于writer恢复检查，fixtureCleanup为unknown-or-refused，不能称已清理。隔离真实Docker明确返回暂停容器Status=paused/Running=true/Paused=true，恢复后running且该临时容器清理verified。以同状态模型复现本轮代码在pause观察及finally恢复前拒绝本轮已登记CID。仅对本次paused集合中的CID、真实Paused=true且原归属/指纹/exec检查全满足时允许paused状态；外部暂停仍拒绝。11项定向维护测试通过，未知/丢失RPC的保守语义不变；修复后完整链仍须在线验证，不断言这是唯一后续缺陷。
