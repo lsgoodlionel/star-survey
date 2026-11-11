@@ -35,9 +35,7 @@ export function updateIpDenyList(definition: EditableSurveyDefinition, denyIps: 
   const network = object(policy.network) ? policy.network : {};
   if (denyIps.length) network.denyIps = [...denyIps];
   else delete network.denyIps;
-  const hasOtherRule = ['allowIps', 'allowRegions', 'denyRegions'].some((key) =>
-    Array.isArray(network[key]) && network[key].length > 0);
-  if (denyIps.length || hasOtherRule) policy.network = network;
+  if (Object.keys(network).length) policy.network = network;
   else delete policy.network;
   if (Object.keys(policy).length === 1) delete source.policy;
   else source.policy = policy;

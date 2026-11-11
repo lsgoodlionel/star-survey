@@ -24,6 +24,16 @@ describe('editable IP denial policy', () => {
     expect(serializeDefinition(updateIpDenyList(withDenial, []))).toEqual(gatewayFixture);
   });
 
+  test('does not silently erase another network setting when denial is cleared', () => {
+    const source = { ...structuredClone(gatewayFixture), policy: { policyVersion: 1,
+      network: { denyIps: ['::1'], regionUnknown: 'allow' },
+    } };
+    const cleared = updateIpDenyList(parseDefinition(source), []);
+    expect(serializeDefinition(cleared)).toEqual({ ...source, policy: { policyVersion: 1,
+      network: { regionUnknown: 'allow' },
+    } });
+  });
+
   test('does not save an empty line as a network rule', () => {
     const definition = updateIpDenyList(parseDefinition(gatewayFixture), ['127.0.0.0/8', '  ']);
     expect(validateIpDenyList(definition)).toContain('IP 拒绝清单不能包含空行');
