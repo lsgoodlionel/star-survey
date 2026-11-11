@@ -52,10 +52,11 @@ class MaintenanceTest(unittest.TestCase):
                     'paused': cid in owner.paused, 'execs': []}
         record = {'installationId': self.installation, 'daemonId': 'fixture-daemon',
                   'resources': {'containers': {v: v for v in self.ids.values()}}}
-        self.manager = SimpleNamespace(target=self.target)
+        self.manager = SimpleNamespace(target=self.target, _managed=lambda name, **kwargs: self.target / name)
         self.runtime = SimpleNamespace(manager=self.manager, data={'version': '0.2.0',
             'contract': {'services': {k: {} for k in self.ids}}}, driver=Driver(),
             probe=SimpleNamespace(api=API()), preflight_cleanup=lambda purge: deepcopy(record))
+        self.runtime._private_bytes = lambda path, maximum: b'x' * 64
         self.operation = self.module.OwnedMaintenance(self.runtime, _guard=Guard())
         self.operation.sleep = lambda seconds: None
 
@@ -145,6 +146,14 @@ class MaintenanceTest(unittest.TestCase):
             with self.assertRaises(BackupErrorForTest): self.operation.backup(self.target / 'backups/first')
         self.assertEqual(['operation', 'mkdir'], events)
         self.assertEqual(0o700, (self.target / 'backups').stat().st_mode & 0o777)
+
+    def test_known_low_disk_preflight_starts_no_mutation_or_directory(self):
+        with patch.object(self.module.shutil, 'disk_usage', return_value=SimpleNamespace(free=0)), \
+             patch.object(self.operation, '_perform') as effect:
+            with self.assertRaises(self.module.BackupError):
+                self.operation.preflight_backup(self.target / 'backups/first')
+            effect.assert_not_called()
+        self.assertFalse((self.target / 'backups').exists())
 
 
 class BackupErrorForTest(Exception):

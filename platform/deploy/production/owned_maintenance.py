@@ -8,12 +8,13 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import time
 from urllib.parse import urlencode
 import uuid
 
-from backup import BackupError, BackupManager, VOLUME_SOURCES, WRITER_SERVICES, rewrite_authenticated_control
+from backup import BackupError, BackupManager, MIN_FREE_BYTES, VOLUME_SOURCES, WRITER_SERVICES, rewrite_authenticated_control
 from doctor import Doctor, DoctorRuntimeError, ProductProbe, ProbeStageError
 from owned_backup_verify import ControlledVerifier
 from owned_children import ChildJournal, ControllerProcessGuard
@@ -238,9 +239,7 @@ class OwnedMaintenance:
 
     def backup(self, output):
         output = Path(output)
-        if (output.parent != self.manager.target / 'backups' or not re.fullmatch(r'[A-Za-z0-9._-]{1,128}', output.name)
-                or os.path.lexists(output)):
-            raise OwnershipError('backup output must be an absent managed child')
+        self.preflight_backup(output)
         version = self.runtime.data['version']
         def create():
             self.manager._mkdir('backups')  # Only after the owned mutation intent is durable.
@@ -272,6 +271,21 @@ class OwnedMaintenance:
             os.rename(staging, output)
             return output
         return self._perform('backup', create)
+
+    def preflight_backup(self, output):
+        output = Path(output)
+        if (output.parent != self.manager.target / 'backups' or not re.fullmatch(r'[A-Za-z0-9._-]{1,128}', output.name)
+                or output.name in ('.', '..') or os.path.lexists(output)):
+            raise OwnershipError('backup output must be an absent managed child')
+        parent = self.manager._managed('backups')
+        if parent.exists() and not parent.is_dir(): raise BackupError('backup parent is not a directory')
+        if shutil.disk_usage(parent if parent.exists() else self.manager.target).free < MIN_FREE_BYTES:
+            raise BackupError('insufficient free space for backup')
+        key = self.runtime._private_bytes(self.manager._managed('shared/secrets/backup_encryption_key'), 1025)
+        key = key[:-1] if key.endswith(b'\n') else key
+        if (not 32 <= len(key) <= 1024 or key.strip() != key
+                or any(value in key for value in (b'\n', b'\r', b'\x00'))):
+            raise BackupError('backup encryption key is invalid')
 
     def verify_backup(self, backup):
         with self.cipher_session(Path(backup)) as (workspace, cipher):

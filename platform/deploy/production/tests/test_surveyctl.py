@@ -2671,6 +2671,32 @@ raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-inte
         operation.backup.assert_called_once_with(self.target / 'backups/owned')
         operation.doctor.assert_called_once_with()
 
+    def test_default_backup_known_preflight_failure_does_not_latch_or_leak(self):
+        from backup import BackupError
+        self.install()
+        manager = self.module.SurveyManager(self.target, runner=self.runner)
+        intent = (self.target / '.surveyctl/operation.intent').read_bytes()
+        operation = mock.Mock()
+        operation.preflight_backup.side_effect = BackupError('synthetic-sensitive-marker')
+        with mock.patch.object(manager, '_runtime'), \
+             mock.patch('owned_maintenance.OwnedMaintenance', return_value=operation):
+            with self.assertRaises(self.module.SurveyctlError) as error: manager.backup('preflight')
+        self.assertNotIn('synthetic-sensitive-marker', str(error.exception))
+        self.assertEqual(intent, (self.target / '.surveyctl/operation.intent').read_bytes())
+        operation.backup.assert_not_called()
+
+    def test_default_backup_unknown_failure_keeps_pending_and_returns_controlled_error(self):
+        from owned_maintenance import UncertainMaintenance
+        self.install()
+        manager = self.module.SurveyManager(self.target, runner=self.runner)
+        operation = mock.Mock()
+        operation.backup.side_effect = UncertainMaintenance('synthetic-sensitive-marker')
+        with mock.patch.object(manager, '_runtime'), \
+             mock.patch('owned_maintenance.OwnedMaintenance', return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError) as error: manager.backup('unknown')
+        self.assertNotIn('synthetic-sensitive-marker', str(error.exception))
+        self.assertEqual('pending', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
+
     def test_refuses_target_outside_owned_state_boundary(self):
         self.target.mkdir(parents=True)
         (self.target / "unmanaged.txt").write_text("keep")

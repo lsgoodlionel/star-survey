@@ -1255,6 +1255,32 @@ class SurveyManager:
             captured[Path(name).stem] = (executable, payload)
         return captured
 
+    def _owned_maintenance(self, version):
+        runtime = self._runtime(version)  # Complete source admission before the import below.
+        from owned_maintenance import OwnedMaintenance
+        try:
+            return OwnedMaintenance(runtime)
+        except Exception as exc:
+            self._raise_owned_failure(exc, 'controlled maintenance preflight failed; no helper was started')
+
+    @staticmethod
+    def _raise_owned_failure(exc, message):
+        # Only called after support admission. Preserve known integrity errors,
+        # while unknown child/exec/RPC state always remains a runtime failure.
+        from backup import BackupError
+        from restore import RestoreIntegrityError
+        from owned_crypto import UncertainCryptoChild
+        from owned_docker_exec import UncertainExec
+        from owned_maintenance import UncertainMaintenance
+        node, integrity, unknown = exc, False, False
+        for _ in range(8):
+            if node is None: break
+            integrity = integrity or isinstance(node, (BackupError, RestoreIntegrityError, IntegrityError))
+            unknown = unknown or isinstance(node, (UncertainCryptoChild, UncertainExec, UncertainMaintenance))
+            node = node.__cause__
+        if integrity and not unknown: raise IntegrityError(message) from exc
+        raise RuntimeHealthError(message) from exc
+
     def _load_owned_support(self, version):
         with _OWNED_IMPORT_LOCK:
             captured = self._verify_owned_support(version)  # Complete stdlib-only gate before the first exec.
@@ -1954,11 +1980,12 @@ class SurveyManager:
             self._reject_symlink_components(path)
         state = self._read_state(require_current=True)
         if self._runtime_factory is None:
-            runtime = self._runtime(state['version'])
-            from owned_maintenance import OwnedMaintenance
-            operation = OwnedMaintenance(runtime)
+            operation = self._owned_maintenance(state['version'])
             self._begin_operation()
-            return operation._perform('backup', lambda: operation.verify_backup(backup))
+            try:
+                return operation._perform('backup', lambda: operation.verify_backup(backup))
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled backup verification failed; preserve its receipts and marker')
         helper = self._checked_helper(state["version"], "restore.py")
         # The helper decrypts into a private temporary directory and can
         # outlive this controller; pure inventory checks above are read-only.
@@ -1980,11 +2007,16 @@ class SurveyManager:
         if output.exists() or output.is_symlink():
             raise InputError("backup destination already exists")
         if self._runtime_factory is None:
-            runtime = self._runtime(state['version'])
-            from owned_maintenance import OwnedMaintenance
-            operation = OwnedMaintenance(runtime)
+            operation = self._owned_maintenance(state['version'])
+            try:
+                operation.preflight_backup(output)
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled backup preflight failed; no helper was started')
             self._begin_operation()
-            return operation.backup(output)
+            try:
+                return operation.backup(output)
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled backup failed or remains unverified; preserve its receipts and marker')
         # Known configuration/integrity failures are read-only preflight errors,
         # not evidence of an interrupted helper. Do not latch them as pending.
         self._checked_helper(state["version"], "backup.py")
@@ -2338,9 +2370,7 @@ class SurveyManager:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
         if self._runtime_factory is None:
-            runtime = self._runtime(state['version'])
-            from owned_maintenance import OwnedMaintenance
-            operation = OwnedMaintenance(runtime)
+            operation = self._owned_maintenance(state['version'])
             self._begin_operation()
             try:
                 report = operation.doctor()
