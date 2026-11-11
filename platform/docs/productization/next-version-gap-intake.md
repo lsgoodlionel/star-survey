@@ -35,6 +35,28 @@ W01–W20 来自 2026-10-27 问卷星公开资料整理；其 Survey 对照使�
 | W19 | AI | 原蓝图明确排除 AI | 定义模型、数据授权、成本和评测后另立计划 |
 | W20 | 服务型业务 | 商业服务目录，不是软件功能 | 单列服务运营，不作菜单验收 |
 
+## 核心旅程逐项核查（截至 2026-11-11）
+
+此处“阶段已验”仅指现有本地或 CI 切片证据；所有项目的生产层仍按机器映射和对应旧阶段 Issue 判定。代码路径为可复核定位，不代表每个公开细项等价。
+
+| W 域与用户动作 | 当前判断 | 可复核证据 | 下一步准出 |
+| --- | --- | --- | --- |
+| W02 空白创建、资源与文件夹 | 已实现且有阶段验证 | [创建 API](../../apps/admin-web/src/shared/api/surveys.ts)、[工作台浏览器旅程](../../apps/admin-web/e2e/dashboard.spec.ts) | 正式身份候选复核资源权限 |
+| W02 模板、批量导入 | 已实现且有阶段验证 | [模板品牌浏览器旅程](../../apps/admin-web/e2e/template-branding.spec.ts)、[导入页](../../apps/admin-web/src/features/import/ImportPage.tsx) | 逐格式/失败行/版本候选复核 |
+| W02 题库、问卷转移、企业素材库 | 未知 | 公开目录已有；本轮未定位完整自有管理端旅程 | 拆原子任务并核对 API、界面和权限 |
+| W03 基础题与首批高级题 | 已实现且有阶段验证 | [编辑器](../../apps/admin-web/src/features/editor/EditorPage.tsx)提供 X/L/M/S/T 与三种主题；[Wave 5 双库旅程](../../apps/admin-web/e2e/authoring.spec.ts) | 其他题型逐项核对，不能按题型总数推断 |
+| W03 前置单选显示条件 | 已实现但未验收（草稿） | [网关 DSL 契约](../../contracts/survey-logic-dsl-v1.md)已有；[PR #110](https://github.com/lsgoodlionel/star-survey/pull/110)新增编辑器与浏览器测试，CI/复审待完成 | 精确 head 双库浏览器、独立复审、合并后再判阶段交付 |
+| W03 复杂条件、校验、计分 | 后端有契约；管理端旅程未验证 | [DSL v2 契约](../../contracts/survey-logic-dsl-v1.md)、[网关测试](../../tools/publish-gateway/tests/test_logic_publish.py)；当前编辑器无相应完整配置路径 | 逐项做安全可视配置、发布拒绝与答卷回读 |
+| W04 时间窗、验证码、邀请码、限制及网络规则 | 后端有契约；管理端旅程未验证 | [访问策略契约](../../contracts/survey-access-policy-v1.md)定义平台保存、网关编译、插件执行；编辑器未定位策略配置 UI | 先核对来源/权限，再分策略切片做双库浏览器及失败路径 |
+| W05 链接、二维码、名单投放 | 已实现且有阶段验证 | [投放工作区](../../apps/admin-web/src/features/delivery/DeliveryWorkspacePage.tsx)、[主作者浏览器旅程](../../apps/admin-web/e2e/authoring.spec.ts)、[#40](https://github.com/lsgoodlionel/star-survey/issues/40) | 正式运营身份不可变候选验收 |
+| W05 SMS 与其他邮件真实回执 | 已批准延期 | [#35](https://github.com/lsgoodlionel/star-survey/issues/35) | 用户提供供应商条件后独立联调，不以模拟结果关闭 |
+| W05 嵌入、小程序、更多外部渠道 | 未知 | 公开目录有细项，本轮未定位完整纵向旅程 | 先确认版本及入口，再核对安全边界 |
+| W06 跨版本答卷与多格式导出 | 已实现且有阶段验证；候选未完成 | [答卷查询](../../apps/admin-web/src/features/responses/ResponsesPage.tsx)、[导出旅程](../../apps/admin-web/e2e/template-branding.spec.ts)、[#38](https://github.com/lsgoodlionel/star-survey/issues/38) | 正式身份不可变候选逐格式语义、权限和故障恢复 |
+| W07 基础摘要 | 已实现且有阶段验证 | [ResponseQueryController](../../services/business/src/main/java/cn/mjy/platform/response/ResponseQueryController.java)、[答卷摘要浏览器旅程](../../apps/admin-web/e2e/authoring.spec.ts) | 正式数据身份/脱敏候选验证 |
+| W07 交叉分析、大屏、多问卷及 AI 报告 | 未纳入旧蓝图；实现范围未定 | [旧蓝图冻结范围](product-blueprint.md)明确不新增统计与 AI | 定指标、数据模型、权限和报告契约后立项 |
+| W17 模板、品牌、多语言与素材固定 | 已实现且有本地阶段验收 | [品牌契约](../../contracts/survey-branding-v1.md)、[双库浏览器旅程](../../apps/admin-web/e2e/template-branding.spec.ts)、[#36](https://github.com/lsgoodlionel/star-survey/issues/36) | 深度主题和自定义域名单列核查 |
+| W17 自定义域名、CSS/JS 扩展 | 未知 | 公开目录有细项，旧 Wave 2 阶段验收未声称覆盖 | 先做安全/租户边界与产品取舍 |
+
 ## 执行顺序与准出
 
 1. **范围决策**：用户已同意先核查并推进核心调查旅程 W02–W07、W17；W01–W20 是否为长期目标、哪些场景纳入下一版，仍待确定。旧阶段遗留按对应 Issue 跟踪；#41 已有 rc19 人工 VoiceOver 初步通过记录并关闭，不再列为当前待做。
