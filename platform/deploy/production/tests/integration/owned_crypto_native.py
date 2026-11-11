@@ -15,7 +15,7 @@ import uuid
 MODULES = ('owned_memory.py', 'owned_children.py', 'owned_crypto.py', 'owned_crypto_child.py',
            'runtime_ownership.py', 'owned_cipher_adapter.py', 'backup.py', 'restore.py', 'owned_backup_verify.py')
 CHECKS = ('roundTrip', 'truncatedCipherRejected', 'deadlineChildEnded', 'noNamedPlaintext',
-          'authenticatedRoundTrip', 'badHmacStartsNoChild', 'allSyntheticPayloadFormatsVerified')
+          'authenticatedRoundTrip', 'badHmacStartsNoChild', 'allSyntheticPayloadFormatsVerified', 'spawnHasNoPlaintextFDs')
 
 
 def passed(report, hashes):
@@ -32,7 +32,7 @@ def inside():
     sys.path.insert(0, '/tmp/code')
     from owned_memory import AnonymousWorkspace
     from owned_children import establish_parent_guard, read_process_identity, ChildJournal
-    from owned_crypto import OpenSSLProcess, KnownCryptoFailure
+    from owned_crypto import OpenSSLProcess, KnownCryptoFailure, LocalBackend, GuardedCryptoProcess
     from runtime_ownership import PrivateStore
     from owned_cipher_adapter import ControlledCipher, BackupError
     parent = read_process_identity(os.getppid())
@@ -68,6 +68,29 @@ def inside():
         report['truncatedCipherRejected'] = not accepted and failed['phase'] == 'failed' and failed['reason'] == 'exit'
         accepted, deadline = execute('encrypt', workspace, plain, timed, key, timeout=0.001)
         report['deadlineChildEnded'] = not accepted and deadline['phase'] == 'failed' and deadline['reason'] == 'deadline'
+        # Inspect the actual Linux child before sending its release packet:
+        # neither key/plaintext nor the other data/binary FD may be inherited.
+        store = PrivateStore(root, name='runtime-child-' + uuid.uuid4().hex + '.json')
+        journal = ChildJournal(store, guard, operation_id=str(uuid.uuid4()), installation_id=str(uuid.uuid4()))
+        backend = LocalBackend()
+        with workspace.export_files(inputs=(plain, key), output=workspace / 'guard-only') as leases, backend.binary() as binary:
+            descriptors = (leases[0].fd, leases[2].fd, leases[1].fd, binary)
+            identities = {(os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in descriptors}
+            token = journal.begin('openssl-encrypt')
+            process, child_start = None, None
+            try:
+                process = backend.spawn(guard.check(), descriptors)
+                child_start = backend.identity(process.pid)['start']
+                journal.created(token, process.pid, child_start)
+                process.control.settimeout(5)
+                ready = process.control.recv(64) == GuardedCryptoProcess.READY
+                child_fds = {(entry.stat().st_dev, entry.stat().st_ino)
+                             for entry in (Path('/proc') / str(process.pid) / 'fd').iterdir()}
+                report['spawnHasNoPlaintextFDs'] = ready and not identities.intersection(child_fds)
+            finally:
+                if process is not None:
+                    code = OpenSSLProcess(journal, guard)._end(process, child_start)
+                    journal.finished(token, code, succeeded=False, reason='bootstrap')
     encrypted_root = Path('/tmp/encrypted')
     encrypted_root.mkdir(mode=0o700)
     store = PrivateStore(root, name='runtime-child-' + uuid.uuid4().hex + '.json')
