@@ -30,6 +30,7 @@ jobs:
           set -euo pipefail
           image=python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
           docker pull "$image"
+          python3 -B platform/deploy/production/tests/integration/owned_memory_native.py --image "$image" > ownership-evidence/anonymous-memory.json
           python3 -B platform/deploy/production/tests/integration/owned_crypto_native.py --image "$image" > ownership-evidence/controlled-crypto.json
           python3 -B platform/deploy/production/tests/integration/runtime_controller_native.py --image "$image" > ownership-evidence/controller-cleanup.json
       - name: Recorded backup and refusal paths with real PostgreSQL and MariaDB

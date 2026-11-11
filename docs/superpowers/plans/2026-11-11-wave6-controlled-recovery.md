@@ -177,3 +177,9 @@ Owner明确批准一轮限定超时修复后，核对原head `bb6a89089c4ca35fba
 定向模型先红证明9秒stop响应被原5秒传输预算拒绝。修复仅为无body的固定POST `/containers/<64hex>/stop?t=20` 提供25秒响应等待，连接/发送保留5秒，其他请求保持原5秒；只接受204/304无body确认。该预算不是整次卸载硬时限，也不改变daemon的20秒grace。超时固定分类container-stop/docker-json，不保留路径、请求体或异常原文；原有unknown语义不变，无重试或CLI fallback。实际cleanup调用链的超预算负例证明只有一次stop、保留cleanup-pending及原资源、不发删除请求。10项runtime_docker、12项exec、4项维护证据回归通过。
 
 真实本机Linux Docker组件实验（`/tmp/survey-pr129-stop-budget-20261111.json`）：随机自建非root、network-none、无端口/宿主挂载、只读、ALL-drop容器忽略TERM；一次stop实际20.08秒收到确认、精确退出检查通过，再删除并核验无残留，未重放未知mutation。不代表旧CI唯一根因、完整卸载、数据库生命周期或四平台通过。修复后精确head仍需GitHub CI；恢复与发布门禁保留，未触碰Claude Release。
+
+Owner另明确批准FD身份安全限定修复。原head72c94843的真实维护/生产smoke43108925648三job均成功，artifact13895671965两场景逐项复核passed且Docker cleanup verified；仍为合成manifest/占位应用、非完整安装/正向doctor/四平台。完整CI43108925694原FD复用断言未成立及后续EBADF仍阻断；旧日志没有inode，不称已证明唯一ABA原因。
+
+匿名workspace现在为每个文件保留独立、不可继承且不导出的私有duplicate，持续钉住原inode，防止公开FD关闭后原对象释放并被重用。原FD与reference均需匹配已记录身份/私有匿名条件；原FD被外来对象替换时不关闭外来FD，只释放仍可独立验证的本方reference，workspace永久failed，不能恢复成成功。reference自身未知则保留未知状态，不猜测close。正常close/unlink及分配/protection失败均测试两FD释放；无磁盘fallback。边界明确不防御任意同进程代码并发篡改FD表，尤其检查后再替换或同时替换两FD，不承诺此类竞态安全。
+
+先红新增引用/释放测试，保留原replacement安全断言；18项便携workspace、82项owned组件测试通过。真实非root/ALL-drop/NNP/network-none/readonly Linux memfd入口扩为9项：identityPinnedAcrossReplacement、foreignReplacementRejected、noReferenceDescriptorLeaks等均true，exit0、源码前后SHA一致、临时容器cleanup verified，JSON `/tmp/survey-pr129-memfd-pin-20261111.json`。真实memfd路径验证原对象存活时外来同mode/uid匿名文件身份不同，不把它追溯当旧CI inode重用记录。入口已接既有ownership质量job，精确提交的Linux在线结果仍需核实，未扩大权限、未操作Release/候选/生产，全部资格门禁保留。

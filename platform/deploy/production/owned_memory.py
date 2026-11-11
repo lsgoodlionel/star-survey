@@ -3,6 +3,10 @@
 The production backend requires Linux memfd and kernel write seals. Exported
 descriptors must only go to the supervised child with an enforced RLIMIT_FSIZE;
 the lease does not itself start, stop or prove termination of that child.
+
+A private non-exported duplicate pins each file's inode until retirement. This
+prevents release/reallocation ABA; it does not defend against arbitrary code
+concurrently replacing this process's private descriptor table after a check.
 """
 from contextlib import contextmanager
 import fcntl
@@ -74,6 +78,7 @@ class AnonymousWorkspace:
         self._live()
         if entry['fd'] is None:
             raise FileNotFoundError('anonymous file is absent')
+        self._anchor_info(entry)
         try:
             info = os.fstat(entry['fd'])
         except OSError as exc:
@@ -82,6 +87,32 @@ class AnonymousWorkspace:
                 or info.st_nlink != 0 or info.st_uid != os.geteuid() or info.st_mode & 0o077):
             raise WorkspaceError('anonymous descriptor ownership changed')
         return info
+
+    def _anchor_info(self, entry):
+        try:
+            anchor = entry.get('anchor')
+            if type(anchor) is not int or anchor == entry['fd']:
+                raise WorkspaceError('anonymous identity reference is unavailable')
+            info = os.fstat(anchor)
+        except OSError as exc:
+            raise WorkspaceError('anonymous identity reference is unavailable') from exc
+        if (self._identity(info) != entry['identity'] or not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 0 or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                or os.get_inheritable(anchor)):
+            raise WorkspaceError('anonymous identity reference changed')
+        return info
+
+    def _close_anchor(self, entry):
+        self._anchor_info(entry)
+        os.close(entry['anchor'])
+        entry['anchor'] = None
+
+    def _retire(self, entry):
+        self._check(entry)
+        os.close(entry['fd'])
+        entry['fd'] = None
+        self._close_anchor(entry)
+        entry.update(identity=None, sealed=False)
 
     def _total(self):
         return sum(self._check(entry).st_size for entry in self._entries.values() if entry['fd'] is not None)
@@ -95,7 +126,7 @@ class AnonymousWorkspace:
             if name not in self._entries:
                 if len(self._entries) >= self.max_files or self._exports:
                     raise WorkspaceError('anonymous file set is full or exported')
-                self._entries[name] = {'fd': None, 'identity': None, 'sealed': False, 'handles': 0}
+                self._entries[name] = {'fd': None, 'anchor': None, 'identity': None, 'sealed': False, 'handles': 0}
             return AnonymousFile(self, name, self._entries[name])
 
     def _create(self, entry):
@@ -103,17 +134,22 @@ class AnonymousWorkspace:
         if self._exports:
             raise WorkspaceError('cannot allocate during a child export')
         fd = self._backend.create('survey-plain-' + self._nonce)
+        anchor = None
         try:
             os.set_inheritable(fd, False)
             os.fchmod(fd, 0o600)
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 0 or info.st_size != 0:
                 raise WorkspaceError('backend did not create an empty anonymous file')
-            entry.update(fd=fd, identity=self._identity(info), sealed=False)
+            anchor = os.dup(fd)  # Python's dup is non-inheritable; never exported.
+            os.set_inheritable(anchor, False)
+            entry.update(fd=fd, anchor=anchor, identity=self._identity(info), sealed=False)
             self._check(entry)
         except BaseException:
+            if anchor is not None:
+                os.close(anchor)
             os.close(fd)
-            entry.update(fd=None, identity=None)
+            entry.update(fd=None, anchor=None, identity=None)
             raise
 
     @contextmanager
@@ -166,15 +202,20 @@ class AnonymousWorkspace:
                 raise WorkspaceError('workspace cleanup is unverified or still in use')
             failed = False
             for entry in self._entries.values():
-                if entry['fd'] is None:
+                if entry['fd'] is None and entry.get('anchor') is None:
                     continue
                 try:
-                    self._check(entry)
-                    os.close(entry['fd'])
-                    entry.update(fd=None, identity=None)
+                    self._retire(entry)
                 except (OSError, WorkspaceError):
                     # Never close a descriptor that was replaced by another file.
                     failed = True
+                    # Release only the independently validated private reference;
+                    # never the foreign public FD. The workspace stays failed.
+                    if entry.get('anchor') is not None:
+                        try:
+                            self._close_anchor(entry)
+                        except (OSError, WorkspaceError):
+                            pass  # Unknown private reference remains unverified.
             self._close_failed = failed
             if failed:
                 raise WorkspaceError('anonymous descriptor cleanup could not be verified')
@@ -245,9 +286,7 @@ class AnonymousFile:
                 if missing_ok:
                     return
                 raise FileNotFoundError('anonymous file is absent')
-            workspace._check(entry)
-            os.close(entry['fd'])
-            entry.update(fd=None, identity=None, sealed=False)
+            workspace._retire(entry)
 
     @contextmanager
     def export_for_child(self, *, write):

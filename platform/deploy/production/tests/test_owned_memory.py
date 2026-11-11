@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 SOURCE = Path(__file__).resolve().parents[1] / 'owned_memory.py'
@@ -145,6 +146,75 @@ class AnonymousWorkspaceTest(unittest.TestCase):
             finally:
                 if original != foreign.fileno():
                     os.close(original)
+
+    def test_private_live_reference_pins_identity_and_is_released_on_rejection(self):
+        workspace = self.module.AnonymousWorkspace(_backend=PortableFDBackend())
+        path = workspace / 'payload'
+        with path.open('xb') as handle: handle.write(b'owned')
+        original, anchor = path._entry['fd'], path._entry.get('anchor')
+        self.assertIsInstance(anchor, int)
+        self.assertNotEqual(original, anchor)
+        self.assertFalse(os.get_inheritable(anchor))
+        identity = os.fstat(anchor).st_dev, os.fstat(anchor).st_ino
+        os.close(original)
+        foreign = PortableFDBackend().create('foreign')
+        if foreign != original: os.dup2(foreign, original, inheritable=False)
+        try:
+            os.pwrite(original, b'foreign', 0)
+            self.assertEqual(b'owned', os.pread(anchor, 5, 0))
+            self.assertNotEqual(identity, (os.fstat(original).st_dev, os.fstat(original).st_ino))
+            for operation in (path.read_bytes, path.unlink, workspace.close, workspace.close):
+                with self.assertRaises(self.module.WorkspaceError): operation()
+            self.assertEqual(b'foreign', os.pread(original, 7, 0))
+            with self.assertRaises(OSError): os.fstat(anchor)
+        finally:
+            if foreign != original: os.close(original)
+            os.close(foreign)
+
+    def test_unlink_and_normal_close_release_both_noninheritable_descriptors(self):
+        workspace = self.workspace()
+        for number in range(8):
+            path = workspace / str(number)
+            with path.open('xb') as handle: handle.write(b'owned')
+            fds = path._entry['fd'], path._entry.get('anchor')
+            self.assertTrue(all(type(fd) is int and not os.get_inheritable(fd) for fd in fds))
+            path.unlink()
+            for fd in fds:
+                with self.assertRaises(OSError): os.fstat(fd)
+        path = workspace / 'last'
+        with path.open('xb') as handle: handle.write(b'owned')
+        fds = path._entry['fd'], path._entry['anchor']
+        workspace.close()
+        for fd in fds:
+            with self.assertRaises(OSError): os.fstat(fd)
+
+    def test_reference_allocation_failure_releases_original_descriptor(self):
+        fd = PortableFDBackend().create('allocation-fault')
+        backend = mock.Mock()
+        backend.create.return_value = fd
+        workspace = self.module.AnonymousWorkspace(_backend=backend)
+        with mock.patch.object(self.module.os, 'dup', side_effect=OSError('synthetic allocation failure')):
+            with self.assertRaises(OSError): (workspace / 'payload').open('xb')
+        with self.assertRaises(OSError): os.fstat(fd)
+        workspace.close()
+
+    def test_reference_protection_failure_releases_both_allocated_descriptors(self):
+        fd = PortableFDBackend().create('protection-fault')
+        backend = mock.Mock()
+        backend.create.return_value = fd
+        duplicated, duplicate = [], os.dup
+        def record_duplicate(value):
+            result = duplicate(value)
+            duplicated.append(result)
+            return result
+        workspace = self.module.AnonymousWorkspace(_backend=backend)
+        with mock.patch.object(self.module.os, 'dup', side_effect=record_duplicate), \
+             mock.patch.object(self.module.os, 'set_inheritable', side_effect=[None, OSError('synthetic protection failure')]):
+            with self.assertRaises(OSError): (workspace / 'payload').open('xb')
+        self.assertEqual(1, len(duplicated))
+        for value in (fd, *duplicated):
+            with self.assertRaises(OSError): os.fstat(value)
+        workspace.close()
 
     def test_no_disk_fallback_when_linux_memfd_is_unavailable(self):
         from unittest import mock

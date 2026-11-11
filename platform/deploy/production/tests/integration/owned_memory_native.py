@@ -17,7 +17,9 @@ import uuid
 
 
 CHECKS = ('privateAnonymousNonInheritable', 'kernelWriteSealEnforced',
-          'childBudgetEnforced', 'originalDescriptorGone', 'noNamedWorkspaceFiles')
+          'childBudgetEnforced', 'originalDescriptorGone', 'noNamedWorkspaceFiles',
+          'privateReferenceNonInheritable', 'identityPinnedAcrossReplacement',
+          'foreignReplacementRejected', 'noReferenceDescriptorLeaks')
 CHILD_BUDGET = '''
 import errno, os, resource, signal, sys
 fd, limit = int(sys.argv[1]), int(sys.argv[2])
@@ -50,6 +52,8 @@ def native_check():
             output.write(b'fixture')
         with plain.export_for_child(write=False) as lease:
             original = lease.fd
+            anchor = plain._entry['anchor']
+            summary['privateReferenceNonInheritable'] = (anchor != original and not os.get_inheritable(anchor))
             info = os.fstat(original)
             identity = info.st_dev, info.st_ino
             summary['privateAnonymousNonInheritable'] = (info.st_nlink == 0
@@ -66,12 +70,42 @@ def native_check():
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
             summary['childBudgetEnforced'] = (result.returncode == 23
                 and os.fstat(lease.fd).st_size <= lease.max_file_bytes)
+        references = (anchor, output._entry['anchor'])
         workspace.close()
+        released = []
+        for fd in references:
+            try: os.fstat(fd); released.append(False)
+            except OSError as exc: released.append(exc.errno == errno.EBADF)
         try:
             current = os.fstat(original)
             summary['originalDescriptorGone'] = (current.st_dev, current.st_ino) != identity
         except OSError as exc:
             summary['originalDescriptorGone'] = exc.errno == errno.EBADF
+        before = set(os.listdir('/proc/self/fd'))
+        replacement = module.AnonymousWorkspace(max_bytes=32)
+        path = replacement / 'identity'
+        with path.open('xb') as handle: handle.write(b'owned')
+        public, reference = path._entry['fd'], path._entry['anchor']
+        identity = os.fstat(reference).st_dev, os.fstat(reference).st_ino
+        os.close(public)
+        foreign = os.memfd_create('foreign-fixture', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+        os.fchmod(foreign, 0o600)
+        if foreign != public: os.dup2(foreign, public, inheritable=False)
+        try:
+            os.pwrite(public, b'foreign', 0)
+            summary['identityPinnedAcrossReplacement'] = (os.pread(reference, 5, 0) == b'owned'
+                and identity != (os.fstat(public).st_dev, os.fstat(public).st_ino))
+            rejected = []
+            for action in (path.read_bytes, path.unlink, replacement.close, replacement.close):
+                try: action(); rejected.append(False)
+                except module.WorkspaceError: rejected.append(True)
+            summary['foreignReplacementRejected'] = all(rejected) and os.pread(public, 7, 0) == b'foreign'
+            try: os.fstat(reference); released.append(False)
+            except OSError as exc: released.append(exc.errno == errno.EBADF)
+        finally:
+            if foreign != public: os.close(public)
+            os.close(foreign)
+        summary['noReferenceDescriptorLeaks'] = all(released) and set(os.listdir('/proc/self/fd')) == before
         summary['noNamedWorkspaceFiles'] = not list(Path('/tmp').iterdir())
     except Exception:
         summary['failure'] = 'native-check-failed'
