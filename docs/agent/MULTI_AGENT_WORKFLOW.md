@@ -1,6 +1,6 @@
 # 多 Agent / 多人协同开发工作流（star-survey 实施版）
 
-> 状态：**草案 v3（2026-11-11）**。v1 由 Claude Code 起草，v2、v3 按 Codex 的两轮独立协议审查（[PR #115 评论](https://github.com/lsgoodlionel/star-survey/pull/115)）修订，待 Owner 决定。
+> 状态：**草案 v4（2026-11-11）**。v1 由 Claude Code 起草，v2–v4 按 Codex 的三轮独立协议审查（[PR #115 评论](https://github.com/lsgoodlionel/star-survey/pull/115)）修订，待 Owner 决定。
 > 关系：[`AGENTS.md`](../../AGENTS.md) 是**硬规则**（必须遵守）；本文是**协作协议**（如何分工、交接、留痕）。两者冲突时以 `AGENTS.md` 为准。
 > 来源：通用的 GitHub 多 Agent 协作方案，加上 2026-11-02 至 11-11 间 Claude Code 与 Codex 协作推进 Wave 0–6 和首个 Release 的实际经验（#37–#41、#83–#117）。
 > 本文中的机制**都是约定或建议**，标注「可选」的自动化在 Owner 批准前不会实施。
@@ -205,7 +205,7 @@
 - 人工批准写成**格式固定的评论**，绑定 run、tag、commit、manifest SHA 和证据评论的 SHA256；
 - 工作流检查它能观察到的字段：作者关联是 `OWNER`、时间顺序正确、内容逐字匹配。
 
-**这类检查的边界**：在 Agent 与 Owner 共用 GitHub 身份期间（§2），机器检查只能证明**账号和记录格式**符合要求，**不能单独证明评论由真人发出，或者已获真人逐字确认**。真人实际批准以及防冒用，依赖独立的权限或审批边界（例如 §11 Q1、§12 P3 的独立身份，或者只有 Owner 能执行的动作）。以后新增人工闸门时，要按具体的威胁模型和实际权限来设计验证方式，不要直接套用这个格式。
+**这类检查的边界**：在 Agent 与 Owner 共用 GitHub 身份期间（§2），机器检查只能证明**账号和记录格式**符合要求，**不能单独证明评论由真人发出，或者已获真人逐字确认**。真人实际批准以及防冒用，依赖独立的权限或审批边界（例如 §11 Q1、§12 P3 的 GitHub App 独立身份，或者只有 Owner 能执行的动作）。注意：Owner 创建的 PAT 仍然代表 Owner 本人，换 PAT 不能区分人和 Agent；即使改用独立的 App 身份，也不自动等于独立的真人审批，信任边界要单独设计和验证。以后新增人工闸门时，要按具体的威胁模型和实际权限来设计验证方式，不要直接套用这个格式。
 
 ---
 
@@ -251,7 +251,9 @@
 > 以下都是**建议，不是已启用的机制**。凡是需要新增 Action、权限或运行成本的，都必须经过 Owner 批准（§12 P2/P3）。
 
 ### Q1 Agent 身份与最小权限
-- **方向**：每个 Agent 一个 GitHub App 或 fine-grained PAT，按仓库和权限做最小授权，不授予 `administration`，也不授予 Release 发布权限。
+- **方向**：每个 Agent 一个 GitHub App（用 installation token 以 App 自身身份行动），按仓库和权限做最小授权，不授予 `administration`。
+- **PAT 不是独立身份**：fine-grained PAT 绑定创建它的用户（[GitHub 文档](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)）。Owner 为 Agent 创建多个 PAT 只能**限制凭据的权限范围**，操作记录上仍是 Owner 本人。App 的 user token 也代表用户。
+- **Release 权限不能简单剥离**：[创建 Release 的 API](https://docs.github.com/en/rest/releases/releases#create-a-release) 要求的就是 `Contents: write`，有这个权限的凭据在其他条件允许时可能直接创建 Release。所以「给 Contents 写但不给 Release 发布权限」只是**待验证的目标**，需要额外的架构或控制（例如 tag/Release 相关的 ruleset、发布只走受保护的工作流和 environment 审批），并实际测试，不能只靠不勾选某项权限来实现。
 - **要注意**：
   - `contents: write` **本身不能按分支前缀限定**。想让 Agent 只能写自己前缀的分支，要配合 ruleset 或分支保护单独设计和验证；
   - **App 身份不能直接当作独立的人类审批**。ruleset 里「需要审批」的规则，要明确规定由谁、以什么身份来批准。
@@ -319,7 +321,7 @@
 | **P0（只靠约定）** | 本文定稿并合并；按 §5、§7、§9 执行 | Claude、Codex | Owner 批准本文 |
 | **P1（模板与标签）** | 新增 §5 列出的标签；在 `.github/ISSUE_TEMPLATE/` 下新增「任务」「交接」「环境绑定任务」三个模板（不动上游 PR 模板）；一行 `CLAUDE.md`；可选的 `.github/agent-lanes.yml` | Claude 起草，Owner 批准 | — |
 | **P2（轻量自动化，可选）** | Q3、Q4、Q5 中「以后可选」的部分，逐项单独决定 | 起草后由 Owner 决定 | **Owner 明确推翻或细化 2026-10-28 的「移除治理 CI」决定**，并逐项确认权限和成本 |
-| **P3（身份与保护）** | 每个 Agent 一个 App 或 PAT；为 `main` 建 ruleset（要求 PR、要求审批、要求检查通过、禁止 force push）；Release 发布权限只保留给 Owner | Owner | Q1 的设计与验证完成 |
+| **P3（身份与保护）** | 每个 Agent 一个 GitHub App 身份（PAT 只能限权，不能区分身份）；为 `main` 建 ruleset（要求 PR、要求审批、要求检查通过、禁止 force push）；目标是 Release 发布只由 Owner 执行，具体靠什么控制实现、是否有效，要先设计并实测（§11 Q1） | Owner | Q1 的设计与验证完成 |
 
 ---
 
