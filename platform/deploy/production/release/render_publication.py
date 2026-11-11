@@ -62,11 +62,10 @@ def render_body(
         f"- `{record['name']}`: `sha256:{record['sha256']}`"
         for _, record in sorted(bundles.items())
     )
-    image_lines = "\n".join(
-        f"- `{key}`: `{images[key]}`"
-        for key in ("ADMIN_IMAGE", "PLATFORM_IMAGE", "PUBLISH_GATEWAY_IMAGE")
-        if key in images
-    )
+    application_images = ("ADMIN_IMAGE", "PLATFORM_IMAGE", "PUBLISH_GATEWAY_IMAGE", "ENGINE_IMAGE")
+    if not isinstance(images, dict) or any(not isinstance(images.get(key), str) for key in application_images):
+        fail("release manifest application image identity is incomplete")
+    image_lines = "\n".join(f"- `{key}`: `{images[key]}`" for key in application_images)
     stable = STABLE_TAG.fullmatch(target_tag) is not None
     if stable:
         channel = f"""## Stable promotion

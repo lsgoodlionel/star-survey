@@ -305,6 +305,7 @@ class PublicationMetadataAndReconciliationTest(unittest.TestCase):
                 "ADMIN_IMAGE": "ghcr.io/example/admin@sha256:" + "3" * 64,
                 "PLATFORM_IMAGE": "ghcr.io/example/platform@sha256:" + "4" * 64,
                 "PUBLISH_GATEWAY_IMAGE": "ghcr.io/example/gateway@sha256:" + "5" * 64,
+                "ENGINE_IMAGE": "ghcr.io/example/engine@sha256:" + "6" * 64,
             },
         }
         readiness = {"promotable": True, "reason": "upgrade-verified", "candidateCommit": self.commit}
@@ -327,6 +328,26 @@ class PublicationMetadataAndReconciliationTest(unittest.TestCase):
         ], text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
         return body, metadata, json.loads(metadata.read_text(encoding="utf-8"))
+
+    def test_verified_identity_lists_every_application_image_digest(self):
+        # The engine image is pinned in release.json and verified by verify_release.sh;
+        # the published notes must let operators compare all four application digests.
+        manifest = json.loads((self.assets / "release.json").read_text(encoding="utf-8"))
+        body, _, _ = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")
+        text = body.read_text(encoding="utf-8")
+        for key in ("ADMIN_IMAGE", "PLATFORM_IMAGE", "PUBLISH_GATEWAY_IMAGE", "ENGINE_IMAGE"):
+            with self.subTest(image=key):
+                self.assertIn(f"- `{key}`: `{manifest['images'][key]}`", text)
+        del manifest["images"]["ENGINE_IMAGE"]
+        (self.assets / "release.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        result = subprocess.run([
+            "python3", str(RENDER_PUBLICATION_PATH), "--assets", str(self.assets),
+            "--repository", "example/project", "--target-tag", "v1.2.3-rc.4", "--source-tag", "v1.2.3-rc.4",
+            "--target-commit", self.commit, "--output-body", str(self.root / "missing.md"),
+            "--output-metadata", str(self.root / "missing.json"),
+        ], text=True, capture_output=True, check=False)
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.root / "missing.md").exists())
 
     def test_rc_and_stable_metadata_are_channel_specific_and_commit_bound(self):
         rc_body, _, rc = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")
