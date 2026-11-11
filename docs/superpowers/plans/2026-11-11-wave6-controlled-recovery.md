@@ -91,3 +91,11 @@ Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→h
 [Linux手册](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)说明此设置在fork子进程中清除、通常跨exec保留，父线程提前死亡还需另行检查；实验结果与此一致。因此该机制**不足以独立证明任意旧helper收束**：需要已审查的每一条实际子进程启动及Docker exec路径都纳入可信bootstrap/receipt，不能把PGID/父死亡约束名称或本实验exit0当完整证明。尚未接入controller/旧helper，也没有验证真实备份/解密明文、Docker exec生命周期、Ubuntu四平台或崩溃恢复；临时合成文件和进程实验不解除任何门禁。
 
 组件增量复核另确认非purge mutation 的后验条件缺口：effect成功后原卷消失/可观察指纹改变仍可写ready。8个operation×丢失/替换负例先红；修改为每个原卷名称/指纹必须在post snapshot原样保留，允许新增已声明卷，异常保持mutation-pending。37测试通过；这只证明可观察身份保留，不证明卷内容未被修改，也不解决同名重建指纹碰撞局限。
+
+### 接入前置：匿名明文工作区（实现未接控制器）
+
+`owned_memory.py`的生产backend仅允许Linux memfd及内核写封印，明确拒绝磁盘回退；私有0600、无目录链接、父进程FD默认close-on-exec。默认总量256MiB、32个逻辑文件，有界参数只供内部受控调用，不承诺任意大小备份。父进程写入前检查总容量；子进程导出提供输入封写及输出剩余预算，实际runner必须执行RLIMIT并验证子进程结束。导出或文件仍占用时不能报关闭成功，FD被替换不能关闭外来文件。匿名文件/opaque child argument拒绝普通字符串/文件路径转换，旧subprocess不能悄悄把对象repr当明文磁盘文件名；必须由受控runner解析授权FD。
+
+14项定向回归通过（开发机portable匿名FD注入仅验证逻辑，不冒称memfd/seal证明）。真实入口：`python3 -B platform/deploy/production/tests/integration/owned_memory_native.py --image python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e`。Docker29.9.3/Linux arm64、随机65534用户容器、无网络/主机挂载/端口、cap-drop ALL及只读rootfs/有限tmpfs，未拉镜像。最终模块SHA`46ce9e30cd42fc68a6964b8dd1254af256ba3ca7336c07c81b60724dd67e9154`、probe SHA`bede3eed5ced3de43650873da498002435fc093b6f89abb5bdd421c9fa7dbd19`，运行前后/容器内均匹配；内核封印拒绝写、RLIMIT拒绝超量、原FD身份消失、无命名工作区文件及测试容器清理均通过，exit0。非作者只读复核无确认新增阻断，未代跑实测。
+
+该lease不启动/终止子进程，不能仅凭关闭父FD证明其他进程无副本；必须继续与实际helper/crypto runner及Docker exec回执组合验证。当前不改控制器、旧包、备份格式或Release，未打包/未接原生门禁，不将本内核实验标为明文生命周期、B清理或stable六项证明通过。
