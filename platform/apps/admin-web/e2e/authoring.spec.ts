@@ -422,6 +422,157 @@ test('Wave 5 advanced questions survive authoring, isolated preview and publishe
   await expect(page.locator('.response-answers')).toContainText('C2');
 });
 
+test('a single-choice display condition is authored and works in isolated preview', async ({ page }) => {
+  test.setTimeout(360_000);
+  const metadata = await readMetadata();
+  const owner = await readToken();
+  const result = await readResult();
+  await login(page, owner, metadata);
+  await navigateWithinApp(page, `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`);
+  await createResource(page, '新建问卷', '创建问卷', '条件显示验收');
+  const surveyId = surveyIdFrom(page.url());
+
+  await page.getByLabel('添加题型').selectOption('L');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByLabel('题目编码')).toHaveValue('Q1');
+  await fillAction(page.getByLabel('题目编码'), 'QTRIGGER');
+  await fillAction(page.getByLabel('题目文本'), '是否继续');
+  await page.getByLabel('添加题型').selectOption('S');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByLabel('题目编码')).toHaveValue('Q1');
+  await fillAction(page.getByLabel('题目文本'), '请说明原因');
+  await expect(page.getByLabel('前置题目').locator('option[value="QTRIGGER"]')).toHaveCount(1);
+  await page.getByLabel('前置题目').selectOption('QTRIGGER');
+  await expect(page.getByLabel('触发选项')).toHaveValue('A1');
+  const saveRequest = page.waitForRequest((request) => request.url().includes(`/v1/surveys/${surveyId}/draft`)
+    && request.method() === 'PUT');
+  const reloadResponse = page.waitForResponse((response) => response.url().includes(`/v1/surveys/${surveyId}/draft`)
+    && response.request().method() === 'GET');
+  await saveAndReloadDraft(page, surveyId);
+  const submitted = (await saveRequest).postDataJSON() as { definition: { groups: Array<{ questions: Array<{ uuid: string; code: string; condition?: string }> }> } };
+  const loaded = await (await reloadResponse).json() as { definition: { groups: Array<{ questions: Array<{ uuid: string; code: string; condition?: string }> }> } };
+  expect(submitted.definition.groups[0].questions[1].code).toBe('QTRIGGER');
+  const expectedCondition = `q("${submitted.definition.groups[0].questions[1].uuid}") == "A1"`;
+  expect(submitted.definition.groups[0].questions[2].condition).toBe(expectedCondition);
+  expect(loaded.definition.groups[0].questions[1].code).toBe('QTRIGGER');
+  expect(loaded.definition.groups[0].questions[2].condition).toBe(expectedCondition);
+  await clickAction(page.getByRole('button', { name: /请说明原因/ }));
+  await expect(page.getByLabel('前置题目')).toHaveValue('QTRIGGER');
+
+  await clickAction(page.getByRole('link', { name: '快速预览' }));
+  await clickAction(page.getByRole('button', { name: '创建真实预览' }));
+  await expect(page.getByText('真实预览已就绪')).toBeVisible({ timeout: 210_000 });
+  const popup = page.context().waitForEvent('page');
+  await clickAction(page.getByRole('button', { name: '在新窗口打开真实预览' }));
+  const preview = await popup;
+  await preview.waitForLoadState('domcontentloaded');
+  for (let step = 0; step < 4 && await preview.locator('input[type="radio"]:visible').count() === 0; step += 1) {
+    await limeSurveyAdvanceButton(preview).click();
+    await preview.waitForLoadState('domcontentloaded');
+  }
+  await expect(preview.getByText('请说明原因')).toBeHidden();
+  await preview.locator('input[type="radio"]:visible').first().check();
+  await expect(preview.getByText('请说明原因')).toBeVisible();
+  await preview.close();
+  await clickAction(page.getByRole('button', { name: '结束真实预览' }));
+  await expect(page.getByText('真实预览已结束')).toBeVisible({ timeout: 210_000 });
+
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
+  await clickAction(page.getByRole('button', { name: '提交审批' }));
+  await clickAction(page.getByRole('button', { name: '批准申请' }));
+  await clickAction(page.getByRole('button', { name: '发布问卷' }));
+  await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+  await fillAction(page.getByLabel('链接名称'), '条件显示正式链接');
+  const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`) && response.request().method() === 'POST');
+  await clickAction(page.getByRole('button', { name: '创建链接' }));
+  const link = await readCreatedDeliveryLink(await linkResponse);
+  const respondent = await page.context().newPage();
+  await respondent.goto(link.url);
+  await respondent.waitForLoadState('domcontentloaded');
+  for (let step = 0; step < 4 && await respondent.locator('input[type="radio"]:visible').count() === 0; step += 1) {
+    await limeSurveyAdvanceButton(respondent).click();
+    await respondent.waitForLoadState('domcontentloaded');
+  }
+  await expect(respondent.getByText('请说明原因')).toBeHidden();
+  await respondent.locator('input[type="radio"]:visible').first().check();
+  await expect(respondent.getByText('请说明原因')).toBeVisible();
+  await completeLimeSurvey(respondent);
+  await respondent.close();
+  await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '答卷与导出' }));
+  await expect(async () => {
+    await clickAction(page.getByRole('button', { name: '刷新答卷数据' }));
+    await expect(page.getByLabel('已完成 1')).toBeVisible();
+  }).toPass({ timeout: 60_000, intervals: [1000, 2000, 5000] });
+});
+
+test('W04 time windows persist through authoring and govern published responses', async ({ page }) => {
+  test.setTimeout(720_000);
+  const metadata = await readMetadata();
+  const owner = await readToken();
+  const result = await readResult();
+  const me = await login(page, owner, metadata);
+  const scenarios = [
+    { name: '当前开放', opensAt: shanghaiLocalTime(-1440), closesAt: shanghaiLocalTime(1440), outcome: 'allow' },
+    { name: '未来开放', opensAt: shanghaiLocalTime(1440), closesAt: '', outcome: 'future' },
+    { name: '已经截止', opensAt: '', closesAt: shanghaiLocalTime(-1440), outcome: 'closed' },
+  ] as const;
+  for (const scenario of scenarios) {
+    await navigateWithinApp(page, `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`);
+    await createResource(page, '新建问卷', '创建问卷', `时间窗${scenario.name}验收`);
+    const surveyId = surveyIdFrom(page.url());
+    await page.getByLabel('添加题型').selectOption('L');
+    await clickAction(page.getByRole('button', { name: '添加题目' }));
+    await expect(page.getByLabel('题目编码')).toHaveValue('Q1');
+    await fillAction(page.getByLabel('题目文本'), `时间窗${scenario.name}题目`);
+    await clickAction(page.getByLabel('启用开放时间窗'));
+    if (scenario.opensAt) await fillAction(page.getByLabel('开放时间', { exact: true }), scenario.opensAt);
+    if (scenario.closesAt) await fillAction(page.getByLabel('截止时间', { exact: true }), scenario.closesAt);
+    await fillAction(page.getByLabel('时区', { exact: true }), 'Asia/Shanghai');
+    const reloaded = page.waitForResponse((response) => response.url().includes(`/v1/surveys/${surveyId}/draft`)
+      && response.request().method() === 'GET');
+    await saveAndReloadDraft(page, surveyId);
+    const draft = await (await reloaded).json() as { definition: { policy: { window: { opensAt?: string; closesAt?: string; timezone: string } } } };
+    expect(draft.definition.policy.window).toEqual({
+      ...(scenario.opensAt ? { opensAt: scenario.opensAt } : {}),
+      ...(scenario.closesAt ? { closesAt: scenario.closesAt } : {}),
+      timezone: 'Asia/Shanghai',
+    });
+    await expect(page.getByLabel('启用开放时间窗')).toBeChecked();
+    await expect(page.getByLabel('时区', { exact: true })).toHaveValue('Asia/Shanghai');
+    await clickAction(page.getByRole('link', { name: '发布与版本' }));
+    await clickAction(page.getByRole('button', { name: '提交审批' }));
+    await clickAction(page.getByRole('button', { name: '批准申请' }));
+    await clickAction(page.getByRole('button', { name: '发布问卷' }));
+    await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+    await fillAction(page.getByLabel('链接名称'), `时间窗${scenario.name}链接`);
+    const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`) && response.request().method() === 'POST');
+    await clickAction(page.getByRole('button', { name: '创建链接' }));
+    const link = await readCreatedDeliveryLink(await linkResponse);
+    const engineSid = await publishedEngineSid(surveyId, me.tenantId);
+    const responseCount = async () => Number(await platformQuery(me.tenantId,
+      `SELECT count(*) FROM response_projection WHERE tenant_id='${me.tenantId}' AND survey_id=${engineSid};`));
+    const responsesBefore = await responseCount();
+    const respondent = await page.context().newPage();
+    await respondent.goto(link.url);
+    if (scenario.outcome === 'allow') {
+      await completeLimeSurvey(respondent);
+      await expect.poll(responseCount, { timeout: 60_000 }).toBe(responsesBefore + 1);
+    } else {
+      await expect(respondent.locator('body')).toContainText(scenario.outcome === 'future' ? '尚未开放' : '截止');
+      expect(await responseCount()).toBe(responsesBefore);
+    }
+    await respondent.close();
+  }
+});
+
+function shanghaiLocalTime(minutesFromNow: number): string {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
+    day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(Date.now() + minutesFromNow * 60_000));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
+}
+
 async function answerAdvancedQuestions(page: Page) {
   await expect(page.locator('[data-mjy-collapsible]')).toBeAttached({ timeout: 30_000 });
   await clickAction(page.getByText('栏目标题验收', { exact: true }));

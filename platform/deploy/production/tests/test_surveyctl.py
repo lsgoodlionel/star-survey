@@ -1,4 +1,5 @@
 import contextlib
+import fcntl
 import hashlib
 import hmac
 import importlib.util
@@ -1605,6 +1606,154 @@ class SurveyctlTest(unittest.TestCase):
             source_dir=PRODUCTION_DIR,
         )
 
+    def test_group_writable_empty_target_is_rejected_before_control_creation(self):
+        self.target.mkdir(mode=0o775)
+        self.target.chmod(0o775)
+        with self.assertRaises(self.module.IntegrityError):
+            self.install()
+        self.assertFalse((self.target / ".surveyctl").exists())
+        self.assertEqual([], self.runner.commands)
+
+    def test_unsafe_installed_paths_cannot_launch_helpers(self):
+        relatives = (".", "releases", "releases/0.2.0", "releases/0.2.0/backup.py",
+                     "releases/0.2.0/restore.py", "releases/0.2.0/doctor.py")
+        for index, relative in enumerate(relatives):
+            for action in ("backup", "doctor", "verify"):
+                self.target = self.root / f"unsafe-{index}-{action}"
+                self.install()
+                path = self.target / relative
+                path.chmod(stat.S_IMODE(path.stat().st_mode) | 0o020)
+                self.runner.commands.clear()
+                manager = self.manager()
+                with self.subTest(path=relative, action=action):
+                    with self.assertRaises(self.module.IntegrityError):
+                        if action == "backup":
+                            manager.backup("unsafe")
+                        elif action == "doctor":
+                            manager.doctor()
+                        else:
+                            backup = self.target / "backups/sample"
+                            write_fake_backup(backup)
+                            with manager._mutation_lock():
+                                manager._verify_backup(backup, "0.2.0", "920")
+                    self.assertEqual([], self.runner.commands)
+
+    def test_backup_preflight_failure_preserves_complete_intent_and_allows_retry(self):
+        for index, failure in enumerate(("helper-mode", "release-mode", "helper-content")):
+            self.target = self.root / f"preflight-{index}"
+            self.install()
+            intent = self.target / ".surveyctl/operation.intent"
+            before = intent.read_bytes()
+            path = self.target / ("releases/0.2.0" if failure == "release-mode" else "releases/0.2.0/backup.py")
+            mode = stat.S_IMODE(path.stat().st_mode)
+            content = path.read_bytes() if path.is_file() else None
+            if failure == "helper-content":
+                path.write_bytes(b"# harmless changed helper\n")
+            else:
+                path.chmod(mode | 0o020)
+            self.runner.commands.clear()
+            with self.subTest(failure=failure):
+                with self.assertRaises(self.module.IntegrityError):
+                    self.manager().backup("preflight-only")
+                self.assertEqual(before, intent.read_bytes())
+                self.assertFalse((self.target / "backups").exists())
+                self.assertEqual([], self.runner.commands)
+                if content is not None:
+                    path.write_bytes(content)
+                path.chmod(mode)
+                self.manager().status()
+                self.assertEqual(before, intent.read_bytes())
+                self.manager().backup("retry-after-preflight")
+                self.assertEqual("complete", json.loads(intent.read_text())["state"])
+
+    def test_backup_drift_after_intent_stays_pending_without_helper_execution(self):
+        self.install()
+        manager = self.manager()
+        original_begin = manager._begin_operation
+        helper = self.target / "releases/0.2.0/backup.py"
+        def drift_after_begin():
+            original_begin()
+            helper.chmod(0o664)
+        self.runner.commands.clear()
+        with mock.patch.object(manager, "_begin_operation", side_effect=drift_after_begin):
+            with self.assertRaises(self.module.IntegrityError):
+                manager.backup("drift")
+        self.assertEqual([], self.runner.commands)
+        intent = self.target / ".surveyctl/operation.intent"
+        self.assertEqual("pending", json.loads(intent.read_text())["state"])
+        helper.chmod(0o644)
+        with self.assertRaisesRegex(self.module.InputError, "unverified outcome"):
+            self.manager().doctor()
+
+    def test_target_replacement_after_lock_is_rejected_before_yield(self):
+        self.install()
+        original_load = self.module.json.load
+        moved = self.root / "original-installation"
+        changed = False
+        def swap_target(handle, *args, **kwargs):
+            nonlocal changed
+            value = original_load(handle, *args, **kwargs)
+            if not changed:
+                changed = True
+                self.target.rename(moved)
+                self.target.mkdir(mode=0o700)
+                # Reusing the exact control inode must not make a new target trusted.
+                (moved / ".surveyctl").rename(self.target / ".surveyctl")
+                (self.target / "foreign-sentinel").write_text("preserve")
+            return value
+        with mock.patch.object(self.module.json, "load", side_effect=swap_target):
+            with self.assertRaisesRegex(self.module.IntegrityError, "target identity changed"):
+                with self.manager()._mutation_lock():
+                    self.fail("replacement target must not be used")
+        self.assertEqual("preserve", (self.target / "foreign-sentinel").read_text())
+
+    def test_mkdir_refuses_to_chmod_an_unsafe_existing_directory(self):
+        self.target.mkdir()
+        path = self.target / "releases"
+        path.mkdir()
+        path.chmod(0o775)
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager()._mkdir("releases")
+        self.assertEqual(0o775, stat.S_IMODE(path.stat().st_mode))
+
+    def test_modified_owned_helper_is_rejected_before_execution(self):
+        self.install()
+        (self.target / "releases/0.2.0/doctor.py").write_text("# harmless modification\n")
+        self.runner.commands.clear()
+        with self.assertRaisesRegex(self.module.IntegrityError, "checksum mismatch"):
+            self.manager().doctor()
+        self.assertEqual([], self.runner.commands)
+
+    def test_foreign_owner_path_and_writable_ancestor_are_rejected(self):
+        self.target.mkdir()
+        manager = self.manager()
+        real_lstat = self.module.os.lstat
+        def foreign(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            if Path(path) == self.target:
+                values = list(info)
+                values[4] = os.geteuid() + 1
+                return os.stat_result(values)
+            return info
+        with mock.patch.object(self.module.os, "lstat", side_effect=foreign):
+            with self.assertRaises(self.module.IntegrityError):
+                manager._assert_target_available()
+        self.root.chmod(0o775)
+        try:
+            with self.assertRaises(self.module.IntegrityError):
+                manager._assert_target_available()
+        finally:
+            self.root.chmod(0o700)
+
+    def test_owned_readonly_helpers_and_directories_remain_usable(self):
+        self.install()
+        for directory in (self.target, self.target / "releases", self.target / "releases/0.2.0"):
+            directory.chmod(0o755)
+        for name in ("backup.py", "restore.py", "doctor.py"):
+            (self.target / "releases/0.2.0" / name).chmod(0o444)
+        self.manager().backup("safe-modes")
+        self.assertTrue(any("backup.py" in " ".join(c) for c in self.runner.commands))
+
     def test_version_install_uses_release_client_and_requires_checksum(self):
         payload = self.base_manifest.read_bytes()
         client = FakeReleaseClient(payload, {self.base_bundle.name: self.base_bundle.read_bytes()})
@@ -1645,7 +1794,7 @@ class SurveyctlTest(unittest.TestCase):
     def test_cli_exposes_all_lifecycle_commands_and_fixed_exit_codes(self):
         parser = self.module.build_parser()
         self.assertEqual(
-            {"install", "setup-probe", "upgrade", "rollback", "backup", "restore", "status", "doctor", "logs", "uninstall"},
+            {"install", "setup-probe", "upgrade", "rollback", "backup", "restore", "recovery-plan", "recovery-reserve", "status", "doctor", "logs", "uninstall"},
             set(parser._subparsers._group_actions[0].choices),
         )
         self.assertEqual(0, self.module.EXIT_SUCCESS)
@@ -2059,9 +2208,8 @@ class SurveyctlTest(unittest.TestCase):
         self.assertEqual("complete", json.loads((target / ".surveyctl/operation.intent").read_text())["state"])
         other_target = self.root / "helper-backup-target"
         other_manager = self.module.SurveyManager(target=other_target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
-        other_manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
-        backup_helper = other_target / "releases" / "0.2.0" / "backup.py"
-        backup_helper.write_text("import sys\nsys.exit(5)\n")
+        backup_manifest, _ = write_test_release(self.root, payload_overrides={"backup.py": b"import sys\nsys.exit(5)\n"})
+        other_manager.install(backup_manifest, "survey.example.com", "operations", "operations@example.com")
         result = subprocess.run(
             [sys.executable, str(MODULE_PATH), "--target", str(other_target), "backup", "--output", "helper-integrity"],
             capture_output=True, text=True,
@@ -2312,6 +2460,480 @@ class SurveyctlTest(unittest.TestCase):
                 admin_email="operations@example.com",
             )
         self.assertEqual("keep", (self.target / "unmanaged.txt").read_text())
+
+
+class RecoveryPlanTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('recovery_plan_ctl', PRODUCTION_DIR / 'surveyctl.py')
+        cls.ctl = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = cls.ctl
+        if str(PRODUCTION_DIR) not in sys.path:
+            sys.path.insert(0, str(PRODUCTION_DIR))
+        spec.loader.exec_module(cls.ctl)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.source = self.root / 'source'
+        self.control = self.source / '.surveyctl'
+        self.control.mkdir(parents=True, mode=0o700)
+        self.write(self.control / 'operation.lock', b'')
+        self.write(self.control / 'operation.intent', {'schemaVersion': 1, 'state': 'pending', 'operation': 'install'})
+        self.write(self.control / 'state.json', {'status': 'install_failed', 'version': '0.3.20-rc.1',
+                   'adminEmail': 'private@example.invalid', 'privateUnknown': 'DO-NOT-OUTPUT'})
+        self.destination = self.root / 'new-target'
+        self.runner = mock.Mock()
+        self.runner.run.side_effect = AssertionError('planning must never run a command')
+        self.manager = self.ctl.SurveyManager(self.source, runner=self.runner)
+
+    def write(self, path, value):
+        path.write_bytes(value if isinstance(value, bytes) else json.dumps(value).encode())
+        path.chmod(0o600)
+
+    def snapshot(self):
+        return {str(p.relative_to(self.source)): (p.read_bytes(), p.stat().st_mode, p.stat().st_ino)
+                for p in self.source.rglob('*') if p.is_file()}
+
+    def plan(self, **kwargs):
+        return self.manager.recovery_plan(self.destination, **kwargs)
+
+    def test_pending_pointerless_install_is_reported_without_changing_any_files(self):
+        before = self.snapshot()
+        plan = self.plan()
+        self.assertEqual(before, self.snapshot())
+        self.assertFalse(self.destination.exists())
+        self.assertEqual('execution-blocked', plan['status'])
+        self.assertIs(False, plan['executable'])
+        self.assertEqual('missing', plan['source']['current'])
+        self.assertEqual('pending', plan['source']['intent'])
+        self.assertEqual(plan, self.plan())
+        self.assertNotIn('private@example.invalid', json.dumps(plan))
+        self.assertNotIn('DO-NOT-OUTPUT', json.dumps(plan))
+        self.assertIn('helper-containment-and-crash-cleanup', plan['requiredChecks'])
+        self.runner.run.assert_not_called()
+
+    def test_recovery_required_and_mismatched_current_are_observations_not_reset(self):
+        self.write(self.control / 'state.json', {'status': 'recovery_required', 'version': '0.3.19-rc.1'})
+        self.write(self.source / 'current', b'0.3.20-rc.1\n')
+        before = self.snapshot()
+        plan = self.plan()
+        self.assertEqual('differs-from-state', plan['source']['current'])
+        self.assertEqual('recovery_required', plan['source']['status'])
+        self.assertEqual(before, self.snapshot())
+        with self.assertRaises(self.ctl.InputError):
+            with self.manager._mutation_lock(operation='backup'):
+                self.fail('planning must not clear existing mutation gate')
+
+    def test_first_install_without_state_can_be_observed(self):
+        (self.control / 'state.json').unlink()
+        plan = self.plan()
+        self.assertEqual('missing', plan['source']['status'])
+        self.assertIsNone(plan['source']['version'])
+        self.assertEqual('pending', plan['source']['intent'])
+
+    def test_backup_metadata_is_not_mistaken_for_authentication_or_payload_verification(self):
+        backup = self.source / 'backups' / 'before-upgrade'
+        backup.mkdir(parents=True, mode=0o700)
+        self.write(backup / 'manifest.json', {'schemaVersion': 2, 'version': '0.3.19-rc.1'})
+        (self.source / 'shared').mkdir()
+        (self.source / 'shared/secret-sentinel').write_text('MUST-NOT-BE-READ')
+        plan = self.plan(backup='before-upgrade')
+        self.assertIs(False, plan['backup']['authenticated'])
+        self.assertIs(False, plan['backup']['payloadsChecked'])
+        first = plan['source']['snapshotSha256']
+        self.write(backup / 'manifest.json', {'schemaVersion': 2, 'version': '0.3.17-rc.1'})
+        self.assertNotEqual(first, self.plan(backup='before-upgrade')['source']['snapshotSha256'])
+        self.runner.run.assert_not_called()
+        for invalid in ('../backup', '/backup', 'backup/other', 'a\n', ''):
+            with self.subTest(backup=invalid), self.assertRaises(self.ctl.InputError):
+                self.plan(backup=invalid)
+
+    def test_overlap_existing_destination_symlink_and_relative_paths_fail_closed(self):
+        for path in (self.source, self.source / 'nested', self.root, Path('relative')):
+            with self.subTest(path=path), self.assertRaises(self.ctl.InputError):
+                self.manager.recovery_plan(path)
+        self.destination.mkdir()
+        with self.assertRaises(self.ctl.InputError): self.plan()
+        self.destination.rmdir()
+        self.destination.symlink_to(self.source)
+        with self.assertRaises(self.ctl.InputError): self.plan()
+
+    def test_unsafe_state_intent_and_lock_are_rejected_without_runner_calls(self):
+        for name in ('state.json', 'operation.intent', 'operation.lock'):
+            path = self.control / name
+            original = path.read_bytes()
+            path.chmod(0o644)
+            with self.subTest(name=name), self.assertRaises(self.ctl.IntegrityError): self.plan()
+            path.chmod(0o600)
+            linked = self.root / ('hard-' + name)
+            os.link(path, linked)
+            with self.assertRaises(self.ctl.IntegrityError): self.plan()
+            linked.unlink()
+            path.unlink(); path.symlink_to(linked)
+            with self.assertRaises(self.ctl.IntegrityError): self.plan()
+            path.unlink(); self.write(path, original)
+        self.runner.run.assert_not_called()
+
+    def test_duplicate_malformed_or_oversized_metadata_never_produces_a_plan(self):
+        for name, bad in [('operation.intent', b'{"schemaVersion":1,"schemaVersion":1,"state":"pending","operation":"install"}'),
+                          ('operation.intent', b'{"schemaVersion":true,"state":"pending","operation":"install"}'),
+                          ('state.json', b'not-json'), ('state.json', b'x' * (64 * 1024 + 1))]:
+            path = self.control / name; original = path.read_bytes()
+            self.write(path, bad)
+            with self.subTest(name=name, size=len(bad)), self.assertRaises(self.ctl.IntegrityError): self.plan()
+            self.write(path, original)
+
+    def test_lock_is_not_created_or_bypassed(self):
+        lock = self.control / 'operation.lock'
+        with lock.open('rb') as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaises(self.ctl.InputError): self.plan()
+        lock.unlink()
+        with self.assertRaises(self.ctl.IntegrityError): self.plan()
+        self.assertFalse(lock.exists())
+
+    def test_in_place_change_after_read_is_preserved_and_rejected(self):
+        original = json.loads
+        state = self.control / 'state.json'
+        changed = b'{"status":"upgrade_failed","version":"0.3.20-rc.1"}'
+        def loads(data, **kwargs):
+            value = original(data, **kwargs)
+            if isinstance(value, dict) and value.get('status') == 'install_failed':
+                self.write(state, changed)
+            return value
+        with mock.patch.object(self.ctl.json, 'loads', side_effect=loads), self.assertRaises(self.ctl.IntegrityError):
+            self.plan()
+        self.assertEqual(changed, state.read_bytes())
+        self.assertEqual('pending', original((self.control / 'operation.intent').read_text())['state'])
+
+    def test_replaced_lock_or_intent_never_produces_a_plan(self):
+        original = json.loads
+        for name in ('operation.lock', 'operation.intent'):
+            path = self.control / name
+            payload = path.read_bytes()
+            def loads(data, **kwargs):
+                value = original(data, **kwargs)
+                if isinstance(value, dict) and value.get('status') == 'install_failed':
+                    temporary = self.control / 'replacement'
+                    self.write(temporary, payload); temporary.replace(path)
+                return value
+            with self.subTest(name=name), mock.patch.object(self.ctl.json, 'loads', side_effect=loads), self.assertRaises(self.ctl.IntegrityError):
+                self.plan()
+            self.assertEqual(payload, path.read_bytes())
+
+    def test_missing_current_appearing_or_destination_created_mid_read_is_rejected(self):
+        original = json.loads
+        backup = self.source / 'backups' / 'valid'
+        backup.mkdir(parents=True, mode=0o700)
+        self.write(backup / 'manifest.json', {'schemaVersion': 2, 'version': '0.3.19-rc.1'})
+        for path in (self.source / 'current', self.destination):
+            def loads(data, **kwargs):
+                value = original(data, **kwargs)
+                if isinstance(value, dict) and value.get('schemaVersion') == 2:
+                    if path == self.destination: path.mkdir()
+                    else: self.write(path, b'0.3.20-rc.1')
+                return value
+            with self.subTest(path=path), mock.patch.object(self.ctl.json, 'loads', side_effect=loads), self.assertRaises(self.ctl.IntegrityError):
+                self.plan(backup='valid')
+            if path.is_dir(): path.rmdir()
+            else: path.unlink()
+
+    def test_non_string_status_and_fifo_fail_without_blocking(self):
+        self.write(self.control / 'state.json', {'status': [], 'version': '0.3.20-rc.1'})
+        with self.assertRaises(self.ctl.IntegrityError): self.plan()
+        (self.control / 'state.json').unlink()
+        os.mkfifo(self.control / 'state.json', 0o600)
+        with self.assertRaises(self.ctl.IntegrityError): self.plan()
+
+    def test_cli_emits_only_a_non_executable_plan(self):
+        before = self.snapshot()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = self.ctl.main(['--target', str(self.source), 'recovery-plan', '--destination', str(self.destination)])
+        self.assertEqual(0, code)  # Successful observation, never recovery success.
+        self.assertIs(False, json.loads(output.getvalue())['executable'])
+        self.assertEqual(before, self.snapshot())
+
+    def test_runtime_collection_contains_the_actual_cli_command(self):
+        spec = importlib.util.spec_from_file_location('recovery_plan_builder', PRODUCTION_DIR / 'release/build_release.py')
+        builder = importlib.util.module_from_spec(spec)
+        with mock.patch.object(sys, 'path', [str(PRODUCTION_DIR / 'release'), *sys.path]):
+            spec.loader.exec_module(builder)
+        files = builder.collect_runtime(PRODUCTION_DIR, PRODUCTION_DIR.parents[2])
+        self.assertIn(b'recovery-plan', files['surveyctl.py'])
+        metadata = json.loads(builder.bundle_metadata('0.3.21-rc.1', 'amd64', files))
+        self.assertEqual(hashlib.sha256(files['surveyctl.py']).hexdigest(), metadata['files']['surveyctl.py'])
+
+
+
+class RecoveryReservationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('recovery_reservation_ctl', PRODUCTION_DIR / 'surveyctl.py')
+        cls.ctl = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = cls.ctl
+        if str(PRODUCTION_DIR) not in sys.path:
+            sys.path.insert(0, str(PRODUCTION_DIR))
+        spec.loader.exec_module(cls.ctl)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.source = self.root / 'source'
+        control = self.source / '.surveyctl'
+        control.mkdir(parents=True, mode=0o700)
+        for name, value in [('operation.lock', b''),
+                            ('operation.intent', b'{"schemaVersion":1,"state":"pending","operation":"install"}'),
+                            ('state.json', b'{"status":"install_failed","version":"0.3.20-rc.1"}')]:
+            (control / name).write_bytes(value); (control / name).chmod(0o600)
+        self.destination = self.root / 'reserved-target'
+        self.runner = mock.Mock(); self.runner.run.side_effect = AssertionError('no runtime commands are allowed')
+        self.manager = self.ctl.SurveyManager(self.source, runner=self.runner)
+        self.observed = self.manager.recovery_plan(self.destination)['source']['snapshotSha256']
+
+    def reserve(self, destination=None, observed=None):
+        return self.manager.recovery_reserve(destination or self.destination, observed or self.observed)
+
+    def source_bytes(self):
+        return {str(p.relative_to(self.source)): p.read_bytes() for p in self.source.rglob('*') if p.is_file()}
+
+    def test_records_private_pending_identity_without_recovery_authorization(self):
+        before = self.source_bytes()
+        result = self.reserve()
+        control = self.destination / '.surveyctl'
+        record = json.loads((control / 'recovery.reservation.json').read_text())
+        self.assertEqual('reserved-not-authorized', result['status'])
+        self.assertIs(False, result['executable'])
+        self.assertEqual(self.observed, record['sourceObservationSha256'])
+        self.assertRegex(record['reservationId'], r'^[0-9a-f]{32}$')
+        self.assertEqual('survey-recovery-' + record['reservationId'], record['projectProposal'])
+        self.assertIs(False, record['backupAuthenticated'])
+        self.assertIs(False, record['runtimeResourcesCreated'])
+        self.assertEqual([self.destination.stat().st_dev, self.destination.stat().st_ino], record['targetIdentity'])
+        self.assertEqual('pending', json.loads((control / 'operation.intent').read_text())['state'])
+        for path in (self.destination, control): self.assertEqual(0o700, stat.S_IMODE(path.stat().st_mode))
+        for path in control.iterdir(): self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
+        self.assertEqual(before, self.source_bytes()); self.runner.run.assert_not_called()
+        with self.assertRaises(self.ctl.InputError):
+            with self.ctl.SurveyManager(self.destination)._mutation_lock(operation='install'):
+                self.fail('a recorded reservation must not reopen ordinary mutation')
+
+    def test_repeat_cannot_overwrite_existing_reservation(self):
+        self.reserve()
+        marker = self.destination / '.surveyctl/recovery.reservation.json'
+        before = marker.read_bytes()
+        with self.assertRaises(self.ctl.InputError): self.reserve()
+        self.assertEqual(before, marker.read_bytes())
+
+    def test_two_distinct_targets_get_distinct_proposals_without_runtime_resources(self):
+        first = self.reserve()
+        second = self.reserve(self.root / 'another-target')
+        self.assertNotEqual(first['reservationId'], second['reservationId'])
+        self.assertIs(False, first['executable']); self.assertIs(False, second['executable'])
+        self.runner.run.assert_not_called()
+
+    def test_cooperating_concurrent_creation_has_one_winner(self):
+        start = threading.Barrier(2)
+        def attempt():
+            start.wait(timeout=5)
+            try:
+                return self.reserve()['reservationId']
+            except (self.ctl.InputError, self.ctl.IntegrityError):
+                return None
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(attempt) for _ in range(2)]
+            result = [f.result(timeout=10) for f in futures]
+        self.assertEqual(1, sum(value is not None for value in result))
+        record = json.loads((self.destination / '.surveyctl/recovery.reservation.json').read_text())
+        self.assertIn(record['reservationId'], result)
+
+    def test_changed_or_malformed_observation_never_creates_a_target(self):
+        path = self.source / '.surveyctl/state.json'
+        path.write_text('{"status":"recovery_required","version":"0.3.20-rc.1"}')
+        with self.assertRaises(self.ctl.IntegrityError): self.reserve()
+        self.assertFalse(self.destination.exists())
+        for value in ('bad', 'A'*64, True, None):
+            with self.subTest(value=value), self.assertRaises(self.ctl.InputError):
+                self.manager.recovery_reserve(self.destination, value)
+        self.assertFalse(self.destination.exists())
+
+    def test_unsafe_parent_or_preexisting_target_is_not_adopted(self):
+        self.root.chmod(0o777)
+        try:
+            with self.assertRaises(self.ctl.IntegrityError): self.reserve()
+        finally:
+            self.root.chmod(0o700)
+        self.assertFalse(self.destination.exists())
+        self.destination.mkdir()
+        with self.assertRaises(self.ctl.InputError): self.reserve()
+        self.assertEqual([], list(self.destination.iterdir()))
+
+    def test_unsafe_ancestor_cannot_hide_behind_a_private_destination_parent(self):
+        before = self.source_bytes()
+        for index, mode in enumerate((0o775, 0o777)):
+            ancestor = self.root / f"writable-ancestor-{index}"
+            parent = ancestor / "private-parent"
+            parent.mkdir(parents=True, mode=0o700)
+            ancestor.chmod(mode)
+            destination = parent / "new-target"
+            with self.subTest(mode=oct(mode)):
+                with self.assertRaises(self.ctl.IntegrityError):
+                    self.reserve(destination)
+                self.assertFalse(destination.exists())
+                self.assertEqual(before, self.source_bytes())
+        self.runner.run.assert_not_called()
+
+    def test_foreign_owned_ancestor_is_rejected_before_target_creation(self):
+        ancestor = self.root / "foreign-ancestor"
+        parent = ancestor / "private-parent"
+        parent.mkdir(parents=True, mode=0o700)
+        destination = parent / "new-target"
+        identity = (ancestor.stat().st_dev, ancestor.stat().st_ino)
+        fstat, inspect = self.ctl.os.fstat, self.ctl.os.stat
+        def foreign(info):
+            if (info.st_dev, info.st_ino) == identity:
+                fields = list(info)
+                fields[4] = os.geteuid() + 1
+                return os.stat_result(fields)
+            return info
+        before = self.source_bytes()
+        with mock.patch.object(self.ctl.os, "fstat", side_effect=lambda fd: foreign(fstat(fd))), \
+                mock.patch.object(self.ctl.os, "stat", side_effect=lambda *a, **kw: foreign(inspect(*a, **kw))):
+            with self.assertRaises(self.ctl.IntegrityError):
+                self.reserve(destination)
+        self.assertFalse(destination.exists())
+        self.assertEqual(before, self.source_bytes())
+        self.runner.run.assert_not_called()
+
+    def test_interrupt_before_first_record_never_allows_ordinary_install_adoption(self):
+        before = self.source_bytes()
+        mkdir, opened = self.ctl.os.mkdir, self.ctl.os.open
+        for phase in ("control-directory", "first-record"):
+            self.destination = self.root / f"interrupted-{phase}"
+            def fail_mkdir(name, *args, **kwargs):
+                if phase == "control-directory" and name == ".surveyctl":
+                    raise OSError("synthetic pre-record interruption")
+                return mkdir(name, *args, **kwargs)
+            def fail_open(name, flags, *args, **kwargs):
+                if phase == "first-record" and name == "recovery.reservation.json" and flags & os.O_CREAT:
+                    raise OSError("synthetic pre-record interruption")
+                return opened(name, flags, *args, **kwargs)
+            with self.subTest(phase=phase):
+                with mock.patch.object(self.ctl.os, "mkdir", side_effect=fail_mkdir), \
+                        mock.patch.object(self.ctl.os, "open", side_effect=fail_open):
+                    with self.assertRaises(self.ctl.IntegrityError):
+                        self.reserve()
+                self.assertEqual(before, self.source_bytes())
+                self.runner.run.assert_not_called()
+                # Stronger publication invariant: no partially initialized
+                # installation target is visible at all; only a private sibling.
+                self.assertFalse(self.destination.exists())
+                stages = list(self.root.glob(".surveyctl-recovery-*"))
+                self.assertTrue(stages)
+                for stage in stages:
+                    for offered in (stage, stage / "nested-install"):
+                        with self.assertRaises(self.ctl.InputError):
+                            with self.ctl.SurveyManager(offered)._mutation_lock(create_target=True, operation="install"):
+                                pass
+                    self.assertFalse((stage / "nested-install").exists())
+
+    def test_fsync_failure_preserves_partial_target_and_original_marker(self):
+        before = self.source_bytes()
+        with mock.patch.object(self.ctl.os, 'fsync', side_effect=OSError('synthetic failure')):
+            with self.assertRaises(self.ctl.IntegrityError): self.reserve()
+        self.assertFalse(self.destination.exists())
+        stages = list(self.root.glob(".surveyctl-recovery-*"))
+        self.assertEqual(1, len(stages))
+        marker = stages[0] / '.surveyctl/recovery.reservation.json'
+        self.assertTrue(marker.exists())
+        partial = marker.read_bytes()
+        self.assertEqual(before, self.source_bytes())
+        # Retrying is a fresh reservation, not adoption of the private partial.
+        self.reserve()
+        self.assertEqual(partial, marker.read_bytes())
+        self.assertNotEqual(stages[0].stat().st_ino, self.destination.stat().st_ino)
+        self.runner.run.assert_not_called()
+
+    def test_replaced_target_is_not_followed_cleaned_or_reported_successful(self):
+        opened = os.open
+        moved = self.root / 'preserved-original-reservation'
+        def intercept(name, flags, *args, **kwargs):
+            if name == 'operation.lock' and flags & os.O_CREAT:
+                stage = next(self.root.glob(".surveyctl-recovery-*"))
+                self.displaced_stage = stage
+                stage.rename(moved)
+                stage.mkdir(mode=0o700)
+                (stage / 'foreign-sentinel').write_text('preserve')
+            return opened(name, flags, *args, **kwargs)
+        with mock.patch.object(self.ctl.os, 'open', side_effect=intercept):
+            with self.assertRaises(self.ctl.IntegrityError): self.reserve()
+        self.assertFalse(self.destination.exists())
+        self.assertEqual(['foreign-sentinel'], [p.name for p in self.displaced_stage.iterdir()])
+        self.assertEqual('preserve', (self.displaced_stage / 'foreign-sentinel').read_text())
+        self.assertTrue((moved / '.surveyctl/recovery.reservation.json').exists())
+
+    def test_record_change_during_final_directory_flush_never_returns_success(self):
+        flush = os.fsync
+        parent_identity = (self.root.stat().st_dev, self.root.stat().st_ino)
+        marker = self.destination / '.surveyctl/recovery.reservation.json'
+        def intercept(fd):
+            flush(fd)
+            info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) == parent_identity and self.destination.exists():
+                marker.write_text(marker.read_text().replace('"runtimeResourcesCreated": false', '"runtimeResourcesCreated": true'))
+        before = self.source_bytes()
+        with mock.patch.object(self.ctl.os, 'fsync', side_effect=intercept):
+            with self.assertRaises(self.ctl.IntegrityError): self.reserve()
+        self.assertEqual(before, self.source_bytes())
+        self.assertTrue(json.loads(marker.read_text())['runtimeResourcesCreated'])
+        self.runner.run.assert_not_called()
+
+    def test_atomic_publication_never_overwrites_a_racing_target(self):
+        publish = self.ctl._publish_directory_noreplace
+        before = self.source_bytes()
+        for populated in (False, True):
+            self.destination = self.root / f"racing-{populated}"
+            saved = []
+            def create_competitor(fd, source, destination):
+                self.destination.mkdir(mode=0o700)
+                saved.append(self.destination.stat().st_ino)
+                if populated:
+                    (self.destination / "foreign-sentinel").write_text("preserve")
+                publish(fd, source, destination)
+            with self.subTest(populated=populated):
+                with mock.patch.object(self.ctl, "_publish_directory_noreplace", side_effect=create_competitor):
+                    with self.assertRaises(self.ctl.InputError):
+                        self.reserve()
+                self.assertEqual(saved[0], self.destination.stat().st_ino)
+                self.assertEqual(["foreign-sentinel"] if populated else [], [p.name for p in self.destination.iterdir()])
+                if populated:
+                    self.assertEqual("preserve", (self.destination / "foreign-sentinel").read_text())
+                self.assertEqual(before, self.source_bytes())
+        self.assertEqual(2, len(list(self.root.glob(".surveyctl-recovery-*"))))
+        self.runner.run.assert_not_called()
+
+    def test_missing_atomic_primitive_refuses_without_rename_fallback(self):
+        before = self.source_bytes()
+        with mock.patch.object(self.ctl.ctypes, "CDLL", return_value=object()), \
+                mock.patch.object(self.ctl.os, "rename", side_effect=AssertionError("unsafe fallback")):
+            with self.assertRaises(self.ctl.IntegrityError):
+                self.reserve()
+        self.assertFalse(self.destination.exists())
+        self.assertEqual(1, len(list(self.root.glob(".surveyctl-recovery-*"))))
+        self.assertEqual(before, self.source_bytes())
+        self.runner.run.assert_not_called()
+
+    def test_cli_success_only_records_a_non_executable_reservation(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = self.ctl.main(['--target', str(self.source), 'recovery-reserve',
+                '--destination', str(self.destination), '--observed-source-sha256', self.observed])
+        self.assertEqual(0, result)
+        self.assertIs(False, json.loads(stdout.getvalue())['executable'])
+        self.runner.run.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -213,7 +213,7 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | R06-02 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | 下载的 ZIP 含 UTF-8 BOM/CRLF CSV，字段字典映射到一条真实答卷值 `A1` |
 | R06-04 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/StatisticalDocxExportWriterTest.java::writesFrequencyPercentAndMissingCountsForEveryAnswerField` | Word 统计报告逐字段输出有效值、空值、频数和比例 |
 | R06-04 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportStatisticalDocxTest.java::completedJobDownloadsAReadableStatisticalWordReport` | 整条作业链路产出可读 Word 统计报告 |
-| R06-05 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | `--wave3` 场景覆盖真实作答、跨版本筛选与七种标准格式的创建和非空下载；当前工作区最终双库复跑待完成 |
+| R06-05 | 端到端 | `platform/deploy/test/run-admin-web-e2e.sh` | `--wave3` 场景覆盖真实作答、跨版本筛选与七种标准格式的创建和下载；后续双库运行已补齐 XLSX、SAV、默认 DOCX、PDF、统计 DOCX 与附件内容核验。现有证据属于隔离源码栈/测试身份，不替代新不可变候选上的正式组织身份验收 |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::valueLabelsAreAttachedToBothNumericAndShortStringVariables` | SPSS 值标签 |
 | R06-03 | 单测 | `platform/services/business/src/test/java/cn/mjy/platform/response/SavExportFormatTest.java::cellsRoundTripWithSystemMissingForBlanksAndUtf8SafeTruncation` | 缺失值与 UTF-8 截断 |
 | R06-03 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportSavTest.java::theBundleHasTheDatasetItsVariableDictionaryAndTheUsualSideSheets` | 整条作业链路产出 SPSS 包与变量字典 |
@@ -231,6 +231,11 @@ R04-02／03／05 是**部分**覆盖，口径见 `platform/docs/p2/progress.md`�
 | R06-07 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportAttachmentPackageTest.java::thePackageCarriesTheFilesThemselvesAlongsideTheManifest` | 附件包含文件本体与清单 |
 | R06-07 | 集成 | `platform/services/business/src/test/java/cn/mjy/platform/response/ResponseExportAttachmentPackageTest.java::aTransientFailureRetriesAndOnlyRefetchesWhatIsStillMissing` | 失败项可重试 |
 | R06-07 | 单测 | `plugins/MjyQuestionExtensions/tests/MjyAttachmentFileEndpointTest.php::testTheEndpointNeverHoldsTheFileContents` | 引擎侧取件端点不把文件内容留在内存里（内存有界） |
+
+2026-11-11 人工 PDF 注记：在 `main` `825e7795c9` 源码范围，用
+`PdfExportFormatTest::aSamplePdfIsLeftInTargetForExternalReaders` 生成三页 A4 样例并以 Poppler 渲染、
+提取文本；标准中文、表格和长字段无裁切或重叠，中文可复制。非 GB2312 字形按既定字体策略显示
+替代字形但保留 ToUnicode 原文。该人工结果不登记为新的自动化层级，也尚未绑定合格不可变候选。
 
 ## WP-18 通讯录联系人用户
 

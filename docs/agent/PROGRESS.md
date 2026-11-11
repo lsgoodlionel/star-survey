@@ -1,5 +1,15 @@
 # 自治执行进度
 
+2026-11-11 Release 方案B准备（#119，Draft，阻断全部保留）：原生验收脚本不再执行真实restore，改为由证据助手调用候选控制器的 restore，要求精确的受控拒绝信息、无标准输出，且 `.surveyctl` 下 operation.intent/state.json 字节与目录条目不变，随后 doctor-final 及安全卸载；DOCTOR_FILE 改为 installed/upgraded/final。`native-acceptance.requirement.json` 用 restore-refused/doctor-final 替换 restore/doctor-restored，并以 deferredUntilStable 记录 stable 仍需真实恢复。先红后绿：新增 3 项拒绝检查与 2 项顺序/策略断言；Windows 本地 release 全部测试模块与未改 main 失败集合对照无新增（均为既有 Windows 失败），POSIX 以 CI 为准。release.yml 两处 exit、脚本顶部 exit 1、证据上传限制和 require_fixture_cleanup_proof 均未改动，待 Codex 在 #33 回答清理安全评估。
+
+2026-11-11 Wave6 #118 P2修订待托管验收：独立审查指出首记录前中断会留下可被普通安装采纳的空目标；两个窗口先红。改为同父目录私有随机暂存，完整记录/锁/pending及fsync/身份检查后不可覆盖地公布目标，缺接口/不支持文件系统拒绝，不使用普通rename fallback。保留原私有权限、路径替换、fsync故障断言，并将故障注入定位到暂存或公布后阶段；新增竞争空/非空目标inode不变、缺API拒绝、旧暂存重试不采纳。增量复审进一步指出私有空暂存仍可能显式传给install，补首记录前暂存及内部路径拒绝回归先红，再在普通安装入口拒绝保留命名空间，不仅依赖README告诫。最终154项控制器及169项Release/工作流契约共323项通过，增量独立静态复核确认原P2闭合且无新增阻断；macOS实际执行renameatx_np，Ubuntu renameat2需在线CI验证，未声称断电/真实崩溃或恢复执行通过。B清理安全仍未证明，Release/native/restore门禁不变。
+
+2026-11-11 Wave6 #33 新目标保留切片接续（待PR/托管验证）：Mac恢复后发现断连前测试文件已落地、运行输出未知；经正常提权只读pgrep确认无匹配测试进程，再运行既有定向回归，0775/0777祖先及一致外来uid模型先失败。独立分支安全整合main4756b6dc（含#108/#114/#117），补no-follow描述符全链属主/写权限检查；151项控制器和169项Release/工作流契约通过，共320项；定向回归仅临时合成文件系统，无真实密钥或数据库。只创建全新私有reservation及pending，随机项目名仅提案，输出executable=false；不读密钥、不解密、不调用Docker/helper、不触碰原安装，不自动采纳或删除不确定现场。此证据不能称恢复/清理或原生验收。#114已由外部操作者合并，不是本窗口执行；其后主线CI以4756b6dc对应运行另核，不复用旧绿灯。
+
+2026-11-11 Wave6 #114 增量修正待合并阻断：Claude 对 eb69387146 指出 backup 先落 pending 再检查 helper。三类新回归先证明 helper/版本目录权限或 helper 内容预检失败会错误改变 complete intent；现将只读完整性预检置于 intent 前，启动前仍复核，后发漂移保持 pending 且不执行 helper。恢复合法文件后可执行真实控制器备份重试，不删除标记。最终139项控制器通过；旧head完整CI42933984585、smoke42933984549等全绿不能覆盖这次新问题或新head。升级在 intent 前已通过人员配置读取校验当前release树，不增加要求current的全局锁预检，保留失败安装/无current恢复观察边界。#108仍须先人工合并，#114后续整合main并复审；Release及原生/恢复/清理门禁未动。
+
+2026-11-11 Wave6 #109 安装路径/helper 信任边界修订（待独立审查及 GitHub CI）：基于 #108 head133933f76 的独立后继分支，先复现组可写空目标仍能安装。补有效用户属主/禁止组与其他用户写入的祖先、目标及已安装路径校验；锁后复核目标 inode；backup/verify/doctor 执行前同时验证 bundle/配置与路径，保留合法只读挂载权限。已有 helper 退出码测试改为将固定 exit5 helper 纳入校验 bundle，而非安装后篡改它，原退出码断言保留。本地137项控制器（7项新增）及167项release/工作流契约均通过，独立静态复审无确认阻断，GitHub CI仍待。合成路径/属主/权限/替换与 helper 完整性回归不代表 root 攻击实验、真实恢复或原生验收；Release/tag/生产及其他工作树未动。
+
 2026-11-07 Wave 1 本地双数据库专项通过，但标准托管 full 仍待执行。未改变六个代码/测试文件的 PostgreSQL 项目 approval-w1-20261107-cachefix-pg1 浏览器 1 项通过（50.9 秒），总运行及清理 75 秒；原跨层 validator 确认恰好一次正式发布，archive 成功，项目容器/卷/网络均为 0。执行前后 hash 一致，私有证据为 /tmp/survey-wave1-pg-proof.faKid3。结合上述 MySQL 结果，只能证明双库下这条 Wave 1 业务链，不能代替标准 full 全套门禁。
 
 向现有测试分支同步七个文件并触发托管 full 的操作被审核拒绝，理由为当前授权未明确涵盖远端提交/推送副作用；命令未启动。已核实 HEAD 仍为 360ffd505b067102e65e27565568bdbe200c2f7d、暂存区为空、改动完整保留。未重试或绕过，等待明确批准后再同步和运行标准 full。无合并、发布或部署。
@@ -599,3 +609,12 @@ After independent review/merge, only the actual main commit with complete succes
 ## 文件快照字段故障注入（2026-11-09，本地待审）
 
 在虚构操作意图读取期间原位改写、恢复原 mtime 并保持 inode、长度及其他快照字段不变，当前 Mac 文件系统暴露变化的 ctime，检查正确阻断；若文件系统未呈现不同 ctime，测试明确跳过而不将该平台记作通过。另在读取期间将权限从 0600 改为 0644，并屏蔽 ctime 的影响，确认仅权限字段变化即可阻断。分别屏蔽被测字段的故障注入使测试失败，恢复后通过；控制器/配置套件 233 项中 232 通过、原生验收按原条件跳过 1 项，Release/工作流策略 166 项通过。测试针对操作意图和共用快照函数，不证明检查后无竞争、可信时间戳或其他平台可检测所有原位修改；Ubuntu、外部写入者和崩溃清理仍未验收。恢复、原生生命周期及卸载保持阻断；未推送或发布。
+
+
+## Wave 6 受控恢复第一切片（2026-11-11，开发中/待审）
+
+按最新 Project 和 #33/#34 核对，main825e7795c956c453c2cb99605a9e66367f7ed2f1 的 CI42787659756 已通过；rc20 run42790836656 四节点在主机变更前主动阻断，不能复用 rc19 证明当前 main。Release 工作流由 Claude Code 处理，本窗口未修改或触发。#33 协作记录6782734603 已声明独立 worktree survey-wave6-recovery-20261110 和分支 fix/wave6-controlled-recovery；主目录两份未提交文件、其他 Wave 工作区均未改动。
+
+第一切片新增 recovery-plan，只读观察无 current/pending/recovery_required 现场及可选备份 metadata，限定全新非重叠目标，输出始终 execution-blocked/executable=false；不调用 helper/Docker、不读密钥、不解密、不写现场或清理标记。通过既有私有锁协调当前控制器并复查文件/目录快照，但不声称旧控制器或外部写入者排空。观察指纹不是授权、签名或执行租约；备份 authenticated/payloadsChecked 均为 false。计划已写入 docs/superpowers/plans/2026-11-11-wave6-controlled-recovery.md；执行端、原生/restore/卸载硬阻断保留。
+
+首批新增测试先因入口缺失失败，14项定向通过；旧控制器精确命令清单随后按新命令更新，未删除断言。读取替换、原位变化、锁冲突、文件出现、权限/链接/FIFO/JSON/大小、只读无泄漏和实际打包清单均有合成回归。合并到既有控制器测试后修正了一处测试路径迁移笔误；完整本地控制器130项、Release/工作流167项均通过（共297项，新增14项已含其中）；GitHub CI 仍待本切片最终精确 head 验证，不能标记恢复/清理通过。后续真实执行必须先证明新目标资源隔离、可信备份与 floor、helper/崩溃明文 containment、人员失效及可归因清理，不重新接入 #102 已拒绝的实验。没有新 tag、候选、Release、生产或真实身份操作。

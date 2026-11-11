@@ -38,6 +38,7 @@ import {
   type EditableSurveyDefinition,
 } from './model/definition';
 import { moveGroup, moveQuestion, preserveCarouselSlideIds, setCarouselSlideAsset, updateQuestion, validateDefinition } from './model/operations';
+import { readTimeWindow, updateTimeWindow, validateTimeWindow } from './model/timeWindow';
 import {
   clearActiveEditorRecovery,
   discardEditorRecovery,
@@ -195,12 +196,19 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
         .find((question) => question.uuid === selectedQuestionUuid) ?? null,
     [definition, selectedQuestionUuid],
   );
+  const conditionSources = useMemo(() => {
+    const questions = definition.groups.flatMap((group) => group.questions);
+    const selectedIndex = questions.findIndex((question) => question.uuid === selectedQuestionUuid);
+    return questions.slice(0, Math.max(0, selectedIndex)).filter((question) =>
+      question.type === 'L' && /^[A-Za-z][A-Za-z0-9]*$/.test(question.code)
+      && question.answers?.some((answer) => /^[A-Za-z0-9]{1,5}$/.test(answer.code)));
+  }, [definition, selectedQuestionUuid]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const issues = validateDefinition(definition);
+      const issues = [...validateDefinition(definition).map((issue) => issue.message), ...validateTimeWindow(definition)];
       if (issues.length) {
-        setValidationMessages(issues.map((issue) => issue.message));
+        setValidationMessages(issues);
         throw new Error('请先修正草稿中的问题');
       }
       setValidationMessages([]);
@@ -345,6 +353,8 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   const questionEditor = selectedQuestion ? (
     <QuestionEditor
       key={selectedQuestion.uuid}
+      supportsLogic={definition.definitionVersion >= 2}
+      conditionSources={conditionSources}
       api={api}
       tenantId={tenantId}
       question={selectedQuestion}
@@ -364,6 +374,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       definition={definition}
       disabled={!canEdit}
       onChange={(update) => changeDefinition({ ...definition, ...update })}
+      onTimeWindowChange={(window) => changeDefinition(updateTimeWindow(definition, window))}
     />
   );
 
@@ -418,6 +429,8 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       {saveMutation.error && !conflict && validationMessages.length === 0 ? (
         <p className="editor-validation" role="alert">
           {saveMutation.error instanceof Error ? saveMutation.error.message : '保存失败，请稍后重试'}
+          {saveMutation.error instanceof ApiError && saveMutation.error.kind === 'validation' && readTimeWindow(definition).window
+            ? '；若为开放时间窗，请检查时区和夏令时、起止顺序及原生时间设置。草稿修改仍留在本页。' : null}
         </p>
       ) : null}
 

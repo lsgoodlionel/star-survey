@@ -8,9 +8,11 @@
 
 ## 1. 当前状态
 
-`main` @ `89ab428f1b` · 更新 2026-11-09（下列按日期的分支验收段落保留为历史记录）
+`main` @ `825e7795c9` · 更新 2026-11-11（下列按日期的分支验收段落保留为历史记录）
 
 **2026-11-09 主线核对**：GitHub Project「Survey 开发与验收」中，Wave 2 模板与品牌（[#36](https://github.com/lsgoodlionel/star-survey/issues/36)）和 Wave 5 编辑器与高级题型（[#31](https://github.com/lsgoodlionel/star-survey/issues/31)）阶段为完成；Wave 0（[#37](https://github.com/lsgoodlionel/star-survey/issues/37)）、Wave 1（[#39](https://github.com/lsgoodlionel/star-survey/issues/39)）、Wave 3（[#38](https://github.com/lsgoodlionel/star-survey/issues/38)）、Wave 4（[#40](https://github.com/lsgoodlionel/star-survey/issues/40)）以及 Wave 6 原生生命周期（[#33](https://github.com/lsgoodlionel/star-survey/issues/33)）和 Release 准出（[#34](https://github.com/lsgoodlionel/star-survey/issues/34)）为验收中，Wave 6 运营后台与安全收口（[#32](https://github.com/lsgoodlionel/star-survey/issues/32)）为开发中。`v0.3.19-rc.1` 候选的四平台原生生命周期与升级验证通过；GitHub Release 发布步骤为 skipped，正式生产部署和公网 TLS 尚未执行。
+
+**2026-11-11 Wave 3 候选边界复核**：[`v0.3.19-rc.1`](https://github.com/lsgoodlionel/star-survey/releases/tag/v0.3.19-rc.1) 已通过人工晋升流程发布为预发布，固定提交 `46766fd432`、manifest `4c29b4e4…`，公开 Release 资产重新下载后的 checksum 全部匹配；但该提交不含后续 #94/#95/#97/#100，也早于正式组织登录和 Production 预览修复。`v0.3.20-rc.1` 固定当前 `main`，但原生验收在主机改动前被恢复/清理门禁阻断，没有合格 Release。当前 `main` 源码生成的三页 PDF 已完成人工渲染和复制核对，标准中文、表格与长字段无裁切或重叠；非 GB2312 字形按既定策略显示替代字形但仍可复制原文。正式组织身份下的七格式、权限、模板和任务生命周期旅程必须等待包含后续修复的新不可变候选，不能用 rc19、rc20 或源码 CI 替代；[#38](https://github.com/lsgoodlionel/star-survey/issues/38) 与 Project 继续保持“验收中”。
 
 **2026-10-27 分支验收**：`feat/admin-product-alignment` @ `c80e9b406b` 已关闭 Wave 2 Task 7 带图真实预览 502 阻塞。隔离 MySQL/PostgreSQL 管理端真实浏览器均 19/19，覆盖品牌化正式答卷、两版发布和旧版图片字节固定；Java 1494 项/184 类、网关 1235 项、管理端 353 项与管理端静态/生产构建检查通过。Wave 2 Task 8 的生产 Caddy/doctor/备份恢复和独立复审仍待完成，能力状态不提升。[GitHub 平台质量门](https://github.com/lsgoodlionel/star-survey/actions/runs/40461852500)曾在 `db267ede9d` 全部通过（10/10 jobs）；后续以当前提交的在线 CI 结果为准。详见 [当前进度](../docs/agent/PROGRESS.md)。
 
@@ -334,3 +336,5 @@ PLATFORM_DB_NAME=platform platform/deploy/test/run-platform-tests.sh --expect-te
 - 提交标记 `[codex-fix-attempt: N]` 最多到 2；再次失败则在 PR 报告，合并由人工执行。支持 `workflow_dispatch` 手动运行，需填失败的运行 ID。
 - 启用前设置 Actions secrets：`OPENAI_API_KEY`、`SURVEY_AUTOFIX_PUSH_TOKEN`（仅授予本仓库 Contents 写权限的 fine-grained PAT）。后者必须能触发后续 CI；默认 `GITHUB_TOKEN` 推送无法形成循环。工作流文件须位于默认分支才能手动触发或接收 `workflow_run`。
 - 自动修复先解析失败步骤日志中的测试命令与文件行号；仅将最多 5 个已跟踪源码文件放入隔离工作区供 Codex 修改。无法确定范围、修改了其他文件或生成新文件时停止并报告，不推送补丁。
+
+需求追溯校验默认读取仓库内 `platform/docs/traceability/02-全量需求追踪矩阵.md`；缺失或格式无效时失败。可用 `REQUIREMENT_MATRIX` 指定另一份本地矩阵。
