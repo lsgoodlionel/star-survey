@@ -441,7 +441,17 @@ test('a single-choice display condition is authored and works in isolated previe
   await fillAction(page.getByLabel('题目文本'), '请说明原因');
   await page.getByLabel('前置题目').selectOption('QTRIGGER');
   await expect(page.getByLabel('触发选项')).toHaveValue('A1');
+  const saveRequest = page.waitForRequest((request) => request.url().includes(`/v1/surveys/${surveyId}/draft`)
+    && request.method() === 'PUT');
+  const reloadResponse = page.waitForResponse((response) => response.url().includes(`/v1/surveys/${surveyId}/draft`)
+    && response.request().method() === 'GET');
   await saveAndReloadDraft(page, surveyId);
+  const submitted = (await saveRequest).postDataJSON() as { definition: { groups: Array<{ questions: Array<{ code: string; condition?: string }> }> } };
+  const loaded = await (await reloadResponse).json() as { definition: { groups: Array<{ questions: Array<{ code: string; condition?: string }> }> } };
+  expect(submitted.definition.groups[0].questions[1].code).toBe('QTRIGGER');
+  expect(submitted.definition.groups[0].questions[2].condition).toBe('QTRIGGER == "A1"');
+  expect(loaded.definition.groups[0].questions[1].code).toBe('QTRIGGER');
+  expect(loaded.definition.groups[0].questions[2].condition).toBe('QTRIGGER == "A1"');
   await clickAction(page.getByRole('button', { name: /请说明原因/ }));
   await expect(page.getByLabel('前置题目')).toHaveValue('QTRIGGER');
 
