@@ -106,6 +106,21 @@ sudo surveyctl --target /opt/survey recovery-plan --destination /opt/survey-reco
 
 受控执行、原地恢复、标记解除及卸载仍保持既有阻断。后续按[受控恢复计划](../../../docs/superpowers/plans/2026-11-11-wave6-controlled-recovery.md)在全新隔离目标证明来源、helper/明文 containment、人员失效、数据和资源清理，再考虑接通执行；Release 工作流不在本切片修改范围。
 
+### 全新目标的独占保留（不是恢复执行）
+
+`recovery-reserve` 在明确指定、尚不存在的新目标的同一父目录内准备私有暂存，然后公布完整目标，不改变源安装。先用相同 `--destination` 和可选 `--backup` 执行上述 `recovery-plan`，人工核对源/目标，再把该次输出的 `source.snapshotSha256` 传给保留命令：
+
+```bash
+sudo surveyctl --target /opt/survey recovery-reserve \
+  --destination /opt/survey-recovered \
+  --observed-source-sha256 '<刚观察到的64位小写SHA256>'
+```
+
+直接父目录必须已存在、归执行用户所有且不可组/其他用户写入；全部祖先也检查属主和写权限，仅目标以外 root-owned sticky 临时祖先可例外。命令重新观察源并核对指纹，经目录描述符独占创建同父目录的 `.surveyctl-recovery-<随机ID>` 私有暂存及控制目录（0700）、reservation/lock/pending 文件（0600），生成随机 reservation ID 与项目名**提案**；落盘并复核后，才用不可覆盖的原子目录公布操作使指定目标出现，公布后再次落盘/复核。Ubuntu使用renameat2(RENAME_NOREPLACE)，macOS开发验证使用renameatx_np(RENAME_EXCL)；缺失接口或文件系统不支持时拒绝，不回退到可覆盖rename。项目提案不是已创建资源或授权；没有 Docker、网络、卷、数据库、密钥读取、备份认证或解密。
+
+成功也始终为 `reserved-not-authorized`、`executable=false`。源指纹不是授权、租约或写入者隔离证明；源仍可能在观察后变化，未来执行必须重新验证。已有目标（含空目录）及公布期间出现的竞争目标一律不替换。首记录前中断只留下私有暂存，指定目标不会暴露可采纳的空目录；失败暂存不自动删除或接管，新重试另建暂存，旧残留保留。公布后失败则保留完整pending目标。控制器将`.surveyctl-recovery-<32位小写hex>`保留为内部命名空间，普通install拒绝该路径及其内部路径，即使目录仍为空；不要改名重用暂存或手工删除标记。不要删除 pending 或重用该目录绕过普通安装阻断。恢复执行、资源创建、应用启动与安全清理仍未接通。
+
+
 安装、升级和回滚启动后，对仍处于 running/starting 的服务最多等待 120 秒；只有全部既有健康检查通过且 engine-init 成功退出才继续。unhealthy、缺失服务或初始化异常仍阻断，status 保持即时检查。本次修复的四节点完整生产生命周期尚待独立验收；原生 admin 探针诊断不能替代 readiness。
 
 ```bash
