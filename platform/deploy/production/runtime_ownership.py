@@ -143,6 +143,9 @@ class OwnershipProtocol:
             raise OwnershipError('daemon changed during mutation')
         self._assert_claim(record)
         observed = self._observe()
+        if any(observed['volumes'].get(name) != fingerprint
+               for name, fingerprint in record['resources']['volumes'].items()):
+            raise OwnershipError('non-purge mutation lost or replaced a recorded volume')
         record.update(phase='ready', resources=observed)
         self._save(record)
 
