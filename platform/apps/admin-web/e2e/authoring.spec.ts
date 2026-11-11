@@ -548,15 +548,16 @@ test('W04 time windows persist through authoring and govern published responses'
     const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`) && response.request().method() === 'POST');
     await clickAction(page.getByRole('button', { name: '创建链接' }));
     const link = await readCreatedDeliveryLink(await linkResponse);
+    const responsesBefore = (await readPreviewIsolationSnapshot(surveyId, me.tenantId)).responses;
     const respondent = await page.context().newPage();
     await respondent.goto(link.url);
     if (scenario.outcome === 'allow') {
       await completeLimeSurvey(respondent);
       await expect.poll(async () => (await readPreviewIsolationSnapshot(surveyId, me.tenantId)).responses,
-        { timeout: 60_000 }).toBe(1);
+        { timeout: 60_000 }).toBe(responsesBefore + 1);
     } else {
       await expect(respondent.locator('body')).toContainText(scenario.outcome === 'future' ? '尚未开放' : '截止');
-      expect((await readPreviewIsolationSnapshot(surveyId, me.tenantId)).responses).toBe(0);
+      expect((await readPreviewIsolationSnapshot(surveyId, me.tenantId)).responses).toBe(responsesBefore);
     }
     await respondent.close();
   }
