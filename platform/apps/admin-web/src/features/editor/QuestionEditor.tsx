@@ -26,7 +26,7 @@ export function QuestionEditor({ question, supportsLogic, conditionSources, api,
   }
   const labels: Record<string, string> = { X: '说明文字', L: '单选题', M: '多选题', S: '短文本题', T: '长文本题',
     'mjy-collapsible': '折叠栏目', 'mjy-cascading-select': '多级下拉', 'mjy-carousel': '轮播图' };
-  const simpleCondition = /^([A-Za-z][A-Za-z0-9]*) == "([^"\\]*)"$/.exec(question.condition ?? '');
+  const simpleCondition = /^([A-Za-z][A-Za-z0-9]*) == "([A-Za-z][A-Za-z0-9]*)"$/.exec(question.condition ?? '');
   const selectedSource = simpleCondition ? conditionSources.find((source) => source.code === simpleCondition[1]
     && source.answers?.some((answer) => answer.code === simpleCondition[2])) : undefined;
   const complexCondition = Boolean(question.condition && !selectedSource);
