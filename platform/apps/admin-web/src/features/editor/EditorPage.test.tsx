@@ -110,6 +110,49 @@ afterEach(() => {
 });
 
 describe('EditorPage', () => {
+  test('authors a device response limit without replacing other limits', async () => {
+    const source = structuredClone(gatewayFixture) as Record<string, unknown>;
+    source.policy = { policyVersion: 1, limits: { maxDurationSeconds: 600,
+      responses: [{ by: 'ip', max: 10 }] } };
+    let saved: Record<string, unknown> | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        saved = (request.body as { definition: Record<string, unknown> }).definition;
+        return { surveyId, version: 5, definition: saved };
+      },
+    });
+    renderEditor(api);
+    fireEvent.change(await screen.findByLabelText('同一设备最多提交次数'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    expect(saved?.policy).toEqual({ ...source.policy as Record<string, unknown>,
+      limits: { maxDurationSeconds: 600, responses: [{ by: 'ip', max: 10 }, { by: 'device', max: 1 }] },
+    });
+  });
+
+  test('keeps unsupported response limits read only', async () => {
+    const source = structuredClone(gatewayFixture) as Record<string, unknown>;
+    source.policy = { policyVersion: 1, limits: { responses: [{ by: 'device', max: 1 }, { by: 'device', max: 2 }] } };
+    const api = editorApi({ [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }) });
+    renderEditor(api);
+    expect(await screen.findByLabelText('同一设备最多提交次数')).toBeDisabled();
+    expect(screen.getByText('现有答卷限制格式无法在此编辑；原设置会保留。')).toBeVisible();
+  });
+
+  test('does not submit an invalid device response limit', async () => {
+    let submissions = 0;
+    const api = editorApi({ [`PUT /v1/surveys/${surveyId}/draft`]: () => {
+      submissions += 1;
+      throw new Error('invalid device limit must not save');
+    } });
+    renderEditor(api);
+    fireEvent.change(await screen.findByLabelText('同一设备最多提交次数'), { target: { value: '10001' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('同一设备答卷上限须为 1–10000 的整数');
+    expect(submissions).toBe(0);
+  });
+
   test('authors an IP denial list without replacing time or access rules', async () => {
     const source = structuredClone(gatewayFixture) as Record<string, unknown>;
     source.policy = { policyVersion: 1, window: { opensAt: '2026-11-12T09:00', timezone: 'Asia/Shanghai' },
