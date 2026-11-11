@@ -1,11 +1,14 @@
 """Internal FD-only OpenSSL bootstrap. Not a general command launcher."""
 import fcntl
+import array
 import json
 import math
 import os
 from pathlib import Path
 import resource
 import signal
+import socket
+import struct
 import stat
 import sys
 
@@ -56,18 +59,63 @@ def unique(pairs):
     return result
 
 
-def main():
-    # -I removes the ambient module path. Only this trusted package directory is
-    # added; the controller must verify the package before starting this child.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from owned_children import establish_parent_guard
+def load_parent_guard():
+    # The controller admits this complete package before starting the child.
+    # A normal import could nevertheless select a timestamp-valid altered pyc.
+    # Read only the admitted companion path, never import/search/cache it.
+    path = Path(__file__).absolute().with_name('owned_children.py')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     try:
-        if len(sys.argv) != 3:
+        before = os.fstat(fd)
+        def snapshot(info):
+            return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink,
+                    info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_uid not in (0, os.geteuid()) or before.st_mode & 0o022
+                or not 1 <= before.st_size <= 131072):
+            raise ValueError('guard companion source is unsafe')
+        source = os.read(fd, 131073)
+        if (len(source) != before.st_size or snapshot(os.fstat(fd)) != snapshot(before)
+                or snapshot(os.lstat(path)) != snapshot(before)):
+            raise ValueError('guard companion source changed')
+    finally:
+        os.close(fd)
+    namespace = {'__name__': '_survey_admitted_child_boundary', '__file__': str(path)}
+    exec(compile(source, str(path), 'exec', dont_inherit=True), namespace)
+    factory = namespace.get('establish_parent_guard')
+    if not callable(factory): raise ValueError('guard companion has no fixed entry')
+    return factory
+
+
+def main():
+    try:
+        if len(sys.argv) != 4:
             return 121
+        establish_parent_guard = load_parent_guard()
         guard = establish_parent_guard(int(sys.argv[1]), sys.argv[2])
         signal.signal(signal.SIGALRM, signal.SIG_DFL)
         signal.alarm(5)  # No payload release may leave an idle bootstrap forever.
-        data = sys.stdin.buffer.read(16385)
+        control_fd = int(sys.argv[3])
+        if control_fd <= 2: return 121
+        with socket.socket(fileno=control_fd) as channel:
+            os.set_inheritable(control_fd, False)
+            if channel.family != socket.AF_UNIX or channel.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_SEQPACKET:
+                return 121
+            peer_pid, peer_uid, _ = struct.unpack('3i', channel.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            if peer_pid != int(sys.argv[1]) or peer_uid != os.geteuid(): return 121
+            channel.settimeout(5)
+            guard.check()
+            channel.send(b'SURVEY-CRYPTO-GUARDED-1')  # No data/key FD exists in this process yet.
+            data, messages, flags, _ = channel.recvmsg(16385, socket.CMSG_SPACE(4 * array.array('i').itemsize),
+                socket.MSG_CMSG_CLOEXEC)
+            received = []
+            for level, kind, content in messages:
+                if level != socket.SOL_SOCKET or kind != socket.SCM_RIGHTS: return 122
+                values = array.array('i'); values.frombytes(content[:len(content) - len(content) % values.itemsize])
+                received.extend(values)
+            if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or len(received) != 4 or len(set(received)) != 4:
+                return 122
+            guard.check()
         if len(data) > 16384:
             return 122
         request = json.loads(data.decode('utf-8'), object_pairs_hook=unique)
@@ -80,11 +128,12 @@ def main():
                 or not isinstance(request['fds'], dict) or set(request['fds']) != {'binary', 'input', 'output', 'key'}):
             return 122
         observed = {}
-        for role, expected in request['fds'].items():
+        for role, descriptor in zip(('input', 'output', 'key', 'binary'), received):
+            expected = request['fds'][role]
             if not isinstance(expected, dict) or type(expected.get('fd')) is not int:
                 return 123
-            actual = describe_fd(expected['fd'], role, request['profile'])
-            if actual != expected:
+            actual = describe_fd(descriptor, role, request['profile'])
+            if {k: v for k, v in actual.items() if k != 'fd'} != {k: v for k, v in expected.items() if k != 'fd'}:
                 return 123
             observed[role] = actual
         if (len({item['fd'] for item in observed.values()}) != 4
@@ -98,6 +147,8 @@ def main():
         # fd: reads the inherited open-file description, unlike reopening the
         # input through /proc/self/fd. A previous child may have consumed it.
         os.lseek(fds['key'], 0, os.SEEK_SET)
+        for role in ('input', 'output', 'key'):
+            os.set_inheritable(fds[role], True)
         os.set_inheritable(fds['binary'], False)
         arguments = ['/usr/bin/openssl', 'enc']
         if request['profile'] == 'decrypt':
