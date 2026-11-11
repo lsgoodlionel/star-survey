@@ -45,7 +45,7 @@ W01–W20 来自 2026-10-27 问卷星公开资料整理；其 Survey 对照使�
 | W02 模板、批量导入 | 已实现且有阶段验证 | [模板品牌浏览器旅程](../../apps/admin-web/e2e/template-branding.spec.ts)、[导入页](../../apps/admin-web/src/features/import/ImportPage.tsx) | 逐格式/失败行/版本候选复核 |
 | W02 题库、问卷转移、企业素材库 | 未知 | 公开目录已有；本轮未定位完整自有管理端旅程 | 拆原子任务并核对 API、界面和权限 |
 | W03 基础题与首批高级题 | 已实现且有阶段验证 | [编辑器](../../apps/admin-web/src/features/editor/EditorPage.tsx)提供 X/L/M/S/T 与三种主题；[Wave 5 双库旅程](../../apps/admin-web/e2e/authoring.spec.ts) | 其他题型逐项核对，不能按题型总数推断 |
-| W03 前置单选显示条件 | 已实现但未验收（草稿） | [网关 DSL 契约](../../contracts/survey-logic-dsl-v1.md)已有；[PR #110](https://github.com/lsgoodlionel/star-survey/pull/110)新增编辑器与浏览器测试，CI/复审待完成 | 精确 head 双库浏览器、独立复审、合并后再判阶段交付 |
+| W03 前置单选显示条件 | 已实现但未验收（草稿） | [网关 DSL 契约](../../contracts/survey-logic-dsl-v1.md)已有；[PR #110](https://github.com/lsgoodlionel/star-survey/pull/110)新增编辑器与浏览器测试，精确 head 双库浏览器与非作者只读复审已通过；PR 仍草稿未合并 | 合并后再判阶段交付 |
 | W03 复杂条件、校验、计分 | 后端有契约；管理端旅程未验证 | [DSL v2 契约](../../contracts/survey-logic-dsl-v1.md)、[网关测试](../../tools/publish-gateway/tests/test_logic_publish.py)；当前编辑器无相应完整配置路径 | 逐项做安全可视配置、发布拒绝与答卷回读 |
 | W04 时间窗、验证码、邀请码、限制及网络规则 | 服务端已有 `policy` v1 保存、编译和插件执行；尚无管理端策略配置旅程 | [访问策略契约](../../contracts/survey-access-policy-v1.md)、[双库 HTTP 端到端驱动](../../deploy/test/run-access-policy.sh)覆盖策略执行；[正式链接面板](../../apps/admin-web/src/features/publish/PublishedAccessPanel.tsx)目前只创建/撤销链接，未暴露策略字段 | 先按来源逐项确认策略范围与权限；管理端从单一时间窗起切片，验证草稿保存→发布→真实作答允许/拒绝、时区边界与越权，双库浏览器准出。编辑器文件与 #110 重叠，待其审查收口后再动实现 |
 | W05 链接、二维码、名单投放 | 已实现且有阶段验证 | [投放工作区](../../apps/admin-web/src/features/delivery/DeliveryWorkspacePage.tsx)、[主作者浏览器旅程](../../apps/admin-web/e2e/authoring.spec.ts)、[#40](https://github.com/lsgoodlionel/star-survey/issues/40) | 正式运营身份不可变候选验收 |
@@ -57,6 +57,21 @@ W01–W20 来自 2026-10-27 问卷星公开资料整理；其 Survey 对照使�
 | W17 模板、品牌、多语言与素材固定 | 已实现且有本地阶段验收 | [品牌契约](../../contracts/survey-branding-v1.md)、[双库浏览器旅程](../../apps/admin-web/e2e/template-branding.spec.ts)、[#36](https://github.com/lsgoodlionel/star-survey/issues/36) | 深度主题和自定义域名单列核查 |
 | W17 自定义域名、CSS/JS 扩展 | 未知 | 公开目录有细项，旧 Wave 2 阶段验收未声称覆盖 | 先做安全/租户边界与产品取舍 |
 
+## W04 首切片任务包：开放时间窗（R04-04）
+
+**范围与依赖。** 只为问卷定义顶层 `policy.window` 提供开放起止时间和 IANA 时区的可视配置。先等 [#110](https://github.com/lsgoodlionel/star-survey/pull/110) 编辑器条件切片收口并核对最新 main，避免同时写 `EditorPage.tsx`、`EditorPage.test.tsx` 和 `authoring.spec.ts`。本切片不扩至 R04 的密码、邀请、设备/IP、地域和答卷时长；这些服务端规则已有契约，但管理端旅程另立任务。
+
+**现有契约。** [访问策略 v1](../../contracts/survey-access-policy-v1.md)允许 definition v1/v2 的可选顶层 `policy`，`policyVersion: 1`；`window.opensAt/closesAt` 至少一项，格式 `YYYY-MM-DDTHH:MM[:SS]` 且无偏移，`timezone` 为 IANA 名，缺省 `Asia/Shanghai`；区间为 `[opensAt, closesAt)`。夏令时不存在/重叠本地时刻、倒置区间和与 `settings.startdate/expires` 共存均由服务端 422 拒绝。现有 [网关单测](../../tools/publish-gateway/tests/test_policy_compile.py)、[schema 负测](../../tools/publish-gateway/tests/test_policy_schema.py)和[真实 HTTP 驱动](../../tests/e2e/access_policy.py)已验证未来开放拒绝、纽约时区关闭拒绝、作答中关窗后的提交拒绝；现有 [编辑器模型](../../apps/admin-web/src/features/editor/model/definition.ts)把顶层未知字段放在 `source` 并原样序列化，但没有可编辑的 `policy` 属性，不能把模型保留等同管理端配置完成。
+
+**先红后绿的最小测试。**
+
+1. 模型测试：载入带 `policy.window` 及 `access/limits/network` 的定义，编辑时间窗、清除单个端点并保存回读；只改 `window`，保留其他策略、未知问卷字段和无策略旧定义。不应让清空两端生成无效空 `window`。先让新测试因缺编辑操作失败。
+2. UI 测试：具有 `canEdit` 权限的人可设置/回读起止与时区；只读身份控件禁用且不能提交。输入有格式提示；服务端 422 的时区、DST、顺序和原生设置冲突需显示可行动的错误，不能静默保存。先断言当前 UI 找不到时间窗字段。
+3. 双库浏览器纵向验收：真实草稿保存→重载→发布→实际答题入口，分别验证未来开始拒绝、当前开放允许、已关闭拒绝；本地时区经服务端转换后语义一致。沿用已有跨层发布计数门禁并精确更新预期，不因新增旅程放宽或跳过。断线/跨关闭时提交的服务端拒绝复用现有 HTTP 驱动；若新增 UI 场景触及该旅程，再补浏览器断言。
+4. 失败边界：`opensAt >= closesAt`、无效 IANA、DST 缺失/重叠、`settings.startdate/expires` 冲突不得发布；草稿保存 422 保留未保存编辑与版本冲突提示，避免将无效本地输入变为已发布状态。
+
+**文件与准出。** 实现预计限于 `apps/admin-web/src/features/editor/model/definition.ts`、独立时间窗控件、`EditorPage.tsx` 与对应模型/UI/浏览器测试；复用后端和网关，不改 Release 工作流。精确 head 的前端质量、MySQL/PostgreSQL 真实浏览器与既有 HTTP 策略驱动通过，非作者复审无阻断后才可判代码切片交付；正式身份候选和生产层仍按原门禁单独验收。
+
 ## 执行顺序与准出
 
 1. **范围决策**：用户已同意先核查并推进核心调查旅程 W02–W07、W17；W01–W20 是否为长期目标、哪些场景纳入下一版，仍待确定。旧阶段遗留按对应 Issue 跟踪；#41 已有 rc19 人工 VoiceOver 初步通过记录并关闭，不再列为当前待做。
@@ -64,4 +79,4 @@ W01–W20 来自 2026-10-27 问卷星公开资料整理；其 Survey 对照使�
 3. **短切片实现**：优先选择不与现行工作树冲突的核心链缺口；写失败测试，再补三端契约和实现。数据库旅程按既有约定做 MySQL/PostgreSQL 真实浏览器验证；精确 head CI 与独立审查后才判断阶段状态。
 4. **门禁分离**：PR/CI 绿只证明对应代码切片；正式身份不可变候选、人工读屏（#41 的 rc19 记录已通过）、原生生命周期、供应商和生产各保留独立证据。Release 工作流由 Claude Code 负责，本草案不修改或触发。
 
-首个 W03 前置单选显示条件切片见 [draft PR #110](https://github.com/lsgoodlionel/star-survey/pull/110)，仍待 CI 和复审，不算交付完成。下一步勾选和责任归属见 [Issue #106](https://github.com/lsgoodlionel/star-survey/issues/106)。本页不更新 `capabilities.json`、旧蓝图或 Release 配置。
+首个 W03 前置单选显示条件切片见 [draft PR #110](https://github.com/lsgoodlionel/star-survey/pull/110)：精确 head CI 与非作者只读复审已通过，仍未合并，不算交付完成。下一步勾选和责任归属见 [Issue #106](https://github.com/lsgoodlionel/star-survey/issues/106)。本页不更新 `capabilities.json`、旧蓝图或 Release 配置。
