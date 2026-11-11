@@ -67,8 +67,8 @@ W01–W20 来自 2026-10-27 问卷星公开资料整理；其 Survey 对照使�
 | 编号 | 子项 | 当前判断 | 建议 | 请 Owner 决定 |
 | --- | --- | --- | --- | --- |
 | A1 | W03 前置单选显示条件 | #110 已合并（`fea42272a3`） | 纳入（已在进行） | 无需新决定 |
-| A2 | W04 开放时间窗（R04-04） | 服务端已有；管理端配置见草稿 [PR #123](https://github.com/lsgoodlionel/star-survey/pull/123) | 纳入，作为 W04 首切片（见下节任务包） | 是否纳入 |
-| A3 | W04 密码、邀请、设备/IP、地域、答卷时长 | 服务端契约已有，管理端无旅程 | 纳入候选，排在 A2 之后逐项切片 | 纳入哪几项 |
+| A2 | W04 开放时间窗（R04-04） | [PR #123](https://github.com/lsgoodlionel/star-survey/pull/123) 已合并（`1245a6003c`） | 纳入，作为 W04 首切片（见下节任务包） | 无需新决定 |
+| A3 | W04 密码、邀请、设备/IP、地域、答卷时长 | 服务端契约已有；2026-11-11 在 #106 登记首个切片为 IP 拒绝清单 `policy.network.denyIps`，其余未开工 | 纳入候选，排在 A2 之后逐项切片 | 每项开工前在 #106 登记 |
 | A4 | W03 复杂条件、校验、计分 | 后端有契约，编辑器无完整配置 | 纳入候选，先做条件组合与校验 | 是否纳入；计分是否本版 |
 | A5 | W02 题库、问卷转移、企业素材库 | 未知 | 先核查，再决定 | 是否授权先做核查 |
 | A6 | W05 嵌入、URL 参数、小程序与外部渠道 | 未知 | 先核查嵌入与参数，小程序单列 | 核查范围 |
@@ -137,4 +137,4 @@ Owner 原话「按建议回复」，即按上面 A–D 的建议执行，记录�
 3. **短切片实现**：优先选择不与现行工作树冲突的核心链缺口；写失败测试，再补三端契约和实现。数据库旅程按既有约定做 MySQL/PostgreSQL 真实浏览器验证；精确 head CI 与独立审查后才判断阶段状态。
 4. **门禁分离**：PR/CI 绿只证明对应代码切片；正式身份不可变候选、人工读屏（#41 的 rc19 记录已通过）、原生生命周期、供应商和生产各保留独立证据。Release 工作流由 Claude Code 负责，本草案不修改或触发。
 
-首个 W03 前置单选显示条件切片 [PR #110](https://github.com/lsgoodlionel/star-survey/pull/110) 已合并（`fea42272a3`）；W04 开放时间窗切片见草稿 [PR #123](https://github.com/lsgoodlionel/star-survey/pull/123)，未合并前不算交付完成。下一步勾选和责任归属见 [Issue #106](https://github.com/lsgoodlionel/star-survey/issues/106)。本页不更新 `capabilities.json`、旧蓝图或 Release 配置。
+首个 W03 前置单选显示条件切片 [PR #110](https://github.com/lsgoodlionel/star-survey/pull/110) 已合并（`fea42272a3`）；W04 开放时间窗切片 [PR #123](https://github.com/lsgoodlionel/star-survey/pull/123) 已合并（`1245a6003c`）；代码切片交付不自动提升旧 Wave 或生产六层状态。下一步勾选和责任归属见 [Issue #106](https://github.com/lsgoodlionel/star-survey/issues/106)。本页不更新 `capabilities.json`、旧蓝图或 Release 配置。
