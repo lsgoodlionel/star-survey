@@ -117,3 +117,11 @@ Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→h
 真实入口为`tests/integration/owned_crypto_native.py --image python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e`。只用本地固定镜像和合成数据，非特权65534、无网络/端口/host挂载、只读rootfs、有限tmpfs/PID/CPU/内存；独立核对自己创建的容器身份及隔离属性。最新实测真实往返、截断密文拒绝、超时child已结束、tmp顶层没有额外命名文件、测试容器删除均通过，exit0。各模块运行前后及容器内SHA一致；crypto模块649dbf55…、bootstrap627a983f…；该实验不验证备份HMAC、更不替代产品清理或四平台准出。`/tmp`顶层检查不证明进程无其他FD副本。非作者复核发现外层仅核bool类型会接受false的P2，现增加独立全部为true及严格0/0退出检查，并补失败证据负例；不能靠子进程exit0兜底。
 
 并行状态复查：远端main9b3b4e080dff合入#127，仅协作提示/看板及其测试，与本切片无文件重叠；#125保持Draft及原head9f8c7c7b，不把WIP分支组件绿灯回填为其controller已交付。当前未打包新运行入口，Docker exec、实际backup/verify helper、失败安装和卸载后置核验尚未闭环，方案B/恢复/native/上传/稳定版门禁全部保持。Release仍由Claude负责。
+
+### Cipher适配器连接原认证封装（未启用）
+
+`owned_cipher_adapter.py`将现有AuthenticatedOpenSSLCipher封装连接实际FD executor：捕获一次内部提供的合成/受信key bytes并立即封写，HMAC与OpenSSL均读取同一份；不允许命名明文、外来workspace/key、根目录外密文或任意命令。未知child与未预期executor异常持续持有导出context，阻断读写、关闭及复用，不用finally自动释放lease。只允许已确认结束的失败释放，外层helper必须保持对象/intent，尚未接线。没有放宽旧HMAC或增加磁盘回退。
+
+非作者复核确认两个P2均先红后修复：另一uid可写非sticky祖先及操作中root替换；密文FIFO阻塞。适配器现核对完整祖先，持固定私有目录FD，所有密文open/stat/unlink均相对dir_fd、NOFOLLOW/NONBLOCK及普通单链接/权限核验，xb独占创建，仅删除本次记录dev/ino的文件，拒绝未知碰撞；权限通过FD fchmod，不追随路径。backup.py仅新增默认行为不变的_secure_output hook。对象close前核对FD，未知child时拒绝close；构造失败关闭目录FD。
+
+7项适配器测试（合成executor）含原HMAC字节、篡改拒绝不启动child、未知持有/复用拒绝、立即封key、外来参数/路径拒绝、祖先及中途替换拒绝、FIFO拒绝；owned总40项、原backup/restore43项通过。真实native入口还在同一受限容器内执行现有HMAC封装的实际OpenSSL往返及篡改拒绝，无child新增，所有receipt completed，容器删除单独确认。源码hash前/后/容器内绑定；不替代完整备份/数据库/归档验证、helper父死亡集成、Docker exec或安装/卸载证明。未产生新PR/候选/Release，#125冻结待Owner决定，WIP仅作后续集成基础。

@@ -72,6 +72,9 @@ class AuthenticatedOpenSSLCipher:
     def _password_argument(self, key_file):
         return f"file:{key_file}"
 
+    def _secure_output(self, destination):
+        os.chmod(destination, 0o600)
+
     def _key(self, key_file: Path) -> bytes:
         try:
             key = key_file.read_bytes().strip()
@@ -98,7 +101,7 @@ class AuthenticatedOpenSSLCipher:
                     authenticator.update(chunk)
                     output.write(chunk)
                 output.write(authenticator.digest())
-            os.chmod(destination, 0o600)
+            self._secure_output(destination)
         except (OSError, subprocess.CalledProcessError) as exc:
             raise BackupError("backup payload encryption failed") from exc
         finally:

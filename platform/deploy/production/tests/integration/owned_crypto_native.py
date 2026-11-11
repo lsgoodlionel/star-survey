@@ -12,8 +12,10 @@ import subprocess
 import sys
 import uuid
 
-MODULES = ('owned_memory.py', 'owned_children.py', 'owned_crypto.py', 'owned_crypto_child.py', 'runtime_ownership.py')
-CHECKS = ('roundTrip', 'truncatedCipherRejected', 'deadlineChildEnded', 'noNamedPlaintext')
+MODULES = ('owned_memory.py', 'owned_children.py', 'owned_crypto.py', 'owned_crypto_child.py',
+           'runtime_ownership.py', 'owned_cipher_adapter.py', 'backup.py')
+CHECKS = ('roundTrip', 'truncatedCipherRejected', 'deadlineChildEnded', 'noNamedPlaintext',
+          'authenticatedRoundTrip', 'badHmacStartsNoChild')
 
 
 def passed(report, hashes):
@@ -32,6 +34,7 @@ def inside():
     from owned_children import establish_parent_guard, read_process_identity, ChildJournal
     from owned_crypto import OpenSSLProcess, KnownCryptoFailure
     from runtime_ownership import PrivateStore
+    from owned_cipher_adapter import ControlledCipher, BackupError
     parent = read_process_identity(os.getppid())
     guard = establish_parent_guard(parent['pid'], parent['start'])
     root = Path('/tmp/receipts')
@@ -65,7 +68,31 @@ def inside():
         report['truncatedCipherRejected'] = not accepted and failed['phase'] == 'failed' and failed['reason'] == 'exit'
         accepted, deadline = execute('encrypt', workspace, plain, timed, key, timeout=0.001)
         report['deadlineChildEnded'] = not accepted and deadline['phase'] == 'failed' and deadline['reason'] == 'deadline'
-    report['noNamedPlaintext'] = all(path.name in ('code', 'receipts') for path in Path('/tmp').iterdir())
+    encrypted_root = Path('/tmp/encrypted')
+    encrypted_root.mkdir(mode=0o700)
+    store = PrivateStore(root, name='runtime-child-' + uuid.uuid4().hex + '.json')
+    journal = ChildJournal(store, guard, operation_id=str(uuid.uuid4()), installation_id=str(uuid.uuid4()))
+    with AnonymousWorkspace(max_bytes=1024 * 1024) as workspace:
+        cipher = ControlledCipher(workspace, OpenSSLProcess(journal, guard), encrypted_root, b'c' * 64)
+        plain, restored = workspace / 'answer', workspace / 'restored'
+        with plain.open('xb') as handle:
+            handle.write(b'synthetic authenticated answer')
+        destination = encrypted_root / 'postgres.dump.enc'
+        cipher.encrypt(plain, destination, cipher.key)
+        cipher.decrypt(destination, restored, cipher.key)
+        report['authenticatedRoundTrip'] = (restored.read_bytes() == plain.read_bytes()
+            and len(store.load()['children']) == 2
+            and all(item['phase'] == 'completed' for item in store.load()['children']))
+        damaged = bytearray(destination.read_bytes())
+        damaged[-1] ^= 1
+        destination.write_bytes(damaged)
+        try:
+            cipher.decrypt(destination, workspace / 'rejected', cipher.key)
+        except BackupError:
+            report['badHmacStartsNoChild'] = len(store.load()['children']) == 2
+        cipher.close()
+    report['noNamedPlaintext'] = (all(path.name in ('code', 'receipts', 'encrypted') for path in Path('/tmp').iterdir())
+        and {path.name for path in encrypted_root.iterdir()} == {'postgres.dump.enc'})
     report['sourceHashes'] = {name: hashlib.sha256((Path('/tmp/code') / name).read_bytes()).hexdigest() for name in MODULES}
     print(json.dumps(report, sort_keys=True))
     return 0 if all(report[key] is True for key in CHECKS) else 1
