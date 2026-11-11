@@ -2439,6 +2439,41 @@ class SurveyctlTest(unittest.TestCase):
                 self.manager().restore("older-compatible")
             self.assertEqual([], self.runner.commands)
 
+    def test_uninstall_refuses_when_runtime_discovery_is_unavailable(self):
+        self.install()
+        self.runner.commands.clear()
+        self.runner.fail_when = lambda command: command[0] == "docker" and "down" not in command
+        with self.assertRaises(self.module.SurveyctlError):
+            self.manager().uninstall(False, None)
+        self.assertFalse(any("down" in command for command in self.runner.commands))
+        self.assertEqual("healthy", self.manager()._read_state()["status"])
+
+    def test_uninstall_zero_exit_without_resource_verification_is_not_success(self):
+        self.install()
+        # FakeRunner keeps reporting the original services as running after a
+        # successful no-op `down`: inject residual resources, not a real daemon.
+        self.runner.commands.clear()
+        with self.assertRaises(self.module.SurveyctlError):
+            self.manager().uninstall(False, None)
+        self.assertNotEqual("uninstalled", self.manager()._read_state()["status"])
+
+    def test_failed_install_cleanup_never_issues_runtime_mutation(self):
+        with self.assertRaises(self.module.RuntimeHealthError):
+            self.manager(probe=FakeHostProbe(tls_valid=False)).install(
+                self.base_manifest, "survey.example.com", "operations", "operations@example.com")
+        state = (self.target / ".surveyctl/state.json").read_bytes()
+        marker = self.target / ".surveyctl/operation.intent"
+        before = marker.read_bytes()
+        self.runner.commands.clear()
+        for purge, confirm in ((False, None), (True, f"PURGE {self.target}")):
+            with self.subTest(purge=purge):
+                with self.assertRaisesRegex(self.module.InputError, "unverified outcome"):
+                    self.manager().uninstall(purge, confirm)
+                self.assertEqual([], self.runner.commands)
+                self.assertEqual(before, marker.read_bytes())
+                self.assertEqual(state, (self.target / ".surveyctl/state.json").read_bytes())
+                self.assertTrue((self.target / "shared").exists())
+
     def test_uninstall_preserves_data_and_purge_requires_exact_second_confirmation(self):
         self.install()
         manager = self.manager()
