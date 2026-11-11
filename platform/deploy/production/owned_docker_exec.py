@@ -48,7 +48,9 @@ PROFILES = {
     'exec-preflight': (5, ['/bin/echo', 'survey-owned-exec-v1']),
     'postgres-dump': (120, ['pg_dump', '-U', 'postgres', '--format=custom', '--serializable-deferrable', 'platform']),
     'mariadb-dump': (120, ['/bin/sh', '-c',
-        'exec mariadb-dump --single-transaction --quick --skip-lock-tables -u root --password="$(cat /run/secrets/engine_db_root_password)" limesurvey']),
+        'password=$(cat /run/secrets/engine_db_root_password) || exit 70; '
+        '[ -n "$password" ] || exit 70; '
+        'exec mariadb-dump --single-transaction --quick --skip-lock-tables -u root --password="$password" limesurvey']),
     'postgres-schema': (15, ['psql', '-U', 'postgres', '-d', 'platform', '-Atqc',
         'SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1']),
     'engine-status': (30, ['php', 'application/commands/console.php', 'productionInit', 'status']),

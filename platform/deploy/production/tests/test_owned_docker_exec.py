@@ -4,6 +4,9 @@ import importlib
 import hashlib
 import io
 import os
+import shlex
+import subprocess
+import tempfile
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -78,6 +81,24 @@ class OwnedDockerExecTest(unittest.TestCase):
             with self.assertRaises(self.module.KnownExecFailure):
                 self.executor.execute('gateway-close', self.container, lease, body={'surveyId': True})
         self.assertEqual([], self.events)
+
+    def test_mariadb_secret_read_failure_cannot_be_masked_by_successful_dump_program(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker, credential = root / 'dump-invoked', root / 'credential'
+            program = root / 'mariadb-dump'
+            program.write_text('#!/bin/sh\nprintf attempted > "$SURVEY_FIXTURE_MARKER"\nprintf "%s\\n" "-- MariaDB dump fixture"\n')
+            program.chmod(0o700)
+            command = self.module.PROFILES['mariadb-dump'][1][-1].replace(
+                '/run/secrets/engine_db_root_password', shlex.quote(str(credential)))
+            environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                               SURVEY_FIXTURE_MARKER=str(marker))
+            for empty in (False, True):
+                if empty: credential.write_text('')
+                result = subprocess.run(['/bin/sh', '-c', command], env=environment,
+                                        capture_output=True, timeout=5)
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(marker.exists())
 
     def test_start_follows_persisted_id_and_released_receipt_then_exact_end(self):
         self.execute()

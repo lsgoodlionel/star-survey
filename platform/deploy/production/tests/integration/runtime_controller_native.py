@@ -98,7 +98,7 @@ def run_case(image, scenario):
     images['ADMIN_IMAGE'] = image
     architecture = 'arm64' if os.uname().machine in ('arm64', 'aarch64') else 'amd64'
     manifest_path, bundle = write_test_release(work, payload_overrides={'compose.yml': json.dumps(compose).encode()},
-        images=images, _fixture_architecture=architecture)
+        images=images, _fixture_architecture=architecture, _fixture_owned_support=True)
     manifest = module.load_manifest(manifest_path)
     stage = 'prepare'
     def remember():
@@ -269,8 +269,7 @@ def run_case(image, scenario):
 def main(image):
     if not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', image) or image.startswith('-'):
         raise SystemExit('a local digest-pinned shell image is required')
-    paths = [ROOT / name for name in ('surveyctl.py', 'runtime_controller.py', 'runtime_cohort.py',
-        'runtime_docker.py', 'runtime_ownership.py', 'owned_docker_exec.py', 'owned_children.py')]
+    paths = [ROOT / name for name in sorted(load_module().OWNED_RUNTIME_FILES)]
     paths += [Path(__file__).resolve(), ROOT / 'tests/test_surveyctl.py']
     hashes = lambda: {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
     report = {'scope': 'synthetic-controller-cleanup-only', 'sourceBefore': hashes()}
