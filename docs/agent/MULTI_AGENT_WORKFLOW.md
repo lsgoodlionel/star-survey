@@ -1,56 +1,69 @@
 # 多 Agent / 多人协同开发工作流（star-survey 实施版）
 
-> 状态：**草案 v1（2026-11-11）**，由 Claude Code 起草，待 Codex 补充、Owner 批准。
-> 关系：[`AGENTS.md`](../../AGENTS.md) 是**硬规则**（必须遵守）；本文是**协作协议**（怎么分工、交接、留痕）。两者冲突时以 `AGENTS.md` 为准。
-> 来源：通用多 Agent 协作方案，加上本仓库 2026-11-02 至 11-11 期间 Claude Code 与 Codex 协作推进 Wave 0–6 和首个 Release 的实际经验（#37–#41、#83–#113）。
+> 状态：**草案 v2（2026-11-11）**。v1 由 Claude Code 起草，v2 按 Codex 的独立协议审查（[PR #115 评论](https://github.com/lsgoodlionel/star-survey/pull/115)）修订，待 Owner 决定。
+> 关系：[`AGENTS.md`](../../AGENTS.md) 是**硬规则**（必须遵守）；本文是**协作协议**（如何分工、交接、留痕）。两者冲突时以 `AGENTS.md` 为准。
+> 来源：通用的 GitHub 多 Agent 协作方案，加上 2026-11-02 至 11-11 间 Claude Code 与 Codex 协作推进 Wave 0–6 和首个 Release 的实际经验（#37–#41、#83–#117）。
+> 本文中的机制**都是约定或建议**，标注「可选」的自动化在 Owner 批准前不会实施。
 
 ---
 
 ## 0. 一句话总结
 
-**GitHub 是唯一事实来源；按"责任区"分工，而不是逐单抢任务；每个结论都附上精确的提交和运行证据；所有不可逆或对外的动作，都要经过人类闸门和事前核查。**
+**GitHub 是共享的协作记录。按"责任区"加"当前认领"分工；每个结论都附上精确的提交和运行证据；所有不可逆或对外的动作，都要经过人类闸门和事前核查。**
 
 ---
 
 ## 1. 目标与原则
 
-**目标**：在同一个 GitHub 仓库里，让人类 Owner 与多个 AI Agent（目前是 Codex 和 Claude Code，今后可能更多）协同推进。要做到：任务有归属、过程可追溯、状态可观测、交接无歧义、对外动作可控。
+**目标**：在同一个 GitHub 仓库里，让人类 Owner 与多个 AI Agent（目前是 Codex 和 Claude Code）协同推进，并且做到：任务有归属、过程可追溯、状态可观测、交接无歧义、对外动作可控。
 
 | # | 原则 | 本项目里的含义 |
 |---|---|---|
-| P1 | **单一事实来源** | 状态只认 GitHub 上的 Issue、Project、PR 和 Actions。本地文件、会话记忆、口头说法都不算数 |
-| P2 | **责任区优先** | 按领域划定长期负责人（见 §3）。只有跨区或临时任务才逐单认领 |
-| P3 | **证据优先** | 每个"通过、完成、已修复"都要附上精确的 head SHA、Actions run 链接和测试名。**CI 全绿不等于验收通过** |
-| P4 | **先写失败测试** | 修复和功能都先写一个会失败的测试（`AGENTS.md`）。不得删除、跳过或放宽断言来换取通过 |
+| P1 | **GitHub 是共享协作记录** | 任务、状态、交接和结论以 Issue、Project、PR、Actions 为共享依据。本机状态、原始材料、用户授权和实际运行**同样是证据**，没公开在 GitHub 上的本地事实不等于不存在。决策依赖这类事实时，要在 GitHub 上留一份**不含私密内容和绝对路径**的摘要。会话记忆和口头说法不能单独作为依据 |
+| P2 | **责任区加当前认领** | 按领域划定默认负责人（§3）。具体工作以当前认领和 Owner 指派为准；责任区表只是起点，不永久锁定某个 Wave 或 Release |
+| P3 | **证据分层，不互相替代** | 「CI 通过」「编号对账通过」「闸门已启用」「需求验收」「人工验收」「发布授权」是**不同的结论**，要分别举证。每个结论都附上精确的 head 或合并提交、run 链接和测试名。合成或演练得到的证据要标明是合成的 |
+| P4 | **先写失败测试** | 修复和功能都先建一个会失败的测试（`AGENTS.md`）。不得删除、跳过或放宽断言来制造通过 |
 | P5 | **并发隔离** | 每个执行者使用独立的 worktree 和分支；同一组文件同一时间只有一个写入者 |
 | P6 | **人类闸门不可代签** | 合并、打 tag、发布、删除、改权限、人工验收记录，都要 Owner 明确授权。Agent 不得编造测试人或复核人，不得自我批准 |
-| P7 | **不可逆动作先核查** | 打 tag、发 Release、合并、删除之前，先跑一遍 §9 的核查清单 |
-| P8 | **历史不改写** | 失败的 tag 和候选保留并标为不合格，不移动、不复用。Issue 正文更新时在顶部加"当前状态"，原文保留为历史 |
-| P9 | **异步优先** | 进展、阻塞、交接写在 Issue 评论里；跨任务的设计讨论放到 Discussions；不用会话内的口头约定来推进 |
+| P7 | **不可逆动作先核查** | 打 tag、发布、合并、删除之前，先完成 §9 的核查清单 |
+| P8 | **历史不改写** | 失败的 tag 和候选保留并标为不合格，不移动、不复用。Issue 正文更新时，在顶部加一节「当前状态」，原文作为历史保留 |
+| P9 | **异步优先** | 进展、阻塞、交接写在 Issue 评论；跨任务的设计讨论放在 Discussions |
 
 ---
 
-## 2. 本仓库现状基线（2026-11-11 核实）
+## 2. 本仓库现状基线
 
-方案必须建立在这些事实上；事实变化时同步更新本节。
+> 「已核实」项附有核实日期和方法；「待核实」项在依赖它做决定之前，必须先重新核对。
 
-- **身份**：Codex 和 Claude Code 都通过 Owner 的账号 `lsgoodlionel` 操作 GitHub。由此带来三个后果：
-  - GitHub 的 Assignee、评论作者、PR 作者**无法区分**是哪个 Agent；
-  - 同一账号**不能 approve 自己的 PR**，所以 Agent 之间的审查只能以"审查评论"的形式留痕；
-  - 发验收、批准类评论时，会显示为 `OWNER` 身份。这类评论必须先得到 Owner 对正文的逐字确认（见 §8）。
-- **仓库**：公开仓库；`main` **没有分支保护**；Discussions 已开启。
-- **Project**：Project 1 有两个关键字段：`Status`（待办 / 开发中 / 验收中 / 完成）和 `Wave`（Wave 0–6 / 延期）。
-- **标签**：现有 `bug`、`documentation`、`enhancement`、`accessibility`、`Needs code review`、`Needs testing`、`Has conflicts` 等，还没有 Agent 或环境类标签。
+**已核实（2026-11-11）**
+- **仓库**：公开（`visibility=public`）；Discussions 已开启。
+- **保护**：`GET /branches/main/protection` 返回 404（未保护）；`GET /rulesets` 结果为 0 个；`GET /rules/branches/main` 结果为 0 条。也就是说，当时 `main` 没有分支保护，也没有 ruleset。
+- **GitHub 操作身份**：Codex 和 Claude Code 在本仓库的评论、PR 和 Release 操作都显示为 `lsgoodlionel`（在 #34、#108、#115 的评论作者和 PR 作者上核对过）。由此带来三个后果：
+  - Assignee 和作者**区分不出**是哪个 Agent；
+  - 同一账号**不能 approve 自己的 PR**，Agent 之间的审查只能以审查评论的形式留痕；
+  - 发出的验收或批准类评论会显示为 `OWNER`，所以发之前必须由 Owner 逐字确认正文（§8）。
+- **提交作者**（`main`，2026-11-01 起）：
+  - `lsgoodlionel <lsgood.lionel@gmail.com>`：162 次；
+  - `Harness Drill <drill@example.invalid>`：86 次；
+  - `Lionel <lsgood.lionel@gmail.com>`：48 次。
+
+  每个身份实际对应哪个执行者，**本文未逐个核实**（见待核实）。
+- **Project 1** 字段：`Status`（待办 / 开发中 / 验收中 / 完成）、`Wave`（Wave 0–6 / 延期）。
 - **现有自动化**：
-  - `labeler.yml`：PR 标签与冲突管理；
+  - `labeler.yml`：PR 打标签和冲突提示；
   - `review-labeler.yml`：approve 后更新标签；
-  - `codex-autofix.yml`：手动触发，最多修 5 个文件、最多两次，合并由人工完成。
-- **治理约束**：`docs/agent/PROJECT_MEMORY.md` 记录了 **2026-10-28 Owner 决定移除自建控制平面及其治理 CI**。因此本方案里所有新增的 Actions 自动化都是**可选**的，必须由 Owner 重新批准后才能落地（见 §12）。
-- **上游文件**：根目录的 `CONTRIBUTING.md` 和 `.github/pull_request_template.md` 是 LimeSurvey 上游原件，**不改**。本项目自己的约定写在 `docs/agent/` 下。
+  - `codex-autofix.yml`：手动触发，最多改 5 个文件、最多两次，失败即停，不自动合并。使用前要先读失败日志、实际的 workflow 和脚本以及对应的 run。自动修复的输出**不等于**审查或 CI 已通过。
+- **治理约束**：`docs/agent/PROJECT_MEMORY.md` 记录了 **2026-10-28 Owner 决定移除自建控制平面及其治理 CI**。因此本文所有新增的自动化都是可选项，需要 Owner 另外明确决定。
+- **上游文件**：根目录的 `CONTRIBUTING.md` 和 `.github/pull_request_template.md` 来自 LimeSurvey vendor 快照（`836af0f8a9`），**不改**。
 - **执行环境**：
-  - Owner 的 Mac 上有仓库外的方案文档（例如 02 需求矩阵）；
-  - Claude Code 当前运行在 Windows 上，有 MAX_PATH 限制，且没有 Docker 和 POSIX 环境；
-  - Linux 相关的验证以 GitHub Actions 为准。
+  - 仓库外的方案文档（例如 02 需求矩阵原件）在 Owner 的 Mac 上；
+  - Claude Code 当前运行在 Windows 上：有 MAX_PATH 限制，没有 Docker 和 POSIX 测试环境；
+  - Linux 验证以 GitHub Actions 为准。
+
+**待核实**
+- 每个提交身份的实际执行者，尤其是 `Harness Drill`（测试或演练上下文中的标识）。
+- 各责任区当前的实际认领情况。以 Issue 中最新的认领和 Owner 指派为准。
+- 本文引用的历史案例细节。以文中链接的 Issue 和 PR 原文为准。
 
 ---
 
@@ -61,29 +74,28 @@
 | 角色 | 职责 | 不能做的事 |
 |---|---|---|
 | **Owner（人类）** | 定范围和优先级；批准合并、tag、Release 和生产操作；签署人工验收；处理权限和删除类操作 | — |
-| **Codex** | 按责任区实现、修复、验收对账；在 Issue 中提出跨区需求 | 未经授权不合并、不打 tag、不发布；不改其他责任区的文件 |
-| **Claude Code** | 同上；另外负责 Release 线；独立审查其他 Agent 的 PR | 同上 |
-| **环境绑定执行者** | 需要特定机器的任务（标记为 `env:mac`），由 Owner 本人或在 Mac 上运行的 Agent 执行 | — |
-| **独立审查者** | 由**非作者**的 Agent 或人审查 PR，以审查评论留痕 | 不能审查自己写的 PR |
+| **Codex** | 按责任区实现、修复、做验收对账；在 Issue 中提出跨区需求。**有 Mac 访问权时，Mac 本地任务属于 Codex 的工作范围** | 未经授权不合并、不打 tag、不发布；不改其他责任区的文件 |
+| **Claude Code** | 同上；另外默认负责 Release 线；对其他 Agent 的 PR 做独立审查 | 同上 |
+| **独立审查者** | 由**非作者**的 Agent 或人复核 PR，以审查评论留痕 | 不能复核自己写的 PR |
 
-### 3.2 责任区（Lane）
+**环境绑定任务**：需要特定机器、真实凭据或外部环境的步骤，标为 `env:mac` 等标签，由**能访问该环境的执行者**来做（通常是 Codex），不默认要求 Owner 动手。真实凭据和生产步骤仍需按 §8 取得**具体授权**。
 
-这是实际运行中形成的划分，今后可以落成机器可读的 `.github/agent-lanes.yml`（§11 Q3）。
+### 3.2 责任区（截至 2026-11-11；以当前认领和 Owner 指派为准）
 
-| 责任区 | 负责人 | 典型路径 | 典型 Issue |
+| 责任区 | 默认负责人 | 典型路径 | 典型 Issue |
 |---|---|---|---|
-| Release 工作流、tag、候选登记、发布说明、Release 发布 | **Claude Code** | `.github/workflows/release.yml`、`.github/release/`、`platform/deploy/production/release/` | #34 |
-| 生产控制器、受控恢复、原生生命周期、安装目录安全 | **Codex** | `platform/deploy/production/surveyctl.py`、`backup.py`、`restore.py` 及其测试 | #33、#108、#109 |
-| Wave 1/3/4 验收对账与产品修复 | **Codex** | `platform/apps/admin-web/`、`platform/services/business/` 的对应功能 | #38、#39、#40 |
-| 下一版本范围盘点 | **Codex**（等 Owner 定范围） | `platform/docs/productization/` | #106、#107 |
-| 生产 Compose 和 Caddy 静态加固 | 最近一次由 Claude Code 负责（#104） | `platform/deploy/production/compose.yml`、`Caddyfile` | #37 |
-| 需求追溯（reqtrace） | 由 #112 指定 | `platform/tools/traceability/` | #112 |
+| Release 工作流、tag、候选登记、发布说明、Release 发布 | Claude Code | `.github/workflows/release.yml`、`.github/release/`、`platform/deploy/production/release/` | #34 |
+| 生产控制器、受控恢复、原生生命周期、安装目录安全 | Codex | `platform/deploy/production/surveyctl.py`、`backup.py`、`restore.py` 及其测试 | #33、#108、#109、#114 |
+| Wave 1/3/4 验收对账与产品修复 | Codex | `platform/apps/admin-web/`、`platform/services/business/` 中的对应功能 | #38、#39、#40 |
+| 下一版本范围盘点 | Codex（等 Owner 定范围） | `platform/docs/productization/` | #106、#107 |
+| 需求追溯（reqtrace） | Codex（由 #112 指派） | `platform/tools/traceability/` | #112、#117 |
+| 生产 Compose 与 Caddy 静态加固 | 最近一次由 Claude Code 负责（#104） | `platform/deploy/production/compose.yml`、`Caddyfile` | #37 |
 | 人工验收、发布批准、生产与公网 | **Owner** | — | #41、#34 |
 
 **规则**：
-1. 在别人的责任区里发现问题时，**不要直接改**。新开一个 Issue，写清问题、利用条件、建议修法和验收标准，加上责任区标签，放进看板，并在相关 Issue 里互相引用（例如 #109）。
-2. 需要接手别人责任区里的某项工作时，必须由对方或 Owner 在 Issue 里**明确移交**（§7）。
-3. 责任区可以由 Owner 调整，调整后更新本表。
+1. 在别人的责任区里发现问题，**不要直接改**。新开一个 Issue，写清问题、利用条件、建议的修法和验收标准，放进看板，并与相关 Issue 互相引用（例如 #109）。
+2. 要接手别人的工作，必须由原负责人或 Owner 在 Issue 里**明确移交**（§7）。
+3. 责任区可以由 Owner 随时调整，调整后同步更新本表。
 
 ---
 
@@ -91,59 +103,57 @@
 
 | 载体 | 用途 | 本项目约定 |
 |---|---|---|
-| **Issue** | 任务、缺陷、阶段记录、交接、跨区请求 | 阶段类 Issue（Wave）的正文顶部维护「## 当前状态（日期，对照 `main` `<sha>`）」，原文保留在「历史记录」下。过程写在评论里 |
-| **Sub-issue** | 把大任务拆成能各自交接的子任务 | 每个子任务都有自己的责任区标签和验收标准 |
-| **PR** | 代码变更 | 先 Draft，就绪后改为 Ready。正文写清：问题、变更、先失败再通过的证据、本地和 CI 验证、范围外事项、关联 Issue（阶段 Issue 用 `Refs #N`，不要用 `Closes`） |
-| **Project** | 状态流转 | 新增的 Issue 和 PR 当天加入看板，并填好 `Status` 和 `Wave`。PR 合并后改为「完成」。阶段 Issue 由 Owner 决定何时进入「完成」 |
-| **Discussions** | 跨任务的设计决策、方案选型 | 结论要回填到对应 Issue 或文档，Discussions 本身不作为执行依据 |
-| **Actions** | 质量门和证据来源 | 证据只认**精确 head** 的 run。push 到 main 和 pull_request 触发的结果分开记录 |
-| **Release** | 不可变制品 | 正文和资产依据**候选自带的数据**生成，不依据执行晋升的源码（教训见 §13-④） |
+| **Issue** | 任务、缺陷、阶段记录、交接、跨区请求 | 阶段类 Issue（Wave）的正文顶部维护「## 当前状态（日期，对照 `main` `<sha>`）」，原文放在「历史记录」下。过程写在评论里 |
+| **Sub-issue** | 把大任务拆成可以独立交接的子任务 | 每个子任务都有负责人和验收标准 |
+| **PR** | 代码变更 | 先开 Draft，就绪后转为 Ready。正文写清楚：问题、变更、先红后绿的证据、本地验证与 CI、不在本 PR 范围的事项、关联的 Issue。阶段 Issue 用 `Refs #N`，不要用 `Closes #N` |
+| **Project** | 状态观测 | 新 Issue 和 PR 当天进看板，并填好 `Status` 和 `Wave`。PR 合并后改为「完成」。阶段 Issue 的「完成」只能由 Owner 设置 |
+| **Discussions** | 跨任务的设计决策 | 结论要回填到对应的 Issue 或文档，Discussions 本身不作为执行依据 |
+| **Actions** | 质量门和证据来源 | 只认**精确 head** 的运行结果；`push` 到 main 和 `pull_request` 的运行分开记录 |
+| **Release** | 不可变制品 | 正文和资产依据**候选自带的数据**生成，而不是依据执行晋升时的源码（见 §13-④） |
 
-**沟通分流**：任务进展、阻塞、交接写在 Issue 评论；代码细节写在 PR 评论；设计选型放到 Discussions；需要 Owner 决定的事项在 Issue 里加 `needs:owner` 标签，并在会话里提醒 Owner。
+**沟通分流**：进展、阻塞和交接写在 Issue 评论；代码细节写在 PR 评论；设计选型放在 Discussions。需要 Owner 决定的事项，在 Issue 里写清楚并在会话里提醒 Owner。
 
 ---
 
-## 5. 身份与留痕约定（共用账号下的过渡方案）
+## 5. 身份与留痕约定（共用账号期间的过渡方案）
 
-在 §11 Q1 的独立身份落地之前：
+1. **评论署名**：标题或第一行写明执行者和日期，例如 `## #108 独立审查（Claude，2026-11-11，精确 head 133933f76c）`。署名只用来标明这条评论由哪个 Agent 撰写，**不代表真人的确认**。
+2. **提交作者**：按照仓库已经验证过的配置填写，**不新造虚构的作者或邮箱，也不把 Agent 写成真人**。如果需要标明是哪个 Agent，可以：
+   - 保留工具自带的官方署名 trailer，例如 Claude Code 默认的 `Co-Authored-By: Claude … <noreply@anthropic.com>`。这是工具署名，不是真人；
+   - 或者在 PR 评论里说明。
 
-1. **评论署名**：标题或首行带上「（Claude，YYYY-MM-DD）」或「（Codex，YYYY-MM-DD）」，例如 `## #108 独立审查（Claude，2026-11-11，精确 head 133933f76c）`。
-2. **提交**：作者统一用仓库已登记的身份。在 trailer 里写明 Agent，例如 `Co-Authored-By: Claude …`。不得使用虚构的作者身份。已有历史保持不变，今后统一。
-3. **标签**（待新增，见 §12）：
-   - `agent:claude`、`agent:codex`：当前负责的 Agent；
-   - `needs:owner`：等待 Owner 决定或执行；
-   - `env:mac`：必须在 Owner 的 Mac 上执行；
-   - `lane:release`、`lane:controller`……：责任区；
-   - `handoff`：交接中。
-4. **分支**：
-   - `claude/<slug>`、`codex/<slug>`：现有习惯，保留；
-   - 新分支建议用 `<agent>/<issue号>-<slug>`，例如 `claude/112-vendor-matrix`；
-   - 人类用 `human/<name>/<slug>`；
-   - **不使用**含义不清的前缀（例如 `fix/` 看不出是谁的）。
-5. **会话可追溯**：在 PR 或评论里写明工作树位置和基线 SHA。会话 ID 可以选填。
+   新增其他 trailer 之前，先确认它和仓库的工具链兼容。
+3. **测试与验收身份要分清**：
+   - `Harness Drill` 之类的测试或演练身份**不是真人**，也不能当作真实的验收身份；
+   - 真实的测试人、复核人、操作者，和合成或演练得到的证据，必须分开标注；
+   - 不要把模拟结果写成生产结果或真人验收。
+4. **标签**（P1 阶段新增，等待批准）：`agent:claude`、`agent:codex`、`needs:owner`、`env:mac`、`lane:*`、`handoff`。
+5. **分支命名**：现在的 `claude/<slug>`、`codex/<slug>` 继续沿用。新分支建议用 `<agent>/<issue>-<slug>`；人类用 `human/<name>/<slug>`。不要再用 `fix/` 这类看不出执行者的前缀。
+6. **可追溯**：在 PR 或评论里写明基线 SHA。会话 ID 可选，写不写都行。
 
 ---
 
 ## 6. 标准工作流
 
 ```
-① 需求/问题 → 建 Issue（问题、验收标准、责任区、标签）→ 加入 Project（待办 + Wave）
+① 需求或问题 → 建 Issue（问题、验收标准、负责人）→ 进 Project（待办 + Wave）
 ② 认领：在 Issue 评论里写「认领：范围=文件/目录；预计产出=PR」→ Status=开发中
-③ 事前核查：git fetch；核对 main 的 SHA、共享 checkout 的状态、对方是否有未合并的分支动到同一组文件
-④ 隔离：从 origin/main 建独立 worktree（Windows 用短路径 + core.longpaths；不在共享 checkout 里改）
-⑤ 先写失败测试 → 确认失败 → 实现 → 确认通过
-⑥ 本地验证；环境不一致时，「对比未改动 main 的失败集合」，证明没有引入新失败
-⑦ 推送 → 开 PR（Draft 或 Ready）→ 加入 Project（验收中）→ 在 Issue 里写进展和 PR 链接
-⑧ 精确 head 的 CI → 非作者做独立审查（审查评论）
-⑨ Owner 授权合并 → 用 --match-head-commit 锁定已测 head 后合并 → 等合并后 main 的 CI
-⑩ 回填：Issue 证据评论、Project=完成、阶段 Issue 的「当前状态」、对账表
-⑪ 清理：删除本地 worktree 和本地分支；远端分支只有在 Owner 同意后才删
+③ 事前核查：git fetch；核对 main 的 SHA、共享 checkout 状态，以及其他开放 PR 和分支是否有路径或接口上的依赖
+④ 隔离：从 origin/main 建独立 worktree（Windows 上用短路径加 core.longpaths；不在共享 checkout 里改）
+⑤ 先写失败测试 → 确认确实失败 → 实现 → 确认通过
+⑥ 本地验证；本地环境和 CI 不一致时，用「未改动 main 的失败集合」逐条比对，证明没有引入新的失败
+⑦ 推送 → 开 PR → 进 Project（验收中）→ 在 Issue 里写进展和 PR 链接
+⑧ 精确 head 的 CI → 非作者独立复核（写审查评论）
+⑨ Owner 对**这个 PR** 授权合并 → 用 --match-head-commit 锁定已测试的 head 合并 → 记录合并提交，等合并后 main 的 CI
+⑩ 回填：在 Issue 写证据评论；Project 改为「完成」；更新阶段 Issue 的「当前状态」和对账表
+⑪ 清理：先检查 worktree，确认没有未提交或未推送的内容、归属清楚，再删除本地 worktree 和分支。远端分支删不删由 Owner 决定
 ```
 
-**关键细节**：
-- 等 CI 时用后台监听（`gh pr checks --watch` 或 `gh run watch`），不要人工轮询。
-- 合并用 `gh pr merge N --merge --match-head-commit <已测 head>`，防止合并进未经测试的提交。
-- PR 落后于 main，但改动的文件不相交时，可以直接合并（合并后由 main 的 CI 兜底）。如果有相交的文件，先 rebase 或合并 main，重新跑 CI。
+**合并依据**：
+- **"改动的文件不相交"本身不足以作为合并依据。** 不同文件之间也可能有接口、配置或语义上的依赖。合并前要核对：这些依赖、基线有没有变化、必要的审查、以及适用的合并前检查。
+- **head 变了，就重新评估**：对应的 CI 和复核结论都要按新 head 重新核对。
+- **CI 结果、人工验收、发布授权分开记录**，互相不能替代。
+- 等待 CI 时用后台监听（`gh pr checks --watch` / `gh run watch`），不要人工轮询。
 
 ---
 
@@ -152,149 +162,180 @@
 ### 7.1 交接备注模板（写在 Issue 评论里）
 
 ```markdown
-## 交接（<来源 Agent> → <接手方>，YYYY-MM-DD）
+## 交接（<原负责人> → <接手方>，YYYY-MM-DD）
 - 责任区 / 范围：<lane>；涉及文件：<路径列表>
 - 当前进度：已完成 … ／ 未完成 …
 - 代码位置：分支 `<branch>`，head `<sha>`；PR #N（Draft/Ready）
-- 证据：CI run <链接>（精确 head）；本地验证 <命令与结果>
-- 未验证 / 已知风险：…（例如「Windows 本地无法运行 POSIX 测试」）
+- 证据：CI 运行 <链接>（精确 head）；本地验证 <命令与结果>；证据类型（真实 / 合成）
+- 未验证 / 已知风险：…
 - 阻塞：…（依赖 #N / 等待 Owner 决定 / 需要 env:mac）
-- 禁止事项：…（例如「不要移动 v0.3.20-rc.1」「不要改 surveyctl.py」）
-- 接手条件：在什么条件满足后接手（例如「#33 和 #109 都关闭之后」）
+- 禁止事项：…
+- 接手条件：…（例如「#33 和 #109 都关闭之后」）
 - 下一步建议：…
 ```
 
 ### 7.2 交接规则
 
-1. **交接要有来有回**：接手方要回复「已接手（日期）」。没有回复之前，责任仍在原负责人。
-2. **可从 Issue 直达代码**：交接备注里必须写明分支或 PR 和 head SHA。
-3. **条件式交接**：后续步骤依赖其他前提时，写清接手条件（例如 Codex 在 #34 写的「受控恢复和 #109 闭合后，由 Release 线冻结 main 并登记新版本」）。
-4. **环境绑定任务**：需要 Mac、真实凭据或外部环境的步骤，单独写成一个 Issue。给出可以照着执行的命令、需要回填的内容和判断规则，并加上 `env:mac` / `needs:owner` 标签（例如 #112）。
-5. **回交**：Codex 需要 Claude 接手的事项（或者反过来），都写在 Issue 里，不依赖会话。
+1. **有来有回**：接手方回复「已接手（日期，核对后的 head 和状态）」。在确认之前，**原负责人继续负责协调**。
+2. **接手后先核对**：接手方先确认最新的 head、PR 和 CI 状态，再动手。
+3. **从 Issue 能直接找到代码**：交接备注里必须写明分支或 PR，以及 head SHA。
+4. **条件式交接**：后续步骤依赖其他前提时，写清楚接手条件。
+5. **环境绑定任务**：单独开一个 Issue，写明可以照着执行的命令、要回填的内容和判断规则（例如 #112）。由能访问该环境的执行者完成。
+6. **回交**：Codex 需要 Claude 接手的事项（以及反方向），都写在 Issue 里，不依赖会话。
 
 ---
 
-## 8. 人类闸门（Human-in-the-loop）
+## 8. 人类闸门与授权
 
-| 动作 | 需要的授权 | 说明 |
-|---|---|---|
-| 合并 PR | Owner 对**这个 PR** 的明确授权（例如「绿了就合」） | 授权只对当次有效，不能推及其他 PR |
-| 打 tag、触发候选、发布 Release、修改 Release 正文 | Owner 明确授权，并且通过 §9 核查 | tag 不可移动 |
-| 删除分支或数据、修改权限或设置、修改 Agent 自身配置 | Owner 本人操作，或者 Owner 明确授权 | Agent 的安全策略可能直接拦截。被拦截时不要绕过，把命令或清单交给 Owner |
-| 人工验收记录（读屏、作者旅程等） | **只能由真人执行**；以 Owner 身份发评论前，Owner 要逐字确认正文 | 不得编造测试人或复核人；独立复核人必须是另一个人 |
-| 生产、公网、真实凭据 | Owner | Agent 不读取、不传播秘密 |
+| 动作 | 需要的授权 |
+|---|---|
+| 合并 PR | Owner 对**这个 PR** 的明确授权（例如「绿了就合」） |
+| 打 tag、触发候选、发布 Release、修改 Release 正文 | Owner 的明确授权，并且通过 §9 核查 |
+| 删除分支或数据、修改权限或设置、修改 Agent 自身的配置 | 由 Owner 本人操作，或者 Owner 明确授权 |
+| 人工验收记录 | **只能由真人执行**。以 Owner 身份发出前，Owner 要逐字确认正文；不得编造测试人或复核人 |
+| 公开原始材料（例如需求矩阵） | Owner 批准公开的范围。公开前要先审查秘密、个人信息、商业内容和本机路径 |
+| 生产、公网、真实凭据 | Owner 的具体授权 |
 
-**机器可校验的人工闸门**（推荐模式，已在 `candidate_provenance.py` 实现）：人工批准写成格式固定的评论，绑定 run、tag、commit 和 manifest SHA，再加上证据评论的 SHA256。工作流再校验三件事：评论作者必须是 OWNER，时间顺序必须对，内容必须逐字匹配。这样即使 Agent 能发评论，也绕不过「真人先关闭 Issue、再签字」这个顺序。今后有新的人工闸门，都照这个模式设计。
+**授权的范围**：
+- 用户已经给出的明确授权，**按它的具体目标和条件持续有效**，换一个窗口或会话不必重新确认；但**不能扩大**到其他 PR、其他材料的公开或生产操作。
+- 同时有多项待决事项时，授权要绑定**对象、动作、条件**。批准的意思不明确时，先回看原文和当前状态，必要时再问。
+- 不要把私有的原始材料或绝对路径写进公开记录。
+
+**机器可校验的人工闸门**（推荐模式，`candidate_provenance.py` 已经按这个方式实现）：
+- 人工批准写成**格式固定的评论**，绑定 run、tag、commit、manifest SHA 和证据评论的 SHA256；
+- 工作流校验三件事：作者是 `OWNER`、时间顺序正确、内容逐字匹配。
+
+以后新增的人工闸门都按这个模式设计。
 
 ---
 
-## 9. 不可逆动作的事前核查清单
+## 9. 不可逆动作的事前核查与异常处理
 
-**适用于：打 tag、触发发布工作流、合并、删除分支、编辑已发布内容。**
+**适用于**：打 tag、触发发布工作流、合并、删除、编辑已发布内容。
 
-- [ ] `git fetch` 后，确认目标 SHA 就是要发布或合并的那一个，期间 main 没有变化
-- [ ] 精确 head 的 CI **全部**通过（跳过的检查逐项确认是按条件跳过）
-- [ ] **读一遍目标工作流**，看有没有硬阻断（`if: false`、写死的 `exit 1`、`Block … before …` 一类步骤）
-  - 教训：rc20 打 tag 前没有读到 #99 加的原生阻断，结果四个平台全部失败，还白白消耗了一个版本号
-- [ ] 前置登记已经完成（例如 `baseline-policy.json` 里的新版本条目）
-- [ ] 依赖的 artifact 没有过期（例如 `verified-release-assets` 的有效期）
-- [ ] tag 或版本号在远端还没被占用
-- [ ] 人工闸门的记录已经就位并通过离线校验：先用仓库里的校验函数 dry-run，再用实时数据复核
-- [ ] 失败时怎么处置已经想清楚（例如保留为不合格、换新版本号、不移动 tag）
+- [ ] `git fetch` 后确认目标 SHA 就是要发布或合并的那一个，期间 main 没有变化
+- [ ] 精确 head 的 CI 全部通过。每个被跳过的检查都要**写明它实际满足了什么跳过条件**，不能写成「通过」
+- [ ] **读一遍目标工作流**，看有没有硬阻断（`if: false`、写死的 `exit 1`、`Block … before …` 这类步骤）
+  - 教训：rc20 打 tag 前没读到 #99 加的原生阻断，结果四个平台全部失败，还消耗了一个版本号
+- [ ] 前置登记已完成（例如 `baseline-policy.json` 的新版本条目）
+- [ ] 依赖的 artifact 没有过期；tag 或版本号在远端没有被占用
+- [ ] 人工闸门的记录已经就位，并通过了离线 dry-run 和实时复核
+- [ ] 失败后的处置已经事先确定（保留为不合格、换新版本号、不移动 tag）
+
+**异常处理**：
+- **结果不确定**（超时、中断、终端里重复执行）时：**先查远端的实际状态，再决定要不要重试**，避免重复评论、重复发布或重复触发。
+  - 例：#111 合并和 rc19 正文更正之后，Owner 在终端里又执行了同样的命令。核对远端后确认第二次执行是幂等的，但它额外删除了远端分支。
+- **被权限策略或自动审批拒绝**时：记录目标、原因和已完成的部分，**不绕过**，继续做其他不依赖这一步的工作，把要 Owner 执行的命令交给 Owner。
 
 ---
 
 ## 10. 并发隔离
 
-1. **永远不在共享 checkout 里改代码**。每项工作都从 `origin/main` 建独立 worktree。Windows 上用短路径（例如 `F:\Develop\survey\wt-<slug>`），并加上 `-c core.longpaths=true`（引擎 vendor 目录的路径超过 MAX_PATH）。
-2. **stash 是所有 worktree 共用的**，不要用不带名字的 `git stash`。需要临时搁置时，用 WIP 提交。
-3. **同一组文件只有一个写入者**：开工前查看对方的开放 PR 和分支（`gh pr list` 加上 `gh pr diff --name-only`）。如果有交集，在 Issue 里协调先后顺序（例如 #109 排在 #108 之后）。
-4. **清理**：PR 合并后删除本地 worktree 和本地分支。远端分支统一列出清单，交给 Owner 决定。
-5. **共享 checkout 里有别人未提交的改动**时，不碰、不还原，在 Issue 里说明一句即可。
+1. **不在共享 checkout 里改代码**。每项工作都从 `origin/main` 建独立 worktree。Windows 上用短路径（例如 `F:\Develop\survey\wt-<slug>`），并加 `-c core.longpaths=true`。
+2. **stash 是所有 worktree 共用的**。不要用不带名字的 `git stash`；需要暂存时用 WIP 提交。
+3. **同一组文件只能有一个写入者**。开工前查看其他开放 PR 的路径和接口依赖（`gh pr list` 加上 `gh pr diff --name-only`），有交集就在 Issue 里协调先后顺序（例如 #109 和 #114 排在 #108 之后）。
+4. **清理前先检查**：先确认 worktree 里没有未提交或未推送的内容、归属清楚，**不能「合并了就删」**。远端分支的清单交给 Owner 决定。
+5. **共享 checkout 里有别人未提交的改动**时，不碰、不还原，在 Issue 里记一句即可。
 
 ---
 
-## 11. 第七节待完善问题的具体答案
+## 11. 待完善问题的回答
+
+> 以下都是**建议，不是已启用的机制**。凡是需要新增 Action、权限或运行成本的，都必须经过 Owner 批准（§12 P2/P3）。
 
 ### Q1 Agent 身份与最小权限
-- **目标形态**：每个 Agent 一个 **GitHub App**（或 fine-grained PAT），按仓库和权限最小化授权：
-  - `contents: write`：仅限自己前缀的分支（配合 ruleset 限制，例如 `claude/**`）；
-  - `pull_requests: write`、`issues: write`；
-  - **不给** `administration`、`workflows` 写权限、Release 发布权限。
-- **好处**：
-  - 评论和提交的作者天然可以区分；
-  - Agent 之间可以真正 approve 对方的 PR；
-  - ruleset 可以要求「至少一个非作者的 approve」；
-  - Release 发布这类敏感动作只保留给 Owner 的账号，或由 Owner 手动触发工作流。
-- **过渡期**：按 §5 的署名、trailer 和标签约定执行。
+- **方向**：每个 Agent 一个 GitHub App 或 fine-grained PAT，按仓库和权限做最小授权，不授予 `administration`，也不授予 Release 发布权限。
+- **要注意**：
+  - `contents: write` **本身不能按分支前缀限定**。想让 Agent 只能写自己前缀的分支，要配合 ruleset 或分支保护单独设计和验证；
+  - **App 身份不能直接当作独立的人类审批**。ruleset 里「需要审批」的规则，要明确规定由谁、以什么身份来批准。
+- **过渡期**：按 §5 的约定执行。
 
 ### Q2 认领的原子性
-- Issue 评论没有原子性。推荐 **以 git ref 作为锁**：认领时推送 `refs/claims/issue-<N>`（或空分支 `claim/issue-<N>`）。远端创建 ref 是原子操作，第二个推送者会因为 ref 已存在而失败，于是知道已经被占用。释放时删除这个 ref，需要有删除权限，或由 Owner 清理。
-- **备选**：用 Actions 的 `concurrency: claim-${{ issue.number }}` 串行处理认领标签；如果同一个 Issue 同时出现两个 `agent:*` 标签，就移除后加的那个并发评论告警。
-- **本项目现状**：按责任区分工，逐单认领的场景很少，**先只做约定**，不上锁。
+- **现在只靠约定**：Issue 评论不是原子锁。发现有人并发写同一处时，暂停重叠部分，在 Issue 里协调。
+- **更正 v1 的错误**：普通地推送一个已经存在的 ref **不一定会失败**，快进推送会成功，所以不能以此当作原子锁。
+- **以后如果确实需要锁**，要先设计清楚：
+  - 条件创建或比较并交换（例如以「期望 ref 不存在」为条件推送）；
+  - 唯一的持有者、租期、过期回收；
+  - 网络结果不确定时怎么处理；
+  - 删除权限。
+
+  这些都要先在隔离的仓库里验证。`concurrency` 也不能当作可靠的队列或完整的锁。在这之前不新增 Action、权限或运行成本。
 
 ### Q3 冲突检测与仲裁
-- **检测**（轻量 Action，可选）：PR 更新时，计算它改动的文件和其他开放 PR 是否有交集，再对照 `.github/agent-lanes.yml` 判断是否越过了责任区。有风险就加 `Has conflicts` 或 `cross-lane` 标签并评论。
-- **仲裁规则**：
-  - **不自动回滚**，不自动 force push；
-  - 先看优先级标签，再看 Owner 指定的顺序，最后按先开 PR 的优先；
-  - 后合并的一方负责 rebase 并重新跑 CI。
+- **现在**：人工检查开放 PR 的路径和接口或语义依赖；**以 Owner 定的优先级为准**，高于先到先得。不自动改标签、不回滚、不 force push。
+- **以后可选的提示性 Action**：
+  - 触发：`pull_request` 的 opened、synchronize、reopened；
+  - 权限：最少 `contents: read`、`pull-requests: read`；如果要写评论，再单独评估 `pull-requests: write` 以及外部贡献者 PR 的 token 限制；
+  - 只报告；API 失败时标为「未检查」，不能当作「无冲突」；
+  - 成本：每次事件跑一个轻量作业，需要限定比较范围并实际测量；
+  - 文件有交集，也覆盖不了语义冲突。
 
 ### Q4 交接质量校验
-- 可选 Action：在 `issues: labeled(handoff)` 或 `assigned` 时，检查最新一条评论是否含有 §7.1 模板的必填行：「代码位置」「证据」「未验证」「接手条件」。缺项时移除 `handoff` 标签，并评论列出缺了哪些项。注意 Action 无法阻止 Assignee 变更，只能事后纠正。
+- **现在**：用模板，加上接手方的确认回复。
+- **以后可选**：
+  - 在 Issue 评论或标签事件上触发；只读检查需要 `issues: read`，写提示评论才需要 `issues: write`；
+  - 缺字段或 API 失败时只提示「待人工核实」，不自动移除标签，也不声称交接已完成；
+  - 结构对得上，不能证明内容真实，也不能证明对方已经接手；
+  - 要去重，防止评论触发评论的循环。
 
-### Q5 用 Project 作 Agent 状态机
-- 可以作为**观测层**，但**不能作为权威门禁**：
-  - 映射关系：待办 → 开发中（认领）→ 验收中（PR Ready 或等待验收）→ 完成（合并，或 Owner 关闭阶段 Issue）；
-  - PR 合并后自动改为「完成」可以自动化；
-  - **阶段类 Issue 的「完成」只能由 Owner 手动设置**（CI 绿不等于验收通过）；
-  - 非法跳转（例如从待办直接到完成）只告警，不拦截。
+### Q5 Project 作为状态机
+- **只作为观测层**，先靠人工同步，并定期核对。PR 合并和阶段验收分开。
+- **以后可选**：
+  - PR closed 且 merged 时，只同步该 PR 在看板上的项，阶段验收状态保持人工维护；
+  - 要先明确访问 Project 的方式和最小凭据（内置 token 不一定有 Projects 写权限）；
+  - 同步失败时记为「待同步」，不影响合并，也不能据此宣称阶段完成；
+  - 幂等和重试都需要验证。
 
 ### Q6 跨平台上下文同步
-- `AGENTS.md` 是所有 Agent 共同的硬规则入口（Codex 原生读取）。Claude Code 通过 `CLAUDE.md` 指向 `AGENTS.md` 和本文（待新增，一行即可）。
-- 阶段 Issue 的固定结构：顶部是「当前状态」，往下是证据、未关闭项，最后是历史。评论用统一的标题格式（§5），方便机器解析。
-- 每个 Agent 开工前**先读相关 Issue 的最新评论**，避免重复对账或重复开表（这是 Codex 在 #34 提的要求）。
+- `AGENTS.md` 是所有 Agent 共同的硬规则入口。可以新增一行 `CLAUDE.md`，指向 `AGENTS.md` 和本文（P1）。
+- 阶段 Issue 采用固定结构：当前状态 → 证据 → 未关闭项 → 历史。评论标题统一按 §5 的格式。
+- 开工前**先读相关 Issue 的最新评论**，避免重复对账或重复建表。
 
 ### Q7 成本与速率
-- Actions 的控制手段：
-  - 重型作业（跨层、原生四平台、开发中继）**只用手动触发或打 tag 触发**（现状如此，保持）；
-  - 用 `concurrency` 加 `cancel-in-progress` 取消同一分支上过期的运行；
-  - 用 `paths` 过滤纯文档类 PR；
-  - 每周看一次 Actions 用量。
-- Agent 侧：一个 Issue 同一时间只能由一个 Agent 处理（§10-3）；等待 CI 用后台监听，不轮询；大范围搜索交给子代理，避免重复消耗上下文。
+- **Actions**：
+  - 重型作业（跨层、原生四平台、开发中继）只在手动触发或打 tag 时运行；
+  - `concurrency` 加 `cancel-in-progress`，取消同一分支上已过时的运行；
+  - 纯文档 PR 用 `paths` 过滤；
+  - 定期查看用量。
+- **Agent**：
+  - 同一时间一个 Issue 只由一个 Agent 写；
+  - 等待 CI 用后台监听；
+  - 大范围搜索交给子代理。
 
 ---
 
 ## 12. 落地路线图
 
-| 阶段 | 内容 | 执行 | 前提 |
+| 阶段 | 内容 | 执行者 | 前提 |
 |---|---|---|---|
-| **P0（立即，只靠约定）** | 本文定稿并合并；`CLAUDE.md` 指向 `AGENTS.md` 和本文；按 §5 署名，按 §7 交接，按 §9 核查 | Claude、Codex | Owner 批准本文 |
-| **P1（模板与标签）** | 新增标签 `agent:*`、`needs:owner`、`env:mac`、`lane:*`、`handoff`；在 `.github/ISSUE_TEMPLATE/` 下新增「任务」「交接」「环境绑定任务」三个模板（不动上游 PR 模板，本项目用 PR 正文约定）；新增 `.github/agent-lanes.yml` | Claude 起草，Owner 批准 | — |
-| **P2（轻量自动化，可选）** | Project 自动化（Issue 建立后进待办、PR 合并后完成）；Q3 冲突提示；Q4 交接校验 | 起草后由 Owner 决定 | **需要 Owner 明确推翻或细化 2026-10-28「移除治理 CI」的决定** |
-| **P3（身份与保护）** | 为每个 Agent 建 GitHub App；为 `main` 建 ruleset：要求 PR、要求非作者 approve、要求通过的检查、禁止 force push；Release 发布只保留给 Owner | Owner | 已落实 Q1 |
+| **P0（只靠约定）** | 本文定稿并合并；按 §5、§7、§9 执行 | Claude、Codex | Owner 批准本文 |
+| **P1（模板与标签）** | 新增 §5 列出的标签；在 `.github/ISSUE_TEMPLATE/` 下新增「任务」「交接」「环境绑定任务」三个模板（不动上游 PR 模板）；一行 `CLAUDE.md`；可选的 `.github/agent-lanes.yml` | Claude 起草，Owner 批准 | — |
+| **P2（轻量自动化，可选）** | Q3、Q4、Q5 中「以后可选」的部分，逐项单独决定 | 起草后由 Owner 决定 | **Owner 明确推翻或细化 2026-10-28 的「移除治理 CI」决定**，并逐项确认权限和成本 |
+| **P3（身份与保护）** | 每个 Agent 一个 App 或 PAT；为 `main` 建 ruleset（要求 PR、要求审批、要求检查通过、禁止 force push）；Release 发布权限只保留给 Owner | Owner | Q1 的设计与验证完成 |
 
 ---
 
-## 13. 实战教训（2026-11 Wave 6 与首个 Release）
+## 13. 实战教训（2026-11，Wave 6 与首个 Release）
 
-1. **CI 绿不等于验收**：阶段 Issue 一律写清「这次结论覆盖什么、不覆盖什么」。例如 rc19 只覆盖旧提交，不覆盖之后的修复。
-2. **Issue 正文会过时**：#32、#37–#40 的正文都滞后于实际。解决办法是在顶部加「当前状态（对照 sha）」，原文保留。
-3. **能力映射会和代码脱节**：`capabilities.json` 的 administration 已经和实际页面不一致。人工文档不能提升状态，需要另行对账。
-4. **按"执行晋升的源码"渲染发布说明会出错**：用 main 的渲染器生成 rc19 的说明，写出了「recovery is currently disabled」，但 rc19 实际上仍会执行恢复。说明应当依据**候选自带、受签名约束的数据**生成（#111）。
-5. **打 tag 前要读工作流**：rc20 被一道早已存在的硬阻断拦下，白白消耗了一个版本号（见 §9）。
-6. **跨区问题开 Issue，不要顺手改**：审查 #108 时发现的安装目录属主问题，开成 #109 交给 Codex，没有和 #108 抢同一个文件。
-7. **环境差异要用基线对照**：Windows 本地有几十个 POSIX 测试跑不了。拿「未改动 main 的失败集合」逐条对比，证明没有引入新失败，最终以 Linux CI 为准。
-8. **人工签字不能代发**：VoiceOver 验收需要两个不同的人；以 Owner 身份发评论前，要先让 Owner 逐字确认正文。
-9. **安全策略拦截不要绕过**：删除远端分支、修改 Agent 自身权限这类操作被拦截时，把清单和命令交给 Owner。
-10. **共用账号带来的限制**：同一账号不能 approve 自己的 PR，Assignee 也区分不了是哪个 Agent。这是推动 P3 的主要原因。
+1. **证据分层**：rc19 的 `upgrade-verified` 只适用于它自己那个提交，不覆盖后续修复（#38–#40）。
+2. **Issue 正文会过时**：#32 和 #37–#40 的正文都落后于实际。做法是在顶部加「当前状态（对照 sha）」，原文保留。
+3. **能力映射会和代码脱节**：`capabilities.json` 里的 administration 和实际页面不一致（#32），需要另行对账。
+4. **发布说明要依据候选自身生成**：rc19 的说明是用 main 的渲染器生成的，写成了「recovery is currently disabled」，与 rc19 的实际行为不符（#34、#111）。
+5. **打 tag 前要读工作流**：rc20 被一道已有的硬阻断拦下（#34）。
+6. **跨区问题开 Issue 处理**：审查 #108 时发现的属主问题，开成了 #109 交给 Codex。
+7. **用基线对照判断环境差异**：Windows 本地跑不了 POSIX 测试，就和「未改动 main 的失败集合」逐条比对。
+8. **人工签字不能代发**：VoiceOver 验收需要两个不同的人，正文要由 Owner 逐字确认（#41）。
+9. **被拦截时不绕过**：删除远端分支、修改 Agent 自身权限、合并操作曾被安全策略拦截，都改为交给 Owner 或等 Owner 放行。
+10. **共用账号的限制**：无法 approve 自己的 PR，Assignee 也区分不出是哪个 Agent，这推动了 P3。
+11. **顺序错误会把可修复的问题变成锁死**：#114 中的 `backup` 先写入 pending intent，再做新增的检查。检查一旦失败，安装就会进入无法自助解除的状态（审查已指出，见 #109）。
+12. **结果不确定时先查远端**：Owner 和 Agent 先后执行了同一组命令，核对远端后才确认是幂等的（§9）。
 
 ---
 
 ## 14. 待 Owner 决策
 
 1. 是否批准本文作为协作协议（P0）。
-2. 是否新增 §5 的标签体系和 Issue 模板（P1）。
-3. 是否重新引入轻量治理自动化（P2），以及引入哪些。
-4. 是否为每个 Agent 建立独立的 GitHub App 身份，并为 `main` 启用 ruleset（P3）。
+2. 是否新增 §5 的标签、Issue 模板和 `CLAUDE.md`（P1）。
+3. 是否、以及在哪些具体项上重新引入轻量治理自动化（P2）。
+4. 是否为每个 Agent 建立独立身份，并为 `main` 启用 ruleset（P3）。
 5. 责任区表（§3.2）是否需要调整。
