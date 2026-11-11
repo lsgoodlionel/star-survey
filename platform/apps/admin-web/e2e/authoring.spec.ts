@@ -505,6 +505,74 @@ test('a single-choice display condition is authored and works in isolated previe
   }).toPass({ timeout: 60_000, intervals: [1000, 2000, 5000] });
 });
 
+test('W04 time windows persist through authoring and govern published responses', async ({ page }) => {
+  test.setTimeout(720_000);
+  const metadata = await readMetadata();
+  const owner = await readToken();
+  const result = await readResult();
+  const me = await login(page, owner, metadata);
+  const scenarios = [
+    { name: '当前开放', opensAt: shanghaiLocalTime(-1440), closesAt: shanghaiLocalTime(1440), outcome: 'allow' },
+    { name: '未来开放', opensAt: shanghaiLocalTime(1440), closesAt: '', outcome: 'future' },
+    { name: '已经截止', opensAt: '', closesAt: shanghaiLocalTime(-1440), outcome: 'closed' },
+  ] as const;
+  for (const scenario of scenarios) {
+    await navigateWithinApp(page, `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`);
+    await createResource(page, '新建问卷', '创建问卷', `时间窗${scenario.name}验收`);
+    const surveyId = surveyIdFrom(page.url());
+    await page.getByLabel('添加题型').selectOption('L');
+    await clickAction(page.getByRole('button', { name: '添加题目' }));
+    await expect(page.getByLabel('题目编码')).toHaveValue('Q1');
+    await fillAction(page.getByLabel('题目文本'), `时间窗${scenario.name}题目`);
+    await clickAction(page.getByLabel('启用开放时间窗'));
+    if (scenario.opensAt) await fillAction(page.getByLabel('开放时间', { exact: true }), scenario.opensAt);
+    if (scenario.closesAt) await fillAction(page.getByLabel('截止时间', { exact: true }), scenario.closesAt);
+    await fillAction(page.getByLabel('时区', { exact: true }), 'Asia/Shanghai');
+    const reloaded = page.waitForResponse((response) => response.url().includes(`/v1/surveys/${surveyId}/draft`)
+      && response.request().method() === 'GET');
+    await saveAndReloadDraft(page, surveyId);
+    const draft = await (await reloaded).json() as { definition: { policy: { window: { opensAt?: string; closesAt?: string; timezone: string } } } };
+    expect(draft.definition.policy.window).toEqual({
+      ...(scenario.opensAt ? { opensAt: scenario.opensAt } : {}),
+      ...(scenario.closesAt ? { closesAt: scenario.closesAt } : {}),
+      timezone: 'Asia/Shanghai',
+    });
+    await expect(page.getByLabel('启用开放时间窗')).toBeChecked();
+    await expect(page.getByLabel('时区', { exact: true })).toHaveValue('Asia/Shanghai');
+    await clickAction(page.getByRole('link', { name: '发布与版本' }));
+    await clickAction(page.getByRole('button', { name: '提交审批' }));
+    await clickAction(page.getByRole('button', { name: '批准申请' }));
+    await clickAction(page.getByRole('button', { name: '发布问卷' }));
+    await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+    await fillAction(page.getByLabel('链接名称'), `时间窗${scenario.name}链接`);
+    const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`) && response.request().method() === 'POST');
+    await clickAction(page.getByRole('button', { name: '创建链接' }));
+    const link = await readCreatedDeliveryLink(await linkResponse);
+    const engineSid = await publishedEngineSid(surveyId, me.tenantId);
+    const responseCount = async () => Number(await platformQuery(me.tenantId,
+      `SELECT count(*) FROM response_projection WHERE tenant_id='${me.tenantId}' AND survey_id=${engineSid};`));
+    const responsesBefore = await responseCount();
+    const respondent = await page.context().newPage();
+    await respondent.goto(link.url);
+    if (scenario.outcome === 'allow') {
+      await completeLimeSurvey(respondent);
+      await expect.poll(responseCount, { timeout: 60_000 }).toBe(responsesBefore + 1);
+    } else {
+      await expect(respondent.locator('body')).toContainText(scenario.outcome === 'future' ? '尚未开放' : '截止');
+      expect(await responseCount()).toBe(responsesBefore);
+    }
+    await respondent.close();
+  }
+});
+
+function shanghaiLocalTime(minutesFromNow: number): string {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
+    day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(Date.now() + minutesFromNow * 60_000));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
+}
+
 async function answerAdvancedQuestions(page: Page) {
   await expect(page.locator('[data-mjy-collapsible]')).toBeAttached({ timeout: 30_000 });
   await clickAction(page.getByText('栏目标题验收', { exact: true }));

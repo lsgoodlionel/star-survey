@@ -38,6 +38,7 @@ import {
   type EditableSurveyDefinition,
 } from './model/definition';
 import { moveGroup, moveQuestion, preserveCarouselSlideIds, setCarouselSlideAsset, updateQuestion, validateDefinition } from './model/operations';
+import { readTimeWindow, updateTimeWindow, validateTimeWindow } from './model/timeWindow';
 import {
   clearActiveEditorRecovery,
   discardEditorRecovery,
@@ -205,9 +206,9 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const issues = validateDefinition(definition);
+      const issues = [...validateDefinition(definition).map((issue) => issue.message), ...validateTimeWindow(definition)];
       if (issues.length) {
-        setValidationMessages(issues.map((issue) => issue.message));
+        setValidationMessages(issues);
         throw new Error('请先修正草稿中的问题');
       }
       setValidationMessages([]);
@@ -373,6 +374,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       definition={definition}
       disabled={!canEdit}
       onChange={(update) => changeDefinition({ ...definition, ...update })}
+      onTimeWindowChange={(window) => changeDefinition(updateTimeWindow(definition, window))}
     />
   );
 
@@ -427,6 +429,8 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       {saveMutation.error && !conflict && validationMessages.length === 0 ? (
         <p className="editor-validation" role="alert">
           {saveMutation.error instanceof Error ? saveMutation.error.message : '保存失败，请稍后重试'}
+          {saveMutation.error instanceof ApiError && saveMutation.error.kind === 'validation' && readTimeWindow(definition).window
+            ? '；若为开放时间窗，请检查时区和夏令时、起止顺序及原生时间设置。草稿修改仍留在本页。' : null}
         </p>
       ) : null}
 
