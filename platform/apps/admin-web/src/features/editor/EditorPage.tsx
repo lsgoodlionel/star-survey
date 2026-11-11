@@ -195,6 +195,13 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
         .find((question) => question.uuid === selectedQuestionUuid) ?? null,
     [definition, selectedQuestionUuid],
   );
+  const conditionSources = useMemo(() => {
+    const questions = definition.groups.flatMap((group) => group.questions);
+    const selectedIndex = questions.findIndex((question) => question.uuid === selectedQuestionUuid);
+    return questions.slice(0, Math.max(0, selectedIndex)).filter((question) =>
+      question.type === 'L' && /^[A-Za-z][A-Za-z0-9]*$/.test(question.code)
+      && question.answers?.some((answer) => /^[A-Za-z][A-Za-z0-9]*$/.test(answer.code)));
+  }, [definition, selectedQuestionUuid]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -345,6 +352,8 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
   const questionEditor = selectedQuestion ? (
     <QuestionEditor
       key={selectedQuestion.uuid}
+      supportsLogic={definition.definitionVersion >= 2}
+      conditionSources={conditionSources}
       api={api}
       tenantId={tenantId}
       question={selectedQuestion}

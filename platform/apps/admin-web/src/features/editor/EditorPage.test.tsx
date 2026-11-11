@@ -258,6 +258,32 @@ describe('EditorPage', () => {
     expect(screen.getByRole('status', { name: '保存状态' })).toHaveTextContent('未保存');
     expect(screen.getByText('简体中文')).toBeInTheDocument();
   });
+  test('authors a v2 question condition and saves the DSL without losing unknown fields', async () => {
+    const source = structuredClone(gatewayFixture);
+    source.definitionVersion = 2;
+    const question = source.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    question.condition = 'true';
+    question.futureLogic = { keep: true };
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    expect(await screen.findByText('现有复杂显示条件会保持原样。若需改成单选条件，请先清除。')).toBeInTheDocument();
+    expect(screen.getByLabelText('前置题目')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '清除显示条件' }));
+    fireEvent.change(screen.getByLabelText('前置题目'), { target: { value: 'QSINGLE' } });
+    expect(screen.getByLabelText('触发选项')).toHaveValue('A1');
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    expect(saved.condition).toBe('QSINGLE == "A1"');
+    expect(saved.futureLogic).toEqual({ keep: true });
+  });
   test('configures a collapsible section while preserving unknown options', async () => {
     const source = structuredClone(gatewayFixture);
     const question = source.groups[0].questions.find((item) => item.uuid === noteUuid)! as Record<string, unknown>;

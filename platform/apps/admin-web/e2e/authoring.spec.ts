@@ -422,6 +422,74 @@ test('Wave 5 advanced questions survive authoring, isolated preview and publishe
   await expect(page.locator('.response-answers')).toContainText('C2');
 });
 
+test('a single-choice display condition is authored and works in isolated preview', async ({ page }) => {
+  test.setTimeout(360_000);
+  const metadata = await readMetadata();
+  const owner = await readToken();
+  const result = await readResult();
+  await login(page, owner, metadata);
+  await navigateWithinApp(page, `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`);
+  await createResource(page, '新建问卷', '创建问卷', '条件显示验收');
+  const surveyId = surveyIdFrom(page.url());
+
+  await page.getByLabel('添加题型').selectOption('L');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await fillAction(page.getByLabel('题目编码'), 'QTRIGGER');
+  await fillAction(page.getByLabel('题目文本'), '是否继续');
+  await page.getByLabel('添加题型').selectOption('S');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await fillAction(page.getByLabel('题目文本'), '请说明原因');
+  await page.getByLabel('前置题目').selectOption('QTRIGGER');
+  await expect(page.getByLabel('触发选项')).toHaveValue('A1');
+  await saveAndReloadDraft(page, surveyId);
+  await expect(page.getByLabel('前置题目')).toHaveValue('QTRIGGER');
+
+  await clickAction(page.getByRole('link', { name: '快速预览' }));
+  await clickAction(page.getByRole('button', { name: '创建真实预览' }));
+  await expect(page.getByText('真实预览已就绪')).toBeVisible({ timeout: 210_000 });
+  const popup = page.context().waitForEvent('page');
+  await clickAction(page.getByRole('button', { name: '在新窗口打开真实预览' }));
+  const preview = await popup;
+  await preview.waitForLoadState('domcontentloaded');
+  for (let step = 0; step < 4 && await preview.locator('input[type="radio"]:visible').count() === 0; step += 1) {
+    await limeSurveyAdvanceButton(preview).click();
+    await preview.waitForLoadState('domcontentloaded');
+  }
+  await expect(preview.getByText('请说明原因')).toBeHidden();
+  await preview.locator('input[type="radio"]:visible').first().check();
+  await expect(preview.getByText('请说明原因')).toBeVisible();
+  await preview.close();
+  await clickAction(page.getByRole('button', { name: '结束真实预览' }));
+  await expect(page.getByText('真实预览已结束')).toBeVisible({ timeout: 210_000 });
+
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
+  await clickAction(page.getByRole('button', { name: '提交审批' }));
+  await clickAction(page.getByRole('button', { name: '批准申请' }));
+  await clickAction(page.getByRole('button', { name: '发布问卷' }));
+  await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+  await fillAction(page.getByLabel('链接名称'), '条件显示正式链接');
+  const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`) && response.request().method() === 'POST');
+  await clickAction(page.getByRole('button', { name: '创建链接' }));
+  const link = await readCreatedDeliveryLink(await linkResponse);
+  const respondent = await page.context().newPage();
+  await respondent.goto(link.url);
+  await respondent.waitForLoadState('domcontentloaded');
+  for (let step = 0; step < 4 && await respondent.locator('input[type="radio"]:visible').count() === 0; step += 1) {
+    await limeSurveyAdvanceButton(respondent).click();
+    await respondent.waitForLoadState('domcontentloaded');
+  }
+  await expect(respondent.getByText('请说明原因')).toBeHidden();
+  await respondent.locator('input[type="radio"]:visible').first().check();
+  await expect(respondent.getByText('请说明原因')).toBeVisible();
+  await completeLimeSurvey(respondent);
+  await respondent.close();
+  await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '答卷与导出' }));
+  await expect(async () => {
+    await clickAction(page.getByRole('button', { name: '刷新答卷数据' }));
+    await expect(page.getByLabel('已完成 1')).toBeVisible();
+  }).toPass({ timeout: 60_000, intervals: [1000, 2000, 5000] });
+});
+
 async function answerAdvancedQuestions(page: Page) {
   await expect(page.locator('[data-mjy-collapsible]')).toBeAttached({ timeout: 30_000 });
   await clickAction(page.getByText('栏目标题验收', { exact: true }));

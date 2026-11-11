@@ -73,6 +73,25 @@ describe('lossless survey definition model', () => {
     expect(serialized).not.toBe(source);
   });
 
+  test('edits a v2 question condition without changing unrelated DSL fields', () => {
+    const source = sourceWithExtensions();
+    source.definitionVersion = 2;
+    const question = (source.groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions[0];
+    question.condition = 'true';
+    question.validation = { rule: 'true', message: '保留校验' };
+
+    const parsed = parseDefinition(source);
+    expect(parsed.groups[0].questions[0].condition).toBe('true');
+    const edited = updateQuestion(parsed, singleUuid, { condition: 'false' });
+    const saved = (serializeDefinition(edited) as typeof source).groups as Array<{ questions: Array<Record<string, unknown>> }>;
+    expect(saved[0].questions[0].condition).toBe('false');
+    expect(saved[0].questions[0].validation).toEqual({ rule: 'true', message: '保留校验' });
+
+    const cleared = updateQuestion(edited, singleUuid, { condition: '' });
+    const clearedQuestion = ((serializeDefinition(cleared) as typeof source).groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions[0];
+    expect(clearedQuestion).not.toHaveProperty('condition');
+  });
+
   test('editsOnlyTheSelectedBasicQuestion', () => {
     const source = sourceWithExtensions();
     const definition = parseDefinition(source);
