@@ -1606,6 +1606,107 @@ class SurveyctlTest(unittest.TestCase):
             source_dir=PRODUCTION_DIR,
         )
 
+    def test_group_writable_empty_target_is_rejected_before_control_creation(self):
+        self.target.mkdir(mode=0o775)
+        self.target.chmod(0o775)
+        with self.assertRaises(self.module.IntegrityError):
+            self.install()
+        self.assertFalse((self.target / ".surveyctl").exists())
+        self.assertEqual([], self.runner.commands)
+
+    def test_unsafe_installed_paths_cannot_launch_helpers(self):
+        relatives = (".", "releases", "releases/0.2.0", "releases/0.2.0/backup.py",
+                     "releases/0.2.0/restore.py", "releases/0.2.0/doctor.py")
+        for index, relative in enumerate(relatives):
+            for action in ("backup", "doctor", "verify"):
+                self.target = self.root / f"unsafe-{index}-{action}"
+                self.install()
+                path = self.target / relative
+                path.chmod(stat.S_IMODE(path.stat().st_mode) | 0o020)
+                self.runner.commands.clear()
+                manager = self.manager()
+                with self.subTest(path=relative, action=action):
+                    with self.assertRaises(self.module.IntegrityError):
+                        if action == "backup":
+                            manager.backup("unsafe")
+                        elif action == "doctor":
+                            manager.doctor()
+                        else:
+                            backup = self.target / "backups/sample"
+                            write_fake_backup(backup)
+                            with manager._mutation_lock():
+                                manager._verify_backup(backup, "0.2.0", "920")
+                    self.assertEqual([], self.runner.commands)
+
+    def test_target_replacement_after_lock_is_rejected_before_yield(self):
+        self.install()
+        original_load = self.module.json.load
+        moved = self.root / "original-installation"
+        changed = False
+        def swap_target(handle, *args, **kwargs):
+            nonlocal changed
+            value = original_load(handle, *args, **kwargs)
+            if not changed:
+                changed = True
+                self.target.rename(moved)
+                self.target.mkdir(mode=0o700)
+                # Reusing the exact control inode must not make a new target trusted.
+                (moved / ".surveyctl").rename(self.target / ".surveyctl")
+                (self.target / "foreign-sentinel").write_text("preserve")
+            return value
+        with mock.patch.object(self.module.json, "load", side_effect=swap_target):
+            with self.assertRaisesRegex(self.module.IntegrityError, "target identity changed"):
+                with self.manager()._mutation_lock():
+                    self.fail("replacement target must not be used")
+        self.assertEqual("preserve", (self.target / "foreign-sentinel").read_text())
+
+    def test_mkdir_refuses_to_chmod_an_unsafe_existing_directory(self):
+        self.target.mkdir()
+        path = self.target / "releases"
+        path.mkdir()
+        path.chmod(0o775)
+        with self.assertRaises(self.module.IntegrityError):
+            self.manager()._mkdir("releases")
+        self.assertEqual(0o775, stat.S_IMODE(path.stat().st_mode))
+
+    def test_modified_owned_helper_is_rejected_before_execution(self):
+        self.install()
+        (self.target / "releases/0.2.0/doctor.py").write_text("# harmless modification\n")
+        self.runner.commands.clear()
+        with self.assertRaisesRegex(self.module.IntegrityError, "checksum mismatch"):
+            self.manager().doctor()
+        self.assertEqual([], self.runner.commands)
+
+    def test_foreign_owner_path_and_writable_ancestor_are_rejected(self):
+        self.target.mkdir()
+        manager = self.manager()
+        real_lstat = self.module.os.lstat
+        def foreign(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            if Path(path) == self.target:
+                values = list(info)
+                values[4] = os.geteuid() + 1
+                return os.stat_result(values)
+            return info
+        with mock.patch.object(self.module.os, "lstat", side_effect=foreign):
+            with self.assertRaises(self.module.IntegrityError):
+                manager._assert_target_available()
+        self.root.chmod(0o775)
+        try:
+            with self.assertRaises(self.module.IntegrityError):
+                manager._assert_target_available()
+        finally:
+            self.root.chmod(0o700)
+
+    def test_owned_readonly_helpers_and_directories_remain_usable(self):
+        self.install()
+        for directory in (self.target, self.target / "releases", self.target / "releases/0.2.0"):
+            directory.chmod(0o755)
+        for name in ("backup.py", "restore.py", "doctor.py"):
+            (self.target / "releases/0.2.0" / name).chmod(0o444)
+        self.manager().backup("safe-modes")
+        self.assertTrue(any("backup.py" in " ".join(c) for c in self.runner.commands))
+
     def test_version_install_uses_release_client_and_requires_checksum(self):
         payload = self.base_manifest.read_bytes()
         client = FakeReleaseClient(payload, {self.base_bundle.name: self.base_bundle.read_bytes()})
@@ -2060,9 +2161,8 @@ class SurveyctlTest(unittest.TestCase):
         self.assertEqual("complete", json.loads((target / ".surveyctl/operation.intent").read_text())["state"])
         other_target = self.root / "helper-backup-target"
         other_manager = self.module.SurveyManager(target=other_target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
-        other_manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
-        backup_helper = other_target / "releases" / "0.2.0" / "backup.py"
-        backup_helper.write_text("import sys\nsys.exit(5)\n")
+        backup_manifest, _ = write_test_release(self.root, payload_overrides={"backup.py": b"import sys\nsys.exit(5)\n"})
+        other_manager.install(backup_manifest, "survey.example.com", "operations", "operations@example.com")
         result = subprocess.run(
             [sys.executable, str(MODULE_PATH), "--target", str(other_target), "backup", "--output", "helper-integrity"],
             capture_output=True, text=True,
