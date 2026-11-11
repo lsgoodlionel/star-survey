@@ -311,6 +311,11 @@ class PublicationMetadataAndReconciliationTest(unittest.TestCase):
         readiness = {"promotable": True, "reason": "upgrade-verified", "candidateCommit": self.commit}
         (self.assets / "release.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
         (self.assets / "release-readiness.json").write_text(json.dumps(readiness) + "\n", encoding="utf-8")
+        # Candidate notes rendered at build time by the candidate's own source; a
+        # controller with the controlled-recovery block says so in these notes.
+        (self.assets / "release-notes.md").write_text(
+            "This release declares rollback policy `restore-only`, but recovery is currently disabled.\n",
+            encoding="utf-8")
         (self.assets / "asset.bin").write_bytes(b"immutable")
 
     def tearDown(self):
@@ -371,6 +376,33 @@ class PublicationMetadataAndReconciliationTest(unittest.TestCase):
             self.assertIn("Preserve the installation, operation marker and verified pre-upgrade backup", body)
             self.assertIn("Do not run older images against a migrated database or bypass the block with an older controller or helper", body)
             self.assertNotIn("restore the verified pre-upgrade backup", body)
+
+    def test_recovery_guidance_follows_the_candidate_controller_not_the_promoting_source(self):
+        # rc19 was built before the restore block: its controller still restores, and a
+        # failed restore-only upgrade restores automatically. The published body must not
+        # claim recovery is disabled for such a candidate.
+        (self.assets / "release-notes.md").write_text(
+            "This release declares rollback policy `restore-only`. When it is `restore-only`, recover with "
+            "the verified pre-upgrade backup instead of starting older images against a migrated database.\n",
+            encoding="utf-8")
+        for target in ("v1.2.3-rc.4", "v1.2.3"):
+            with self.subTest(target=target):
+                body, _, _ = self.render(target, "v1.2.3-rc.4")
+                text = body.read_text(encoding="utf-8")
+                self.assertNotIn("recovery is currently disabled", text)
+                self.assertIn("this candidate's controller still runs recovery", text)
+                self.assertIn("a failed upgrade automatically restores the pre-upgrade backup", text)
+                self.assertIn("Preserve the installation, operation marker and verified pre-upgrade backup", text)
+                self.assertIn("Do not run older images against a migrated database", text)
+        (self.assets / "release-notes.md").unlink()
+        result = subprocess.run([
+            "python3", str(RENDER_PUBLICATION_PATH), "--assets", str(self.assets),
+            "--repository", "example/project", "--target-tag", "v1.2.3-rc.4", "--source-tag", "v1.2.3-rc.4",
+            "--target-commit", self.commit, "--output-body", str(self.root / "nonotes.md"),
+            "--output-metadata", str(self.root / "nonotes.json"),
+        ], text=True, capture_output=True, check=False)
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.root / "nonotes.md").exists())
 
     def test_renderer_rejects_stable_tag_or_readiness_identity_drift(self):
         for target, source, commit in (
