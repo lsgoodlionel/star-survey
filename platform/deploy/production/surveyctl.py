@@ -505,6 +505,7 @@ class SurveyManager:
         release_client=None,
         source_dir=None,
         expected_public_addresses=None,
+        _runtime_factory=None,
     ):
         raw_target = Path(target).expanduser()
         if ".." in raw_target.parts:
@@ -521,6 +522,8 @@ class SurveyManager:
         self._reject_symlink_components(self.target)
         self._mutation_mutex = threading.RLock()
         self._mutation_depth = 0
+        self._runtime_factory = _runtime_factory
+        self._runtime_lock_fd = None
 
     @contextmanager
     def _mutation_lock(self, *, create_target: bool = False, operation: str = "operation"):
@@ -623,11 +626,13 @@ class SurveyManager:
                 self._operation_name = operation
                 self._operation_started = False
                 self._mutation_depth = 1
+                self._runtime_lock_fd = fd
                 try:
                     yield
                     if self._operation_started:
                         self._atomic_write(intent, json.dumps({"schemaVersion": 1, "state": "complete", "operation": operation}) + "\n")
                 finally:
+                    self._runtime_lock_fd = None
                     self._mutation_depth = 0
                     fcntl.flock(fd, fcntl.LOCK_UN)
             finally:
@@ -1174,16 +1179,59 @@ class SurveyManager:
         if manifest.raw.get("securityCapabilities", {}).get("platform-admin-session-v1") != manifest.raw["images"]["PLATFORM_IMAGE"]:
             raise InputError("personnel security boundary is unsupported by the target release")
 
-    def _compose(self, version: str) -> list[str]:
+    def _compose(self, version: str, *, owned_overlay: bool = True) -> list[str]:
         release = self._release_dir(version)
         self._verify_staged_release(release, version)
         for name in (".env", "compose.yml"):
             _regular_file(release / name, f"release {name}")
             self._reject_symlink_components(release / name)
-        return [
+        command = [
             "docker", "compose", "--project-directory", str(release),
             "--env-file", str(release / ".env"), "-f", str(release / "compose.yml"),
         ]
+        if owned_overlay and (os.path.lexists(self.control_dir / 'runtime-owner.json')
+                or os.path.lexists(self.control_dir / 'runtime-owner.compose.json')):
+            try:
+                from runtime_controller import RuntimeController
+                RuntimeController._load(self, version)
+            except Exception as exc:
+                raise IntegrityError('owned Compose overlay or source binding is unavailable') from exc
+            command += ['-f', str(self.control_dir / 'runtime-owner.compose.json')]
+        return command
+
+    def _runtime(self, version, *, create=False):
+        try:
+            if self._runtime_factory is not None:
+                return self._runtime_factory(self, version, create=create)
+            from runtime_controller import RuntimeController
+            return (RuntimeController.prepare(self, version) if create else RuntimeController.open(self, version))
+        except SurveyctlError:
+            raise
+        except Exception as exc:
+            raise RuntimeHealthError('controlled runtime ownership is unavailable; preserve the installation and markers') from exc
+
+    def _owned_start_install(self, runtime, version, public_host):
+        from runtime_ownership import SettledMutationFailure
+        def start():
+            # Never remove orphans: unknown objects must block observation,
+            # rather than being swept up by Compose before ownership checks.
+            self._run(self._compose(version) + ['up', '-d'], 'installation start failed')
+            try:
+                self._wait_healthy(self._compose(version), 'installation health check failed')
+                self._verify_public_tls(public_host)
+            except SurveyctlError as exc:
+                # Only this post-success boundary can state all create/start
+                # calls returned. A failed/unknown up is never classified here.
+                raise SettledMutationFailure('known startup ended; readiness failed') from exc
+        try:
+            runtime.install(start)
+        except SettledMutationFailure as exc:
+            self._write_state(status='install_failed')
+            try:
+                runtime.cleanup(False)
+            except Exception as cleanup:
+                raise RuntimeHealthError('installation failed and runtime cleanup is unverified; preserve markers') from cleanup
+            raise RuntimeHealthError('installation readiness failed; exact runtime removed, volumes and operation marker retained') from exc
 
     def _verify_staged_release(self, release: Path, version: str) -> None:
         self._reject_symlink_components(release)
@@ -1247,6 +1295,10 @@ class SurveyManager:
                 raise IntegrityError(f"generated release configuration checksum mismatch: {name}")
 
     def _run(self, command: list[str], runtime_message: str, **kwargs):
+        if command and command[0] == 'docker' and os.path.lexists(self.control_dir / 'runtime-owner.json'):
+            if os.environ.get('DOCKER_CONTEXT') or os.environ.get('DOCKER_HOST') not in (None, '', 'unix:///var/run/docker.sock'):
+                raise InputError('owned runtime operations require the fixed local Docker daemon')
+            kwargs['env'] = dict(kwargs.get('env', os.environ), DOCKER_HOST='unix:///var/run/docker.sock')
         try:
             return self.runner.run(command, cwd=self.target, **kwargs)
         except (OSError, subprocess.CalledProcessError) as exc:
@@ -1257,6 +1309,8 @@ class SurveyManager:
         self._verify_staged_release(release, version)
         helper = self._managed(Path("releases") / version / name, must_exist=True)
         _regular_file(helper, "installed helper")
+        if self._runtime_factory is None and os.path.lexists(self.control_dir / 'runtime-owner.json'):
+            raise InputError('unregistered legacy helper is prohibited for an owned installation; controlled helper admission is not yet complete')
         return helper
 
     def _run_helper(self, command: list[str], runtime_message: str, **kwargs):
@@ -2248,6 +2302,8 @@ class SurveyManager:
 
     @_locked_mutation(create_target=False)
     def uninstall(self, purge_data, confirmation) -> None:
+        if type(purge_data) is not bool:
+            raise InputError('uninstall purge mode must be boolean')
         state = self._read_state()
         self._require_no_pending_recovery(state)
         # A first install can fail after starting Compose but before writing its
@@ -2256,39 +2312,56 @@ class SurveyManager:
         pointerless = state['status'] == 'install_failed' and not os.path.lexists(self.current_path)
         if not pointerless:
             state = self._read_state(require_current=True)
-        command = self._compose(state["version"]) + ["down", "--remove-orphans"]
+        self._compose(state['version'])  # Verify code/configuration before runtime admission.
         purge_paths = [self.target / "shared", self.target / "backups"]
+        snapshots = {}
         if purge_data:
             required = f"PURGE {self.target}"
             if confirmation != required:
                 raise InputError(f"data purge requires exact confirmation: {required}")
-            self._begin_operation()
             for path in purge_paths:
                 if path.is_symlink():
-                    self._write_state(status="purge_failed")
                     raise RuntimeHealthError(f"purge refused symbolic link: {path.relative_to(self.target)}")
                 self._reject_symlink_components(path)
-            command.append("--volumes")
-            self._write_state(status="purging")
-        self._begin_operation()
+                if os.path.lexists(path):
+                    self._assert_trusted_path(path)
+                    info = os.lstat(path)
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise RuntimeHealthError('purge refused a non-directory managed path')
+                    snapshots[path] = (info.st_dev, info.st_ino, info.st_mode, info.st_uid)
+                else:
+                    snapshots[path] = None
+        runtime = self._runtime(state['version'])
         try:
-            self._run(command, "uninstall failed")
-        except SurveyctlError:
-            if purge_data:
-                self._write_state(status="purge_failed")
-            raise
+            runtime.preflight_cleanup(purge_data)
+        except Exception as exc:
+            raise RuntimeHealthError('uninstall preflight could not prove resource ownership and cohort; no deletion was attempted') from exc
+        self._begin_operation()
         if purge_data:
-            try:
-                for path in purge_paths:
-                    if path.exists():
-                        shutil.rmtree(path)
-                remaining = [path for path in purge_paths if path.exists() or path.is_symlink()]
-                if remaining:
-                    raise OSError("managed data remains")
-            except OSError as exc:
-                self._write_state(status="purge_failed")
-                remaining = [str(path.relative_to(self.target)) for path in purge_paths if path.exists() or path.is_symlink()]
-                raise RuntimeHealthError(f"purge failed; managed data remains: {', '.join(remaining)}") from exc
+            self._write_state(status='purging')
+        def host_purge():
+            for path, expected in snapshots.items():
+                present = os.path.lexists(path)
+                if expected is None:
+                    if present:
+                        raise RuntimeHealthError('purge path appeared after preflight; managed data remains')
+                    continue
+                if not present:
+                    raise RuntimeHealthError('purge path disappeared after preflight; preserve evidence')
+                info = os.lstat(path)
+                if (info.st_dev, info.st_ino, info.st_mode, info.st_uid) != expected:
+                    raise RuntimeHealthError('purge path identity changed; managed data remains')
+                try:
+                    shutil.rmtree(path)
+                except OSError as exc:
+                    raise RuntimeHealthError('purge failed; managed data remains') from exc
+            if any(os.path.lexists(path) for path in purge_paths):
+                raise RuntimeHealthError('purge failed; managed data remains')
+        try:
+            runtime.cleanup(purge_data, host_purge if purge_data else None)
+        except Exception as exc:
+            self._write_state(status='purge_failed' if purge_data else 'recovery_required')
+            raise RuntimeHealthError('uninstall outcome is unverified or managed data remains; preserve operation and ownership markers') from exc
         self._write_state(status="uninstalled", dataPurged=bool(purge_data), pointerlessUninstall=pointerless)
 
 

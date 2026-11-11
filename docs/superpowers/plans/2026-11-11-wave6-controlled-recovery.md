@@ -141,3 +141,13 @@ Docker29.9.3/Linux arm64实际exit0，固定JSON确认：(1)受控controller→h
 9项定向测试通过，覆盖持久化先后、未知启动/结束、wrong ID/container/bool exit、非零与重复journal、帧截断/配额，以及完整帧EOF→running→exit0、分片/错nonce/hash/缺尾。真实入口`tests/integration/owned_exec_native.py --image python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e`：本地已有镜像、随机自建非特权无网络/挂载/端口容器，实际预检ExecID结束0、缺pg_dump程序127、外来CID拒绝未start、容器清理均true；源码前/后SHA一致（模块bb12289b…）。guard明确为fixture注入，**不证明真实helper进程cohort、业务数据库dump或全局收束**。协议不是备份可恢复性证明，全部产品门禁仍保留。
 
 依据：[Engine API1.47](https://docs.docker.com/reference/api/engine/version/v1.47/)、[Moby exec生命周期](https://github.com/moby/moby/blob/v28.5.2/daemon/exec.go)、[精确ExecInspect实现](https://github.com/moby/moby/blob/v28.5.2/daemon/inspect.go)。后者在从未运行时ExitCode仍未设置，不能把Running=false单独作为完成。非升级raw stream无总长度，故必须有应用层完成证明。
+
+### 控制器清理接线与 Caddy 兼容镜像验证（2026-11-11，仍未解除门禁）
+
+WIP 在真实 operation.lock 下连接 RuntimeController：卸载在 intent 前验证源配置、资源归属与 cohort；删除后逐对象核验，再清理已核对 inode 的 host 数据，最后释放 claim。未知查询、未知执行和残留不能记 uninstalled；旧安装无创建记录不自动认领。新增 `_owned_start_install` 仅将成功 up 后的健康/TLS失败视为已知失败；未知 up 不做这种推断。**默认 install 尚未调用此入口**，受控 hash/cohort、helper 启动、代码打包及实际业务拓扑仍需整合；旧 helper 在 owned target 上保守拒绝。
+
+入口 `tests/integration/runtime_controller_native.py` 使用随机项目、固定本地 Python digest 和合成单服务有卷 Compose，以真实 SurveyManager/RuntimeController（无 runtime/cohort stub）验证：普通卸载保留同一数据卷且可回读、外来附件在 intent 前拒绝、purge 后资源与 claim 均不存在；模拟 DELETE 返回204但未删除时拒绝并保留 pending；成功 up 后 readiness 失败的精确清理保留数据和失败 marker。三场景均通过且独立 fixture cleanup verified，9个源码文件前后 SHA 相同。159项控制器、56项runtime、56项owned定向测试通过。证据仅为合成源码组件，不是签名候选、业务/数据库安装、从零 install、四平台或恢复证明。先前输出丢失的运行未记为通过；只读确认其随机 namespace 无残留后，新运行将 JSON 留在 `/tmp/survey-controller-cleanup-evidence-20261111.json`。
+
+[官方 Caddy 修复](https://github.com/caddyserver/caddy-docker/pull/478) 指向 file capability effective bit 兼容问题。实际拉取并核验 `caddy:2.11.9-alpine`：索引 `sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee`；linux/arm64 child `sha256:9ee998103a2bc0d4392bbe9738b4069da1562d6920b3cd8088cfd098a8270120`；linux/amd64 child `sha256:fc9cbc100585871d18d4e451cca7021785c90a7006087427ae5ceb3e4efe6424`。**本轮真实执行仅 ARM64**：镜像标签及二进制均为 v2.11.9，getcap 为 `cap_net_bind_service=p`，非root65534、CapDrop ALL、no-new-privileges、readonly、network none 下 version 退出0；实际 stdin bcrypt helper 格式/结束回执/容器删除均通过，源码前后SHA相同。没有 CapAdd、没有剥除属性、没有改产品 CADDY_IMAGE；AMD64只核对registry元数据，尚未执行。hash JSON为 `/tmp/survey-caddy-2119-hash-evidence.json`，不含口令或hash。guard仍为明确fixture注入，不是完整进程cohort证明。交由Claude评估Release镜像固定及现有供应链回归，不能凭本实验直接换生产镜像。
+
+#125 仍冻结原Draft；当前main已到22535aa9（#128管理端device-limit，无本切片文件重叠）。恢复/native/上传/stable门禁保持；B安全前提未全部完成，不触发Release、标签或生产操作。

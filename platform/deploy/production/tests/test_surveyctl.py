@@ -39,8 +39,11 @@ def write_fake_backup(output, version="0.2.0", schema="920"):
     (output / "CONTROL-HMAC").write_text("0" * 64 + "\n")
 
 
-def write_test_release(root, version="0.2.0", rollback="compatible", restore_source=None, payload_overrides=None, **updates):
-    bundle = Path(root) / f"survey-{version}-linux-arm64.tar.gz"
+def write_test_release(root, version="0.2.0", rollback="compatible", restore_source=None, payload_overrides=None,
+                       _fixture_architecture='arm64', **updates):
+    if _fixture_architecture not in ('amd64', 'arm64'):
+        raise ValueError('unsupported fixture architecture')
+    bundle = Path(root) / f"survey-{version}-linux-{_fixture_architecture}.tar.gz"
     files = {
         "compose.yml": b"name: verified-bundle\nservices: {}\n",
         "Caddyfile": b":443 { respond 204 }\n",
@@ -59,7 +62,7 @@ def write_test_release(root, version="0.2.0", rollback="compatible", restore_sou
     metadata = {
         "schemaVersion": 1,
         "version": version,
-        "architecture": "arm64",
+        "architecture": _fixture_architecture,
         "files": {name: hashlib.sha256(value).hexdigest() for name, value in files.items()},
     }
     files["bundle-metadata.json"] = json.dumps(metadata, sort_keys=True).encode()
@@ -73,9 +76,9 @@ def write_test_release(root, version="0.2.0", rollback="compatible", restore_sou
     data["version"] = version
     data["securityCapabilities"] = {"platform-admin-session-v1": data["images"]["PLATFORM_IMAGE"]}
     data["database"]["rollback"] = rollback
-    data["supportedHosts"]["architectures"] = ["arm64"]
+    data["supportedHosts"]["architectures"] = [_fixture_architecture]
     data["assets"]["bundles"] = {
-        "arm64": {"name": bundle.name, "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
+        _fixture_architecture: {"name": bundle.name, "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
     }
     data.update(updates)
     manifest = Path(root) / f"release-{version}.json"
@@ -119,6 +122,8 @@ class FakeRunner:
         self.engine_init_health = engine_init_health
         self.configured_relay = configured_relay
         self.running_relay = running_relay
+        self.down_noop = False
+        self.fixture_running = True
 
     def run(self, command, **kwargs):
         command = tuple(str(part) for part in command)
@@ -126,6 +131,10 @@ class FakeRunner:
         self.calls.append((command, kwargs))
         if self.fail_when and self.fail_when(command):
             raise subprocess.CalledProcessError(1, command)
+        if 'down' in command and not self.down_noop:
+            self.fixture_running = False
+        if 'up' in command:
+            self.fixture_running = True
         if "hash-password" in command:
             return subprocess.CompletedProcess(command, 0, stdout="$2a$14$" + "x" * 53 + "\n", stderr="")
         if "cp" in command and "root.crt" in " ".join(command):
@@ -145,6 +154,8 @@ class FakeRunner:
             return subprocess.CompletedProcess(command, 0, stdout="\n".join(
                 sorted(services)) + "\n", stderr="")
         if "ps" in command and "--format" in command:
+            if not self.fixture_running:
+                return subprocess.CompletedProcess(command, 0, stdout='[]', stderr='')
             services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"]
             if self.running_relay:
                 services.append("engine-relay")
@@ -164,6 +175,38 @@ class FakeRunner:
             })
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
         return subprocess.CompletedProcess(command, 0, stdout=self.stdout, stderr=self.stderr)
+
+
+class FixtureRuntime:
+    """Filesystem/controller unit stub only; never an ownership/cohort proof.
+
+    Real source/daemon checks are in runtime_controller tests and the explicit
+    isolated native entry. This model distinguishes no-op down from removal.
+    """
+    def __init__(self, manager, version):
+        self.manager, self.version = manager, version
+
+    def preflight_cleanup(self, purge):
+        self.manager._run(['docker', 'info'], 'fixture discovery unavailable')
+
+    def cleanup(self, purge, host_purge=None):
+        compose = self.manager._compose(self.version)
+        self.manager._run(compose + ['down'], 'fixture stop failed')
+        result = self.manager._run(compose + ['ps', '--all', '--format', 'json'], 'fixture postcheck failed')
+        if json.loads(result.stdout):
+            raise RuntimeError('fixture resources remain after a successful no-op')
+        if host_purge is not None:
+            host_purge()
+
+    def install(self, effect):
+        return effect()
+
+    def ensure_admin_hash(self):
+        self.manager._ensure_admin_password_hash(self.manager._release_manifest(self.version).raw['images']['CADDY_IMAGE'])
+
+
+def fixture_runtime(manager, version, *, create=False):
+    return FixtureRuntime(manager, version)
 
 
 class FakeHostProbe:
@@ -219,6 +262,7 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.target = self.root / "survey"
 
     def manager(self, runner=None, probe=None, client=None, **kwargs):
+        kwargs.setdefault('_runtime_factory', fixture_runtime)
         return self.module.SurveyManager(
             target=self.target,
             runner=runner or FakeRunner(),
@@ -1467,11 +1511,13 @@ with manager._mutation_lock(operation='verify-test'):
             path.unlink() if path.is_file() else path.rmdir()
         shared.rmdir()
         shared.symlink_to(outside, target_is_directory=True)
+        intent = (self.target / '.surveyctl/operation.intent').read_bytes()
         with self.assertRaises(self.module.RuntimeHealthError):
             manager.uninstall(True, f"PURGE {manager.target}")
         self.assertTrue((outside / "keep").exists())
         state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
-        self.assertEqual("purge_failed", state["status"])
+        self.assertEqual("healthy", state["status"])  # Read-only refusal precedes intent/deletion.
+        self.assertEqual(intent, (self.target / '.surveyctl/operation.intent').read_bytes())
 
     def test_purge_deletion_error_is_nonzero_and_diagnostic(self):
         manifest, _ = self.write_bundle_manifest()
@@ -1604,6 +1650,7 @@ class SurveyctlTest(unittest.TestCase):
             runner=runner or self.runner,
             host_probe=probe or FakeHostProbe(),
             source_dir=PRODUCTION_DIR,
+            _runtime_factory=fixture_runtime,
         )
 
     def test_group_writable_empty_target_is_rejected_before_control_creation(self):
@@ -2453,6 +2500,7 @@ class SurveyctlTest(unittest.TestCase):
         # FakeRunner keeps reporting the original services as running after a
         # successful no-op `down`: inject residual resources, not a real daemon.
         self.runner.commands.clear()
+        self.runner.down_noop = True
         with self.assertRaises(self.module.SurveyctlError):
             self.manager().uninstall(False, None)
         self.assertNotEqual("uninstalled", self.manager()._read_state()["status"])
@@ -2494,6 +2542,17 @@ class SurveyctlTest(unittest.TestCase):
             manager.uninstall(purge_data=True, confirmation="yes")
         manager.uninstall(purge_data=True, confirmation=f"PURGE {self.target.resolve()}")
         self.assertFalse((self.target / "shared").exists())
+
+    def test_default_uninstall_never_adopts_a_legacy_fixture_without_ownership_record(self):
+        self.install()
+        state, intent = self.target / '.surveyctl/state.json', self.target / '.surveyctl/operation.intent'
+        before = state.read_bytes(), intent.read_bytes()
+        self.runner.commands.clear()
+        manager = self.module.SurveyManager(self.target, runner=self.runner)
+        with self.assertRaises(self.module.RuntimeHealthError): manager.uninstall(False, None)
+        self.assertEqual(before, (state.read_bytes(), intent.read_bytes()))
+        self.assertEqual([], self.runner.commands)
+        self.assertTrue((self.target / 'shared').is_dir())
 
     def test_refuses_target_outside_owned_state_boundary(self):
         self.target.mkdir(parents=True)
