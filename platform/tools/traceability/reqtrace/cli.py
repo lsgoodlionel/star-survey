@@ -30,9 +30,7 @@ def _check() -> int:
         report.requirement_count, report.entry_count, report.covered_count, report.referenced_count
     ))
     print("与 02 矩阵对账：{}".format(
-        "已对" if report.matrix_checked else "跳过（{} 读不到，设 {} 指过去）".format(
-            matrix_path(), MATRIX_ENV
-        )
+        "已对" if report.matrix_checked else "未完成（矩阵缺失、不可读或无效）"
     ))
     if report.is_clean:
         print("需求追溯校验通过")
@@ -44,9 +42,12 @@ def _check() -> int:
 
 
 def _sync() -> int:
-    matrix = load_matrix()
+    try:
+        matrix = load_matrix(REPO_ROOT)
+    except (OSError, UnicodeError, ValueError):
+        matrix = None
     if matrix is None:
-        print("读不到 02 矩阵（{}）；设 {} 指过去".format(matrix_path(), MATRIX_ENV), file=sys.stderr)
+        print("读不到或无法解析 02 矩阵（{}）；设 {} 指过去".format(matrix_path(REPO_ROOT), MATRIX_ENV), file=sys.stderr)
         return _EXIT_USAGE
     target = REPO_ROOT / check.INDEX_FILE
     rendered = render_index(matrix)
