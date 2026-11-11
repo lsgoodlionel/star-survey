@@ -110,6 +110,65 @@ afterEach(() => {
 });
 
 describe('EditorPage', () => {
+  test('authors a time window without replacing other access policy rules', async () => {
+    const source = structuredClone(gatewayFixture) as Record<string, unknown>;
+    source.policy = { policyVersion: 1, access: { captcha: true }, network: { denyIps: ['127.0.0.0/8'] } };
+    let saved: Record<string, unknown> | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        saved = (request.body as { definition: Record<string, unknown> }).definition;
+        return { surveyId, version: 5, definition: saved };
+      },
+    });
+    renderEditor(api);
+    fireEvent.click(await screen.findByLabelText('启用开放时间窗'));
+    fireEvent.change(screen.getByLabelText('开放时间'), { target: { value: '2026-11-12T09:00' } });
+    fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-11-13T18:00' } });
+    fireEvent.change(screen.getByLabelText('时区'), { target: { value: 'Asia/Shanghai' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    expect(saved?.policy).toEqual({
+      policyVersion: 1,
+      access: { captcha: true },
+      network: { denyIps: ['127.0.0.0/8'] },
+      window: { opensAt: '2026-11-12T09:00', closesAt: '2026-11-13T18:00', timezone: 'Asia/Shanghai' },
+    });
+  });
+
+  test('keeps time window controls read only without edit capability', async () => {
+    const source = structuredClone(gatewayFixture) as Record<string, unknown>;
+    source.policy = { policyVersion: 1, window: { opensAt: '2026-11-12T09:00', timezone: 'Asia/Shanghai' } };
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`GET /v1/resource-capabilities?resourceId=${surveyId}`]: () => ({ ...editableCapabilities, canEdit: false }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: () => { throw new Error('read-only user must not save'); },
+    });
+    renderEditor(api);
+    expect(await screen.findByLabelText('启用开放时间窗')).toBeDisabled();
+    expect(screen.getByLabelText('开放时间')).toBeDisabled();
+    expect(screen.getByLabelText('时区')).toBeDisabled();
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+  });
+
+  test('does not submit an empty time window and explains a server validation refusal', async () => {
+    let submissions = 0;
+    const api = editorApi({ [`PUT /v1/surveys/${surveyId}/draft`]: () => {
+      submissions += 1;
+      throw new ApiError('validation', '定义或导入内容未通过校验', 422);
+    } });
+    renderEditor(api);
+    fireEvent.click(await screen.findByLabelText('启用开放时间窗'));
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('开放时间和截止时间至少填写一项');
+    expect(submissions).toBe(0);
+    fireEvent.change(screen.getByLabelText('开放时间'), { target: { value: '2026-11-12T09:00' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(submissions).toBe(1));
+    expect(await screen.findByRole('alert')).toHaveTextContent('请检查时区和夏令时');
+    expect(screen.getByRole('status', { name: '保存状态' })).toHaveTextContent('未保存');
+  });
+
   test.each(['switch', 'remove_before', 'remove_target', 'save_during_upload'] as const)('keeps a delayed carousel upload bound to its original slide: %s', async (scenario) => {
     const source = structuredClone(gatewayFixture);
     const questions = source.groups[0].questions as Array<Record<string, unknown>>;

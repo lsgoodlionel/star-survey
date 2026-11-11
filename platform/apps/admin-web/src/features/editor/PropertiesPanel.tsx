@@ -1,12 +1,17 @@
 import type { EditableSurveyDefinition } from './model/definition';
+import { readTimeWindow, type TimeWindow } from './model/timeWindow';
 
 interface PropertiesPanelProps {
   definition: EditableSurveyDefinition;
   disabled: boolean;
   onChange(update: Pick<EditableSurveyDefinition, 'description' | 'language' | 'title'>): void;
+  onTimeWindowChange(window: TimeWindow | null): void;
 }
 
-export function PropertiesPanel({ definition, disabled, onChange }: PropertiesPanelProps) {
+export function PropertiesPanel({ definition, disabled, onChange, onTimeWindowChange }: PropertiesPanelProps) {
+  const timeWindow = readTimeWindow(definition);
+  const window = timeWindow.window;
+  const windowDisabled = disabled || !timeWindow.editable;
   return (
     <div className="editor-properties">
       <h2>问卷属性</h2>
@@ -39,6 +44,22 @@ export function PropertiesPanel({ definition, disabled, onChange }: PropertiesPa
           }
         />
       </label>
+      <fieldset>
+        <legend>开放时间窗</legend>
+        {!timeWindow.editable ? <p role="alert">现有访问策略格式无法在此编辑；原设置会保留。</p> : null}
+        <label>启用开放时间窗 <input type="checkbox" checked={window !== null} disabled={windowDisabled}
+          onChange={(event) => onTimeWindowChange(event.target.checked ? { timezone: 'Asia/Shanghai' } : null)} /></label>
+        {window ? <>
+          <p>至少填写开放或截止时间；按所填时区解释本地时间，截止时刻不再接受作答。</p>
+          <label>开放时间 <input type="datetime-local" value={window.opensAt ?? ''} disabled={windowDisabled}
+            onChange={(event) => onTimeWindowChange({ ...window, opensAt: event.target.value })} /></label>
+          <label>截止时间 <input type="datetime-local" value={window.closesAt ?? ''} disabled={windowDisabled}
+            onChange={(event) => onTimeWindowChange({ ...window, closesAt: event.target.value })} /></label>
+          <label>时区 <input type="text" value={window.timezone} disabled={windowDisabled} placeholder="Asia/Shanghai"
+            onChange={(event) => onTimeWindowChange({ ...window, timezone: event.target.value })} /></label>
+          <p>时区使用 IANA 名称；夏令时不存在或重叠的时刻由服务端拒绝。</p>
+        </> : null}
+      </fieldset>
       <div>
         <p>语言：<span>{languageLabel(definition.language)}</span></p>
         <details>
