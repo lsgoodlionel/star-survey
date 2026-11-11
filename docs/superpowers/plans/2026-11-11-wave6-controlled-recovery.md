@@ -71,3 +71,11 @@ rc20 run42790836656 的四个 Native job 都在 `Block native lifecycle before h
 本节只是实现/测试范围，不是运行许可或已完成安全证明；四道原生/清理阻断保持，Release 仍由 Claude 负责。已保存的保守测试在 main4756b6dc 上有两项预期安全断言失败，失败安装保留及 restore 拒绝不改 state/intent 通过；尚无真实 Docker 清理验收。
 
 组件PR另在现有 production-smoke workflow 增加独立 ownership-protocol job：GitHub hosted Ubuntu24.04，contents:read，无OIDC/registry登录/持久凭据，先跑定向回归，再按固定Alpine digest获取测试镜像，执行随机空资源正常旅程并上传单份固定JSON。新增成本为一个轻量节点及一次小镜像拉取，不构建产品或触发Release；真实运行结果以该PR精确head的CI为准。10分钟job终止/runner中断可能阻止finally及JSON完成，此时不得宣称清理已验证；宿主销毁不是产品清理证明。
+
+### 后续运行接入的具体实施包（设计待验证，不是已启用能力）
+
+1. **从创建起记录**：候选controller读取并校验staged manifest/Compose，产生有限服务、镜像ID、路径/挂载、网络/卷契约；先取得daemon claim，再持久化创建意图。网络/卷的创建归因不能靠事后同名认领。正常uninstall改为按ledger精确ID删除及核验；失败安装未知结果保留pending，不执行猜测清理。安装、升级、backup、doctor与uninstall共用实际安装锁及归属检查，不能只给uninstall补一次ps。
+2. **旧helper的兼容证据**：公开源码commit46766fd4326c370e0a5eeaa8de50235b5abb4a16中的backup.py SHA256为ceaaa316403f5fcf47162d3e310aa906a78cf5ecaab39ef2012b94b4cb1db3b0（仅Git源码证据，不冒称实际bundle已重验）。`BackupManager`已有runner/cipher注入点；数据库dump、容器复制、pause/unpause/up通过runner，但OpenSSL直接subprocess，必须一并纳入受控启动。controller `_verify_backup`还调用已安装restore.py的verify；verify_only会解密并验格式，不启动数据库，仍有明文/子进程收束要求，不能因为CLI restore拒绝就跳过。
+3. **最小候选方向**：先隔离验证受控launcher加载经过现有签名/manifest校验且明确兼容的旧helper原字节，通过内部runner限制其Docker操作；旧包不改、不重签。与“改用候选helper并显式声明旧state/格式兼容”相比，该方向保留旧格式实现，但须逐项证明注入覆盖全部实际调用；不支持的版本/调用拒绝，不能悄悄回退原CLI。若真实旧包API不兼容，再向Owner给出这两种精确执行契约的证据及差异，而非笼统重选单/多栈。
+4. **真实receipt，不靠空集合**：Docker exec需绑定实际ExecID、容器ID及结束状态，未知创建/启动/投递结果保持pending；当前无ExecIDs不代表本轮已结束。受控Python/OpenSSL启动链需记录PID/starttime并验证整个允许cohort收束；PGID本身不是containment。Linux无新增特权的父死亡约束/受控child bootstrap仅为待验证机制，须真实SIGKILL、子进程失败、controller死亡及异常派生负例；不得仅凭扫描或PDEATHSIG名称宣称通过，也不引入#102已拒绝的特权实验。
+5. **保持原安全职责**：部分pause、丢回复、dump/加密失败、unpause/health/up异常均需真实组件故障注入；未知writer/exec/资源不主动kill或删除。验证私有工作区及明文清理必须建立在已证明cohort结束之上，不能以TemporaryDirectory finally或宿主销毁替代。备份HMAC、源manifest、schema、人员floor、restore拒绝及六项stable证明不变。此包只在隔离代码/合成数据验证，不启动真实组织或发布流程。
