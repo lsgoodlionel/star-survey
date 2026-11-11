@@ -110,6 +110,65 @@ afterEach(() => {
 });
 
 describe('EditorPage', () => {
+  test('authors a time window without replacing other access policy rules', async () => {
+    const source = structuredClone(gatewayFixture) as Record<string, unknown>;
+    source.policy = { policyVersion: 1, access: { captcha: true }, network: { denyIps: ['127.0.0.0/8'] } };
+    let saved: Record<string, unknown> | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        saved = (request.body as { definition: Record<string, unknown> }).definition;
+        return { surveyId, version: 5, definition: saved };
+      },
+    });
+    renderEditor(api);
+    fireEvent.click(await screen.findByLabelText('启用开放时间窗'));
+    fireEvent.change(screen.getByLabelText('开放时间'), { target: { value: '2026-11-12T09:00' } });
+    fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-11-13T18:00' } });
+    fireEvent.change(screen.getByLabelText('时区'), { target: { value: 'Asia/Shanghai' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    expect(saved?.policy).toEqual({
+      policyVersion: 1,
+      access: { captcha: true },
+      network: { denyIps: ['127.0.0.0/8'] },
+      window: { opensAt: '2026-11-12T09:00', closesAt: '2026-11-13T18:00', timezone: 'Asia/Shanghai' },
+    });
+  });
+
+  test('keeps time window controls read only without edit capability', async () => {
+    const source = structuredClone(gatewayFixture) as Record<string, unknown>;
+    source.policy = { policyVersion: 1, window: { opensAt: '2026-11-12T09:00', timezone: 'Asia/Shanghai' } };
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`GET /v1/resource-capabilities?resourceId=${surveyId}`]: () => ({ ...editableCapabilities, canEdit: false }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: () => { throw new Error('read-only user must not save'); },
+    });
+    renderEditor(api);
+    expect(await screen.findByLabelText('启用开放时间窗')).toBeDisabled();
+    expect(screen.getByLabelText('开放时间')).toBeDisabled();
+    expect(screen.getByLabelText('时区')).toBeDisabled();
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+  });
+
+  test('does not submit an empty time window and explains a server validation refusal', async () => {
+    let submissions = 0;
+    const api = editorApi({ [`PUT /v1/surveys/${surveyId}/draft`]: () => {
+      submissions += 1;
+      throw new ApiError('validation', '定义或导入内容未通过校验', 422);
+    } });
+    renderEditor(api);
+    fireEvent.click(await screen.findByLabelText('启用开放时间窗'));
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('开放时间和截止时间至少填写一项');
+    expect(submissions).toBe(0);
+    fireEvent.change(screen.getByLabelText('开放时间'), { target: { value: '2026-11-12T09:00' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(submissions).toBe(1));
+    expect(await screen.findByRole('alert')).toHaveTextContent('请检查时区和夏令时');
+    expect(screen.getByRole('status', { name: '保存状态' })).toHaveTextContent('未保存');
+  });
+
   test.each(['switch', 'remove_before', 'remove_target', 'save_during_upload'] as const)('keeps a delayed carousel upload bound to its original slide: %s', async (scenario) => {
     const source = structuredClone(gatewayFixture);
     const questions = source.groups[0].questions as Array<Record<string, unknown>>;
@@ -257,6 +316,89 @@ describe('EditorPage', () => {
     fireEvent.change(screen.getByLabelText('题目文本'), { target: { value: '未保存修改' } });
     expect(screen.getByRole('status', { name: '保存状态' })).toHaveTextContent('未保存');
     expect(screen.getByText('简体中文')).toBeInTheDocument();
+  });
+  test('authors a v2 question condition and saves the DSL without losing unknown fields', async () => {
+    const source = structuredClone(gatewayFixture);
+    source.definitionVersion = 2;
+    const question = source.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    question.condition = 'true';
+    question.futureLogic = { keep: true };
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    expect(await screen.findByText('现有复杂显示条件会保持原样。若需改成单选条件，请先清除。')).toBeInTheDocument();
+    expect(screen.getByLabelText('前置题目')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '清除显示条件' }));
+    fireEvent.change(screen.getByLabelText('前置题目'), { target: { value: 'QSINGLE' } });
+    expect(screen.getByLabelText('触发选项')).toHaveValue('A1');
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    expect(saved.condition).toBe(`q("${singleUuid}") == "A1"`);
+    expect(saved.futureLogic).toEqual({ keep: true });
+  });
+  test('uses a stable source UUID when the question code is a DSL keyword and later changes', async () => {
+    const source = structuredClone(gatewayFixture);
+    source.definitionVersion = 2;
+    source.groups[0].questions[0].code = 'and';
+    const target = source.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    target.condition = 'true';
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    await screen.findByText('现有复杂显示条件会保持原样。若需改成单选条件，请先清除。');
+    fireEvent.click(screen.getByRole('button', { name: '清除显示条件' }));
+    fireEvent.change(screen.getByLabelText('前置题目'), { target: { value: 'and' } });
+    expect(screen.getByLabelText('触发选项')).toHaveValue('A1');
+    fireEvent.click(screen.getByRole('button', { name: 'and Pick exactly one' }));
+    fireEvent.change(screen.getByLabelText('题目编码'), { target: { value: 'QRENAMED' } });
+    fireEvent.click(screen.getByRole('button', { name: 'QTEXT Say something short' }));
+    expect(screen.getByLabelText('前置题目')).toHaveValue('QRENAMED');
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    expect(saved.condition).toBe(`q("${singleUuid}") == "A1"`);
+  });
+  test.each(['1', '01'])('recognizes a valid numeric answer code %s in an existing condition', async (answerCode) => {
+    const source = structuredClone(gatewayFixture);
+    source.definitionVersion = 2;
+    const trigger = source.groups[0].questions.find((item) => item.uuid === singleUuid)! as Record<string, unknown>;
+    (trigger.answers as Array<{ code: string }>)[0].code = answerCode;
+    const target = source.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    target.condition = `QSINGLE == "${answerCode}"`;
+    target.futureLogic = { keep: true };
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    expect(await screen.findByLabelText('前置题目')).toHaveValue('QSINGLE');
+    expect(screen.getByLabelText('触发选项')).toHaveValue(answerCode);
+    expect(screen.queryByText('现有复杂显示条件会保持原样。若需改成单选条件，请先清除。')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('前置题目'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('前置题目'), { target: { value: 'QSINGLE' } });
+    expect(screen.getByLabelText('触发选项')).toHaveValue(answerCode);
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    expect(saved.condition).toBe(`q("${singleUuid}") == "${answerCode}"`);
+    expect(saved.futureLogic).toEqual({ keep: true });
   });
   test('configures a collapsible section while preserving unknown options', async () => {
     const source = structuredClone(gatewayFixture);
