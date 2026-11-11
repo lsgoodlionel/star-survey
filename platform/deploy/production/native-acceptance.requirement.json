@@ -25,9 +25,14 @@
     "backup",
     "upgrade",
     "doctor-after",
-    "restore",
-    "doctor-restored",
+    "restore-refused",
+    "doctor-final",
     "uninstall"
   ],
+  "deferredUntilStable": {
+    "decision": "https://github.com/lsgoodlionel/star-survey/issues/119",
+    "journey": ["restore", "doctor-restored"],
+    "reason": "Option B: prerelease lifecycle acceptance is separate from controlled recovery; stable still requires the #33 recovery plan"
+  },
   "owner": "multiarch-release-plan-task3"
 }

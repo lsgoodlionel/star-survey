@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-11 Release 方案B准备（#119，Draft，阻断全部保留）：原生验收脚本不再执行真实restore，改为由证据助手调用候选控制器的 restore，要求精确的受控拒绝信息、无标准输出，且 `.surveyctl` 下 operation.intent/state.json 字节与目录条目不变，随后 doctor-final 及安全卸载；DOCTOR_FILE 改为 installed/upgraded/final。`native-acceptance.requirement.json` 用 restore-refused/doctor-final 替换 restore/doctor-restored，并以 deferredUntilStable 记录 stable 仍需真实恢复。先红后绿：新增 3 项拒绝检查与 2 项顺序/策略断言；Windows 本地 release 全部测试模块与未改 main 失败集合对照无新增（均为既有 Windows 失败），POSIX 以 CI 为准。release.yml 两处 exit、脚本顶部 exit 1、证据上传限制和 require_fixture_cleanup_proof 均未改动，待 Codex 在 #33 回答清理安全评估。
+
 2026-11-11 Wave6 #118 P2修订待托管验收：独立审查指出首记录前中断会留下可被普通安装采纳的空目标；两个窗口先红。改为同父目录私有随机暂存，完整记录/锁/pending及fsync/身份检查后不可覆盖地公布目标，缺接口/不支持文件系统拒绝，不使用普通rename fallback。保留原私有权限、路径替换、fsync故障断言，并将故障注入定位到暂存或公布后阶段；新增竞争空/非空目标inode不变、缺API拒绝、旧暂存重试不采纳。增量复审进一步指出私有空暂存仍可能显式传给install，补首记录前暂存及内部路径拒绝回归先红，再在普通安装入口拒绝保留命名空间，不仅依赖README告诫。最终154项控制器及169项Release/工作流契约共323项通过，增量独立静态复核确认原P2闭合且无新增阻断；macOS实际执行renameatx_np，Ubuntu renameat2需在线CI验证，未声称断电/真实崩溃或恢复执行通过。B清理安全仍未证明，Release/native/restore门禁不变。
 
 2026-11-11 Wave6 #33 新目标保留切片接续（待PR/托管验证）：Mac恢复后发现断连前测试文件已落地、运行输出未知；经正常提权只读pgrep确认无匹配测试进程，再运行既有定向回归，0775/0777祖先及一致外来uid模型先失败。独立分支安全整合main4756b6dc（含#108/#114/#117），补no-follow描述符全链属主/写权限检查；151项控制器和169项Release/工作流契约通过，共320项；定向回归仅临时合成文件系统，无真实密钥或数据库。只创建全新私有reservation及pending，随机项目名仅提案，输出executable=false；不读密钥、不解密、不调用Docker/helper、不触碰原安装，不自动采纳或删除不确定现场。此证据不能称恢复/清理或原生验收。#114已由外部操作者合并，不是本窗口执行；其后主线CI以4756b6dc对应运行另核，不复用旧绿灯。

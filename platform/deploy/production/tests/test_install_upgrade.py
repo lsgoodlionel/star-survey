@@ -35,7 +35,15 @@ class NativeAcceptancePolicyTest(unittest.TestCase):
             execution["environment"],
         )
         self.assertFalse(policy["legacyOptInTest"]["releaseBlocking"])
-        self.assertIn("doctor-restored", policy["requiredJourney"])
+        journey = policy["requiredJourney"]
+        self.assertLess(journey.index("backup"), journey.index("restore-refused"))
+        self.assertLess(journey.index("restore-refused"), journey.index("doctor-final"))
+        self.assertLess(journey.index("doctor-final"), journey.index("uninstall"))
+        self.assertNotIn("restore", journey)
+        # Option B (#119) defers real recovery to stable; it is recorded, not dropped.
+        deferred = policy["deferredUntilStable"]
+        self.assertEqual(["restore", "doctor-restored"], deferred["journey"])
+        self.assertTrue(deferred["decision"].endswith("/issues/119"))
 
 
 @unittest.skipUnless(os.environ.get("SURVEY_PRODUCTION_E2E") == "1", "native production acceptance is opt-in")
