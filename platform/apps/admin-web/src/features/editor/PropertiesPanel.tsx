@@ -1,6 +1,7 @@
 import type { EditableSurveyDefinition } from './model/definition';
 import { readTimeWindow, type TimeWindow } from './model/timeWindow';
 import { readIpDenyList } from './model/ipDenyList';
+import { readDeviceLimit } from './model/deviceLimit';
 
 interface PropertiesPanelProps {
   definition: EditableSurveyDefinition;
@@ -8,13 +9,16 @@ interface PropertiesPanelProps {
   onChange(update: Pick<EditableSurveyDefinition, 'description' | 'language' | 'title'>): void;
   onTimeWindowChange(window: TimeWindow | null): void;
   onIpDenyListChange(denyIps: string[]): void;
+  onDeviceLimitChange(max: number | null): void;
 }
 
-export function PropertiesPanel({ definition, disabled, onChange, onTimeWindowChange, onIpDenyListChange }: PropertiesPanelProps) {
+export function PropertiesPanel({ definition, disabled, onChange, onTimeWindowChange, onIpDenyListChange,
+  onDeviceLimitChange }: PropertiesPanelProps) {
   const timeWindow = readTimeWindow(definition);
   const window = timeWindow.window;
   const windowDisabled = disabled || !timeWindow.editable;
   const ipDenyList = readIpDenyList(definition);
+  const deviceLimit = readDeviceLimit(definition);
   return (
     <div className="editor-properties">
       <h2>问卷属性</h2>
@@ -62,6 +66,16 @@ export function PropertiesPanel({ definition, disabled, onChange, onTimeWindowCh
             onChange={(event) => onTimeWindowChange({ ...window, timezone: event.target.value })} /></label>
           <p>时区使用 IANA 名称；夏令时不存在或重叠的时刻由服务端拒绝。</p>
         </> : null}
+      </fieldset>
+      <fieldset>
+        <legend>答卷限制</legend>
+        {!deviceLimit.editable ? <p role="alert">现有答卷限制格式无法在此编辑；原设置会保留。</p> : null}
+        <label>同一设备最多提交次数
+          <input type="number" min={1} max={10000} step={1} value={deviceLimit.max ?? ''}
+            disabled={disabled || !deviceLimit.editable}
+            onChange={(event) => onDeviceLimitChange(event.target.value === '' ? null : Number(event.target.value))} />
+        </label>
+        <p>按浏览器设备标识计数；换浏览器可绕过，不能作为强身份防刷。留空则不设置设备上限。</p>
       </fieldset>
       <fieldset>
         <legend>网络访问</legend>

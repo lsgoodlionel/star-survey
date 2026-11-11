@@ -40,6 +40,7 @@ import {
 import { moveGroup, moveQuestion, preserveCarouselSlideIds, setCarouselSlideAsset, updateQuestion, validateDefinition } from './model/operations';
 import { readTimeWindow, updateTimeWindow, validateTimeWindow } from './model/timeWindow';
 import { updateIpDenyList, validateIpDenyList } from './model/ipDenyList';
+import { updateDeviceLimit, validateDeviceLimit } from './model/deviceLimit';
 import {
   clearActiveEditorRecovery,
   discardEditorRecovery,
@@ -207,7 +208,8 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const issues = [...validateDefinition(definition).map((issue) => issue.message), ...validateTimeWindow(definition), ...validateIpDenyList(definition)];
+      const issues = [...validateDefinition(definition).map((issue) => issue.message), ...validateTimeWindow(definition),
+        ...validateIpDenyList(definition), ...validateDeviceLimit(definition)];
       if (issues.length) {
         setValidationMessages(issues);
         throw new Error('请先修正草稿中的问题');
@@ -377,6 +379,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
       onChange={(update) => changeDefinition({ ...definition, ...update })}
       onTimeWindowChange={(window) => changeDefinition(updateTimeWindow(definition, window))}
       onIpDenyListChange={(denyIps) => changeDefinition(updateIpDenyList(definition, denyIps))}
+      onDeviceLimitChange={(max) => changeDefinition(updateDeviceLimit(definition, max))}
     />
   );
 

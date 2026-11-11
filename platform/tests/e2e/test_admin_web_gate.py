@@ -146,6 +146,13 @@ class AdminWebGateTest(unittest.TestCase):
                 gate.cmd_verify(args)
             self.assertEqual(2, load.call_count)
         args.expected_gateway_publish_calls = 9
+        with mock.patch.object(gate, '_load_object', return_value={}) as load, \
+             mock.patch.object(gate, 'validate_metadata', return_value={}), \
+             mock.patch.object(gate, 'validate_result', return_value={}):
+            with self.assertRaisesRegex(gate.StepFailed, 'full gate requires full-suite publish count'):
+                gate.cmd_verify(args)
+            self.assertEqual(2, load.call_count)
+        args.expected_gateway_publish_calls = 10
         with mock.patch.object(gate, '_load_object', side_effect=[{}, {}, gate.StepFailed('missing wave2')]) as load, \
              mock.patch.object(gate, 'validate_metadata', return_value={}), \
              mock.patch.object(gate, 'validate_result', return_value={}):
@@ -386,12 +393,12 @@ class AdminWebGateTest(unittest.TestCase):
         engine_db = {"active": "Y", "surveyCount": 1}
 
         gate.validate_evidence(metadata, result, api, platform_db, engine_db, gateway_publish_calls=3)
-        # Wave 5 and W03 add one each; W04 adds three windows and one IP denial.
+        # Wave 5 and W03 add one each; W04 adds three windows, one IP denial and one device limit.
         gate.validate_evidence(metadata, result, api, platform_db, engine_db,
-                               gateway_publish_calls=9, expected_gateway_publish_calls=9)
+                               gateway_publish_calls=10, expected_gateway_publish_calls=10)
         with self.assertRaises(gate.StepFailed):
             gate.validate_evidence(metadata, result, api, platform_db, engine_db,
-                                   gateway_publish_calls=8, expected_gateway_publish_calls=9)
+                                   gateway_publish_calls=9, expected_gateway_publish_calls=10)
 
         with self.assertRaises(gate.StepFailed):
             gate.validate_evidence(metadata, result, api, platform_db, engine_db, gateway_publish_calls=1)
