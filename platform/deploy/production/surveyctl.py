@@ -604,6 +604,153 @@ class SurveyManager:
             finally:
                 os.close(fd)
 
+    def recovery_plan(self, destination: Path | str, backup: str | None = None) -> dict[str, Any]:
+        """Observe a new-target recovery proposal; never authorize or execute recovery.
+
+        The existing lock only coordinates cooperating current controllers. These
+        snapshots are not a lease or proof that legacy/external writers stopped.
+        """
+        destination = Path(destination).expanduser()
+        if not destination.is_absolute() or '..' in destination.parts:
+            raise InputError('recovery destination must be an absolute new directory')
+        destination = Path(os.path.abspath(destination))
+        self._reject_symlink_components(destination)
+        if (destination == self.target or self.target in destination.parents
+                or destination in self.target.parents or os.path.lexists(destination)):
+            raise InputError('recovery destination must be distinct, nonoverlapping and absent')
+        if backup is not None and (not isinstance(backup, str) or re.fullmatch(r'[A-Za-z0-9._-]{1,128}', backup) is None
+                                   or backup in {'.', '..'}):
+            raise InputError('recovery backup name is invalid')
+        descriptors, directories, observations = [], [], []
+        open_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+
+        def directory(parent, name):
+            fd = os.open(name, open_flags | os.O_DIRECTORY, **({'dir_fd': parent} if parent is not None else {}))
+            descriptors.append(fd)
+            info = os.fstat(fd)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+                raise IntegrityError('recovery source directory is unsafe')
+            directories.append((fd, parent, name, _file_read_snapshot(info)))
+            return fd
+
+        def capture(parent, name, limit, optional=False):
+            try:
+                fd = os.open(name, open_flags, dir_fd=parent)
+            except FileNotFoundError:
+                if not optional:
+                    raise IntegrityError('recovery source file is unavailable')
+                observations.append((parent, name, None, None, None))
+                return None
+            descriptors.append(fd)
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid()
+                    or info.st_mode & 0o077 or info.st_size > limit):
+                raise IntegrityError('recovery source file is unsafe or exceeds its bound')
+            data = os.read(fd, limit + 1)
+            if len(data) != info.st_size:
+                raise IntegrityError('recovery source file changed while reading')
+            observations.append((parent, name, fd, _file_read_snapshot(info), data))
+            return data
+
+        def document(data):
+            try:
+                value = json.loads(data.decode('utf-8'), object_pairs_hook=_unique_json_fields)
+            except (UnicodeError, ValueError) as exc:
+                raise IntegrityError('recovery metadata is invalid') from exc
+            if not isinstance(value, dict):
+                raise IntegrityError('recovery metadata must be an object')
+            return value
+
+        def version(value):
+            try:
+                return _validate_semver(value, 'recovery metadata version')
+            except SurveyctlError as exc:
+                raise IntegrityError('recovery metadata version is invalid') from exc
+
+        try:
+            root = directory(None, str(self.target))
+            control = directory(root, '.surveyctl')
+            capture(control, 'operation.lock', 0)
+            lock_fd = observations[-1][2]
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise InputError('another installation operation is in progress') from exc
+            state_bytes = capture(control, 'state.json', 64 * 1024, optional=True)
+            intent_bytes = capture(control, 'operation.intent', 1024, optional=True)
+            current_bytes = capture(root, 'current', 128, optional=True)
+            state, source_version, intent = 'missing', None, 'missing'
+            if state_bytes is not None:
+                record = document(state_bytes)
+                if not isinstance(record.get('status'), str) or record['status'] not in {'installing', 'install_failed', 'healthy', 'upgrading',
+                                                'upgrade_failed', 'recovery_required', 'purging',
+                                                'purge_failed', 'uninstalled'}:
+                    raise IntegrityError('recovery metadata status is invalid')
+                state, source_version = record['status'], version(record.get('version'))
+            if intent_bytes is not None:
+                record = document(intent_bytes)
+                if (set(record) != {'schemaVersion', 'state', 'operation'}
+                        or type(record.get('schemaVersion')) is not int or record['schemaVersion'] != 1
+                        or not isinstance(record.get('state'), str) or record['state'] not in {'pending', 'complete'}
+                        or not isinstance(record.get('operation'), str)
+                        or re.fullmatch(r'[a-z_]{1,64}', record['operation']) is None):
+                    raise IntegrityError('recovery operation intent is invalid')
+                intent = record['state']
+            current = 'missing'
+            if current_bytes is not None:
+                try:
+                    current_version = version(current_bytes.decode('ascii').strip())
+                except UnicodeError as exc:
+                    raise IntegrityError('recovery current pointer is invalid') from exc
+                current = 'matches-state' if current_version == source_version else 'differs-from-state'
+            backup_observation = {'selected': False, 'authenticated': False, 'payloadsChecked': False}
+            if backup is not None:
+                backups = directory(root, 'backups')
+                selected = directory(backups, backup)
+                payload = capture(selected, 'manifest.json', 256 * 1024)
+                record = document(payload)
+                if type(record.get('schemaVersion')) is not int or record['schemaVersion'] != 2:
+                    raise IntegrityError('recovery backup metadata schema is invalid')
+                backup_observation.update(selected=True, version=version(record.get('version')),
+                                          metadataSha256=hashlib.sha256(payload).hexdigest())
+            # A changed or newly appeared path invalidates this observation, even
+            # though no executable capability is produced by this command.
+            for fd, parent, name, before in directories:
+                after = os.stat(name, follow_symlinks=False, **({'dir_fd': parent} if parent is not None else {}))
+                if before != _file_read_snapshot(os.fstat(fd)) or before != _file_read_snapshot(after):
+                    raise IntegrityError('recovery source directory identity changed')
+            bound = [['directory', name, before] for _, _, name, before in directories]
+            for parent, name, fd, before, data in observations:
+                if fd is None:
+                    try:
+                        os.stat(name, dir_fd=parent, follow_symlinks=False)
+                    except FileNotFoundError:
+                        bound.append([name, None]); continue
+                    raise IntegrityError('recovery source file appeared during observation')
+                after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if before != _file_read_snapshot(os.fstat(fd)) or before != _file_read_snapshot(after):
+                    raise IntegrityError('recovery source file identity changed or contents modified')
+                bound.append([name, before, hashlib.sha256(data).hexdigest()])
+            self._reject_symlink_components(self.target)
+            self._reject_symlink_components(destination)
+            if os.path.lexists(destination):
+                raise IntegrityError('recovery destination appeared during observation')
+            snapshot = hashlib.sha256(json.dumps(bound, separators=(',', ':')).encode()).hexdigest()
+            return {'schemaVersion': 1, 'kind': 'new-target-recovery-plan', 'status': 'execution-blocked',
+                    'executable': False, 'destination': str(destination),
+                    'source': {'snapshotSha256': snapshot, 'status': state, 'version': source_version,
+                               'intent': intent, 'current': current}, 'backup': backup_observation,
+                    'requiredChecks': ['source-and-backup-authentication', 'exclusive-new-target-reservation',
+                                       'new-random-project-databases-and-volumes',
+                                       'helper-containment-and-crash-cleanup',
+                                       'personnel-invalidation-before-app-start', 'data-and-application-validation',
+                                       'resource-ownership-and-cleanup']}
+        except OSError as exc:
+            raise IntegrityError('recovery source could not be observed safely') from exc
+        finally:
+            for fd in reversed(descriptors):
+                os.close(fd)  # Closing the held descriptor also releases its flock.
+
     def _begin_operation(self) -> None:
         """Persist an unfinished operation before touching managed data or services."""
         if not self._mutation_depth:
@@ -1986,6 +2133,9 @@ def build_parser() -> argparse.ArgumentParser:
     backup.add_argument("--output")
     restore = sub.add_parser("restore")
     restore.add_argument("backup")
+    recovery = sub.add_parser("recovery-plan", help="read-only new-target proposal; recovery execution remains blocked")
+    recovery.add_argument("--destination", required=True)
+    recovery.add_argument("--backup")
     sub.add_parser("status")
     sub.add_parser("doctor")
     logs = sub.add_parser("logs")
@@ -2020,6 +2170,8 @@ def main(argv=None) -> int:
             manager.backup(args.output or f"manual-{uuid.uuid4().hex[:12]}")
         elif args.command == "restore":
             manager.restore(args.backup)
+        elif args.command == "recovery-plan":
+            print(json.dumps(manager.recovery_plan(args.destination, args.backup), sort_keys=True))
         elif args.command == "status":
             manager.status()
         elif args.command == "doctor":

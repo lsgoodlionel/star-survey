@@ -599,3 +599,12 @@ After independent review/merge, only the actual main commit with complete succes
 ## 文件快照字段故障注入（2026-11-09，本地待审）
 
 在虚构操作意图读取期间原位改写、恢复原 mtime 并保持 inode、长度及其他快照字段不变，当前 Mac 文件系统暴露变化的 ctime，检查正确阻断；若文件系统未呈现不同 ctime，测试明确跳过而不将该平台记作通过。另在读取期间将权限从 0600 改为 0644，并屏蔽 ctime 的影响，确认仅权限字段变化即可阻断。分别屏蔽被测字段的故障注入使测试失败，恢复后通过；控制器/配置套件 233 项中 232 通过、原生验收按原条件跳过 1 项，Release/工作流策略 166 项通过。测试针对操作意图和共用快照函数，不证明检查后无竞争、可信时间戳或其他平台可检测所有原位修改；Ubuntu、外部写入者和崩溃清理仍未验收。恢复、原生生命周期及卸载保持阻断；未推送或发布。
+
+
+## Wave 6 受控恢复第一切片（2026-11-11，开发中/待审）
+
+按最新 Project 和 #33/#34 核对，main825e7795c956c453c2cb99605a9e66367f7ed2f1 的 CI42787659756 已通过；rc20 run42790836656 四节点在主机变更前主动阻断，不能复用 rc19 证明当前 main。Release 工作流由 Claude Code 处理，本窗口未修改或触发。#33 协作记录6782734603 已声明独立 worktree survey-wave6-recovery-20261110 和分支 fix/wave6-controlled-recovery；主目录两份未提交文件、其他 Wave 工作区均未改动。
+
+第一切片新增 recovery-plan，只读观察无 current/pending/recovery_required 现场及可选备份 metadata，限定全新非重叠目标，输出始终 execution-blocked/executable=false；不调用 helper/Docker、不读密钥、不解密、不写现场或清理标记。通过既有私有锁协调当前控制器并复查文件/目录快照，但不声称旧控制器或外部写入者排空。观察指纹不是授权、签名或执行租约；备份 authenticated/payloadsChecked 均为 false。计划已写入 docs/superpowers/plans/2026-11-11-wave6-controlled-recovery.md；执行端、原生/restore/卸载硬阻断保留。
+
+首批新增测试先因入口缺失失败，14项定向通过；旧控制器精确命令清单随后按新命令更新，未删除断言。读取替换、原位变化、锁冲突、文件出现、权限/链接/FIFO/JSON/大小、只读无泄漏和实际打包清单均有合成回归。合并到既有控制器测试后修正了一处测试路径迁移笔误；完整本地控制器130项、Release/工作流167项均通过（共297项，新增14项已含其中）；GitHub CI 仍待本切片最终精确 head 验证，不能标记恢复/清理通过。后续真实执行必须先证明新目标资源隔离、可信备份与 floor、helper/崩溃明文 containment、人员失效及可归因清理，不重新接入 #102 已拒绝的实验。没有新 tag、候选、Release、生产或真实身份操作。
