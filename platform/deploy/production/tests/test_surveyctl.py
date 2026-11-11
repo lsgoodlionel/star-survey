@@ -2771,6 +2771,43 @@ class RecoveryReservationTest(unittest.TestCase):
         with self.assertRaises(self.ctl.InputError): self.reserve()
         self.assertEqual([], list(self.destination.iterdir()))
 
+    def test_unsafe_ancestor_cannot_hide_behind_a_private_destination_parent(self):
+        before = self.source_bytes()
+        for index, mode in enumerate((0o775, 0o777)):
+            ancestor = self.root / f"writable-ancestor-{index}"
+            parent = ancestor / "private-parent"
+            parent.mkdir(parents=True, mode=0o700)
+            ancestor.chmod(mode)
+            destination = parent / "new-target"
+            with self.subTest(mode=oct(mode)):
+                with self.assertRaises(self.ctl.IntegrityError):
+                    self.reserve(destination)
+                self.assertFalse(destination.exists())
+                self.assertEqual(before, self.source_bytes())
+        self.runner.run.assert_not_called()
+
+    def test_foreign_owned_ancestor_is_rejected_before_target_creation(self):
+        ancestor = self.root / "foreign-ancestor"
+        parent = ancestor / "private-parent"
+        parent.mkdir(parents=True, mode=0o700)
+        destination = parent / "new-target"
+        identity = (ancestor.stat().st_dev, ancestor.stat().st_ino)
+        fstat, inspect = self.ctl.os.fstat, self.ctl.os.stat
+        def foreign(info):
+            if (info.st_dev, info.st_ino) == identity:
+                fields = list(info)
+                fields[4] = os.geteuid() + 1
+                return os.stat_result(fields)
+            return info
+        before = self.source_bytes()
+        with mock.patch.object(self.ctl.os, "fstat", side_effect=lambda fd: foreign(fstat(fd))), \
+                mock.patch.object(self.ctl.os, "stat", side_effect=lambda *a, **kw: foreign(inspect(*a, **kw))):
+            with self.assertRaises(self.ctl.IntegrityError):
+                self.reserve(destination)
+        self.assertFalse(destination.exists())
+        self.assertEqual(before, self.source_bytes())
+        self.runner.run.assert_not_called()
+
     def test_fsync_failure_preserves_partial_target_and_original_marker(self):
         before = self.source_bytes()
         with mock.patch.object(self.ctl.os, 'fsync', side_effect=OSError('synthetic failure')):
