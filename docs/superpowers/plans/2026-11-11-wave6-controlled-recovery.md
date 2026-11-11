@@ -153,3 +153,17 @@ WIP 在真实 operation.lock 下连接 RuntimeController：卸载在 intent 前�
 #125 仍冻结原Draft；当前main已到22535aa9（#128管理端device-limit，无本切片文件重叠）。恢复/native/上传/stable门禁保持；B安全前提未全部完成，不触发Release、标签或生产操作。
 
 后续 helper 接线增量：CohortProbe 仅接受严格 terminal caddy-hash receipt（同daemon/install/actor、固定profile/digest格式、整数退出码）并要求原CID实际不存在；停止但仍可重启的容器不算收束，pending 即使容器消失仍拒绝。测试先红后绿，已知failed+removed仅证明结束而非成功。RuntimeController.ensure_admin_hash 在 source/claim/cohort 复核后，使用实际ControllerProcessGuard、manifest固定CADDY_IMAGE及独立runtime-launch receipt调用真实helper；未知异常不写hash或runtime投影。私有输入/缓存文件使用NOFOLLOW/NONBLOCK、有界单链接普通文件、权限及读前后身份检查；缓存只验证安全性/格式，**不证明它与当前口令匹配**，不能把本切片当口令轮换机制。新增bridge mock单测验证未知传播、不落hash、固定绑定、合法输出/缓存、坏缓存及FIFO拒绝；runtime总59项通过。两个增量均经限定非作者只读复核未确认阻断，但Linux guard/helper真实组合、默认install操作标记及完整业务路径仍待验证，未启用默认入口。
+
+### 默认入口接线与 Linux 质量验证接续（历史“未接入”说明不再代表本轮代码）
+
+本轮 WIP 已将默认 install、backup、verify 和 doctor 接到 owned runtime：从创建起的 claim 先于 installing state；hash/start 使用受控入口，不使用 remove-orphans。backup/doctor 在控制器内执行，只有固定 profiles 的 Docker ExecID 和受控 OpenSSL 子进程；所有明文/密钥副本在有界匿名 workspace，256MiB/32文件预算无磁盘回退。保留旧 HMAC、源manifest、版本/schema/personnel floor、SQL/tar校验及512MiB磁盘预检。已知配置错误在 intent 前拒绝；未知 child/exec/RPC 保持引用和 pending，不允许同对象再启动新数据操作。已知库完整性失败仍映射5，未知执行映射4，消息固定，不透出原异常串。旧无创建记录安装不认领，restore 入口仍无条件拒绝。
+
+独立复核确认并先红修复支持代码先 import 后校验的P1。现在17个执行文件必须与已验证 staged bundle 的 SHA/属主权限/加载位置匹配；全部 stdlib-only admission 完成后，按固定依赖顺序 compile 已捕获字节，不查找 PYTHONPATH 替身或消费未验pyc。另以实际 timestamp-valid 恶意pyc复现普通loader会执行副作用，child伴随 guard 改为直接编译受信源码。没有声称抵抗已接管的Python启动环境、同权限恶意进程或Docker/宿主管理员。
+
+修复 spawn 早于 parent-death guard 即继承数据FD的窗口：child只继承私有 AF_UNIX SOCK_SEQPACKET；建立实际父死亡/NNP保护并核对peer PID/UID后READY；parent在durable released之后通过SCM_RIGHTS交付4个FD。接收端重映射实际FD，保留原身份/封印/预算及key offset检查。真实受限Linux/arm64加密fixture八项全部true、退出0、0/0往返、独立容器删除verified，9模块前后/容器内SHA一致；新增实际 `/proc/<child>/fd` 检查确认READY但未交付时不含明文/密钥。证据 `/tmp/survey-owned-crypto-bootstrap-fds-20261111.json`。这不覆盖所有父死时序或完整业务cohort。Caddy固定2.11.9的AMD64 child另经Docker Desktop/ARM64上的明确仿真，原ALL-drop边界真实version/getcap=p、stdin hash/结束/删除通过；不是AMD64原生准出，产品镜像配置未改。
+
+真实Docker29.9.3的独立无数据fixture确认内建healthcheck会注册ExecIDs（2个，容器删除verified），与[Moby health实现](https://github.com/moby/moby/blob/v28.5.2/daemon/health.go)一致。adapter仅对有效忙快照做有界只读重查，最终仍要求实际空闲，不采用或标记任何未知ID终态；私有pending receipt独立阻断，paused/坏元数据/查询异常不提升。最多50次、重查窗口5秒，单次原查询仍可30秒，**不是总耗时5秒硬上限**。空快照不证明过去未知ID、后代或未来启动已结束；Root/Docker管理员边界不变。已知本轮尚未启动的唯一ExecID只避免等待自身，调用者仍严格核对。相关原强断言保留，63项runtime、76项owned定向测试通过；控制器168项通过。
+
+新增 `tests/integration/owned_maintenance_native.py` 将实际Linux guard/Caddy hash、PG16.15/MariaDB10.11.19 dump、完整匿名verify、七份tar根文件精确内容、保留卷/purge及doctor拒绝/保持pending接到现有production-smoke的ownership质量job。只拉固定工具/DB镜像，权限仍contents read，只上传白名单JSON，不上传目录/日志/密钥/dump。该入口使用合成manifest/初始化SQL和Python占位服务，明确 defaultInstall/business/restore/release 均未取得资格；doctor仅TLS=false的拒绝场景。证据校验器拒绝bool schema、1代替true、缺项/空报告及误标资格。本机辅助cp/GET比较未确认非空源，不能计作内容布局通过；已停止重复本地探针，由该Linux入口严格校验真实卷内容。**新入口尚待精确head的GitHub CI，不能写已通过**。
+
+Claude接续点：`release/build_release.py:RUNTIME_FILES` 尚需在独立审查后包含 `surveyctl.OWNED_RUNTIME_FILES` 的13个新增模块；当前不会绕过缺模块的failclosed检查，也未修改Release工作流/打包文件。已有source-production smoke的旧入口不证明这些默认入口。后续仍需完整默认安装/正向业务doctor、故障矩阵、实际包及B原生验收；owned升级接线也未据此完成。#125仍冻结原Draft，恢复/native/上传/stable门禁保持，未触发标签、GHCR、Release或生产操作。
