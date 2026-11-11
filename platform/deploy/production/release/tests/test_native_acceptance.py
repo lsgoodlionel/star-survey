@@ -61,8 +61,8 @@ REQUIRED_LIFECYCLE_COMMANDS = (
     'run_ctl backup',
     'python3 "$evidence_helper" upgrade-data-probe',
     'write_doctor_evidence "doctor-upgraded"',
-    'run_ctl restore',
-    'write_doctor_evidence "doctor-restored"',
+    'python3 "$evidence_helper" restore-refused',
+    'write_doctor_evidence "doctor-final"',
     'run_ctl uninstall',
     'acceptance_status="passed"',
 )
@@ -95,6 +95,8 @@ def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) 
         positions.append(shell.rindex(command))
     testcase.assertEqual(sorted(positions), positions, "native lifecycle command order changed")
     testcase.assertIn('require_fixture_cleanup_proof\nrun_ctl uninstall', shell)
+    # #119 option B: restore is only exercised through the refusal check.
+    testcase.assertNotRegex(shell, r"(?m)^\s*(?:if\s+)?run_ctl\s+restore\b")
     cleanup = shell[shell.index('collect_evidence() {'):shell.index('\ntrap collect_evidence EXIT')]
     testcase.assertNotIn('run_ctl uninstall', cleanup)
     testcase.assertNotIn('rm -rf', cleanup)
@@ -598,11 +600,17 @@ run_ctl() { printf 'unexpected' > "$UNINSTALL_CAPTURE"; }
         ):
             self.assertIn(required, self.text)
 
-    def test_script_executes_full_lifecycle_and_restores_into_second_project(self):
+    def test_script_executes_lifecycle_and_requires_restore_refusal(self):
         calls = re.findall(r"^\s*(?:if\s+)?run_ctl\s+([a-z-]+)", self.text, re.MULTILINE)
         self.assertEqual(1, calls.count("setup-probe"))
-        for command in ("install", "setup-probe", "doctor", "backup", "restore", "uninstall"):
+        for command in ("install", "setup-probe", "doctor", "backup", "uninstall"):
             self.assertIn(command, calls)
+        self.assertNotIn("restore", calls)
+        refusal = 'python3 "$evidence_helper" restore-refused --ctl "$ctl_bin" --target "$target" --backup "$backup_name"'
+        self.assertEqual(1, self.text.count(refusal))
+        self.assertLess(self.text.index('run_ctl backup'), self.text.index(refusal))
+        self.assertLess(self.text.index(refusal), self.text.index('write_doctor_evidence "doctor-final"'))
+        self.assertLess(self.text.index('write_doctor_evidence "doctor-final"'), self.text.index('run_ctl uninstall'))
         self.assertIn("survey-restore-", self.text)
         self.assertIn("BASELINE_MODE", self.text)
 
@@ -839,6 +847,78 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             with mock.patch.object(self.module, 'verify_fixture_owner'):
                 with self.assertRaises(self.module.EvidenceError):
                     self.module.verify_fixture_volume_snapshot(work, marker, snapshot)
+
+    def _restore_refusal_target(self, root):
+        target = root / 'primary'
+        control = target / '.surveyctl'
+        control.mkdir(parents=True)
+        (control / 'operation.intent').write_bytes(b'{"state":"complete"}\n')
+        (control / 'state.json').write_bytes(b'{"status":"current"}\n')
+        (control / 'operation.lock').write_bytes(b'')
+        return target
+
+    def _reset_restore_refusal_target(self, target):
+        control = target / '.surveyctl'
+        (control / 'operation.intent').write_bytes(b'{"state":"complete"}\n')
+        (control / 'state.json').write_bytes(b'{"status":"current"}\n')
+        (control / 'recovery_required').unlink(missing_ok=True)
+
+    def test_restore_refusal_requires_the_exact_controlled_refusal_without_state_change(self):
+        refusal = 'surveyctl: ' + self.module.RESTORE_REFUSAL + '\n'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = self._restore_refusal_target(root)
+            ctl = root / 'surveyctl'
+            refused = subprocess.CompletedProcess([], 2, stdout='', stderr=refusal)
+            with mock.patch.object(self.module.subprocess, 'run', return_value=refused) as run:
+                self.module.require_restore_refused(ctl, target, 'native-before-upgrade')
+            self.assertEqual([str(ctl), '--target', str(target), 'restore', 'native-before-upgrade'],
+                             run.call_args.args[0])
+            self.assertFalse(run.call_args.kwargs.get('shell', False))
+
+            def mutate(name):
+                def effect(*args, **kwargs):
+                    path = target / '.surveyctl' / name
+                    path.write_bytes(path.read_bytes() + b' ')
+                    return refused
+                return effect
+
+            def add_entry(*args, **kwargs):
+                (target / '.surveyctl' / 'recovery_required').write_bytes(b'{}')
+                return refused
+
+            cases = {
+                'restore ran': {'return_value': subprocess.CompletedProcess([], 0, stdout='', stderr='')},
+                'other failure': {'return_value': subprocess.CompletedProcess([], 2, stdout='', stderr='surveyctl: backup does not exist\n')},
+                'extra output': {'return_value': subprocess.CompletedProcess([], 2, stdout='restoring\n', stderr=refusal)},
+                'intent changed': {'side_effect': mutate('operation.intent')},
+                'state changed': {'side_effect': mutate('state.json')},
+                'marker added': {'side_effect': add_entry},
+                'timeout': {'side_effect': subprocess.TimeoutExpired('surveyctl', 120)},
+                'not runnable': {'side_effect': OSError('missing')},
+            }
+            for label, kwargs in cases.items():
+                self._reset_restore_refusal_target(target)
+                with self.subTest(case=label), mock.patch.object(self.module.subprocess, 'run', **kwargs):
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.require_restore_refused(ctl, target, 'native-before-upgrade')
+
+    def test_restore_refusal_rejects_missing_control_state_and_unsafe_backup_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = self._restore_refusal_target(root)
+            with mock.patch.object(self.module.subprocess, 'run') as run:
+                for name in ('', '../escape', '-x', 'a' * 65):
+                    with self.subTest(backup=name), self.assertRaises(self.module.EvidenceError):
+                        self.module.require_restore_refused(root / 'surveyctl', target, name)
+                (target / '.surveyctl' / 'state.json').unlink()
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.require_restore_refused(root / 'surveyctl', target, 'native-before-upgrade')
+                run.assert_not_called()
+
+    def test_restore_refusal_message_matches_the_controller(self):
+        controller = (ROOT / 'platform/deploy/production/surveyctl.py').read_text(encoding='utf-8')
+        self.assertIn('raise InputError("' + self.module.RESTORE_REFUSAL + '")', controller)
 
     def test_restore_cleanup_check_rejects_orphans_and_query_failures(self):
         empty = subprocess.CompletedProcess([], 0, stdout='', stderr='')
@@ -1084,7 +1164,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                 doctor._backup_check() if name == 'backups' else
                 {'id': name, 'status': 'ok', 'summary': 'fixture passed'} for name in ids]}
             cases = [('doctor-installed', report, True), ('doctor-upgraded', report, False),
-                     ('doctor-restored', report, False)]
+                     ('doctor-final', report, False)]
             for name in ('tls', 'minimal-probe', 'migrations', 'backups'):
                 invalid = copy.deepcopy(report)
                 next(item for item in invalid['checks'] if item['id'] == name)['status'] = 'blocked'
@@ -1099,7 +1179,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             healthy = copy.deepcopy(report)
             healthy['status'] = 'ok'
             next(item for item in healthy['checks'] if item['id'] == 'backups').update(status='ok', summary='1 verified backup(s) available')
-            cases.extend((label, healthy, True) for label in ('doctor-installed', 'doctor-upgraded', 'doctor-restored'))
+            cases.extend((label, healthy, True) for label in ('doctor-installed', 'doctor-upgraded', 'doctor-final'))
             for shape in ('missing', 'duplicate'):
                 invalid = copy.deepcopy(healthy)
                 if shape == 'missing': invalid['checks'].pop(0)
