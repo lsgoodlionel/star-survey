@@ -200,7 +200,7 @@ function LoadedEditor({ api, canEdit, initialDraft, surveyId, surveyTitle, tenan
     const selectedIndex = questions.findIndex((question) => question.uuid === selectedQuestionUuid);
     return questions.slice(0, Math.max(0, selectedIndex)).filter((question) =>
       question.type === 'L' && /^[A-Za-z][A-Za-z0-9]*$/.test(question.code)
-      && question.answers?.some((answer) => /^[A-Za-z][A-Za-z0-9]*$/.test(answer.code)));
+      && question.answers?.some((answer) => /^[A-Za-z0-9]{1,5}$/.test(answer.code)));
   }, [definition, selectedQuestionUuid]);
 
   const saveMutation = useMutation({

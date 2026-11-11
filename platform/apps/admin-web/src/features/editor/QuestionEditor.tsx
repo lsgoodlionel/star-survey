@@ -26,9 +26,10 @@ export function QuestionEditor({ question, supportsLogic, conditionSources, api,
   }
   const labels: Record<string, string> = { X: '说明文字', L: '单选题', M: '多选题', S: '短文本题', T: '长文本题',
     'mjy-collapsible': '折叠栏目', 'mjy-cascading-select': '多级下拉', 'mjy-carousel': '轮播图' };
-  const simpleCondition = /^([A-Za-z][A-Za-z0-9]*) == "([A-Za-z][A-Za-z0-9]*)"$/.exec(question.condition ?? '');
-  const selectedSource = simpleCondition ? conditionSources.find((source) => source.code === simpleCondition[1]
-    && source.answers?.some((answer) => answer.code === simpleCondition[2])) : undefined;
+  const simpleCondition = /^(?:q\("([0-9a-fA-F-]{36})"\)|([A-Za-z][A-Za-z0-9]*)) == "([A-Za-z0-9]{1,5})"$/.exec(question.condition ?? '');
+  const selectedSource = simpleCondition ? conditionSources.find((source) =>
+    (simpleCondition[1] ? source.uuid === simpleCondition[1] : source.code === simpleCondition[2])
+    && source.answers?.some((answer) => answer.code === simpleCondition[3])) : undefined;
   const complexCondition = Boolean(question.condition && !selectedSource);
 
   return (
@@ -67,17 +68,17 @@ export function QuestionEditor({ question, supportsLogic, conditionSources, api,
           <label>前置题目
             <select aria-label="前置题目" disabled={complexCondition} value={selectedSource?.code ?? ''} onChange={(event) => {
               const source = conditionSources.find((item) => item.code === event.target.value);
-              const answer = source?.answers?.find((item) => /^[A-Za-z][A-Za-z0-9]*$/.test(item.code));
-              onChange({ condition: source && answer ? `${source.code} == ${JSON.stringify(answer.code)}` : '' });
+              const answer = source?.answers?.find((item) => /^[A-Za-z0-9]{1,5}$/.test(item.code));
+              onChange({ condition: source && answer ? `q(${JSON.stringify(source.uuid)}) == ${JSON.stringify(answer.code)}` : '' });
             }}>
               <option value="">始终显示</option>
               {conditionSources.map((source) => <option key={source.uuid} value={source.code}>{source.text}</option>)}
             </select>
           </label>
           {selectedSource ? <label>触发选项
-            <select aria-label="触发选项" value={simpleCondition?.[2] ?? ''} onChange={(event) =>
-              onChange({ condition: `${selectedSource.code} == ${JSON.stringify(event.target.value)}` })}>
-              {selectedSource.answers?.filter((answer) => /^[A-Za-z][A-Za-z0-9]*$/.test(answer.code))
+            <select aria-label="触发选项" value={simpleCondition?.[3] ?? ''} onChange={(event) =>
+              onChange({ condition: `q(${JSON.stringify(selectedSource.uuid)}) == ${JSON.stringify(event.target.value)}` })}>
+              {selectedSource.answers?.filter((answer) => /^[A-Za-z0-9]{1,5}$/.test(answer.code))
                 .map((answer) => <option key={answer.code} value={answer.code}>{answer.text}</option>)}
             </select>
           </label> : null}

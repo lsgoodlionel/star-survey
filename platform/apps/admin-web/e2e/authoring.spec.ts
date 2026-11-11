@@ -449,12 +449,13 @@ test('a single-choice display condition is authored and works in isolated previe
   const reloadResponse = page.waitForResponse((response) => response.url().includes(`/v1/surveys/${surveyId}/draft`)
     && response.request().method() === 'GET');
   await saveAndReloadDraft(page, surveyId);
-  const submitted = (await saveRequest).postDataJSON() as { definition: { groups: Array<{ questions: Array<{ code: string; condition?: string }> }> } };
-  const loaded = await (await reloadResponse).json() as { definition: { groups: Array<{ questions: Array<{ code: string; condition?: string }> }> } };
+  const submitted = (await saveRequest).postDataJSON() as { definition: { groups: Array<{ questions: Array<{ uuid: string; code: string; condition?: string }> }> } };
+  const loaded = await (await reloadResponse).json() as { definition: { groups: Array<{ questions: Array<{ uuid: string; code: string; condition?: string }> }> } };
   expect(submitted.definition.groups[0].questions[1].code).toBe('QTRIGGER');
-  expect(submitted.definition.groups[0].questions[2].condition).toBe('QTRIGGER == "A1"');
+  const expectedCondition = `q("${submitted.definition.groups[0].questions[1].uuid}") == "A1"`;
+  expect(submitted.definition.groups[0].questions[2].condition).toBe(expectedCondition);
   expect(loaded.definition.groups[0].questions[1].code).toBe('QTRIGGER');
-  expect(loaded.definition.groups[0].questions[2].condition).toBe('QTRIGGER == "A1"');
+  expect(loaded.definition.groups[0].questions[2].condition).toBe(expectedCondition);
   await clickAction(page.getByRole('button', { name: /请说明原因/ }));
   await expect(page.getByLabel('前置题目')).toHaveValue('QTRIGGER');
 
