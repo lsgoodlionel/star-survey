@@ -71,12 +71,16 @@ OWNED_RUNTIME_FILES = {
     'owned_children.py', 'owned_container_hash.py', 'owned_docker_exec.py', 'owned_memory.py',
     'owned_crypto.py', 'owned_crypto_child.py', 'owned_cipher_adapter.py', 'owned_backup_verify.py',
     'owned_maintenance.py',
+    'recovery_reservation.py', 'recovery_handoff.py',
+    'controlled_database_import.py', 'recovery_target_binding.py',
 }
+OWNED_HELPER_FILES = {'release/verify_release.sh'}
 OWNED_IMPORT_ORDER = (
     'backup', 'restore', 'doctor', 'runtime_ownership', 'owned_memory', 'owned_children',
     'owned_crypto_child', 'owned_crypto', 'owned_docker_exec', 'owned_cipher_adapter',
     'owned_backup_verify', 'owned_container_hash', 'runtime_cohort', 'runtime_docker',
     'runtime_controller', 'owned_maintenance',
+    'recovery_reservation', 'recovery_handoff', 'controlled_database_import', 'recovery_target_binding',
 )
 _OWNED_IMPORT_LOCK = threading.RLock()
 
@@ -1247,7 +1251,7 @@ class SurveyManager:
         inventory = metadata['files']
         root = Path(__file__).absolute().parent
         captured = {}
-        for name in sorted(OWNED_RUNTIME_FILES):
+        for name in sorted(OWNED_RUNTIME_FILES | OWNED_HELPER_FILES):
             expected = inventory.get(name)
             if not isinstance(expected, str) or re.fullmatch('[0-9a-f]{64}', expected) is None:
                 raise IntegrityError('release lacks checksum-bound controlled runtime support')
@@ -1258,7 +1262,7 @@ class SurveyManager:
                 payload = handle.read(1024 * 1024 + 1)
             if len(payload) > 1024 * 1024 or not secrets.compare_digest(hashlib.sha256(payload).hexdigest(), expected):
                 raise IntegrityError('executing controlled runtime differs from the verified release payload')
-            loaded = sys.modules.get(Path(name).stem)
+            loaded = sys.modules.get(Path(name).stem) if name.endswith('.py') else None
             if loaded is not None and Path(getattr(loaded, '__file__', '')).absolute() != executable:
                 raise IntegrityError('controlled runtime module was loaded from an unbound location')
             captured[Path(name).stem] = (executable, payload)

@@ -61,7 +61,9 @@ def write_test_release(root, version="0.2.0", rollback="compatible", restore_sou
     }
     if _fixture_owned_support:
         # Synthetic bundle, real code hashes; not a signed candidate identity.
-        files.update({name: (PRODUCTION_DIR / name).read_bytes() for name in load_module().OWNED_RUNTIME_FILES})
+        controller=load_module()
+        files.update({name: (PRODUCTION_DIR / name).read_bytes()
+            for name in controller.OWNED_RUNTIME_FILES | controller.OWNED_HELPER_FILES})
     if payload_overrides:
         files.update(payload_overrides)
     metadata = {
@@ -2426,7 +2428,8 @@ raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-inte
             manager._upgrade_execution_version = '0.3.0'
             try:
                 admitted = manager._verify_owned_support(manager._executing_support_version('0.2.0'))
-                self.assertEqual(17, len(admitted))
+                self.assertEqual({Path(name).stem for name in
+                    self.module.OWNED_RUNTIME_FILES | self.module.OWNED_HELPER_FILES},set(admitted))
                 self.assertEqual(previous_bytes, (self.target / 'releases/0.2.0/release.json').read_bytes())
             finally:
                 manager._upgrade_execution_version = None

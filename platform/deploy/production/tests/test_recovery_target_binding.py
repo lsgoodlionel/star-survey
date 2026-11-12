@@ -23,6 +23,8 @@ class RecoveryTargetBindingTest(unittest.TestCase):
             'platform-db':{'imageIds':['sha256:'+'a'*64]},'engine-db':{'imageIds':['sha256:'+'b'*64]}}}}
         self.manifest=SimpleNamespace(sha256=self.sha,raw={'commit':'c'*40})
         self.manager._release_manifest=lambda _:self.manifest
+        # Explicit code-admission model; packaging tests exercise real hashes.
+        self.manager._verify_owned_support=lambda _:{'verify_release':(self.m.VERIFIER,self.m.VERIFIER.read_bytes())}
         self.signature=mock.patch.object(self.m,'_run_verifier',return_value=SimpleNamespace(returncode=0))
         self.run=self.signature.start();self.addCleanup(self.signature.stop)
         self.compose=mock.patch.object(self.m,'source_contract',side_effect=lambda *_:self.data)
@@ -70,6 +72,13 @@ class RecoveryTargetBindingTest(unittest.TestCase):
             self.assertTrue(bound.check_database_target(target)['databaseImagesBound'])
             target.check=lambda *_:False
             with self.assertRaises(self.m.TargetBindingError):bound.check_database_target(target)
+
+    def test_unadmitted_or_different_verifier_cannot_start_signature_tool(self):
+        for captured in ({},{'verify_release':(self.m.VERIFIER,b'changed helper')},
+                {'verify_release':(self.root/'foreign.sh',self.m.VERIFIER.read_bytes())}):
+            self.manager._verify_owned_support=lambda _,value=captured:value
+            with self.assertRaises(self.m.TargetBindingError):self.bind()
+            self.run.assert_not_called()
 
     def test_binding_is_rechecked_before_authentication_and_each_import(self):
         from test_authenticated_database_copy import AuthenticatedDatabaseCopyTest

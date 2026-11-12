@@ -1,6 +1,7 @@
 """Read-only release/config binding for a future recovery controller.
 
-No restore admission, runtime packaging or CLI caller. Assets must be supplied by
+No restore admission or CLI caller. Checksum admission is not execution approval.
+Assets must be supplied by
 an explicitly selected trusted candidate flow, never by a request body. Uses the
 existing full release verifier; no caller-provided `verified=True` is accepted.
 Trusted application/exclusive-controller boundary, not hostile same-UID defence.
@@ -125,7 +126,7 @@ class RecoveryTargetBinding:
         self.assets_view=_snapshot(self.assets)
         if self.assets_view.get('release.json',(None,None))[1]!=manifest_sha256:
             raise TargetBindingError('target manifest digest differs')
-        helper=VERIFIER.read_bytes();self.helper_sha=hashlib.sha256(helper).hexdigest()
+        helper=self._admitted_verifier();self.helper_sha=hashlib.sha256(helper).hexdigest()
         try:
             result=_run_verifier(['bash',str(VERIFIER),'--assets',str(self.assets),'--repository',REPOSITORY,
                 '--target-tag','v'+version,'--source-tag','v'+version,'--target-commit',commit],
@@ -136,6 +137,17 @@ class RecoveryTargetBinding:
             raise TargetBindingError('target release verification rejected')
         self.data=deepcopy(self._configuration())
         self.recheck()
+
+    def _admitted_verifier(self):
+        try:
+            captured=self.manager._verify_owned_support(self.version)
+            path,payload=captured['verify_release']
+            if (Path(path).absolute()!=VERIFIER or not isinstance(payload,bytes)
+                    or VERIFIER.read_bytes()!=payload):
+                raise TargetBindingError('executing verifier is not the checksum-bound runtime helper')
+            return payload
+        except TargetBindingError:raise
+        except Exception as error:raise TargetBindingError('verified recovery runtime support unavailable') from error
 
     def _configuration(self):
         try:
@@ -156,7 +168,7 @@ class RecoveryTargetBinding:
         except Exception as error:raise TargetBindingError('target effective configuration unavailable') from error
 
     def recheck(self):
-        if (hashlib.sha256(VERIFIER.read_bytes()).hexdigest()!=self.helper_sha
+        if (hashlib.sha256(self._admitted_verifier()).hexdigest()!=self.helper_sha
                 or _snapshot(self.assets)!=self.assets_view or self._configuration()!=self.data):
             raise TargetBindingError('verified target assets or effective configuration changed')
         return {'schemaVersion':1,'releaseSignaturesVerified':True,'effectiveConfigurationSnapshotBound':True,
