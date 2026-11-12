@@ -331,3 +331,14 @@ Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发�
 先红证明原证据不要求新接口，修改后2项证据测试、12项兼容性回归通过。既有固定Python镜像下真实Docker Desktop Linux arm64测试exit0：正向targetMetadataCompatible及sourcePayloadsVerified=true，同时targetSignatureVerified/targetConfigurationVerified/restoreAuthorized=false；错误目标hash为0 child，版本/floor拒绝均在完整匿名payload校验后且所有child已结束；坏control-HMAC为0 child；无具名解密payload、restore调用仍拒绝。原加密往返、截断/坏MAC、deadline、FD不继承和noNamedPlaintext仍true，最终containerCleanup=verified，12份同源文件的before/inside/after SHA相同，JSON /tmp/survey-recovery-source-crypto-20261112.json。
 
 边界仍是actual OpenSSL/Linux memfd处理合成PGDMP magic、Maria注释头及小tar；未导入数据库、未启动副本应用、未认证目标签名或新目标配置，不称完整SQL安全性/数据库恢复/Ubuntu四平台。沿用原非root65534、cap-drop ALL/NNP/network-none/readonly、16MiB tmpfs、无host bind/端口及CPU/内存/PID限制，无新增权限/镜像拉取或workflow入口。现有ownership-protocol job已调用此夹具，精确PR的amd64证据待CI；父PR #140原head不改。restore/native/上传/发布门禁不变，Release仍Claude负责。
+### 2026-11-12：新目标预留的使用时校验（内部切片，未接执行端）
+
+基于已合并main7cdd66c4独立实现`recovery_reservation.RecoveryReservation`，不改Claude #138的Release区域。先建立失败回归，再实现只读上下文：通过no-follow目录FD检查祖先/直接父目录及0700目标/control；读取0600、单链接、普通文件的精确三文件清单，JSON有界且重复字段/布尔伪整数/授权字段变化拒绝。reservation ID、随机项目提案、source observation、记录中的目标与control dev/inode均与调用绑定；source observation只是绑定，不是备份认证。持有原operation.lock非阻塞排他锁，不创建、修复或清理任何对象；FD不可继承。读取前后和正常退出复核文件身份/摘要及目录路径，额外项即拒绝，枚举只保留有限预期项。首次失败永久封锁该上下文，即使外部随后移除异常项也不能重新取得成功。
+
+先红的目录读取期间替换和失败后复用两项均修复；14项目标测试以及184项原surveyctl回归本地通过，包含真实recovery-reserve产物接续、symlink/hardlink/FIFO、权限、拷贝/错绑定、锁冲突、同字节替换、原地改写与外来目标保留。仅本机真实文件系统/故障注入，不冒称Linux各平台或宿主崩溃证明；Linux结果由精确PR的现有CI核实。
+
+模块目前未加入OWNED_RUNTIME_FILES、没有CLI或restore调用者、不进候选执行包。所有输出固定executable=false/backupAuthenticated=false/runtimeResourcesCreated=false，只代表观察到的预留未变。锁约束可信独占controller，不防御同UID恶意写入者/宿主管理员，也没有原子的最后检查到未来使用间隔或永久租约；后续执行器必须继续持有FD并在使用前复核。
+
+后续依赖顺序不变：新的Docker项目/卷/网络从创建起归属且未知拒绝；受控匿名验证器重验备份HMAC、清单、manifest/版本/schema/floor；新副本双库/卷导入及人员grant/session先失效并审计；数据验证后才考虑独立切换。故障注入、明文/子进程收束和精确资源清理仍需逐项证明。此切片不完成上述后续步骤，restore/native/上传/发布门禁保持；每项具体解除前说明证据范围风险并取得明确同意。
+
+人工读屏事实已重核：#41存在Owner于2026-11-10记录的VoiceOver passed与发布批准，均绑定rc19，而非“完全未完成”；后续候选须核对差异覆盖及批准范围，不自动继承rc19记录。
