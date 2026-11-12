@@ -245,3 +245,9 @@ v1仅在精确live ExecInspect终态或原不可变CID证实缺席时可成为�
 先红两项：已有足够容量仍删历史、迟到回调仍成功；修订后30项回执测试、default_backup4与runtime73通过，新增pending后预算耗尽零删除。真实Docker29.9.3/linux/arm64新reserve样本：有空间21条留21、63 inspect/63缺席/1资源回调、0.167秒、intent保持不存在；252项压力样本删16留5、219/219/5、0.720秒、pending保持。JSON /tmp/survey-reserve-room-20261112.json 与 /tmp/survey-reserve-pressure-20261112.json，均捕获CID清理verified且源码SHA前后一致；owner/claim/进程reader仍模型，不是完整controller资源回调/真实backup端到端或SLA，单次无故障样本不能证明高负载表现。
 
 升级组合新增边界已记录：共享backup helper的3配额不覆盖后续独立_owned_maintenance verify的新cipher journal，整体至少还需1槽；独立复审在252项非回执基线模型看到backup255、verify256及后续原子写峰值257。该组合在base已存在，不当作本PR新手动备份缺陷；本PR仍未整合#131或声明升级预算已证明。后续需跨阶段预留及验证，当前不解除原生/恢复/发布门禁。
+
+升级组合预算复核增量：先红证明prepare_backup_capacity对upgrade/upgrade_version仍传reserve3，独立verify也无配额。现升级备份预留4条（2 DB exec+共享cipher journal+后续独立verify journal），备份实际分配限3；_verify_backup在自己的begin/解密前prepare_verify_capacity重新核验并预留1、实际分配限1，失败不启动解密。252目录项含249有效终态回执及完整intent模型，reserve4先腾空间，随后4次真正PrivateStore原子发布的临时峰值均<=256，后续ledger临时槽也有余量；下一backup预留通过。模型不是自然真实升级必现，#131完整组合仍未整合验证，先前“只非回执filler”限制不再适用。手动backup固定3语义不变。
+
+协作预算措辞与检测增量：先红复现_local_check返回时已经超预算仍先unlink1条、资源回调迟到后仍多查一个回执。现capture在资源回调返回后和逐回执边界核时，local_check尾部及最终stat后/unlink前再核时，两个确定性已观察过期窗口零删除。不能因此承诺所有过期零删除：最终检查后时间仍可推进；第4/5次完整核验迟到时已有终态删除，新增回归确认最终拒绝且pending保留。opaque回调内仍不能强制中断，30秒非硬deadline。最终stat/unlink非原子、独占controller信任和批次远端核验边界不变。
+
+本增量34项回执、73项runtime、11项maintenance、default_backup4及upgrade/verify配额和verify拒绝顺序定向测试通过；未删除/跳过安全断言。仅隔离模型和真实管理器方法，真实SIGKILL/受信候选/升级端到端性能仍待GitHub组件与后续候选证据。所有恢复/原生/发布门禁保持，未合并/发布/碰生产或Claude Release。
