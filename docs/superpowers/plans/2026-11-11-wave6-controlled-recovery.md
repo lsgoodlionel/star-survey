@@ -397,3 +397,13 @@ LocalDockerAPI 使用 ExecStart 101/tcp 升级、原 HTTP 缓冲、同一个35�
 新模块及原reservation guard仍未进入OWNED_RUNTIME_FILES，未被产品restore/CLI调用；没有Docker变更、DB导入、受信目标签名配置或候选资格。该交接只提供未来控制器保留原锁/锚点并容纳有限运行记录的文件系统层；必须继续组合实际OwnershipProtocol/CohortProbe与源/目标认证，不能拿此返回值授权执行或清理。restore/native/上传/发布门保持，Release仍Claude单一写入者。后续具体解除须向用户给证据/范围/风险并获同意。
 
 #147增量先红后绿：非作者自然with双故障复现为handoff fsync未知结果被外层guard关闭ReservationError覆盖。新增测试在旧源失败，修为保留同一原始UncertainExec及其fsync cause；原FD单次关闭后立即复用的外来FD仍存活，marker保留且发布不重放。另自查并复现runtime JSON读取后替换immutable marker/追加未知文件会漏过最终观察，补末尾锚点及无JSON回调的清单复核，两类注入拒绝。新增后共12项handoff/同进程98回归通过，修订仅guard/handoff、对应测试和本计划。原head绿色不能代替新head CI，仍非原子check-to-use或同UID对抗保证，未发生产品恢复或解除门禁。
+
+### 2026-11-12：认证输入到实际数据库消费者下一包（在独立分支准备，尚未实现/验收）
+
+基于#1477b5ff1，暂不改已审head。拟新增内部ControlledDatabaseCopy：只能接收ControlledVerifier与同一handoff/OwnershipProtocol/显式CohortProbe组成的新副本目标；锁FD、nonce/project、target hash、daemon/claim、完整两DB服务/卷映射及真实network=none/无发布端口必须匹配，目标只能有platform-db/engine-db。重用OwnedMaintenance的真实container_check/ControllerProcessGuard，不以caller布尔或任意CID当归属证明。此组件没有产品restore/CLI调用，签名/有效配置/业务/候选资格继续false。
+
+输入必须先经原verify_backup的HMAC、全inventory、匿名payload格式/归档及版本/schema/floor检查；解密后复核认证control和cipher hash视图不漂移，再一次导出并封印两DB FD。只有该验证器签发的单次typed input能进入新增固定import profile，绑定service/CID、operation和installation；普通lease或caller SHA拒绝。父copy持有source/cipher/输入export及输出workspace，Unknown保留并poison整个copy，不能因with自动退出丢失租约。每个目标预登记四个receipt操作（两项空库预检+PG/Maria import），已存在任何相同receipt拒绝新copy；失败后不能以相同新scope重新执行。
+
+拟固定profiles：PG空表计数/pg_restore单事务且保留source ownership；Maria空表计数/固定secret-file读取到子进程环境（不在argv或日志）+binary-mode client。导入wrapper以管道/coprocess计算输入hash，仅固定SQLtool stdout转有界stderr，等待全部固定子进程结束后发hashack及原nonce-footer；不使用具名明文/临时SQL。增加strict v4 sourceEvidence（受认证control/manifest SHA）及input/terminal审计，GC404未知仍拒绝，hashack/exit0不等于业务提交或事务一致性。
+
+隔离native拟复用真实PG/Maria dump、新scope/卷、58迁移及数据/人员失效验证，真实OpenSSL/memfd/HMAC将snapshot接入新consumer。需区分fixture初始化/查询的旧同步工具与真正受控输入回执，不能泛称整条CLI已covered。known failure用新scope证明PG成功/Maria凭据失败后停止、不重试且source保留；未知Exec/部分输入/日志缺失仅先模型证明阻断与租约保留，真实崩溃或unknown结局不得强制清理或伪造终态。新scope控件handoff仍保留pending，组件的显式清理只有完整资源+cohort已知结束才可做。实际native、调用/目标签名配置、业务资格均待实现和独立复核，不在本段标通过。
