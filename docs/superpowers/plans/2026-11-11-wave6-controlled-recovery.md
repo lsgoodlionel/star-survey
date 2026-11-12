@@ -280,3 +280,9 @@ v1仅在精确live ExecInspect终态或原不可变CID证实缺席时可成为�
 Draft #131初始head4ad004f97f1aea1dd132db30c798974795837d25的真实组件job43125523570已success；artifact13902846793逐项确认ownedUpgradeCompleted/persistentIDsKeptAcrossUpgrade/oldContainerIDsAbsentAfterUpgrade/newContainerIDsBound及原备份/归档/卸载/purge/helper结束字段均true，两场景Docker fixtureCleanup verified，源码SHA一致。资格限制字段仍false/模型标记true，不能提升候选资格。完整CI43125523585先报告既有RC最低来源版本测试失败：源归属前置检查覆盖原版本floor/preflight错误。只将归属检查移动到只读preflight之后、intent/staging之前；版本排序及原Release测试不变，该精确失败测试与六项升级定向回归通过。修复后head完整CI及组件需重新验证，不继承旧绿色证据。
 
 **网络证据范围更正：** 独立复审确认此前夹具全部network_mode=none，没有实际network；上述旧run的持久网络比较仅为空字典相等，撤回“真实网络ID保持已实测”的表述。九卷、claim、旧CID消失/新CID绑定仍有实际证据，网络代码保护仅有模型测试。已在#119及#131公开更正。先红新增拓扑及空/0/bool/缺失count不能通过的回归，夹具现在仅给一个无监听、无发布端口的占位进程接单独internal bridge，其余服务仍none；要求retainedNetworkCount为严格整数1，并且旧网络集合非空。5项证据/隔离边界测试通过；产品Compose、capability、Release配置不变。新的非空网络ID/指纹保持实测仍待新head GitHub CI，不把旧制品当作该证明。
+
+### 2026-11-12：授权后的依赖整合
+
+Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发布。此次在独立`integrate/wave6-controlled-runtime`组合#136修订链、#131升级与Claude #130打包；原分支不改。仅计划文档追加冲突，保留两侧记录。相对已验证main22535aa9没有引入上述PR之外的新功能；整合态仍需精确head完整CI和非作者复核，不能沿用各自旧基线的绿色代替。
+
+此提交没有解除恢复/native/发布门禁，没有创建标签或发布；授权不等于缺失证明已经通过。后续由Claude协调最终不可变候选及Release，避免重复执行。恢复六项证明、真实候选安装/正向doctor/升级业务连续性、四平台及人工读屏仍独立核验；旧rc19不可自动认领。可信独占controller、非原子stat/unlink、批次远端核验、协作预算和旧v1未知/超限目录保守拒绝的限制保持。
