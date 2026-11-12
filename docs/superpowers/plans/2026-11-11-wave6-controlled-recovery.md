@@ -286,3 +286,13 @@ Draft #131初始head4ad004f97f1aea1dd132db30c798974795837d25的真实组件job43
 Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发布。此次在独立`integrate/wave6-controlled-runtime`组合#136修订链、#131升级与Claude #130打包；原分支不改。仅计划文档追加冲突，保留两侧记录。相对已验证main22535aa9没有引入上述PR之外的新功能；整合态仍需精确head完整CI和非作者复核，不能沿用各自旧基线的绿色代替。
 
 此提交没有解除恢复/native/发布门禁，没有创建标签或发布；授权不等于缺失证明已经通过。后续由Claude协调最终不可变候选及Release，避免重复执行。恢复六项证明、真实候选安装/正向doctor/升级业务连续性、四平台及人工读屏仍独立核验；旧rc19不可自动认领。可信独占controller、非原子stat/unlink、批次远端核验、协作预算和旧v1未知/超限目录保守拒绝的限制保持。
+
+### 2026-11-12：匿名来源验证后的新目标兼容性（内部接口，未接恢复）
+
+独立于#139目标预留守卫、基于main7cdd66c4，在现有ControlledVerifier增加verify_target_compatibility。原verify_only检查的是原安装当前版本的兼容范围，不能直接证明备份适用于另一个目标；新接口先要求明确的目标manifest小写SHA256，并用现有load_manifest完整schema校验及内容绑定，再调用原verify_only进行HMAC、文件/源manifest/镜像身份、版本/floor与全部匿名payload格式校验。随后对目标minimumSourceVersion、目标版本上界、schema及source现存人员floor作兼容判断；读取前后重新加载固定hash目标，拒绝长验证期间改写。
+
+输出sourcePayloadsVerified/targetMetadataCompatible只描述本次内部检查，不是恢复能力票据；targetSignatureVerified、targetConfigurationVerified、restoreAuthorized固定false。来源/目标的签名、控制器代码/operation/资源归属、目标有效配置、生命周期及未知child的cipher/workspace责任仍在未来调用者；接口没有CLI/restore调用者，也没有启动数据库或应用、失效人员授权或复制明文到新目标。现有restore拒绝不变，未改Release或门禁。原owned_backup_verify已属17模块包，此次只是新增未接调用方法，不新增模块声明或候选能力。
+
+先失败测试证实接口不存在，再实现；schema负例夹具最初缺backupSchema，经补齐真实schema字段后保留不兼容断言。10项新测试覆盖缺失/错hash、版本上下界及RC minimum、schema、坏HMAC早于decrypt、人员floor降级、目标中途改写及资格false；连同2项继承的原匿名验证测试通过，另外独立运行原2项和43项backup/restore回归通过。测试使用实际HMAC/清单/格式/FD适配器，但cipher是显式CopyExecutor模型、workspace是portable backend；不称真实OpenSSL、Linux memfd、新副本DB或恢复准出通过，Linux结果待精确CI。
+
+下一步仍需新的Docker项目/资源从创建起绑定、源备份/目标包在使用时复验、真实双库新副本及人员session/grant失效和归因审计、故障注入/收束/精确清理。不得把metadata兼容或原HMAC通过当成未来恢复执行授权，所有具体解除前说明证据、范围及风险并取得明确同意。
