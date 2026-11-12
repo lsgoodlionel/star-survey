@@ -21,6 +21,8 @@ from unittest import mock
 
 
 PRODUCTION_DIR = Path(__file__).resolve().parents[1]
+if str(PRODUCTION_DIR) not in sys.path:
+    sys.path.insert(0, str(PRODUCTION_DIR))
 MODULE_PATH = PRODUCTION_DIR / "surveyctl.py"
 FIXTURE_MANIFEST = Path(__file__).resolve().parent / "fixtures" / "release.json"
 
@@ -39,8 +41,11 @@ def write_fake_backup(output, version="0.2.0", schema="920"):
     (output / "CONTROL-HMAC").write_text("0" * 64 + "\n")
 
 
-def write_test_release(root, version="0.2.0", rollback="compatible", restore_source=None, payload_overrides=None, **updates):
-    bundle = Path(root) / f"survey-{version}-linux-arm64.tar.gz"
+def write_test_release(root, version="0.2.0", rollback="compatible", restore_source=None, payload_overrides=None,
+                       _fixture_architecture='arm64', _fixture_owned_support=False, **updates):
+    if _fixture_architecture not in ('amd64', 'arm64'):
+        raise ValueError('unsupported fixture architecture')
+    bundle = Path(root) / f"survey-{version}-linux-{_fixture_architecture}.tar.gz"
     files = {
         "compose.yml": b"name: verified-bundle\nservices: {}\n",
         "Caddyfile": b":443 { respond 204 }\n",
@@ -54,12 +59,15 @@ def write_test_release(root, version="0.2.0", rollback="compatible", restore_sou
         "engines.example.json": (PRODUCTION_DIR / 'engines.example.json').read_bytes(),
         "init/marker.txt": b"verified init\n",
     }
+    if _fixture_owned_support:
+        # Synthetic bundle, real code hashes; not a signed candidate identity.
+        files.update({name: (PRODUCTION_DIR / name).read_bytes() for name in load_module().OWNED_RUNTIME_FILES})
     if payload_overrides:
         files.update(payload_overrides)
     metadata = {
         "schemaVersion": 1,
         "version": version,
-        "architecture": "arm64",
+        "architecture": _fixture_architecture,
         "files": {name: hashlib.sha256(value).hexdigest() for name, value in files.items()},
     }
     files["bundle-metadata.json"] = json.dumps(metadata, sort_keys=True).encode()
@@ -73,9 +81,9 @@ def write_test_release(root, version="0.2.0", rollback="compatible", restore_sou
     data["version"] = version
     data["securityCapabilities"] = {"platform-admin-session-v1": data["images"]["PLATFORM_IMAGE"]}
     data["database"]["rollback"] = rollback
-    data["supportedHosts"]["architectures"] = ["arm64"]
+    data["supportedHosts"]["architectures"] = [_fixture_architecture]
     data["assets"]["bundles"] = {
-        "arm64": {"name": bundle.name, "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
+        _fixture_architecture: {"name": bundle.name, "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
     }
     data.update(updates)
     manifest = Path(root) / f"release-{version}.json"
@@ -119,6 +127,8 @@ class FakeRunner:
         self.engine_init_health = engine_init_health
         self.configured_relay = configured_relay
         self.running_relay = running_relay
+        self.down_noop = False
+        self.fixture_running = True
 
     def run(self, command, **kwargs):
         command = tuple(str(part) for part in command)
@@ -126,6 +136,10 @@ class FakeRunner:
         self.calls.append((command, kwargs))
         if self.fail_when and self.fail_when(command):
             raise subprocess.CalledProcessError(1, command)
+        if 'down' in command and not self.down_noop:
+            self.fixture_running = False
+        if 'up' in command:
+            self.fixture_running = True
         if "hash-password" in command:
             return subprocess.CompletedProcess(command, 0, stdout="$2a$14$" + "x" * 53 + "\n", stderr="")
         if "cp" in command and "root.crt" in " ".join(command):
@@ -145,6 +159,8 @@ class FakeRunner:
             return subprocess.CompletedProcess(command, 0, stdout="\n".join(
                 sorted(services)) + "\n", stderr="")
         if "ps" in command and "--format" in command:
+            if not self.fixture_running:
+                return subprocess.CompletedProcess(command, 0, stdout='[]', stderr='')
             services = ["edge", "admin-web", "platform", "publish-gateway", "engine", "platform-db", "engine-db"]
             if self.running_relay:
                 services.append("engine-relay")
@@ -164,6 +180,38 @@ class FakeRunner:
             })
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
         return subprocess.CompletedProcess(command, 0, stdout=self.stdout, stderr=self.stderr)
+
+
+class FixtureRuntime:
+    """Filesystem/controller unit stub only; never an ownership/cohort proof.
+
+    Real source/daemon checks are in runtime_controller tests and the explicit
+    isolated native entry. This model distinguishes no-op down from removal.
+    """
+    def __init__(self, manager, version):
+        self.manager, self.version = manager, version
+
+    def preflight_cleanup(self, purge):
+        self.manager._run(['docker', 'info'], 'fixture discovery unavailable')
+
+    def cleanup(self, purge, host_purge=None):
+        compose = self.manager._compose(self.version)
+        self.manager._run(compose + ['down'], 'fixture stop failed')
+        result = self.manager._run(compose + ['ps', '--all', '--format', 'json'], 'fixture postcheck failed')
+        if json.loads(result.stdout):
+            raise RuntimeError('fixture resources remain after a successful no-op')
+        if host_purge is not None:
+            host_purge()
+
+    def install(self, effect):
+        return effect()
+
+    def ensure_admin_hash(self):
+        self.manager._ensure_admin_password_hash(self.manager._release_manifest(self.version).raw['images']['CADDY_IMAGE'])
+
+
+def fixture_runtime(manager, version, *, create=False):
+    return FixtureRuntime(manager, version)
 
 
 class FakeHostProbe:
@@ -219,6 +267,7 @@ class SurveyctlAdversarialTest(unittest.TestCase):
         self.target = self.root / "survey"
 
     def manager(self, runner=None, probe=None, client=None, **kwargs):
+        kwargs.setdefault('_runtime_factory', fixture_runtime)
         return self.module.SurveyManager(
             target=self.target,
             runner=runner or FakeRunner(),
@@ -805,7 +854,7 @@ tests = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tests)
 module = tests.load_module()
 manager = module.SurveyManager(target=Path(sys.argv[2]), runner=tests.FakeRunner(),
-    host_probe=tests.FakeHostProbe(), source_dir=Path(sys.argv[3]))
+    host_probe=tests.FakeHostProbe(), source_dir=Path(sys.argv[3]), _runtime_factory=tests.fixture_runtime)
 def interrupted(*args, **kwargs):
     if sys.argv[6] in ('sigterm', 'sigkill'):
         os.kill(os.getpid(), signal.SIGTERM if sys.argv[6] == 'sigterm' else signal.SIGKILL)
@@ -819,7 +868,7 @@ manager.upgrade(Path(sys.argv[4]))'''
             with self.subTest(phase=phase, interruption=interruption):
                 target = self.root / ('survey-' + phase + '-' + interruption)
                 manager = self.module.SurveyManager(target=target, runner=FakeRunner(),
-                    host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+                    host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR, _runtime_factory=fixture_runtime)
                 manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
                 result = subprocess.run([sys.executable, '-c', script, str(Path(__file__).resolve()),
                                          str(target), str(PRODUCTION_DIR), str(target_manifest), phase, interruption],
@@ -897,7 +946,7 @@ manager.upgrade(Path(sys.argv[4]))'''
                 target = self.root / ('unsafe-lock-' + kind)
                 runner = FakeRunner()
                 manager = self.module.SurveyManager(target=target, runner=runner,
-                    host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+                    host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR, _runtime_factory=fixture_runtime)
                 manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
                 lock = target / '.surveyctl' / 'operation.lock'
                 state = (target / '.surveyctl' / 'state.json').read_bytes()
@@ -929,7 +978,7 @@ spec = importlib.util.spec_from_file_location('survey_test_fixture', sys.argv[1]
 tests = importlib.util.module_from_spec(spec); spec.loader.exec_module(tests)
 module = tests.load_module()
 manager = module.SurveyManager(target=Path(sys.argv[2]), runner=tests.FakeRunner(),
-    host_probe=tests.FakeHostProbe(), source_dir=Path(sys.argv[3]))
+    host_probe=tests.FakeHostProbe(), source_dir=Path(sys.argv[3]), _runtime_factory=tests.fixture_runtime)
 ready = Path(sys.argv[5])
 def wait_here():
     ready.write_text('ready')
@@ -951,7 +1000,7 @@ else:
             with self.subTest(holder=phase):
                 target = self.root / ('lock-' + phase)
                 manager = self.module.SurveyManager(target=target, runner=FakeRunner(),
-                    host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+                    host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR, _runtime_factory=fixture_runtime)
                 manager.install(initial, 'survey.example.com', 'operations', 'operations@example.com')
                 ready = self.root / ('ready-' + phase)
                 process = subprocess.Popen([sys.executable, '-c', script, str(Path(__file__).resolve()),
@@ -1070,7 +1119,7 @@ with manager._mutation_lock(operation='uninstall'):
 spec = importlib.util.spec_from_file_location('survey_test_fixture', sys.argv[1])
 tests = importlib.util.module_from_spec(spec); spec.loader.exec_module(tests)
 module = tests.load_module()
-manager = module.SurveyManager(target=pathlib.Path(sys.argv[2]), runner=tests.FakeRunner(), host_probe=tests.FakeHostProbe(), source_dir=pathlib.Path(sys.argv[3]))
+manager = module.SurveyManager(target=pathlib.Path(sys.argv[2]), runner=tests.FakeRunner(), host_probe=tests.FakeHostProbe(), source_dir=pathlib.Path(sys.argv[3]), _runtime_factory=tests.fixture_runtime)
 def helper(command, *args, **kwargs):
     assert 'verify' in command
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1375,6 +1424,27 @@ with manager._mutation_lock(operation='verify-test'):
         self.assertTrue(all(p.read_bytes() == content for p, content in before.items() if p != manager.state_path), 'staging failure must preserve existing runtime')
         self.assertEqual('upgrading', manager._read_state()['status'])
 
+    def test_install_pull_does_not_load_previous_owner_overlay_before_prepare(self):
+        manifest, _ = self.write_bundle_manifest()
+        admitted = []
+        def runtime_factory(manager, version, *, create=False):
+            admitted.append((version, create))
+            return fixture_runtime(manager, version, create=create)
+        manager = self.manager(_runtime_factory=runtime_factory)
+        original = manager._compose
+        calls = []
+        def compose(version, *, owned_overlay=True):
+            calls.append((version, owned_overlay, bool(admitted)))
+            if not admitted and owned_overlay:
+                raise self.module.IntegrityError('target overlay cannot precede source transition')
+            return original(version, owned_overlay=owned_overlay)
+        with mock.patch.object(manager, '_compose', side_effect=compose):
+            manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertTrue(calls)
+        self.assertEqual((False, False), calls[0][1:])
+        self.assertEqual([(self.module.load_manifest(manifest).version, True)], admitted)
+        self.assertTrue(manager.current_path.exists())
+
     def test_failed_install_blocks_retries_and_uninstall_when_outcome_uncertain(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager(probe=FakeHostProbe(tls_valid=False))
@@ -1467,11 +1537,13 @@ with manager._mutation_lock(operation='verify-test'):
             path.unlink() if path.is_file() else path.rmdir()
         shared.rmdir()
         shared.symlink_to(outside, target_is_directory=True)
+        intent = (self.target / '.surveyctl/operation.intent').read_bytes()
         with self.assertRaises(self.module.RuntimeHealthError):
             manager.uninstall(True, f"PURGE {manager.target}")
         self.assertTrue((outside / "keep").exists())
         state = json.loads((self.target / ".surveyctl" / "state.json").read_text())
-        self.assertEqual("purge_failed", state["status"])
+        self.assertEqual("healthy", state["status"])  # Read-only refusal precedes intent/deletion.
+        self.assertEqual(intent, (self.target / '.surveyctl/operation.intent').read_bytes())
 
     def test_purge_deletion_error_is_nonzero_and_diagnostic(self):
         manifest, _ = self.write_bundle_manifest()
@@ -1604,6 +1676,7 @@ class SurveyctlTest(unittest.TestCase):
             runner=runner or self.runner,
             host_probe=probe or FakeHostProbe(),
             source_dir=PRODUCTION_DIR,
+            _runtime_factory=fixture_runtime,
         )
 
     def test_group_writable_empty_target_is_rejected_before_control_creation(self):
@@ -1763,6 +1836,7 @@ class SurveyctlTest(unittest.TestCase):
             host_probe=FakeHostProbe(),
             release_client=client,
             source_dir=PRODUCTION_DIR,
+            _runtime_factory=fixture_runtime,
         )
         with self.assertRaises(self.module.InputError):
             manager.install_version("0.2.0", None, "survey.example.com", "operations", "operations@example.com")
@@ -2192,13 +2266,13 @@ class SurveyctlTest(unittest.TestCase):
         persisted = json.loads((self.target / "shared" / "probe-run.json").read_text())["runId"]
         self.assertEqual(seen, [persisted])
 
-    def test_helper_exit_codes_are_preserved_by_real_cli_without_traceback(self):
+    def test_helper_exit_codes_in_explicit_cli_fixture_and_default_legacy_denial(self):
         helper_source = ("import pathlib,sys\n"
                          "target=pathlib.Path(sys.argv[sys.argv.index('--target')+1])\n"
                          "sys.exit(0 if 'verify' in sys.argv and (target/'allow-verify').exists() else (5 if 'verify' in sys.argv else 4))\n")
         manifest, _ = write_test_release(self.root, restore_source=helper_source.encode())
         target = self.root / "helper-restore-closed"
-        manager = self.module.SurveyManager(target=target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+        manager = self.module.SurveyManager(target=target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR, _runtime_factory=fixture_runtime)
         manager.install(manifest, "survey.example.com", "operations", "operations@example.com")
         write_fake_backup(target / "backups" / "sample")
         result = subprocess.run([sys.executable, str(MODULE_PATH), "--target", str(target), "restore", "sample"], capture_output=True, text=True)
@@ -2207,13 +2281,31 @@ class SurveyctlTest(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
         self.assertEqual("complete", json.loads((target / ".surveyctl/operation.intent").read_text())["state"])
         other_target = self.root / "helper-backup-target"
-        other_manager = self.module.SurveyManager(target=other_target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR)
+        other_manager = self.module.SurveyManager(target=other_target, runner=FakeRunner(), host_probe=FakeHostProbe(), source_dir=PRODUCTION_DIR, _runtime_factory=fixture_runtime)
         backup_manifest, _ = write_test_release(self.root, payload_overrides={"backup.py": b"import sys\nsys.exit(5)\n"})
         other_manager.install(backup_manifest, "survey.example.com", "operations", "operations@example.com")
         result = subprocess.run(
             [sys.executable, str(MODULE_PATH), "--target", str(other_target), "backup", "--output", "helper-integrity"],
             capture_output=True, text=True,
         )
+        self.assertEqual(4, result.returncode, result.stderr)
+        self.assertIn('controlled runtime ownership is unavailable', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertEqual('complete', json.loads((other_target / '.surveyctl/operation.intent').read_text())['state'])
+        # The old helper exit-code contract is retained in an explicit test-only
+        # CLI factory. Production has no environment/argument bypass to this.
+        script = r'''import importlib.util,sys
+spec=importlib.util.spec_from_file_location('survey_fixture',sys.argv[1])
+tests=importlib.util.module_from_spec(spec);spec.loader.exec_module(tests)
+m=tests.load_module();Base=m.SurveyManager
+class FixtureManager(Base):
+    def __init__(self,target):
+        super().__init__(target,_runtime_factory=tests.fixture_runtime)
+m.SurveyManager=FixtureManager
+raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-integrity']))
+'''
+        result = subprocess.run([sys.executable, '-c', script, str(Path(__file__).resolve()), str(other_target)],
+                                capture_output=True, text=True)
         self.assertEqual(5, result.returncode, result.stderr)
         self.assertNotIn("Traceback", result.stderr)
 
@@ -2232,6 +2324,112 @@ class SurveyctlTest(unittest.TestCase):
         self.assertLess(next(i for i, value in enumerate(joined) if "backup" in value), next(i for i, value in enumerate(joined) if "pull" in value))
         self.assertLess(next(i for i, value in enumerate(joined) if "ps" in value), len(joined))
         self.assertEqual("0.3.0", (self.target / "current").read_text().strip())
+
+    def test_default_upgrade_binds_target_code_before_source_backup_and_owned_switch(self):
+        self.install()
+        target = self.manifest(version='0.3.0', minimumSourceVersion='0.2.0')
+        manager = self.manager(); manager._runtime_factory = None
+        events = []
+        def admit(version): events.append(('code', version))
+        def backup(name, state):
+            events.append(('backup-source', state['version'], manager._executing_support_version(state['version'])))
+            return self.target / 'backups' / name
+        class Runtime:
+            def upgrade(runtime, effect):
+                events.append(('owned-upgrade',))
+                return effect()
+        import runtime_controller
+        with mock.patch.object(manager, '_require_owned_upgrade_source'), \
+             mock.patch.object(manager, '_verify_owned_support', side_effect=admit), \
+             mock.patch.object(manager, '_backup_for_upgrade_or_manual', side_effect=backup), \
+             mock.patch.object(manager, '_verify_backup', return_value={}) as verify, \
+             mock.patch.object(runtime_controller.RuntimeController, 'prepare_upgrade', return_value=Runtime()) as prepare:
+            manager.upgrade(target)
+        self.assertEqual([('code', '0.3.0'), ('backup-source', '0.2.0', '0.3.0'), ('owned-upgrade',)], events)
+        prepare.assert_called_once_with(manager, '0.2.0', '0.3.0')
+        self.assertEqual('0.2.0', verify.call_args.args[1])
+        self.assertIsNone(manager._upgrade_execution_version)
+        self.assertFalse(any('--remove-orphans' in command for command in self.runner.commands[-4:]))
+        self.assertEqual('0.3.0', manager._read_current())
+
+    def test_default_upgrade_unknown_switch_never_calls_legacy_recovery(self):
+        self.install()
+        target = self.manifest(version='0.3.0', minimumSourceVersion='0.2.0')
+        manager = self.manager(); manager._runtime_factory = None
+        class Runtime:
+            def upgrade(runtime, effect): raise TimeoutError('synthetic unknown request')
+        import runtime_controller
+        with mock.patch.object(manager, '_require_owned_upgrade_source'), \
+             mock.patch.object(manager, '_verify_owned_support'), \
+             mock.patch.object(manager, '_backup_for_upgrade_or_manual', return_value=self.target / 'backups/verified'), \
+             mock.patch.object(manager, '_verify_backup', return_value={}), \
+             mock.patch.object(runtime_controller.RuntimeController, 'prepare_upgrade', return_value=Runtime()), \
+             mock.patch.object(manager, '_recover_failed_upgrade') as legacy:
+            with self.assertRaises(self.module.RuntimeHealthError): manager.upgrade(target)
+        legacy.assert_not_called()
+        self.assertEqual('recovery_required', manager._read_state()['status'])
+        self.assertEqual('0.2.0', manager._read_current())
+        self.assertIsNone(manager._upgrade_execution_version)
+        self.assertFalse(any('--remove-orphans' in command for command in self.runner.commands[-4:]))
+
+    def test_default_upgrade_unmatched_target_code_cannot_start_source_backup(self):
+        self.install()
+        target = self.manifest(version='0.3.0', minimumSourceVersion='0.2.0')
+        manager = self.manager(); manager._runtime_factory = None
+        self.runner.commands.clear()
+        with mock.patch.object(manager, '_require_owned_upgrade_source'), \
+             mock.patch.object(manager, '_backup_for_upgrade_or_manual') as backup:
+            with self.assertRaises(self.module.IntegrityError): manager.upgrade(target)
+            backup.assert_not_called()
+        self.assertIsNone(manager._upgrade_execution_version)
+        self.assertEqual('0.2.0', manager._read_current())
+        self.assertFalse(any('pull' in command or 'up' in command for command in self.runner.commands))
+
+    def test_default_upgrade_legacy_source_is_refused_without_latching_or_staging(self):
+        self.install()
+        target = self.manifest(version='0.3.0', minimumSourceVersion='0.2.0')
+        manager = self.manager(); manager._runtime_factory = None
+        paths = (manager.state_path, manager.current_path, manager.control_dir / 'operation.intent')
+        before = [path.read_bytes() for path in paths]
+        self.runner.commands.clear()
+        with self.assertRaises(self.module.InputError): manager.upgrade(target)
+        with mock.patch.object(manager.release_client, 'fetch_manifest') as fetch:
+            with self.assertRaises(self.module.InputError): manager.upgrade_version('0.3.0', 'a' * 64)
+            fetch.assert_not_called()
+        self.assertEqual(before, [path.read_bytes() for path in paths])
+        self.assertFalse((self.target / 'releases/0.3.0').exists())
+        self.assertEqual([], self.runner.commands)
+
+    def test_target_code_context_is_not_available_to_ordinary_diagnostics(self):
+        manager = self.manager(); manager._upgrade_execution_version = '0.3.0'
+        with self.assertRaises(self.module.IntegrityError): manager._executing_support_version('0.2.0')
+        with manager._mutation_lock(create_target=True, operation='doctor'):
+            with self.assertRaises(self.module.IntegrityError): manager._executing_support_version('0.2.0')
+        for name in ('upgrade', 'upgrade_version'):
+            with manager._mutation_lock(operation=name):
+                self.assertEqual('0.3.0', manager._executing_support_version('0.2.0'))
+        manager._upgrade_execution_version = None
+        self.assertEqual('0.2.0', manager._executing_support_version('0.2.0'))
+
+    def test_target_code_admission_does_not_rewrite_predecessor_package_identity(self):
+        old, _ = write_test_release(self.root, _fixture_owned_support=True,
+            payload_overrides={'owned_memory.py': (PRODUCTION_DIR / 'owned_memory.py').read_bytes() + b'\n# predecessor fixture\n'})
+        self.install(old)  # Explicit modeled bootstrap, not execution of the predecessor code.
+        target, bundle = write_test_release(self.root, version='0.3.0', _fixture_owned_support=True)
+        manager = self.manager()
+        previous_bytes = (self.target / 'releases/0.2.0/release.json').read_bytes()
+        with manager._mutation_lock(operation='upgrade'):
+            state = manager._read_state(require_current=True)
+            manager._stage_release(self.module.load_manifest(target), 'arm64', state['publicHost'],
+                                   state['adminUser'], state['adminEmail'], bundle)
+            with self.assertRaises(self.module.IntegrityError): manager._verify_owned_support('0.2.0')
+            manager._upgrade_execution_version = '0.3.0'
+            try:
+                admitted = manager._verify_owned_support(manager._executing_support_version('0.2.0'))
+                self.assertEqual(17, len(admitted))
+                self.assertEqual(previous_bytes, (self.target / 'releases/0.2.0/release.json').read_bytes())
+            finally:
+                manager._upgrade_execution_version = None
 
     def test_upgrade_from_legacy_and_failed_upgrade_recovers_legacy_topology(self):
         self.runner.configured_relay = self.runner.running_relay = False
@@ -2439,6 +2637,53 @@ class SurveyctlTest(unittest.TestCase):
                 self.manager().restore("older-compatible")
             self.assertEqual([], self.runner.commands)
 
+    def test_uninstall_refuses_when_runtime_discovery_is_unavailable(self):
+        self.install()
+        self.runner.commands.clear()
+        self.runner.fail_when = lambda command: command[0] == "docker" and "down" not in command
+        with self.assertRaises(self.module.SurveyctlError):
+            self.manager().uninstall(False, None)
+        self.assertFalse(any("down" in command for command in self.runner.commands))
+        self.assertEqual("healthy", self.manager()._read_state()["status"])
+
+    def test_uninstall_zero_exit_without_resource_verification_is_not_success(self):
+        self.install()
+        # FakeRunner keeps reporting the original services as running after a
+        # successful no-op `down`: inject residual resources, not a real daemon.
+        self.runner.commands.clear()
+        self.runner.down_noop = True
+        with self.assertRaises(self.module.SurveyctlError):
+            self.manager().uninstall(False, None)
+        self.assertNotEqual("uninstalled", self.manager()._read_state()["status"])
+
+    def test_disabled_restore_refusal_preserves_state_and_complete_intent(self):
+        self.install()
+        state = self.target / ".surveyctl/state.json"
+        intent = self.target / ".surveyctl/operation.intent"
+        before = (state.read_bytes(), intent.read_bytes())
+        self.runner.commands.clear()
+        with self.assertRaisesRegex(self.module.InputError, "controlled restore is disabled"):
+            self.manager().restore("nonexistent-backup")
+        self.assertEqual(before, (state.read_bytes(), intent.read_bytes()))
+        self.assertEqual([], self.runner.commands)
+
+    def test_failed_install_cleanup_never_issues_runtime_mutation(self):
+        with self.assertRaises(self.module.RuntimeHealthError):
+            self.manager(probe=FakeHostProbe(tls_valid=False)).install(
+                self.base_manifest, "survey.example.com", "operations", "operations@example.com")
+        state = (self.target / ".surveyctl/state.json").read_bytes()
+        marker = self.target / ".surveyctl/operation.intent"
+        before = marker.read_bytes()
+        self.runner.commands.clear()
+        for purge, confirm in ((False, None), (True, f"PURGE {self.target}")):
+            with self.subTest(purge=purge):
+                with self.assertRaisesRegex(self.module.InputError, "unverified outcome"):
+                    self.manager().uninstall(purge, confirm)
+                self.assertEqual([], self.runner.commands)
+                self.assertEqual(before, marker.read_bytes())
+                self.assertEqual(state, (self.target / ".surveyctl/state.json").read_bytes())
+                self.assertTrue((self.target / "shared").exists())
+
     def test_uninstall_preserves_data_and_purge_requires_exact_second_confirmation(self):
         self.install()
         manager = self.manager()
@@ -2448,6 +2693,248 @@ class SurveyctlTest(unittest.TestCase):
             manager.uninstall(purge_data=True, confirmation="yes")
         manager.uninstall(purge_data=True, confirmation=f"PURGE {self.target.resolve()}")
         self.assertFalse((self.target / "shared").exists())
+
+    def test_default_uninstall_never_adopts_a_legacy_fixture_without_ownership_record(self):
+        self.install()
+        state, intent = self.target / '.surveyctl/state.json', self.target / '.surveyctl/operation.intent'
+        before = state.read_bytes(), intent.read_bytes()
+        self.runner.commands.clear()
+        manager = self.module.SurveyManager(self.target, runner=self.runner)
+        with self.assertRaises(self.module.RuntimeHealthError): manager.uninstall(False, None)
+        self.assertEqual(before, (state.read_bytes(), intent.read_bytes()))
+        self.assertEqual([], self.runner.commands)
+        self.assertTrue((self.target / 'shared').is_dir())
+
+    def test_default_install_admits_runtime_before_installing_state_and_uses_owned_start(self):
+        manifest = self.manifest()
+        manager = self.module.SurveyManager(self.target, runner=self.runner, host_probe=FakeHostProbe())
+        runtime = mock.Mock()
+        runtime.install.side_effect = lambda effect: effect()
+        def admitted(version, *, create=False):
+            self.assertTrue(create)
+            self.assertFalse(manager.state_path.exists())
+            return runtime
+        with mock.patch.object(manager, '_verify_owned_support') as support, \
+             mock.patch.object(manager, '_runtime', side_effect=admitted):
+            manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        support.assert_called_with('0.2.0')
+        runtime.ensure_admin_hash.assert_called_once_with()
+        runtime.install.assert_called_once()
+        self.assertFalse(any('hash-password' in command or '--remove-orphans' in command for command in self.runner.commands))
+        self.assertEqual('healthy', manager._read_state()['status'])
+
+    def test_default_install_missing_owned_code_is_rejected_before_runtime_or_pull(self):
+        manifest = self.manifest()
+        manager = self.module.SurveyManager(self.target, runner=self.runner, host_probe=FakeHostProbe())
+        with mock.patch.object(manager, '_runtime') as runtime:
+            with self.assertRaises(self.module.IntegrityError):
+                manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+            runtime.assert_not_called()
+        self.assertFalse(any('pull' in command or 'up' in command or 'hash-password' in command
+                             for command in self.runner.commands))
+
+    def test_owned_code_admission_binds_all_executing_modules_to_verified_payload(self):
+        manifest, _ = write_test_release(self.root, _fixture_owned_support=True)
+        self.install(manifest)
+        manager = self.manager()
+        manager._verify_owned_support('0.2.0')
+        wrong = type('ForeignModule', (), {'__file__': '/tmp/not-the-approved-module.py'})()
+        with mock.patch.dict(sys.modules, {'runtime_controller': wrong}):
+            with self.assertRaisesRegex(self.module.IntegrityError, 'unbound location'):
+                manager._verify_owned_support('0.2.0')
+
+    def test_owned_code_admission_rejects_even_checksum_valid_different_controller_code(self):
+        manifest, _ = write_test_release(self.root, _fixture_owned_support=True,
+            payload_overrides={'runtime_controller.py': b'# different checksum-valid candidate module\n'})
+        self.install(manifest)
+        with self.assertRaisesRegex(self.module.IntegrityError, 'differs from the verified release'):
+            self.manager()._verify_owned_support('0.2.0')
+
+    def test_owned_code_is_checked_before_any_support_module_import(self):
+        self.install()
+        control = self.target / '.surveyctl'
+        owner = control / 'runtime-owner.json'
+        owner.write_text('{}\n'); owner.chmod(0o600)
+        before = (control / 'operation.intent').read_bytes()
+        manager = self.module.SurveyManager(self.target, runner=self.runner)
+        imports, real_import = [], __import__
+        def observed(name, *args, **kwargs):
+            if name.startswith(('owned_', 'runtime_')): imports.append(name)
+            return real_import(name, *args, **kwargs)
+        with mock.patch('builtins.__import__', side_effect=observed):
+            with self.assertRaises(self.module.SurveyctlError) as error: manager.doctor()
+        self.assertEqual([], imports)
+        self.assertIsInstance(error.exception, self.module.IntegrityError)
+        self.assertEqual(before, (control / 'operation.intent').read_bytes())
+
+    def test_owned_support_loads_captured_bytes_without_executing_pythonpath_shadow(self):
+        manifest, _ = write_test_release(self.root, _fixture_owned_support=True)
+        self.install(manifest)
+        foreign = self.root / 'foreign-pythonpath'
+        foreign.mkdir()
+        marker = self.root / 'foreign-module-executed'
+        (foreign / 'owned_crypto_child.py').write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('unexpected')\n")
+        with mock.patch.dict(sys.modules), mock.patch.object(sys, 'path', [str(foreign), *sys.path]):
+            sys.modules.pop('owned_crypto_child', None)
+            self.manager()._load_owned_support('0.2.0')
+            self.assertEqual(PRODUCTION_DIR / 'owned_crypto_child.py',
+                             Path(sys.modules['owned_crypto_child'].__file__))
+        self.assertFalse(marker.exists())
+
+    def test_default_backup_and_doctor_do_not_launch_legacy_helpers(self):
+        self.install()
+        manager = self.module.SurveyManager(self.target, runner=self.runner)
+        operation = mock.Mock()
+        operation.backup.side_effect = lambda output: output
+        operation.doctor.return_value = {'schemaVersion': 1, 'status': 'ok', 'checks': []}
+        with mock.patch.object(manager, '_runtime') as runtime, \
+             mock.patch('owned_maintenance.OwnedMaintenance', return_value=operation), \
+             mock.patch.object(manager, '_checked_helper', side_effect=AssertionError('legacy helper')), \
+             mock.patch.object(manager, '_run_helper', side_effect=AssertionError('legacy process')):
+            self.assertEqual(self.target / 'backups/owned', manager.backup('owned'))
+            with contextlib.redirect_stdout(io.StringIO()): manager.doctor()
+        self.assertEqual(2, runtime.call_count)
+        operation.backup.assert_called_once_with(self.target / 'backups/owned')
+        operation.doctor.assert_called_once_with()
+
+    def test_default_backup_reserves_before_intent_and_any_helper(self):
+        self.install()
+        manager=self.module.SurveyManager(self.target,runner=self.runner)
+        before=(self.target/'.surveyctl/operation.intent').read_bytes()
+        operation=mock.Mock()
+        def reserve():
+            self.assertEqual(before,(self.target/'.surveyctl/operation.intent').read_bytes())
+            raise self.module.RuntimeHealthError('capacity refused')
+        operation.prepare_backup_capacity.side_effect=reserve
+        with mock.patch.object(manager,'_runtime'), mock.patch('owned_maintenance.OwnedMaintenance',return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError): manager.backup('no-capacity')
+        operation.prepare_backup_capacity.assert_called_once_with()
+        operation.backup.assert_not_called()
+        self.assertEqual(before,(self.target/'.surveyctl/operation.intent').read_bytes())
+
+    def test_partial_capacity_retirement_failure_keeps_pending_and_never_backs_up(self):
+        self.install()
+        manager=self.module.SurveyManager(self.target,runner=self.runner)
+        operation=mock.Mock()
+        def interrupted():
+            manager._begin_operation()
+            raise self.module.RuntimeHealthError('retirement interrupted')
+        operation.prepare_backup_capacity.side_effect=interrupted
+        with mock.patch.object(manager,'_runtime'), mock.patch('owned_maintenance.OwnedMaintenance',return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError): manager.backup('interrupted-reserve')
+        operation.backup.assert_not_called()
+        self.assertEqual('pending',json.loads((self.target/'.surveyctl/operation.intent').read_text())['state'])
+        restarted=self.module.SurveyManager(self.target,runner=self.runner)
+        with mock.patch.object(restarted,'_runtime') as runtime:
+            with self.assertRaises(self.module.InputError): restarted.backup('after-restart')
+            runtime.assert_not_called()
+
+    def test_backup_capacity_bridge_uses_real_resource_preflight_and_fixed_three_slots(self):
+        import owned_maintenance
+        operation=object.__new__(owned_maintenance.OwnedMaintenance)
+        operation.uncertain=False; operation.held=[]; operation.paused=set()
+        operation.runtime=mock.Mock(); operation.manager=mock.Mock()
+        operation.manager._operation_name='backup'
+        with mock.patch('runtime_cohort.ReceiptRetirement') as retirement:
+            operation.prepare_backup_capacity()
+            retirement.return_value.reserve.assert_called_once_with(3)
+            args=retirement.call_args.args
+            self.assertIs(args[0],operation.runtime.probe)
+            args[1](); operation.runtime.preflight_cleanup.assert_called_once_with(False)
+            self.assertEqual('backup',args[3])
+
+    def test_upgrade_backup_reserves_four_but_backup_allocates_only_three(self):
+        import owned_maintenance
+        for name in ('upgrade','upgrade_version'):
+            operation=object.__new__(owned_maintenance.OwnedMaintenance)
+            operation.uncertain=False; operation.held=[]; operation.paused=set()
+            operation.runtime=mock.Mock(); operation.manager=mock.Mock()
+            operation.manager._operation_name=name
+            with mock.patch('runtime_cohort.ReceiptRetirement') as retirement:
+                operation.prepare_backup_capacity()
+                retirement.return_value.reserve.assert_called_once_with(4)
+            self.assertEqual(3,operation._receipt_budget)
+
+    def test_verify_capacity_failure_precedes_new_intent_and_decryption(self):
+        self.install()
+        backup=self.target/'backups/verify-capacity'; write_fake_backup(backup)
+        manager=self.module.SurveyManager(self.target,runner=self.runner)
+        marker=self.target/'.surveyctl/operation.intent'; before=marker.read_bytes()
+        operation=mock.Mock()
+        operation.prepare_verify_capacity.side_effect=self.module.RuntimeHealthError('verify capacity unavailable')
+        with mock.patch.object(manager,'_owned_maintenance',return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                with manager._mutation_lock(operation='upgrade'):
+                    manager._verify_backup(backup,'0.2.0','920')
+        operation._perform.assert_not_called(); operation.verify_backup.assert_not_called()
+        self.assertEqual(before,marker.read_bytes())
+
+    def test_independent_verify_reserves_and_enforces_its_own_single_journal(self):
+        import owned_maintenance
+        operation=object.__new__(owned_maintenance.OwnedMaintenance)
+        operation.uncertain=False; operation.held=[]; operation.paused=set()
+        operation.runtime=mock.Mock(); operation.manager=mock.Mock()
+        operation.manager._operation_name='upgrade'
+        with mock.patch('runtime_cohort.ReceiptRetirement') as retirement:
+            operation.prepare_verify_capacity()
+            retirement.return_value.reserve.assert_called_once_with(1)
+        self.assertEqual(1,operation._receipt_budget)
+        operation._allocate_receipt()
+        with self.assertRaises(owned_maintenance.OwnershipError): operation._allocate_receipt()
+
+    def test_exhausted_backup_receipt_budget_cannot_allocate_a_child_journal(self):
+        import owned_maintenance
+        operation=object.__new__(owned_maintenance.OwnedMaintenance)
+        operation._receipt_budget=0
+        with mock.patch('owned_maintenance.PrivateStore') as store:
+            with self.assertRaises(owned_maintenance.OwnershipError): operation._journal()
+            store.assert_not_called()
+
+    def test_exhausted_backup_budget_cannot_export_or_create_an_exec(self):
+        import owned_maintenance
+        operation=object.__new__(owned_maintenance.OwnedMaintenance)
+        operation._receipt_budget=0; operation.uncertain=False
+        operation.services={'platform-db':'c'*64}
+        plain=mock.Mock()
+        with mock.patch('owned_maintenance.PrivateStore') as store, mock.patch('owned_maintenance.OwnedDockerExec') as executor:
+            with self.assertRaises(owned_maintenance.OwnershipError): operation.exec_file('postgres-dump','platform-db',plain)
+            store.assert_not_called(); executor.assert_not_called(); plain.export_for_child.assert_not_called()
+
+    def test_doctor_capacity_rejection_precedes_intent_and_helpers(self):
+        self.install(); manager=self.module.SurveyManager(self.target,runner=self.runner)
+        marker=self.target/'.surveyctl/operation.intent'; before=marker.read_bytes()
+        operation=mock.Mock()
+        operation.prepare_doctor_capacity.side_effect=self.module.RuntimeHealthError('doctor capacity unavailable')
+        with mock.patch.object(manager,'_owned_maintenance',return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError): manager.doctor()
+        self.assertEqual(before,marker.read_bytes()); operation.doctor.assert_not_called()
+
+    def test_default_backup_known_preflight_failure_does_not_latch_or_leak(self):
+        from backup import BackupError
+        self.install()
+        manager = self.module.SurveyManager(self.target, runner=self.runner)
+        intent = (self.target / '.surveyctl/operation.intent').read_bytes()
+        operation = mock.Mock()
+        operation.preflight_backup.side_effect = BackupError('synthetic-sensitive-marker')
+        with mock.patch.object(manager, '_runtime'), \
+             mock.patch('owned_maintenance.OwnedMaintenance', return_value=operation):
+            with self.assertRaises(self.module.SurveyctlError) as error: manager.backup('preflight')
+        self.assertNotIn('synthetic-sensitive-marker', str(error.exception))
+        self.assertEqual(intent, (self.target / '.surveyctl/operation.intent').read_bytes())
+        operation.backup.assert_not_called()
+
+    def test_default_backup_unknown_failure_keeps_pending_and_returns_controlled_error(self):
+        from owned_maintenance import UncertainMaintenance
+        self.install()
+        manager = self.module.SurveyManager(self.target, runner=self.runner)
+        operation = mock.Mock()
+        operation.backup.side_effect = UncertainMaintenance('synthetic-sensitive-marker')
+        with mock.patch.object(manager, '_runtime'), \
+             mock.patch('owned_maintenance.OwnedMaintenance', return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError) as error: manager.backup('unknown')
+        self.assertNotIn('synthetic-sensitive-marker', str(error.exception))
+        self.assertEqual('pending', json.loads((self.target / '.surveyctl/operation.intent').read_text())['state'])
 
     def test_refuses_target_outside_owned_state_boundary(self):
         self.target.mkdir(parents=True)

@@ -6,6 +6,55 @@ on:
 permissions:
   contents: read
 jobs:
+  ownership-protocol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Ownership protocol and conservative cleanup regressions
+        run: python3 -B -m unittest discover -s platform/deploy/production/tests -p test_runtime_ownership.py
+      - name: Isolated daemon claim and empty-resource removal
+        run: |
+          set -euo pipefail
+          image=alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+          docker pull "$image"
+          mkdir ownership-evidence
+          python3 -B platform/deploy/production/tests/integration/runtime_ownership_docker.py --image "$image" --api-mutations > ownership-evidence/daemon-protocol.json
+      - name: Controlled helper lifetimes and exact controller cleanup
+        run: |
+          set -euo pipefail
+          image=python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
+          docker pull "$image"
+          python3 -B platform/deploy/production/tests/integration/owned_memory_native.py --image "$image" > ownership-evidence/anonymous-memory.json
+          python3 -B platform/deploy/production/tests/integration/owned_crypto_native.py --image "$image" > ownership-evidence/controlled-crypto.json
+          python3 -B platform/deploy/production/tests/integration/runtime_controller_native.py --image "$image" > ownership-evidence/controller-cleanup.json
+      - name: Recorded backup and refusal paths with real PostgreSQL and MariaDB
+        run: |
+          set -euo pipefail
+          python_image=python@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
+          caddy_image=caddy@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
+          postgres_image=postgres@sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6
+          mariadb_image=mariadb@sha256:7f22313fc130a377a44999965bcb0a08dd5b21e8502824c1b864f792f9bc66ab
+          docker pull "$caddy_image"
+          docker pull "$postgres_image"
+          docker pull "$mariadb_image"
+          python3 -B platform/deploy/production/tests/integration/owned_maintenance_native.py \
+            --python-image "$python_image" --caddy-image "$caddy_image" \
+            --postgres-image "$postgres_image" --mariadb-image "$mariadb_image" \
+            --evidence ownership-evidence/controlled-maintenance.json
+      - name: Preserve bounded protocol and cleanup result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: isolated-ownership-protocol-amd64
+          # JSON only. Never upload fixture directories, dumps, credentials or logs.
+          path: ownership-evidence/*.json
+          if-no-files-found: error
   cosign-contract:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

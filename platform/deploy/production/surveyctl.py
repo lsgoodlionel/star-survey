@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import hashlib
 import hmac
 import ipaddress
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -64,6 +65,20 @@ REQUIRED_BUNDLE_FILES = {
     "compose.yml", "Caddyfile", "surveyctl", "surveyctl.py", "release.schema.json",
     "env.example", "engines.example.json", "backup.py", "restore.py", "doctor.py",
 }
+OWNED_RUNTIME_FILES = {
+    'surveyctl.py', 'backup.py', 'restore.py', 'doctor.py',
+    'runtime_ownership.py', 'runtime_controller.py', 'runtime_cohort.py', 'runtime_docker.py',
+    'owned_children.py', 'owned_container_hash.py', 'owned_docker_exec.py', 'owned_memory.py',
+    'owned_crypto.py', 'owned_crypto_child.py', 'owned_cipher_adapter.py', 'owned_backup_verify.py',
+    'owned_maintenance.py',
+}
+OWNED_IMPORT_ORDER = (
+    'backup', 'restore', 'doctor', 'runtime_ownership', 'owned_memory', 'owned_children',
+    'owned_crypto_child', 'owned_crypto', 'owned_docker_exec', 'owned_cipher_adapter',
+    'owned_backup_verify', 'owned_container_hash', 'runtime_cohort', 'runtime_docker',
+    'runtime_controller', 'owned_maintenance',
+)
+_OWNED_IMPORT_LOCK = threading.RLock()
 
 
 class SurveyctlError(Exception):
@@ -505,6 +520,7 @@ class SurveyManager:
         release_client=None,
         source_dir=None,
         expected_public_addresses=None,
+        _runtime_factory=None,
     ):
         raw_target = Path(target).expanduser()
         if ".." in raw_target.parts:
@@ -521,6 +537,9 @@ class SurveyManager:
         self._reject_symlink_components(self.target)
         self._mutation_mutex = threading.RLock()
         self._mutation_depth = 0
+        self._runtime_factory = _runtime_factory
+        self._runtime_lock_fd = None
+        self._upgrade_execution_version = None
 
     @contextmanager
     def _mutation_lock(self, *, create_target: bool = False, operation: str = "operation"):
@@ -623,11 +642,13 @@ class SurveyManager:
                 self._operation_name = operation
                 self._operation_started = False
                 self._mutation_depth = 1
+                self._runtime_lock_fd = fd
                 try:
                     yield
                     if self._operation_started:
                         self._atomic_write(intent, json.dumps({"schemaVersion": 1, "state": "complete", "operation": operation}) + "\n")
                 finally:
+                    self._runtime_lock_fd = None
                     self._mutation_depth = 0
                     fcntl.flock(fd, fcntl.LOCK_UN)
             finally:
@@ -1174,16 +1195,140 @@ class SurveyManager:
         if manifest.raw.get("securityCapabilities", {}).get("platform-admin-session-v1") != manifest.raw["images"]["PLATFORM_IMAGE"]:
             raise InputError("personnel security boundary is unsupported by the target release")
 
-    def _compose(self, version: str) -> list[str]:
+    def _compose(self, version: str, *, owned_overlay: bool = True) -> list[str]:
         release = self._release_dir(version)
         self._verify_staged_release(release, version)
         for name in (".env", "compose.yml"):
             _regular_file(release / name, f"release {name}")
             self._reject_symlink_components(release / name)
-        return [
+        command = [
             "docker", "compose", "--project-directory", str(release),
             "--env-file", str(release / ".env"), "-f", str(release / "compose.yml"),
         ]
+        if owned_overlay and (os.path.lexists(self.control_dir / 'runtime-owner.json')
+                or os.path.lexists(self.control_dir / 'runtime-owner.compose.json')):
+            self._load_owned_support(self._executing_support_version(version))  # Before any support import.
+            try:
+                from runtime_controller import RuntimeController
+                RuntimeController._load(self, version)
+            except Exception as exc:
+                raise IntegrityError('owned Compose overlay or source binding is unavailable') from exc
+            command += ['-f', str(self.control_dir / 'runtime-owner.compose.json')]
+        return command
+
+    def _runtime(self, version, *, create=False):
+        try:
+            if self._runtime_factory is not None:
+                return self._runtime_factory(self, version, create=create)
+            if not create and not os.path.lexists(self.control_dir / 'runtime-owner.json'):
+                raise RuntimeHealthError('controlled runtime ownership is unavailable; legacy adoption is prohibited')
+            self._load_owned_support(self._executing_support_version(version))
+            from runtime_controller import RuntimeController
+            if create:
+                return RuntimeController.prepare(self, version)
+            return RuntimeController.open(self, version)
+        except SurveyctlError:
+            raise
+        except Exception as exc:
+            raise RuntimeHealthError('controlled runtime ownership is unavailable; preserve the installation and markers') from exc
+
+    def _executing_support_version(self, source_version):
+        target = self._upgrade_execution_version
+        if target is None:
+            return source_version
+        if self._mutation_depth < 1 or getattr(self, '_operation_name', None) not in {'upgrade', 'upgrade_version'}:
+            raise IntegrityError('target-code authority is restricted to the locked upgrade operation')
+        return target
+
+    def _verify_owned_support(self, version):
+        release = self._release_dir(version)
+        self._verify_staged_release(release, version)
+        metadata = json.loads((release / 'bundle-metadata.json').read_text(encoding='utf-8'))
+        inventory = metadata['files']
+        root = Path(__file__).absolute().parent
+        captured = {}
+        for name in sorted(OWNED_RUNTIME_FILES):
+            expected = inventory.get(name)
+            if not isinstance(expected, str) or re.fullmatch('[0-9a-f]{64}', expected) is None:
+                raise IntegrityError('release lacks checksum-bound controlled runtime support')
+            executable = root / name
+            self._assert_trusted_path(executable)
+            _regular_file(executable, 'controller support module')
+            with executable.open('rb') as handle:
+                payload = handle.read(1024 * 1024 + 1)
+            if len(payload) > 1024 * 1024 or not secrets.compare_digest(hashlib.sha256(payload).hexdigest(), expected):
+                raise IntegrityError('executing controlled runtime differs from the verified release payload')
+            loaded = sys.modules.get(Path(name).stem)
+            if loaded is not None and Path(getattr(loaded, '__file__', '')).absolute() != executable:
+                raise IntegrityError('controlled runtime module was loaded from an unbound location')
+            captured[Path(name).stem] = (executable, payload)
+        return captured
+
+    def _owned_maintenance(self, version):
+        runtime = self._runtime(version)  # Complete source admission before the import below.
+        from owned_maintenance import OwnedMaintenance
+        try:
+            return OwnedMaintenance(runtime)
+        except Exception as exc:
+            self._raise_owned_failure(exc, 'controlled maintenance preflight failed; no helper was started')
+
+    @staticmethod
+    def _raise_owned_failure(exc, message):
+        # Only called after support admission. Preserve known integrity errors,
+        # while unknown child/exec/RPC state always remains a runtime failure.
+        from backup import BackupError
+        from restore import RestoreIntegrityError
+        from owned_crypto import UncertainCryptoChild
+        from owned_docker_exec import UncertainExec
+        from owned_maintenance import UncertainMaintenance
+        node, integrity, unknown = exc, False, False
+        for _ in range(8):
+            if node is None: break
+            integrity = integrity or isinstance(node, (BackupError, RestoreIntegrityError, IntegrityError))
+            unknown = unknown or isinstance(node, (UncertainCryptoChild, UncertainExec, UncertainMaintenance))
+            node = node.__cause__
+        if integrity and not unknown: raise IntegrityError(message) from exc
+        raise RuntimeHealthError(message) from exc
+
+    def _load_owned_support(self, version):
+        with _OWNED_IMPORT_LOCK:
+            captured = self._verify_owned_support(version)  # Complete stdlib-only gate before the first exec.
+            for name in OWNED_IMPORT_ORDER:
+                if name in sys.modules: continue  # Its path was checked by the admission above.
+                path, payload = captured[name]
+                spec = importlib.util.spec_from_file_location(name, path)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[name] = module
+                try:
+                    # Compile the exact verified bytes: do not resolve a different
+                    # PYTHONPATH module or consume an unchecked cached .pyc.
+                    exec(compile(payload, str(path), 'exec', dont_inherit=True), module.__dict__)
+                except BaseException:
+                    sys.modules.pop(name, None)
+                    raise
+
+    def _owned_start_install(self, runtime, version, public_host):
+        from runtime_ownership import SettledMutationFailure
+        def start():
+            # Never remove orphans: unknown objects must block observation,
+            # rather than being swept up by Compose before ownership checks.
+            self._run(self._compose(version) + ['up', '-d'], 'installation start failed')
+            try:
+                self._wait_healthy(self._compose(version), 'installation health check failed')
+                self._verify_public_tls(public_host)
+            except SurveyctlError as exc:
+                # Only this post-success boundary can state all create/start
+                # calls returned. A failed/unknown up is never classified here.
+                raise SettledMutationFailure('known startup ended; readiness failed') from exc
+        try:
+            runtime.install(start)
+        except SettledMutationFailure as exc:
+            self._write_state(status='install_failed')
+            try:
+                runtime.cleanup(False)
+            except Exception as cleanup:
+                raise RuntimeHealthError('installation failed and runtime cleanup is unverified; preserve markers') from cleanup
+            raise RuntimeHealthError('installation readiness failed; exact runtime removed, volumes and operation marker retained') from exc
 
     def _verify_staged_release(self, release: Path, version: str) -> None:
         self._reject_symlink_components(release)
@@ -1247,6 +1392,10 @@ class SurveyManager:
                 raise IntegrityError(f"generated release configuration checksum mismatch: {name}")
 
     def _run(self, command: list[str], runtime_message: str, **kwargs):
+        if command and command[0] == 'docker' and os.path.lexists(self.control_dir / 'runtime-owner.json'):
+            if os.environ.get('DOCKER_CONTEXT') or os.environ.get('DOCKER_HOST') not in (None, '', 'unix:///var/run/docker.sock'):
+                raise InputError('owned runtime operations require the fixed local Docker daemon')
+            kwargs['env'] = dict(kwargs.get('env', os.environ), DOCKER_HOST='unix:///var/run/docker.sock')
         try:
             return self.runner.run(command, cwd=self.target, **kwargs)
         except (OSError, subprocess.CalledProcessError) as exc:
@@ -1257,6 +1406,8 @@ class SurveyManager:
         self._verify_staged_release(release, version)
         helper = self._managed(Path("releases") / version / name, must_exist=True)
         _regular_file(helper, "installed helper")
+        if self._runtime_factory is None and os.path.lexists(self.control_dir / 'runtime-owner.json'):
+            raise InputError('unregistered legacy helper is prohibited for an owned installation; controlled helper admission is not yet complete')
         return helper
 
     def _run_helper(self, command: list[str], runtime_message: str, **kwargs):
@@ -1692,7 +1843,7 @@ class SurveyManager:
         self._mkdir(".")
         self._stage_release(manifest, values["architecture"], public_host, admin_user, admin_email, bundle_path, asset_loader)
         self._activate_personnel_floor(manifest.version)
-        self._write_state(
+        initial_state = dict(
             status="installing",
             version=manifest.version,
             databaseSchema=manifest.database_schema,
@@ -1703,16 +1854,21 @@ class SurveyManager:
             dataPurged=False,
             pointerlessUninstall=False,
         )
-        compose = self._compose(manifest.version)
+        # Pull verified source images without loading a previous generation's
+        # overlay. Runtime.prepare binds the target before any helper/start.
+        compose = self._compose(manifest.version, owned_overlay=False)
         try:
+            if self._runtime_factory is None:
+                self._verify_owned_support(manifest.version)
             self._run(compose + ["pull"], "image pull failed")
-            self._ensure_admin_password_hash(manifest.raw["images"]["CADDY_IMAGE"])
-            self._run(compose + ["up", "-d", "--remove-orphans"], "installation start failed")
-            self._wait_healthy(compose, "installation health check failed")
-            self._verify_public_tls(public_host)
-        except SurveyctlError:
-            self._write_state(status="install_failed")
-            raise
+            runtime = self._runtime(manifest.version, create=True)
+            self._write_state(**initial_state)  # Fresh creation admission must precede this state.
+            runtime.ensure_admin_hash()
+            self._owned_start_install(runtime, manifest.version, public_host)
+        except Exception as exc:
+            self._write_state(**dict(initial_state, status='install_failed'))
+            if isinstance(exc, SurveyctlError): raise
+            raise RuntimeHealthError('controlled installation failed or remains unverified; preserve its receipts and marker') from exc
         self._atomic_write(self.current_path, manifest.version + "\n")
         self._write_state(status="healthy")
 
@@ -1834,6 +1990,17 @@ class SurveyManager:
             _regular_file(path, f"backup {name}")
             self._reject_symlink_components(path)
         state = self._read_state(require_current=True)
+        if self._runtime_factory is None:
+            operation = self._owned_maintenance(state['version'])
+            try:
+                operation.prepare_verify_capacity()
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled verify capacity is unavailable; preserve operation evidence')
+            self._begin_operation()
+            try:
+                return operation._perform('backup', lambda: operation.verify_backup(backup))
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled backup verification failed; preserve its receipts and marker')
         helper = self._checked_helper(state["version"], "restore.py")
         # The helper decrypts into a private temporary directory and can
         # outlive this controller; pure inventory checks above are read-only.
@@ -1854,6 +2021,18 @@ class SurveyManager:
         output = self._backup_path(name)
         if output.exists() or output.is_symlink():
             raise InputError("backup destination already exists")
+        if self._runtime_factory is None:
+            operation = self._owned_maintenance(state['version'])
+            try:
+                operation.preflight_backup(output)
+                operation.prepare_backup_capacity()
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled backup preflight failed; no helper was started')
+            self._begin_operation()
+            try:
+                return operation.backup(output)
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled backup failed or remains unverified; preserve its receipts and marker')
         # Known configuration/integrity failures are read-only preflight errors,
         # not evidence of an interrupted helper. Do not latch them as pending.
         self._checked_helper(state["version"], "backup.py")
@@ -2041,11 +2220,15 @@ class SurveyManager:
             require_ports=False,
             expected_addresses=state.get("expectedPublicAddresses"),
         )
+        if self._runtime_factory is None:
+            self._require_owned_upgrade_source()
         # Persist and fsync the intent before staging or backup can change
         # the installation. A killed process leaves a durable command latch.
         self._begin_operation()
         self._write_state(status="upgrading", previousVersion=previous, recoveryBackup=None)
         self._stage_release(manifest, values["architecture"], state["publicHost"], state["adminUser"], state["adminEmail"], bundle_path, asset_loader)
+        if self._runtime_factory is None:
+            return self._upgrade_owned_staged(manifest, state)
         backup_name = f"pre-upgrade-{previous}-to-{manifest.version}"
         backup = self._backup_for_upgrade_or_manual(backup_name, self._read_state(require_current=True))
         self._verify_backup(backup, previous, state["databaseSchema"])
@@ -2061,6 +2244,57 @@ class SurveyManager:
             self._write_state(status="healthy", version=manifest.version, databaseSchema=manifest.database_schema, previousVersion=previous)
         except SurveyctlError as failure:
             self._recover_failed_upgrade(manifest, previous, backup_name, failure)
+
+    def _require_owned_upgrade_source(self):
+        # Read-only admission before staging/intent; never adopt rc19/legacy
+        # resources or latch a working legacy install for an unsupported path.
+        for name in ('runtime-owner.json', 'runtime-contract.json', 'runtime-owner.compose.json'):
+            path = self._managed(Path('.surveyctl') / name)
+            if not os.path.lexists(path):
+                raise InputError('controlled upgrade requires recorded source ownership; legacy adoption is prohibited')
+            self._assert_trusted_path(path)
+            _regular_file(path, 'source runtime ownership metadata')
+            if os.lstat(path).st_mode & 0o077:
+                raise IntegrityError('source runtime ownership metadata must remain private')
+
+    def _upgrade_owned_staged(self, manifest, state):
+        # Code authority belongs to the verified target package; resource/data
+        # authority remains the recorded predecessor until its containers end.
+        self._require_personnel_capability(manifest)
+        self._verify_owned_support(manifest.version)
+        if self._upgrade_execution_version is not None:
+            raise IntegrityError('nested target-code authority is forbidden')
+        previous = state['version']
+        backup_name = f'pre-upgrade-{previous}-to-{manifest.version}'
+        verified_backup = None
+        self._upgrade_execution_version = manifest.version
+        try:
+            backup = self._backup_for_upgrade_or_manual(backup_name, self._read_state(require_current=True))
+            self._verify_backup(backup, previous, state['databaseSchema'])
+            verified_backup = backup_name
+            # Pull is not permission to operate on existing project resources.
+            # Source contracts are computed only after the fixed images exist.
+            self._run(self._compose(manifest.version, owned_overlay=False) + ['pull'], 'upgrade image pull failed')
+            from runtime_controller import RuntimeController
+            runtime = RuntimeController.prepare_upgrade(self, previous, manifest.version)
+            self._activate_personnel_floor(manifest.version)
+            self._write_state(status='upgrading', previousVersion=previous, recoveryBackup=verified_backup)
+            def start():
+                compose = self._compose(manifest.version)
+                self._run(compose + ['up', '-d'], 'controlled upgrade migration or start failed')
+                self._wait_healthy(compose, 'controlled upgrade health check failed')
+                self._verify_public_tls(state['publicHost'])
+            runtime.upgrade(start)
+            self._atomic_write(self.current_path, manifest.version + '\n')
+            self._write_state(status='healthy', version=manifest.version, databaseSchema=manifest.database_schema,
+                              previousVersion=previous)
+        except Exception as exc:
+            self._write_state(status='recovery_required', version=previous, recoveryBackup=verified_backup)
+            if isinstance(exc, SurveyctlError):
+                raise
+            raise RuntimeHealthError('controlled upgrade failed or remains unverified; no automatic recovery was attempted') from exc
+        finally:
+            self._upgrade_execution_version = None
 
     def _stop_new_writers_before_legacy_restore(self, compose: list[str]) -> bool:
         # The old restore helper freezes only writers known to its release.
@@ -2148,6 +2382,8 @@ class SurveyManager:
     @_locked_mutation(create_target=False)
     def upgrade_version(self, version, expected_sha256) -> None:
         self._require_no_pending_recovery(self._read_state(require_current=True))
+        if self._runtime_factory is None:
+            self._require_owned_upgrade_source()
         version = _validate_semver(version.removeprefix("v"), "release version")
         if not expected_sha256:
             raise InputError("remote release operation requires --manifest-sha256")
@@ -2206,6 +2442,24 @@ class SurveyManager:
     def doctor(self) -> None:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
+        if self._runtime_factory is None:
+            operation = self._owned_maintenance(state['version'])
+            try:
+                operation.prepare_doctor_capacity()
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled doctor capacity is unavailable; preserve operation evidence')
+            self._begin_operation()
+            try:
+                report = operation.doctor()
+            except Exception as exc:
+                print(json.dumps({'schemaVersion': 1, 'status': 'blocked', 'checks': [{
+                    'id': 'doctor-runtime', 'status': 'blocked',
+                    'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'}]}))
+                raise RuntimeHealthError('controlled doctor did not complete; preserve operation evidence') from exc
+            print(json.dumps(report))
+            if report.get('status') == 'blocked':
+                raise RuntimeHealthError('doctor checks failed')
+            return
         helper = self._checked_helper(state["version"], "doctor.py")
         self._begin_operation()
         try:
@@ -2248,6 +2502,8 @@ class SurveyManager:
 
     @_locked_mutation(create_target=False)
     def uninstall(self, purge_data, confirmation) -> None:
+        if type(purge_data) is not bool:
+            raise InputError('uninstall purge mode must be boolean')
         state = self._read_state()
         self._require_no_pending_recovery(state)
         # A first install can fail after starting Compose but before writing its
@@ -2256,39 +2512,56 @@ class SurveyManager:
         pointerless = state['status'] == 'install_failed' and not os.path.lexists(self.current_path)
         if not pointerless:
             state = self._read_state(require_current=True)
-        command = self._compose(state["version"]) + ["down", "--remove-orphans"]
+        self._compose(state['version'])  # Verify code/configuration before runtime admission.
         purge_paths = [self.target / "shared", self.target / "backups"]
+        snapshots = {}
         if purge_data:
             required = f"PURGE {self.target}"
             if confirmation != required:
                 raise InputError(f"data purge requires exact confirmation: {required}")
-            self._begin_operation()
             for path in purge_paths:
                 if path.is_symlink():
-                    self._write_state(status="purge_failed")
                     raise RuntimeHealthError(f"purge refused symbolic link: {path.relative_to(self.target)}")
                 self._reject_symlink_components(path)
-            command.append("--volumes")
-            self._write_state(status="purging")
-        self._begin_operation()
+                if os.path.lexists(path):
+                    self._assert_trusted_path(path)
+                    info = os.lstat(path)
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise RuntimeHealthError('purge refused a non-directory managed path')
+                    snapshots[path] = (info.st_dev, info.st_ino, info.st_mode, info.st_uid)
+                else:
+                    snapshots[path] = None
+        runtime = self._runtime(state['version'])
         try:
-            self._run(command, "uninstall failed")
-        except SurveyctlError:
-            if purge_data:
-                self._write_state(status="purge_failed")
-            raise
+            runtime.preflight_cleanup(purge_data)
+        except Exception as exc:
+            raise RuntimeHealthError('uninstall preflight could not prove resource ownership and cohort; no deletion was attempted') from exc
+        self._begin_operation()
         if purge_data:
-            try:
-                for path in purge_paths:
-                    if path.exists():
-                        shutil.rmtree(path)
-                remaining = [path for path in purge_paths if path.exists() or path.is_symlink()]
-                if remaining:
-                    raise OSError("managed data remains")
-            except OSError as exc:
-                self._write_state(status="purge_failed")
-                remaining = [str(path.relative_to(self.target)) for path in purge_paths if path.exists() or path.is_symlink()]
-                raise RuntimeHealthError(f"purge failed; managed data remains: {', '.join(remaining)}") from exc
+            self._write_state(status='purging')
+        def host_purge():
+            for path, expected in snapshots.items():
+                present = os.path.lexists(path)
+                if expected is None:
+                    if present:
+                        raise RuntimeHealthError('purge path appeared after preflight; managed data remains')
+                    continue
+                if not present:
+                    raise RuntimeHealthError('purge path disappeared after preflight; preserve evidence')
+                info = os.lstat(path)
+                if (info.st_dev, info.st_ino, info.st_mode, info.st_uid) != expected:
+                    raise RuntimeHealthError('purge path identity changed; managed data remains')
+                try:
+                    shutil.rmtree(path)
+                except OSError as exc:
+                    raise RuntimeHealthError('purge failed; managed data remains') from exc
+            if any(os.path.lexists(path) for path in purge_paths):
+                raise RuntimeHealthError('purge failed; managed data remains')
+        try:
+            runtime.cleanup(purge_data, host_purge if purge_data else None)
+        except Exception as exc:
+            self._write_state(status='purge_failed' if purge_data else 'recovery_required')
+            raise RuntimeHealthError('uninstall outcome is unverified or managed data remains; preserve operation and ownership markers') from exc
         self._write_state(status="uninstalled", dataPurged=bool(purge_data), pointerlessUninstall=pointerless)
 
 
