@@ -407,3 +407,14 @@ LocalDockerAPI 使用 ExecStart 101/tcp 升级、原 HTTP 缓冲、同一个35�
 拟固定profiles：PG空表计数/pg_restore单事务且保留source ownership；Maria空表计数/固定secret-file读取到子进程环境（不在argv或日志）+binary-mode client。导入wrapper以管道/coprocess计算输入hash，仅固定SQLtool stdout转有界stderr，等待全部固定子进程结束后发hashack及原nonce-footer；不使用具名明文/临时SQL。增加strict v4 sourceEvidence（受认证control/manifest SHA）及input/terminal审计，GC404未知仍拒绝，hashack/exit0不等于业务提交或事务一致性。
 
 隔离native拟复用真实PG/Maria dump、新scope/卷、58迁移及数据/人员失效验证，真实OpenSSL/memfd/HMAC将snapshot接入新consumer。需区分fixture初始化/查询的旧同步工具与真正受控输入回执，不能泛称整条CLI已covered。known failure用新scope证明PG成功/Maria凭据失败后停止、不重试且source保留；未知Exec/部分输入/日志缺失仅先模型证明阻断与租约保留，真实崩溃或unknown结局不得强制清理或伪造终态。新scope控件handoff仍保留pending，组件的显式清理只有完整资源+cohort已知结束才可做。实际native、调用/目标签名配置、业务资格均待实现和独立复核，不在本段标通过。
+
+
+### 2026-11-12：认证双库输入实现及待运行隔离证据（接续上一设计）
+
+本分支实现内部 ControlledDatabaseCopy/NewCopyTarget，复用实际 ControlledVerifier 的 HMAC、完整密文 inventory、匿名解密、schema/version/floor 检查；控制文件先通过 no-follow/普通单链接/属主私有权限/大小预检才读取，解密后再认证并在输入使用时复核源视图。真实 OwnershipProtocol/CohortProbe、原 handoff 锁和四个预登记 operation 绑定两 DB 服务/CID/installation；完整资源映射、无网络/发布端口、非特权及有限资源检查拒绝漂移。typed 单次输入方可进入固定 PG/Maria profile，普通 sealed lease 加调用方 SHA 拒绝。v4 source/input/terminal 回执只记录摘要与固定阶段，不记录 SQL、口令或原始 stderr。
+
+PG 使用固定 Unix socket、pg_restore 单事务/exit-on-error 并保留 ownership；Maria 固定 Unix socket、binary-mode、no-defaults、禁 reconnect/local-infile，口令仅由固定容器 secret-file 进入子进程环境。先前 coproc FD 在 tee 子进程中不可见已真实复现，改为动态 process-substitution FD 后同隔离边界的固定 cat 消费器 exit0/hash ack/清理通过；该小实验不是数据库证明。双向输入继续使用 #146 同线程有界传输；PG 成功/Maria 非零阻止重放，unknown 保留输入/输出、pending 和整个 copy context，不能清理。清理夹具先对全部 scope 预检再删除，任一异常停止，不能因目标未知继续删除源。
+
+本地13项新测试及73项相关组合通过，涵盖 HMAC 拒绝零 DB exec、控制文件 symlink 不读取 referent、源/目标漂移、caller 伪输入、v4严格回执、已知部分成功不重放、未知保留租约、清理双scope预检及严格资格。真实数据库隔离 job 已接 production-smoke，仅 contents:read，固定镜像、新临时scope、无宿主挂载或端口；正向与 known-partial 两次依次运行，JSON证据单列源码hash与cleanup。新增job尚未执行，不可写成通过。
+
+边界：source fixture 生成真实 dump 后曾经过宿主内存；源 cohort/初始化/结果查询和授权失效 reset 仍是明确夹具，目标输入本身使用真实 controller/kernel reader。SQL为合成业务行，未证明跨库事务快照、应用登录、真实崩溃/unknown settle。HMAC不等于 source/target 镜像签名，metadata资源隔离不等于有效产品配置审批。目标签名、配置、业务提交、人员失效与候选/恢复资格均保持 false；独立SQL查询/reset证据不自动改变组件报告。新守卫/交接/复制模块尚未加入产品runtime打包，无 restore/CLI 调用，无门禁解除，不改 Claude Release。

@@ -50,7 +50,31 @@ CLOSE_SCRIPT = (
     "hmac.new(s,t.encode()+b'.'+b,hashlib.sha256).hexdigest()});"
     "r=urllib.request.urlopen(q,timeout=60);sys.exit(0 if r.status==200 else 1)"
 )
+DATABASE_INPUT_PROFILES = frozenset({'postgres-import', 'mariadb-import'})
+INPUT_PROFILES = DATABASE_INPUT_PROFILES | {'stdin-proof'}
+_MARIA_CLIENT = ('password=$(cat /run/secrets/engine_db_root_password) || exit 70; '
+    '[ -n "$password" ] || exit 70; MYSQL_PWD="$password" exec mariadb --no-defaults --binary-mode --skip-reconnect --local-infile=0 --protocol=socket --socket=/run/mysqld/mysqld.sock -u root limesurvey')
+
+
+def _database_consumer(command):
+    # Dynamic process-substitution FD is inherited by tee; Bash deliberately
+    # hides coprocess descriptors from pipeline children. Both hash pipeline
+    # and the fixed SQL client are waited before any acknowledgement.
+    script = ('set -euo pipefail; dbfd=""; dbpid=""; '
+        'finish(){ rc=$?; trap - EXIT; if [ -n "$dbfd" ]; then exec {dbfd}>&-; fi; '
+        'pending=${dbpid:-${!:-}}; if [ -n "$pending" ] && [ "$pending" != 0 ]; '
+        'then wait "$pending" || :; fi; exit "$rc"; }; trap finish EXIT; '
+        'exec {dbfd}> >(' + shlex.join(command) + ' 1>&2); dbpid=$!; '
+        'digest=$(tee /dev/fd/"$dbfd" | sha256sum); '
+        'exec {dbfd}>&-; dbfd=""; wait "$dbpid"; dbpid=0; '
+        'printf "%s  -\\n" "${digest%% *}"')
+    return ['/bin/bash', '-c', script]
+
 PROFILES = {
+    'postgres-empty': (15, ['psql', '-X', '-w', '-h', '/var/run/postgresql', '-U', 'postgres', '-d', 'platform', '-Atqc', "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"]),
+    'mariadb-empty': (15, ['/bin/sh', '-c', _MARIA_CLIENT + " -N -B -e \"SELECT count(*) FROM information_schema.tables WHERE table_schema='limesurvey'\""]),
+    'postgres-import': (120, _database_consumer(['pg_restore', '--no-password', '-h', '/var/run/postgresql', '-U', 'postgres', '-d', 'platform', '--single-transaction', '--exit-on-error', '--clean', '--if-exists'])),
+    'mariadb-import': (120, _database_consumer(['/bin/sh', '-c', _MARIA_CLIENT])),
     'stdin-proof': (30, ['sha256sum']),
     'exec-preflight': (5, ['/bin/echo', 'survey-owned-exec-v1']),
     'postgres-dump': (120, ['pg_dump', '-U', 'postgres', '--format=custom', '--serializable-deferrable', 'platform']),
@@ -414,7 +438,7 @@ class LocalDockerAPI:
     def stream_duplex_input(self, identity, output, limit, *, profile, source):
         # One event loop, not background threads holding caller FDs after an
         # exception. Buffered HTTP bytes are consumed before readiness waits.
-        if profile != 'stdin-proof' or not isinstance(source, SealedExecInput):
+        if profile not in INPUT_PROFILES or not isinstance(source, SealedExecInput):
             raise ExecProtocolError('unsupported duplex input consumer')
         decoder = _InputFrameDecoder(output, limit)
         connection = self._connect()
@@ -556,7 +580,7 @@ class OwnedDockerExec:
         self.saved = deepcopy(record)
 
     def execute(self, profile, container, output, *, body=None, input_lease=None, input_sha256=None):
-        released, source = False, None
+        released, source, authenticated = False, None, None
         try:
             if (self.saved is not None or not isinstance(profile, str) or profile not in PROFILES
                     or not isinstance(container, str) or not HEX.fullmatch(container)
@@ -568,7 +592,13 @@ class OwnedDockerExec:
                     or info.st_mode & 0o077 or info.st_size != 0
                     or fcntl.fcntl(output.fd, fcntl.F_GETFL) & os.O_ACCMODE not in (os.O_WRONLY, os.O_RDWR)):
                 raise ValueError('exec output is not an empty private anonymous file')
-            if profile == 'stdin-proof':
+            if profile in DATABASE_INPUT_PROFILES:
+                from controlled_database_import import VerifiedDatabaseInput
+                if not isinstance(input_lease, VerifiedDatabaseInput) or input_sha256 != input_lease.sha256:
+                    raise ValueError('database input requires the authenticated single-use binding')
+                authenticated = input_lease
+                authenticated.claim(profile, container, self.operation, self.installation)
+            if profile in INPUT_PROFILES:
                 if input_lease is None:
                     raise ValueError('fixed input consumer requires a sealed input')
                 source = SealedExecInput(input_lease, input_sha256)
@@ -588,6 +618,9 @@ class OwnedDockerExec:
             if source is not None:
                 record['schemaVersion'] = 3
                 record['inputEvidence'] = {'size': source.size, 'sha256': source.sha256, 'delivered': False}
+                if authenticated is not None:
+                    record['schemaVersion'] = 4
+                    record['sourceEvidence'] = deepcopy(authenticated.source_evidence)
             # Input binding is durable before the one create attempt.
             if source is not None:
                 self._save(record)
@@ -663,10 +696,12 @@ class OwnedDockerExec:
             self._save(record)
             if code or protocol_failure:
                 raise KnownExecFailure('exec ended unsuccessfully')
-        except (KnownExecFailure, UncertainExec):
+        except (KnownExecFailure, UncertainExec) as exc:
+            if authenticated is not None and isinstance(exc, UncertainExec): authenticated.unknown()
             raise
         except BaseException as exc:
             if released:
+                if authenticated is not None: authenticated.unknown()
                 raise UncertainExec('exec result is unknown; retain output lease') from exc
             raise KnownExecFailure('exec was not started; ownership intent remains') from exc
 
@@ -679,5 +714,6 @@ class OwnedDockerExec:
                     # Never replace an uncertain send/end with a plain close
                     # error. A caller must keep both leases and the pending
                     # receipt. No retry of a potentially reused descriptor.
+                    if authenticated is not None: authenticated.unknown()
                     if not isinstance(primary, UncertainExec):
                         raise UncertainExec('input reference release is unknown; retain both leases') from close_error

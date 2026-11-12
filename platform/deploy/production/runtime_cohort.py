@@ -15,7 +15,7 @@ from pathlib import Path
 
 import runtime_ownership as ownership
 from owned_children import read_process_identity, _pid, _start
-from owned_docker_exec import ExecMetadataGone, LocalDockerAPI, PROFILES
+from owned_docker_exec import ExecMetadataGone, LocalDockerAPI, PROFILES, DATABASE_INPUT_PROFILES, INPUT_PROFILES
 
 
 def _uuid(value):
@@ -54,7 +54,7 @@ class CohortProbe:
             or owner and pid == os.getpid() and value['start'] == start)
 
     def _receipt(self, name, record, owner):
-        if (not isinstance(record, dict) or type(record.get('schemaVersion')) is not int or record['schemaVersion'] not in (1, 2, 3)
+        if (not isinstance(record, dict) or type(record.get('schemaVersion')) is not int or record['schemaVersion'] not in (1, 2, 3, 4)
                 or not _uuid(record.get('operationId'))
                 or record.get('installationId') not in [owner['installationId'], *owner.get('retiredInstallations', [])]):
             return False
@@ -87,8 +87,10 @@ class CohortProbe:
                       'containerId', 'profile', 'phase', 'execId', 'exitCode'}
             if version >= 2:
                 fields.add('completionEvidence')
-            if version == 3:
+            if version >= 3:
                 fields.add('inputEvidence')
+            if version == 4:
+                fields.add('sourceEvidence')
             if (name != 'runtime-exec-' + suffix or set(record) != fields
                     or record['daemonId'] != owner['daemonId'] or record['phase'] not in ('completed', 'failed')
                     or record['profile'] not in PROFILES or type(record['exitCode']) is not int
@@ -96,9 +98,9 @@ class CohortProbe:
                     or not isinstance(record['execId'], str) or not ownership.HEX64.fullmatch(record['execId'])
                     or not isinstance(record['containerId'], str) or not ownership.HEX64.fullmatch(record['containerId'])):
                 return False
-            if version == 3:
+            if version >= 3:
                 evidence = record['inputEvidence']
-                if (record['profile'] != 'stdin-proof' or not isinstance(evidence, dict)
+                if (record['profile'] not in INPUT_PROFILES or not isinstance(evidence, dict)
                         or set(evidence) != {'size', 'sha256', 'delivered'}
                         or type(evidence['size']) is not int or not 1 <= evidence['size'] <= 2**30
                         or not isinstance(evidence['sha256'], str)
@@ -106,7 +108,17 @@ class CohortProbe:
                         or type(evidence['delivered']) is not bool
                         or record['phase'] == 'completed' and evidence['delivered'] is not True):
                     return False
-            elif record['profile'] == 'stdin-proof':
+            elif record['profile'] in INPUT_PROFILES:
+                return False
+            if version == 4:
+                source = record['sourceEvidence']
+                if (record['profile'] not in DATABASE_INPUT_PROFILES or not isinstance(source, dict)
+                        or set(source) != {'kind', 'controlSha256', 'releaseManifestSha256'}
+                        or source['kind'] != 'backup-hmac-control-v1'
+                        or any(not isinstance(source[key], str) or not ownership.HEX64.fullmatch(source[key])
+                               for key in ('controlSha256', 'releaseManifestSha256'))):
+                    return False
+            elif record['profile'] in DATABASE_INPUT_PROFILES:
                 return False
             durable = False
             if version >= 2:
