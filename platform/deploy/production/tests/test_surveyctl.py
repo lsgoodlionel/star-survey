@@ -2738,6 +2738,45 @@ raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-inte
             args[1](); operation.runtime.preflight_cleanup.assert_called_once_with(False)
             self.assertEqual('backup',args[3])
 
+    def test_upgrade_backup_reserves_four_but_backup_allocates_only_three(self):
+        import owned_maintenance
+        for name in ('upgrade','upgrade_version'):
+            operation=object.__new__(owned_maintenance.OwnedMaintenance)
+            operation.uncertain=False; operation.held=[]; operation.paused=set()
+            operation.runtime=mock.Mock(); operation.manager=mock.Mock()
+            operation.manager._operation_name=name
+            with mock.patch('runtime_cohort.ReceiptRetirement') as retirement:
+                operation.prepare_backup_capacity()
+                retirement.return_value.reserve.assert_called_once_with(4)
+            self.assertEqual(3,operation._receipt_budget)
+
+    def test_verify_capacity_failure_precedes_new_intent_and_decryption(self):
+        self.install()
+        backup=self.target/'backups/verify-capacity'; write_fake_backup(backup)
+        manager=self.module.SurveyManager(self.target,runner=self.runner)
+        marker=self.target/'.surveyctl/operation.intent'; before=marker.read_bytes()
+        operation=mock.Mock()
+        operation.prepare_verify_capacity.side_effect=self.module.RuntimeHealthError('verify capacity unavailable')
+        with mock.patch.object(manager,'_owned_maintenance',return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError):
+                with manager._mutation_lock(operation='upgrade'):
+                    manager._verify_backup(backup,'0.2.0','920')
+        operation._perform.assert_not_called(); operation.verify_backup.assert_not_called()
+        self.assertEqual(before,marker.read_bytes())
+
+    def test_independent_verify_reserves_and_enforces_its_own_single_journal(self):
+        import owned_maintenance
+        operation=object.__new__(owned_maintenance.OwnedMaintenance)
+        operation.uncertain=False; operation.held=[]; operation.paused=set()
+        operation.runtime=mock.Mock(); operation.manager=mock.Mock()
+        operation.manager._operation_name='upgrade'
+        with mock.patch('runtime_cohort.ReceiptRetirement') as retirement:
+            operation.prepare_verify_capacity()
+            retirement.return_value.reserve.assert_called_once_with(1)
+        self.assertEqual(1,operation._receipt_budget)
+        operation._allocate_receipt()
+        with self.assertRaises(owned_maintenance.OwnershipError): operation._allocate_receipt()
+
     def test_exhausted_backup_receipt_budget_cannot_allocate_a_child_journal(self):
         import owned_maintenance
         operation=object.__new__(owned_maintenance.OwnedMaintenance)

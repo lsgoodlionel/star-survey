@@ -208,6 +208,7 @@ class ReceiptRetirement:
         probe = self.probe
         if probe._lock() != probe.lock_identity or probe() != 'quiescent':
             raise ownership.OwnershipError('receipt cohort is unverified')
+        self._budget()
         store = ownership.PrivateStore(probe.target)
         parent, chain = store._open_parent()
         try:
@@ -217,13 +218,16 @@ class ReceiptRetirement:
             owner = store.load()
             if not isinstance(owner, dict) or owner.get('phase') not in ('ready', 'retained-data', 'removed', 'settled-failure') or self.check() != owner:
                 raise ownership.OwnershipError('retirement resources or owner are unverified')
+            self._budget()
             receipts = {}
             for name in names:
+                self._budget()
                 if not re.fullmatch(r'runtime-(?:child|exec|launch)-[0-9a-f]{32}\.json', name): continue
                 identity = store._regular(os.stat(name, dir_fd=parent, follow_symlinks=False))
                 record = ownership.PrivateStore(probe.target, name=name).load()
                 if not probe._receipt(name, record, owner) or identity != store._regular(os.stat(name, dir_fd=parent, follow_symlinks=False)):
                     raise ownership.OwnershipError('receipt end or identity is unverified')
+                self._budget()
                 digest = hashlib.sha256(json.dumps(record,sort_keys=True,allow_nan=False).encode()).hexdigest()
                 receipts[name] = (identity, digest)
             if names != sorted(os.listdir(parent)) or probe._lock() != probe.lock_identity:
@@ -268,11 +272,13 @@ class ReceiptRetirement:
         if store._directory_identity(os.fstat(parent))!=expected['directory'] or store._regular(os.stat(store.NAME,dir_fd=parent,follow_symlinks=False))!=expected['ownerIdentity'] or store.load()!=expected['owner'] or store._regular(os.stat(store.NAME,dir_fd=parent,follow_symlinks=False))!=expected['ownerIdentity']:
             raise ownership.OwnershipError('retirement owner changed')
         for name,(identity,digest) in expected['receipts'].items():
+            self._budget()
             if store._regular(os.stat(name,dir_fd=parent,follow_symlinks=False))!=identity:
                 raise ownership.OwnershipError('retirement file identity changed')
             record=ownership.PrivateStore(self.probe.target,name=name).load()
             if identity!=store._regular(os.stat(name,dir_fd=parent,follow_symlinks=False)) or hashlib.sha256(json.dumps(record,sort_keys=True,allow_nan=False).encode()).hexdigest()!=digest:
                 raise ownership.OwnershipError('retirement file contents changed')
+        self._budget()
 
     def reserve(self, receipt_slots):
         """Capacity-driven admission, at most one batch and five full passes.
@@ -324,6 +330,7 @@ class ReceiptRetirement:
                 store._recheck(parent,chain)
                 if store._regular(os.stat(name,dir_fd=parent,follow_symlinks=False))!=expected['receipts'][name][0]:
                     raise ownership.OwnershipError('retirement target changed before unlink')
+                self._budget() # Detect expiry observed in the final stat before deletion.
                 os.unlink(name,dir_fd=parent)
                 os.fsync(parent)
                 if name in os.listdir(parent): raise ownership.OwnershipError('retired receipt remains')

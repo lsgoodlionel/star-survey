@@ -267,4 +267,66 @@ class ReceiptRetirementTest(unittest.TestCase):
         self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
         self.assertEqual(1,len(self.receipts()))
 
+    def test_upgrade_four_slot_reservation_prevents_backup_verify_peak_overflow(self):
+        import uuid
+        control=self.f.target/'.surveyctl'
+        for i in range(248): self.f.receipt(operationId=str(uuid.uuid4()))
+        self.begin() # Existing completed operation marker is a directory entry.
+        self.intent.write_text(json.dumps({'schemaVersion':1,'state':'complete','operation':'backup'}))
+        self.assertEqual(252,len(list(control.iterdir())))
+        with patch('time.monotonic',return_value=100): self.primitive().reserve(4)
+        self.assertLess(len(list(control.iterdir())),252)
+        opened=os.open; peaks=[]
+        def observed_open(name,*args,**kwargs):
+            fd=opened(name,*args,**kwargs)
+            if isinstance(name,str) and name.startswith('.runtime-owner-') and name.endswith('.tmp'):
+                peaks.append(len(list(control.iterdir())))
+                self.assertLessEqual(peaks[-1],256)
+            return fd
+        with patch.object(self.module.os,'open',side_effect=observed_open):
+            for i in range(4): self.f.receipt(operationId=str(uuid.uuid4()))
+        self.assertEqual(4,len(peaks))
+        self.assertLessEqual(len(list(control.iterdir()))+1,256) # next ledger rewrite
+        with patch('time.monotonic',return_value=100): self.primitive().reserve(3)
+
+    def test_observed_expiry_after_local_check_does_not_unlink(self):
+        control=self.f.target/'.surveyctl'
+        while len(list(control.iterdir()))<252:
+            (control/('filler-'+str(len(list(control.iterdir()))))).touch(mode=0o600)
+        clock=[100]; primitive=self.primitive(); local=primitive._local_check
+        def delayed(*args): local(*args); clock[0]=131
+        primitive._local_check=delayed
+        with patch('time.monotonic',side_effect=lambda:clock[0]),patch.object(self.module.os,'unlink',wraps=os.unlink) as unlink:
+            with self.assertRaises(self.module.ownership.OwnershipError): primitive.reserve(3)
+            unlink.assert_not_called()
+        self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
+
+    def test_expired_resource_callback_does_not_start_remaining_receipt_queries(self):
+        clock=[100]; calls=[]; inspect=self.f.api.inspect
+        def query(identity): calls.append(identity); return inspect(identity)
+        self.f.api.inspect=query
+        def resources(): clock[0]=131; return self.f.store_type(self.f.target).load()
+        self.check=resources
+        with patch('time.monotonic',side_effect=lambda:clock[0]):
+            with self.assertRaises(self.module.ownership.OwnershipError): self.primitive().reserve(3)
+        self.assertEqual(1,len(calls)) # only initial cohort proof before resource callback
+        self.assertFalse(self.calls)
+
+    def test_deadline_at_post_batch_or_final_capture_preserves_partial_effects_and_pending(self):
+        for expiry in (4,5):
+            if expiry==5: self.setUp()
+            control=self.f.target/'.surveyctl'
+            while len(list(control.iterdir()))<252:
+                (control/('filler-'+str(len(list(control.iterdir()))))).touch(mode=0o600)
+            clock=[100]; calls=[0]
+            def resources():
+                calls[0]+=1
+                if calls[0]==expiry: clock[0]=131
+                return self.f.store_type(self.f.target).load()
+            self.check=resources
+            with patch('time.monotonic',side_effect=lambda:clock[0]):
+                with self.assertRaises(self.module.ownership.OwnershipError): self.primitive().reserve(3)
+            self.assertFalse(self.receipts()) # terminal deletion already happened before late result
+            self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
+
 if __name__ == '__main__': unittest.main()

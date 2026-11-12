@@ -1983,6 +1983,10 @@ class SurveyManager:
         state = self._read_state(require_current=True)
         if self._runtime_factory is None:
             operation = self._owned_maintenance(state['version'])
+            try:
+                operation.prepare_verify_capacity()
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled verify capacity is unavailable; preserve operation evidence')
             self._begin_operation()
             try:
                 return operation._perform('backup', lambda: operation.verify_backup(backup))

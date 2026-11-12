@@ -263,8 +263,18 @@ class OwnedMaintenance:
         # session journal, including verification with that same cipher.
         ReceiptRetirement(self.runtime.probe,
             lambda: self.runtime.preflight_cleanup(False),
-            self.manager._begin_operation, self.manager._operation_name).reserve(3)
+            self.manager._begin_operation, self.manager._operation_name).reserve(
+                4 if self.manager._operation_name in ('upgrade','upgrade_version') else 3)
         self._receipt_budget=3
+
+    def prepare_verify_capacity(self):
+        if self.uncertain or self.held or self.paused:
+            raise UncertainMaintenance('verify receipt admission requires an idle context')
+        from runtime_cohort import ReceiptRetirement
+        ReceiptRetirement(self.runtime.probe,
+            lambda: self.runtime.preflight_cleanup(False),
+            self.manager._begin_operation,self.manager._operation_name).reserve(1)
+        self._receipt_budget=1
 
     def backup(self, output):
         output = Path(output)
