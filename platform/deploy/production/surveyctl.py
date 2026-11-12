@@ -1845,7 +1845,9 @@ class SurveyManager:
             dataPurged=False,
             pointerlessUninstall=False,
         )
-        compose = self._compose(manifest.version)
+        # Pull verified source images without loading a previous generation's
+        # overlay. Runtime.prepare binds the target before any helper/start.
+        compose = self._compose(manifest.version, owned_overlay=False)
         try:
             if self._runtime_factory is None:
                 self._verify_owned_support(manifest.version)

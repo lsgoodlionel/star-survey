@@ -178,12 +178,24 @@ class RuntimeController:
         if not isinstance(previous, dict) or not isinstance(previous.get('version'), str):
             raise ownership.OwnershipError('retained source contract is absent')
         runtime = cls.open(manager, previous['version'], **kwargs)
-        if owner.get('phase') == 'removed':
-            runtime.protocol.acquire()
-        elif owner.get('phase') != 'retained-data':
+        if owner.get('phase') not in ('removed', 'retained-data'):
             raise ownership.OwnershipError('existing active or pending installation cannot be recreated')
-        runtime.next_data = source_contract(manager, version)
-        runtime.next_data['claimImage'] = runtime.data['claimImage']
+        candidate = source_contract(manager, version)
+        # The creation claim keeps its verified image lineage. A new generation
+        # still requires the old removed record and fresh exclusive acquire.
+        candidate['claimImage'] = runtime.data['claimImage']
+        if owner['phase'] == 'retained-data':
+            if any(candidate['contract'][kind] != runtime.data['contract'][kind]
+                   for kind in ('networks', 'volumes')):
+                raise ownership.OwnershipError('retained persistent topology changed; controlled migration is required')
+            runtime.protocol.preflight_cleanup(False)  # Recheck old binding/cohort after candidate queries.
+        else:
+            runtime.protocol.acquire()
+        # Hash admission must see the target source and the current generation,
+        # before install's effect can run. Partial persistence remains blocked
+        # by _load; never fall back to an old overlay or adopt unknown resources.
+        runtime._save_source(candidate)
+        runtime.next_data = deepcopy(runtime.data)
         return runtime
 
     def _save_source(self, data):

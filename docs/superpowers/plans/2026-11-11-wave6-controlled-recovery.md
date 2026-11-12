@@ -197,3 +197,11 @@ Owner另明确批准FD身份安全限定修复。原head72c94843的真实维护/
 同轮独立GC修订已合入此待审分支（仍以#129 c59a4416为stacked base）：Docker29.9.3真实原容器保持running，旧回执在自然GC后536.49秒变unknown；新版测试521.26秒观察到同样GC，v2精确终止观察仍有效、v1及pending继续拒绝，已终止ExecID的detached restart明确409，临时容器清理verified且源码SHA前后一致。attached start先返回流HTTP200才处理backend拒绝，不能把200当重启证明；真实负测使用detached路径，不放宽断言。可重复入口：tests/integration/owned_exec_native.py --image <本地固定Python镜像digest> --wait-for-gc，最多等待660秒；默认入口只跑快速ExecID/终止观察，不宣称每次CI都观察自然GC。
 
 新schema2回执只由受控writer在精确terminal ExecInspect及daemon/actor/output身份复核之后写入；实时仍查ExecInspect，只有精确GET /exec/<id>/json的404才使用绑定daemon/install/container/exec/exit的既有终止观察。v1没有该证据，GC后不自动认证、迁移、删标记或重放；timeout/500/身份冲突/运行中状态仍unknown。该回执是现有私有目录/单写入者边界内的持久观察，不是密码学证明，不抵御同权限/宿主/Docker管理员接管，不替代全局cohort与实际资源归属检查。fixture的owner是注入模型，不称完整安装或真实controller隔离证明；未取得业务连续性/四平台/恢复/Release资格。重装合同顺序问题仍独立待解决，旧#129绿色CI不能作其安全通过依据。
+
+### 2026-11-12：卸载后重装合同绑定（独立待审）
+
+先红复现两项：install在prepare前生成带旧overlay的目标Compose；普通卸载/数据purge后prepare尚未将目标version及当前generation写入合同，hash admission的实际_load检查拒绝。修订只让image pull使用已验证source-only Compose；任何helper/start仍在prepare之后，不能拿source-only路径启动服务。
+
+prepare仍先验证旧合同、属主/daemon/claim/cohort。仅retained-data或removed可继续；先完整验证目标source，保留已核验claim image lineage，不把旧claim静默替换成新镜像。retained-data要求网络/卷合同完全一致，并在目标查询后重新核对旧归属；purge必须经既有exclusive acquire产生新installationId及retired history。然后绑定目标source、overlay和当前generation，才允许hash helper与install effect。不存在对旧无归属安装的自动认领。部分合同持久化失败仍由_load不一致拒绝，不回退旧overlay、不称已恢复；需要保留现场受控对账。
+
+模型回归覆盖两条重装到ready、新容器归属、保留卷、purge新generation、活动状态/目标未验证/网络卷漂移/查询失败不改账本资源、purge目标无效不新建claim，以及第二份overlay写入失败后admission继续拒绝；另经实际SurveyManager.install入口核对source pull早于prepare而overlay不可提前加载。此为控制器/CLI定向证据，不是受信完整产品安装、真实双库重装或四平台验收。依赖#132/#129，Release/恢复/原生/发布门禁保持，任何具体解除前Owner另批准。

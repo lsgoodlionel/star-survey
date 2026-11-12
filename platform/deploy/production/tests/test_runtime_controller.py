@@ -79,6 +79,98 @@ class RuntimeControllerTest(unittest.TestCase):
         self.assertTrue(self.daemon.snapshot['volumes'])
         self.assertFalse(self.daemon.snapshot['containers'])
 
+    def test_reinstall_binds_target_contract_and_generation_before_hash_admission(self):
+        for purge in (False, True):
+            with self.subTest(purge=purge):
+                if purge: self.setUp()
+                runtime = self.prepare()
+                def created():
+                    self.daemon.snapshot.update(containers={'1' * 64: 'a' * 64},
+                        networks={'2' * 64: 'b' * 64}, volumes={'survey-production_data': 'd' * 64})
+                runtime.install(created)
+                old = runtime.store.load()
+                runtime.cleanup(purge)
+                release = self.target / 'releases/0.3.0'; release.mkdir()
+                for name in ('compose.yml', '.env'): (release / name).write_text('new-source')
+                prepared = self.module.RuntimeController.prepare(self.manager, '0.3.0',
+                    _driver_factory=self.driver, _api=self.api)
+                # ensure_admin_hash calls this exact binding check before a helper.
+                bound = self.module.RuntimeController._load(self.manager, '0.3.0')
+                self.assertEqual(prepared.store.load()['installationId'], bound['installationId'])
+                self.assertEqual('0.3.0', prepared.data['version'])
+                if purge:
+                    self.assertNotEqual(old['installationId'], bound['installationId'])
+                    self.assertIn(old['installationId'], prepared.store.load()['retiredInstallations'])
+                else:
+                    self.assertEqual(old['installationId'], bound['installationId'])
+                    self.assertEqual(old['resources']['volumes'], prepared.store.load()['resources']['volumes'])
+                self.assertFalse(self.daemon.snapshot['containers'])
+                def restarted():
+                    self.daemon.snapshot.update(containers={'3' * 64: 'b' * 64},
+                        networks={'4' * 64: 'c' * 64}, volumes={'survey-production_data': 'd' * 64})
+                prepared.install(restarted)
+                self.assertEqual('ready', prepared.store.load()['phase'])
+                self.assertEqual({'3' * 64: 'b' * 64}, prepared.store.load()['resources']['containers'])
+                self.assertEqual(bound, self.module.RuntimeController._load(self.manager, '0.3.0'))
+
+    def test_reinstall_prechecks_preserve_existing_ledger_claim_and_resources_on_rejection(self):
+        for failure in ('active', 'candidate', 'network', 'volume', 'query'):
+            with self.subTest(failure=failure):
+                if failure != 'active': self.setUp()
+                runtime = self.prepare()
+                runtime.install(lambda: self.daemon.snapshot.update(volumes={'survey-production_data': 'd' * 64}))
+                if failure != 'active': runtime.cleanup(False)
+                release = self.target / 'releases/0.3.0'; release.mkdir()
+                for name in ('compose.yml', '.env'): (release / name).write_text('new-source')
+                paths = [self.control / name for name in
+                    ('runtime-owner.json', 'runtime-contract.json', 'runtime-owner.compose.json')]
+                before = {path: path.read_bytes() for path in paths}
+                claims, snapshot = deepcopy(self.daemon.claims), deepcopy(self.daemon.snapshot)
+                if failure == 'candidate':
+                    original = self.manager._verify_staged_release
+                    def verify(path, version):
+                        if version == '0.3.0': raise self.module.ownership.OwnershipError('candidate verification failed')
+                        return original(path, version)
+                    self.manager._verify_staged_release = verify
+                elif failure == 'network': self.config['networks']['internal']['internal'] = False
+                elif failure == 'volume': self.config['volumes']['other'] = {'name': 'survey-production_other'}
+                elif failure == 'query': self.daemon.fail_query = True
+                with self.assertRaises(self.module.ownership.OwnershipError):
+                    self.module.RuntimeController.prepare(self.manager, '0.3.0',
+                        _driver_factory=self.driver, _api=self.api)
+                self.assertEqual(before, {path: path.read_bytes() for path in paths})
+                self.assertEqual(claims, self.daemon.claims)
+                self.assertEqual(snapshot, self.daemon.snapshot)
+
+    def test_invalid_purge_reinstall_candidate_cannot_acquire_a_new_generation(self):
+        runtime = self.prepare(); runtime.install(lambda: None); runtime.cleanup(True)
+        before = runtime.store.load(); count = self.daemon.created_claims
+        with patch.object(self.module, 'source_contract', side_effect=self.module.ownership.OwnershipError('bad target')):
+            with self.assertRaises(self.module.ownership.OwnershipError):
+                self.module.RuntimeController.prepare(self.manager, '0.3.0',
+                    _driver_factory=self.driver, _api=self.api)
+        self.assertEqual(before, runtime.store.load())
+        self.assertEqual(count, self.daemon.created_claims)
+        self.assertFalse(self.daemon.claims)
+
+    def test_partial_target_binding_failure_cannot_admit_a_helper_or_runtime(self):
+        runtime = self.prepare(); runtime.install(lambda: None); runtime.cleanup(False)
+        release = self.target / 'releases/0.3.0'; release.mkdir()
+        for name in ('compose.yml', '.env'): (release / name).write_text('new-source')
+        self.config['services']['new-platform'] = self.config['services'].pop('platform')
+        original = self.module.ownership.PrivateStore.save
+        def save(store, value):
+            if store.NAME == 'runtime-owner.compose.json': raise OSError('fixture persistence failure')
+            return original(store, value)
+        with patch.object(self.module.ownership.PrivateStore, 'save', save):
+            with self.assertRaises(OSError):
+                self.module.RuntimeController.prepare(self.manager, '0.3.0',
+                    _driver_factory=self.driver, _api=self.api)
+        with self.assertRaises(self.module.ownership.OwnershipError):
+            self.module.RuntimeController._load(self.manager, '0.3.0')
+        self.assertFalse(self.daemon.snapshot['containers'])
+        self.assertEqual('retained-data', runtime.store.load()['phase'])
+
     def test_source_drift_and_legacy_state_never_authorize_cleanup_or_adoption(self):
         (self.control / 'state.json').write_text('{"status":"install_failed"}')
         with self.assertRaises(self.module.ownership.OwnershipError): self.prepare()

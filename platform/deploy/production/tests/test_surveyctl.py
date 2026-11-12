@@ -1424,6 +1424,27 @@ with manager._mutation_lock(operation='verify-test'):
         self.assertTrue(all(p.read_bytes() == content for p, content in before.items() if p != manager.state_path), 'staging failure must preserve existing runtime')
         self.assertEqual('upgrading', manager._read_state()['status'])
 
+    def test_install_pull_does_not_load_previous_owner_overlay_before_prepare(self):
+        manifest, _ = self.write_bundle_manifest()
+        admitted = []
+        def runtime_factory(manager, version, *, create=False):
+            admitted.append((version, create))
+            return fixture_runtime(manager, version, create=create)
+        manager = self.manager(_runtime_factory=runtime_factory)
+        original = manager._compose
+        calls = []
+        def compose(version, *, owned_overlay=True):
+            calls.append((version, owned_overlay, bool(admitted)))
+            if not admitted and owned_overlay:
+                raise self.module.IntegrityError('target overlay cannot precede source transition')
+            return original(version, owned_overlay=owned_overlay)
+        with mock.patch.object(manager, '_compose', side_effect=compose):
+            manager.install(manifest, 'survey.example.com', 'operations', 'operations@example.com')
+        self.assertTrue(calls)
+        self.assertEqual((False, False), calls[0][1:])
+        self.assertEqual([(self.module.load_manifest(manifest).version, True)], admitted)
+        self.assertTrue(manager.current_path.exists())
+
     def test_failed_install_blocks_retries_and_uninstall_when_outcome_uncertain(self):
         manifest, _ = self.write_bundle_manifest()
         manager = self.manager(probe=FakeHostProbe(tls_valid=False))
