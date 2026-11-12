@@ -53,7 +53,7 @@ class CohortProbe:
             or owner and pid == os.getpid() and value['start'] == start)
 
     def _receipt(self, name, record, owner):
-        if (not isinstance(record, dict) or type(record.get('schemaVersion')) is not int or record['schemaVersion'] not in (1, 2)
+        if (not isinstance(record, dict) or type(record.get('schemaVersion')) is not int or record['schemaVersion'] not in (1, 2, 3)
                 or not _uuid(record.get('operationId'))
                 or record.get('installationId') not in [owner['installationId'], *owner.get('retiredInstallations', [])]):
             return False
@@ -84,8 +84,10 @@ class CohortProbe:
         if record.get('kind') == 'controlled-docker-exec':
             fields = {'schemaVersion', 'kind', 'operationId', 'installationId', 'owner', 'daemonId',
                       'containerId', 'profile', 'phase', 'execId', 'exitCode'}
-            if version == 2:
+            if version >= 2:
                 fields.add('completionEvidence')
+            if version == 3:
+                fields.add('inputEvidence')
             if (name != 'runtime-exec-' + suffix or set(record) != fields
                     or record['daemonId'] != owner['daemonId'] or record['phase'] not in ('completed', 'failed')
                     or record['profile'] not in PROFILES or type(record['exitCode']) is not int
@@ -93,8 +95,20 @@ class CohortProbe:
                     or not isinstance(record['execId'], str) or not ownership.HEX64.fullmatch(record['execId'])
                     or not isinstance(record['containerId'], str) or not ownership.HEX64.fullmatch(record['containerId'])):
                 return False
+            if version == 3:
+                evidence = record['inputEvidence']
+                if (record['profile'] != 'stdin-proof' or not isinstance(evidence, dict)
+                        or set(evidence) != {'size', 'sha256', 'delivered'}
+                        or type(evidence['size']) is not int or not 1 <= evidence['size'] <= 2**30
+                        or not isinstance(evidence['sha256'], str)
+                        or not ownership.HEX64.fullmatch(evidence['sha256'])
+                        or type(evidence['delivered']) is not bool
+                        or record['phase'] == 'completed' and evidence['delivered'] is not True):
+                    return False
+            elif record['profile'] == 'stdin-proof':
+                return False
             durable = False
-            if version == 2:
+            if version >= 2:
                 proof = record['completionEvidence']
                 durable = (isinstance(proof, dict) and set(proof) == {'kind', 'ID', 'ContainerID', 'Running', 'ExitCode'}
                     and proof['kind'] == 'exec-inspect-terminal-v1' and proof['ID'] == record['execId']

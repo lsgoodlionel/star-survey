@@ -357,3 +357,17 @@ Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发�
 4. **故障闭环与准出**：补部分导入、进程/控制器SIGKILL、审计失败、意图/资源漂移、未知exec/明文与清理的实际故障注入；source保留及已知/未知分别记录。之后才是真实受信候选、正式身份/业务连续性和四平台验收。具体恢复/原生/发布门禁解除前，给出精确操作/候选/证据与风险并取得用户明确同意。
 
 本整合不做上述执行接线、合并main、打tag、发布或真实部署；Release由Claude #138负责，所有门禁保持。下一轮优先收束整合CI与非作者审查，不再用重复空资源或合成样本代替执行链。
+
+### 2026-11-12：受控 stdin / ExecID 传输切片（保持恢复门关闭）
+
+Stack #144 的独立分支新增固定 `stdin-proof` 消费器，只运行有界 sha256sum，不新增 SQL/import profile、restore operation 或 CLI 入口。生产路径要求真实 Linux 写入/增缩/封印四种 memfd seals、私有匿名且不可继承的输入；私有 dup 保持 inode 存活，逐块及末尾复核原 FD/anchor 的身份、长度、封印。调用方提供的输入 SHA 只是长度/内容绑定，不代替备份来源认证。输入不得与输出同 inode，最多 1GiB；每次只创建/启动一个 ExecID，不重放。
+
+新 v3 回执在 create 之前记录输入 size/hash/delivered=false；只有固定消费者摘要、原输出 nonce/footer、精确 CID/ExecID 终态、daemon/actor/output 复核与输入私有引用关闭成功后，才能记 delivered=true/completed。旧 v1/v2 输出回执契约不变，cohort 对 v3 严格字段、整数/布尔类型、摘要和终态校验。部分发送、超时或结束未知仍留 released/pending，不自动清理或重新提交；保留输入/输出工作区由上层负责，当前没有产品恢复调用者。
+
+LocalDockerAPI 使用 ExecStart 101/tcp 升级、原 HTTP 缓冲、同一个35秒协作预算、分块 sendall 和半关闭 EOF；200/chunked 不作为双向输入成功。sha256sum 只在读完输入后输出，故此固定 consumer 可顺序发送再读；不能把它当作需要并行 stderr/backpressure 的 PG/Maria 输入协议。原只读/输出型 stream 的 chunked 支持保持。
+
+先红后绿：原无接口/回执拒绝被11项定向测试覆盖，原 Exec14/cohort8/memory21回归通过。额外覆盖伪封印拒绝、错长度/hash/profile、外来FD替换不关闭、部分发送未知不重放、错误消费者摘要/footer、错误CID终态、严格 v3 schema、101缓冲/EOF、200拒绝与send超时关闭。模型中的 seal 查询使用便携测试 seam，不声称内核证据。
+
+本机 Docker Desktop Linux arm64 真实 transport-only 实验成功发送大于socket缓冲的合成数据，经101、输入摘要、输出footer和实际ExecInspect终态核对后清理精确临时容器；/tmp/survey-exec-input-transport-20261112.json 明确 kernelSealsVerified=false、controlledReceiptVerified=false。新增 Linux native 夹具将真实 AnonymousWorkspace/memfd 与 OwnedDockerExec/private receipt 连成同一正向组件，接入现有 production-smoke ownership job；源码hash、有限JSON、unknown保留资源，且清理结果单列。该组合尚待精确head CI，不是数据库导入或业务恢复。
+
+#144 的五workflow已全部success（CI43205373012、smoke43205372769、relay43205372889及元数据）；独立组合复核无新增确认阻断。新预留守卫仍未进入受校验 runtime 打包清单，产品接线前必须处理。新的受控 stdin 切片仍须独立审查；所有恢复/原生/上传/发布门、Claude #138 Release 工作流均未改动。下一步是在此传输基础上设计限定数据库consumer的双向背压、来源/目标使用时认证与故障注入，不能用hash消费组件替代实际双库恢复。
