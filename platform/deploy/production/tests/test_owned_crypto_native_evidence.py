@@ -11,6 +11,13 @@ SPEC.loader.exec_module(MODULE)
 
 
 class CryptoNativeEvidenceTest(unittest.TestCase):
+    def test_recovery_compatibility_needs_real_crypto_checks_and_controller_schema(self):
+        required = {'recoveryTargetMetadataVerified', 'recoveryTargetHashMismatchRejected',
+            'recoveryTargetVersionRejected', 'recoveryTargetFloorRejected',
+            'recoveryBadControlHmacStartsNoChild', 'recoveryNoNamedPayload', 'recoveryRestoreRemainsDisabled'}
+        self.assertTrue(required.issubset(set(MODULE.CHECKS)))
+        self.assertTrue({'surveyctl.py', 'release.schema.json', 'tests/fixtures/release.json'}.issubset(set(MODULE.MODULES)))
+
     def test_false_missing_or_invalid_proof_cannot_pass_with_zero_exit(self):
         hashes = {'fixture': 'a' * 64}
         report = {'exitCode': 0, 'containerCleanup': 'verified', 'sourceAfter': hashes,
