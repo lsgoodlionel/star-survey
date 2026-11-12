@@ -29,11 +29,12 @@ from backup import VOLUME_SOURCES
 from owned_children import read_process_identity
 from owned_docker_exec import LocalDockerAPI, DockerRequestTimeout
 from runtime_controller_native import namespace_empty, remove_and_confirm
-from test_surveyctl import load_module, write_test_release
+from test_surveyctl import FakeHostProbe, load_module, write_test_release
 
 REQUIRED = {
     'backup-purge': ('realHashReceipt', 'backupVerified', 'archiveContentsVerified', 'restoreRefusedWithoutEffects',
-                     'retainedNineVolumes', 'productPurgeVerified', 'allHelpersEnded'),
+                     'ownedUpgradeCompleted', 'persistentIDsKeptAcrossUpgrade', 'oldContainerIDsAbsentAfterUpgrade',
+                     'newContainerIDsBound', 'retainedNineVolumes', 'productPurgeVerified', 'allHelpersEnded'),
     'doctor-refusal': ('realHashReceipt', 'doctorBlockedWithoutLeak', 'pendingPreserved',
                       'unsafeUninstallRefused', 'allHelpersEnded'),
 }
@@ -59,9 +60,13 @@ def passed(report):
     for case in report['cases']:
         if not isinstance(case, dict) or case.get('scenario') not in REQUIRED or case['scenario'] in found: return False
         found[case['scenario']] = case
+        if case['scenario'] == 'backup-purge' and (type(case.get('retainedNetworkCount')) is not int
+                                                  or case['retainedNetworkCount'] != 1):
+            return False
         if (case.get('status') != 'passed' or case.get('fixtureCleanup') != 'verified'
                 or case.get('syntheticManifestOnly') is not True or case.get('businessServicesCovered') is not False
                 or case.get('defaultInstallCovered') is not False or case.get('restorationEligible') is not False
+                or case.get('hostAndTlsAreSynthetic') is not True or case.get('upgradeBusinessDataVerified') is not False
                 or case.get('releaseEligible') is not False or any(case.get(k) is not True for k in REQUIRED[case['scenario']])):
             return False
     return set(found) == set(REQUIRED)
@@ -153,7 +158,7 @@ def fixture_cleanup(manager, namespace, api):
         return False
 
 
-def topology(namespace, target, images):
+def topology(namespace, target, images, version='0.2.0'):
     volumes = {name: {} for name in ('caddy-data', 'caddy-config', 'platform-assets', 'platform-exports',
         'publish-gateway-state', 'engine-upload', 'engine-runtime', 'platform-db-data', 'engine-db-data')}
     services = {}
@@ -164,8 +169,11 @@ def topology(namespace, target, images):
             if service != name: continue
             mounts.append({'type': 'volume', 'source': archive.removesuffix('.tar'), 'target': destination})
             paths.append(destination)
+        # Model ordinary graceful service termination; the separate stop-budget
+        # fixture covers a real PID1 that ignores TERM for the full 20s grace.
+        sleeper = 'import signal,sys,time; signal.signal(signal.SIGTERM,lambda *a:sys.exit(0)); time.sleep(600)'
         script = '; '.join(["printf '%s\\n' 'fixture-data' > " + shlex.quote(p + '/proof.txt') for p in paths]
-                           + ['exec sleep 600'])
+                           + ['exec python -c ' + shlex.quote(sleeper)])
         services[name] = {'image': images['ADMIN_IMAGE'], 'entrypoint': ['/bin/sh', '-ec'], 'command': [script],
             'network_mode': 'none', 'read_only': True, 'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'],
             'volumes': mounts, 'pids_limit': 32, 'mem_limit': '64m',
@@ -173,7 +181,7 @@ def topology(namespace, target, images):
     services['engine-init'] = dict(services['admin-web'], entrypoint=['/bin/true'], command=[], healthcheck={'test': ['NONE']})
     secrets = {name: {'file': str(target / 'shared/runtime-secrets' / name)}
                for name in ('platform_db_superuser_password', 'engine_db_root_password')}
-    release = target / 'releases/0.2.0'
+    release = target / 'releases' / version
     services['platform-db'] = {'image': images['POSTGRES_IMAGE'], 'network_mode': 'none',
         'security_opt': ['no-new-privileges:true'], 'mem_limit': '512m',
         'environment': {'POSTGRES_USER': 'postgres', 'POSTGRES_DB': 'platform',
@@ -191,13 +199,18 @@ def topology(namespace, target, images):
             {'type': 'bind', 'source': str(release / 'init/fixture-mdb.sql'), 'target': '/docker-entrypoint-initdb.d/fixture.sql', 'read_only': True}],
         'healthcheck': {'test': ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized'],
                         'interval': '2s', 'timeout': '3s', 'retries': 40}}
-    return {'name': namespace, 'services': services, 'volumes': volumes, 'secrets': secrets}
+    # One idle, non-listening fixture process exercises an actual retained
+    # bridge. No published port or production/network-policy change is involved.
+    services['admin-web'].pop('network_mode')
+    services['admin-web']['networks'] = ['internal']
+    return {'name': namespace, 'services': services, 'volumes': volumes, 'secrets': secrets,
+            'networks': {'internal': {'name': namespace + '_internal', 'internal': True}}}
 
 
-def write_component_release(work, images, payload, architecture):
+def write_component_release(work, images, payload, architecture, *, version='0.2.0'):
     # Synthetic parser fixture, not a signed capability assertion. Keep it bound
     # to this fixture's image so the real safety check is exercised unchanged.
-    return write_test_release(work, images=images, payload_overrides=payload,
+    return write_test_release(work, version=version, images=images, payload_overrides=payload,
                               securityCapabilities={'platform-admin-session-v1': images['PLATFORM_IMAGE']},
                               _fixture_owned_support=True, _fixture_architecture=architecture)
 
@@ -209,9 +222,13 @@ def run_case(images, scenario):
     work.chmod(0o700)
     target, api = work / 'installation', LocalDockerAPI()
     module = load_module()
-    manager = module.SurveyManager(target)  # Default runtime and real Linux process guard.
+    architecture = 'arm64' if os.uname().machine == 'aarch64' else 'amd64'
+    # The upgrade host/DNS/TLS preflight is modeled: this component stack has
+    # no edge listener or signed candidate. Runtime/process guards remain real.
+    manager = module.SurveyManager(target, host_probe=FakeHostProbe(architecture=architecture))
     result = {'scenario': scenario, 'status': 'failed', 'fixtureCleanup': 'unknown', 'syntheticManifestOnly': True,
               'businessServicesCovered': False, 'defaultInstallCovered': False,
+              'hostAndTlsAreSynthetic': True, 'upgradeBusinessDataVerified': False,
               'restorationEligible': False, 'releaseEligible': False, 'fixtureCleanupScope': 'docker-objects-only'}
     stage = 'preflight'
     try:
@@ -273,6 +290,21 @@ def run_case(images, scenario):
             try: manager.restore('native-component')
             except module.InputError:
                 result['restoreRefusedWithoutEffects'] = all(p.read_bytes() == data for p, data in before)
+            stage = 'owned-upgrade'
+            old = ownership.PrivateStore(target).load()
+            candidate_payload = dict(payload, **{'compose.yml': json.dumps(topology(namespace, target, images, '0.3.0')).encode()})
+            candidate_path, _ = write_component_release(work, images, candidate_payload, architecture, version='0.3.0')
+            manager.upgrade(candidate_path)
+            upgraded = ownership.PrivateStore(target).load()
+            result['ownedUpgradeCompleted'] = (manager._read_state(require_current=True)['version'] == '0.3.0'
+                                                and upgraded['phase'] == 'ready')
+            result['retainedNetworkCount'] = len(old['resources']['networks'])
+            result['persistentIDsKeptAcrossUpgrade'] = (bool(old['resources']['networks'])
+                and old['claimId'] == upgraded['claimId']
+                and all(old['resources'][kind] == upgraded['resources'][kind] for kind in ('networks', 'volumes')))
+            result['oldContainerIDsAbsentAfterUpgrade'] = all(api.container_absent(cid) for cid in old['resources']['containers'])
+            result['newContainerIDsBound'] = (len(upgraded['resources']['containers']) == len(old['resources']['containers'])
+                and not set(upgraded['resources']['containers']).intersection(old['resources']['containers']))
             stage = 'uninstall'
             manager.uninstall(False, None)
             record = ownership.PrivateStore(target).load()

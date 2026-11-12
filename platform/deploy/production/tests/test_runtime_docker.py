@@ -102,6 +102,37 @@ class RuntimeDockerTest(unittest.TestCase):
         with self.assertRaises(OSError): self.driver._query(['container', 'rm', 'a' * 64])
         self.assertEqual([], self.cli)
 
+    def test_upgrade_retires_only_recorded_containers_and_verifies_absence(self):
+        expected = {'containers': {'a' * 64: 'fp'}, 'networks': {'b' * 64: 'net'},
+                    'volumes': {'survey-production_data': 'vol'}}
+        remaining = dict(deepcopy(expected), containers={})
+        snapshots = iter((expected, remaining))
+        self.driver.observe = lambda: dict(deepcopy(next(snapshots)), cohort='quiescent', foreign=False)
+        states = iter(('running', 'exited'))
+        self.driver._container = lambda cid: ('fp', False, next(states))
+        self.driver.api.container_absent = lambda cid: cid == 'a' * 64
+        self.driver.stop_remove_containers(expected)
+        self.assertEqual([('POST', '/containers/' + 'a' * 64 + '/stop?t=20'),
+                          ('DELETE', '/containers/' + 'a' * 64 + '?force=false&v=false')],
+                         [(row[0], row[1]) for row in self.calls])
+        self.assertEqual([], self.cli)
+
+    def test_upgrade_unknown_stop_or_residual_cid_never_replays_or_removes_data(self):
+        expected = {'containers': {'a' * 64: 'fp'}, 'networks': {}, 'volumes': {}}
+        self.driver.observe = lambda: dict(deepcopy(expected), cohort='quiescent', foreign=False)
+        self.driver._container = lambda cid: ('fp', False, 'running')
+        self.api_failure = True
+        with self.assertRaises(OSError): self.driver.stop_remove_containers(expected)
+        self.assertEqual(1, len(self.calls))
+        self.api_failure = False
+        self.calls.clear()
+        states = iter(('running', 'exited'))
+        self.driver._container = lambda cid: ('fp', False, next(states))
+        self.driver.api.container_absent = lambda cid: False
+        with self.assertRaises(self.module.ownership.OwnershipError): self.driver.stop_remove_containers(expected)
+        self.assertEqual(2, len(self.calls))
+        self.assertFalse(any('volume' in row[1] or 'network' in row[1] for row in self.calls))
+
     def test_unsupported_force_or_foreign_volume_is_never_sent(self):
         for command in (['container', 'rm', '--force', 'a' * 64], ['volume', 'rm', 'other_data'],
                 ['container', 'create', 'anything']):

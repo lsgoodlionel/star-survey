@@ -207,6 +207,51 @@ class RuntimeController:
         self.data = data
         self.driver.contract = deepcopy(data['contract'])
 
+    @classmethod
+    def prepare_upgrade(cls, manager, previous, version, **kwargs):
+        if (getattr(manager, '_upgrade_execution_version', None) != version
+                or manager._operation_name not in {'upgrade', 'upgrade_version'}
+                or manager._mutation_depth < 1 or previous == version):
+            raise ownership.OwnershipError('upgrade requires a verified target-code context and active lock')
+        manager._verify_owned_support(version)
+        runtime = cls.open(manager, previous, **kwargs)
+        runtime.preflight_cleanup(False)
+        if runtime.store.load()['phase'] != 'ready':
+            raise ownership.OwnershipError('upgrade requires an active settled installation')
+        candidate = source_contract(manager, version)
+        for kind in ('networks', 'volumes'):
+            if candidate['contract'][kind] != runtime.data['contract'][kind]:
+                raise ownership.OwnershipError('persistent topology migration is not supported by this upgrade')
+        candidate['claimImage'] = runtime.data['claimImage']
+        runtime.next_data = candidate
+        return runtime
+
+    def upgrade(self, effect):
+        if (self.next_data['version'] == self.data['version']
+                or getattr(self.manager, '_upgrade_execution_version', None) != self.next_data['version']
+                or self.manager._operation_name not in {'upgrade', 'upgrade_version'}
+                or self.manager._mutation_depth < 1):
+            raise ownership.OwnershipError('upgrade transition has no verified target context')
+        self.manager._verify_owned_support(self.next_data['version'])
+        self._load(self.manager, self.data['version'])
+        current_target = source_contract(self.manager, self.next_data['version'])
+        current_target['claimImage'] = self.data['claimImage']
+        if current_target != self.next_data:
+            raise ownership.OwnershipError('upgrade target source changed before retirement')
+        def replace():
+            old = self.store.load()['resources']
+            self.driver.stop_remove_containers(deepcopy(old))
+            remaining = self.protocol._observe()
+            if (remaining['containers'] or any(remaining[kind] != old[kind] for kind in ('networks', 'volumes'))):
+                raise ownership.OwnershipError('old containers or persistent resource changes remain')
+            self._save_source(self.next_data)
+            result = effect()
+            after = self.protocol._observe()
+            if any(after[kind] != old[kind] for kind in ('networks', 'volumes')):
+                raise ownership.OwnershipError('upgrade replaced a persistent network or volume')
+            return result
+        return self.protocol.mutate('upgrade', replace)
+
     def install(self, effect):
         def bound_effect():
             self._save_source(self.next_data)

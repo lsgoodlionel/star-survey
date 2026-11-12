@@ -261,3 +261,22 @@ v1仅在精确live ExecInspect终态或原不可变CID证实缺席时可成为�
 先红三项后修订，15项maintenance、6项doctor相关管理器测试、73项runtime通过，default_backup4也通过；大清单/224个journal需求、准入后新增清单、原不存在root变为存在、容量拒绝早于intent/helper等模型覆盖。首次无备份仅warning断言原样保留，夹具补上实际admission对象。仅模型与管理器方法，真实候选doctor/双库业务旅程/完整升级/真实崩溃未验证；交GitHub既有组件CI及非作者复审。
 
 旧v1 GC+原CID存在和已有超限目录仍保守拒绝，不补证、不移走未知回执、不执行未授权现场清理。可信独占controller、非原子stat/unlink、协作预算可能有已完成删除及pending保持边界不变；所有恢复/原生/发布门禁保持，不合并/发布/碰Claude Release或生产。
+### 2026-11-12 受控升级接线（独立分支，待审/待在线验证）
+
+以#129精确c59a441648b6ce2db3da4fde569b72b8f0dcb785为冻结基线，在`fix/wave6-owned-upgrade`独立推进，不改其head或Claude #130/Release。原代码已有upgrade枚举但控制器没有接线，还会使用旧Compose/rollback路径。新默认路径在intent/staging前以stdlib检查源归属文件存在及私有性，不自动认领rc19或其他旧安装，也不因不支持的旧安装请求就改写其状态。
+
+**代码授权与数据授权分开。** 使用来自经验证目标包的控制器执行升级；先按目标staged bundle校验全部17个实际执行模块（原SHA/属主/权限/非pyc准入不变），再启用仅限锁定upgrade操作、不可由请求参数选择的内存执行版本上下文。上下文内旧数据仍按原runtime-contract、原manifest/env/overlay及claim/daemon校验，备份版本/schema/manifest SHA/HMAC及人员floor仍绑定源版本。上下文在成功和失败时都清除；普通backup/doctor不能借用。代码字节不同的源包按原规则会被当前执行器拒绝，但经目标包准入的升级执行器可操作经独立验证的旧资源；源manifest不被替换。包/镜像签名与来源信任沿用现有正式制品链，不从源码夹具伪造capability。
+
+先做真实源版本受控备份及核验，再拉取固定目标镜像/建立目标合同。新旧持久网络与卷定义必须完全一致；本切片不实现持久拓扑迁移。原容器按旧合同/精确CID逐一停止、结束确认、非force且v=false删除，并核验原CID不存在；不删除网络/卷。任何未知响应不重放、不切源。全部旧容器退出且持久ID未变后，在mutation-pending内写入目标合同/overlay、以`up -d`启动（无remove-orphans），健康/TLS通过且前后网络/卷指纹相同才完成并切current。原claim/CID及其固定镜像保留，不重新认领；目标应用镜像可改变，但claim来源仍是原受信安装。合同与overlay的多文件切换不是原子事务；中断会留下operation intent/mutation-pending并拒绝继续，不能自动修复或假称回滚成功。
+
+失败进入recovery_required，只有验证完成的备份名才记录为recoveryBackup；不调用旧Compose回退、不启动旧镜像、不恢复数据库。已知完整性错误保留原退出分类，未知执行固定RuntimeHealthError。可能存在备份后的写入或迁移，保留所有状态供受控恢复设计；恢复仍禁用。
+
+定向测试先红覆盖：退役先于合同切换、未知停止不启动、持久拓扑改变及启动时网络替换不settle、无源码权限的旧安装在intent前拒绝、目标代码不匹配不得启动备份、目标代码上下文不得逃逸、失败不调用旧恢复。经真实staging元数据的测试证明字节不同的旧包身份仍被保留，并非用目标manifest重写旧备份身份。协议/管理器测试含显式fake daemon/host，不是原生验收。
+
+实际退役边界再次校验目标代码和完整目标source contract，拒绝prepare之后的漂移；未经prepare或没有目标上下文的runtime实例不能直接升级。远程`upgrade_version`与本地manifest两种入口共享该锁定授权，旧安装在远程下载前也拒绝。174项控制器、73项runtime、85项owned定向测试通过；新真实组件升级的在线结果待CI，不将此前无升级步骤的绿色证据冒充当前组合。
+
+现有Linux维护夹具扩展为真实PG/Maria容器同代码双版本切换：原容器ID全部消失、新ID绑定，claim/网络/九卷ID与指纹保留，再执行普通卸载与purge。host/DNS/TLS是显式模型，manifest是合成包，`upgradeBusinessDataVerified=false`；不证明业务答卷数据连续性、跨任意历史代码兼容、完整安装、正向doctor或候选准出。占位服务改为显式TERM退出以避免无意义的六次20秒等待；不响应TERM的真实20秒stop合同已另有独立实验和负例，产品stop预算不变。该路径复用现有quality job，完整在线证据尚待新head CI。新增运行模块数仍17，Claude #130打包无须再加名称；Release/候选/门禁解除仍由相应授权流程处理。
+
+Draft #131初始head4ad004f97f1aea1dd132db30c798974795837d25的真实组件job43125523570已success；artifact13902846793逐项确认ownedUpgradeCompleted/persistentIDsKeptAcrossUpgrade/oldContainerIDsAbsentAfterUpgrade/newContainerIDsBound及原备份/归档/卸载/purge/helper结束字段均true，两场景Docker fixtureCleanup verified，源码SHA一致。资格限制字段仍false/模型标记true，不能提升候选资格。完整CI43125523585先报告既有RC最低来源版本测试失败：源归属前置检查覆盖原版本floor/preflight错误。只将归属检查移动到只读preflight之后、intent/staging之前；版本排序及原Release测试不变，该精确失败测试与六项升级定向回归通过。修复后head完整CI及组件需重新验证，不继承旧绿色证据。
+
+**网络证据范围更正：** 独立复审确认此前夹具全部network_mode=none，没有实际network；上述旧run的持久网络比较仅为空字典相等，撤回“真实网络ID保持已实测”的表述。九卷、claim、旧CID消失/新CID绑定仍有实际证据，网络代码保护仅有模型测试。已在#119及#131公开更正。先红新增拓扑及空/0/bool/缺失count不能通过的回归，夹具现在仅给一个无监听、无发布端口的占位进程接单独internal bridge，其余服务仍none；要求retainedNetworkCount为严格整数1，并且旧网络集合非空。5项证据/隔离边界测试通过；产品Compose、capability、Release配置不变。新的非空网络ID/指纹保持实测仍待新head GitHub CI，不把旧制品当作该证明。

@@ -33,6 +33,8 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
             'sourceBefore': {'file': 'a' * 64}, 'sourceAfter': {'file': 'a' * 64},
             'cases': [{'scenario': kind, 'status': 'passed', 'fixtureCleanup': 'verified',
                        'syntheticManifestOnly': True, 'businessServicesCovered': False,
+                       'hostAndTlsAreSynthetic': True, 'upgradeBusinessDataVerified': False,
+                       **({'retainedNetworkCount': 1} if kind == 'backup-purge' else {}),
                        'defaultInstallCovered': False, 'restorationEligible': False, 'releaseEligible': False,
                        **{key: True for key in checks}}
                       for kind, checks in self.module.REQUIRED.items()]}
@@ -46,9 +48,24 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
                     bad = deepcopy(report); bad['cases'][index][key] = value
                     self.assertFalse(self.module.passed(bad))
             for key, value in (('restorationEligible', True), ('releaseEligible', None),
-                               ('fixtureCleanup', 'unknown'), ('businessServicesCovered', True)):
+                               ('fixtureCleanup', 'unknown'), ('businessServicesCovered', True),
+                               ('hostAndTlsAreSynthetic', False), ('upgradeBusinessDataVerified', True)):
                 bad = deepcopy(report); bad['cases'][index][key] = value
                 self.assertFalse(self.module.passed(bad))
+        for count in (0, True, None, 2):
+            bad = deepcopy(report); bad['cases'][0]['retainedNetworkCount'] = count
+            self.assertFalse(self.module.passed(bad))
+
+    def test_upgrade_fixture_has_one_real_internal_network_without_published_ports(self):
+        images = json.loads((Path(__file__).parent / 'fixtures/release.json').read_text())['images']
+        compose = self.module.topology('isolated-fixture', Path('/synthetic/installation'), images)
+        self.assertEqual({'internal': {'name': 'isolated-fixture_internal', 'internal': True}}, compose.get('networks'))
+        connected = compose['services']['admin-web']
+        self.assertNotIn('network_mode', connected)
+        self.assertEqual(['internal'], connected['networks'])
+        self.assertTrue(all(not service.get('ports') for service in compose['services'].values()))
+        self.assertTrue(all(service.get('network_mode') == 'none' for name, service in compose['services'].items()
+                            if name != 'admin-web'))
 
     def test_empty_or_unbounded_doctor_error_report_cannot_qualify(self):
         report = {'schemaVersion': 1, 'status': 'blocked', 'checks': [{
