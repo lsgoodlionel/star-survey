@@ -25,6 +25,7 @@ jobs:
           docker pull "$image"
           mkdir ownership-evidence
           python3 -B platform/deploy/production/tests/integration/runtime_ownership_docker.py --image "$image" --api-mutations > ownership-evidence/daemon-protocol.json
+          python3 -B platform/deploy/production/tests/integration/recovery_namespace_native.py --image "$image" > ownership-evidence/recovery-namespaces.json
       - name: Controlled helper lifetimes and exact controller cleanup
         run: |
           set -euo pipefail

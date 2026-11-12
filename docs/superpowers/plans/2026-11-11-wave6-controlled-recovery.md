@@ -286,3 +286,17 @@ Draft #131初始head4ad004f97f1aea1dd132db30c798974795837d25的真实组件job43
 Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发布。此次在独立`integrate/wave6-controlled-runtime`组合#136修订链、#131升级与Claude #130打包；原分支不改。仅计划文档追加冲突，保留两侧记录。相对已验证main22535aa9没有引入上述PR之外的新功能；整合态仍需精确head完整CI和非作者复核，不能沿用各自旧基线的绿色代替。
 
 此提交没有解除恢复/native/发布门禁，没有创建标签或发布；授权不等于缺失证明已经通过。后续由Claude协调最终不可变候选及Release，避免重复执行。恢复六项证明、真实候选安装/正向doctor/升级业务连续性、四平台及人工读屏仍独立核验；旧rc19不可自动认领。可信独占controller、非原子stat/unlink、批次远端核验、协作预算和旧v1未知/超限目录保守拒绝的限制保持。
+
+### 2026-11-12：恢复副本的显式资源命名空间（未接恢复执行）
+
+基于main7cdd66c4独立参数化OwnershipProtocol、DockerOwnershipDriver及API适配器的内部project。默认仍survey-production；额外只接受survey-recovery-加32个小写hex，绝不从已有record推导或认领project。实例构造时固定project/claim名，恢复范围要求adapter明确匹配；record、claim、卷身份、资源发现/指纹及删除使用同一实例绑定，不用修改模块全局常量。原旧夹具的一项测试将全局项目设置移到实例构造前，所有合法/非法卷名断言保留；新增全局后来变化不能重定向已构造实例回归。
+
+恢复合同目前仅支持空资源/数据卷层：卷和网络必须属于本project，卷必须local，网络必须internal bridge；volume mount只可引用本合同卷，host bind和外部命名资源拒绝。未来应用配置挂载须另有目标根准入设计，不在此切片扩大。来源project对象不会吸收到副本清单；未知create保留claim-pending，不重放或猜测清理。mutate操作仍不含restore，没有接CLI/恢复执行端或修改其拒绝。
+
+首批7项因缺接口失败，追加无project adapter拒绝先红，再实现；10项新scope/原生夹具查询保守测试、45项ownership、12项API、14项controller和184项surveyctl通过。包含跨project record/卷/claim拒绝、邻居与停止容器清单、全局漂移、未知创建、外部卷/bind/public网络拒绝、volume返回畸形/某类查询失败仍核对三类，以及restore仍不可调用。
+
+新增真实入口tests/integration/recovery_namespace_native.py --image alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6。只使用已有镜像、两个随机新私有目标，各一只永不启动且无挂载/端口的隔离claim、一只不挂载的空local卷和一个不接容器的internal bridge；不操作真实survey-production。通过同一daemon的真实API/只读投影和私有账本完成独立归属、删除第二组不改变第一组，再精确purge；未知结果保留private state，不删除或重试pending。
+
+本机默认socket访问被沙盒拒绝后，经正常require_escalated授权只读检查固定镜像，再运行此范围的测试，无权限改写或socket绕行。Docker Desktop Linux arm64实际exit0，firstNamespaceUnchanged/firstNamespaceRemoved/secondNamespaceRemoved=true、fixtureCleanup=verified，源码前后SHA一致；JSON /tmp/survey-recovery-namespace-20261112.json。claimsNeverStarted=true、cohortProbeIsModel=true、businessDataCovered/restoreAuthorized/releaseEligible=false，不能说已证明任意helper/writer收束、真正源业务不变或新副本恢复。生产smoke现有ownership-protocol轻量job追加该入口和白名单JSON，不新增权限/凭据/产品镜像构建；精确PR的amd64在线结果待CI，不把本机arm64等同Ubuntu四平台。
+
+仍须将#139目标预留、#140来源/目标兼容性与此命名空间在未来执行器绑定，再证明新副本真实数据库/卷导入、人员授权失效及归因审计、故障/明文/资源清理和业务核对。Release由Claude #138负责，所有restore/native/上传/发布门禁保持；每项具体解除前说明操作证据风险并取得明确同意。

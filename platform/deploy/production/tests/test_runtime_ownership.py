@@ -122,6 +122,9 @@ class OwnershipProtocolTest(unittest.TestCase):
         self.assertEqual({}, self.daemon.claims)
     def test_volume_identity_must_follow_the_exact_bound_project_namespace(self):
         with mock.patch.object(self.module, 'PROJECT', 'survey-owner-fixture-123'):
+            # Project is now pinned when the protocol is constructed, rather
+            # than dynamically redirected by another instance's global state.
+            self.protocol = self.make('/fixture/primary', self.store)
             self.protocol._resources({'containers': {}, 'networks': {},
                 'volumes': {'survey-owner-fixture-123_data': 'd' * 64}})
             for name in ('survey-production_data', 'survey-owner-fixture-1234_data', '../data'):
