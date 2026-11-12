@@ -145,6 +145,16 @@ class OwnedDockerExecTest(unittest.TestCase):
                 self.assertEqual('released', self.store.value['phase'])
                 self.assertIsNone(self.store.value['completionEvidence'])
 
+    def test_read_deadline_keeps_released_receipt_and_never_starts_again(self):
+        def stream(identity, output, limit, *, profile):
+            self.events.append('start')
+            raise self.module.DockerRequestTimeout('exec-stream')
+        self.api.stream = stream
+        with self.assertRaises(self.module.UncertainExec): self.execute()
+        self.assertEqual(['create', 'start'], self.events)
+        self.assertEqual('released', self.store.value['phase'])
+        self.assertIsNone(self.store.value['completionEvidence'])
+
     def test_wrong_exec_container_and_boolean_exit_are_not_end_evidence(self):
         for field, value in (('ContainerID', 'd' * 64), ('ID', 'f' * 64), ('ExitCode', False)):
             with self.subTest(field=field):

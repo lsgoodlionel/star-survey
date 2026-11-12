@@ -115,6 +115,49 @@ def command_for(profile, nonce, *, body=None):
     return ['/usr/bin/timeout', '--signal=KILL', str(seconds), '/bin/bash', '-c', script, 'survey-owned-exec', nonce]
 
 
+class _DeadlineReader:
+    """Preserve the existing buffered bytes and bound every chunk-parser read."""
+    def __init__(self, buffered, raw_socket, deadline):
+        self.buffered, self.socket, self.deadline = buffered, raw_socket, deadline
+
+    def read1(self, size):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise DockerRequestTimeout('exec-stream')
+        self.socket.settimeout(remaining)
+        block = self.buffered.read1(size)
+        if time.monotonic() >= self.deadline:
+            raise DockerRequestTimeout('exec-stream')
+        return block
+
+    def read(self, size):
+        if type(size) is not int or size < 0:
+            raise ExecProtocolError('unbounded exec parser read is unsupported')
+        data = bytearray()
+        while len(data) < size:
+            block = self.read1(min(65536, size - len(data)))
+            if not block: break
+            data.extend(block)
+        return bytes(data)
+
+    def readline(self, limit):
+        if type(limit) is not int or not 0 < limit <= 65537:
+            raise ExecProtocolError('unbounded exec parser line is unsupported')
+        data = bytearray()
+        while len(data) < limit:
+            block = self.read1(1)
+            if not block: break
+            data.extend(block)
+            if block == b'\n': break
+        return bytes(data)
+
+    def flush(self):
+        return self.buffered.flush()
+
+    def close(self):
+        self.buffered.close()
+
+
 def read_stream(response, output, limit):
     """Docker non-TTY multiplexing. Discard stderr, never log it."""
     stdout, stderr = 0, 0
@@ -281,6 +324,13 @@ class LocalDockerAPI:
             response = connection.getresponse()
             if response.status != 200:
                 raise OSError('exec start result is unknown')
+            coding = response.getheader('Transfer-Encoding')
+            if coding is not None and (coding.lower() != 'chunked' or response.chunked is not True):
+                raise OSError('exec transfer coding is unsupported; outcome remains unknown')
+            # A local Engine proxy may use chunked encoding even for hijack.
+            # HTTPResponse.read1 can parse multiple chunk/trailer lines; wrap
+            # its *existing* buffered reader so none gets a fresh full budget.
+            response.fp = _DeadlineReader(response.fp, raw_socket, deadline)
             class BoundedResponse:
                 def read(self, size):
                     remaining = deadline - time.monotonic()
@@ -289,10 +339,22 @@ class LocalDockerAPI:
                     raw_socket.settimeout(remaining)
                     # One buffered read/recv permits deadline checks even when
                     # a peer trickles bytes instead of filling a whole frame.
-                    return response.read1(size)
+                    block = response.read1(size)
+                    if time.monotonic() >= deadline:
+                        raise DockerRequestTimeout('exec-stream')
+                    return block
             read_stream(BoundedResponse(), output, limit)
-        finally:
-            connection.close()
+        except BaseException:
+            try:
+                connection.close()
+            except Exception:
+                # Already unknown/failed. Preserve the primary exception, do
+                # not retry a close whose outcome is uncertain, and do not
+                # claim cleanup succeeded or release the caller's lease.
+                pass
+            raise
+        else:
+            connection.close()  # A close failure must not become success.
 
 
 class OwnedDockerExec:

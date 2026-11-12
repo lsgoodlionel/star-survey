@@ -197,3 +197,11 @@ Owner另明确批准FD身份安全限定修复。原head72c94843的真实维护/
 同轮独立GC修订已合入此待审分支（仍以#129 c59a4416为stacked base）：Docker29.9.3真实原容器保持running，旧回执在自然GC后536.49秒变unknown；新版测试521.26秒观察到同样GC，v2精确终止观察仍有效、v1及pending继续拒绝，已终止ExecID的detached restart明确409，临时容器清理verified且源码SHA前后一致。attached start先返回流HTTP200才处理backend拒绝，不能把200当重启证明；真实负测使用detached路径，不放宽断言。可重复入口：tests/integration/owned_exec_native.py --image <本地固定Python镜像digest> --wait-for-gc，最多等待660秒；默认入口只跑快速ExecID/终止观察，不宣称每次CI都观察自然GC。
 
 新schema2回执只由受控writer在精确terminal ExecInspect及daemon/actor/output身份复核之后写入；实时仍查ExecInspect，只有精确GET /exec/<id>/json的404才使用绑定daemon/install/container/exec/exit的既有终止观察。v1没有该证据，GC后不自动认证、迁移、删标记或重放；timeout/500/身份冲突/运行中状态仍unknown。该回执是现有私有目录/单写入者边界内的持久观察，不是密码学证明，不抵御同权限/宿主/Docker管理员接管，不替代全局cohort与实际资源归属检查。fixture的owner是注入模型，不称完整安装或真实controller隔离证明；未取得业务连续性/四平台/恢复/Release资格。重装合同顺序问题仍独立待解决，旧#129绿色CI不能作其安全通过依据。
+
+### 2026-11-12：经Owner批准的chunked缓冲接口与异常关闭限定修订
+
+独立deadline复核后，真实本机Docker29.9.3 unix exec实测HTTP200且chunked=true；不能按Moby原始raw-hijack源码推断所有部署都没有HTTP chunk封装。拒绝chunked会破坏正常路径，该尝试未提交。现将HTTPResponse原有fp缓冲器包入共同deadline reader，不丢弃已缓冲字节；chunk header、body、trailer的read1/read/readline都逐次设置剩余socket时间并检查返回时间，迟到EOF不能成为成功。只支持无Transfer-Encoding或明确chunked，不接任意编码；连接与HTTP头解析仍不冒称整个CLI硬总时限。
+
+Owner已明确同意对缺失flush及异常关闭进行一轮限定修复。flush委托原缓冲器；异常路径只尝试一次connection.close，关闭也失败时保留原失败/超时、不重试、不声称清理成功或释放unknown lease；正常读取后的close失败仍向外失败。先红复现真实HTTPResponse.close缺失flush掩盖deadline，以及immutable c3ddb886慢trailer模型未在预算内拒绝；修订后95项owned与69项runtime通过，包含实际HTTPResponse逻辑时钟trailer、flush故障仍关闭buffer并保留原超时、迟到EOF、close失败无重试、released无completionEvidence及私有Unix socket5.5秒静默正例。
+
+真实Docker补验入口：owned_exec_native.py --image <本地固定Python镜像digest> --read-timeout，默认CI不自动运行该慢路径。本机Python3.9.6的socket.timeout不是TimeoutError，夹具只兼容这两个明确超时类型，不扩大到任意OSError。实际chunked正向通过；固定15秒sleep在10.002秒读取超时、GET确认仍running，再仅观察自然退出0，无重放；容器cleanup verified、源码SHA前后一致，JSON /tmp/survey-exec-chunked-timeout-verified-20261112.json。此超时段直接调用本夹具API，不是完整controller/lease/全局进程证明；writer保留unknown由独立状态机回归验证。真实慢trailer网络投递未演示，逻辑时钟负例与实际普通chunked/静默超时证据分别记录。旧GC实验未为此重跑或扩张资格；v1与256目录项/安全退休仍未解决，恢复/原生/发布门禁均保持。

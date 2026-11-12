@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -25,7 +26,7 @@ from runtime_cohort import CohortProbe
 from runtime_ownership import PrivateStore
 
 
-def main(image, wait_for_gc=False):
+def main(image, wait_for_gc=False, read_timeout=False):
     if not isinstance(image, str) or image.startswith('-') or not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', image):
         raise SystemExit('a local digest-pinned Python image is required')
     name, cid = 'survey-exec-fixture-' + uuid.uuid4().hex, None
@@ -70,7 +71,25 @@ def main(image, wait_for_gc=False):
         inspect(running=False)
         docker(['start', cid])
         inspect(running=True)
-        api = LocalDockerAPI()
+        class ObservedAPI(LocalDockerAPI):
+            def _connect(self):
+                connection = super()._connect()
+                request, getresponse = connection.request, connection.getresponse
+                state = {'execStart': False}
+                def observed_request(method, path, *args, **kwargs):
+                    state['execStart'] = method == 'POST' and bool(re.fullmatch(r'/v[0-9.]+/exec/[0-9a-f]{64}/start', path))
+                    return request(method, path, *args, **kwargs)
+                def observed_response():
+                    response = getresponse()
+                    if state['execStart']:
+                        report.setdefault('execStartResponses', []).append({
+                            'status': response.status, 'chunked': response.chunked,
+                            'transferEncoding': ('none' if response.getheader('Transfer-Encoding') is None else
+                                'chunked' if response.getheader('Transfer-Encoding').lower() == 'chunked' else 'other')})
+                    return response
+                connection.request, connection.getresponse = observed_request, observed_response
+                return connection
+        api = ObservedAPI()
         def check(identity, allowed):
             if identity != cid:
                 return False
@@ -148,6 +167,45 @@ def main(image, wait_for_gc=False):
                 except KnownExecFailure:
                     receipt = store.load()
                     report['missingProgramRejected'] = receipt['phase'] == 'failed' and receipt['exitCode'] == 127
+            if read_timeout:
+                stage = 'quiet-read-deadline'
+                report['quietTimeoutScope'] = 'direct-api-fixture-not-controller-or-lease-proof'
+                # Deliberately outlive the read budget in this fixture only;
+                # production command profiles/command timeout remain unchanged.
+                quiet_id = api.create(cid, ['python3', '-B', '-c', 'import time; time.sleep(15)'])
+                inspect(quiet_id, running=True)
+                started, blocks = time.monotonic(), []
+                try:
+                    api.stream(quiet_id, blocks.append, 256, profile='exec-preflight')
+                except (TimeoutError, socket.timeout):
+                    elapsed = time.monotonic() - started
+                    report['quietReadDeadlineSeconds'] = round(elapsed, 3)
+                    report['quietReadTimedOut'] = 9 <= elapsed <= 15 and blocks == []
+                except Exception as exc:
+                    categories = {'OSError', 'ValueError', 'TypeError', 'AttributeError',
+                                  'IncompleteRead', 'RemoteDisconnected', 'ExecProtocolError'}
+                    report['quietReadExceptionCategory'] = type(exc).__name__ if type(exc).__name__ in categories else 'other'
+                    report['quietReadDeadlineSeconds'] = round(time.monotonic() - started, 3)
+                    raise
+                else:
+                    raise RuntimeError('quiet read was not timed out')
+                ended = api.inspect(quiet_id)
+                def bound(value):
+                    return value.get('ID') == quiet_id and value.get('ContainerID') == cid
+                report['execStillRunningAfterReadTimeout'] = bound(ended) and ended.get('Running') is True
+                inspect(quiet_id, running=True)
+                # Observe, never restart. Wait for this known fixture command to
+                # finish before cleanup; this is not product unknown recovery.
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline:
+                    ended = api.inspect(quiet_id)
+                    if not bound(ended): raise RuntimeError('fixture exec identity changed')
+                    if ended.get('Running') is False and type(ended.get('ExitCode')) is int:
+                        report['quietExecEndedWithoutReplay'] = ended['ExitCode'] == 0
+                        break
+                    time.sleep(.2)
+                if report.get('quietExecEndedWithoutReplay') is not True:
+                    raise RuntimeError('fixture exec end is unverified')
             stage = 'foreign'
             with tempfile.TemporaryFile() as output:
                 runner, store = executor()
@@ -178,12 +236,15 @@ def main(image, wait_for_gc=False):
     return 0 if ('failure' not in report and report['containerCleanup'] == 'verified'
         and report['sourceBefore'] == report['sourceAfter'] and all(report.get(key) is True for key in
             ('actualExecCompleted', 'terminalObservationBound', 'missingProgramRejected', 'foreignContainerNeverStarted'))
-        and (not wait_for_gc or all(report.get(key) is True for key in gc_checks))) else 1
+        and (not wait_for_gc or all(report.get(key) is True for key in gc_checks))
+        and (not read_timeout or all(report.get(key) is True for key in
+            ('quietReadTimedOut', 'execStillRunningAfterReadTimeout', 'quietExecEndedWithoutReplay')))) else 1
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', required=True)
     parser.add_argument('--wait-for-gc', action='store_true', help='one isolated real daemon GC observation, at most 11 minutes')
+    parser.add_argument('--read-timeout', action='store_true', help='isolated direct API quiet exec deadline, not controller proof')
     args = parser.parse_args()
-    raise SystemExit(main(args.image, args.wait_for_gc))
+    raise SystemExit(main(args.image, args.wait_for_gc, args.read_timeout))
