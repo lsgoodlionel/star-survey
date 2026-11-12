@@ -34,6 +34,14 @@ HEX64 = re.compile(r'[0-9a-f]{64}')
 PHASES = {'claim-pending', 'ready', 'mutation-pending', 'settled-failure', 'cleanup-pending', 'retained-data', 'removed'}
 
 
+def project_name(value=None):
+    """Internal explicit scope, never derived from an existing ownership record."""
+    value = PROJECT if value is None else value
+    if not isinstance(value, str) or (value != PROJECT and re.fullmatch(r'survey-recovery-[0-9a-f]{32}', value) is None):
+        raise OwnershipError('ownership project is not an explicit recovery namespace')
+    return value
+
+
 def canonical_uuid(value):
     try:
         return isinstance(value, str) and str(uuid.UUID(value)) == value
@@ -42,13 +50,17 @@ def canonical_uuid(value):
 
 
 class OwnershipProtocol:
-    def __init__(self, target, driver, store, image):
+    def __init__(self, target, driver, store, image, *, project=None):
         path = Path(target)
         if not path.is_absolute() or '..' in path.parts:
             raise OwnershipError('installation binding is invalid')
         if not isinstance(image, str) or not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', image):
             raise OwnershipError('ownership image must be digest pinned')
         self.target_hash = hashlib.sha256(str(path).encode('utf-8')).hexdigest()
+        self.project = project_name(project)
+        self.claim_name = self.project + '-ownership-v1'
+        if getattr(driver, 'project', None if self.project.startswith('survey-recovery-') else self.project) != self.project:
+            raise OwnershipError('ownership adapter project differs')
         self.driver, self.store, self.image = driver, store, image
 
     @staticmethod
@@ -67,8 +79,7 @@ class OwnershipProtocol:
             raise OwnershipError('daemon identity is unavailable')
         return value
 
-    @staticmethod
-    def _resources(value):
+    def _resources(self, value):
         if not isinstance(value, dict) or set(value) != set(KINDS):
             raise OwnershipError('resource observation shape is invalid')
         for kind, objects in value.items():
@@ -77,7 +88,7 @@ class OwnershipProtocol:
             for identity, fingerprint in objects.items():
                 valid_id = (isinstance(identity, str) and (
                     bool(HEX64.fullmatch(identity)) if kind != 'volumes' else
-                    bool(re.fullmatch(re.escape(PROJECT) + r'_[A-Za-z0-9_.-]{1,128}', identity))))
+                    bool(re.fullmatch(re.escape(self.project) + r'_[A-Za-z0-9_.-]{1,128}', identity))))
                 if not valid_id or not isinstance(fingerprint, str) or not HEX64.fullmatch(fingerprint):
                     raise OwnershipError('resource identity is invalid')
         return deepcopy(value)
@@ -95,7 +106,7 @@ class OwnershipProtocol:
 
     def _assert_claim(self, record):
         claim = self._call(self.driver.inspect_claim, record['claimId'])
-        expected = {'id': record['claimId'], 'name': CLAIM_NAME,
+        expected = {'id': record['claimId'], 'name': self.claim_name,
                     'binding': self._binding(record), 'image': record['image'],
                     'stopped': True, 'isolated': True}
         if (not isinstance(claim, dict) or set(claim) != set(expected) or claim != expected
@@ -108,7 +119,7 @@ class OwnershipProtocol:
                 'claimId', 'image', 'phase', 'resources'}
         if (not isinstance(record, dict) or set(record) not in (keys, keys | {'retiredInstallations'})
                 or type(record['schemaVersion']) is not int or record['schemaVersion'] != 1
-                or record['project'] != PROJECT or not isinstance(record['phase'], str) or record['phase'] not in PHASES
+                or record['project'] != self.project or not isinstance(record['phase'], str) or record['phase'] not in PHASES
                 or record['phase'] not in phases or record['targetSha256'] != self.target_hash
                 or record['daemonId'] != self._daemon() or record['image'] != self.image
                 or not isinstance(record['claimId'], str) or not HEX64.fullmatch(record['claimId'])):
@@ -146,13 +157,13 @@ class OwnershipProtocol:
         empty = self._observe()
         if any(empty[kind] for kind in KINDS):
             raise OwnershipError('project resources already exist')
-        record = {'schemaVersion': 1, 'project': PROJECT, 'daemonId': daemon,
+        record = {'schemaVersion': 1, 'project': self.project, 'daemonId': daemon,
                   'installationId': str(uuid.uuid4()), 'targetSha256': self.target_hash,
                   'claimId': None, 'image': self.image, 'phase': 'claim-pending', 'resources': empty}
         if retired:
             record['retiredInstallations'] = retired
         self._save(record)
-        claim_id = self._call(self.driver.create_claim, CLAIM_NAME, self._binding(record), self.image)
+        claim_id = self._call(self.driver.create_claim, self.claim_name, self._binding(record), self.image)
         if not isinstance(claim_id, str) or not HEX64.fullmatch(claim_id):
             raise OwnershipError('claim create result is invalid')
         record['claimId'] = claim_id
@@ -397,14 +408,47 @@ class DockerOwnershipDriver:
         '"logical":{{json (index .Labels "com.docker.compose.volume")}},'
         '"owner":{{json (index .Labels "io.survey.installation")}},"optionsEmpty":{{eq (len .Options) 0}}}')
 
-    def __init__(self, runner, contract, cohort_probe):
+    def __init__(self, runner, contract, cohort_probe, *, project=None):
         if (not callable(cohort_probe) or not isinstance(contract, dict)
                 or set(contract) != {'services', 'networks', 'volumes'}
                 or not isinstance(contract['services'], dict) or not contract['services']):
             raise OwnershipError('verified topology and a real cohort probe are required')
+        self.project = project_name(project)
+        self.claim_name = self.project + '-ownership-v1'
+        if self.project.startswith('survey-recovery-'):
+            self._recovery_contract(contract)
         self.runner, self.contract, self.probe = runner, deepcopy(contract), cohort_probe
         self.binding = None
         self.claim_id = None
+
+    def _recovery_contract(self, contract):
+        """Data-only scope for the still-disabled recovery executor.
+
+        No bind mounts or shared/external persistent names. Future application
+        config mounts need their own reviewed target-root admission; this does
+        not reuse the production topology or authorize an import/start.
+        """
+        if not isinstance(contract['networks'], dict) or not isinstance(contract['volumes'], dict):
+            raise OwnershipError('recovery topology inventory is invalid')
+        name = re.compile(re.escape(self.project) + r'_[A-Za-z0-9_.-]{1,128}')
+        for key, value in contract['networks'].items():
+            if (not isinstance(key, str) or not name.fullmatch(key) or not isinstance(value, dict)
+                    or set(value) != {'logical', 'driver', 'internal'}
+                    or value['driver'] != 'bridge' or value['internal'] is not True):
+                raise OwnershipError('recovery network must be private and project bound')
+        for key, value in contract['volumes'].items():
+            if (not isinstance(key, str) or not name.fullmatch(key) or not isinstance(value, dict)
+                    or set(value) != {'logical', 'driver'} or value['driver'] != 'local'):
+                raise OwnershipError('recovery volume must be local and project bound')
+        for service in contract['services'].values():
+            if (not isinstance(service, dict) or set(service) != {'imageIds', 'workingDirs', 'mounts'}
+                    or not isinstance(service['mounts'], list)):
+                raise OwnershipError('recovery service contract is invalid')
+            for mount in service['mounts']:
+                if (not isinstance(mount, dict) or set(mount) != {'type', 'name', 'target', 'readOnly'}
+                        or mount['type'] != 'volume' or mount['name'] not in contract['volumes']
+                        or type(mount['readOnly']) is not bool):
+                    raise OwnershipError('recovery mounts cannot reference external data or host paths')
 
     def _query(self, arguments):
         if (os.environ.get('DOCKER_CONTEXT') or os.environ.get('DOCKER_HOST') not in (None, '', self.HOST)):
@@ -431,7 +475,7 @@ class DockerOwnershipDriver:
         return self._json(['info', '--format', '{{json .ID}}'])
 
     def create_claim(self, name, binding, image):
-        if name != CLAIM_NAME or not isinstance(binding, dict) or set(binding) != {'daemonId', 'installationId', 'targetSha256'}:
+        if name != self.claim_name or not isinstance(binding, dict) or set(binding) != {'daemonId', 'installationId', 'targetSha256'}:
             raise OwnershipError('claim request binding is invalid')
         if (not isinstance(image, str) or image.startswith('-')
                 or not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', image)):
@@ -440,7 +484,7 @@ class DockerOwnershipDriver:
         # --mount argument. Such an image cannot serve as a metadata-only claim.
         if self._json(['image', 'inspect', '--format', '{{json .Config.Volumes}}', '--', image]) not in ({}, None):
             raise OwnershipError('claim image declares implicit volumes')
-        args = ['container', 'create', '--name', CLAIM_NAME, '--pull=never', '--network', 'none',
+        args = ['container', 'create', '--name', self.claim_name, '--pull=never', '--network', 'none',
                 '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
                 '--label', self.OWNER + '=' + binding['installationId'],
                 '--label', 'io.survey.target-sha256=' + binding['targetSha256'],
@@ -495,9 +539,9 @@ class DockerOwnershipDriver:
             if (not isinstance(item, dict) or set(item) != keys or not isinstance(item['name'], str)
                     or not isinstance(item['project'], str)):
                 raise OwnershipError('Docker object list shape is invalid')
-            if singular == 'container' and item['id'] == self.claim_id and item['name'] == CLAIM_NAME:
+            if singular == 'container' and item['id'] == self.claim_id and item['name'] == self.claim_name:
                 continue
-            if item['project'] == PROJECT or item['name'].startswith((PROJECT + '-', PROJECT + '_')):
+            if item['project'] == self.project or item['name'].startswith((self.project + '-', self.project + '_')):
                 result.append(item)
         return result
 
@@ -507,7 +551,7 @@ class DockerOwnershipDriver:
         if not isinstance(item, dict) or set(item) != keys or item['id'] != identity:
             raise OwnershipError('container inspection shape is invalid')
         service = self.contract['services'].get(item['service'])
-        if not service or item['project'] != PROJECT or item['name'] != '/' + PROJECT + '-' + item['service'] + '-1':
+        if not service or item['project'] != self.project or item['name'] != '/' + self.project + '-' + item['service'] + '-1':
             raise OwnershipError('unrecognized project container')
         if item['image'] not in service['imageIds'] or item['workingDir'] not in service['workingDirs']:
             raise OwnershipError('container image or creation path is not bound')
@@ -535,7 +579,7 @@ class DockerOwnershipDriver:
     def _network(self, identity, owned_ids):
         item = self._json(['network', 'inspect', '--format', self.NETWORK, identity])
         expected = self.contract['networks'].get(item.get('name')) if isinstance(item, dict) else None
-        if (not expected or item.get('id') != identity or item.get('project') != PROJECT
+        if (not expected or item.get('id') != identity or item.get('project') != self.project
                 or item.get('logical') != expected['logical'] or item.get('driver') != expected['driver']
                 or item.get('internal') is not expected['internal'] or not item.get('created')
                 or item.get('owner') != (self.binding or {}).get('installationId')
@@ -546,7 +590,7 @@ class DockerOwnershipDriver:
     def _volume(self, name, owned_ids):
         item = self._json(['volume', 'inspect', '--format', self.VOLUME, name])
         expected = self.contract['volumes'].get(name)
-        if (not isinstance(item, dict) or not expected or item.get('name') != name or item.get('project') != PROJECT
+        if (not isinstance(item, dict) or not expected or item.get('name') != name or item.get('project') != self.project
                 or item.get('logical') != expected['logical'] or item.get('driver') != expected['driver']
                 or not isinstance(item.get('created'), str) or not item['created'] or item.get('optionsEmpty') is not True
                 or item.get('owner') != (self.binding or {}).get('installationId')):
@@ -570,7 +614,7 @@ class DockerOwnershipDriver:
             for item in self._rows(kind):
                 identity = item['id'] if kind == 'networks' else item['name']
                 valid = (isinstance(identity, str) and (bool(HEX64.fullmatch(identity)) if kind == 'networks'
-                         else bool(re.fullmatch(re.escape(PROJECT) + r'_[A-Za-z0-9_.-]{1,128}', identity))))
+                         else bool(re.fullmatch(re.escape(self.project) + r'_[A-Za-z0-9_.-]{1,128}', identity))))
                 if not valid: raise OwnershipError('resource list identity is invalid')
                 if identity in result[kind]: raise OwnershipError('duplicate resource identity')
                 if kind == 'networks': fingerprint, _ = self._network(identity, result['containers'])

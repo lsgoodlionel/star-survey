@@ -27,8 +27,8 @@ class ReadOnlyDockerRunner:
 
 
 class APIOwnershipDriver(ownership.DockerOwnershipDriver):
-    def __init__(self, runner, contract, cohort_probe, *, api=None):
-        super().__init__(ReadOnlyDockerRunner(runner), contract, cohort_probe)
+    def __init__(self, runner, contract, cohort_probe, *, api=None, project=None):
+        super().__init__(ReadOnlyDockerRunner(runner), contract, cohort_probe, project=project)
         self.api = api or LocalDockerAPI()
         self.idle_sleep = time.sleep
 
@@ -67,7 +67,7 @@ class APIOwnershipDriver(ownership.DockerOwnershipDriver):
             return identity
         if len(args) == 3 and args[:2] == ['volume', 'rm']:
             name = args[2]
-            if not re.fullmatch(re.escape(ownership.PROJECT) + r'_[A-Za-z0-9_.-]{1,128}', name):
+            if not re.fullmatch(re.escape(self.project) + r'_[A-Za-z0-9_.-]{1,128}', name):
                 raise ownership.OwnershipError('volume deletion identity is invalid')
             self.api._json('DELETE', '/volumes/' + quote(name, safe='') + '?force=false', accepted=(204,))
             return name
@@ -96,7 +96,7 @@ class APIOwnershipDriver(ownership.DockerOwnershipDriver):
             raise ownership.OwnershipError('upgrade changed persistent resources or left containers')
 
     def create_claim(self, name, binding, image):
-        if (name != ownership.CLAIM_NAME or not isinstance(binding, dict)
+        if (name != self.claim_name or not isinstance(binding, dict)
                 or set(binding) != {'daemonId', 'installationId', 'targetSha256'}
                 or not isinstance(image, str) or image.startswith('-')
                 or not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', image)):

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import runtime_ownership as ownership
 from owned_children import read_process_identity, _pid, _start
-from owned_docker_exec import ExecMetadataGone, LocalDockerAPI, PROFILES
+from owned_docker_exec import ExecMetadataGone, LocalDockerAPI, PROFILES, DATABASE_INPUT_PROFILES, INPUT_PROFILES
 
 
 def _uuid(value):
@@ -23,7 +23,8 @@ def _uuid(value):
 
 
 class CohortProbe:
-    def __init__(self, target, lock_fd, active_lock, *, api=None, fresh=False, _process_reader=None):
+    def __init__(self, target, lock_fd, active_lock, *, api=None, fresh=False, project=None, _process_reader=None):
+        self.project = ownership.project_name(project)
         self.target, self.fd, self.active = Path(target), lock_fd, active_lock
         self.api, self.fresh = api or LocalDockerAPI(), fresh is True
         self.reader = _process_reader or read_process_identity
@@ -53,7 +54,7 @@ class CohortProbe:
             or owner and pid == os.getpid() and value['start'] == start)
 
     def _receipt(self, name, record, owner):
-        if (not isinstance(record, dict) or type(record.get('schemaVersion')) is not int or record['schemaVersion'] not in (1, 2)
+        if (not isinstance(record, dict) or type(record.get('schemaVersion')) is not int or record['schemaVersion'] not in (1, 2, 3, 4)
                 or not _uuid(record.get('operationId'))
                 or record.get('installationId') not in [owner['installationId'], *owner.get('retiredInstallations', [])]):
             return False
@@ -84,8 +85,12 @@ class CohortProbe:
         if record.get('kind') == 'controlled-docker-exec':
             fields = {'schemaVersion', 'kind', 'operationId', 'installationId', 'owner', 'daemonId',
                       'containerId', 'profile', 'phase', 'execId', 'exitCode'}
-            if version == 2:
+            if version >= 2:
                 fields.add('completionEvidence')
+            if version >= 3:
+                fields.add('inputEvidence')
+            if version == 4:
+                fields.add('sourceEvidence')
             if (name != 'runtime-exec-' + suffix or set(record) != fields
                     or record['daemonId'] != owner['daemonId'] or record['phase'] not in ('completed', 'failed')
                     or record['profile'] not in PROFILES or type(record['exitCode']) is not int
@@ -93,8 +98,30 @@ class CohortProbe:
                     or not isinstance(record['execId'], str) or not ownership.HEX64.fullmatch(record['execId'])
                     or not isinstance(record['containerId'], str) or not ownership.HEX64.fullmatch(record['containerId'])):
                 return False
+            if version >= 3:
+                evidence = record['inputEvidence']
+                if (record['profile'] not in INPUT_PROFILES or not isinstance(evidence, dict)
+                        or set(evidence) != {'size', 'sha256', 'delivered'}
+                        or type(evidence['size']) is not int or not 1 <= evidence['size'] <= 2**30
+                        or not isinstance(evidence['sha256'], str)
+                        or not ownership.HEX64.fullmatch(evidence['sha256'])
+                        or type(evidence['delivered']) is not bool
+                        or record['phase'] == 'completed' and evidence['delivered'] is not True):
+                    return False
+            elif record['profile'] in INPUT_PROFILES:
+                return False
+            if version == 4:
+                source = record['sourceEvidence']
+                if (record['profile'] not in DATABASE_INPUT_PROFILES or not isinstance(source, dict)
+                        or set(source) != {'kind', 'controlSha256', 'releaseManifestSha256'}
+                        or source['kind'] != 'backup-hmac-control-v1'
+                        or any(not isinstance(source[key], str) or not ownership.HEX64.fullmatch(source[key])
+                               for key in ('controlSha256', 'releaseManifestSha256'))):
+                    return False
+            elif record['profile'] in DATABASE_INPUT_PROFILES:
+                return False
             durable = False
-            if version == 2:
+            if version >= 2:
                 proof = record['completionEvidence']
                 durable = (isinstance(proof, dict) and set(proof) == {'kind', 'ID', 'ContainerID', 'Running', 'ExitCode'}
                     and proof['kind'] == 'exec-inspect-terminal-v1' and proof['ID'] == record['execId']
@@ -157,7 +184,7 @@ class CohortProbe:
                 keys = {'schemaVersion', 'project', 'daemonId', 'installationId', 'targetSha256', 'claimId', 'image', 'phase', 'resources'}
                 retired = owner.get('retiredInstallations', [])
                 if (set(owner) not in (keys, keys | {'retiredInstallations'}) or type(owner['schemaVersion']) is not int
-                        or owner['schemaVersion'] != 1 or owner['project'] != ownership.PROJECT
+                        or owner['schemaVersion'] != 1 or owner['project'] != self.project
                         or not _uuid(owner['installationId']) or owner['daemonId'] != self.api.identity()
                         or owner['targetSha256'] != hashlib.sha256(str(self.target).encode()).hexdigest()
                         or owner['phase'] not in ownership.PHASES or not isinstance(retired, list)

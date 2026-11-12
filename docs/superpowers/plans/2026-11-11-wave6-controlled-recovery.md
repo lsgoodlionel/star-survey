@@ -286,3 +286,189 @@ Draft #131初始head4ad004f97f1aea1dd132db30c798974795837d25的真实组件job43
 Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发布。此次在独立`integrate/wave6-controlled-runtime`组合#136修订链、#131升级与Claude #130打包；原分支不改。仅计划文档追加冲突，保留两侧记录。相对已验证main22535aa9没有引入上述PR之外的新功能；整合态仍需精确head完整CI和非作者复核，不能沿用各自旧基线的绿色代替。
 
 此提交没有解除恢复/native/发布门禁，没有创建标签或发布；授权不等于缺失证明已经通过。后续由Claude协调最终不可变候选及Release，避免重复执行。恢复六项证明、真实候选安装/正向doctor/升级业务连续性、四平台及人工读屏仍独立核验；旧rc19不可自动认领。可信独占controller、非原子stat/unlink、批次远端核验、协作预算和旧v1未知/超限目录保守拒绝的限制保持。
+
+### 2026-11-12：恢复副本的显式资源命名空间（未接恢复执行）
+
+基于main7cdd66c4独立参数化OwnershipProtocol、DockerOwnershipDriver及API适配器的内部project。默认仍survey-production；额外只接受survey-recovery-加32个小写hex，绝不从已有record推导或认领project。实例构造时固定project/claim名，恢复范围要求adapter明确匹配；record、claim、卷身份、资源发现/指纹及删除使用同一实例绑定，不用修改模块全局常量。原旧夹具的一项测试将全局项目设置移到实例构造前，所有合法/非法卷名断言保留；新增全局后来变化不能重定向已构造实例回归。
+
+恢复合同目前仅支持空资源/数据卷层：卷和网络必须属于本project，卷必须local，网络必须internal bridge；volume mount只可引用本合同卷，host bind和外部命名资源拒绝。未来应用配置挂载须另有目标根准入设计，不在此切片扩大。来源project对象不会吸收到副本清单；未知create保留claim-pending，不重放或猜测清理。mutate操作仍不含restore，没有接CLI/恢复执行端或修改其拒绝。
+
+首批7项因缺接口失败，追加无project adapter拒绝先红，再实现；10项新scope/原生夹具查询保守测试、45项ownership、12项API、14项controller和184项surveyctl通过。包含跨project record/卷/claim拒绝、邻居与停止容器清单、全局漂移、未知创建、外部卷/bind/public网络拒绝、volume返回畸形/某类查询失败仍核对三类，以及restore仍不可调用。
+
+新增真实入口tests/integration/recovery_namespace_native.py --image alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6。只使用已有镜像、两个随机新私有目标，各一只永不启动且无挂载/端口的隔离claim、一只不挂载的空local卷和一个不接容器的internal bridge；不操作真实survey-production。通过同一daemon的真实API/只读投影和私有账本完成独立归属、删除第二组不改变第一组，再精确purge；未知结果保留private state，不删除或重试pending。
+
+本机默认socket访问被沙盒拒绝后，经正常require_escalated授权只读检查固定镜像，再运行此范围的测试，无权限改写或socket绕行。Docker Desktop Linux arm64实际exit0，firstNamespaceUnchanged/firstNamespaceRemoved/secondNamespaceRemoved=true、fixtureCleanup=verified，源码前后SHA一致；JSON /tmp/survey-recovery-namespace-20261112.json。claimsNeverStarted=true、cohortProbeIsModel=true、businessDataCovered/restoreAuthorized/releaseEligible=false，不能说已证明任意helper/writer收束、真正源业务不变或新副本恢复。生产smoke现有ownership-protocol轻量job追加该入口和白名单JSON，不新增权限/凭据/产品镜像构建；精确PR的amd64在线结果待CI，不把本机arm64等同Ubuntu四平台。
+
+仍须将#139目标预留、#140来源/目标兼容性与此命名空间在未来执行器绑定，再证明新副本真实数据库/卷导入、人员授权失效及归因审计、故障/明文/资源清理和业务核对。Release由Claude #138负责，所有restore/native/上传/发布门禁保持；每项具体解除前说明操作证据风险并取得明确同意。
+
+### 2026-11-12：真实双库新副本的合成数据组件（stack #141，未接产品恢复）
+
+新增recovery_database_native.py，基于#141显式namespace协议在两个随机私有目标各创建PG/Maria及明确新卷，共四个DB容器/四卷和两只从不启动的claim；无host bind、发布端口、容器网络或业务app，固定本地PG/Maria/Alpine镜像，无脚本拉镜像或特权/cap-add。角色/数据库使用一次性network-none夹具的local trust/空口令初始化，不模拟生产认证；512MiB/1CPU/128PID及NNP约束沿用测试边界。
+
+真实PG应用当前58份迁移（实际role platform_owner），创建虚构组织、人员grant/session和fixture_recovery_response；Maria创建同名合成记录表。实际pg_dump/custom及mariadb-dump输出仅在host Python内存，经stdin导入全新目标DB；不写具名host dump、不调用产品restore或旧_restore_payload。源端在两份dump后追加记录，验证源两行而副本仅快照一行；副本内直接调用现有人员失效SQL，正向先确认目标旧grant/session有效，再验证失效、关联trace审计存在且源grant/session不变。实际应用从未启动，不称真实问卷/业务恢复。导出顺序仅适用于无并发业务writer的本夹具，不证明双库事务快照。
+
+先红4项缺实现，后追加pending持久化和非空目标拒绝2项缺实现回归，再实现。同步fixture exec若timeout/非零/畸形输出即永久unknown，不重放、不清理；每个私有目标在创建Docker资源前以O_EXCL/no-follow写0600并fsync的operation.intent，整个实验保持pending，检测同字节替换与权限/身份漂移。非空/不独立目标在import前拒绝并保留状态。仅全部已知结束、意图仍匹配、精确资源删除及三类全无残留后，才清理自建夹具目录；未知时保留目录/标记并输出保留路径，不认领或删除真实安装标记。意图/cleanup规则是测试保护，不是产品exec回执或恢复授权。
+
+首轮真实双库复制通过后发现仅进程内unknown标记不足，未将首轮当最终结果；增加上述两项安全前置、审计trace关联和私有root文件清单核对后重新运行。最终6项新夹具回归及10项namespace回归通过；Docker Desktop Linux arm64实际exit0，targetWasFresh、资源独立、PG/Maria合成行、源post-snapshot保留、目标人员失效/源授权不变、审计关联及pending贯穿等字段true，fixtureCleanup=verified、privateStateRetained=false，源码及58迁移库存hash前后一致。最终JSON /tmp/survey-new-copy-database-final-20261112.json，不用首轮旧脚本哈希冒称最终源码验证。
+
+强制负资格字段sourceAuthenticationVerified/targetSignatureVerified/controlledExecReceiptsCovered/restoreAuthorized/releaseEligible/crossDatabaseTransactionVerified/productionAuthenticationVerified=false。dumpTransportHostMemoryOnly=true不是memfd/加密备份链，也不声称Python heap已擦除；具名host dump只核对本夹具私有root及当前固定命令路径，数据库数据本就写入自建卷。cohortProbeIsModel=true，同步CLI结果不能证明任意宿主writer/未知exec已收束。已有#142真实OpenSSL/memfd和旧PG owner/audit故障证据仍是不同组件，未被本测试自动组合成全链路。
+
+现有production-smoke ownership-protocol在既有固定DB镜像拉取/维护组件之后追加此实验，仅上传白名单JSON；预计额外四个短期DB容器和四卷、最多2GiB DB内存配置，无新权限/凭据/候选镜像构建。#141该job既有时长约2分19秒，仍保留10分钟总门；超时/中断无证据不能宣称清理。线上amd64精确证据待CI。Release由Claude #138负责，恢复/原生/上传/发布门禁均未解除。
+### 2026-11-12：匿名来源验证后的新目标兼容性（内部接口，未接恢复）
+
+独立于#139目标预留守卫、基于main7cdd66c4，在现有ControlledVerifier增加verify_target_compatibility。原verify_only检查的是原安装当前版本的兼容范围，不能直接证明备份适用于另一个目标；新接口先要求明确的目标manifest小写SHA256，并用现有load_manifest完整schema校验及内容绑定，再调用原verify_only进行HMAC、文件/源manifest/镜像身份、版本/floor与全部匿名payload格式校验。随后对目标minimumSourceVersion、目标版本上界、schema及source现存人员floor作兼容判断；读取前后重新加载固定hash目标，拒绝长验证期间改写。
+
+输出sourcePayloadsVerified/targetMetadataCompatible只描述本次内部检查，不是恢复能力票据；targetSignatureVerified、targetConfigurationVerified、restoreAuthorized固定false。来源/目标的签名、控制器代码/operation/资源归属、目标有效配置、生命周期及未知child的cipher/workspace责任仍在未来调用者；接口没有CLI/restore调用者，也没有启动数据库或应用、失效人员授权或复制明文到新目标。现有restore拒绝不变，未改Release或门禁。原owned_backup_verify已属17模块包，此次只是新增未接调用方法，不新增模块声明或候选能力。
+
+先失败测试证实接口不存在，再实现；schema负例夹具最初缺backupSchema，经补齐真实schema字段后保留不兼容断言。10项新测试覆盖缺失/错hash、版本上下界及RC minimum、schema、坏HMAC早于decrypt、人员floor降级、目标中途改写及资格false；连同2项继承的原匿名验证测试通过，另外独立运行原2项和43项backup/restore回归通过。测试使用实际HMAC/清单/格式/FD适配器，但cipher是显式CopyExecutor模型、workspace是portable backend；不称真实OpenSSL、Linux memfd、新副本DB或恢复准出通过，Linux结果待精确CI。
+
+下一步仍需新的Docker项目/资源从创建起绑定、源备份/目标包在使用时复验、真实双库新副本及人员session/grant失效和归因审计、故障注入/收束/精确清理。不得把metadata兼容或原HMAC通过当成未来恢复执行授权，所有具体解除前说明证据、范围及风险并取得明确同意。
+
+### 2026-11-12：来源/目标兼容性的真实Linux crypto验证（stack #140，执行门未动）
+
+先核对原check_restore_owner_contract组件，人员grant/session失效、审计失败回滚、旧会话拒绝等已有真实PG证据，本轮不重复实现。优先补#140当前CopyExecutor/portableFD的证据缺口：扩展现有owned_crypto_native.py隔离夹具，带入同源surveyctl/schema/fixture manifest，调用实际verify_target_compatibility。每个case单独匿名workspace、受控cipher和child journal，避免多个验证复用既有解密输出或累积超过child预算；旧8项crypto/错误/期限/无继承测试全部保留，新增7项证据必需字段及缺失/false/1拒绝。
+
+先红证明原证据不要求新接口，修改后2项证据测试、12项兼容性回归通过。既有固定Python镜像下真实Docker Desktop Linux arm64测试exit0：正向targetMetadataCompatible及sourcePayloadsVerified=true，同时targetSignatureVerified/targetConfigurationVerified/restoreAuthorized=false；错误目标hash为0 child，版本/floor拒绝均在完整匿名payload校验后且所有child已结束；坏control-HMAC为0 child；无具名解密payload、restore调用仍拒绝。原加密往返、截断/坏MAC、deadline、FD不继承和noNamedPlaintext仍true，最终containerCleanup=verified，12份同源文件的before/inside/after SHA相同，JSON /tmp/survey-recovery-source-crypto-20261112.json。
+
+边界仍是actual OpenSSL/Linux memfd处理合成PGDMP magic、Maria注释头及小tar；未导入数据库、未启动副本应用、未认证目标签名或新目标配置，不称完整SQL安全性/数据库恢复/Ubuntu四平台。沿用原非root65534、cap-drop ALL/NNP/network-none/readonly、16MiB tmpfs、无host bind/端口及CPU/内存/PID限制，无新增权限/镜像拉取或workflow入口。现有ownership-protocol job已调用此夹具，精确PR的amd64证据待CI；父PR #140原head不改。restore/native/上传/发布门禁不变，Release仍Claude负责。
+### 2026-11-12：新目标预留的使用时校验（内部切片，未接执行端）
+
+基于已合并main7cdd66c4独立实现`recovery_reservation.RecoveryReservation`，不改Claude #138的Release区域。先建立失败回归，再实现只读上下文：通过no-follow目录FD检查祖先/直接父目录及0700目标/control；读取0600、单链接、普通文件的精确三文件清单，JSON有界且重复字段/布尔伪整数/授权字段变化拒绝。reservation ID、随机项目提案、source observation、记录中的目标与control dev/inode均与调用绑定；source observation只是绑定，不是备份认证。持有原operation.lock非阻塞排他锁，不创建、修复或清理任何对象；FD不可继承。读取前后和正常退出复核文件身份/摘要及目录路径，额外项即拒绝，枚举只保留有限预期项。首次失败永久封锁该上下文，即使外部随后移除异常项也不能重新取得成功。
+
+先红的目录读取期间替换和失败后复用两项均修复；14项目标测试以及184项原surveyctl回归本地通过，包含真实recovery-reserve产物接续、symlink/hardlink/FIFO、权限、拷贝/错绑定、锁冲突、同字节替换、原地改写与外来目标保留。仅本机真实文件系统/故障注入，不冒称Linux各平台或宿主崩溃证明；Linux结果由精确PR的现有CI核实。
+
+模块目前未加入OWNED_RUNTIME_FILES、没有CLI或restore调用者、不进候选执行包。所有输出固定executable=false/backupAuthenticated=false/runtimeResourcesCreated=false，只代表观察到的预留未变。锁约束可信独占controller，不防御同UID恶意写入者/宿主管理员，也没有原子的最后检查到未来使用间隔或永久租约；后续执行器必须继续持有FD并在使用前复核。
+
+后续依赖顺序不变：新的Docker项目/卷/网络从创建起归属且未知拒绝；受控匿名验证器重验备份HMAC、清单、manifest/版本/schema/floor；新副本双库/卷导入及人员grant/session先失效并审计；数据验证后才考虑独立切换。故障注入、明文/子进程收束和精确资源清理仍需逐项证明。此切片不完成上述后续步骤，restore/native/上传/发布门禁保持；每项具体解除前说明证据范围风险并取得明确同意。
+
+人工读屏事实已重核：#41存在Owner于2026-11-10记录的VoiceOver passed与发布批准，均绑定rc19，而非“完全未完成”；后续候选须核对差异覆盖及批准范围，不自动继承rc19记录。
+
+### 2026-11-12：恢复前置实际组合与下一执行包
+
+在独立integrate/wave6-recovery-preconditions组合#1434313d6c4（含#141a2ff8d）、#142d916（含#140f5f7）和#1392f82。两个merge只在本计划追加处冲突，保留双方全部段落；14份实现/测试/workflow blob与对应原head逐一相同，全部五heads为祖先。7个release/原生门禁、surveyctl/restore/owned_docker_exec入口blob与main7cdd66c4不变。91项有范围的同进程组合回归通过；本地只检查组合，不重复旧head全量。记录/tmp/survey-recovery-composition-20261112.json；真实组件组合及整轮CI仍待新整合head，不沿用旧分支结果。
+
+这证明组件共存准备，不代表五项已接成同一个数据流。#143非作者已核对AMD64 artifact13936201630的真实双库合成数据/58迁移/源增量/授权失效/清理，ZIP摘要与源码hash匹配；#142非作者核对AMD64 artifact13935060098的15项真实FD/crypto检查。没有独立Sigstore签名验证声明，也不提升为候选或真实业务恢复。
+
+下一执行包须先测试、实现和独立复核，以下尚未实现或启用：
+
+1. **受控stdin写入链**：现有OwnedDockerExec为输出型profile，没有DB import输入路径。只能消费认证后、受同一workspace/operation绑定并只读封印的匿名FD；限定目标owned CID/service、有限PG/Maria导入及人员失效命令，不接受任意SQL/shell/request-body命令或具名host明文。新增ExecID/输入长度摘要/期限/输出及结束回执，部分输入、丢回复、超时、GC未知均保持输入/输出lease和pending，不重放。不能借现有backup/doctor profile冒充恢复写入。
+2. **原目标与源认证接线**：#139持锁FD、reservation/project/target身份须与#141新scope、daemon/claim/新卷互相绑定；#140本次payload验证不能当持久capability，使用时重验源/目标包签名、manifest、HMAC、schema/版本和有效人员floor。目标有效配置还未被metadata接口证明。
+3. **副本先隔离**：实际双库和全部卷只写新scope；导入失败保留隔离副本，Maria DDL不能假称全库事务回滚。应用启动前完成grant/session失效、归因审计和数据校验，不能沿用源实例域名/端口/外发连接或原管理员有效授权。
+4. **故障闭环与准出**：补部分导入、进程/控制器SIGKILL、审计失败、意图/资源漂移、未知exec/明文与清理的实际故障注入；source保留及已知/未知分别记录。之后才是真实受信候选、正式身份/业务连续性和四平台验收。具体恢复/原生/发布门禁解除前，给出精确操作/候选/证据与风险并取得用户明确同意。
+
+本整合不做上述执行接线、合并main、打tag、发布或真实部署；Release由Claude #138负责，所有门禁保持。下一轮优先收束整合CI与非作者审查，不再用重复空资源或合成样本代替执行链。
+
+### 2026-11-12：受控 stdin / ExecID 传输切片（保持恢复门关闭）
+
+Stack #144 的独立分支新增固定 `stdin-proof` 消费器，只运行有界 sha256sum，不新增 SQL/import profile、restore operation 或 CLI 入口。生产路径要求真实 Linux 写入/增缩/封印四种 memfd seals、私有匿名且不可继承的输入；私有 dup 保持 inode 存活，逐块及末尾复核原 FD/anchor 的身份、长度、封印。调用方提供的输入 SHA 只是长度/内容绑定，不代替备份来源认证。输入不得与输出同 inode，最多 1GiB；每次只创建/启动一个 ExecID，不重放。
+
+新 v3 回执在 create 之前记录输入 size/hash/delivered=false；只有固定消费者摘要、原输出 nonce/footer、精确 CID/ExecID 终态、daemon/actor/output 复核与输入私有引用关闭成功后，才能记 delivered=true/completed。旧 v1/v2 输出回执契约不变，cohort 对 v3 严格字段、整数/布尔类型、摘要和终态校验。部分发送、超时或结束未知仍留 released/pending，不自动清理或重新提交；保留输入/输出工作区由上层负责，当前没有产品恢复调用者。
+
+LocalDockerAPI 使用 ExecStart 101/tcp 升级、原 HTTP 缓冲、同一个35秒协作预算、分块 sendall 和半关闭 EOF；200/chunked 不作为双向输入成功。sha256sum 只在读完输入后输出，故此固定 consumer 可顺序发送再读；不能把它当作需要并行 stderr/backpressure 的 PG/Maria 输入协议。原只读/输出型 stream 的 chunked 支持保持。
+
+先红后绿：原无接口/回执拒绝被11项定向测试覆盖，原 Exec14/cohort8/memory21回归通过。额外覆盖伪封印拒绝、错长度/hash/profile、外来FD替换不关闭、部分发送未知不重放、错误消费者摘要/footer、错误CID终态、严格 v3 schema、101缓冲/EOF、200拒绝与send超时关闭。模型中的 seal 查询使用便携测试 seam，不声称内核证据。
+
+本机 Docker Desktop Linux arm64 真实 transport-only 实验成功发送大于socket缓冲的合成数据，经101、输入摘要、输出footer和实际ExecInspect终态核对后清理精确临时容器；/tmp/survey-exec-input-transport-20261112.json 明确 kernelSealsVerified=false、controlledReceiptVerified=false。新增 Linux native 夹具将真实 AnonymousWorkspace/memfd 与 OwnedDockerExec/private receipt 连成同一正向组件，接入现有 production-smoke ownership job；源码hash、有限JSON、unknown保留资源，且清理结果单列。该组合尚待精确head CI，不是数据库导入或业务恢复。
+
+#144 的五workflow已全部success（CI43205373012、smoke43205372769、relay43205372889及元数据）；独立组合复核无新增确认阻断。新预留守卫仍未进入受校验 runtime 打包清单，产品接线前必须处理。新的受控 stdin 切片仍须独立审查；所有恢复/原生/上传/发布门、Claude #138 Release 工作流均未改动。下一步是在此传输基础上设计限定数据库consumer的双向背压、来源/目标使用时认证与故障注入，不能用hash消费组件替代实际双库恢复。
+
+#145非作者发现并确定性复现双故障：部分stdin发送已抛UncertainExec，finally关闭私有输入引用又抛OSError，会覆盖原未知分类。补红测验证原异常类型/原发送cause、released回执、input未确认、输入仍可读及只关闭一次，再修为保留原UncertainExec；没有原未知异常的关闭失败也保守转UncertainExec，不重试可能复用的FD。12项新输入回归与14项原Exec回归通过。后续head需自己的CI，旧4397428a的绿色smoke/实际memfd产物不能代替此修订验证；门禁保持。
+
+### 2026-11-12：数据库导入前的背压与副本 cohort 条件
+
+独立stack #145ce6 的输入消费准备，未新增数据库profile/SQL导入/restore入口。确定性Unix socketpair模型先让消费者在读输入前写出超socket缓冲的stdout及受限stderr；原顺序sendall在5秒测试预算内超时，证据/tmp/survey-input-sequential-red-20261112.log。新增同线程selector事件循环，在同一协作deadline内增量收发、有限frame解析及stderr丢弃，保留HTTP预读缓冲、EOF半关闭和输入身份复核。无后台线程在异常返回后访问caller FD；连接/返回关闭异常仍按#145未知结果规则处理。35秒是该固定profile的协作流预算，不是包括哈希、Docker元数据、终态观察和关闭在内的完整操作硬上限。
+
+原12项输入测试的断言保留，仅将旧sendall socket模型改为明确readiness模型；新增真实socketpair背压、fragment/frame限额及截断负例。真实Docker Desktop arm64 transport-only已验证大输入与预先512KiB stdout/48KiB stderr、nonce/digest和精确终态及容器清理，JSON /tmp/survey-exec-duplex-transport-20261112.json，kernelSealsVerified/controlledReceiptVerified=false。新native夹具另外注入故意不提供合法footer的真实消费者，要求背压链结束后是failed/exit0/input-unconfirmed，不可误当合法stdin-proof；这项Linux组合待精确CI，不拿本机模型冒充。
+
+另发现CohortProbe此前仍硬编码生产project，不能验证#141的随机恢复namespace。先红测，再增加构造时固定的project（默认生产不变），只接受现有project_name契约；不同副本/生产record、非法namespace均拒绝，之后全局变化不能重定向既有probe。此改变仅让已有锁/回执校验可显式绑定scope，不证明完整资源/宿主进程归属，不解除任何门禁。
+
+数据库写入前仍有明确接线条件：#139初始预留守卫只接受精确三文件，创建runtime-owner/exec回执后不能直接继续inspect，需受控且持锁的预留→运行归属handoff；不得简单放宽未知文件。来源必须先通过ControlledVerifier现有HMAC/全inventory/匿名payload校验，再在使用时封印/绑定输入；target metadata检查仍不证明签名或有效配置，不能用caller SHA代替认证。随后有限PG/Maria consumer必须绑定同一已证明的新scope/CID/service/operation、记录输入ack与精确终态，再独立核对提交/数据及目标人员失效。双库部分成功/超时不重放，隔离失败副本并仅清理归属及cohort已证结束的资源。当前未实现该高层产品链，restore/native/上传/发布保持关闭，Claude Release不改。
+
+补充新native夹具的Mac预检：以明确注入的portable FD/seal/platform测试模型跑真实Docker正向及故意缺footer背压消费者，portableFDActualExec=true、backpressureConsumerEndedRejected=true、cleanup=verified，无残留fixture；/tmp/survey-duplex-full-fixture-20261112.json。kernelSealsVerified=false，不能把此结果称Linux内核验证；现有CI将对原始未注入的Linux代码执行同一正负流程。全程未新增DBprofile或恢复执行调用。
+
+### 2026-11-12：预留到运行记录的持锁文件系统交接（仍非执行许可）
+
+为处理#139精确三文件与未来owner/exec记录的接线冲突，独立stack #146 新增内部`RecoveryReservation.handoff(receipts=...)`及`ReservationHandoff`。先按原守卫检查完全空预留，再以no-follow/O_EXCL创建0600、不可继承、fsync的`recovery.handoff.json`，内容固定pending-not-authorized/executable=false并绑定reservation/source observation与最多16份预先登记的child/exec文件名。marker创建期间只能存在原三文件+marker，哪怕提前出现的文件名在计划内也拒绝、不认领。成功后原目录/文件/同一个flock FD的所有权直接转给handoff，不解锁、不重开；原guard失效且退出不关闭已转移FD。
+
+交接后的根仍只允许.surveyctl，控制目录只允许原锚点、immutable marker、runtime-owner及预登记文件；锚点/目录身份和内容持续复查，额外项永久poison。可变runtime记录仅通过既有PrivateStore核对普通文件/单链接/私有权限/严格有界JSON，不校验资源或执行语义，输出runtimeRecordsQualified=false、backupAuthenticated/targetSignatureVerified/restoreAuthorized/executable均false。原reservation记录只是历史预留，不能用其runtimeResourcesCreated=false推断交接后的真实资源不存在。
+
+先红后绿与真实本地文件系统验证共10项：外层guard退出后锁仍被持有，handoff关闭后才可重新取锁；不变的原intent与marker保留；计划参数/早到record/短写/fsync中断、同字节marker替换、原intent替换、symlink/hardlink/public/FIFO、失败后移除异常仍拒绝、__enter__失败释放私有FD、close结果未知不重试。交接失败也永久poison原guard；实现没有删除marker/未知对象或修复旧现场。结合原guard、输入、背压/cohort/retirement等同进程96项回归通过，/tmp/survey-handoff-combination-20261112.log。没有实际SIGKILL/宿主崩溃证明，可信独占controller之外同UID对抗/最终check-to-use不是原子fence。
+
+新模块及原reservation guard仍未进入OWNED_RUNTIME_FILES，未被产品restore/CLI调用；没有Docker变更、DB导入、受信目标签名配置或候选资格。该交接只提供未来控制器保留原锁/锚点并容纳有限运行记录的文件系统层；必须继续组合实际OwnershipProtocol/CohortProbe与源/目标认证，不能拿此返回值授权执行或清理。restore/native/上传/发布门保持，Release仍Claude单一写入者。后续具体解除须向用户给证据/范围/风险并获同意。
+
+#147增量先红后绿：非作者自然with双故障复现为handoff fsync未知结果被外层guard关闭ReservationError覆盖。新增测试在旧源失败，修为保留同一原始UncertainExec及其fsync cause；原FD单次关闭后立即复用的外来FD仍存活，marker保留且发布不重放。另自查并复现runtime JSON读取后替换immutable marker/追加未知文件会漏过最终观察，补末尾锚点及无JSON回调的清单复核，两类注入拒绝。新增后共12项handoff/同进程98回归通过，修订仅guard/handoff、对应测试和本计划。原head绿色不能代替新head CI，仍非原子check-to-use或同UID对抗保证，未发生产品恢复或解除门禁。
+
+### 2026-11-12：认证输入到实际数据库消费者下一包（在独立分支准备，尚未实现/验收）
+
+基于#1477b5ff1，暂不改已审head。拟新增内部ControlledDatabaseCopy：只能接收ControlledVerifier与同一handoff/OwnershipProtocol/显式CohortProbe组成的新副本目标；锁FD、nonce/project、target hash、daemon/claim、完整两DB服务/卷映射及真实network=none/无发布端口必须匹配，目标只能有platform-db/engine-db。重用OwnedMaintenance的真实container_check/ControllerProcessGuard，不以caller布尔或任意CID当归属证明。此组件没有产品restore/CLI调用，签名/有效配置/业务/候选资格继续false。
+
+输入必须先经原verify_backup的HMAC、全inventory、匿名payload格式/归档及版本/schema/floor检查；解密后复核认证control和cipher hash视图不漂移，再一次导出并封印两DB FD。只有该验证器签发的单次typed input能进入新增固定import profile，绑定service/CID、operation和installation；普通lease或caller SHA拒绝。父copy持有source/cipher/输入export及输出workspace，Unknown保留并poison整个copy，不能因with自动退出丢失租约。每个目标预登记四个receipt操作（两项空库预检+PG/Maria import），已存在任何相同receipt拒绝新copy；失败后不能以相同新scope重新执行。
+
+拟固定profiles：PG空表计数/pg_restore单事务且保留source ownership；Maria空表计数/固定secret-file读取到子进程环境（不在argv或日志）+binary-mode client。导入wrapper以管道/coprocess计算输入hash，仅固定SQLtool stdout转有界stderr，等待全部固定子进程结束后发hashack及原nonce-footer；不使用具名明文/临时SQL。增加strict v4 sourceEvidence（受认证control/manifest SHA）及input/terminal审计，GC404未知仍拒绝，hashack/exit0不等于业务提交或事务一致性。
+
+隔离native拟复用真实PG/Maria dump、新scope/卷、58迁移及数据/人员失效验证，真实OpenSSL/memfd/HMAC将snapshot接入新consumer。需区分fixture初始化/查询的旧同步工具与真正受控输入回执，不能泛称整条CLI已covered。known failure用新scope证明PG成功/Maria凭据失败后停止、不重试且source保留；未知Exec/部分输入/日志缺失仅先模型证明阻断与租约保留，真实崩溃或unknown结局不得强制清理或伪造终态。新scope控件handoff仍保留pending，组件的显式清理只有完整资源+cohort已知结束才可做。实际native、调用/目标签名配置、业务资格均待实现和独立复核，不在本段标通过。
+
+
+### 2026-11-12：认证双库输入实现及待运行隔离证据（接续上一设计）
+
+本分支实现内部 ControlledDatabaseCopy/NewCopyTarget，复用实际 ControlledVerifier 的 HMAC、完整密文 inventory、匿名解密、schema/version/floor 检查；控制文件先通过 no-follow/普通单链接/属主私有权限/大小预检才读取，解密后再认证并在输入使用时复核源视图。真实 OwnershipProtocol/CohortProbe、原 handoff 锁和四个预登记 operation 绑定两 DB 服务/CID/installation；完整资源映射、无网络/发布端口、非特权及有限资源检查拒绝漂移。typed 单次输入方可进入固定 PG/Maria profile，普通 sealed lease 加调用方 SHA 拒绝。v4 source/input/terminal 回执只记录摘要与固定阶段，不记录 SQL、口令或原始 stderr。
+
+PG 使用固定 Unix socket、pg_restore 单事务/exit-on-error 并保留 ownership；Maria 固定 Unix socket、binary-mode、no-defaults、禁 reconnect/local-infile，口令仅由固定容器 secret-file 进入子进程环境。先前 coproc FD 在 tee 子进程中不可见已真实复现，改为动态 process-substitution FD 后同隔离边界的固定 cat 消费器 exit0/hash ack/清理通过；该小实验不是数据库证明。双向输入继续使用 #146 同线程有界传输；PG 成功/Maria 非零阻止重放，unknown 保留输入/输出、pending 和整个 copy context，不能清理。清理夹具先对全部 scope 预检再删除，任一异常停止，不能因目标未知继续删除源。
+
+本地13项新测试及73项相关组合通过，涵盖 HMAC 拒绝零 DB exec、控制文件 symlink 不读取 referent、源/目标漂移、caller 伪输入、v4严格回执、已知部分成功不重放、未知保留租约、清理双scope预检及严格资格。真实数据库隔离 job 已接 production-smoke，仅 contents:read，固定镜像、新临时scope、无宿主挂载或端口；正向与 known-partial 两次依次运行，JSON证据单列源码hash与cleanup。新增job尚未执行，不可写成通过。
+
+边界：source fixture 生成真实 dump 后曾经过宿主内存；源 cohort/初始化/结果查询和授权失效 reset 仍是明确夹具，目标输入本身使用真实 controller/kernel reader。SQL为合成业务行，未证明跨库事务快照、应用登录、真实崩溃/unknown settle。HMAC不等于 source/target 镜像签名，metadata资源隔离不等于有效产品配置审批。目标签名、配置、业务提交、人员失效与候选/恢复资格均保持 false；独立SQL查询/reset证据不自动改变组件报告。新守卫/交接/复制模块尚未加入产品runtime打包，无 restore/CLI 调用，无门禁解除，不改 Claude Release。
+
+
+#148非作者复现使用时密文漂移：空库预检后原地翻转postgres.dump.enc而control不变，旧实现仍用先前认证sealed明文继续。不是未认证SQL进入，但不满足此前源漂移声明。新增确定性红测后，每次typed input claim在固定control/源release/floor复核之外，对先前HMAC认证的全密文inventory逐项no-follow FD重算SHA，检查读取前后FD/路径身份、长度与受限字节数；不能在plaintext child lease期间重开workspace key，故复用先前完整认证且当前字节未变的control绑定，不重解密或新增crypto child。首次import前漂移拒绝零SQL；PG完成后改变Maria密文则Maria未开始，整copy失败且不重放PG。15项新测试/75项相关组合通过。每次claim重读全inventory，成本受workspace上限约束但无新增硬时限保证；可信独占controller和最终check-to-use非原子边界不变。旧head实际AMD64 artifact13949183939已下载核对ZIP摘要/18源码+58迁移库存，正常/已知部分失败/cleanup通过；不能代替本修订head线上证据。所有gate保持关闭。
+
+### 2026-11-12：受验签目标与隔离数据库绑定（stack #148）
+
+新增内部 RecoveryTargetBinding，以明确选定的同仓候选 assets、版本、commit、manifest SHA 调用既有完整 verify_release.sh；固定 repository/tag/commit、180秒子进程上限、丢弃工具原始输出，不新增凭据或修改 Release。资产普通单链接/no-follow、属主/不可组写、最多64项及8GiB单文件/16GiB总量，前后身份和SHA一致。复用 source_contract 的 retained bundle/generated 文件校验、实际 Compose/local image 投影；staged manifest/commit 必须匹配受验签资产，快照深拷贝在使用时复比。
+
+ControlledDatabaseCopy.execute_bound 只接该类型，源认证前和每次输入 claim 前检查实际 NewCopyTarget 及数据库 image ID 映射。普通 execute 组件路径不获得签名声明；bound 返回 targetReleaseSignaturesVerified，但完整 targetSignatureVerified/targetConfigurationVerified、业务、人员、restore/candidate 资格仍 false。配置快照和数据库镜像匹配不证明目标口令、角色、全部应用配置已安全；数据库一完成后绑定漂移会阻止数据库二，不重放。
+
+缺接口红测后，7项新测试/70项相关组合通过。验签工具/Compose/target 为明确模型 seam，覆盖固定命令、非零/超时、资产/manifest/commit/配置漂移、symlink及逐输入复核；没有新受信目标的真实 bound 正向证据。#148新84bde33d的 artifact13949837988 已核 ZIP f9e527bcbdf802cf3609d0f95a042508bc5eb68388dcef8cd3a64489182a5ebc、18源码+58迁移库存和两份JSON/cleanup，只证明 unbound 双库组件。
+
+新模块尚未加入受校验 runtime 打包/导入清单，无产品 restore/CLI 调用。可信独占 controller、最终检查到使用非原子、重复扫描成本边界不变。Claude/协调器仍需明确包含已审模块的冻结目标、同仓run/commit/manifest/固定digest/两架构bundle及完整验签来源，再完成打包、真实bound导入、受控授权失效、业务/故障/四平台验收。不把旧rc19当作新目标通过，不触发候选/Release，不解除门禁。
+
+#149非作者真实复现验签超时只杀直接bash、后代仍写sentinel。保留原语义抽取后的真实fork红测同样失败，再改Popen独立session/close_fds/三路DEVNULL：180秒验签预算，超时后leader尚未reap时仅一次SIGKILL原进程组，额外最多3秒wait及组缺席观察；失败/观察未知转TargetVerificationUncertain（UncertainExec），异常保留process上下文、不重放。正常leader退出而组仍在时不再向可能复用的PGID发送信号，保守未知，即使exit0也不得继续。真实本机测试证明该固定后代不能延迟写入、继承性外来FD未进child且parent仍持有、stdout/stderr无PIPE；模型覆盖kill拒绝及exit0残留观察未知。10项本包/73相关组合通过，需新head Linux CI。进程组不是cgroup或任意恶意daemon containment，主动setsid逃逸未证明；不可据此声称所有后代安全停止。完整恢复/打包及门禁不变。
+
+#149后续非作者确认SIGINT取消边界：Popen.wait内部可能已reap leader再抛KeyboardInterrupt，不能在BaseException中按旧PGID发送信号。真实SIGINT新红测确认returncode=0时原实现仍调用killpg。修订仅在TimeoutExpired未reap路径进行一次组终止；其他wait/启动/最终观察中断统一TargetVerificationUncertain，保留能取得的process（启动中断可能无handle），不poll后发信号、不自动重试。真实SIGINT新版不再发组信号，未伤其他组；模型覆盖未reap取消及启动/末尾观察中断。13项本包/76相关回归通过。取消时不能承诺后代已停止，未知context/资产必须保留，产品恢复及清理不得因该失败继续；这不是全量后代containment证明，门禁保持。
+
+### 2026-11-12：受校验恢复runtime打包与helper准入（stack #149）
+
+新增失败回归先证明4个恢复模块未进入实际collect_runtime、checksum-valid不同恢复源码未被执行侧准入拒绝、loader未捕获导入新模块、执行中的verify_release.sh未纳入额外helper准入。现将recovery_reservation/recovery_handoff/controlled_database_import/recovery_target_binding列入OWNED_RUNTIME_FILES及依赖顺序；现有builder静态读取该集合自动携带文件，无需修改Claude的Release workflow或build_release.py。verify_release.sh本已列入bundle的RUNTIME_FILES，新增OWNED_HELPER_FILES使执行侧按同一retained bundle inventory验证其路径/字节，captured helper不作为Python模块执行。
+
+RecoveryTargetBinding在启动任何验签工具前及后续recheck先走manager._verify_owned_support，确认其执行helper路径/字节属于受校验runtime；没有admission、错路径/错helper字节都拒绝且不启动工具。实际bundle collect/tar写读覆盖amd64/arm64两套metadata、全部新源码和helper字节/SHA；这只是归档构建，不是ARM64原生运行或签名通过。代码捕获loader在foreign PYTHONPATH下使用已校验字节，且default restore仍直接拒绝、未调用copy.execute。既有upgrade前代身份测试改为完整admitted key集合比较而非旧固定17数量，保留原manifest字节不变断言。
+
+整合#1494e9e54c后231项本地相关回归通过，打包scope尚待精确head GitHub/非作者复核。默认安装/维护现在要求新声明模块和helper齐全；旧bundle缺件仍fail-closed，升级只能走既有锁内target-code authority，不能修改前代manifest或自动认领。没有改任何restore/native/upload/publication gate、CLI命令集合或Release，guard/交接marker语义不变。真实受信候选、工具链/签名身份、有效目标口令/角色/业务配置、完整受控人员reset和双库故障/业务/四平台链仍未准出，Claude后续需从整合审查代码构建可信资产，而非复用旧rc19冒充。
+
+### 2026-11-12：#139–#150 单一草稿整合与候选冻结前置
+
+只读核查 main=7cdd66c44bf882a9bfbbc5752e083e7a24b2a89a，最新公开Release仅rc19。活跃PR仅本组12项；#138未给出包含新runtime的签名候选。12项精确head的关联workflow全部success，当前potentialMergeCommit的两个parent匹配各自base/head且tree等于head；正式GitHub reviews均为空。协调窗口的逐切片独立复核不等于正式Approve或发布批准。
+
+| PR | 精确head | Survey CI | topology smoke | 双库relay |
+| --- | --- | --- | --- | --- |
+| #139 | `2f82cefc2abbdb4f402c9b01e470c7a0af4c410e` | [43191884478](https://github.com/lsgoodlionel/star-survey/actions/runs/43191884478) | [43191884444](https://github.com/lsgoodlionel/star-survey/actions/runs/43191884444) | [43191884317](https://github.com/lsgoodlionel/star-survey/actions/runs/43191884317) |
+| #140 | `f5f7be9599e99a5ae6cae33f9c18c8c23dd0041b` | [43193852797](https://github.com/lsgoodlionel/star-survey/actions/runs/43193852797) | [43193852725](https://github.com/lsgoodlionel/star-survey/actions/runs/43193852725) | [43193852628](https://github.com/lsgoodlionel/star-survey/actions/runs/43193852628) |
+| #141 | `a2ff8d2789d85a4fcfb5814936193d6b9283fc97` | [43196708759](https://github.com/lsgoodlionel/star-survey/actions/runs/43196708759) | [43196708544](https://github.com/lsgoodlionel/star-survey/actions/runs/43196708544) | [43196708631](https://github.com/lsgoodlionel/star-survey/actions/runs/43196708631) |
+| #142 | `d9160d074fdda6e9f4c952f212cef2ccc3f00111` | [43198734269](https://github.com/lsgoodlionel/star-survey/actions/runs/43198734269) | [43198734288](https://github.com/lsgoodlionel/star-survey/actions/runs/43198734288) | [43198734348](https://github.com/lsgoodlionel/star-survey/actions/runs/43198734348) |
+| #143 | `4313d6c4f8843b7743cf4c3ea1235bbdb7014897` | [43202862046](https://github.com/lsgoodlionel/star-survey/actions/runs/43202862046) | [43202861723](https://github.com/lsgoodlionel/star-survey/actions/runs/43202861723) | [43202861843](https://github.com/lsgoodlionel/star-survey/actions/runs/43202861843) |
+| #144 | `10a23223e1e4af611ab719fdf70997ad326e7156` | [43205373012](https://github.com/lsgoodlionel/star-survey/actions/runs/43205373012) | [43205372769](https://github.com/lsgoodlionel/star-survey/actions/runs/43205372769) | [43205372889](https://github.com/lsgoodlionel/star-survey/actions/runs/43205372889) |
+| #145 | `ce6d0bb56112acffe05b4e83ae35418c2d19b885` | [43211138838](https://github.com/lsgoodlionel/star-survey/actions/runs/43211138838) | [43211138774](https://github.com/lsgoodlionel/star-survey/actions/runs/43211138774) | [43211138670](https://github.com/lsgoodlionel/star-survey/actions/runs/43211138670) |
+| #146 | `25e4ae3276f0e445be210e5ef8cb322b31aa1af1` | [43213300640](https://github.com/lsgoodlionel/star-survey/actions/runs/43213300640) | [43213300611](https://github.com/lsgoodlionel/star-survey/actions/runs/43213300611) | [43213300518](https://github.com/lsgoodlionel/star-survey/actions/runs/43213300518) |
+| #147 | `7b5ff1c2e4304bc7521c295e0899fde62142849b` | [43217106741](https://github.com/lsgoodlionel/star-survey/actions/runs/43217106741) | [43217106762](https://github.com/lsgoodlionel/star-survey/actions/runs/43217106762) | [43217106641](https://github.com/lsgoodlionel/star-survey/actions/runs/43217106641) |
+| #148 | `84bde33d918d4f4674819e52fe22f8c9ab8daf18` | [43231822269](https://github.com/lsgoodlionel/star-survey/actions/runs/43231822269) | [43231822126](https://github.com/lsgoodlionel/star-survey/actions/runs/43231822126) | [43231822418](https://github.com/lsgoodlionel/star-survey/actions/runs/43231822418) |
+| #149 | `4e9e54c2b691b0b3117d33e2791f46d342a02245` | [43236480994](https://github.com/lsgoodlionel/star-survey/actions/runs/43236480994) | [43236480909](https://github.com/lsgoodlionel/star-survey/actions/runs/43236480909) | [43236481341](https://github.com/lsgoodlionel/star-survey/actions/runs/43236481341) |
+| #150 | `7ef86fafda76e0664116f2c0c878cd0797792660` | [43237237293](https://github.com/lsgoodlionel/star-survey/actions/runs/43237237293) | [43237236931](https://github.com/lsgoodlionel/star-survey/actions/runs/43237236931) | [43237236984](https://github.com/lsgoodlionel/star-survey/actions/runs/43237236984) |
+
+依赖为 main→139；main→140→142；main→141→143；144已整合139–143全部最终head；随后144→145→146→147→148→149→150。git祖先核对确认全部12个head及当前main均为1507ef86faf的祖先。因此整合分支以150完整树为基底，仅追加本段计划，全部运行时、测试和workflow blob与150保持一致，集中建立base main的草稿PR供独立整合复核。来源PR保留审查证据，当前不关闭或合并它们；这不是main已经集成。
+
+本组相对main为30文件、4536插入/42删除（追加本段前），包含安全runtime和测试；即使CI成功仍须人工看聚合diff及已发现故障的修复。144的首次5切片冲突和150的149整合均已有非作者检查；本次不再改代码或解决新冲突。150的独立复核在打包范围未见新增确认阻断（271项、本机两架构归档及Python -I导入），不等于ARM原生或新签名候选。各较早切片的空scope/合成SQL、DB而非应用授权、source cohort/查询/reset夹具、unbound路径边界依旧有效；149取消和后代残留仍unknown，必须保留资产且不能自动重试。
+
+门禁对账：release.yml、baseline-policy.json、native_acceptance.sh、verify_release.sh与main逐字节相同；SurveyManager.restore和RestoreManager.restore完整AST（含装饰器）与main相同，CLI命令集合不变。新声明的模块/helper准入提高默认维护包要求，但不是restore/native/upload/release执行授权。旧bundle缺件、旧v1回执GC未知或超限仍保守拒绝；rc19不含新owned记录，不能自动认领为新运行环境。
+
+冻结顺序：先整合PR的精确head完整CI/独立复核，再由人工决定合并；随后核对实际main合并提交CI，才确定候选commit。签名制品与readiness的依赖已交Claude #138评论6826809003；21/22候选尚未登记或创建，不能先填未来SHA或复用旧标签。恢复/原生/上传/发布的每项具体解除和候选触发仍须先说明操作/证据/风险并获用户同意，Release仍Claude负责。本整合不触发标签、镜像、Release或生产。
+
+可独立故障证据：本机22份实际owned代码/helper准入后调用真实验签脚本，缺资产exit1拒绝、组已缺席、DBcopy未启动、私有fixture已清理（/tmp/survey-recovery-target-refusal-150.json SHA256935316509b29975eb3f88b0fcef7a7c2ae86110cd251d7257beb7ef2a6180982）；daemon/install明确模型，不是签名正向。实际签名/有效配置/业务恢复和四平台未完成，不因本整合提升capability为Accepted。
