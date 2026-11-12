@@ -56,6 +56,26 @@ RECOVERY_BLOCKED_GUIDANCE = (
     "database or bypass the block with an older controller or helper."
 )
 
+#: Owned-runtime controllers (surveyctl OWNED_RUNTIME_FILES) refuse to adopt an
+#: installation that lacks their recorded runtime ownership. Keep this text identical
+#: in render_notes.py and render_publication.py; the publication renderer detects it.
+OWNERSHIP_GUIDANCE = (
+    "This controller upgrades only installations that carry its recorded runtime ownership. "
+    "Installations created by earlier controllers without that record are refused, not adopted: "
+    "keep them on their current release and preserve their data, operation markers and backups. "
+    "While recovery is disabled, `surveyctl restore` cannot move their data into a new installation."
+)
+
+#: A bootstrap candidate is built with minimum source version 0.0.0 and no predecessor.
+FRESH_INSTALL_GUIDANCE = (
+    "This candidate is a fresh-install baseline: it was not built against a verified predecessor, "
+    "so no upgrade into it has been verified and it cannot be promoted to stable. Install it on a "
+    "new host for evaluation; do not use it to replace an existing installation."
+)
+BOOTSTRAP_MINIMUM_SOURCE_VERSION = "0.0.0"
+OWNERSHIP_MARKER = "recorded runtime ownership"
+
+
 RECOVERY_LEGACY_GUIDANCE = (
     "Rollback is `restore-only`, and this candidate's controller still runs recovery: `surveyctl restore` "
     "restores a verified backup, and a failed upgrade automatically restores the pre-upgrade backup "
@@ -78,9 +98,15 @@ def candidate_recovery_blocked(assets: Path) -> bool:
     return RECOVERY_BLOCKED_MARKER in text
 
 
+def candidate_requires_ownership(assets: Path) -> bool:
+    """Owned-runtime candidates say so in their own build-time notes; older ones keep their body."""
+    return OWNERSHIP_MARKER in (assets / "release-notes.md").read_text(encoding="utf-8")
+
+
 def render_body(
     manifest: dict[str, Any], readiness: dict[str, Any], repository: str,
     target_tag: str, source_tag: str, target_commit: str, recovery_blocked: bool = True,
+    owned_runtime: bool = False,
 ) -> str:
     rollback = manifest.get("database", {}).get("rollback")
     minimum = manifest.get("minimumSourceVersion")
@@ -98,6 +124,11 @@ def render_body(
     if not isinstance(images, dict) or any(not isinstance(images.get(key), str) for key in application_images):
         fail("release manifest application image identity is incomplete")
     image_lines = "\n".join(f"- `{key}`: `{images[key]}`" for key in application_images)
+    upgrade_limits = ""
+    if owned_runtime:
+        upgrade_limits = "\n" + OWNERSHIP_GUIDANCE + "\n"
+        if minimum == BOOTSTRAP_MINIMUM_SOURCE_VERSION:
+            upgrade_limits += "\n" + FRESH_INSTALL_GUIDANCE + "\n"
     stable = STABLE_TAG.fullmatch(target_tag) is not None
     if stable:
         channel = f"""## Stable promotion
@@ -149,7 +180,7 @@ Minimum source version: `{minimum}`. Create and verify a backup before upgrading
 ```
 
 {RECOVERY_BLOCKED_GUIDANCE if recovery_blocked else RECOVERY_LEGACY_GUIDANCE}
-
+{upgrade_limits}
 ## Known issues and limits
 
 - This is a single-host deployment, not high availability. Planned host maintenance interrupts authoring and responses.
@@ -189,6 +220,7 @@ def render(args: argparse.Namespace) -> int:
     body = render_body(
         manifest, readiness, args.repository, args.target_tag, args.source_tag, args.target_commit,
         recovery_blocked=candidate_recovery_blocked(args.assets),
+        owned_runtime=candidate_requires_ownership(args.assets),
     )
     metadata = {
         "schemaVersion": 1,
