@@ -6,6 +6,8 @@ import sys
 import tempfile
 import os
 import time
+import signal
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -98,6 +100,35 @@ class RecoveryTargetBindingTest(unittest.TestCase):
         with self.assertRaises(fixture.exec_module.KnownExecFailure):copy.execute(fixture.fixture.output)
 
 class RealVerifierLifecycleTest(unittest.TestCase):
+    def test_sigint_after_wait_reaps_leader_never_signals_old_group(self):
+        import recovery_target_binding as m
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);ready=root/'ready';release=root/'release'
+            script="""import pathlib,sys,time
+pathlib.Path(sys.argv[1]).touch()
+while not pathlib.Path(sys.argv[2]).exists():time.sleep(0.001)
+"""
+            processes=[];real_popen=m.subprocess.Popen
+            def launch(*args,**kwargs):
+                p=real_popen(*args,**kwargs);processes.append(p);return p
+            def interrupt():
+                end=time.monotonic()+2
+                while not ready.exists() and time.monotonic()<end:time.sleep(0.002)
+                if ready.exists():
+                    os.kill(os.getpid(),signal.SIGINT)
+                    time.sleep(0.03);release.touch()
+            sender=threading.Thread(target=interrupt)
+            failure=None
+            with mock.patch.object(m.subprocess,'Popen',side_effect=launch),mock.patch.object(m.os,'killpg',side_effect=ProcessLookupError) as signal_group:
+                sender.start()
+                try:m._run_verifier([sys.executable,'-c',script,str(ready),str(release)],timeout=3)
+                except BaseException as error:failure=error
+                finally:sender.join(timeout=3)
+            self.assertEqual(0,processes[0].returncode)
+            self.assertIsInstance(failure,m.TargetVerificationUncertain)
+            self.assertIs(failure.verifier_process,processes[0])
+            signal_group.assert_not_called()
+
     def test_timeout_stops_real_group_child_and_preserves_foreign_parent_fd(self):
         import recovery_target_binding as m
         with tempfile.TemporaryDirectory() as temp:
@@ -152,5 +183,25 @@ time.sleep(30)
         self.assertIs(process,failure.exception.verifier_process)
         self.assertEqual(1,signal_group.call_count)
         self.assertEqual(1,process.wait.call_count)
+
+    def test_unreaped_wait_cancellation_retains_context_without_group_signal(self):
+        import recovery_target_binding as m
+        process=mock.Mock(pid=999999999,returncode=None)
+        process.wait.side_effect=KeyboardInterrupt
+        with mock.patch.object(m.subprocess,'Popen',return_value=process),mock.patch.object(m.os,'killpg') as signal_group:
+            with self.assertRaises(m.TargetVerificationUncertain) as failure:m._run_verifier(['fixed-fixture'])
+        signal_group.assert_not_called()
+        self.assertIs(process,failure.exception.verifier_process)
+        self.assertIsInstance(failure.exception.__cause__,KeyboardInterrupt)
+
+    def test_launch_or_final_observation_cancellation_is_uncertain(self):
+        import recovery_target_binding as m
+        with mock.patch.object(m.subprocess,'Popen',side_effect=KeyboardInterrupt):
+            with self.assertRaises(m.TargetVerificationUncertain) as failure:m._run_verifier(['fixed-fixture'])
+        self.assertIsNone(failure.exception.verifier_process)
+        with mock.patch.object(m,'_group_absent',side_effect=KeyboardInterrupt):
+            with self.assertRaises(m.TargetVerificationUncertain) as failure:
+                m._run_verifier([sys.executable,'-c','pass'],timeout=3)
+        self.assertEqual(0,failure.exception.verifier_process.returncode)
 
 if __name__=='__main__':unittest.main()

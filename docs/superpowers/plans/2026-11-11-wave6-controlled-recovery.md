@@ -433,3 +433,5 @@ ControlledDatabaseCopy.execute_bound 只接该类型，源认证前和每次输�
 新模块尚未加入受校验 runtime 打包/导入清单，无产品 restore/CLI 调用。可信独占 controller、最终检查到使用非原子、重复扫描成本边界不变。Claude/协调器仍需明确包含已审模块的冻结目标、同仓run/commit/manifest/固定digest/两架构bundle及完整验签来源，再完成打包、真实bound导入、受控授权失效、业务/故障/四平台验收。不把旧rc19当作新目标通过，不触发候选/Release，不解除门禁。
 
 #149非作者真实复现验签超时只杀直接bash、后代仍写sentinel。保留原语义抽取后的真实fork红测同样失败，再改Popen独立session/close_fds/三路DEVNULL：180秒验签预算，超时后leader尚未reap时仅一次SIGKILL原进程组，额外最多3秒wait及组缺席观察；失败/观察未知转TargetVerificationUncertain（UncertainExec），异常保留process上下文、不重放。正常leader退出而组仍在时不再向可能复用的PGID发送信号，保守未知，即使exit0也不得继续。真实本机测试证明该固定后代不能延迟写入、继承性外来FD未进child且parent仍持有、stdout/stderr无PIPE；模型覆盖kill拒绝及exit0残留观察未知。10项本包/73相关组合通过，需新head Linux CI。进程组不是cgroup或任意恶意daemon containment，主动setsid逃逸未证明；不可据此声称所有后代安全停止。完整恢复/打包及门禁不变。
+
+#149后续非作者确认SIGINT取消边界：Popen.wait内部可能已reap leader再抛KeyboardInterrupt，不能在BaseException中按旧PGID发送信号。真实SIGINT新红测确认returncode=0时原实现仍调用killpg。修订仅在TimeoutExpired未reap路径进行一次组终止；其他wait/启动/最终观察中断统一TargetVerificationUncertain，保留能取得的process（启动中断可能无handle），不poll后发信号、不自动重试。真实SIGINT新版不再发组信号，未伤其他组；模型覆盖未reap取消及启动/末尾观察中断。13项本包/76相关回归通过。取消时不能承诺后代已停止，未知context/资产必须保留，产品恢复及清理不得因该失败继续；这不是全量后代containment证明，门禁保持。
