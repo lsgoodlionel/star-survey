@@ -13,9 +13,13 @@ import sys
 import uuid
 
 MODULES = ('owned_memory.py', 'owned_children.py', 'owned_crypto.py', 'owned_crypto_child.py',
-           'runtime_ownership.py', 'owned_cipher_adapter.py', 'backup.py', 'restore.py', 'owned_backup_verify.py')
+           'runtime_ownership.py', 'owned_cipher_adapter.py', 'backup.py', 'restore.py', 'owned_backup_verify.py',
+           'surveyctl.py', 'release.schema.json', 'tests/fixtures/release.json')
 CHECKS = ('roundTrip', 'truncatedCipherRejected', 'deadlineChildEnded', 'noNamedPlaintext',
-          'authenticatedRoundTrip', 'badHmacStartsNoChild', 'allSyntheticPayloadFormatsVerified', 'spawnHasNoPlaintextFDs')
+          'authenticatedRoundTrip', 'badHmacStartsNoChild', 'allSyntheticPayloadFormatsVerified', 'spawnHasNoPlaintextFDs',
+          'recoveryTargetMetadataVerified', 'recoveryTargetHashMismatchRejected', 'recoveryTargetVersionRejected',
+          'recoveryTargetFloorRejected', 'recoveryBadControlHmacStartsNoChild', 'recoveryNoNamedPayload',
+          'recoveryRestoreRemainsDisabled')
 
 
 def passed(report, hashes):
@@ -154,6 +158,71 @@ def inside():
             and len(store.load()['children']) == 2 * len(payloads)
             and all(item['phase'] == 'completed' for item in store.load()['children']))
         cipher.close()
+    # The legacy/source-only check above does not qualify a recovery target.
+    # Now exercise #140 with the real sealed memfd/OpenSSL path, retaining an
+    # explicit synthetic release/SQL format scope and no database import.
+    from restore import RestoreIntegrityError, EXPECTED_PAYLOADS, CONTROL_FILES
+    source_release = json.loads(release_bytes)
+    source_release['securityCapabilities'] = {'platform-admin-session-v1': images['PLATFORM_IMAGE']}
+    release_bytes = json.dumps(source_release).encode()
+    (release / 'release.json').write_bytes(release_bytes)
+    (release / '.env').write_text('PLATFORM_ADMIN_ENFORCE_PERSONNEL=true\n')
+    (target / '.surveyctl').mkdir(mode=0o700)
+    (target / '.surveyctl/auth-security-floor').write_text('platform-admin-session-v1\n')
+    with AnonymousWorkspace(max_bytes=1024 * 1024) as workspace:
+        cipher = ControlledCipher(workspace, None, payload_root, b'd' * 64)
+        metadata['releaseManifestSha256'] = hashlib.sha256(release_bytes).hexdigest()
+        rewrite_authenticated_control(payload_root, cipher.key, metadata)
+        cipher.close()
+    candidate = json.loads(Path('/tmp/code/tests/fixtures/release.json').read_text())
+    candidate.update(version='0.3.0', images=images,
+        securityCapabilities={'platform-admin-session-v1': images['PLATFORM_IMAGE']})
+    for architecture, bundle in candidate['assets']['bundles'].items():
+        bundle['name'] = 'survey-0.3.0-linux-' + architecture + '.tar.gz'
+    candidate_path = target / 'recovery-target.json'
+
+    def assess(patch=None, *, wrong_hash=False, corrupt_control=False):
+        value = {**candidate, **(patch or {})}
+        candidate_path.write_text(json.dumps(value, sort_keys=True))
+        expected = '0' * 64 if wrong_hash else hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+        control = payload_root / 'CONTROL-HMAC'
+        original = control.read_bytes()
+        if corrupt_control: control.write_text('0' * 64 + '\n')
+        store = PrivateStore(root, name='runtime-child-' + uuid.uuid4().hex + '.json')
+        journal = ChildJournal(store, guard, operation_id=str(uuid.uuid4()), installation_id=str(uuid.uuid4()))
+        try:
+            with AnonymousWorkspace(max_bytes=1024 * 1024) as workspace:
+                cipher = ControlledCipher(workspace, OpenSSLProcess(journal, guard), payload_root, b'd' * 64)
+                verifier = ControlledVerifier(target, cipher)
+                try:
+                    outcome = ('verified', verifier.verify_target_compatibility(payload_root, candidate_path, expected))
+                except RestoreIntegrityError as error:
+                    outcome = ('rejected', str(error))  # Compared locally, never emitted.
+                denied = False
+                try: verifier.restore(payload_root)
+                except RestoreIntegrityError: denied = True
+                rows = (store.load() or {}).get('children', [])
+                ended = not cipher.uncertain and all(row['phase'] == 'completed' for row in rows)
+                cipher.close()
+                return outcome, len(rows), ended, denied
+        finally:
+            if corrupt_control: control.write_bytes(original)
+
+    outcome, count, ended, denied = assess()
+    report['recoveryTargetMetadataVerified'] = (outcome[0] == 'verified' and count == len(payloads) and ended
+        and outcome[1]['sourcePayloadsVerified'] is True and outcome[1]['targetMetadataCompatible'] is True
+        and all(outcome[1][key] is False for key in ('targetSignatureVerified', 'targetConfigurationVerified', 'restoreAuthorized')))
+    report['recoveryRestoreRemainsDisabled'] = denied
+    outcome, count, ended, _ = assess(wrong_hash=True)
+    report['recoveryTargetHashMismatchRejected'] = (outcome == ('rejected', 'recovery target manifest binding is invalid') and count == 0 and ended)
+    outcome, count, ended, _ = assess({'minimumSourceVersion': '0.2.1'})
+    report['recoveryTargetVersionRejected'] = (outcome == ('rejected', 'backup version is incompatible with the recovery target') and count == len(payloads) and ended)
+    outcome, count, ended, _ = assess({'securityCapabilities': {}})
+    report['recoveryTargetFloorRejected'] = (outcome == ('rejected', 'recovery target would downgrade the personnel security floor') and count == len(payloads) and ended)
+    outcome, count, ended, _ = assess(corrupt_control=True)
+    report['recoveryBadControlHmacStartsNoChild'] = (outcome == ('rejected', 'backup control authentication failed') and count == 0 and ended)
+    report['recoveryNoNamedPayload'] = ({path.name for path in payload_root.iterdir()} == EXPECTED_PAYLOADS | CONTROL_FILES
+        and not any(path.name in payloads for path in target.rglob('*')))
     report['noNamedPlaintext'] = (all(path.name in ('code', 'receipts', 'encrypted', 'verify-target') for path in Path('/tmp').iterdir())
         and {path.name for path in encrypted_root.iterdir()} == {'postgres.dump.enc'})
     report['sourceHashes'] = {name: hashlib.sha256((Path('/tmp/code') / name).read_bytes()).hexdigest() for name in MODULES}
@@ -199,7 +268,7 @@ def host(image):
         stage = 'inspect'
         inspect()
         payload = ('import os\nfrom pathlib import Path\np=Path("/tmp/code");p.mkdir(mode=0o700)\n'
-            + 'sources=' + repr(sources) + '\nfor n,s in sources.items():\n (p/n).write_text(s)\n (p/n).chmod(0o600)\n'
+            + 'sources=' + repr(sources) + '\nfor n,s in sources.items():\n (p/n).parent.mkdir(parents=True,exist_ok=True)\n (p/n).write_text(s)\n (p/n).chmod(0o600)\n'
             + 'exec(compile(' + repr(Path(__file__).read_text()) + ',"<crypto-probe>","exec"))\n')
         stage = 'execute'
         result = subprocess.run(command + ['start', '-ai', cid], input=payload, text=True,

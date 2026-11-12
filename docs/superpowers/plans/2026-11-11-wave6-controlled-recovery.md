@@ -314,3 +314,20 @@ Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发�
 强制负资格字段sourceAuthenticationVerified/targetSignatureVerified/controlledExecReceiptsCovered/restoreAuthorized/releaseEligible/crossDatabaseTransactionVerified/productionAuthenticationVerified=false。dumpTransportHostMemoryOnly=true不是memfd/加密备份链，也不声称Python heap已擦除；具名host dump只核对本夹具私有root及当前固定命令路径，数据库数据本就写入自建卷。cohortProbeIsModel=true，同步CLI结果不能证明任意宿主writer/未知exec已收束。已有#142真实OpenSSL/memfd和旧PG owner/audit故障证据仍是不同组件，未被本测试自动组合成全链路。
 
 现有production-smoke ownership-protocol在既有固定DB镜像拉取/维护组件之后追加此实验，仅上传白名单JSON；预计额外四个短期DB容器和四卷、最多2GiB DB内存配置，无新权限/凭据/候选镜像构建。#141该job既有时长约2分19秒，仍保留10分钟总门；超时/中断无证据不能宣称清理。线上amd64精确证据待CI。Release由Claude #138负责，恢复/原生/上传/发布门禁均未解除。
+### 2026-11-12：匿名来源验证后的新目标兼容性（内部接口，未接恢复）
+
+独立于#139目标预留守卫、基于main7cdd66c4，在现有ControlledVerifier增加verify_target_compatibility。原verify_only检查的是原安装当前版本的兼容范围，不能直接证明备份适用于另一个目标；新接口先要求明确的目标manifest小写SHA256，并用现有load_manifest完整schema校验及内容绑定，再调用原verify_only进行HMAC、文件/源manifest/镜像身份、版本/floor与全部匿名payload格式校验。随后对目标minimumSourceVersion、目标版本上界、schema及source现存人员floor作兼容判断；读取前后重新加载固定hash目标，拒绝长验证期间改写。
+
+输出sourcePayloadsVerified/targetMetadataCompatible只描述本次内部检查，不是恢复能力票据；targetSignatureVerified、targetConfigurationVerified、restoreAuthorized固定false。来源/目标的签名、控制器代码/operation/资源归属、目标有效配置、生命周期及未知child的cipher/workspace责任仍在未来调用者；接口没有CLI/restore调用者，也没有启动数据库或应用、失效人员授权或复制明文到新目标。现有restore拒绝不变，未改Release或门禁。原owned_backup_verify已属17模块包，此次只是新增未接调用方法，不新增模块声明或候选能力。
+
+先失败测试证实接口不存在，再实现；schema负例夹具最初缺backupSchema，经补齐真实schema字段后保留不兼容断言。10项新测试覆盖缺失/错hash、版本上下界及RC minimum、schema、坏HMAC早于decrypt、人员floor降级、目标中途改写及资格false；连同2项继承的原匿名验证测试通过，另外独立运行原2项和43项backup/restore回归通过。测试使用实际HMAC/清单/格式/FD适配器，但cipher是显式CopyExecutor模型、workspace是portable backend；不称真实OpenSSL、Linux memfd、新副本DB或恢复准出通过，Linux结果待精确CI。
+
+下一步仍需新的Docker项目/资源从创建起绑定、源备份/目标包在使用时复验、真实双库新副本及人员session/grant失效和归因审计、故障注入/收束/精确清理。不得把metadata兼容或原HMAC通过当成未来恢复执行授权，所有具体解除前说明证据、范围及风险并取得明确同意。
+
+### 2026-11-12：来源/目标兼容性的真实Linux crypto验证（stack #140，执行门未动）
+
+先核对原check_restore_owner_contract组件，人员grant/session失效、审计失败回滚、旧会话拒绝等已有真实PG证据，本轮不重复实现。优先补#140当前CopyExecutor/portableFD的证据缺口：扩展现有owned_crypto_native.py隔离夹具，带入同源surveyctl/schema/fixture manifest，调用实际verify_target_compatibility。每个case单独匿名workspace、受控cipher和child journal，避免多个验证复用既有解密输出或累积超过child预算；旧8项crypto/错误/期限/无继承测试全部保留，新增7项证据必需字段及缺失/false/1拒绝。
+
+先红证明原证据不要求新接口，修改后2项证据测试、12项兼容性回归通过。既有固定Python镜像下真实Docker Desktop Linux arm64测试exit0：正向targetMetadataCompatible及sourcePayloadsVerified=true，同时targetSignatureVerified/targetConfigurationVerified/restoreAuthorized=false；错误目标hash为0 child，版本/floor拒绝均在完整匿名payload校验后且所有child已结束；坏control-HMAC为0 child；无具名解密payload、restore调用仍拒绝。原加密往返、截断/坏MAC、deadline、FD不继承和noNamedPlaintext仍true，最终containerCleanup=verified，12份同源文件的before/inside/after SHA相同，JSON /tmp/survey-recovery-source-crypto-20261112.json。
+
+边界仍是actual OpenSSL/Linux memfd处理合成PGDMP magic、Maria注释头及小tar；未导入数据库、未启动副本应用、未认证目标签名或新目标配置，不称完整SQL安全性/数据库恢复/Ubuntu四平台。沿用原非root65534、cap-drop ALL/NNP/network-none/readonly、16MiB tmpfs、无host bind/端口及CPU/内存/PID限制，无新增权限/镜像拉取或workflow入口。现有ownership-protocol job已调用此夹具，精确PR的amd64证据待CI；父PR #140原head不改。restore/native/上传/发布门禁不变，Release仍Claude负责。
