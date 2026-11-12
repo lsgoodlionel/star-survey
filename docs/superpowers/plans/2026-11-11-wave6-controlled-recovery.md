@@ -431,3 +431,5 @@ ControlledDatabaseCopy.execute_bound 只接该类型，源认证前和每次输�
 缺接口红测后，7项新测试/70项相关组合通过。验签工具/Compose/target 为明确模型 seam，覆盖固定命令、非零/超时、资产/manifest/commit/配置漂移、symlink及逐输入复核；没有新受信目标的真实 bound 正向证据。#148新84bde33d的 artifact13949837988 已核 ZIP f9e527bcbdf802cf3609d0f95a042508bc5eb68388dcef8cd3a64489182a5ebc、18源码+58迁移库存和两份JSON/cleanup，只证明 unbound 双库组件。
 
 新模块尚未加入受校验 runtime 打包/导入清单，无产品 restore/CLI 调用。可信独占 controller、最终检查到使用非原子、重复扫描成本边界不变。Claude/协调器仍需明确包含已审模块的冻结目标、同仓run/commit/manifest/固定digest/两架构bundle及完整验签来源，再完成打包、真实bound导入、受控授权失效、业务/故障/四平台验收。不把旧rc19当作新目标通过，不触发候选/Release，不解除门禁。
+
+#149非作者真实复现验签超时只杀直接bash、后代仍写sentinel。保留原语义抽取后的真实fork红测同样失败，再改Popen独立session/close_fds/三路DEVNULL：180秒验签预算，超时后leader尚未reap时仅一次SIGKILL原进程组，额外最多3秒wait及组缺席观察；失败/观察未知转TargetVerificationUncertain（UncertainExec），异常保留process上下文、不重放。正常leader退出而组仍在时不再向可能复用的PGID发送信号，保守未知，即使exit0也不得继续。真实本机测试证明该固定后代不能延迟写入、继承性外来FD未进child且parent仍持有、stdout/stderr无PIPE；模型覆盖kill拒绝及exit0残留观察未知。10项本包/73相关组合通过，需新head Linux CI。进程组不是cgroup或任意恶意daemon containment，主动setsid逃逸未证明；不可据此声称所有后代安全停止。完整恢复/打包及门禁不变。

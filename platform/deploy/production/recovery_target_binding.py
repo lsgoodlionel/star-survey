@@ -12,15 +12,68 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import signal
+import time
 
 from controlled_database_import import NewCopyTarget
 from runtime_controller import source_contract
+from owned_docker_exec import UncertainExec
 
 REPOSITORY='lsgoodlionel/star-survey'
 VERIFIER=Path(__file__).resolve().parent/'release/verify_release.sh'
 
 class TargetBindingError(Exception):
     pass
+
+
+class TargetVerificationUncertain(TargetBindingError,UncertainExec):
+    """Retain verification context; never admit SQL on unknown helper state."""
+
+
+def _group_absent(pgid):
+    try:os.killpg(pgid,0)
+    except ProcessLookupError:return True
+    except OSError:return False
+    return False
+
+
+def _terminate_group(process,timeout):
+    # A timed-out wait has not reaped our leader. Signal its original process
+    # group once while that PID cannot be reused; never signal after wait/reap.
+    try:os.killpg(process.pid,signal.SIGKILL)
+    except ProcessLookupError:pass
+    except OSError:return False
+    deadline=time.monotonic()+timeout
+    try:process.wait(timeout=max(0.001,deadline-time.monotonic()))
+    except BaseException:return False
+    while not _group_absent(process.pid):
+        if time.monotonic()>=deadline:return False
+        time.sleep(min(0.02,max(0,deadline-time.monotonic())))
+    return True
+
+
+def _run_verifier(command,timeout=180,cleanup_timeout=3):
+    try:
+        process=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,start_new_session=True,close_fds=True)
+    except OSError as error:
+        raise TargetBindingError('target release verification unavailable') from error
+    try:process.wait(timeout=timeout)
+    except BaseException as error:
+        settled=_terminate_group(process,cleanup_timeout)
+        if not settled:
+            failure=TargetVerificationUncertain('verifier process group outcome unknown; retain context')
+            failure.verifier_process=process
+            raise failure from error
+        if not isinstance(error,Exception):raise
+        raise TargetBindingError('target release verification interrupted; process group absent') from error
+    if not _group_absent(process.pid):
+        # The leader was already reaped. Do not risk signaling a reused group
+        # ID; unexpected descendants remain unknown, even after exit 0.
+        failure=TargetVerificationUncertain('verifier exited with a nonempty or unobservable process group')
+        failure.verifier_process=process
+        raise failure
+    return process
 
 
 def _snapshot(root):
@@ -74,10 +127,9 @@ class RecoveryTargetBinding:
             raise TargetBindingError('target manifest digest differs')
         helper=VERIFIER.read_bytes();self.helper_sha=hashlib.sha256(helper).hexdigest()
         try:
-            result=subprocess.run(['bash',str(VERIFIER),'--assets',str(self.assets),'--repository',REPOSITORY,
+            result=_run_verifier(['bash',str(VERIFIER),'--assets',str(self.assets),'--repository',REPOSITORY,
                 '--target-tag','v'+version,'--source-tag','v'+version,'--target-commit',commit],
-                stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-                check=False,timeout=180)
+                timeout=180)
         except (OSError,subprocess.TimeoutExpired) as error:
             raise TargetBindingError('target release verification unavailable') from error
         if type(result.returncode) is not int or result.returncode!=0:
