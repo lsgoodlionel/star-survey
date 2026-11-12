@@ -73,6 +73,28 @@ class APIOwnershipDriver(ownership.DockerOwnershipDriver):
             return name
         return super()._query(args)  # ReadOnlyDockerRunner rejects other mutations.
 
+    def stop_remove_containers(self, expected):
+        current = self.observe()
+        if (current['cohort'] != 'quiescent' or current['foreign']
+                or {kind: current[kind] for kind in ownership.KINDS} != expected):
+            raise ownership.OwnershipError('upgrade retirement precondition changed')
+        for cid, fingerprint in expected['containers'].items():
+            actual, unknown, state = self._container(cid)
+            if actual != fingerprint or unknown:
+                raise ownership.OwnershipError('upgrade container identity is unverified')
+            if state == 'running':
+                self._query(['container', 'stop', '--time', '20', cid])
+            actual, unknown, state = self._container(cid)
+            if actual != fingerprint or unknown or state not in {'created', 'exited', 'dead'}:
+                raise ownership.OwnershipError('upgrade container end is unverified')
+            self._query(['container', 'rm', cid])
+            if not self.api.container_absent(cid):
+                raise ownership.OwnershipError('upgrade container removal is unverified')
+        after = self.observe()
+        if (after['cohort'] != 'quiescent' or after['foreign'] or after['containers']
+                or any(after[kind] != expected[kind] for kind in ('networks', 'volumes'))):
+            raise ownership.OwnershipError('upgrade changed persistent resources or left containers')
+
     def create_claim(self, name, binding, image):
         if (name != ownership.CLAIM_NAME or not isinstance(binding, dict)
                 or set(binding) != {'daemonId', 'installationId', 'targetSha256'}

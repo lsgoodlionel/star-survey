@@ -63,6 +63,86 @@ class RuntimeControllerTest(unittest.TestCase):
         return self.module.RuntimeController.prepare(self.manager, '0.2.0',
             _driver_factory=self.driver, _api=self.api)
 
+    def active_upgrade(self):
+        runtime = self.prepare()
+        runtime.install(lambda: self.daemon.snapshot.update(containers={'1' * 64: 'a' * 64},
+            networks={'2' * 64: 'b' * 64}, volumes={'survey-production_data': 'd' * 64}))
+        release = self.target / 'releases/0.3.0'; release.mkdir()
+        for name in ('compose.yml', '.env'): (release / name).write_text('next-synthetic')
+        self.manager._operation_name = 'upgrade'
+        self.manager._upgrade_execution_version = '0.3.0'
+        self.manager._verify_owned_support = lambda version: None  # Explicit code-admission model.
+        return runtime
+
+    def test_upgrade_switches_only_after_container_retirement_and_retains_claim_data(self):
+        runtime = self.active_upgrade()
+        old = runtime.store.load()
+        events = []
+        def stop(expected):
+            self.assertEqual('mutation-pending', runtime.store.load()['phase'])
+            self.assertEqual(old['resources'], expected)
+            self.assertEqual('0.2.0', runtime._load(self.manager, '0.2.0')['version'])
+            events.append('retire')
+            self.daemon.snapshot['containers'] = {}
+        self.daemon.stop_remove_containers = stop
+        candidate = self.module.RuntimeController.prepare_upgrade(self.manager, '0.2.0', '0.3.0',
+            _driver_factory=self.driver, _api=self.api)
+        def start():
+            self.assertEqual(['retire'], events)
+            self.assertEqual('0.3.0', candidate._load(self.manager, '0.3.0')['version'])
+            self.daemon.snapshot['containers'] = {'3' * 64: 'e' * 64}
+            events.append('start')
+        candidate.upgrade(start)
+        after = candidate.store.load()
+        self.assertEqual(['retire', 'start'], events)
+        self.assertEqual('ready', after['phase'])
+        self.assertEqual(old['claimId'], after['claimId'])
+        for kind in ('networks', 'volumes'): self.assertEqual(old['resources'][kind], after['resources'][kind])
+
+    def test_upgrade_unknown_retirement_keeps_pending_and_old_source_without_start(self):
+        self.active_upgrade()
+        self.daemon.stop_remove_containers = lambda expected: (_ for _ in ()).throw(TimeoutError('lost stop'))
+        candidate = self.module.RuntimeController.prepare_upgrade(self.manager, '0.2.0', '0.3.0',
+            _driver_factory=self.driver, _api=self.api)
+        events = []
+        with self.assertRaises(self.module.ownership.OwnershipError): candidate.upgrade(lambda: events.append('start'))
+        self.assertEqual([], events)
+        self.assertEqual('mutation-pending', candidate.store.load()['phase'])
+        self.assertEqual('0.2.0', candidate._load(self.manager, '0.2.0')['version'])
+
+    def test_upgrade_persistent_inventory_change_is_rejected_before_retirement(self):
+        runtime = self.active_upgrade()
+        before = runtime.store.load()
+        self.config['volumes']['new-data'] = {'name': 'survey-production_new-data'}
+        with self.assertRaises(self.module.ownership.OwnershipError):
+            self.module.RuntimeController.prepare_upgrade(self.manager, '0.2.0', '0.3.0',
+                _driver_factory=self.driver, _api=self.api)
+        self.assertEqual(before, runtime.store.load())
+
+    def test_upgrade_network_replacement_during_start_is_not_settled_success(self):
+        self.active_upgrade()
+        self.daemon.stop_remove_containers = lambda expected: self.daemon.snapshot.update(containers={})
+        candidate = self.module.RuntimeController.prepare_upgrade(self.manager, '0.2.0', '0.3.0',
+            _driver_factory=self.driver, _api=self.api)
+        def start():
+            self.daemon.snapshot.update(containers={'3' * 64: 'e' * 64}, networks={'4' * 64: 'f' * 64})
+        with self.assertRaises(self.module.ownership.OwnershipError): candidate.upgrade(start)
+        self.assertEqual('mutation-pending', candidate.store.load()['phase'])
+        self.assertEqual('0.3.0', candidate._load(self.manager, '0.3.0')['version'])
+
+    def test_upgrade_source_drift_and_unprepared_runtime_never_retire_containers(self):
+        runtime = self.active_upgrade()
+        before = runtime.store.load()
+        calls = []
+        self.daemon.stop_remove_containers = lambda expected: calls.append('retire')
+        with self.assertRaises(self.module.ownership.OwnershipError): runtime.upgrade(lambda: None)
+        candidate = self.module.RuntimeController.prepare_upgrade(self.manager, '0.2.0', '0.3.0',
+            _driver_factory=self.driver, _api=self.api)
+        (self.target / 'releases/0.3.0/.env').write_text('changed-after-prepare')
+        with self.assertRaises(self.module.ownership.OwnershipError): candidate.upgrade(lambda: None)
+        self.assertEqual([], calls)
+        self.assertEqual(before, candidate.store.load())
+
     def test_new_source_contract_labels_and_reload_bind_actual_installation(self):
         runtime = self.prepare()
         def created():

@@ -187,3 +187,19 @@ Owner另明确批准FD身份安全限定修复。原head72c94843的真实维护/
 独立复核后，故障注入确认了部分退役缺口：public FD已关闭但anchor close失败时，unlink未封锁workspace；workspace.close还可能再次尝试同一anchor。先红覆盖unlink/close、close前报错及close后号码已被外来FD复用四种组合。现在close前记录anchor_close_attempted，任何退役close未知立即永久failed，保留FD/identity记录；不重试、不允许同名/新文件或export，不将未知状态改为成功。分配错误清理也保留部分引用，不能覆盖，只有完整已验证退役后的新分配可重置尝试标记。正常清理仍释放已验证本方FD，未知引用保留至进程退出，不能称无残留。
 
 21项便携workspace、85项owned测试通过；真实Linux memfd新增uncertainRetirementBlocksReuse（实际close后dup2外来FD再注入错误），十项全true，源码前后SHA一致、容器清理verified，最终JSON `/tmp/survey-pr129-memfd-retirement-final-20261111.json`。独立故障夹具显式清理其自建FD，不是产品恢复流程，也未清除产品未知标记。上一head130a09ff的smoke43115963126已通过，新增故障语义仍需新head的CI及独立复核，不能继承旧绿色结果。按Owner最新指示，解除恢复、原生或发布门禁前必须先说明具体操作并取得同意；本轮全部保留，不合并、不发布，Release仍由Claude负责。
+
+### 2026-11-12 受控升级接线（独立分支，待审/待在线验证）
+
+以#129精确c59a441648b6ce2db3da4fde569b72b8f0dcb785为冻结基线，在`fix/wave6-owned-upgrade`独立推进，不改其head或Claude #130/Release。原代码已有upgrade枚举但控制器没有接线，还会使用旧Compose/rollback路径。新默认路径在intent/staging前以stdlib检查源归属文件存在及私有性，不自动认领rc19或其他旧安装，也不因不支持的旧安装请求就改写其状态。
+
+**代码授权与数据授权分开。** 使用来自经验证目标包的控制器执行升级；先按目标staged bundle校验全部17个实际执行模块（原SHA/属主/权限/非pyc准入不变），再启用仅限锁定upgrade操作、不可由请求参数选择的内存执行版本上下文。上下文内旧数据仍按原runtime-contract、原manifest/env/overlay及claim/daemon校验，备份版本/schema/manifest SHA/HMAC及人员floor仍绑定源版本。上下文在成功和失败时都清除；普通backup/doctor不能借用。代码字节不同的源包按原规则会被当前执行器拒绝，但经目标包准入的升级执行器可操作经独立验证的旧资源；源manifest不被替换。包/镜像签名与来源信任沿用现有正式制品链，不从源码夹具伪造capability。
+
+先做真实源版本受控备份及核验，再拉取固定目标镜像/建立目标合同。新旧持久网络与卷定义必须完全一致；本切片不实现持久拓扑迁移。原容器按旧合同/精确CID逐一停止、结束确认、非force且v=false删除，并核验原CID不存在；不删除网络/卷。任何未知响应不重放、不切源。全部旧容器退出且持久ID未变后，在mutation-pending内写入目标合同/overlay、以`up -d`启动（无remove-orphans），健康/TLS通过且前后网络/卷指纹相同才完成并切current。原claim/CID及其固定镜像保留，不重新认领；目标应用镜像可改变，但claim来源仍是原受信安装。合同与overlay的多文件切换不是原子事务；中断会留下operation intent/mutation-pending并拒绝继续，不能自动修复或假称回滚成功。
+
+失败进入recovery_required，只有验证完成的备份名才记录为recoveryBackup；不调用旧Compose回退、不启动旧镜像、不恢复数据库。已知完整性错误保留原退出分类，未知执行固定RuntimeHealthError。可能存在备份后的写入或迁移，保留所有状态供受控恢复设计；恢复仍禁用。
+
+定向测试先红覆盖：退役先于合同切换、未知停止不启动、持久拓扑改变及启动时网络替换不settle、无源码权限的旧安装在intent前拒绝、目标代码不匹配不得启动备份、目标代码上下文不得逃逸、失败不调用旧恢复。经真实staging元数据的测试证明字节不同的旧包身份仍被保留，并非用目标manifest重写旧备份身份。协议/管理器测试含显式fake daemon/host，不是原生验收。
+
+实际退役边界再次校验目标代码和完整目标source contract，拒绝prepare之后的漂移；未经prepare或没有目标上下文的runtime实例不能直接升级。远程`upgrade_version`与本地manifest两种入口共享该锁定授权，旧安装在远程下载前也拒绝。174项控制器、73项runtime、85项owned定向测试通过；新真实组件升级的在线结果待CI，不将此前无升级步骤的绿色证据冒充当前组合。
+
+现有Linux维护夹具扩展为真实PG/Maria容器同代码双版本切换：原容器ID全部消失、新ID绑定，claim/网络/九卷ID与指纹保留，再执行普通卸载与purge。host/DNS/TLS是显式模型，manifest是合成包，`upgradeBusinessDataVerified=false`；不证明业务答卷数据连续性、跨任意历史代码兼容、完整安装、正向doctor或候选准出。占位服务改为显式TERM退出以避免无意义的六次20秒等待；不响应TERM的真实20秒stop合同已另有独立实验和负例，产品stop预算不变。该路径复用现有quality job，完整在线证据尚待新head CI。新增运行模块数仍17，Claude #130打包无须再加名称；Release/候选/门禁解除仍由相应授权流程处理。

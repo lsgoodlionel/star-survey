@@ -2304,6 +2304,112 @@ raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-inte
         self.assertLess(next(i for i, value in enumerate(joined) if "ps" in value), len(joined))
         self.assertEqual("0.3.0", (self.target / "current").read_text().strip())
 
+    def test_default_upgrade_binds_target_code_before_source_backup_and_owned_switch(self):
+        self.install()
+        target = self.manifest(version='0.3.0', minimumSourceVersion='0.2.0')
+        manager = self.manager(); manager._runtime_factory = None
+        events = []
+        def admit(version): events.append(('code', version))
+        def backup(name, state):
+            events.append(('backup-source', state['version'], manager._executing_support_version(state['version'])))
+            return self.target / 'backups' / name
+        class Runtime:
+            def upgrade(runtime, effect):
+                events.append(('owned-upgrade',))
+                return effect()
+        import runtime_controller
+        with mock.patch.object(manager, '_require_owned_upgrade_source'), \
+             mock.patch.object(manager, '_verify_owned_support', side_effect=admit), \
+             mock.patch.object(manager, '_backup_for_upgrade_or_manual', side_effect=backup), \
+             mock.patch.object(manager, '_verify_backup', return_value={}) as verify, \
+             mock.patch.object(runtime_controller.RuntimeController, 'prepare_upgrade', return_value=Runtime()) as prepare:
+            manager.upgrade(target)
+        self.assertEqual([('code', '0.3.0'), ('backup-source', '0.2.0', '0.3.0'), ('owned-upgrade',)], events)
+        prepare.assert_called_once_with(manager, '0.2.0', '0.3.0')
+        self.assertEqual('0.2.0', verify.call_args.args[1])
+        self.assertIsNone(manager._upgrade_execution_version)
+        self.assertFalse(any('--remove-orphans' in command for command in self.runner.commands[-4:]))
+        self.assertEqual('0.3.0', manager._read_current())
+
+    def test_default_upgrade_unknown_switch_never_calls_legacy_recovery(self):
+        self.install()
+        target = self.manifest(version='0.3.0', minimumSourceVersion='0.2.0')
+        manager = self.manager(); manager._runtime_factory = None
+        class Runtime:
+            def upgrade(runtime, effect): raise TimeoutError('synthetic unknown request')
+        import runtime_controller
+        with mock.patch.object(manager, '_require_owned_upgrade_source'), \
+             mock.patch.object(manager, '_verify_owned_support'), \
+             mock.patch.object(manager, '_backup_for_upgrade_or_manual', return_value=self.target / 'backups/verified'), \
+             mock.patch.object(manager, '_verify_backup', return_value={}), \
+             mock.patch.object(runtime_controller.RuntimeController, 'prepare_upgrade', return_value=Runtime()), \
+             mock.patch.object(manager, '_recover_failed_upgrade') as legacy:
+            with self.assertRaises(self.module.RuntimeHealthError): manager.upgrade(target)
+        legacy.assert_not_called()
+        self.assertEqual('recovery_required', manager._read_state()['status'])
+        self.assertEqual('0.2.0', manager._read_current())
+        self.assertIsNone(manager._upgrade_execution_version)
+        self.assertFalse(any('--remove-orphans' in command for command in self.runner.commands[-4:]))
+
+    def test_default_upgrade_unmatched_target_code_cannot_start_source_backup(self):
+        self.install()
+        target = self.manifest(version='0.3.0', minimumSourceVersion='0.2.0')
+        manager = self.manager(); manager._runtime_factory = None
+        self.runner.commands.clear()
+        with mock.patch.object(manager, '_require_owned_upgrade_source'), \
+             mock.patch.object(manager, '_backup_for_upgrade_or_manual') as backup:
+            with self.assertRaises(self.module.IntegrityError): manager.upgrade(target)
+            backup.assert_not_called()
+        self.assertIsNone(manager._upgrade_execution_version)
+        self.assertEqual('0.2.0', manager._read_current())
+        self.assertFalse(any('pull' in command or 'up' in command for command in self.runner.commands))
+
+    def test_default_upgrade_legacy_source_is_refused_without_latching_or_staging(self):
+        self.install()
+        target = self.manifest(version='0.3.0', minimumSourceVersion='0.2.0')
+        manager = self.manager(); manager._runtime_factory = None
+        paths = (manager.state_path, manager.current_path, manager.control_dir / 'operation.intent')
+        before = [path.read_bytes() for path in paths]
+        self.runner.commands.clear()
+        with self.assertRaises(self.module.InputError): manager.upgrade(target)
+        with mock.patch.object(manager.release_client, 'fetch_manifest') as fetch:
+            with self.assertRaises(self.module.InputError): manager.upgrade_version('0.3.0', 'a' * 64)
+            fetch.assert_not_called()
+        self.assertEqual(before, [path.read_bytes() for path in paths])
+        self.assertFalse((self.target / 'releases/0.3.0').exists())
+        self.assertEqual([], self.runner.commands)
+
+    def test_target_code_context_is_not_available_to_ordinary_diagnostics(self):
+        manager = self.manager(); manager._upgrade_execution_version = '0.3.0'
+        with self.assertRaises(self.module.IntegrityError): manager._executing_support_version('0.2.0')
+        with manager._mutation_lock(create_target=True, operation='doctor'):
+            with self.assertRaises(self.module.IntegrityError): manager._executing_support_version('0.2.0')
+        for name in ('upgrade', 'upgrade_version'):
+            with manager._mutation_lock(operation=name):
+                self.assertEqual('0.3.0', manager._executing_support_version('0.2.0'))
+        manager._upgrade_execution_version = None
+        self.assertEqual('0.2.0', manager._executing_support_version('0.2.0'))
+
+    def test_target_code_admission_does_not_rewrite_predecessor_package_identity(self):
+        old, _ = write_test_release(self.root, _fixture_owned_support=True,
+            payload_overrides={'owned_memory.py': (PRODUCTION_DIR / 'owned_memory.py').read_bytes() + b'\n# predecessor fixture\n'})
+        self.install(old)  # Explicit modeled bootstrap, not execution of the predecessor code.
+        target, bundle = write_test_release(self.root, version='0.3.0', _fixture_owned_support=True)
+        manager = self.manager()
+        previous_bytes = (self.target / 'releases/0.2.0/release.json').read_bytes()
+        with manager._mutation_lock(operation='upgrade'):
+            state = manager._read_state(require_current=True)
+            manager._stage_release(self.module.load_manifest(target), 'arm64', state['publicHost'],
+                                   state['adminUser'], state['adminEmail'], bundle)
+            with self.assertRaises(self.module.IntegrityError): manager._verify_owned_support('0.2.0')
+            manager._upgrade_execution_version = '0.3.0'
+            try:
+                admitted = manager._verify_owned_support(manager._executing_support_version('0.2.0'))
+                self.assertEqual(17, len(admitted))
+                self.assertEqual(previous_bytes, (self.target / 'releases/0.2.0/release.json').read_bytes())
+            finally:
+                manager._upgrade_execution_version = None
+
     def test_upgrade_from_legacy_and_failed_upgrade_recovers_legacy_topology(self):
         self.runner.configured_relay = self.runner.running_relay = False
         self.install()

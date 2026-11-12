@@ -539,6 +539,7 @@ class SurveyManager:
         self._mutation_depth = 0
         self._runtime_factory = _runtime_factory
         self._runtime_lock_fd = None
+        self._upgrade_execution_version = None
 
     @contextmanager
     def _mutation_lock(self, *, create_target: bool = False, operation: str = "operation"):
@@ -1206,7 +1207,7 @@ class SurveyManager:
         ]
         if owned_overlay and (os.path.lexists(self.control_dir / 'runtime-owner.json')
                 or os.path.lexists(self.control_dir / 'runtime-owner.compose.json')):
-            self._load_owned_support(version)  # Before importing any support code.
+            self._load_owned_support(self._executing_support_version(version))  # Before any support import.
             try:
                 from runtime_controller import RuntimeController
                 RuntimeController._load(self, version)
@@ -1221,7 +1222,7 @@ class SurveyManager:
                 return self._runtime_factory(self, version, create=create)
             if not create and not os.path.lexists(self.control_dir / 'runtime-owner.json'):
                 raise RuntimeHealthError('controlled runtime ownership is unavailable; legacy adoption is prohibited')
-            self._load_owned_support(version)
+            self._load_owned_support(self._executing_support_version(version))
             from runtime_controller import RuntimeController
             if create:
                 return RuntimeController.prepare(self, version)
@@ -1230,6 +1231,14 @@ class SurveyManager:
             raise
         except Exception as exc:
             raise RuntimeHealthError('controlled runtime ownership is unavailable; preserve the installation and markers') from exc
+
+    def _executing_support_version(self, source_version):
+        target = self._upgrade_execution_version
+        if target is None:
+            return source_version
+        if self._mutation_depth < 1 or getattr(self, '_operation_name', None) not in {'upgrade', 'upgrade_version'}:
+            raise IntegrityError('target-code authority is restricted to the locked upgrade operation')
+        return target
 
     def _verify_owned_support(self, version):
         release = self._release_dir(version)
@@ -2192,6 +2201,8 @@ class SurveyManager:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
         previous, manifest = state["version"], load_manifest(manifest_path, expected_sha256)
+        if self._runtime_factory is None:
+            self._require_owned_upgrade_source()
         if self._personnel_guard_enabled(previous, require_floor=True):
             self._require_personnel_capability(manifest)
         if _version_key(manifest.version) <= _version_key(previous):
@@ -2209,6 +2220,8 @@ class SurveyManager:
         self._begin_operation()
         self._write_state(status="upgrading", previousVersion=previous, recoveryBackup=None)
         self._stage_release(manifest, values["architecture"], state["publicHost"], state["adminUser"], state["adminEmail"], bundle_path, asset_loader)
+        if self._runtime_factory is None:
+            return self._upgrade_owned_staged(manifest, state)
         backup_name = f"pre-upgrade-{previous}-to-{manifest.version}"
         backup = self._backup_for_upgrade_or_manual(backup_name, self._read_state(require_current=True))
         self._verify_backup(backup, previous, state["databaseSchema"])
@@ -2224,6 +2237,57 @@ class SurveyManager:
             self._write_state(status="healthy", version=manifest.version, databaseSchema=manifest.database_schema, previousVersion=previous)
         except SurveyctlError as failure:
             self._recover_failed_upgrade(manifest, previous, backup_name, failure)
+
+    def _require_owned_upgrade_source(self):
+        # Read-only admission before staging/intent; never adopt rc19/legacy
+        # resources or latch a working legacy install for an unsupported path.
+        for name in ('runtime-owner.json', 'runtime-contract.json', 'runtime-owner.compose.json'):
+            path = self._managed(Path('.surveyctl') / name)
+            if not os.path.lexists(path):
+                raise InputError('controlled upgrade requires recorded source ownership; legacy adoption is prohibited')
+            self._assert_trusted_path(path)
+            _regular_file(path, 'source runtime ownership metadata')
+            if os.lstat(path).st_mode & 0o077:
+                raise IntegrityError('source runtime ownership metadata must remain private')
+
+    def _upgrade_owned_staged(self, manifest, state):
+        # Code authority belongs to the verified target package; resource/data
+        # authority remains the recorded predecessor until its containers end.
+        self._require_personnel_capability(manifest)
+        self._verify_owned_support(manifest.version)
+        if self._upgrade_execution_version is not None:
+            raise IntegrityError('nested target-code authority is forbidden')
+        previous = state['version']
+        backup_name = f'pre-upgrade-{previous}-to-{manifest.version}'
+        verified_backup = None
+        self._upgrade_execution_version = manifest.version
+        try:
+            backup = self._backup_for_upgrade_or_manual(backup_name, self._read_state(require_current=True))
+            self._verify_backup(backup, previous, state['databaseSchema'])
+            verified_backup = backup_name
+            # Pull is not permission to operate on existing project resources.
+            # Source contracts are computed only after the fixed images exist.
+            self._run(self._compose(manifest.version, owned_overlay=False) + ['pull'], 'upgrade image pull failed')
+            from runtime_controller import RuntimeController
+            runtime = RuntimeController.prepare_upgrade(self, previous, manifest.version)
+            self._activate_personnel_floor(manifest.version)
+            self._write_state(status='upgrading', previousVersion=previous, recoveryBackup=verified_backup)
+            def start():
+                compose = self._compose(manifest.version)
+                self._run(compose + ['up', '-d'], 'controlled upgrade migration or start failed')
+                self._wait_healthy(compose, 'controlled upgrade health check failed')
+                self._verify_public_tls(state['publicHost'])
+            runtime.upgrade(start)
+            self._atomic_write(self.current_path, manifest.version + '\n')
+            self._write_state(status='healthy', version=manifest.version, databaseSchema=manifest.database_schema,
+                              previousVersion=previous)
+        except Exception as exc:
+            self._write_state(status='recovery_required', version=previous, recoveryBackup=verified_backup)
+            if isinstance(exc, SurveyctlError):
+                raise
+            raise RuntimeHealthError('controlled upgrade failed or remains unverified; no automatic recovery was attempted') from exc
+        finally:
+            self._upgrade_execution_version = None
 
     def _stop_new_writers_before_legacy_restore(self, compose: list[str]) -> bool:
         # The old restore helper freezes only writers known to its release.
@@ -2311,6 +2375,8 @@ class SurveyManager:
     @_locked_mutation(create_target=False)
     def upgrade_version(self, version, expected_sha256) -> None:
         self._require_no_pending_recovery(self._read_state(require_current=True))
+        if self._runtime_factory is None:
+            self._require_owned_upgrade_source()
         version = _validate_semver(version.removeprefix("v"), "release version")
         if not expected_sha256:
             raise InputError("remote release operation requires --manifest-sha256")

@@ -33,6 +33,7 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
             'sourceBefore': {'file': 'a' * 64}, 'sourceAfter': {'file': 'a' * 64},
             'cases': [{'scenario': kind, 'status': 'passed', 'fixtureCleanup': 'verified',
                        'syntheticManifestOnly': True, 'businessServicesCovered': False,
+                       'hostAndTlsAreSynthetic': True, 'upgradeBusinessDataVerified': False,
                        'defaultInstallCovered': False, 'restorationEligible': False, 'releaseEligible': False,
                        **{key: True for key in checks}}
                       for kind, checks in self.module.REQUIRED.items()]}
@@ -46,7 +47,8 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
                     bad = deepcopy(report); bad['cases'][index][key] = value
                     self.assertFalse(self.module.passed(bad))
             for key, value in (('restorationEligible', True), ('releaseEligible', None),
-                               ('fixtureCleanup', 'unknown'), ('businessServicesCovered', True)):
+                               ('fixtureCleanup', 'unknown'), ('businessServicesCovered', True),
+                               ('hostAndTlsAreSynthetic', False), ('upgradeBusinessDataVerified', True)):
                 bad = deepcopy(report); bad['cases'][index][key] = value
                 self.assertFalse(self.module.passed(bad))
 
