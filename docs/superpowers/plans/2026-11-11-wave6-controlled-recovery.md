@@ -342,3 +342,18 @@ Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发�
 后续依赖顺序不变：新的Docker项目/卷/网络从创建起归属且未知拒绝；受控匿名验证器重验备份HMAC、清单、manifest/版本/schema/floor；新副本双库/卷导入及人员grant/session先失效并审计；数据验证后才考虑独立切换。故障注入、明文/子进程收束和精确资源清理仍需逐项证明。此切片不完成上述后续步骤，restore/native/上传/发布门禁保持；每项具体解除前说明证据范围风险并取得明确同意。
 
 人工读屏事实已重核：#41存在Owner于2026-11-10记录的VoiceOver passed与发布批准，均绑定rc19，而非“完全未完成”；后续候选须核对差异覆盖及批准范围，不自动继承rc19记录。
+
+### 2026-11-12：恢复前置实际组合与下一执行包
+
+在独立integrate/wave6-recovery-preconditions组合#1434313d6c4（含#141a2ff8d）、#142d916（含#140f5f7）和#1392f82。两个merge只在本计划追加处冲突，保留双方全部段落；14份实现/测试/workflow blob与对应原head逐一相同，全部五heads为祖先。7个release/原生门禁、surveyctl/restore/owned_docker_exec入口blob与main7cdd66c4不变。91项有范围的同进程组合回归通过；本地只检查组合，不重复旧head全量。记录/tmp/survey-recovery-composition-20261112.json；真实组件组合及整轮CI仍待新整合head，不沿用旧分支结果。
+
+这证明组件共存准备，不代表五项已接成同一个数据流。#143非作者已核对AMD64 artifact13936201630的真实双库合成数据/58迁移/源增量/授权失效/清理，ZIP摘要与源码hash匹配；#142非作者核对AMD64 artifact13935060098的15项真实FD/crypto检查。没有独立Sigstore签名验证声明，也不提升为候选或真实业务恢复。
+
+下一执行包须先测试、实现和独立复核，以下尚未实现或启用：
+
+1. **受控stdin写入链**：现有OwnedDockerExec为输出型profile，没有DB import输入路径。只能消费认证后、受同一workspace/operation绑定并只读封印的匿名FD；限定目标owned CID/service、有限PG/Maria导入及人员失效命令，不接受任意SQL/shell/request-body命令或具名host明文。新增ExecID/输入长度摘要/期限/输出及结束回执，部分输入、丢回复、超时、GC未知均保持输入/输出lease和pending，不重放。不能借现有backup/doctor profile冒充恢复写入。
+2. **原目标与源认证接线**：#139持锁FD、reservation/project/target身份须与#141新scope、daemon/claim/新卷互相绑定；#140本次payload验证不能当持久capability，使用时重验源/目标包签名、manifest、HMAC、schema/版本和有效人员floor。目标有效配置还未被metadata接口证明。
+3. **副本先隔离**：实际双库和全部卷只写新scope；导入失败保留隔离副本，Maria DDL不能假称全库事务回滚。应用启动前完成grant/session失效、归因审计和数据校验，不能沿用源实例域名/端口/外发连接或原管理员有效授权。
+4. **故障闭环与准出**：补部分导入、进程/控制器SIGKILL、审计失败、意图/资源漂移、未知exec/明文与清理的实际故障注入；source保留及已知/未知分别记录。之后才是真实受信候选、正式身份/业务连续性和四平台验收。具体恢复/原生/发布门禁解除前，给出精确操作/候选/证据与风险并取得用户明确同意。
+
+本整合不做上述执行接线、合并main、打tag、发布或真实部署；Release由Claude #138负责，所有门禁保持。下一轮优先收束整合CI与非作者审查，不再用重复空资源或合成样本代替执行链。
