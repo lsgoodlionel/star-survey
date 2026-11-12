@@ -213,3 +213,11 @@ prepare仍先验证旧合同、属主/daemon/claim/cohort。仅retained-data或r
 Owner已明确同意对缺失flush及异常关闭进行一轮限定修复。flush委托原缓冲器；异常路径只尝试一次connection.close，关闭也失败时保留原失败/超时、不重试、不声称清理成功或释放unknown lease；正常读取后的close失败仍向外失败。先红复现真实HTTPResponse.close缺失flush掩盖deadline，以及immutable c3ddb886慢trailer模型未在预算内拒绝；修订后95项owned与69项runtime通过，包含实际HTTPResponse逻辑时钟trailer、flush故障仍关闭buffer并保留原超时、迟到EOF、close失败无重试、released无completionEvidence及私有Unix socket5.5秒静默正例。
 
 真实Docker补验入口：owned_exec_native.py --image <本地固定Python镜像digest> --read-timeout，默认CI不自动运行该慢路径。本机Python3.9.6的socket.timeout不是TimeoutError，夹具只兼容这两个明确超时类型，不扩大到任意OSError。实际chunked正向通过；固定15秒sleep在10.002秒读取超时、GET确认仍running，再仅观察自然退出0，无重放；容器cleanup verified、源码SHA前后一致，JSON /tmp/survey-exec-chunked-timeout-verified-20261112.json。此超时段直接调用本夹具API，不是完整controller/lease/全局进程证明；writer保留unknown由独立状态机回归验证。真实慢trailer网络投递未演示，逻辑时钟负例与实际普通chunked/静默超时证据分别记录。旧GC实验未为此重跑或扩张资格；v1与256目录项/安全退休仍未解决，恢复/原生/发布门禁均保持。
+
+### 2026-11-12：隔离终态回执收束原语（未接默认入口）
+
+环境重连后核对独立fix/wave6-terminal-receipts基于#133 83e720cd且无未提交现场；先红新增失败测试，再实现ReceiptRetirement。只读plan始终executable=false；run重新采样，最多收束16个已重新证明结束的回执，整个目录256项硬限制不变。实际资源/claim验证及durable begin-operation是受信controller回调边界，不可由外部输入断言；当前无默认调用者、无新CLI命令。先验证整个cohort/owner/文件身份，再持久pending并复读，逐文件删除前后复核集合、lock/目录/文件身份与资源；父目录fsync后确认缺席，任何失败不清operation.intent、不重试未知操作，不触碰运行容器或数据卷。
+
+v1仅在精确live ExecInspect终态或原不可变CID证实缺席时可成为候选；已GC且原CID仍存在的v1继续unknown。v2精确终态观察的GC兼容沿用#132，500/timeout不兼容。pending/未知回执与恢复标记从不收束。超过256的已有目录不自动救场；默认生命周期接线、开始前最坏容量预留、崩溃后受控处置及真实资源查询成本均未验证，故本原语不代表长期运维问题已全部闭合。
+
+隔离模型测试覆盖v1/v2 GC差异、资源漂移、超容量零写入、intent缺失/写失败、symlink拒绝、unlink/fsync失败保留pending、收束期间回执变pending拒绝、16批上限及重复周期累计271个历史回执而活动目录可收束。仅临时文件/Fake API与资源回调，不是Docker/完整controller或候选证明。旧8项cohort回归随新测试复用；独立runtime套件73项通过。所有恢复/原生/发布门禁保持，不合并、不发布，Release由Claude负责；默认接线需下一切片及独立复审，不清除未知标记来换取成功。

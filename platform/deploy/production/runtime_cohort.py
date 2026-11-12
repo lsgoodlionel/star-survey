@@ -5,6 +5,7 @@ legacy process discovery: controller code must never launch unregistered old
 helpers after adopting this protocol, and a previous pending intent blocks it.
 """
 import hashlib
+import json
 import os
 import re
 import stat
@@ -176,3 +177,93 @@ class CohortProbe:
                 os.close(parent)
         except Exception:
             return 'unknown'
+
+
+class ReceiptRetirement:
+    """Isolated primitive; no default caller. Callbacks are trusted controller code.
+
+    Never clears intent, repairs unknown receipts, or raises directory capacity.
+    The caller must supply real full resource/claim verification and durable
+    begin-operation; injected callbacks in tests are not production evidence.
+    """
+    def __init__(self, probe, check_resources, begin_operation, operation):
+        if not callable(check_resources) or not callable(begin_operation) or not isinstance(operation, str) or not re.fullmatch(r'[a-z_]{1,32}', operation):
+            raise ownership.OwnershipError('retirement controller contract is invalid')
+        self.probe, self.check, self.begin, self.operation = probe, check_resources, begin_operation, operation
+
+    def _capture(self):
+        probe = self.probe
+        if probe._lock() != probe.lock_identity or probe() != 'quiescent':
+            raise ownership.OwnershipError('receipt cohort is unverified')
+        store = ownership.PrivateStore(probe.target)
+        parent, chain = store._open_parent()
+        try:
+            names = sorted(os.listdir(parent))
+            if len(names) > 256:
+                raise ownership.OwnershipError('receipt directory capacity exceeded')
+            owner = store.load()
+            if not isinstance(owner, dict) or owner.get('phase') not in ('ready', 'retained-data', 'removed', 'settled-failure') or self.check() != owner:
+                raise ownership.OwnershipError('retirement resources or owner are unverified')
+            receipts = {}
+            for name in names:
+                if not re.fullmatch(r'runtime-(?:child|exec|launch)-[0-9a-f]{32}\.json', name): continue
+                identity = store._regular(os.stat(name, dir_fd=parent, follow_symlinks=False))
+                record = ownership.PrivateStore(probe.target, name=name).load()
+                if not probe._receipt(name, record, owner) or identity != store._regular(os.stat(name, dir_fd=parent, follow_symlinks=False)):
+                    raise ownership.OwnershipError('receipt end or identity is unverified')
+                digest = hashlib.sha256(json.dumps(record,sort_keys=True,allow_nan=False).encode()).hexdigest()
+                receipts[name] = (identity, digest)
+            if names != sorted(os.listdir(parent)) or probe._lock() != probe.lock_identity:
+                raise ownership.OwnershipError('retirement inventory changed')
+            store._recheck(parent, chain)
+            return {'owner': owner, 'ownerIdentity':store._regular(os.stat(store.NAME,dir_fd=parent,follow_symlinks=False)),
+                    'directory':store._directory_identity(os.fstat(parent)),
+                    'names':[name for name in names if name != 'operation.intent'], 'receipts':receipts}
+        finally:
+            os.close(parent)
+
+    def plan(self):
+        snapshot = self._capture()
+        return {'schemaVersion':1,'executable':False,'count':len(snapshot['receipts']),
+                'files':sorted(snapshot['receipts']), 'batchCount':min(16,len(snapshot['receipts']))}
+
+    def _intent(self, parent, store):
+        fd=os.open('operation.intent',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+        with os.fdopen(fd,'rb') as handle:
+            before=store._regular(os.fstat(handle.fileno()))
+            data=handle.read(1025)
+            if len(data)>1024 or before!=store._regular(os.fstat(handle.fileno())) or before!=store._regular(os.stat('operation.intent',dir_fd=parent,follow_symlinks=False)):
+                raise ownership.OwnershipError('retirement intent changed')
+        record=json.loads(data,object_pairs_hook=store._unique)
+        if record!={'schemaVersion':1,'state':'pending','operation':self.operation} or type(record.get('schemaVersion')) is not int:
+            raise ownership.OwnershipError('durable pending retirement intent is absent')
+        return before
+
+    def run(self):
+        expected=self._capture()
+        if not expected['receipts']: return 0
+        self.begin()  # No unlink before durable pending intent succeeds.
+        store=ownership.PrivateStore(self.probe.target)
+        parent,chain=store._open_parent()
+        try:
+            intent=self._intent(parent,store)
+            if self._capture()!=expected:
+                raise ownership.OwnershipError('retirement plan is stale')
+            count=0
+            for name in sorted(expected['receipts'])[:16]:
+                store._recheck(parent,chain)
+                if self._intent(parent,store)!=intent or self._capture()!=expected:
+                    raise ownership.OwnershipError('retirement evidence changed before unlink')
+                if store._directory_identity(os.fstat(parent))!=expected['directory']:
+                    raise ownership.OwnershipError('retirement parent changed')
+                os.unlink(name,dir_fd=parent)
+                os.fsync(parent)
+                if name in os.listdir(parent): raise ownership.OwnershipError('retired receipt remains')
+                del expected['receipts'][name]; expected['names'].remove(name)
+                if self._capture()!=expected or self._intent(parent,store)!=intent:
+                    raise ownership.OwnershipError('retirement outcome is unverified')
+                count+=1
+            store._recheck(parent,chain)
+            return count  # Pending belongs to the outer operation; never clear it.
+        finally:
+            os.close(parent)
