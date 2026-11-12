@@ -42,7 +42,8 @@ class OwnedDockerExecTest(unittest.TestCase):
                 if owner.fail == 'inspect': raise OSError('unavailable')
                 return {'ID': owner.exec_id, 'ContainerID': owner.container,
                     'Running': owner.fail == 'running', 'ExitCode': None if owner.fail == 'not-started' else owner.exit}
-            def stream(self, exec_id, output, limit):
+            def stream(self, exec_id, output, limit, *, profile):
+                owner.assertIn(profile, owner.module.PROFILES)
                 owner.assertEqual('released', owner.store.value['phase'])
                 owner.events.append('start')
                 if owner.fail == 'stream': raise OSError('unknown stream')

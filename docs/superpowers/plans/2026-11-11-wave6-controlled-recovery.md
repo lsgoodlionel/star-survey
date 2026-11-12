@@ -187,3 +187,9 @@ Owner另明确批准FD身份安全限定修复。原head72c94843的真实维护/
 独立复核后，故障注入确认了部分退役缺口：public FD已关闭但anchor close失败时，unlink未封锁workspace；workspace.close还可能再次尝试同一anchor。先红覆盖unlink/close、close前报错及close后号码已被外来FD复用四种组合。现在close前记录anchor_close_attempted，任何退役close未知立即永久failed，保留FD/identity记录；不重试、不允许同名/新文件或export，不将未知状态改为成功。分配错误清理也保留部分引用，不能覆盖，只有完整已验证退役后的新分配可重置尝试标记。正常清理仍释放已验证本方FD，未知引用保留至进程退出，不能称无残留。
 
 21项便携workspace、85项owned测试通过；真实Linux memfd新增uncertainRetirementBlocksReuse（实际close后dup2外来FD再注入错误），十项全true，源码前后SHA一致、容器清理verified，最终JSON `/tmp/survey-pr129-memfd-retirement-final-20261111.json`。独立故障夹具显式清理其自建FD，不是产品恢复流程，也未清除产品未知标记。上一head130a09ff的smoke43115963126已通过，新增故障语义仍需新head的CI及独立复核，不能继承旧绿色结果。按Owner最新指示，解除恢复、原生或发布门禁前必须先说明具体操作并取得同意；本轮全部保留，不合并、不发布，Release仍由Claude负责。
+
+### 2026-11-12：静默 exec 的连接/执行预算分离（待审）
+
+独立审查的5秒读超时已用真实私有Unix socket先红复现：服务先返回HTTP200，静默5.5秒后才发送合成一帧，旧实现读取首字节时socket.timeout；不访问Docker或生产、不含凭据。连接仍固定5秒，stream仅允许固定profile，读取预算为该profile命令秒数+5秒；开始读取后每次单次buffer/recv前核对同一deadline并设置剩余socket时间，不因滴流重新起算。命令自身timeout、帧/字节预算、nonce和终止ExecInspect校验保留。不将此称整个CLI/HTTP头解析/清理的硬总时限。
+
+先红后绿真实5.5秒静默正例；模型负例逐一验证所有profile预算、非法profile在连接前拒绝、滴流不能延长deadline且只发出一次start。超时仍是unknown并保留released回执/lease，不能重放不确定操作，也未提高任何成功判据。该切片独立于exec GC与重装合同问题；不操作Release、生产或候选，恢复/原生/发布门禁保持，具体解除前须Owner明确同意。

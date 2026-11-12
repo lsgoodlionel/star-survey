@@ -258,15 +258,32 @@ class LocalDockerAPI:
         finally:
             connection.close()
 
-    def stream(self, identity, output, limit):
+    def stream(self, identity, output, limit, *, profile):
+        if not isinstance(profile, str) or profile not in PROFILES:
+            raise ExecProtocolError('exec stream profile is invalid')
+        # Keep connect at five seconds; this fixed profile owns a separate
+        # execution/read budget. No caller-supplied duration and no retry.
+        budget = PROFILES[profile][0] + 5
         connection = self._connect()
         try:
             connection.request('POST', self.VERSION + '/exec/' + self._id(identity) + '/start',
                 b'{"Detach":false,"Tty":false}', {'Content-Type': 'application/json'})
+            raw_socket = connection.sock
+            deadline = time.monotonic() + budget
+            raw_socket.settimeout(budget)
             response = connection.getresponse()
             if response.status != 200:
                 raise OSError('exec start result is unknown')
-            read_stream(response, output, limit)
+            class BoundedResponse:
+                def read(self, size):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise DockerRequestTimeout('exec-stream')
+                    raw_socket.settimeout(remaining)
+                    # One buffered read/recv permits deadline checks even when
+                    # a peer trickles bytes instead of filling a whole frame.
+                    return response.read1(size)
+            read_stream(BoundedResponse(), output, limit)
         finally:
             connection.close()
 
@@ -343,7 +360,7 @@ class OwnedDockerExec:
             protocol_failure = False
             proof = PayloadProof(nonce, write, output.max_file_bytes)
             try:
-                self.api.stream(identity, proof.feed, output.max_file_bytes + PayloadProof.SIZE)
+                self.api.stream(identity, proof.feed, output.max_file_bytes + PayloadProof.SIZE, profile=profile)
                 proof.finish()
             except ExecProtocolError:
                 protocol_failure = True
