@@ -23,7 +23,9 @@ class ExecStreamBudgetTest(unittest.TestCase):
                 class Socket:
                     def settimeout(self, value): timeouts.append(value)
                 class Response(io.BytesIO):
-                    status = 200
+                    status, chunked = 200, False
+                    fp = io.BytesIO()
+                    def getheader(self, name): return None
                 class Connection:
                     sock = Socket()
                     def request(self, *args): requests.append(args)
@@ -48,7 +50,9 @@ class ExecStreamBudgetTest(unittest.TestCase):
         class Socket:
             def settimeout(self, value): pass
         class Response:
-            status = 200
+            status, chunked = 200, False
+            fp = io.BytesIO()
+            def getheader(self, name): return None
             def read1(self, size):
                 clock[0] = 111  # exec-preflight has only a ten-second read budget.
                 return b'\x01'
@@ -64,6 +68,135 @@ class ExecStreamBudgetTest(unittest.TestCase):
                            profile='exec-preflight')
         self.assertEqual('exec-stream', caught.exception.operation)
         self.assertEqual(1, len(requests)); self.assertEqual([True], closed)
+
+    def test_unsupported_transfer_coding_is_refused_before_body_read(self):
+        module = importlib.import_module('owned_docker_exec')
+        for coding in ('gzip', 'identity'):
+            with self.subTest(coding=coding):
+                class WireSocket:
+                    def makefile(self, mode):
+                        return io.BytesIO(b'HTTP/1.1 200 OK\r\nTransfer-Encoding: '
+                            + coding.encode() + b'\r\n\r\n0\r\nSlow-Trailer: fixture\r\n\r\n')
+                response = http.client.HTTPResponse(WireSocket()); response.begin()
+                closed, requests = [], []
+                class Socket:
+                    def settimeout(self, value): pass
+                class Connection:
+                    sock = Socket()
+                    def request(self, *args): requests.append(args)
+                    def getresponse(self): return response
+                    def close(self): closed.append(True); response.close()
+                api = module.LocalDockerAPI(); api._connect = Connection
+                with patch.object(response, 'read1', side_effect=AssertionError('unexpected body/trailer read')):
+                    with self.assertRaises(OSError):
+                        api.stream('e' * 64, lambda value: self.fail('unexpected output'), 10,
+                                   profile='exec-preflight')
+                self.assertEqual(1, len(requests)); self.assertEqual([True], closed)
+
+    def test_chunked_internal_trailer_reads_share_absolute_deadline(self):
+        module = importlib.import_module('owned_docker_exec')
+        clock, closed, requests = [100], [], []
+        class Wire(io.BytesIO):
+            armed = False
+            def read1(self, size):
+                block = super().read1(size)
+                if self.armed: clock[0] += len(block)
+                return block
+            def readline(self, limit=-1):
+                block = super().readline(limit)
+                if self.armed: clock[0] += len(block)
+                return block
+        wire = Wire(b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n'
+                    b'0\r\nX: fixture\r\n\r\n')
+        class Socket:
+            def makefile(self, mode): return wire
+            def settimeout(self, value): pass
+        sock = Socket(); response = http.client.HTTPResponse(sock); response.begin()
+        wire.armed = True
+        class Connection:
+            def __init__(self): self.sock = sock
+            def request(self, *args): requests.append(args)
+            def getresponse(self): return response
+            def close(self): closed.append(True); response.close()
+        api = module.LocalDockerAPI(); api._connect = Connection
+        with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaises(module.DockerRequestTimeout):
+                api.stream('e' * 64, lambda value: self.fail('unexpected output'), 10,
+                           profile='exec-preflight')
+        self.assertLessEqual(clock[0], 110)
+        self.assertEqual(1, len(requests)); self.assertEqual([True], closed)
+
+    def test_flush_error_during_timeout_close_preserves_original_timeout_and_closes_buffer(self):
+        module = importlib.import_module('owned_docker_exec')
+        clock, calls = [100], []
+        class Wire(io.BytesIO):
+            def flush(self):
+                calls.append('flush'); raise OSError('synthetic flush failure')
+            def close(self): calls.append('buffer-close'); super().close()
+        wire = Wire()
+        class Socket:
+            def settimeout(self, value): pass
+        class Response(http.client.HTTPResponse):
+            status, chunked = 200, False
+            def read1(self, size): clock[0] = 111; return b''
+            def getheader(self, name): return None
+        # Use actual IOBase/HTTPResponse.close behavior without opening a socket.
+        response = Response(type('SocketFile', (), {'makefile': lambda self, mode: wire})())
+        response.status, response.chunked = 200, False
+        class Connection:
+            sock = Socket()
+            def request(self, *args): pass
+            def getresponse(self): return response
+            def close(self): calls.append('connection-close'); response.close()
+        api = module.LocalDockerAPI(); api._connect = Connection
+        with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaises(module.DockerRequestTimeout):
+                api.stream('e' * 64, lambda value: self.fail('unexpected data'), 10, profile='exec-preflight')
+        self.assertEqual(['connection-close', 'flush', 'buffer-close'], calls)
+        self.assertTrue(wire.closed)
+
+    def test_close_failure_after_eof_is_not_silent_success_or_retried(self):
+        module = importlib.import_module('owned_docker_exec')
+        calls = []
+        class Socket:
+            def settimeout(self, value): pass
+        class Response(io.BytesIO):
+            status, chunked = 200, False
+            fp = io.BytesIO()
+            def getheader(self, name): return None
+        class Connection:
+            sock = Socket()
+            def request(self, *args): calls.append('start')
+            def getresponse(self): return Response()
+            def close(self): calls.append('close'); raise OSError('synthetic close failure')
+        api = module.LocalDockerAPI(); api._connect = Connection
+        with self.assertRaises(OSError):
+            api.stream('e' * 64, lambda value: self.fail('unexpected data'), 10, profile='exec-preflight')
+        self.assertEqual(['start', 'close'], calls)
+
+    def test_late_eof_cannot_be_success_after_profile_deadline(self):
+        module = importlib.import_module('owned_docker_exec')
+        clock, closed = [100], []
+        class Socket:
+            def settimeout(self, value): pass
+        class Response:
+            status, chunked = 200, False
+            fp = io.BytesIO()
+            def getheader(self, name): return None
+            def read1(self, size):
+                clock[0] = 111
+                return b''
+        class Connection:
+            sock = Socket()
+            def request(self, *args): pass
+            def getresponse(self): return Response()
+            def close(self): closed.append(True)
+        api = module.LocalDockerAPI(); api._connect = Connection
+        with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaises(module.DockerRequestTimeout):
+                api.stream('e' * 64, lambda value: self.fail('unexpected output'), 10,
+                           profile='exec-preflight')
+        self.assertEqual([True], closed)
 
     def test_quiet_stream_can_exceed_connect_budget_inside_fixed_profile(self):
         module = importlib.import_module('owned_docker_exec')

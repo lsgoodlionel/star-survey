@@ -205,3 +205,11 @@ Owner另明确批准FD身份安全限定修复。原head72c94843的真实维护/
 prepare仍先验证旧合同、属主/daemon/claim/cohort。仅retained-data或removed可继续；先完整验证目标source，保留已核验claim image lineage，不把旧claim静默替换成新镜像。retained-data要求网络/卷合同完全一致，并在目标查询后重新核对旧归属；purge必须经既有exclusive acquire产生新installationId及retired history。然后绑定目标source、overlay和当前generation，才允许hash helper与install effect。不存在对旧无归属安装的自动认领。部分合同持久化失败仍由_load不一致拒绝，不回退旧overlay、不称已恢复；需要保留现场受控对账。
 
 模型回归覆盖两条重装到ready、新容器归属、保留卷、purge新generation、活动状态/目标未验证/网络卷漂移/查询失败不改账本资源、purge目标无效不新建claim，以及第二份overlay写入失败后admission继续拒绝；另经实际SurveyManager.install入口核对source pull早于prepare而overlay不可提前加载。此为控制器/CLI定向证据，不是受信完整产品安装、真实双库重装或四平台验收。依赖#132/#129，Release/恢复/原生/发布门禁保持，任何具体解除前Owner另批准。
+
+### 2026-11-12：经Owner批准的chunked缓冲接口与异常关闭限定修订
+
+独立deadline复核后，真实本机Docker29.9.3 unix exec实测HTTP200且chunked=true；不能按Moby原始raw-hijack源码推断所有部署都没有HTTP chunk封装。拒绝chunked会破坏正常路径，该尝试未提交。现将HTTPResponse原有fp缓冲器包入共同deadline reader，不丢弃已缓冲字节；chunk header、body、trailer的read1/read/readline都逐次设置剩余socket时间并检查返回时间，迟到EOF不能成为成功。只支持无Transfer-Encoding或明确chunked，不接任意编码；连接与HTTP头解析仍不冒称整个CLI硬总时限。
+
+Owner已明确同意对缺失flush及异常关闭进行一轮限定修复。flush委托原缓冲器；异常路径只尝试一次connection.close，关闭也失败时保留原失败/超时、不重试、不声称清理成功或释放unknown lease；正常读取后的close失败仍向外失败。先红复现真实HTTPResponse.close缺失flush掩盖deadline，以及immutable c3ddb886慢trailer模型未在预算内拒绝；修订后95项owned与69项runtime通过，包含实际HTTPResponse逻辑时钟trailer、flush故障仍关闭buffer并保留原超时、迟到EOF、close失败无重试、released无completionEvidence及私有Unix socket5.5秒静默正例。
+
+真实Docker补验入口：owned_exec_native.py --image <本地固定Python镜像digest> --read-timeout，默认CI不自动运行该慢路径。本机Python3.9.6的socket.timeout不是TimeoutError，夹具只兼容这两个明确超时类型，不扩大到任意OSError。实际chunked正向通过；固定15秒sleep在10.002秒读取超时、GET确认仍running，再仅观察自然退出0，无重放；容器cleanup verified、源码SHA前后一致，JSON /tmp/survey-exec-chunked-timeout-verified-20261112.json。此超时段直接调用本夹具API，不是完整controller/lease/全局进程证明；writer保留unknown由独立状态机回归验证。真实慢trailer网络投递未演示，逻辑时钟负例与实际普通chunked/静默超时证据分别记录。旧GC实验未为此重跑或扩张资格；v1与256目录项/安全退休仍未解决，恢复/原生/发布门禁均保持。
