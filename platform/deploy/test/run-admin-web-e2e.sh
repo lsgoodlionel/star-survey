@@ -369,7 +369,7 @@ PYLOG
 verify_and_archive_run_root() {
   local success_marker="$ADMIN_WEB_TEST_RESULTS_DIR/playwright-suite-success.txt"
   local root_id_file="$ADMIN_WEB_TEST_RESULTS_DIR/run-root-resource-id.txt"
-  local expected_publish_calls=8
+  local expected_publish_calls=10
   if [[ "$E2E_SUITE" == "wave3" ]]; then expected_publish_calls=3; fi
   local verification_scope=full
   if [[ "${ADMIN_WEB_RELAY_DIAGNOSTIC:-}" == "1" ]]; then

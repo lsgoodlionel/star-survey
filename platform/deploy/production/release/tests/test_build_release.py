@@ -213,6 +213,77 @@ class ReleaseBuilderTest(unittest.TestCase):
         shutil.copytree(PRODUCTION_DIR, source)
         return trusted_root, source
 
+    def declare_owned_fixture(self, source: Path, name: str) -> None:
+        # surveyctl admits its owned support modules by name; the bundle must carry each one.
+        controller = source / "surveyctl.py"
+        text = controller.read_text(encoding="utf-8")
+        marker = "OWNED_RUNTIME_FILES = {"
+        if marker in text:
+            text = text.replace(marker, marker + f"{name!r}, ", 1)
+        else:
+            text += f"\nOWNED_RUNTIME_FILES = {{'surveyctl.py', 'backup.py', {name!r}}}\n"
+        controller.write_text(text, encoding="utf-8")
+
+    def test_owned_runtime_modules_declared_by_surveyctl_are_packaged(self):
+        trusted_root, source = self.copy_trusted_source("owned-modules")
+        self.declare_owned_fixture(source, "owned_fixture.py")
+        (source / "owned_fixture.py").write_text("VALUE = 1\n", encoding="utf-8")
+        output = self.root / "owned-release"
+        result = self.build(output, source=source, trusted_root=trusted_root)
+        self.assertEqual(0, result.returncode, result.stderr)
+        manifest = json.loads((output / "release.json").read_text())
+        for architecture in ("amd64", "arm64"):
+            bundle = output / manifest["assets"]["bundles"][architecture]["name"]
+            with tarfile.open(bundle, "r:gz") as archive:
+                member = archive.getmember("owned_fixture.py")
+                self.assertEqual(b"VALUE = 1\n", archive.extractfile(member).read())
+                self.assertEqual(0o644, member.mode)
+                metadata = json.loads(archive.extractfile("bundle-metadata.json").read())
+            self.assertEqual(hashlib.sha256(b"VALUE = 1\n").hexdigest(), metadata["files"]["owned_fixture.py"])
+
+    def test_declared_owned_runtime_module_missing_from_source_fails_closed(self):
+        trusted_root, source = self.copy_trusted_source("owned-missing")
+        self.declare_owned_fixture(source, "owned_absent.py")
+        output = self.root / "owned-missing-release"
+        result = self.build(output, source=source, trusted_root=trusted_root)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("owned_absent.py", result.stderr)
+        self.assertFalse(output.exists())
+
+    def test_owned_runtime_declaration_is_parsed_statically_and_strictly(self):
+        builder = load_builder()
+        self.assertEqual((), builder.owned_runtime_files(b"VALUE = 1\n"))
+        self.assertEqual(("backup.py", "owned_x.py", "surveyctl.py"), builder.owned_runtime_files(
+            b"OWNED_RUNTIME_FILES = {'surveyctl.py', 'owned_x.py', 'backup.py'}\n"))
+        # Executing the declaration would run arbitrary source; it must never be evaluated.
+        marker = self.root / "executed"
+        executing = f"import pathlib\nOWNED_RUNTIME_FILES = {{'surveyctl.py', pathlib.Path({str(marker)!r}).touch() or 'x.py'}}\n"
+        rejected = (
+            executing.encode(),
+            b"OWNED_RUNTIME_FILES = set(['surveyctl.py'])\n",
+            b"OWNED_RUNTIME_FILES = {'surveyctl.py', '../escape.py'}\n",
+            b"OWNED_RUNTIME_FILES = {'surveyctl.py', 'init/nested.py'}\n",
+            b"OWNED_RUNTIME_FILES = {'surveyctl.py', 'Caddyfile'}\n",
+            b"OWNED_RUNTIME_FILES = {'surveyctl.py', 'Upper.py'}\n",
+            b"OWNED_RUNTIME_FILES = {'surveyctl.py', 'x.py', 'x.py'}\n",
+            b"OWNED_RUNTIME_FILES = {'surveyctl.py', 1}\n",
+            b"OWNED_RUNTIME_FILES = {'backup.py'}\n",
+            b"OWNED_RUNTIME_FILES = {'surveyctl.py'}\nOWNED_RUNTIME_FILES = {'surveyctl.py'}\n",
+            b"OWNED_RUNTIME_FILES: set = {'surveyctl.py'}\nOWNED_RUNTIME_FILES += {'x.py'}\n",
+            b"OWNED_RUNTIME_FILES = {'surveyctl.py', " + b", ".join(f"'m{i}.py'".encode() for i in range(64)) + b"}\n",
+            b"def broken(:\n",
+        )
+        for source in rejected:
+            with self.subTest(source=source[:60]):
+                with self.assertRaises(builder.ReleaseBuildError):
+                    builder.owned_runtime_files(source)
+        self.assertFalse(marker.exists())
+
+    def test_checked_in_owned_runtime_declaration_names_existing_source_files(self):
+        builder = load_builder()
+        for name in builder.owned_runtime_files((PRODUCTION_DIR / "surveyctl.py").read_bytes()):
+            self.assertTrue((PRODUCTION_DIR / name).is_file(), name)
+
     def test_repeated_builds_are_byte_reproducible_and_tar_metadata_is_normalized(self):
         first, second = self.root / "first", self.root / "second"
         first_result = self.build(first)

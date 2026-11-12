@@ -565,6 +565,91 @@ test('W04 time windows persist through authoring and govern published responses'
   }
 });
 
+test('W04 IP denial is authored and enforced on the published link', async ({ page }) => {
+  test.setTimeout(360_000);
+  const metadata = await readMetadata();
+  const owner = await readToken();
+  const result = await readResult();
+  const me = await login(page, owner, metadata);
+  await navigateWithinApp(page, `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`);
+  await createResource(page, '新建问卷', '创建问卷', 'IP 拒绝验收');
+  const surveyId = surveyIdFrom(page.url());
+  await page.getByLabel('添加题型').selectOption('L');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByLabel('题目编码')).toHaveValue('Q1');
+  await fillAction(page.getByLabel('题目文本'), '网络拒绝题目');
+  await fillAction(page.getByLabel('拒绝访问的 IP/CIDR'), '0.0.0.0/0\n::/0');
+  const reloadResponse = page.waitForResponse((response) => response.url().includes(`/v1/surveys/${surveyId}/draft`)
+    && response.request().method() === 'GET');
+  await saveAndReloadDraft(page, surveyId);
+  const loaded = await (await reloadResponse).json() as { definition: { policy: { network: { denyIps: string[] } } } };
+  expect(loaded.definition.policy.network.denyIps).toEqual(['0.0.0.0/0', '::/0']);
+  await expect(page.getByLabel('拒绝访问的 IP/CIDR')).toHaveValue('0.0.0.0/0\n::/0');
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
+  await clickAction(page.getByRole('button', { name: '提交审批' }));
+  await clickAction(page.getByRole('button', { name: '批准申请' }));
+  await clickAction(page.getByRole('button', { name: '发布问卷' }));
+  await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+  const engineSid = await publishedEngineSid(surveyId, me.tenantId);
+  await fillAction(page.getByLabel('链接名称'), 'IP 拒绝正式链接');
+  const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`)
+    && response.request().method() === 'POST');
+  await clickAction(page.getByRole('button', { name: '创建链接' }));
+  const link = await readCreatedDeliveryLink(await linkResponse);
+  const respondent = await page.context().newPage();
+  await respondent.goto(link.url);
+  await expect(respondent.locator('body')).toContainText('当前网络');
+  expect(Number(await platformQuery(me.tenantId,
+    `SELECT count(*) FROM response_projection WHERE tenant_id='${me.tenantId}' AND survey_id=${engineSid};`))).toBe(0);
+  await respondent.close();
+});
+
+test('W04 device limit is authored and denies a second response in the same browser', async ({ page }) => {
+  test.setTimeout(360_000);
+  const metadata = await readMetadata();
+  const owner = await readToken();
+  const result = await readResult();
+  const me = await login(page, owner, metadata);
+  await navigateWithinApp(page, `/workspace?project=${result.rootProjectId}&parent=${result.folderId}`);
+  await createResource(page, '新建问卷', '创建问卷', '设备答卷上限验收');
+  const surveyId = surveyIdFrom(page.url());
+  await page.getByLabel('添加题型').selectOption('L');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByLabel('题目编码')).toHaveValue('Q1');
+  await fillAction(page.getByLabel('题目文本'), '设备限制题目');
+  await fillAction(page.getByLabel('同一设备最多提交次数'), '1');
+  const reloadResponse = page.waitForResponse((response) => response.url().includes(`/v1/surveys/${surveyId}/draft`)
+    && response.request().method() === 'GET');
+  await saveAndReloadDraft(page, surveyId);
+  const loaded = await (await reloadResponse).json() as { definition: { policy: { limits: { responses: Array<{ by: string; max: number }> } } } };
+  expect(loaded.definition.policy.limits.responses).toContainEqual({ by: 'device', max: 1 });
+  await expect(page.getByLabel('同一设备最多提交次数')).toHaveValue('1');
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
+  await clickAction(page.getByRole('button', { name: '提交审批' }));
+  await clickAction(page.getByRole('button', { name: '批准申请' }));
+  await clickAction(page.getByRole('button', { name: '发布问卷' }));
+  await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+  const engineSid = await publishedEngineSid(surveyId, me.tenantId);
+  await fillAction(page.getByLabel('链接名称'), '设备限制正式链接');
+  const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`)
+    && response.request().method() === 'POST');
+  await clickAction(page.getByRole('button', { name: '创建链接' }));
+  const link = await readCreatedDeliveryLink(await linkResponse);
+  const respondent = await page.context().newPage();
+  await respondent.goto(link.url);
+  await completeLimeSurvey(respondent);
+  await expect.poll(async () => Number(await platformQuery(me.tenantId,
+    `SELECT count(*) FROM response_projection WHERE tenant_id='${me.tenantId}' AND survey_id=${engineSid};`)),
+    { timeout: 60_000 }).toBe(1);
+  await respondent.close();
+  const again = await page.context().newPage();
+  await again.goto(link.url);
+  await expect(again.locator('body')).toContainText('次数上限');
+  expect(Number(await platformQuery(me.tenantId,
+    `SELECT count(*) FROM response_projection WHERE tenant_id='${me.tenantId}' AND survey_id=${engineSid};`))).toBe(1);
+  await again.close();
+});
+
 function shanghaiLocalTime(minutesFromNow: number): string {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
     day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
@@ -1109,6 +1194,11 @@ test('@mobile editor keeps tabs and primary actions usable without horizontal ov
       .not.toBe('none');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
+  await clickAction(page.getByRole('tab', { name: '属性' }));
+  const deviceLimitInput = page.getByLabel('同一设备最多提交次数');
+  await deviceLimitInput.scrollIntoViewIfNeeded();
+  await assertUsable(deviceLimitInput);
+  await assertTouchTarget(deviceLimitInput);
   await assertUsable(page.getByRole('button', { name: '保存草稿' }));
 });
 
@@ -1552,10 +1642,16 @@ async function assertUsable(locator: Locator) {
   expect(box).not.toBeNull();
   expect(box!.width).toBeGreaterThanOrEqual(24);
   expect(box!.height).toBeGreaterThanOrEqual(24);
-  expect(await locator.evaluate((element, point) => {
-    const hit = document.elementFromPoint(point.x, point.y);
+  expect(await locator.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const left = Math.max(0, rect.left);
+    const right = Math.min(window.innerWidth, rect.right);
+    const top = Math.max(0, rect.top);
+    const bottom = Math.min(window.innerHeight, rect.bottom);
+    if (right <= left || bottom <= top) return false;
+    const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
     return hit === element || (hit !== null && element.contains(hit));
-  }, { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 })).toBe(true);
+  })).toBe(true);
 }
 
 function surveyIdFrom(url: string) {
