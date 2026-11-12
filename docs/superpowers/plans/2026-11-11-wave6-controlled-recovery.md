@@ -418,3 +418,6 @@ PG 使用固定 Unix socket、pg_restore 单事务/exit-on-error 并保留 owner
 本地13项新测试及73项相关组合通过，涵盖 HMAC 拒绝零 DB exec、控制文件 symlink 不读取 referent、源/目标漂移、caller 伪输入、v4严格回执、已知部分成功不重放、未知保留租约、清理双scope预检及严格资格。真实数据库隔离 job 已接 production-smoke，仅 contents:read，固定镜像、新临时scope、无宿主挂载或端口；正向与 known-partial 两次依次运行，JSON证据单列源码hash与cleanup。新增job尚未执行，不可写成通过。
 
 边界：source fixture 生成真实 dump 后曾经过宿主内存；源 cohort/初始化/结果查询和授权失效 reset 仍是明确夹具，目标输入本身使用真实 controller/kernel reader。SQL为合成业务行，未证明跨库事务快照、应用登录、真实崩溃/unknown settle。HMAC不等于 source/target 镜像签名，metadata资源隔离不等于有效产品配置审批。目标签名、配置、业务提交、人员失效与候选/恢复资格均保持 false；独立SQL查询/reset证据不自动改变组件报告。新守卫/交接/复制模块尚未加入产品runtime打包，无 restore/CLI 调用，无门禁解除，不改 Claude Release。
+
+
+#148非作者复现使用时密文漂移：空库预检后原地翻转postgres.dump.enc而control不变，旧实现仍用先前认证sealed明文继续。不是未认证SQL进入，但不满足此前源漂移声明。新增确定性红测后，每次typed input claim在固定control/源release/floor复核之外，对先前HMAC认证的全密文inventory逐项no-follow FD重算SHA，检查读取前后FD/路径身份、长度与受限字节数；不能在plaintext child lease期间重开workspace key，故复用先前完整认证且当前字节未变的control绑定，不重解密或新增crypto child。首次import前漂移拒绝零SQL；PG完成后改变Maria密文则Maria未开始，整copy失败且不重放PG。15项新测试/75项相关组合通过。每次claim重读全inventory，成本受workspace上限约束但无新增硬时限保证；可信独占controller和最终check-to-use非原子边界不变。旧head实际AMD64 artifact13949183939已下载核对ZIP摘要/18源码+58迁移库存，正常/已知部分失败/cleanup通过；不能代替本修订head线上证据。所有gate保持关闭。

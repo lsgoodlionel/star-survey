@@ -128,6 +128,20 @@ class AuthenticatedDatabaseCopyTest(unittest.TestCase):
         with self.assertRaises(self.exec_module.KnownExecFailure):copy.execute(self.fixture.output)
         self.assertEqual([], [e for e in self.events if e[0]=='input'])
 
+    def test_ciphertext_byte_change_after_preflight_cannot_start_import(self):
+        original=self.target.preflight
+        def changed(copy):
+            original(copy)
+            path=self.fixture.output/'postgres.dump.enc'
+            with path.open('r+b') as handle:
+                first=handle.read(1);handle.seek(0);handle.write(bytes([first[0]^1]))
+        self.target.preflight=changed
+        copy=self.copier()
+        with self.assertRaises(self.exec_module.KnownExecFailure) as failure:copy.execute(self.fixture.output)
+        self.assertIsInstance(failure.exception.__cause__,self.fixture.module.RestoreIntegrityError)
+        self.assertEqual([], [e for e in self.events if e[0]=='input'])
+        self.assertTrue(copy.failed)
+
     def test_raw_sealed_lease_and_caller_digest_cannot_enter_database_profile(self):
         import owned_memory
         from runtime_ownership import PrivateStore
@@ -140,6 +154,22 @@ class AuthenticatedDatabaseCopyTest(unittest.TestCase):
                     runner.execute('postgres-import',self.target.services['platform-db'],output,
                         input_lease=source,input_sha256=hashlib.sha256(b'PGDMP unverified caller bytes').hexdigest())
         self.assertEqual([],self.events)
+
+    def test_ciphertext_change_after_pg_stops_maria_without_replaying_pg(self):
+        original=self.target.api.stream_input
+        def changed(eid,output,limit,*,profile,source):
+            original(eid,output,limit,profile=profile,source=source)
+            if profile=='postgres-import':
+                path=self.fixture.output/'mariadb.sql.enc'
+                with path.open('r+b') as handle:
+                    first=handle.read(1);handle.seek(0);handle.write(bytes([first[0]^1]))
+        self.target.api.stream_input=changed
+        copy=self.copier()
+        with self.assertRaises(self.exec_module.KnownExecFailure):copy.execute(self.fixture.output)
+        self.assertEqual([('input','postgres-import')],[e for e in self.events if e[0]=='input'])
+        before=list(self.events)
+        with self.assertRaises(self.exec_module.KnownExecFailure):copy.execute(self.fixture.output)
+        self.assertEqual(before,self.events)
 
 
     def test_v4_receipt_requires_source_evidence_and_known_terminal_even_after_gc(self):

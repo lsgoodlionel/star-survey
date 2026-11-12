@@ -199,6 +199,7 @@ class ControlledDatabaseCopy:
         self._exports, self._outputs = [], []
         self.used = self.active = self.failed = self.uncertain = False
         self.control, self.evidence, self._source_view = None, None, None
+        self._authenticated_metadata = None
         target.maintenance.held.append(self)  # Keep unknown plaintext/leases alive.
 
     def poison_unknown(self):
@@ -274,6 +275,37 @@ class ControlledDatabaseCopy:
         self.source_inventory()
         if self.control_snapshot() != self.control:
             raise RestoreIntegrityError('authenticated source control changed')
+        # The control bytes are unchanged from full HMAC verification. Rehash
+        # against that authenticated inventory without reopening the key while
+        # plaintext exports hold the workspace's child leases.
+        directory=self.verifier.cipher.directory
+        def identity(info):
+            return (info.st_dev,info.st_ino,info.st_uid,info.st_mode,info.st_nlink,
+                    info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+        for name,expected in self._authenticated_metadata['files'].items():
+            try:
+                fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC,dir_fd=directory.fd)
+                try:
+                    before=os.fstat(fd)
+                    if (not stat.S_ISREG(before.st_mode) or before.st_nlink!=1
+                            or before.st_uid!=os.geteuid() or before.st_mode&0o077
+                            or not 0<before.st_size<=self.verifier.workspace.max_bytes+65536):
+                        raise RestoreIntegrityError('authenticated source ciphertext is unsafe')
+                    digest=hashlib.sha256();remaining=before.st_size
+                    while remaining:
+                        block=os.read(fd,min(65536,remaining))
+                        if not block:raise RestoreIntegrityError('authenticated source ciphertext is truncated')
+                        digest.update(block);remaining-=len(block)
+                    if (os.read(fd,1) or identity(os.fstat(fd))!=identity(before)
+                            or identity(os.stat(name,dir_fd=directory.fd,follow_symlinks=False))!=identity(before)
+                            or digest.hexdigest()!=expected):
+                        raise RestoreIntegrityError('authenticated source ciphertext changed')
+                finally:
+                    try:os.close(fd)
+                    except OSError as exc:raise UncertainExec('ciphertext descriptor release unknown') from exc
+            except OSError as exc:
+                raise RestoreIntegrityError('authenticated source ciphertext is unavailable') from exc
+        directory.check()
 
     def output(self):
         workspace = AnonymousWorkspace(max_bytes=1024*1024, max_files=1)
@@ -298,6 +330,7 @@ class ControlledDatabaseCopy:
             version, _, _, compatible, minimum = self.verifier._load_current()
             if self.verifier._verify(backup, version, compatible, minimum) != metadata:
                 raise RestoreIntegrityError('authenticated backup snapshot changed')
+            self._authenticated_metadata = deepcopy(metadata)
             self.recheck_source()
             digest = hashlib.sha256(b'survey-backup-control-v1\0')
             for name in sorted(self.control):
