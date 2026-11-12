@@ -259,6 +259,28 @@ class ReceiptRetirement:
             if identity!=store._regular(os.stat(name,dir_fd=parent,follow_symlinks=False)) or hashlib.sha256(json.dumps(record,sort_keys=True,allow_nan=False).encode()).hexdigest()!=digest:
                 raise ownership.OwnershipError('retirement file contents changed')
 
+    def reserve(self, receipt_slots):
+        """Internal preflight: only a caller-proven fixed writer bound is valid."""
+        if type(receipt_slots) is not int or not 1<=receipt_slots<=256:
+            raise ownership.OwnershipError('receipt allocation bound is invalid')
+        for batch in range(17):
+            snapshot=self._capture()
+            intent_exists=os.path.lexists(self.probe.target/'.surveyctl/operation.intent')
+            current=len(snapshot['names'])+int(intent_exists)
+            # Reserve final pending intent plus one atomic-publication temp.
+            overhead=int(not intent_exists)+1
+            if current-len(snapshot['receipts'])+receipt_slots+overhead>256:
+                raise ownership.OwnershipError('fixed operation cannot fit receipt capacity')
+            if not snapshot['receipts']:
+                if current+receipt_slots+overhead>256:
+                    raise ownership.OwnershipError('receipt capacity is unverified')
+                return
+            # Proactively retire reverified historical terminals, including v1
+            # while live proof still exists. Unknown v1 never reaches this call.
+            if batch==16 or self.run()<1:
+                raise ownership.OwnershipError('receipt retirement did not converge')
+        raise ownership.OwnershipError('receipt reservation remains unverified')
+
     def run(self):
         expected=self._capture()
         if not expected['receipts']: return 0

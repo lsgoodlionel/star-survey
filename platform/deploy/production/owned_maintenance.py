@@ -38,6 +38,7 @@ class OwnedMaintenance:
         self.guard = _guard or ControllerProcessGuard()
         self.actor = self.guard.check()
         self.uncertain, self.paused, self.held = False, set(), []
+        self._receipt_budget = None
         self.sleep = time.sleep
         self.services = {}
         for cid in self.record['resources']['containers']:
@@ -171,6 +172,7 @@ class OwnedMaintenance:
             connection.close()
 
     def _journal(self):
+        self._allocate_receipt()
         operation = str(uuid.uuid4())
         store = PrivateStore(self.manager.target, name='runtime-child-' + operation.replace('-', '') + '.json')
         return ChildJournal(store, self.guard, operation_id=operation, installation_id=self.record['installationId'])
@@ -201,6 +203,7 @@ class OwnedMaintenance:
     def exec_file(self, profile, service, plain, *, body=None):
         if self.uncertain: raise UncertainMaintenance('prior maintenance remains unverified')
         if service not in self.services: raise OwnershipError('exec service is not in the source contract')
+        self._allocate_receipt()
         operation = str(uuid.uuid4())
         store = PrivateStore(self.manager.target, name='runtime-exec-' + operation.replace('-', '') + '.json')
         executor = OwnedDockerExec(self.api, store, self.guard, container_check=self.container_check,
@@ -245,6 +248,23 @@ class OwnedMaintenance:
         finally:
             if not self.uncertain and not self.held:
                 self.manager._owned_contexts.remove(self)
+
+    def _allocate_receipt(self):
+        if self._receipt_budget is not None:
+            if type(self._receipt_budget) is not int or self._receipt_budget<1:
+                raise OwnershipError('backup receipt allocation bound exhausted')
+            self._receipt_budget-=1
+
+    def prepare_backup_capacity(self):
+        if self.uncertain or self.held or self.paused:
+            raise UncertainMaintenance('backup receipt admission requires an idle context')
+        from runtime_cohort import ReceiptRetirement
+        # This fixed backup path uses two DB exec receipts and one cipher
+        # session journal, including verification with that same cipher.
+        ReceiptRetirement(self.runtime.probe,
+            lambda: self.runtime.preflight_cleanup(False),
+            self.manager._begin_operation, self.manager._operation_name).reserve(3)
+        self._receipt_budget=3
 
     def backup(self, output):
         output = Path(output)

@@ -2012,6 +2012,7 @@ class SurveyManager:
             operation = self._owned_maintenance(state['version'])
             try:
                 operation.preflight_backup(output)
+                operation.prepare_backup_capacity()
             except Exception as exc:
                 self._raise_owned_failure(exc, 'controlled backup preflight failed; no helper was started')
             self._begin_operation()

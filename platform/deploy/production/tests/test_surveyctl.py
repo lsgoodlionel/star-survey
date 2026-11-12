@@ -2692,6 +2692,70 @@ raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-inte
         operation.backup.assert_called_once_with(self.target / 'backups/owned')
         operation.doctor.assert_called_once_with()
 
+    def test_default_backup_reserves_before_intent_and_any_helper(self):
+        self.install()
+        manager=self.module.SurveyManager(self.target,runner=self.runner)
+        before=(self.target/'.surveyctl/operation.intent').read_bytes()
+        operation=mock.Mock()
+        def reserve():
+            self.assertEqual(before,(self.target/'.surveyctl/operation.intent').read_bytes())
+            raise self.module.RuntimeHealthError('capacity refused')
+        operation.prepare_backup_capacity.side_effect=reserve
+        with mock.patch.object(manager,'_runtime'), mock.patch('owned_maintenance.OwnedMaintenance',return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError): manager.backup('no-capacity')
+        operation.prepare_backup_capacity.assert_called_once_with()
+        operation.backup.assert_not_called()
+        self.assertEqual(before,(self.target/'.surveyctl/operation.intent').read_bytes())
+
+    def test_partial_capacity_retirement_failure_keeps_pending_and_never_backs_up(self):
+        self.install()
+        manager=self.module.SurveyManager(self.target,runner=self.runner)
+        operation=mock.Mock()
+        def interrupted():
+            manager._begin_operation()
+            raise self.module.RuntimeHealthError('retirement interrupted')
+        operation.prepare_backup_capacity.side_effect=interrupted
+        with mock.patch.object(manager,'_runtime'), mock.patch('owned_maintenance.OwnedMaintenance',return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError): manager.backup('interrupted-reserve')
+        operation.backup.assert_not_called()
+        self.assertEqual('pending',json.loads((self.target/'.surveyctl/operation.intent').read_text())['state'])
+        restarted=self.module.SurveyManager(self.target,runner=self.runner)
+        with mock.patch.object(restarted,'_runtime') as runtime:
+            with self.assertRaises(self.module.InputError): restarted.backup('after-restart')
+            runtime.assert_not_called()
+
+    def test_backup_capacity_bridge_uses_real_resource_preflight_and_fixed_three_slots(self):
+        import owned_maintenance
+        operation=object.__new__(owned_maintenance.OwnedMaintenance)
+        operation.uncertain=False; operation.held=[]; operation.paused=set()
+        operation.runtime=mock.Mock(); operation.manager=mock.Mock()
+        operation.manager._operation_name='backup'
+        with mock.patch('runtime_cohort.ReceiptRetirement') as retirement:
+            operation.prepare_backup_capacity()
+            retirement.return_value.reserve.assert_called_once_with(3)
+            args=retirement.call_args.args
+            self.assertIs(args[0],operation.runtime.probe)
+            args[1](); operation.runtime.preflight_cleanup.assert_called_once_with(False)
+            self.assertEqual('backup',args[3])
+
+    def test_exhausted_backup_receipt_budget_cannot_allocate_a_child_journal(self):
+        import owned_maintenance
+        operation=object.__new__(owned_maintenance.OwnedMaintenance)
+        operation._receipt_budget=0
+        with mock.patch('owned_maintenance.PrivateStore') as store:
+            with self.assertRaises(owned_maintenance.OwnershipError): operation._journal()
+            store.assert_not_called()
+
+    def test_exhausted_backup_budget_cannot_export_or_create_an_exec(self):
+        import owned_maintenance
+        operation=object.__new__(owned_maintenance.OwnedMaintenance)
+        operation._receipt_budget=0; operation.uncertain=False
+        operation.services={'platform-db':'c'*64}
+        plain=mock.Mock()
+        with mock.patch('owned_maintenance.PrivateStore') as store, mock.patch('owned_maintenance.OwnedDockerExec') as executor:
+            with self.assertRaises(owned_maintenance.OwnershipError): operation.exec_file('postgres-dump','platform-db',plain)
+            store.assert_not_called(); executor.assert_not_called(); plain.export_for_child.assert_not_called()
+
     def test_default_backup_known_preflight_failure_does_not_latch_or_leak(self):
         from backup import BackupError
         self.install()

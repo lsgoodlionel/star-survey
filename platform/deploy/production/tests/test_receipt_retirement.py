@@ -216,4 +216,23 @@ class ReceiptRetirementTest(unittest.TestCase):
         self.assertTrue(path.exists()); self.assertEqual([True],replaced)
         self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
 
+    def test_capacity_reservation_reclaims_only_when_needed_before_helpers(self):
+        control=self.f.target/'.surveyctl'
+        while len(list(control.iterdir()))<252:
+            (control/('filler-'+str(len(list(control.iterdir()))))).touch(mode=0o600)
+        # 252 + three receipts + missing intent + one temporary is 257.
+        self.primitive().reserve(3)
+        self.assertFalse(self.receipts())
+        self.assertLessEqual(len(list(control.iterdir()))+3+1,256)
+        self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
+
+    def test_impossible_reservation_is_read_only_and_invalid_slots_rejected(self):
+        control=self.f.target/'.surveyctl'
+        while len(list(control.iterdir()))<255:
+            (control/('filler-'+str(len(list(control.iterdir()))))).touch(mode=0o600)
+        for slots in (3,True,-1,257):
+            with self.assertRaises(self.module.ownership.OwnershipError): self.primitive().reserve(slots)
+        self.assertFalse(self.calls); self.assertFalse(self.intent.exists())
+        self.assertEqual(1,len(self.receipts()))
+
 if __name__ == '__main__': unittest.main()
