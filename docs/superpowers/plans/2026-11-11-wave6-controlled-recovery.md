@@ -395,3 +395,5 @@ LocalDockerAPI 使用 ExecStart 101/tcp 升级、原 HTTP 缓冲、同一个35�
 先红后绿与真实本地文件系统验证共10项：外层guard退出后锁仍被持有，handoff关闭后才可重新取锁；不变的原intent与marker保留；计划参数/早到record/短写/fsync中断、同字节marker替换、原intent替换、symlink/hardlink/public/FIFO、失败后移除异常仍拒绝、__enter__失败释放私有FD、close结果未知不重试。交接失败也永久poison原guard；实现没有删除marker/未知对象或修复旧现场。结合原guard、输入、背压/cohort/retirement等同进程96项回归通过，/tmp/survey-handoff-combination-20261112.log。没有实际SIGKILL/宿主崩溃证明，可信独占controller之外同UID对抗/最终check-to-use不是原子fence。
 
 新模块及原reservation guard仍未进入OWNED_RUNTIME_FILES，未被产品restore/CLI调用；没有Docker变更、DB导入、受信目标签名配置或候选资格。该交接只提供未来控制器保留原锁/锚点并容纳有限运行记录的文件系统层；必须继续组合实际OwnershipProtocol/CohortProbe与源/目标认证，不能拿此返回值授权执行或清理。restore/native/上传/发布门保持，Release仍Claude单一写入者。后续具体解除须向用户给证据/范围/风险并获同意。
+
+#147增量先红后绿：非作者自然with双故障复现为handoff fsync未知结果被外层guard关闭ReservationError覆盖。新增测试在旧源失败，修为保留同一原始UncertainExec及其fsync cause；原FD单次关闭后立即复用的外来FD仍存活，marker保留且发布不重放。另自查并复现runtime JSON读取后替换immutable marker/追加未知文件会漏过最终观察，补末尾锚点及无JSON回调的清单复核，两类注入拒绝。新增后共12项handoff/同进程98回归通过，修订仅guard/handoff、对应测试和本计划。原head绿色不能代替新head CI，仍非原子check-to-use或同UID对抗保证，未发生产品恢复或解除门禁。

@@ -156,4 +156,67 @@ class RecoveryHandoffTest(unittest.TestCase):
                 (self.control/'recovery.handoff.json').unlink()  # Fault injection only, not implementation repair.
                 with self.assertRaises(self.module.ReservationError): guard.inspect()
 
+
+    def test_runtime_record_read_cannot_hide_late_anchor_or_inventory_replacement(self):
+        from runtime_ownership import PrivateStore
+        for change in ('marker', 'inventory'):
+            with self.subTest(change=change):
+                self.setUp()
+                with self.guard() as guard: handoff = guard.handoff(receipts=(self.receipt,))
+                self.write('runtime-owner.json', {'schemaVersion': 1})
+                original, changed = PrivateStore.load, False
+                def replacing(store):
+                    nonlocal changed
+                    value = original(store)
+                    if not changed:
+                        changed = True
+                        if change == 'marker':
+                            path = self.control/'recovery.handoff.json'
+                            staged = self.control/'swap'; staged.write_bytes(path.read_bytes())
+                            staged.chmod(0o600); staged.replace(path)
+                        else: (self.control/'late-unknown').write_bytes(b'keep')
+                    return value
+                try:
+                    with mock.patch.object(PrivateStore, 'load', replacing):
+                        with self.assertRaises(self.module.ReservationError): handoff.inspect()
+                finally: handoff.close()
+
+
+    def test_nested_preparation_and_outer_guard_close_failure_keep_original_unknown(self):
+        from owned_docker_exec import UncertainExec
+        actual_close, actual_open = os.close, os.open
+        victim, foreign, primary, closed, publications = [], [], [], [], []
+        def observed_open(name, *args, **kwargs):
+            if name == 'recovery.handoff.json': publications.append(name)
+            return actual_open(name, *args, **kwargs)
+        def ambiguous_close(fd):
+            closed.append(fd); actual_close(fd)
+            if victim and fd == victim[0]:
+                replacement = actual_open(self.parent/'foreign-fd', os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+                foreign.append(replacement)
+                os.write(replacement, b'foreign must remain open')
+                raise OSError('outer guard close result unknown')
+        try:
+            with mock.patch('os.open', side_effect=observed_open), mock.patch('os.close', side_effect=ambiguous_close):
+                with self.assertRaises(UncertainExec) as result:
+                    with self.guard() as guard:
+                        victim.append(guard._fds[-1])
+                        with mock.patch('os.fsync', side_effect=OSError('handoff fsync interrupted')):
+                            try: guard.handoff(receipts=(self.receipt,))
+                            except UncertainExec as error:
+                                primary.append(error); raise
+                self.assertIs(result.exception, primary[0])
+                self.assertEqual('handoff fsync interrupted', str(result.exception.__cause__))
+                with self.assertRaises(self.module.ReservationError): guard.handoff(receipts=(self.receipt,))
+                guard._close()  # No retry of any old or reused descriptor.
+            self.assertEqual(victim, foreign)
+            self.assertEqual(1, closed.count(victim[0]))
+            self.assertEqual(1, len(publications))
+            self.assertEqual(b'foreign must remain open', os.pread(foreign[0], 64, 0))
+            marker = json.loads((self.control/'recovery.handoff.json').read_text())
+            self.assertEqual('pending-not-authorized', marker['state'])
+            self.assertIs(False, marker['executable'])
+        finally:
+            for fd in foreign: actual_close(fd)
+
 if __name__ == '__main__': unittest.main()

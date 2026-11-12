@@ -211,7 +211,18 @@ class RecoveryReservation:
             raise ReservationError('recovery reservation descriptor release is unverified') from error
 
     def __exit__(self, kind, value, traceback):
+        if kind is not None:
+            try:
+                self._close()
+            except ReservationError:
+                from owned_docker_exec import UncertainExec
+                if not isinstance(value, UncertainExec):
+                    raise
+                # Natural with propagation retains the exact original unknown
+                # and its cause. All FDs were detached before the one close
+                # attempt, and no pending marker is removed or retried.
+            return False
         try:
-            if kind is None and not self._transferred: self.inspect()
+            if not self._transferred: self.inspect()
         finally:
             self._close()

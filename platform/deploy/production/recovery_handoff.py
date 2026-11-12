@@ -68,7 +68,7 @@ class ReservationHandoff:
         guard._active, guard._transferred = False, True
         self._fds, self._active = descriptors, True
 
-    def _check(self, *, initial=False):
+    def _anchors(self):
         for parent, name, fd, expected in self._directories:
             observed = os.stat(name, follow_symlinks=False, **({'dir_fd': parent} if parent is not None else {}))
             if _identity(observed) != expected or _identity(os.fstat(fd)) != expected:
@@ -80,6 +80,9 @@ class ReservationHandoff:
                     or _snapshot(os.fstat(fd)) != expected
                     or _snapshot(os.stat(name, dir_fd=self._control, follow_symlinks=False)) != expected):
                 raise HandoffError('handoff anchor contents or identity changed')
+
+    def _inventory(self, *, initial=False, read_records=True):
+        observed = []
         for fd, required, allowed in ((self._target, {'.surveyctl'}, {'.surveyctl'}),
                                       (self._control, self._base, self._base if initial else self._allowed)):
             found = set()
@@ -89,13 +92,25 @@ class ReservationHandoff:
                         raise HandoffError('handoff inventory is unknown')
                     found.add(entry.name)
             if not required <= found: raise HandoffError('handoff anchor is missing')
-            if fd == self._control:
+            if fd == self._control and read_records:
                 for name in found - self._base:
                     # Only filesystem/JSON observation. OwnershipProtocol and
                     # CohortProbe must separately validate these semantics.
                     store = PrivateStore(self.path) if name == 'runtime-owner.json' else PrivateStore(self.path, name=name)
                     if not isinstance(store.load(), dict):
                         raise HandoffError('handoff runtime record is unreadable')
+            observed.append(frozenset(found))
+
+        return tuple(observed)
+
+    def _check(self, *, initial=False):
+        self._anchors()
+        observed = self._inventory(initial=initial)
+        # Runtime JSON reads must not hide a replacement of an immutable
+        # anchor or late inventory change before this observation returns.
+        self._anchors()
+        if observed != self._inventory(initial=initial, read_records=False):
+            raise HandoffError('handoff inventory changed while reading records')
 
     def inspect(self):
         if not self._active or self._failed: raise HandoffError('handoff is inactive or failed')
