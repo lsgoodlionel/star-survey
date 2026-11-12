@@ -472,4 +472,3 @@ RecoveryTargetBinding在启动任何验签工具前及后续recheck先走manager
 冻结顺序：先整合PR的精确head完整CI/独立复核，再由人工决定合并；随后核对实际main合并提交CI，才确定候选commit。签名制品与readiness的依赖已交Claude #138评论6826809003；21/22候选尚未登记或创建，不能先填未来SHA或复用旧标签。恢复/原生/上传/发布的每项具体解除和候选触发仍须先说明操作/证据/风险并获用户同意，Release仍Claude负责。本整合不触发标签、镜像、Release或生产。
 
 可独立故障证据：本机22份实际owned代码/helper准入后调用真实验签脚本，缺资产exit1拒绝、组已缺席、DBcopy未启动、私有fixture已清理（/tmp/survey-recovery-target-refusal-150.json SHA256935316509b29975eb3f88b0fcef7a7c2ae86110cd251d7257beb7ef2a6180982）；daemon/install明确模型，不是签名正向。实际签名/有效配置/业务恢复和四平台未完成，不因本整合提升capability为Accepted。
-
