@@ -48,6 +48,10 @@ jobs:
             --python-image "$python_image" --caddy-image "$caddy_image" \
             --postgres-image "$postgres_image" --mariadb-image "$mariadb_image" \
             --evidence ownership-evidence/controlled-maintenance.json
+          python3 -B platform/deploy/production/tests/integration/recovery_database_native.py \
+            --claim-image alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 \
+            --postgres-image "$postgres_image" --mariadb-image "$mariadb_image" \
+            > ownership-evidence/new-copy-databases.json
       - name: Preserve bounded protocol and cleanup result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

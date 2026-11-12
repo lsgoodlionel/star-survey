@@ -300,3 +300,17 @@ Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发�
 本机默认socket访问被沙盒拒绝后，经正常require_escalated授权只读检查固定镜像，再运行此范围的测试，无权限改写或socket绕行。Docker Desktop Linux arm64实际exit0，firstNamespaceUnchanged/firstNamespaceRemoved/secondNamespaceRemoved=true、fixtureCleanup=verified，源码前后SHA一致；JSON /tmp/survey-recovery-namespace-20261112.json。claimsNeverStarted=true、cohortProbeIsModel=true、businessDataCovered/restoreAuthorized/releaseEligible=false，不能说已证明任意helper/writer收束、真正源业务不变或新副本恢复。生产smoke现有ownership-protocol轻量job追加该入口和白名单JSON，不新增权限/凭据/产品镜像构建；精确PR的amd64在线结果待CI，不把本机arm64等同Ubuntu四平台。
 
 仍须将#139目标预留、#140来源/目标兼容性与此命名空间在未来执行器绑定，再证明新副本真实数据库/卷导入、人员授权失效及归因审计、故障/明文/资源清理和业务核对。Release由Claude #138负责，所有restore/native/上传/发布门禁保持；每项具体解除前说明操作证据风险并取得明确同意。
+
+### 2026-11-12：真实双库新副本的合成数据组件（stack #141，未接产品恢复）
+
+新增recovery_database_native.py，基于#141显式namespace协议在两个随机私有目标各创建PG/Maria及明确新卷，共四个DB容器/四卷和两只从不启动的claim；无host bind、发布端口、容器网络或业务app，固定本地PG/Maria/Alpine镜像，无脚本拉镜像或特权/cap-add。角色/数据库使用一次性network-none夹具的local trust/空口令初始化，不模拟生产认证；512MiB/1CPU/128PID及NNP约束沿用测试边界。
+
+真实PG应用当前58份迁移（实际role platform_owner），创建虚构组织、人员grant/session和fixture_recovery_response；Maria创建同名合成记录表。实际pg_dump/custom及mariadb-dump输出仅在host Python内存，经stdin导入全新目标DB；不写具名host dump、不调用产品restore或旧_restore_payload。源端在两份dump后追加记录，验证源两行而副本仅快照一行；副本内直接调用现有人员失效SQL，正向先确认目标旧grant/session有效，再验证失效、关联trace审计存在且源grant/session不变。实际应用从未启动，不称真实问卷/业务恢复。导出顺序仅适用于无并发业务writer的本夹具，不证明双库事务快照。
+
+先红4项缺实现，后追加pending持久化和非空目标拒绝2项缺实现回归，再实现。同步fixture exec若timeout/非零/畸形输出即永久unknown，不重放、不清理；每个私有目标在创建Docker资源前以O_EXCL/no-follow写0600并fsync的operation.intent，整个实验保持pending，检测同字节替换与权限/身份漂移。非空/不独立目标在import前拒绝并保留状态。仅全部已知结束、意图仍匹配、精确资源删除及三类全无残留后，才清理自建夹具目录；未知时保留目录/标记并输出保留路径，不认领或删除真实安装标记。意图/cleanup规则是测试保护，不是产品exec回执或恢复授权。
+
+首轮真实双库复制通过后发现仅进程内unknown标记不足，未将首轮当最终结果；增加上述两项安全前置、审计trace关联和私有root文件清单核对后重新运行。最终6项新夹具回归及10项namespace回归通过；Docker Desktop Linux arm64实际exit0，targetWasFresh、资源独立、PG/Maria合成行、源post-snapshot保留、目标人员失效/源授权不变、审计关联及pending贯穿等字段true，fixtureCleanup=verified、privateStateRetained=false，源码及58迁移库存hash前后一致。最终JSON /tmp/survey-new-copy-database-final-20261112.json，不用首轮旧脚本哈希冒称最终源码验证。
+
+强制负资格字段sourceAuthenticationVerified/targetSignatureVerified/controlledExecReceiptsCovered/restoreAuthorized/releaseEligible/crossDatabaseTransactionVerified/productionAuthenticationVerified=false。dumpTransportHostMemoryOnly=true不是memfd/加密备份链，也不声称Python heap已擦除；具名host dump只核对本夹具私有root及当前固定命令路径，数据库数据本就写入自建卷。cohortProbeIsModel=true，同步CLI结果不能证明任意宿主writer/未知exec已收束。已有#142真实OpenSSL/memfd和旧PG owner/audit故障证据仍是不同组件，未被本测试自动组合成全链路。
+
+现有production-smoke ownership-protocol在既有固定DB镜像拉取/维护组件之后追加此实验，仅上传白名单JSON；预计额外四个短期DB容器和四卷、最多2GiB DB内存配置，无新权限/凭据/候选镜像构建。#141该job既有时长约2分19秒，仍保留10分钟总门；超时/中断无证据不能宣称清理。线上amd64精确证据待CI。Release由Claude #138负责，恢复/原生/上传/发布门禁均未解除。
