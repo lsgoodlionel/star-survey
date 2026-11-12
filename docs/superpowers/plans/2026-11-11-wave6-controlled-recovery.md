@@ -231,3 +231,11 @@ v1仅在精确live ExecInspect终态或原不可变CID证实缺席时可成为�
 身份一致性增量：先红确定性复现_local_check初次stat之后、load之前同内容原子替换会被接受并删除；未证明正常独占controller可自然触发，也不称生产攻击。现owner/receipt加载后均再比较原文件身份，unlink前再核对目录链与目标身份。两项故障注入分别在load内部及_local_check返回后换同内容新inode，均零unlink、保留pending。回执测试25项（含8既有）及runtime73项通过。
 
 边界明确：最后stat与POSIX unlink之间仍不是原子比较删除，依赖既有可信独占写入者协议；不能保证抵御最终检查之后任意同进程/同UID/宿主管理员的并发路径替换。两个可检测窗口的模型通过不代表所有TOCTOU已消除。远端资源核验始终是批前/批后边界，不把批内本地见证复核写成逐项实时远端验证。默认入口保持未接线，真实性能及整体墙钟预算待验，所有门禁保持。
+
+### 2026-11-12：手动备份容量接线（独立待审）
+
+独立分支基于#134 c3353eea，未改其他待审head。默认owned备份在输出/密钥/空间等已有preflight通过之后、原begin/helper之前调用prepare_backup_capacity，使用真实runtime.preflight_cleanup回调和manager durable begin；固定预留2个DB exec+1个共享cipher journal，实际分配点每次扣减，耗尽时禁止新journal/exec/FD export。reserve先判定即使收束全部已核验终态也能容纳；不可能则零写入。只有旧记录均可实时核验结束时才按16批上限逐批收束，成功后留出3个永久回执、缺失intent及1个原子发布临时槽；已有满256目录仍拒绝。unknown v1不补证、不认领，不清操作/恢复标记。失败/中断留pending，重建manager下一操作在runtime前拒绝。
+
+先红后绿容量分配与默认backup顺序/配额耗尽负例；27项回执（含8既有）、73项runtime、11项maintenance及default_backup4/capacity3/exhausted2定向测试通过。仅模型及实际CLI方法，不是真实进程SIGKILL/候选/双库全流程证明，交GitHub既有真实组件CI继续验证。共享内部备份helper调用同样保护，但不宣称#131升级组合已测试。默认doctor/verify/install/upgrade其他生命周期未因此接线：doctor遍历备份目录数量无固定界限，需动态预算，不能假定小常数；每种operation、总墙钟预算、所有崩溃窗口/真实候选连续性仍待。
+
+旧v1 GC+原CID存在和已超256目录保持失败关闭，当前没有指定且获准操作的真实安装目标；后续只能先做只读盘点与精确处置提案，不能为了可用性运行旧controller、抬阈值、移走未知回执或停止/删除原资源。最终stat/unlink非原子、可信独占controller边界不变，所有恢复/原生/发布门禁保留。此为开发分支代码，不合并/发布/触碰生产，Release仍Claude负责。
