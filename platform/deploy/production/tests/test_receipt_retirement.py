@@ -117,4 +117,66 @@ class ReceiptRetirementTest(unittest.TestCase):
         self.assertEqual(5,len(self.receipts()))
         self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
 
+    def test_exact_capacity_reserves_intent_temporary_before_writing(self):
+        control=self.f.target/'.surveyctl'
+        while len(list(control.iterdir()))<256:
+            (control/('filler-'+str(len(list(control.iterdir()))))).touch(mode=0o600)
+        with self.assertRaises(self.module.ownership.OwnershipError): self.primitive().run()
+        self.assertFalse(self.calls); self.assertFalse(self.intent.exists())
+        self.assertEqual(256,len(list(control.iterdir())))
+
+    def test_twenty_one_receipts_use_bounded_full_verification_passes(self):
+        import uuid
+        for i in range(20): self.f.receipt(operationId=str(uuid.uuid4()))
+        counts={'inspect':0,'absent':0,'resources':0}
+        inspect,absent=self.f.api.inspect,self.f.api.container_absent
+        def query(identity): counts['inspect']+=1; return inspect(identity)
+        def presence(identity): counts['absent']+=1; return absent(identity)
+        self.f.api.inspect=query; self.f.api.container_absent=presence
+        def resources():
+            counts['resources']+=1
+            if self.f.probe()!='quiescent': raise self.module.ownership.OwnershipError('unverified')
+            return self.f.store_type(self.f.target).load()
+        self.check=resources
+        self.assertEqual(16,self.primitive().run())
+        self.observed_queries=dict(counts)
+        self.assertLessEqual(counts['resources'],3)
+        self.assertLessEqual(counts['inspect'],192)
+        self.assertLessEqual(counts['absent'],192)
+
+    def test_one_free_slot_is_enough_for_intent_atomic_publication(self):
+        control=self.f.target/'.surveyctl'
+        while len(list(control.iterdir()))<255:
+            (control/('filler-'+str(len(list(control.iterdir()))))).touch(mode=0o600)
+        begin=self.begin
+        def atomic_begin():
+            temporary=control/'intent-temporary'; temporary.touch(mode=0o600)
+            self.assertEqual(256,len(list(control.iterdir())))
+            temporary.unlink(); begin()
+        self.begin=atomic_begin
+        self.assertEqual(1,self.primitive().run())
+        self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
+
+    def test_new_pending_receipt_during_batch_stops_without_clearing_intent(self):
+        import uuid
+        self.f.receipt(operationId=str(uuid.uuid4()))
+        unlink=self.module.os.unlink
+        def changed(name,**kwargs):
+            unlink(name,**kwargs)
+            self.f.receipt(operationId=str(uuid.uuid4()),phase='released',exitCode=None)
+        with patch.object(self.module.os,'unlink',side_effect=changed):
+            with self.assertRaises(self.module.ownership.OwnershipError): self.primitive().run()
+        self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
+        self.assertTrue(any(json.loads(path.read_text())['phase']=='released' for path in self.receipts()))
+
+    def test_post_batch_resource_drift_keeps_pending(self):
+        count=[0]
+        def resources():
+            count[0]+=1
+            owner=self.f.store_type(self.f.target).load()
+            return dict(owner,daemonId='changed') if count[0]>=3 else owner
+        self.check=resources
+        with self.assertRaises(self.module.ownership.OwnershipError): self.primitive().run()
+        self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
+
 if __name__ == '__main__': unittest.main()

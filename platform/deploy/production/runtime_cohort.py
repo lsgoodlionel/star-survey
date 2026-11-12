@@ -239,30 +239,52 @@ class ReceiptRetirement:
             raise ownership.OwnershipError('durable pending retirement intent is absent')
         return before
 
+    def _local_check(self, parent, chain, store, expected, intent):
+        # Terminal identities already observed in this locked call cannot start
+        # again. Keep proving the local witness unchanged; do not re-query the
+        # whole daemon inventory for every file. No pending/unknown witness is
+        # admitted by _capture. Full resource checks bracket the batch.
+        store._recheck(parent,chain)
+        if self.probe._lock()!=self.probe.lock_identity or self._intent(parent,store)!=intent:
+            raise ownership.OwnershipError('retirement lock or intent changed')
+        names=sorted(os.listdir(parent))
+        if len(names)>256 or [name for name in names if name!='operation.intent']!=expected['names']:
+            raise ownership.OwnershipError('retirement directory set changed')
+        if store._directory_identity(os.fstat(parent))!=expected['directory'] or store._regular(os.stat(store.NAME,dir_fd=parent,follow_symlinks=False))!=expected['ownerIdentity'] or store.load()!=expected['owner']:
+            raise ownership.OwnershipError('retirement owner changed')
+        for name,(identity,digest) in expected['receipts'].items():
+            if store._regular(os.stat(name,dir_fd=parent,follow_symlinks=False))!=identity:
+                raise ownership.OwnershipError('retirement file identity changed')
+            record=ownership.PrivateStore(self.probe.target,name=name).load()
+            if hashlib.sha256(json.dumps(record,sort_keys=True,allow_nan=False).encode()).hexdigest()!=digest:
+                raise ownership.OwnershipError('retirement file contents changed')
+
     def run(self):
         expected=self._capture()
         if not expected['receipts']: return 0
-        self.begin()  # No unlink before durable pending intent succeeds.
         store=ownership.PrivateStore(self.probe.target)
         parent,chain=store._open_parent()
         try:
+            names=sorted(os.listdir(parent))
+            # Existing intent replacement also needs one temporary directory
+            # entry; missing intent publication needs the same one-slot peak.
+            if len(names)+1>256 or [name for name in names if name!='operation.intent']!=expected['names']:
+                raise ownership.OwnershipError('pending intent capacity is unavailable')
+            self.begin()  # No unlink before durable pending intent succeeds.
             intent=self._intent(parent,store)
             if self._capture()!=expected:
                 raise ownership.OwnershipError('retirement plan is stale')
             count=0
             for name in sorted(expected['receipts'])[:16]:
-                store._recheck(parent,chain)
-                if self._intent(parent,store)!=intent or self._capture()!=expected:
-                    raise ownership.OwnershipError('retirement evidence changed before unlink')
-                if store._directory_identity(os.fstat(parent))!=expected['directory']:
-                    raise ownership.OwnershipError('retirement parent changed')
+                self._local_check(parent,chain,store,expected,intent)
                 os.unlink(name,dir_fd=parent)
                 os.fsync(parent)
                 if name in os.listdir(parent): raise ownership.OwnershipError('retired receipt remains')
                 del expected['receipts'][name]; expected['names'].remove(name)
-                if self._capture()!=expected or self._intent(parent,store)!=intent:
-                    raise ownership.OwnershipError('retirement outcome is unverified')
+                self._local_check(parent,chain,store,expected,intent)
                 count+=1
+            if self._capture()!=expected or self._intent(parent,store)!=intent:
+                raise ownership.OwnershipError('retirement outcome is unverified')
             store._recheck(parent,chain)
             return count  # Pending belongs to the outer operation; never clear it.
         finally:
