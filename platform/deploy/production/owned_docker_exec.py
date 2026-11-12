@@ -16,6 +16,7 @@ import socket
 import secrets
 import shlex
 import stat
+import sys
 import time
 import uuid
 
@@ -601,4 +602,12 @@ class OwnedDockerExec:
 
         finally:
             if source is not None:
-                source.close()
+                primary = sys.exc_info()[1]
+                try:
+                    source.close()
+                except BaseException as close_error:
+                    # Never replace an uncertain send/end with a plain close
+                    # error. A caller must keep both leases and the pending
+                    # receipt. No retry of a potentially reused descriptor.
+                    if not isinstance(primary, UncertainExec):
+                        raise UncertainExec('input reference release is unknown; retain both leases') from close_error

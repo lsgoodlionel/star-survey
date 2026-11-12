@@ -371,3 +371,5 @@ LocalDockerAPI 使用 ExecStart 101/tcp 升级、原 HTTP 缓冲、同一个35�
 本机 Docker Desktop Linux arm64 真实 transport-only 实验成功发送大于socket缓冲的合成数据，经101、输入摘要、输出footer和实际ExecInspect终态核对后清理精确临时容器；/tmp/survey-exec-input-transport-20261112.json 明确 kernelSealsVerified=false、controlledReceiptVerified=false。新增 Linux native 夹具将真实 AnonymousWorkspace/memfd 与 OwnedDockerExec/private receipt 连成同一正向组件，接入现有 production-smoke ownership job；源码hash、有限JSON、unknown保留资源，且清理结果单列。该组合尚待精确head CI，不是数据库导入或业务恢复。
 
 #144 的五workflow已全部success（CI43205373012、smoke43205372769、relay43205372889及元数据）；独立组合复核无新增确认阻断。新预留守卫仍未进入受校验 runtime 打包清单，产品接线前必须处理。新的受控 stdin 切片仍须独立审查；所有恢复/原生/上传/发布门、Claude #138 Release 工作流均未改动。下一步是在此传输基础上设计限定数据库consumer的双向背压、来源/目标使用时认证与故障注入，不能用hash消费组件替代实际双库恢复。
+
+#145非作者发现并确定性复现双故障：部分stdin发送已抛UncertainExec，finally关闭私有输入引用又抛OSError，会覆盖原未知分类。补红测验证原异常类型/原发送cause、released回执、input未确认、输入仍可读及只关闭一次，再修为保留原UncertainExec；没有原未知异常的关闭失败也保守转UncertainExec，不重试可能复用的FD。12项新输入回归与14项原Exec回归通过。后续head需自己的CI，旧4397428a的绿色smoke/实际memfd产物不能代替此修订验证；门禁保持。

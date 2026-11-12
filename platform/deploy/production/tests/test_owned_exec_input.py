@@ -189,6 +189,27 @@ class OwnedExecInputTest(unittest.TestCase):
         self.assertEqual([65536], attempts); self.assertEqual([True], closed)
 
 
+    def test_partial_send_and_input_close_failure_preserves_unknown_semantics(self):
+        self.fail = 'partial'
+        original = self.module.SealedExecInput.close
+        calls = []
+        def failed_close(source):
+            calls.append(source.fd)
+            original(source)  # Model an ambiguous OS close that did release.
+            raise OSError('input pin close result unknown')
+        with mock.patch.object(self.module.SealedExecInput, 'close', failed_close):
+            with self.assertRaises(self.module.UncertainExec) as error:
+                self.input_execute()
+        self.assertIn('unknown', str(error.exception))
+        self.assertEqual('unknown partial input', str(error.exception.__cause__))
+        self.assertEqual(1, len(calls))
+        self.assertEqual('released', self.store.value['phase'])
+        self.assertIsNone(self.store.value['completionEvidence'])
+        self.assertIs(False, self.store.value['inputEvidence']['delivered'])
+        self.assertEqual(self.data, self.source.read_bytes())
+        self.assertEqual(['create', 'input-start'], self.events)
+
+
 class InputReceiptTest(unittest.TestCase):
     def test_v3_input_receipt_is_strict_and_unknown_never_counts_as_quiescent(self):
         import test_runtime_cohort as fixtures
