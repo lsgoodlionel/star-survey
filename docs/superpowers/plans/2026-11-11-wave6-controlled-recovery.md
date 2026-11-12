@@ -443,3 +443,33 @@ ControlledDatabaseCopy.execute_bound 只接该类型，源认证前和每次输�
 RecoveryTargetBinding在启动任何验签工具前及后续recheck先走manager._verify_owned_support，确认其执行helper路径/字节属于受校验runtime；没有admission、错路径/错helper字节都拒绝且不启动工具。实际bundle collect/tar写读覆盖amd64/arm64两套metadata、全部新源码和helper字节/SHA；这只是归档构建，不是ARM64原生运行或签名通过。代码捕获loader在foreign PYTHONPATH下使用已校验字节，且default restore仍直接拒绝、未调用copy.execute。既有upgrade前代身份测试改为完整admitted key集合比较而非旧固定17数量，保留原manifest字节不变断言。
 
 整合#1494e9e54c后231项本地相关回归通过，打包scope尚待精确head GitHub/非作者复核。默认安装/维护现在要求新声明模块和helper齐全；旧bundle缺件仍fail-closed，升级只能走既有锁内target-code authority，不能修改前代manifest或自动认领。没有改任何restore/native/upload/publication gate、CLI命令集合或Release，guard/交接marker语义不变。真实受信候选、工具链/签名身份、有效目标口令/角色/业务配置、完整受控人员reset和双库故障/业务/四平台链仍未准出，Claude后续需从整合审查代码构建可信资产，而非复用旧rc19冒充。
+
+### 2026-11-12：#139–#150 单一草稿整合与候选冻结前置
+
+只读核查 main=7cdd66c44bf882a9bfbbc5752e083e7a24b2a89a，最新公开Release仅rc19。活跃PR仅本组12项；#138未给出包含新runtime的签名候选。12项精确head的关联workflow全部success，当前potentialMergeCommit的两个parent匹配各自base/head且tree等于head；正式GitHub reviews均为空。协调窗口的逐切片独立复核不等于正式Approve或发布批准。
+
+| PR | 精确head | Survey CI | topology smoke | 双库relay |
+| --- | --- | --- | --- | --- |
+| #139 | `2f82cefc2abbdb4f402c9b01e470c7a0af4c410e` | [43191884478](https://github.com/lsgoodlionel/star-survey/actions/runs/43191884478) | [43191884444](https://github.com/lsgoodlionel/star-survey/actions/runs/43191884444) | [43191884317](https://github.com/lsgoodlionel/star-survey/actions/runs/43191884317) |
+| #140 | `f5f7be9599e99a5ae6cae33f9c18c8c23dd0041b` | [43193852797](https://github.com/lsgoodlionel/star-survey/actions/runs/43193852797) | [43193852725](https://github.com/lsgoodlionel/star-survey/actions/runs/43193852725) | [43193852628](https://github.com/lsgoodlionel/star-survey/actions/runs/43193852628) |
+| #141 | `a2ff8d2789d85a4fcfb5814936193d6b9283fc97` | [43196708759](https://github.com/lsgoodlionel/star-survey/actions/runs/43196708759) | [43196708544](https://github.com/lsgoodlionel/star-survey/actions/runs/43196708544) | [43196708631](https://github.com/lsgoodlionel/star-survey/actions/runs/43196708631) |
+| #142 | `d9160d074fdda6e9f4c952f212cef2ccc3f00111` | [43198734269](https://github.com/lsgoodlionel/star-survey/actions/runs/43198734269) | [43198734288](https://github.com/lsgoodlionel/star-survey/actions/runs/43198734288) | [43198734348](https://github.com/lsgoodlionel/star-survey/actions/runs/43198734348) |
+| #143 | `4313d6c4f8843b7743cf4c3ea1235bbdb7014897` | [43202862046](https://github.com/lsgoodlionel/star-survey/actions/runs/43202862046) | [43202861723](https://github.com/lsgoodlionel/star-survey/actions/runs/43202861723) | [43202861843](https://github.com/lsgoodlionel/star-survey/actions/runs/43202861843) |
+| #144 | `10a23223e1e4af611ab719fdf70997ad326e7156` | [43205373012](https://github.com/lsgoodlionel/star-survey/actions/runs/43205373012) | [43205372769](https://github.com/lsgoodlionel/star-survey/actions/runs/43205372769) | [43205372889](https://github.com/lsgoodlionel/star-survey/actions/runs/43205372889) |
+| #145 | `ce6d0bb56112acffe05b4e83ae35418c2d19b885` | [43211138838](https://github.com/lsgoodlionel/star-survey/actions/runs/43211138838) | [43211138774](https://github.com/lsgoodlionel/star-survey/actions/runs/43211138774) | [43211138670](https://github.com/lsgoodlionel/star-survey/actions/runs/43211138670) |
+| #146 | `25e4ae3276f0e445be210e5ef8cb322b31aa1af1` | [43213300640](https://github.com/lsgoodlionel/star-survey/actions/runs/43213300640) | [43213300611](https://github.com/lsgoodlionel/star-survey/actions/runs/43213300611) | [43213300518](https://github.com/lsgoodlionel/star-survey/actions/runs/43213300518) |
+| #147 | `7b5ff1c2e4304bc7521c295e0899fde62142849b` | [43217106741](https://github.com/lsgoodlionel/star-survey/actions/runs/43217106741) | [43217106762](https://github.com/lsgoodlionel/star-survey/actions/runs/43217106762) | [43217106641](https://github.com/lsgoodlionel/star-survey/actions/runs/43217106641) |
+| #148 | `84bde33d918d4f4674819e52fe22f8c9ab8daf18` | [43231822269](https://github.com/lsgoodlionel/star-survey/actions/runs/43231822269) | [43231822126](https://github.com/lsgoodlionel/star-survey/actions/runs/43231822126) | [43231822418](https://github.com/lsgoodlionel/star-survey/actions/runs/43231822418) |
+| #149 | `4e9e54c2b691b0b3117d33e2791f46d342a02245` | [43236480994](https://github.com/lsgoodlionel/star-survey/actions/runs/43236480994) | [43236480909](https://github.com/lsgoodlionel/star-survey/actions/runs/43236480909) | [43236481341](https://github.com/lsgoodlionel/star-survey/actions/runs/43236481341) |
+| #150 | `7ef86fafda76e0664116f2c0c878cd0797792660` | [43237237293](https://github.com/lsgoodlionel/star-survey/actions/runs/43237237293) | [43237236931](https://github.com/lsgoodlionel/star-survey/actions/runs/43237236931) | [43237236984](https://github.com/lsgoodlionel/star-survey/actions/runs/43237236984) |
+
+依赖为 main→139；main→140→142；main→141→143；144已整合139–143全部最终head；随后144→145→146→147→148→149→150。git祖先核对确认全部12个head及当前main均为1507ef86faf的祖先。因此整合分支以150完整树为基底，仅追加本段计划，全部运行时、测试和workflow blob与150保持一致，集中建立base main的草稿PR供独立整合复核。来源PR保留审查证据，当前不关闭或合并它们；这不是main已经集成。
+
+本组相对main为30文件、4536插入/42删除（追加本段前），包含安全runtime和测试；即使CI成功仍须人工看聚合diff及已发现故障的修复。144的首次5切片冲突和150的149整合均已有非作者检查；本次不再改代码或解决新冲突。150的独立复核在打包范围未见新增确认阻断（271项、本机两架构归档及Python -I导入），不等于ARM原生或新签名候选。各较早切片的空scope/合成SQL、DB而非应用授权、source cohort/查询/reset夹具、unbound路径边界依旧有效；149取消和后代残留仍unknown，必须保留资产且不能自动重试。
+
+门禁对账：release.yml、baseline-policy.json、native_acceptance.sh、verify_release.sh与main逐字节相同；SurveyManager.restore和RestoreManager.restore完整AST（含装饰器）与main相同，CLI命令集合不变。新声明的模块/helper准入提高默认维护包要求，但不是restore/native/upload/release执行授权。旧bundle缺件、旧v1回执GC未知或超限仍保守拒绝；rc19不含新owned记录，不能自动认领为新运行环境。
+
+冻结顺序：先整合PR的精确head完整CI/独立复核，再由人工决定合并；随后核对实际main合并提交CI，才确定候选commit。签名制品与readiness的依赖已交Claude #138评论6826809003；21/22候选尚未登记或创建，不能先填未来SHA或复用旧标签。恢复/原生/上传/发布的每项具体解除和候选触发仍须先说明操作/证据/风险并获用户同意，Release仍Claude负责。本整合不触发标签、镜像、Release或生产。
+
+可独立故障证据：本机22份实际owned代码/helper准入后调用真实验签脚本，缺资产exit1拒绝、组已缺席、DBcopy未启动、私有fixture已清理（/tmp/survey-recovery-target-refusal-150.json SHA256935316509b29975eb3f88b0fcef7a7c2ae86110cd251d7257beb7ef2a6180982）；daemon/install明确模型，不是签名正向。实际签名/有效配置/业务恢复和四平台未完成，不因本整合提升capability为Accepted。
+
