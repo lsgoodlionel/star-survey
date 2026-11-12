@@ -60,6 +60,9 @@ def passed(report):
     for case in report['cases']:
         if not isinstance(case, dict) or case.get('scenario') not in REQUIRED or case['scenario'] in found: return False
         found[case['scenario']] = case
+        if case['scenario'] == 'backup-purge' and (type(case.get('retainedNetworkCount')) is not int
+                                                  or case['retainedNetworkCount'] != 1):
+            return False
         if (case.get('status') != 'passed' or case.get('fixtureCleanup') != 'verified'
                 or case.get('syntheticManifestOnly') is not True or case.get('businessServicesCovered') is not False
                 or case.get('defaultInstallCovered') is not False or case.get('restorationEligible') is not False
@@ -196,7 +199,12 @@ def topology(namespace, target, images, version='0.2.0'):
             {'type': 'bind', 'source': str(release / 'init/fixture-mdb.sql'), 'target': '/docker-entrypoint-initdb.d/fixture.sql', 'read_only': True}],
         'healthcheck': {'test': ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized'],
                         'interval': '2s', 'timeout': '3s', 'retries': 40}}
-    return {'name': namespace, 'services': services, 'volumes': volumes, 'secrets': secrets}
+    # One idle, non-listening fixture process exercises an actual retained
+    # bridge. No published port or production/network-policy change is involved.
+    services['admin-web'].pop('network_mode')
+    services['admin-web']['networks'] = ['internal']
+    return {'name': namespace, 'services': services, 'volumes': volumes, 'secrets': secrets,
+            'networks': {'internal': {'name': namespace + '_internal', 'internal': True}}}
 
 
 def write_component_release(work, images, payload, architecture, *, version='0.2.0'):
@@ -290,7 +298,9 @@ def run_case(images, scenario):
             upgraded = ownership.PrivateStore(target).load()
             result['ownedUpgradeCompleted'] = (manager._read_state(require_current=True)['version'] == '0.3.0'
                                                 and upgraded['phase'] == 'ready')
-            result['persistentIDsKeptAcrossUpgrade'] = (old['claimId'] == upgraded['claimId']
+            result['retainedNetworkCount'] = len(old['resources']['networks'])
+            result['persistentIDsKeptAcrossUpgrade'] = (bool(old['resources']['networks'])
+                and old['claimId'] == upgraded['claimId']
                 and all(old['resources'][kind] == upgraded['resources'][kind] for kind in ('networks', 'volumes')))
             result['oldContainerIDsAbsentAfterUpgrade'] = all(api.container_absent(cid) for cid in old['resources']['containers'])
             result['newContainerIDsBound'] = (len(upgraded['resources']['containers']) == len(old['resources']['containers'])
