@@ -17,7 +17,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from owned_memory import AnonymousWorkspace
-from owned_docker_exec import LocalDockerAPI, OwnedDockerExec
+from owned_docker_exec import LocalDockerAPI, OwnedDockerExec, KnownExecFailure
 from runtime_ownership import PrivateStore
 
 
@@ -98,6 +98,36 @@ def main(image):
                 and receipt['completionEvidence'] == dict(kind='exec-inspect-terminal-v1',
                     ID=receipt['execId'], ContainerID=cid, Running=False, ExitCode=0))
             if report['sealedMemfdAndActualExec'] is not True: raise RuntimeError('proof')
+            # Fault injection: an explicitly different synthetic consumer
+            # fills stdout/stderr before reading stdin. It deliberately omits
+            # the nonce/footer and must end FAILED, never become stdin-proof.
+            # This is not a registered database or production command profile.
+            stage = 'backpressure-negative-consumer'
+            class FaultAPI(LocalDockerAPI):
+                def create(self, container, command, *, stdin=False):
+                    code = ("import hashlib,sys;"
+                        "sys.stderr.buffer.write(b'e'*49152);sys.stderr.buffer.flush();"
+                        "sys.stdout.buffer.write(b'x'*524288);sys.stdout.buffer.flush();"
+                        "d=hashlib.sha256(sys.stdin.buffer.read()).hexdigest();"
+                        "sys.stdout.buffer.write((d+'  -\\n').encode());sys.stdout.buffer.flush()")
+                    return super().create(container, ['/usr/bin/timeout', '--signal=KILL', '30',
+                        'python3', '-B', '-c', code], stdin=stdin)
+            fault_operation = str(uuid.uuid4())
+            fault_store = PrivateStore(root, name='runtime-exec-' + fault_operation.replace('-', '') + '.json')
+            fault = OwnedDockerExec(FaultAPI(), fault_store, Guard(), operation_id=fault_operation,
+                installation_id=receipt['installationId'], container_check=check)
+            rejected = False
+            with workspace.export_files(inputs=(source,), output=workspace / 'negative-proof') as (input_lease, output_lease):
+                try:
+                    fault.execute('stdin-proof', cid, output_lease, input_lease=input_lease, input_sha256=digest)
+                except KnownExecFailure:
+                    rejected = True
+            negative = fault_store.load()
+            report['backpressureConsumerEndedRejected'] = (rejected and negative['phase'] == 'failed'
+                and negative['exitCode'] == 0 and negative['completionEvidence']['ExitCode'] == 0
+                and negative['inputEvidence']['delivered'] is False)
+            if not report['backpressureConsumerEndedRejected']: raise RuntimeError('backpressure-negative-proof')
+            receipt = negative  # Cleanup permits only this last exact ended ExecID.
             unknown = False
         stage = 'cleanup'
     except BaseException as exc:
@@ -117,7 +147,8 @@ def main(image):
         report['sourceAfter'] = hashes()
         report['sourceUnchanged'] = report['sourceBefore'] == report['sourceAfter']
         print(json.dumps(report, sort_keys=True))
-    return 0 if (report.get('sealedMemfdAndActualExec') is True and report['cleanup'] == 'verified'
+    return 0 if (report.get('sealedMemfdAndActualExec') is True
+        and report.get('backpressureConsumerEndedRejected') is True and report['cleanup'] == 'verified'
         and report['sourceUnchanged'] is True and 'failure' not in report) else 1
 
 

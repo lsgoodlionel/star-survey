@@ -147,7 +147,8 @@ class OwnedExecInputTest(unittest.TestCase):
         events, closed = [], []
         payload = b'ack'
         frame = bytes((1, 0, 0, 0)) + len(payload).to_bytes(4, 'big') + payload
-        raw = SimpleNamespace(settimeout=lambda _: None, sendall=lambda block: events.append(('send', len(block))),
+        raw = SimpleNamespace(settimeout=lambda _: None, setblocking=lambda _: None,
+            send=lambda block: (events.append(('send', len(block))) or len(block)),
             shutdown=lambda how: events.append(('eof', how)))
         response = SimpleNamespace(status=101, fp=io.BytesIO(frame),
             getheader=lambda name: 'tcp' if name == 'Upgrade' else None)
@@ -159,7 +160,17 @@ class OwnedExecInputTest(unittest.TestCase):
                 source = self.module.SealedExecInput(lease, self.sha)
                 try:
                     output = []
-                    api.stream_input(self.exec_id, output.append, 256, profile='stdin-proof', source=source)
+                    class Poll:
+                        def __enter__(self): return self
+                        def __exit__(self, *args): pass
+                        def register(self, *args): pass
+                        def modify(self, *args): pass
+                        def select(self, timeout):
+                            eof = any(kind == 'eof' for kind, _ in events)
+                            return [(None, self_module.selectors.EVENT_READ if eof else self_module.selectors.EVENT_WRITE)]
+                    self_module = self.module
+                    with mock.patch.object(self.module.selectors, 'DefaultSelector', Poll):
+                        api.stream_input(self.exec_id, output.append, 256, profile='stdin-proof', source=source)
                     self.assertEqual([payload], output)
                 finally: source.close()
         self.assertEqual(('start', 1), events[0])
@@ -173,7 +184,7 @@ class OwnedExecInputTest(unittest.TestCase):
         attempts, closed = [], []
         def send(block):
             attempts.append(len(block)); raise TimeoutError('partial send')
-        raw = SimpleNamespace(settimeout=lambda _: None, sendall=send)
+        raw = SimpleNamespace(settimeout=lambda _: None, setblocking=lambda _: None, send=send)
         response = SimpleNamespace(status=101, fp=io.BytesIO(),
             getheader=lambda name: 'tcp' if name == 'Upgrade' else None)
         connection = SimpleNamespace(sock=raw, request=lambda *a, **k: None,
@@ -183,8 +194,15 @@ class OwnedExecInputTest(unittest.TestCase):
             with self.source.export_for_child(write=False) as lease:
                 source = self.module.SealedExecInput(lease, self.sha)
                 try:
-                    with self.assertRaises(TimeoutError):
-                        api.stream_input(self.exec_id, lambda _: None, 256, profile='stdin-proof', source=source)
+                    class Poll:
+                        def __enter__(self): return self
+                        def __exit__(self, *args): pass
+                        def register(self, *args): pass
+                        def select(self, timeout): return [(None, self_module.selectors.EVENT_WRITE)]
+                    self_module = self.module
+                    with mock.patch.object(self.module.selectors, 'DefaultSelector', Poll):
+                        with self.assertRaises(TimeoutError):
+                            api.stream_input(self.exec_id, lambda _: None, 256, profile='stdin-proof', source=source)
                 finally: source.close()
         self.assertEqual([65536], attempts); self.assertEqual([True], closed)
 

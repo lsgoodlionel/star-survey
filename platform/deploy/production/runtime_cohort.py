@@ -23,7 +23,8 @@ def _uuid(value):
 
 
 class CohortProbe:
-    def __init__(self, target, lock_fd, active_lock, *, api=None, fresh=False, _process_reader=None):
+    def __init__(self, target, lock_fd, active_lock, *, api=None, fresh=False, project=None, _process_reader=None):
+        self.project = ownership.project_name(project)
         self.target, self.fd, self.active = Path(target), lock_fd, active_lock
         self.api, self.fresh = api or LocalDockerAPI(), fresh is True
         self.reader = _process_reader or read_process_identity
@@ -171,7 +172,7 @@ class CohortProbe:
                 keys = {'schemaVersion', 'project', 'daemonId', 'installationId', 'targetSha256', 'claimId', 'image', 'phase', 'resources'}
                 retired = owner.get('retiredInstallations', [])
                 if (set(owner) not in (keys, keys | {'retiredInstallations'}) or type(owner['schemaVersion']) is not int
-                        or owner['schemaVersion'] != 1 or owner['project'] != ownership.PROJECT
+                        or owner['schemaVersion'] != 1 or owner['project'] != self.project
                         or not _uuid(owner['installationId']) or owner['daemonId'] != self.api.identity()
                         or owner['targetSha256'] != hashlib.sha256(str(self.target).encode()).hexdigest()
                         or owner['phase'] not in ownership.PHASES or not isinstance(retired, list)

@@ -373,3 +373,15 @@ LocalDockerAPI 使用 ExecStart 101/tcp 升级、原 HTTP 缓冲、同一个35�
 #144 的五workflow已全部success（CI43205373012、smoke43205372769、relay43205372889及元数据）；独立组合复核无新增确认阻断。新预留守卫仍未进入受校验 runtime 打包清单，产品接线前必须处理。新的受控 stdin 切片仍须独立审查；所有恢复/原生/上传/发布门、Claude #138 Release 工作流均未改动。下一步是在此传输基础上设计限定数据库consumer的双向背压、来源/目标使用时认证与故障注入，不能用hash消费组件替代实际双库恢复。
 
 #145非作者发现并确定性复现双故障：部分stdin发送已抛UncertainExec，finally关闭私有输入引用又抛OSError，会覆盖原未知分类。补红测验证原异常类型/原发送cause、released回执、input未确认、输入仍可读及只关闭一次，再修为保留原UncertainExec；没有原未知异常的关闭失败也保守转UncertainExec，不重试可能复用的FD。12项新输入回归与14项原Exec回归通过。后续head需自己的CI，旧4397428a的绿色smoke/实际memfd产物不能代替此修订验证；门禁保持。
+
+### 2026-11-12：数据库导入前的背压与副本 cohort 条件
+
+独立stack #145ce6 的输入消费准备，未新增数据库profile/SQL导入/restore入口。确定性Unix socketpair模型先让消费者在读输入前写出超socket缓冲的stdout及受限stderr；原顺序sendall在5秒测试预算内超时，证据/tmp/survey-input-sequential-red-20261112.log。新增同线程selector事件循环，在同一协作deadline内增量收发、有限frame解析及stderr丢弃，保留HTTP预读缓冲、EOF半关闭和输入身份复核。无后台线程在异常返回后访问caller FD；连接/返回关闭异常仍按#145未知结果规则处理。35秒是该固定profile的协作流预算，不是包括哈希、Docker元数据、终态观察和关闭在内的完整操作硬上限。
+
+原12项输入测试的断言保留，仅将旧sendall socket模型改为明确readiness模型；新增真实socketpair背压、fragment/frame限额及截断负例。真实Docker Desktop arm64 transport-only已验证大输入与预先512KiB stdout/48KiB stderr、nonce/digest和精确终态及容器清理，JSON /tmp/survey-exec-duplex-transport-20261112.json，kernelSealsVerified/controlledReceiptVerified=false。新native夹具另外注入故意不提供合法footer的真实消费者，要求背压链结束后是failed/exit0/input-unconfirmed，不可误当合法stdin-proof；这项Linux组合待精确CI，不拿本机模型冒充。
+
+另发现CohortProbe此前仍硬编码生产project，不能验证#141的随机恢复namespace。先红测，再增加构造时固定的project（默认生产不变），只接受现有project_name契约；不同副本/生产record、非法namespace均拒绝，之后全局变化不能重定向既有probe。此改变仅让已有锁/回执校验可显式绑定scope，不证明完整资源/宿主进程归属，不解除任何门禁。
+
+数据库写入前仍有明确接线条件：#139初始预留守卫只接受精确三文件，创建runtime-owner/exec回执后不能直接继续inspect，需受控且持锁的预留→运行归属handoff；不得简单放宽未知文件。来源必须先通过ControlledVerifier现有HMAC/全inventory/匿名payload校验，再在使用时封印/绑定输入；target metadata检查仍不证明签名或有效配置，不能用caller SHA代替认证。随后有限PG/Maria consumer必须绑定同一已证明的新scope/CID/service/operation、记录输入ack与精确终态，再独立核对提交/数据及目标人员失效。双库部分成功/超时不重放，隔离失败副本并仅清理归属及cohort已证结束的资源。当前未实现该高层产品链，restore/native/上传/发布保持关闭，Claude Release不改。
+
+补充新native夹具的Mac预检：以明确注入的portable FD/seal/platform测试模型跑真实Docker正向及故意缺footer背压消费者，portableFDActualExec=true、backpressureConsumerEndedRejected=true、cleanup=verified，无残留fixture；/tmp/survey-duplex-full-fixture-20261112.json。kernelSealsVerified=false，不能把此结果称Linux内核验证；现有CI将对原始未注入的Linux代码执行同一正负流程。全程未新增DBprofile或恢复执行调用。

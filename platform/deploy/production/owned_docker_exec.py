@@ -14,6 +14,7 @@ import os
 import re
 import socket
 import secrets
+import selectors
 import shlex
 import stat
 import sys
@@ -255,6 +256,42 @@ def read_stream(response, output, limit):
                 output(block)
 
 
+class _InputFrameDecoder:
+    """Incremental bounded stdout, discarded bounded stderr, no raw logging."""
+    def __init__(self, output, limit):
+        if type(limit) is not int or not 1 <= limit <= 2**30 + PayloadProof.SIZE:
+            raise ExecProtocolError('duplex output bound is invalid')
+        self.output, self.limit = output, limit
+        self.header, self.channel, self.remaining = bytearray(), None, 0
+        self.stdout, self.stderr = 0, 0
+
+    def feed(self, block):
+        while block:
+            if self.remaining == 0:
+                count = min(8 - len(self.header), len(block))
+                self.header.extend(block[:count]); block = block[count:]
+                if len(self.header) != 8: continue
+                header = self.header; self.header = bytearray()
+                size = int.from_bytes(header[4:8], 'big')
+                if header[0] not in (1, 2) or header[1:4] != b'\0\0\0' or size > 1024 * 1024:
+                    raise ExecProtocolError('invalid duplex exec frame')
+                self.channel, self.remaining = header[0], size
+                if self.channel == 1:
+                    self.stdout += size
+                    if self.stdout > self.limit: raise ExecProtocolError('duplex stdout exceeds bound')
+                else:
+                    self.stderr += size
+                    if self.stderr > 65536: raise ExecProtocolError('duplex stderr exceeds bound')
+                if not size: continue
+            count = min(self.remaining, len(block))
+            if self.channel == 1: self.output(block[:count])
+            self.remaining -= count; block = block[count:]
+
+    def finish(self):
+        if self.header or self.remaining:
+            raise ExecProtocolError('truncated duplex exec frame')
+
+
 class _UnixConnection(http.client.HTTPConnection):
     def connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -372,39 +409,72 @@ class LocalDockerAPI:
             connection.close()
 
     def stream_input(self, identity, output, limit, *, profile, source):
-        # Fixed sha256sum consumes all input before producing bounded output,
-        # so sequential send/read cannot deadlock on concurrent output. This is
-        # not a general DB import protocol (which needs duplex backpressure).
+        return self.stream_duplex_input(identity, output, limit, profile=profile, source=source)
+
+    def stream_duplex_input(self, identity, output, limit, *, profile, source):
+        # One event loop, not background threads holding caller FDs after an
+        # exception. Buffered HTTP bytes are consumed before readiness waits.
         if profile != 'stdin-proof' or not isinstance(source, SealedExecInput):
-            raise ExecProtocolError('unsupported input consumer')
+            raise ExecProtocolError('unsupported duplex input consumer')
+        decoder = _InputFrameDecoder(output, limit)
         connection = self._connect()
         try:
             connection.request('POST', self.VERSION + '/exec/' + self._id(identity) + '/start',
                 b'{"Detach":false,"Tty":false}', {'Content-Type': 'application/json',
                     'Connection': 'Upgrade', 'Upgrade': 'tcp'})
-            raw_socket = connection.sock
+            raw = connection.sock
             deadline = time.monotonic() + PROFILES[profile][0] + 5
             def remaining():
                 value = deadline - time.monotonic()
-                if value <= 0: raise DockerRequestTimeout('exec-input')
-                raw_socket.settimeout(value)
-            remaining()
+                if value <= 0: raise DockerRequestTimeout('exec-duplex-input')
+                return value
+            raw.settimeout(remaining())
             response = connection.getresponse()
             if (response.status != 101 or response.fp is None
                     or (response.getheader('Upgrade') or '').lower() != 'tcp'
                     or response.getheader('Transfer-Encoding') is not None):
-                raise OSError('duplex exec input was not established; outcome remains unknown')
-            for block in source.chunks():
+                raise OSError('duplex exec was not established; outcome remains unknown')
+            raw.setblocking(False)
+            chunks, pending, eof = iter(source.chunks()), b'', False
+            # read1 on a nonblocking buffered reader returns b'' for EAGAIN.
+            # Here it only drains read-ahead; EOF is decided on READ readiness.
+            while True:
                 remaining()
-                raw_socket.sendall(block)
+                block = response.fp.read1(65536)
+                if not block: break
+                decoder.feed(block)
                 remaining()
-            source.check()
-            remaining()
-            raw_socket.shutdown(socket.SHUT_WR)
-            # Keep the HTTP parser's existing buffered bytes on protocol switch.
-            reader = _DeadlineReader(response.fp, raw_socket, deadline)
-            read_stream(reader, output, limit)
-            remaining()
+            finished = False
+            with selectors.DefaultSelector() as poll:
+                poll.register(raw, selectors.EVENT_READ | selectors.EVENT_WRITE)
+                while not finished:
+                    events = poll.select(remaining())
+                    remaining()
+                    for _, ready in events:
+                        if ready & selectors.EVENT_READ:
+                            block = response.fp.read1(65536)
+                            remaining()
+                            if not block:
+                                if not eof: raise ExecProtocolError('consumer closed before input EOF')
+                                source.check(); decoder.finish(); remaining()
+                                finished = True
+                                break
+                            decoder.feed(block)
+                        if ready & selectors.EVENT_WRITE and not eof:
+                            if not pending:
+                                try: pending = next(chunks)
+                                except StopIteration:
+                                    source.check(); remaining()
+                                    raw.shutdown(socket.SHUT_WR)
+                                    eof = True
+                                    poll.modify(raw, selectors.EVENT_READ)
+                            if pending:
+                                remaining()
+                                try: count = raw.send(pending)
+                                except BlockingIOError: count = None
+                                if count == 0: raise OSError('input send made no progress')
+                                if count is not None: pending = pending[count:]
+                        remaining()
         except BaseException:
             try: connection.close()
             except Exception: pass
