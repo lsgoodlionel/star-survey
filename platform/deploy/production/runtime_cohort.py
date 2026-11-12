@@ -250,13 +250,13 @@ class ReceiptRetirement:
         names=sorted(os.listdir(parent))
         if len(names)>256 or [name for name in names if name!='operation.intent']!=expected['names']:
             raise ownership.OwnershipError('retirement directory set changed')
-        if store._directory_identity(os.fstat(parent))!=expected['directory'] or store._regular(os.stat(store.NAME,dir_fd=parent,follow_symlinks=False))!=expected['ownerIdentity'] or store.load()!=expected['owner']:
+        if store._directory_identity(os.fstat(parent))!=expected['directory'] or store._regular(os.stat(store.NAME,dir_fd=parent,follow_symlinks=False))!=expected['ownerIdentity'] or store.load()!=expected['owner'] or store._regular(os.stat(store.NAME,dir_fd=parent,follow_symlinks=False))!=expected['ownerIdentity']:
             raise ownership.OwnershipError('retirement owner changed')
         for name,(identity,digest) in expected['receipts'].items():
             if store._regular(os.stat(name,dir_fd=parent,follow_symlinks=False))!=identity:
                 raise ownership.OwnershipError('retirement file identity changed')
             record=ownership.PrivateStore(self.probe.target,name=name).load()
-            if hashlib.sha256(json.dumps(record,sort_keys=True,allow_nan=False).encode()).hexdigest()!=digest:
+            if identity!=store._regular(os.stat(name,dir_fd=parent,follow_symlinks=False)) or hashlib.sha256(json.dumps(record,sort_keys=True,allow_nan=False).encode()).hexdigest()!=digest:
                 raise ownership.OwnershipError('retirement file contents changed')
 
     def run(self):
@@ -277,6 +277,12 @@ class ReceiptRetirement:
             count=0
             for name in sorted(expected['receipts'])[:16]:
                 self._local_check(parent,chain,store,expected,intent)
+                # POSIX has no compare-and-unlink here. This final identity
+                # recheck narrows the window; it is not exclusion against an
+                # arbitrary same-uid writer after the check.
+                store._recheck(parent,chain)
+                if store._regular(os.stat(name,dir_fd=parent,follow_symlinks=False))!=expected['receipts'][name][0]:
+                    raise ownership.OwnershipError('retirement target changed before unlink')
                 os.unlink(name,dir_fd=parent)
                 os.fsync(parent)
                 if name in os.listdir(parent): raise ownership.OwnershipError('retired receipt remains')

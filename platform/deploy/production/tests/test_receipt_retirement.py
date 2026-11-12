@@ -179,4 +179,41 @@ class ReceiptRetirementTest(unittest.TestCase):
         with self.assertRaises(self.module.ownership.OwnershipError): self.primitive().run()
         self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
 
+    def test_same_bytes_replacement_during_local_load_is_rejected_before_unlink(self):
+        primitive=self.primitive(); local=primitive._local_check
+        load=self.f.store_type.load; state={'armed':False,'replaced':False}
+        path=self.receipts()[0]; original=path.stat().st_ino
+        def checked(*args):
+            state['armed']=True
+            try: return local(*args)
+            finally: state['armed']=False
+        def swapped(store):
+            if state['armed'] and not state['replaced'] and store.NAME.startswith('runtime-exec-'):
+                replacement=self.f.target/'replacement'
+                replacement.write_bytes(path.read_bytes()); replacement.chmod(0o600)
+                os.replace(replacement,path); state['replaced']=True
+            return load(store)
+        primitive._local_check=checked
+        with patch.object(self.f.store_type,'load',swapped), patch.object(self.module.os,'unlink',wraps=os.unlink) as unlink:
+            with self.assertRaises(self.module.ownership.OwnershipError): primitive.run()
+            self.assertEqual(0,unlink.call_count)
+        self.assertTrue(state['replaced']); self.assertNotEqual(original,path.stat().st_ino)
+        self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
+
+    def test_replacement_after_local_check_is_rejected_by_final_target_check(self):
+        primitive=self.primitive(); local=primitive._local_check
+        path=self.receipts()[0]; replaced=[]
+        def checked(*args):
+            local(*args)
+            if not replaced:
+                replacement=self.f.target/'replacement'
+                replacement.write_bytes(path.read_bytes()); replacement.chmod(0o600)
+                os.replace(replacement,path); replaced.append(True)
+        primitive._local_check=checked
+        with patch.object(self.module.os,'unlink',wraps=os.unlink) as unlink:
+            with self.assertRaises(self.module.ownership.OwnershipError): primitive.run()
+            self.assertEqual(0,unlink.call_count)
+        self.assertTrue(path.exists()); self.assertEqual([True],replaced)
+        self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
+
 if __name__ == '__main__': unittest.main()
