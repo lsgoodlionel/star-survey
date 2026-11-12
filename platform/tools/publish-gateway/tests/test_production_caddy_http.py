@@ -67,7 +67,7 @@ class ProductionCaddyHttpTest(unittest.TestCase):
             command = ["docker", "run", "--rm", "--network", "host", "--cidfile", str(cidfile),
                        "-e", f"PUBLIC_HOST=http://127.0.0.1:{edge_port}",
                        "-e", "ENGINE_ADMIN_USER=fixture", "-e", f"ENGINE_ADMIN_PASSWORD_HASH={admin_hash}",
-                       "-v", f"{root / 'Caddyfile'}:/etc/caddy/Caddyfile:ro", "caddy:2.11.6-alpine",
+                       "-v", f"{root / 'Caddyfile'}:/etc/caddy/Caddyfile:ro", "caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee",
                        "caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
             process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
