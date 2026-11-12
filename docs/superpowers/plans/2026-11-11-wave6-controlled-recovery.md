@@ -421,3 +421,13 @@ PG 使用固定 Unix socket、pg_restore 单事务/exit-on-error 并保留 owner
 
 
 #148非作者复现使用时密文漂移：空库预检后原地翻转postgres.dump.enc而control不变，旧实现仍用先前认证sealed明文继续。不是未认证SQL进入，但不满足此前源漂移声明。新增确定性红测后，每次typed input claim在固定control/源release/floor复核之外，对先前HMAC认证的全密文inventory逐项no-follow FD重算SHA，检查读取前后FD/路径身份、长度与受限字节数；不能在plaintext child lease期间重开workspace key，故复用先前完整认证且当前字节未变的control绑定，不重解密或新增crypto child。首次import前漂移拒绝零SQL；PG完成后改变Maria密文则Maria未开始，整copy失败且不重放PG。15项新测试/75项相关组合通过。每次claim重读全inventory，成本受workspace上限约束但无新增硬时限保证；可信独占controller和最终check-to-use非原子边界不变。旧head实际AMD64 artifact13949183939已下载核对ZIP摘要/18源码+58迁移库存，正常/已知部分失败/cleanup通过；不能代替本修订head线上证据。所有gate保持关闭。
+
+### 2026-11-12：受验签目标与隔离数据库绑定（stack #148）
+
+新增内部 RecoveryTargetBinding，以明确选定的同仓候选 assets、版本、commit、manifest SHA 调用既有完整 verify_release.sh；固定 repository/tag/commit、180秒子进程上限、丢弃工具原始输出，不新增凭据或修改 Release。资产普通单链接/no-follow、属主/不可组写、最多64项及8GiB单文件/16GiB总量，前后身份和SHA一致。复用 source_contract 的 retained bundle/generated 文件校验、实际 Compose/local image 投影；staged manifest/commit 必须匹配受验签资产，快照深拷贝在使用时复比。
+
+ControlledDatabaseCopy.execute_bound 只接该类型，源认证前和每次输入 claim 前检查实际 NewCopyTarget 及数据库 image ID 映射。普通 execute 组件路径不获得签名声明；bound 返回 targetReleaseSignaturesVerified，但完整 targetSignatureVerified/targetConfigurationVerified、业务、人员、restore/candidate 资格仍 false。配置快照和数据库镜像匹配不证明目标口令、角色、全部应用配置已安全；数据库一完成后绑定漂移会阻止数据库二，不重放。
+
+缺接口红测后，7项新测试/70项相关组合通过。验签工具/Compose/target 为明确模型 seam，覆盖固定命令、非零/超时、资产/manifest/commit/配置漂移、symlink及逐输入复核；没有新受信目标的真实 bound 正向证据。#148新84bde33d的 artifact13949837988 已核 ZIP f9e527bcbdf802cf3609d0f95a042508bc5eb68388dcef8cd3a64489182a5ebc、18源码+58迁移库存和两份JSON/cleanup，只证明 unbound 双库组件。
+
+新模块尚未加入受校验 runtime 打包/导入清单，无产品 restore/CLI 调用。可信独占 controller、最终检查到使用非原子、重复扫描成本边界不变。Claude/协调器仍需明确包含已审模块的冻结目标、同仓run/commit/manifest/固定digest/两架构bundle及完整验签来源，再完成打包、真实bound导入、受控授权失效、业务/故障/四平台验收。不把旧rc19当作新目标通过，不触发候选/Release，不解除门禁。
