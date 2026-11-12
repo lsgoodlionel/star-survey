@@ -75,6 +75,9 @@
       "manifestSha256": "4c29b4e4f9dcdeda22963eb203ea11264c6555e5f0e3ce6baf6db73a71829e8a",
       "runId": 41942118701,
       "commit": "46766fd4326c370e0a5eeaa8de50235b5abb4a16"
+    },
+    "0.3.21-rc.1": {
+      "mode": "bootstrap"
     }
   }
 }
