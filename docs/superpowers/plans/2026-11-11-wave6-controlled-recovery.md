@@ -193,3 +193,7 @@ Owner另明确批准FD身份安全限定修复。原head72c94843的真实维护/
 独立审查的5秒读超时已用真实私有Unix socket先红复现：服务先返回HTTP200，静默5.5秒后才发送合成一帧，旧实现读取首字节时socket.timeout；不访问Docker或生产、不含凭据。连接仍固定5秒，stream仅允许固定profile，读取预算为该profile命令秒数+5秒；开始读取后每次单次buffer/recv前核对同一deadline并设置剩余socket时间，不因滴流重新起算。命令自身timeout、帧/字节预算、nonce和终止ExecInspect校验保留。不将此称整个CLI/HTTP头解析/清理的硬总时限。
 
 先红后绿真实5.5秒静默正例；模型负例逐一验证所有profile预算、非法profile在连接前拒绝、滴流不能延长deadline且只发出一次start。超时仍是unknown并保留released回执/lease，不能重放不确定操作，也未提高任何成功判据。该切片独立于exec GC与重装合同问题；不操作Release、生产或候选，恢复/原生/发布门禁保持，具体解除前须Owner明确同意。
+
+同轮独立GC修订已合入此待审分支（仍以#129 c59a4416为stacked base）：Docker29.9.3真实原容器保持running，旧回执在自然GC后536.49秒变unknown；新版测试521.26秒观察到同样GC，v2精确终止观察仍有效、v1及pending继续拒绝，已终止ExecID的detached restart明确409，临时容器清理verified且源码SHA前后一致。attached start先返回流HTTP200才处理backend拒绝，不能把200当重启证明；真实负测使用detached路径，不放宽断言。可重复入口：tests/integration/owned_exec_native.py --image <本地固定Python镜像digest> --wait-for-gc，最多等待660秒；默认入口只跑快速ExecID/终止观察，不宣称每次CI都观察自然GC。
+
+新schema2回执只由受控writer在精确terminal ExecInspect及daemon/actor/output身份复核之后写入；实时仍查ExecInspect，只有精确GET /exec/<id>/json的404才使用绑定daemon/install/container/exec/exit的既有终止观察。v1没有该证据，GC后不自动认证、迁移、删标记或重放；timeout/500/身份冲突/运行中状态仍unknown。该回执是现有私有目录/单写入者边界内的持久观察，不是密码学证明，不抵御同权限/宿主/Docker管理员接管，不替代全局cohort与实际资源归属检查。fixture的owner是注入模型，不称完整安装或真实controller隔离证明；未取得业务连续性/四平台/恢复/Release资格。重装合同顺序问题仍独立待解决，旧#129绿色CI不能作其安全通过依据。
