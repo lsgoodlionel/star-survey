@@ -286,3 +286,15 @@ Draft #131初始head4ad004f97f1aea1dd132db30c798974795837d25的真实组件job43
 Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发布。此次在独立`integrate/wave6-controlled-runtime`组合#136修订链、#131升级与Claude #130打包；原分支不改。仅计划文档追加冲突，保留两侧记录。相对已验证main22535aa9没有引入上述PR之外的新功能；整合态仍需精确head完整CI和非作者复核，不能沿用各自旧基线的绿色代替。
 
 此提交没有解除恢复/native/发布门禁，没有创建标签或发布；授权不等于缺失证明已经通过。后续由Claude协调最终不可变候选及Release，避免重复执行。恢复六项证明、真实候选安装/正向doctor/升级业务连续性、四平台及人工读屏仍独立核验；旧rc19不可自动认领。可信独占controller、非原子stat/unlink、批次远端核验、协作预算和旧v1未知/超限目录保守拒绝的限制保持。
+
+### 2026-11-12：新目标预留的使用时校验（内部切片，未接执行端）
+
+基于已合并main7cdd66c4独立实现`recovery_reservation.RecoveryReservation`，不改Claude #138的Release区域。先14项失败测试，再实现只读上下文：通过no-follow目录FD检查祖先/直接父目录及0700目标/control；读取0600、单链接、普通文件的精确三文件清单，JSON有界且重复字段/布尔伪整数/授权字段变化拒绝。reservation ID、随机项目提案、source observation、记录中的目标与control dev/inode均与调用绑定；source observation只是绑定，不是备份认证。持有原operation.lock非阻塞排他锁，不创建、修复或清理任何对象；FD不可继承。读取前后和正常退出复核文件身份/摘要及目录路径，额外项即拒绝，枚举只保留有限预期项。首次失败永久封锁该上下文，即使外部随后移除异常项也不能重新取得成功。
+
+先红的目录读取期间替换和失败后复用两项均修复；14项目标测试以及184项原surveyctl回归本地通过，包含真实recovery-reserve产物接续、symlink/hardlink/FIFO、权限、拷贝/错绑定、锁冲突、同字节替换、原地改写与外来目标保留。仅本机真实文件系统/故障注入，不冒称Linux各平台或宿主崩溃证明；Linux结果由精确PR的现有CI核实。
+
+模块目前未加入OWNED_RUNTIME_FILES、没有CLI或restore调用者、不进候选执行包。所有输出固定executable=false/backupAuthenticated=false/runtimeResourcesCreated=false，只代表观察到的预留未变。锁约束可信独占controller，不防御同UID恶意写入者/宿主管理员，也没有原子的最后检查到未来使用间隔或永久租约；后续执行器必须继续持有FD并在使用前复核。
+
+后续依赖顺序不变：新的Docker项目/卷/网络从创建起归属且未知拒绝；受控匿名验证器重验备份HMAC、清单、manifest/版本/schema/floor；新副本双库/卷导入及人员grant/session先失效并审计；数据验证后才考虑独立切换。故障注入、明文/子进程收束和精确资源清理仍需逐项证明。此切片不完成上述后续步骤，restore/native/上传/发布门禁保持；每项具体解除前说明证据范围风险并取得明确同意。
+
+人工读屏事实已重核：#41存在Owner于2026-11-10记录的VoiceOver passed与发布批准，均绑定rc19，而非“完全未完成”；后续候选须核对差异覆盖及批准范围，不自动继承rc19记录。
