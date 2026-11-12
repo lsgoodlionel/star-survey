@@ -2201,8 +2201,6 @@ class SurveyManager:
         state = self._read_state(require_current=True)
         self._require_no_pending_recovery(state)
         previous, manifest = state["version"], load_manifest(manifest_path, expected_sha256)
-        if self._runtime_factory is None:
-            self._require_owned_upgrade_source()
         if self._personnel_guard_enabled(previous, require_floor=True):
             self._require_personnel_capability(manifest)
         if _version_key(manifest.version) <= _version_key(previous):
@@ -2215,6 +2213,8 @@ class SurveyManager:
             require_ports=False,
             expected_addresses=state.get("expectedPublicAddresses"),
         )
+        if self._runtime_factory is None:
+            self._require_owned_upgrade_source()
         # Persist and fsync the intent before staging or backup can change
         # the installation. A killed process leaves a durable command latch.
         self._begin_operation()
