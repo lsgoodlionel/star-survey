@@ -55,6 +55,7 @@ class RecoveryReservation:
         self._fds, self._directories, self._files = [], [], {}
         self._used = self._active = False
         self._failed = False
+        self._transferred = False
 
     def _directory(self, name, parent=None, *, ancestor=False):
         fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -189,6 +190,16 @@ class RecoveryReservation:
             self._failed = True
             raise
 
+    def handoff(self, *, receipts):
+        """Transfer the same held descriptors to an explicit FS-only phase.
+
+        This creates a persistent, non-authorizing pending marker. It neither
+        starts runtime resources nor admits data import. No caller exists in
+        the product recovery/CLI path.
+        """
+        from recovery_handoff import ReservationHandoff
+        return ReservationHandoff(self, receipts)
+
     def _close(self):
         self._active = False
         descriptors, self._fds = self._fds, []
@@ -201,6 +212,6 @@ class RecoveryReservation:
 
     def __exit__(self, kind, value, traceback):
         try:
-            if kind is None: self.inspect()
+            if kind is None and not self._transferred: self.inspect()
         finally:
             self._close()

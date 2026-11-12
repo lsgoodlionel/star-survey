@@ -385,3 +385,13 @@ LocalDockerAPI 使用 ExecStart 101/tcp 升级、原 HTTP 缓冲、同一个35�
 数据库写入前仍有明确接线条件：#139初始预留守卫只接受精确三文件，创建runtime-owner/exec回执后不能直接继续inspect，需受控且持锁的预留→运行归属handoff；不得简单放宽未知文件。来源必须先通过ControlledVerifier现有HMAC/全inventory/匿名payload校验，再在使用时封印/绑定输入；target metadata检查仍不证明签名或有效配置，不能用caller SHA代替认证。随后有限PG/Maria consumer必须绑定同一已证明的新scope/CID/service/operation、记录输入ack与精确终态，再独立核对提交/数据及目标人员失效。双库部分成功/超时不重放，隔离失败副本并仅清理归属及cohort已证结束的资源。当前未实现该高层产品链，restore/native/上传/发布保持关闭，Claude Release不改。
 
 补充新native夹具的Mac预检：以明确注入的portable FD/seal/platform测试模型跑真实Docker正向及故意缺footer背压消费者，portableFDActualExec=true、backpressureConsumerEndedRejected=true、cleanup=verified，无残留fixture；/tmp/survey-duplex-full-fixture-20261112.json。kernelSealsVerified=false，不能把此结果称Linux内核验证；现有CI将对原始未注入的Linux代码执行同一正负流程。全程未新增DBprofile或恢复执行调用。
+
+### 2026-11-12：预留到运行记录的持锁文件系统交接（仍非执行许可）
+
+为处理#139精确三文件与未来owner/exec记录的接线冲突，独立stack #146 新增内部`RecoveryReservation.handoff(receipts=...)`及`ReservationHandoff`。先按原守卫检查完全空预留，再以no-follow/O_EXCL创建0600、不可继承、fsync的`recovery.handoff.json`，内容固定pending-not-authorized/executable=false并绑定reservation/source observation与最多16份预先登记的child/exec文件名。marker创建期间只能存在原三文件+marker，哪怕提前出现的文件名在计划内也拒绝、不认领。成功后原目录/文件/同一个flock FD的所有权直接转给handoff，不解锁、不重开；原guard失效且退出不关闭已转移FD。
+
+交接后的根仍只允许.surveyctl，控制目录只允许原锚点、immutable marker、runtime-owner及预登记文件；锚点/目录身份和内容持续复查，额外项永久poison。可变runtime记录仅通过既有PrivateStore核对普通文件/单链接/私有权限/严格有界JSON，不校验资源或执行语义，输出runtimeRecordsQualified=false、backupAuthenticated/targetSignatureVerified/restoreAuthorized/executable均false。原reservation记录只是历史预留，不能用其runtimeResourcesCreated=false推断交接后的真实资源不存在。
+
+先红后绿与真实本地文件系统验证共10项：外层guard退出后锁仍被持有，handoff关闭后才可重新取锁；不变的原intent与marker保留；计划参数/早到record/短写/fsync中断、同字节marker替换、原intent替换、symlink/hardlink/public/FIFO、失败后移除异常仍拒绝、__enter__失败释放私有FD、close结果未知不重试。交接失败也永久poison原guard；实现没有删除marker/未知对象或修复旧现场。结合原guard、输入、背压/cohort/retirement等同进程96项回归通过，/tmp/survey-handoff-combination-20261112.log。没有实际SIGKILL/宿主崩溃证明，可信独占controller之外同UID对抗/最终check-to-use不是原子fence。
+
+新模块及原reservation guard仍未进入OWNED_RUNTIME_FILES，未被产品restore/CLI调用；没有Docker变更、DB导入、受信目标签名配置或候选资格。该交接只提供未来控制器保留原锁/锚点并容纳有限运行记录的文件系统层；必须继续组合实际OwnershipProtocol/CohortProbe与源/目标认证，不能拿此返回值授权执行或清理。restore/native/上传/发布门保持，Release仍Claude单一写入者。后续具体解除须向用户给证据/范围/风险并获同意。
