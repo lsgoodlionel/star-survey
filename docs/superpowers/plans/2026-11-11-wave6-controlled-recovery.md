@@ -239,3 +239,9 @@ v1仅在精确live ExecInspect终态或原不可变CID证实缺席时可成为�
 先红后绿容量分配与默认backup顺序/配额耗尽负例；27项回执（含8既有）、73项runtime、11项maintenance及default_backup4/capacity3/exhausted2定向测试通过。仅模型及实际CLI方法，不是真实进程SIGKILL/候选/双库全流程证明，交GitHub既有真实组件CI继续验证。共享内部备份helper调用同样保护，但不宣称#131升级组合已测试。默认doctor/verify/install/upgrade其他生命周期未因此接线：doctor遍历备份目录数量无固定界限，需动态预算，不能假定小常数；每种operation、总墙钟预算、所有崩溃窗口/真实候选连续性仍待。
 
 旧v1 GC+原CID存在和已超256目录保持失败关闭，当前没有指定且获准操作的真实安装目标；后续只能先做只读盘点与精确处置提案，不能为了可用性运行旧controller、抬阈值、移走未知回执或停止/删除原资源。最终stat/unlink非原子、可信独占controller边界不变，所有恢复/原生/发布门禁保留。此为开发分支代码，不合并/发布/触碰生产，Release仍Claude负责。
+
+#135预检成本复审增量：旧reserve会清空全部终态，非“只删够容量”；完整旧21回执真实本地API样本249 inspect/249缺席/9资源回调、0.944秒，不能与#134单批0.483秒混用。现容量足够时只核验、不删历史、不写新intent；不足时最多一批16，超出一批所能证明的需求在开始前拒绝。最多5次完整capture，并设置30秒协作式成功准入预算，捕获/本地检查前后核时；迟到资源结果不得放行，若已写pending则保留。opaque资源回调/阻塞文件系统调用不能由该预算强制中断，不称30秒硬墙钟deadline或整个backup时限。已知v1的主动清空策略不再适用：留存v1将来失去live证明仍按unknown拒绝，不承诺自动迁移。
+
+先红两项：已有足够容量仍删历史、迟到回调仍成功；修订后30项回执测试、default_backup4与runtime73通过，新增pending后预算耗尽零删除。真实Docker29.9.3/linux/arm64新reserve样本：有空间21条留21、63 inspect/63缺席/1资源回调、0.167秒、intent保持不存在；252项压力样本删16留5、219/219/5、0.720秒、pending保持。JSON /tmp/survey-reserve-room-20261112.json 与 /tmp/survey-reserve-pressure-20261112.json，均捕获CID清理verified且源码SHA前后一致；owner/claim/进程reader仍模型，不是完整controller资源回调/真实backup端到端或SLA，单次无故障样本不能证明高负载表现。
+
+升级组合新增边界已记录：共享backup helper的3配额不覆盖后续独立_owned_maintenance verify的新cipher journal，整体至少还需1槽；独立复审在252项非回执基线模型看到backup255、verify256及后续原子写峰值257。该组合在base已存在，不当作本PR新手动备份缺陷；本PR仍未整合#131或声明升级预算已证明。后续需跨阶段预留及验证，当前不解除原生/恢复/发布门禁。

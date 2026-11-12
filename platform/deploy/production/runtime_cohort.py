@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import time
 import uuid
 from pathlib import Path
 
@@ -190,8 +191,20 @@ class ReceiptRetirement:
         if not callable(check_resources) or not callable(begin_operation) or not isinstance(operation, str) or not re.fullmatch(r'[a-z_]{1,32}', operation):
             raise ownership.OwnershipError('retirement controller contract is invalid')
         self.probe, self.check, self.begin, self.operation = probe, check_resources, begin_operation, operation
+        self._reservation_deadline=None
+        self._full_passes=0
+
+    def _budget(self, *, full=False):
+        if self._reservation_deadline is None: return
+        if time.monotonic()>=self._reservation_deadline:
+            raise ownership.OwnershipError('receipt admission time budget exceeded')
+        if full:
+            self._full_passes+=1
+            if self._full_passes>5:
+                raise ownership.OwnershipError('receipt admission query pass budget exceeded')
 
     def _capture(self):
+        self._budget(full=True)
         probe = self.probe
         if probe._lock() != probe.lock_identity or probe() != 'quiescent':
             raise ownership.OwnershipError('receipt cohort is unverified')
@@ -216,6 +229,7 @@ class ReceiptRetirement:
             if names != sorted(os.listdir(parent)) or probe._lock() != probe.lock_identity:
                 raise ownership.OwnershipError('retirement inventory changed')
             store._recheck(parent, chain)
+            self._budget()
             return {'owner': owner, 'ownerIdentity':store._regular(os.stat(store.NAME,dir_fd=parent,follow_symlinks=False)),
                     'directory':store._directory_identity(os.fstat(parent)),
                     'names':[name for name in names if name != 'operation.intent'], 'receipts':receipts}
@@ -244,6 +258,7 @@ class ReceiptRetirement:
         # again. Keep proving the local witness unchanged; do not re-query the
         # whole daemon inventory for every file. No pending/unknown witness is
         # admitted by _capture. Full resource checks bracket the batch.
+        self._budget()
         store._recheck(parent,chain)
         if self.probe._lock()!=self.probe.lock_identity or self._intent(parent,store)!=intent:
             raise ownership.OwnershipError('retirement lock or intent changed')
@@ -260,26 +275,30 @@ class ReceiptRetirement:
                 raise ownership.OwnershipError('retirement file contents changed')
 
     def reserve(self, receipt_slots):
-        """Internal preflight: only a caller-proven fixed writer bound is valid."""
+        """Capacity-driven admission, at most one batch and five full passes.
+
+        Thirty seconds is a cooperative success-admission budget, not hard
+        cancellation of an opaque resource callback or filesystem syscall.
+        """
         if type(receipt_slots) is not int or not 1<=receipt_slots<=256:
             raise ownership.OwnershipError('receipt allocation bound is invalid')
-        for batch in range(17):
-            snapshot=self._capture()
-            intent_exists=os.path.lexists(self.probe.target/'.surveyctl/operation.intent')
-            current=len(snapshot['names'])+int(intent_exists)
-            # Reserve final pending intent plus one atomic-publication temp.
-            overhead=int(not intent_exists)+1
-            if current-len(snapshot['receipts'])+receipt_slots+overhead>256:
-                raise ownership.OwnershipError('fixed operation cannot fit receipt capacity')
-            if not snapshot['receipts']:
-                if current+receipt_slots+overhead>256:
-                    raise ownership.OwnershipError('receipt capacity is unverified')
-                return
-            # Proactively retire reverified historical terminals, including v1
-            # while live proof still exists. Unknown v1 never reaches this call.
-            if batch==16 or self.run()<1:
-                raise ownership.OwnershipError('receipt retirement did not converge')
-        raise ownership.OwnershipError('receipt reservation remains unverified')
+        self._reservation_deadline=time.monotonic()+30
+        self._full_passes=0
+        def demand(snapshot):
+            exists=os.path.lexists(self.probe.target/'.surveyctl/operation.intent')
+            return len(snapshot['names'])+int(exists)+receipt_slots+int(not exists)+1-256
+        snapshot=self._capture()
+        needed=demand(snapshot)
+        if needed<=0:
+            self._budget()
+            return  # No sweeping history or writing intent merely to free space.
+        if needed>min(16,len(snapshot['receipts'])):
+            raise ownership.OwnershipError('fixed operation cannot fit one retirement batch')
+        if self.run()<needed:
+            raise ownership.OwnershipError('receipt retirement did not free the reserved capacity')
+        if demand(self._capture())>0:
+            raise ownership.OwnershipError('receipt reservation remains unverified')
+        self._budget()
 
     def run(self):
         expected=self._capture()

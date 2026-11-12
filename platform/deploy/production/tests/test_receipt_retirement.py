@@ -235,4 +235,36 @@ class ReceiptRetirementTest(unittest.TestCase):
         self.assertFalse(self.calls); self.assertFalse(self.intent.exists())
         self.assertEqual(1,len(self.receipts()))
 
+    def test_reserve_leaves_terminal_history_when_capacity_already_sufficient(self):
+        before=self.receipts()[0].read_bytes()
+        self.primitive().reserve(3)
+        self.assertEqual(before,self.receipts()[0].read_bytes())
+        self.assertFalse(self.calls); self.assertFalse(self.intent.exists())
+
+    def test_late_resource_result_cannot_admit_backup_after_soft_deadline(self):
+        clock=[100]
+        def resources():
+            clock[0]=131
+            return self.f.store_type(self.f.target).load()
+        self.check=resources
+        with patch('time.monotonic',side_effect=lambda:clock[0]):
+            with self.assertRaises(self.module.ownership.OwnershipError): self.primitive().reserve(3)
+        self.assertFalse(self.calls); self.assertEqual(1,len(self.receipts()))
+
+    def test_reservation_deadline_after_pending_never_deletes_or_admits(self):
+        control=self.f.target/'.surveyctl'
+        while len(list(control.iterdir()))<252:
+            (control/('filler-'+str(len(list(control.iterdir()))))).touch(mode=0o600)
+        clock=[100]; calls=[0]
+        def resources():
+            calls[0]+=1
+            if calls[0]==3: clock[0]=131
+            return self.f.store_type(self.f.target).load()
+        self.check=resources
+        with patch('time.monotonic',side_effect=lambda:clock[0]), patch.object(self.module.os,'unlink',wraps=os.unlink) as unlink:
+            with self.assertRaises(self.module.ownership.OwnershipError): self.primitive().reserve(3)
+            unlink.assert_not_called()
+        self.assertEqual('pending',json.loads(self.intent.read_text())['state'])
+        self.assertEqual(1,len(self.receipts()))
+
 if __name__ == '__main__': unittest.main()
