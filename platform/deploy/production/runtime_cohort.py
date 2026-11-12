@@ -13,7 +13,7 @@ from pathlib import Path
 
 import runtime_ownership as ownership
 from owned_children import read_process_identity, _pid, _start
-from owned_docker_exec import LocalDockerAPI, PROFILES
+from owned_docker_exec import ExecMetadataGone, LocalDockerAPI, PROFILES
 
 
 def _uuid(value):
@@ -51,9 +51,12 @@ class CohortProbe:
             or owner and pid == os.getpid() and value['start'] == start)
 
     def _receipt(self, name, record, owner):
-        if (not isinstance(record, dict) or type(record.get('schemaVersion')) is not int or record['schemaVersion'] != 1
+        if (not isinstance(record, dict) or type(record.get('schemaVersion')) is not int or record['schemaVersion'] not in (1, 2)
                 or not _uuid(record.get('operationId'))
                 or record.get('installationId') not in [owner['installationId'], *owner.get('retiredInstallations', [])]):
+            return False
+        version = record['schemaVersion']
+        if record.get('kind') != 'controlled-docker-exec' and version != 1:
             return False
         retired = record['installationId'] != owner['installationId']
         actor = record.get('owner')
@@ -77,19 +80,37 @@ class CohortProbe:
             # container can be started again. Pending never reaches this check.
             return self.api.container_absent(record['containerId']) is True
         if record.get('kind') == 'controlled-docker-exec':
-            if (name != 'runtime-exec-' + suffix or set(record) != {'schemaVersion', 'kind', 'operationId', 'installationId',
-                    'owner', 'daemonId', 'containerId', 'profile', 'phase', 'execId', 'exitCode'}
+            fields = {'schemaVersion', 'kind', 'operationId', 'installationId', 'owner', 'daemonId',
+                      'containerId', 'profile', 'phase', 'execId', 'exitCode'}
+            if version == 2:
+                fields.add('completionEvidence')
+            if (name != 'runtime-exec-' + suffix or set(record) != fields
                     or record['daemonId'] != owner['daemonId'] or record['phase'] not in ('completed', 'failed')
                     or record['profile'] not in PROFILES or type(record['exitCode']) is not int
                     or not 0 <= record['exitCode'] <= 255 or record['phase'] == 'completed' and record['exitCode'] != 0
                     or not isinstance(record['execId'], str) or not ownership.HEX64.fullmatch(record['execId'])
                     or not isinstance(record['containerId'], str) or not ownership.HEX64.fullmatch(record['containerId'])):
                 return False
+            durable = False
+            if version == 2:
+                proof = record['completionEvidence']
+                durable = (isinstance(proof, dict) and set(proof) == {'kind', 'ID', 'ContainerID', 'Running', 'ExitCode'}
+                    and proof['kind'] == 'exec-inspect-terminal-v1' and proof['ID'] == record['execId']
+                    and proof['ContainerID'] == record['containerId'] and proof['Running'] is False
+                    and type(proof['ExitCode']) is int and proof['ExitCode'] == record['exitCode'])
+                if not durable:
+                    return False
             if self.api.container_absent(record['containerId']) is True:
                 return True  # Immutable original container gone; this exec cannot start again.
             if retired:
                 return False
-            ended = self.api.inspect(record['execId'])
+            try:
+                ended = self.api.inspect(record['execId'])
+            except ExecMetadataGone:
+                # Moby GC discards ended exec configs; the single-shot ExecID
+                # cannot restart. Trust only this locked private writer's exact
+                # prior observation. v1/missing proof and all other errors fail.
+                return durable
             return (isinstance(ended, dict) and ended.get('ID') == record['execId']
                 and ended.get('ContainerID') == record['containerId'] and ended.get('Running') is False
                 and type(ended.get('ExitCode')) is int and ended['ExitCode'] == record['exitCode'])

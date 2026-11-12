@@ -107,6 +107,24 @@ class OwnedDockerExecTest(unittest.TestCase):
         self.assertEqual('completed', self.store.value['phase'])
         self.assertEqual(self.exec_id, self.store.value['execId'])
         self.assertEqual(b'synthetic dump', (self.workspace / 'dump').read_bytes())
+        self.assertEqual(2, self.store.value['schemaVersion'])
+        self.assertEqual({'kind': 'exec-inspect-terminal-v1', 'ID': self.exec_id,
+                         'ContainerID': self.container, 'Running': False, 'ExitCode': 0},
+                         self.store.value['completionEvidence'])
+
+    def test_only_exact_exec_inspect_404_has_gc_absence_type(self):
+        for method, path, status, missing in (
+                ('GET', '/exec/' + self.exec_id + '/json', 404, True),
+                ('GET', '/exec/' + self.exec_id + '/json', 500, False),
+                ('GET', '/containers/' + self.container + '/json', 404, False),
+                ('POST', '/exec/' + self.exec_id + '/start', 404, False)):
+            closed = []
+            connection = SimpleNamespace(request=lambda *args: None,
+                getresponse=lambda: SimpleNamespace(status=status), close=lambda: closed.append(True))
+            api = self.module.LocalDockerAPI(); api._connect = lambda: connection
+            with self.assertRaises(self.module.ExecProtocolError) as error: api._json(method, path)
+            self.assertEqual(missing, isinstance(error.exception, self.module.ExecMetadataGone))
+            self.assertEqual([True], closed)
 
     def test_persistence_failure_cannot_start_and_create_failure_remains_pending(self):
         self.store.fail = True
@@ -125,6 +143,7 @@ class OwnedDockerExecTest(unittest.TestCase):
                 self.fail = fail
                 with self.assertRaises(self.module.UncertainExec): self.execute()
                 self.assertEqual('released', self.store.value['phase'])
+                self.assertIsNone(self.store.value['completionEvidence'])
 
     def test_wrong_exec_container_and_boolean_exit_are_not_end_evidence(self):
         for field, value in (('ContainerID', 'd' * 64), ('ID', 'f' * 64), ('ExitCode', False)):

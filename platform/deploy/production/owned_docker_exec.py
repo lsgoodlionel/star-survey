@@ -26,6 +26,10 @@ class ExecProtocolError(RuntimeError):
     pass
 
 
+class ExecMetadataGone(ExecProtocolError):
+    """Only an exact ExecInspect HTTP 404, never a transport/daemon failure."""
+
+
 class KnownExecFailure(OSError):
     """Exec start was never called, or exact exec end was confirmed."""
 
@@ -186,6 +190,9 @@ class LocalDockerAPI:
             if stop:
                 connection.sock.settimeout(25)
             response = connection.getresponse()
+            if (response.status == 404 and method == 'GET'
+                    and re.fullmatch(r'/exec/[0-9a-f]{64}/json', path)):
+                raise ExecMetadataGone('exec metadata is absent')
             if stop and response.status not in (204, 304):
                 raise ExecProtocolError('Docker stop acknowledgement was not accepted')
             if response.status not in accepted:
@@ -330,9 +337,10 @@ class OwnedDockerExec:
             daemon = self.api.identity()
             if self.check(container, None) is not True:
                 raise ValueError('container is not bound to this operation')
-            record = {'schemaVersion': 1, 'kind': 'controlled-docker-exec', 'operationId': self.operation,
+            record = {'schemaVersion': 2, 'kind': 'controlled-docker-exec', 'operationId': self.operation,
                 'installationId': self.installation, 'owner': self.actor, 'daemonId': daemon,
-                'containerId': container, 'profile': profile, 'phase': 'create-pending', 'execId': None, 'exitCode': None}
+                'containerId': container, 'profile': profile, 'phase': 'create-pending', 'execId': None, 'exitCode': None,
+                'completionEvidence': None}
             self._save(record)
             identity = self.api.create(container, command)
             if not isinstance(identity, str) or not HEX.fullmatch(identity):
@@ -381,7 +389,12 @@ class OwnedDockerExec:
                     (info.st_dev, info.st_ino, info.st_uid, info.st_mode, 0, offset)):
                 raise UncertainExec('exec output identity or size changed')
             code = ended['ExitCode']
-            record.update(phase='failed' if code or protocol_failure else 'completed', exitCode=code)
+            # Publish only after the exact terminal ExecInspect, daemon/actor
+            # recheck and output identity check above. A phase flag is not this
+            # observation, and an unknown operation never receives it.
+            record.update(phase='failed' if code or protocol_failure else 'completed', exitCode=code,
+                completionEvidence={'kind': 'exec-inspect-terminal-v1', 'ID': identity,
+                                    'ContainerID': container, 'Running': False, 'ExitCode': code})
             self._save(record)
             if code or protocol_failure:
                 raise KnownExecFailure('exec ended unsuccessfully')

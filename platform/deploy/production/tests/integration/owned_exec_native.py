@@ -4,6 +4,8 @@ No image pull, host mount, port or network. Injected host guard is NOT process
 cohort evidence. Only this fixture's captured container ID may be stopped/rm'd.
 """
 import argparse
+import copy
+import fcntl
 import hashlib
 import json
 import os
@@ -12,21 +14,24 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from owned_docker_exec import LocalDockerAPI, OwnedDockerExec, KnownExecFailure
+from owned_docker_exec import ExecMetadataGone, LocalDockerAPI, OwnedDockerExec, KnownExecFailure
+from runtime_cohort import CohortProbe
 from runtime_ownership import PrivateStore
 
 
-def main(image):
+def main(image, wait_for_gc=False):
     if not isinstance(image, str) or image.startswith('-') or not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', image):
         raise SystemExit('a local digest-pinned Python image is required')
     name, cid = 'survey-exec-fixture-' + uuid.uuid4().hex, None
     command = ['docker', '--host', 'unix:///var/run/docker.sock']
-    paths = [ROOT / value for value in ('owned_docker_exec.py', 'owned_children.py', 'runtime_ownership.py')]
+    paths = [Path(__file__), *(ROOT / value for value in
+             ('owned_docker_exec.py', 'owned_children.py', 'runtime_ownership.py', 'runtime_cohort.py'))]
     hashes = lambda: {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
     report = {'scope': 'synthetic-local-exec-id-only', 'ownerGuard': 'fixture-injected-not-process-proof',
         'containerCleanup': 'unknown', 'sourceBefore': hashes()}
@@ -59,7 +64,7 @@ def main(image):
             '--init', '--network', 'none', '--read-only', '--user', '65534:65534', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges:true', '--pids-limit', '32', '--memory', '128m', '--cpus', '1',
             '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=16m', '--entrypoint', 'python3', image,
-            '-B', '-c', 'import time; time.sleep(90)'])
+            '-B', '-c', 'import time; time.sleep(' + ('900' if wait_for_gc else '90') + ')'])
         if not re.fullmatch(r'[0-9a-f]{64}', cid):
             raise RuntimeError('create identity unknown')
         inspect(running=False)
@@ -75,8 +80,9 @@ def main(image):
             target = Path(temporary).resolve()
             (target / '.surveyctl').mkdir(mode=0o700)
             def executor():
-                store = PrivateStore(target, name='runtime-exec-' + uuid.uuid4().hex + '.json')
-                return OwnedDockerExec(api, store, FixtureGuard(), operation_id=str(uuid.uuid4()),
+                operation = str(uuid.uuid4())
+                store = PrivateStore(target, name='runtime-exec-' + operation.replace('-', '') + '.json')
+                return OwnedDockerExec(api, store, FixtureGuard(), operation_id=operation,
                     installation_id=str(uuid.uuid4()), container_check=check), store
             stage = 'positive'
             with tempfile.TemporaryFile() as output:
@@ -86,6 +92,54 @@ def main(image):
                 report['actualExecCompleted'] = (receipt['phase'] == 'completed' and receipt['exitCode'] == 0
                     and os.pread(output.fileno(), 256, 0) == b'survey-owned-exec-v1\n')
                 report['execId'] = receipt['execId']
+                report['terminalObservationBound'] = (receipt['schemaVersion'] == 2 and receipt['completionEvidence'] == {
+                    'kind': 'exec-inspect-terminal-v1', 'ID': receipt['execId'], 'ContainerID': cid,
+                    'Running': False, 'ExitCode': 0})
+            if wait_for_gc:
+                stage = 'wait-real-daemon-gc'
+                version = api._json('GET', '/version').get('Version')
+                report['dockerVersion'] = version if isinstance(version, str) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version) else 'unknown'
+                lock = os.open(target / '.surveyctl/operation.lock', os.O_CREAT | os.O_RDWR, 0o600)
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    # Historical receipt evaluation only; this is not an actual
+                    # installation claim or host-process containment proof.
+                    probe = CohortProbe(target, lock, lambda: True, api=api, _process_reader=lambda pid: None)
+                    owner = {'installationId': receipt['installationId'], 'daemonId': receipt['daemonId']}
+                    filename = 'runtime-exec-' + receipt['operationId'].replace('-', '') + '.json'
+                    report['durableBeforeGcAccepted'] = probe._receipt(filename, receipt, owner)
+                    # Attached start sends HTTP 200 before backend rejection.
+                    # Detached start exposes the actual single-shot conflict.
+                    connection = api._connect()
+                    try:
+                        connection.request('POST', api.VERSION + '/exec/' + receipt['execId'] + '/start',
+                            b'{"Detach":true,"Tty":false}', {'Content-Type': 'application/json'})
+                        report['finishedExecRestartStatus'] = connection.getresponse().status
+                        report['finishedExecRestartRejected'] = report['finishedExecRestartStatus'] == 409
+                    finally:
+                        connection.close()
+                    if not report['finishedExecRestartRejected']: raise RuntimeError('single-shot property unverified')
+                    start, last = time.monotonic(), -60
+                    while time.monotonic() - start < 660:
+                        elapsed = time.monotonic() - start
+                        if elapsed - last >= 60:
+                            print(json.dumps({'stage': 'waiting-real-gc', 'elapsedSeconds': int(elapsed)}), file=sys.stderr, flush=True)
+                            last = elapsed
+                        try:
+                            api.inspect(receipt['execId'])
+                        except ExecMetadataGone:
+                            report.update(realGcObserved=True, gcWaitSeconds=round(time.monotonic() - start, 2),
+                                originalContainerStillRunning=inspect(running=True),
+                                durableAfterGcAccepted=probe._receipt(filename, receipt, owner))
+                            legacy = copy.deepcopy(receipt); legacy['schemaVersion'] = 1; legacy.pop('completionEvidence')
+                            report['legacyAfterGcRejected'] = probe._receipt(filename, legacy, owner) is False
+                            pending = dict(receipt, phase='released', exitCode=None)
+                            report['pendingAfterGcRejected'] = probe._receipt(filename, pending, owner) is False
+                            break
+                        time.sleep(5)
+                    if report.get('realGcObserved') is not True: raise RuntimeError('real GC was not observed')
+                finally:
+                    os.close(lock)
             stage = 'nonzero'
             with tempfile.TemporaryFile() as output:
                 runner, store = executor()
@@ -119,12 +173,17 @@ def main(image):
                 report['containerCleanup'] = 'failed-or-unknown'
     report['sourceAfter'] = hashes()
     print(json.dumps(report, sort_keys=True))
+    gc_checks = ('durableBeforeGcAccepted', 'finishedExecRestartRejected', 'realGcObserved',
+                 'originalContainerStillRunning', 'durableAfterGcAccepted', 'legacyAfterGcRejected', 'pendingAfterGcRejected')
     return 0 if ('failure' not in report and report['containerCleanup'] == 'verified'
         and report['sourceBefore'] == report['sourceAfter'] and all(report.get(key) is True for key in
-            ('actualExecCompleted', 'missingProgramRejected', 'foreignContainerNeverStarted'))) else 1
+            ('actualExecCompleted', 'terminalObservationBound', 'missingProgramRejected', 'foreignContainerNeverStarted'))
+        and (not wait_for_gc or all(report.get(key) is True for key in gc_checks))) else 1
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', required=True)
-    raise SystemExit(main(parser.parse_args().image))
+    parser.add_argument('--wait-for-gc', action='store_true', help='one isolated real daemon GC observation, at most 11 minutes')
+    args = parser.parse_args()
+    raise SystemExit(main(args.image, args.wait_for_gc))

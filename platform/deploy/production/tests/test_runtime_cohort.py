@@ -74,6 +74,46 @@ class RuntimeCohortTest(unittest.TestCase):
         self.absent = True
         self.assertEqual('unknown', self.probe())
 
+    def durable_receipt(self, **updates):
+        self.receipt()
+        store = self.store_type(self.target, name='runtime-exec-' + '00000000000040008000000000000001' + '.json')
+        record = store.load()
+        record.update(schemaVersion=2, completionEvidence={'kind': 'exec-inspect-terminal-v1',
+            'ID': record['execId'], 'ContainerID': record['containerId'], 'Running': False, 'ExitCode': 0})
+        record.update(updates); store.save(record)
+        return store, record
+
+    def test_durable_terminal_exec_survives_exact_metadata_gc_but_legacy_does_not(self):
+        self.owner()
+        self.durable_receipt()
+        self.assertEqual('quiescent', self.probe())
+        from owned_docker_exec import ExecMetadataGone
+        self.api.inspect = lambda identity: (_ for _ in ()).throw(ExecMetadataGone('fixture GC'))
+        self.assertEqual('quiescent', self.probe())
+        self.receipt()  # v1 has no independently recorded terminal observation.
+        self.assertEqual('unknown', self.probe())
+
+    def test_gc_never_promotes_pending_mismatched_or_unverified_terminal_records(self):
+        self.owner()
+        from owned_docker_exec import ExecMetadataGone
+        self.api.inspect = lambda identity: (_ for _ in ()).throw(ExecMetadataGone('fixture GC'))
+        for update in ({'phase': 'released', 'exitCode': None}, {'completionEvidence': None},
+                       {'schemaVersion': True}, {'daemonId': 'other'}):
+            self.durable_receipt(**update)
+            self.assertEqual('unknown', self.probe())
+        for key, value in (('ID', 'd' * 64), ('ContainerID', 'd' * 64), ('Running', 0), ('ExitCode', False)):
+            store, record = self.durable_receipt()
+            record['completionEvidence'][key] = value; store.save(record)
+            self.assertEqual('unknown', self.probe())
+
+    def test_durable_observation_does_not_override_live_contradiction_or_transport_failure(self):
+        self.owner(); self.durable_receipt()
+        for failure in (TimeoutError('unavailable'), OSError('server unavailable')):
+            self.api.inspect = lambda identity: (_ for _ in ()).throw(failure)
+            self.assertEqual('unknown', self.probe())
+        self.api.inspect = lambda identity: {'ID': 'e' * 64, 'ContainerID': 'c' * 64, 'Running': True, 'ExitCode': 0}
+        self.assertEqual('unknown', self.probe())
+
     def test_hash_helper_requires_terminal_receipt_and_original_container_absence(self):
         self.owner()
         value = {'schemaVersion': 1, 'kind': 'controlled-container-helper',
