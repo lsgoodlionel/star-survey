@@ -58,16 +58,32 @@ def _run_verifier(command,timeout=180,cleanup_timeout=3):
             stderr=subprocess.DEVNULL,start_new_session=True,close_fds=True)
     except OSError as error:
         raise TargetBindingError('target release verification unavailable') from error
-    try:process.wait(timeout=timeout)
     except BaseException as error:
-        settled=_terminate_group(process,cleanup_timeout)
+        failure=TargetVerificationUncertain('verifier launch interrupted; outcome unknown')
+        failure.verifier_process=None
+        raise failure from error
+    try:process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        try:settled=_terminate_group(process,cleanup_timeout)
+        except BaseException:settled=False
         if not settled:
             failure=TargetVerificationUncertain('verifier process group outcome unknown; retain context')
             failure.verifier_process=process
             raise failure from error
-        if not isinstance(error,Exception):raise
         raise TargetBindingError('target release verification interrupted; process group absent') from error
-    if not _group_absent(process.pid):
+    except BaseException as error:
+        # Popen.wait may already reap the leader before propagating SIGINT.
+        # Never poll-then-signal here: neither returncode nor a later lookup
+        # gives authority over the old PGID. Retain, reject and require settling.
+        failure=TargetVerificationUncertain('verifier wait interrupted; retain unconfirmed group context')
+        failure.verifier_process=process
+        raise failure from error
+    try:absent=_group_absent(process.pid)
+    except BaseException as error:
+        failure=TargetVerificationUncertain('verifier final observation interrupted')
+        failure.verifier_process=process
+        raise failure from error
+    if not absent:
         # The leader was already reaped. Do not risk signaling a reused group
         # ID; unexpected descendants remain unknown, even after exit 0.
         failure=TargetVerificationUncertain('verifier exited with a nonempty or unobservable process group')
