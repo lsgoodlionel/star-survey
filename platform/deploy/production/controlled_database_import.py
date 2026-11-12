@@ -182,6 +182,7 @@ class VerifiedDatabaseInput:
                 or target.services[OPERATIONS[profile]] != container):
             raise KnownExecFailure('authenticated input single-use binding differs')
         copy.recheck_source()
+        if copy._target_binding is not None:copy._target_binding.check_database_target(target)
         if not target.check(OPERATIONS[profile], container):
             raise KnownExecFailure('authenticated input target changed')
         self.claimed = True
@@ -200,6 +201,7 @@ class ControlledDatabaseCopy:
         self.used = self.active = self.failed = self.uncertain = False
         self.control, self.evidence, self._source_view = None, None, None
         self._authenticated_metadata = None
+        self._target_binding = None
         target.maintenance.held.append(self)  # Keep unknown plaintext/leases alive.
 
     def poison_unknown(self):
@@ -319,6 +321,7 @@ class ControlledDatabaseCopy:
         self.used = True
         try:
             self.target.admit_unused()
+            if self._target_binding is not None:self._target_binding.check_database_target(self.target)
             if backup != self.verifier.cipher.root or backup.parent != self.verifier.target/'backups':
                 raise RestoreIntegrityError('authenticated backup operation binding differs')
             self._source_view = self.source_view()
@@ -354,6 +357,7 @@ class ControlledDatabaseCopy:
                 self.target.executor(profile).execute(profile, self.target.services[OPERATIONS[profile]], output,
                     input_lease=item, input_sha256=item.sha256)
             return {'schemaVersion':1,'backupHmacAuthenticated':True,'databaseInputsTransferred':True,
+                'targetReleaseSignaturesVerified':self._target_binding is not None,
                 'databaseStateVerified':False,'personnelInvalidationVerified':False,
                 'targetSignatureVerified':False,'targetConfigurationVerified':False,
                 'restoreAuthorized':False,'candidateQualified':False}
@@ -366,6 +370,14 @@ class ControlledDatabaseCopy:
             raise
         finally:
             if not self.uncertain: self.release()
+
+    def execute_bound(self,backup,binding):
+        """Internal candidate-bound component, never product restore admission."""
+        from recovery_target_binding import RecoveryTargetBinding
+        if not isinstance(binding,RecoveryTargetBinding) or self.used:
+            raise KnownExecFailure('verified target binding and unused copy required')
+        self._target_binding=binding
+        return self.execute(backup)
 
     def release(self):
         if self.uncertain: raise UncertainExec('copy leases remain bound to an unknown result')
