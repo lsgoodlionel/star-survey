@@ -2795,6 +2795,15 @@ raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-inte
             with self.assertRaises(owned_maintenance.OwnershipError): operation.exec_file('postgres-dump','platform-db',plain)
             store.assert_not_called(); executor.assert_not_called(); plain.export_for_child.assert_not_called()
 
+    def test_doctor_capacity_rejection_precedes_intent_and_helpers(self):
+        self.install(); manager=self.module.SurveyManager(self.target,runner=self.runner)
+        marker=self.target/'.surveyctl/operation.intent'; before=marker.read_bytes()
+        operation=mock.Mock()
+        operation.prepare_doctor_capacity.side_effect=self.module.RuntimeHealthError('doctor capacity unavailable')
+        with mock.patch.object(manager,'_owned_maintenance',return_value=operation):
+            with self.assertRaises(self.module.RuntimeHealthError): manager.doctor()
+        self.assertEqual(before,marker.read_bytes()); operation.doctor.assert_not_called()
+
     def test_default_backup_known_preflight_failure_does_not_latch_or_leak(self):
         from backup import BackupError
         self.install()

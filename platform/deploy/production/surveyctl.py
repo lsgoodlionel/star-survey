@@ -2378,6 +2378,10 @@ class SurveyManager:
         self._require_no_pending_recovery(state)
         if self._runtime_factory is None:
             operation = self._owned_maintenance(state['version'])
+            try:
+                operation.prepare_doctor_capacity()
+            except Exception as exc:
+                self._raise_owned_failure(exc, 'controlled doctor capacity is unavailable; preserve operation evidence')
             self._begin_operation()
             try:
                 report = operation.doctor()

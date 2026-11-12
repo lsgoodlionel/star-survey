@@ -9,13 +9,14 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import time
 from urllib.parse import urlencode
 import uuid
 
 from backup import BackupError, BackupManager, MIN_FREE_BYTES, VOLUME_SOURCES, WRITER_SERVICES, rewrite_authenticated_control
-from doctor import Doctor, DoctorRuntimeError, ProductProbe, ProbeStageError
+from doctor import Doctor, DoctorRuntimeError, ProductProbe, ProbeStageError, PROBE_MAX_RELAY_EXECS
 from owned_backup_verify import ControlledVerifier
 from owned_children import ChildJournal, ControllerProcessGuard
 from owned_cipher_adapter import ControlledCipher
@@ -330,6 +331,47 @@ class OwnedMaintenance:
         with self.cipher_session(Path(backup)) as (workspace, cipher):
             return ControlledVerifier(self.manager.target, cipher).verify_only(Path(backup))
 
+    def _doctor_backup_inventory(self):
+        root=self.manager._managed('backups')
+        def identity(info):
+            return (info.st_dev,info.st_ino,info.st_uid,info.st_mode,info.st_mtime_ns,info.st_ctime_ns)
+        if not os.path.lexists(root): return (None,())
+        before=os.lstat(root)
+        if not stat.S_ISDIR(before.st_mode) or before.st_uid!=os.geteuid() or before.st_mode&0o022:
+            raise OwnershipError('doctor backup directory is unsafe')
+        entries=[]
+        with os.scandir(root) as iterator:
+            for count,entry in enumerate(iterator,1):
+                if count>256: raise OwnershipError('doctor backup inventory exceeds capacity bound')
+                info=entry.stat(follow_symlinks=False)
+                if entry.name.startswith('.') or not stat.S_ISDIR(info.st_mode): continue
+                if info.st_uid!=os.geteuid() or info.st_mode&0o022:
+                    raise OwnershipError('doctor backup member is unsafe')
+                entries.append((entry.name,identity(info)))
+        if identity(os.lstat(root))!=identity(before):
+            raise OwnershipError('doctor backup inventory changed')
+        return (identity(before),tuple(sorted(entries)))
+
+    def prepare_doctor_capacity(self):
+        if self.uncertain or self.held or self.paused:
+            raise UncertainMaintenance('doctor receipt admission requires an idle context')
+        from runtime_cohort import ReceiptRetirement
+        snapshot=self._doctor_backup_inventory()
+        # Two migration execs, bounded relay execs, one close; each backup
+        # verification creates one independent cipher journal.
+        slots=3+PROBE_MAX_RELAY_EXECS+len(snapshot[1])
+        ReceiptRetirement(self.runtime.probe,lambda:self.runtime.preflight_cleanup(False),
+            self.manager._begin_operation,self.manager._operation_name).reserve(slots)
+        if self._doctor_backup_inventory()!=snapshot:
+            raise OwnershipError('doctor backup set changed during capacity admission')
+        self._doctor_snapshot=snapshot
+        self._receipt_budget=slots
+
+    def doctor_backups(self):
+        if not hasattr(self,'_doctor_snapshot') or self._doctor_backup_inventory()!=self._doctor_snapshot:
+            raise OwnershipError('doctor backup set no longer matches admission')
+        return [self.manager.target/'backups'/name for name,_ in self._doctor_snapshot[1]]
+
     def doctor(self):
         def run():
             runner = OwnedDoctorRunner(self)
@@ -371,16 +413,15 @@ class OwnedDoctor(Doctor):
         return version, schema, host, self.operation.manager._compose(version)
 
     def _backup_check(self):
-        root = self.target / 'backups'
         valid = 0
-        if root.exists():
-            for directory in root.iterdir():
-                if directory.is_symlink() or not directory.is_dir() or directory.name.startswith('.'): continue
-                try:
-                    self.operation.verify_backup(directory)
-                    valid += 1
-                except (BackupError, OSError, RestoreIntegrityError):
-                    continue
+        for directory in self.operation.doctor_backups():
+            self.operation.doctor_backups()
+            try:
+                self.operation.verify_backup(directory)
+                valid += 1
+            except (BackupError, OSError, RestoreIntegrityError):
+                continue
+        self.operation.doctor_backups()
         return self._check('backups', 'ok' if valid else 'warning',
             f'{valid} verified backup(s) available' if valid else 'no completed backup exists yet')
 

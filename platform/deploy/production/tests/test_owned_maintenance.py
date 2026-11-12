@@ -146,6 +146,11 @@ class MaintenanceTest(unittest.TestCase):
     def test_first_install_backup_warning_retains_native_acceptance_contract(self):
         doctor = object.__new__(self.module.OwnedDoctor)
         doctor.target = self.target
+        from unittest.mock import patch
+        self.manager._begin_operation=lambda: None; self.manager._operation_name='doctor'
+        with patch('runtime_cohort.ReceiptRetirement'):
+            self.operation.prepare_doctor_capacity()
+        doctor.operation=self.operation
         self.assertEqual({'id': 'backups', 'status': 'warning', 'summary': 'no completed backup exists yet'},
                          doctor._backup_check())
 
@@ -185,6 +190,47 @@ class MaintenanceTest(unittest.TestCase):
                 self.operation.exec_file('postgres-dump', 'platform-db', None)
             workspace.assert_not_called()
             executor.assert_not_called()
+
+
+    def test_doctor_reserves_fixed_execs_plus_one_journal_per_backup(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        root=self.target/'backups'; root.mkdir()
+        (root/'one').mkdir(); (root/'two').mkdir(); (root/'.partial').mkdir()
+        (root/'link').symlink_to(root/'one'); (root/'file').write_text('not a backup')
+        self.manager._begin_operation=lambda: None; self.manager._operation_name='doctor'
+        with patch('runtime_cohort.ReceiptRetirement') as retirement:
+            self.operation.prepare_doctor_capacity()
+            retirement.return_value.reserve.assert_called_once_with(35)
+        self.assertEqual(35,self.operation._receipt_budget)
+        self.assertEqual(['one','two'],[p.name for p in self.operation.doctor_backups()])
+        (root/'three').mkdir()
+        with self.assertRaises(self.module.OwnershipError): self.operation.doctor_backups()
+
+    def test_doctor_large_backup_inventory_refuses_before_reservation(self):
+        from unittest.mock import patch
+        root=self.target/'backups'; root.mkdir()
+        for i in range(257): (root/str(i)).mkdir()
+        self.manager._begin_operation=lambda: None; self.manager._operation_name='doctor'
+        with patch('runtime_cohort.ReceiptRetirement') as retirement:
+            with self.assertRaises(self.module.OwnershipError): self.operation.prepare_doctor_capacity()
+            retirement.assert_not_called()
+
+
+    def test_doctor_excess_journal_demand_fails_before_begin(self):
+        from unittest.mock import Mock
+        root=self.target/'backups'; root.mkdir()
+        for i in range(224): (root/str(i)).mkdir()
+        self.manager._begin_operation=Mock(); self.manager._operation_name='doctor'
+        with self.assertRaises(self.module.OwnershipError): self.operation.prepare_doctor_capacity()
+        self.manager._begin_operation.assert_not_called()
+
+    def test_doctor_absent_inventory_cannot_become_present_after_admission(self):
+        from unittest.mock import patch
+        self.manager._begin_operation=lambda: None; self.manager._operation_name='doctor'
+        with patch('runtime_cohort.ReceiptRetirement'): self.operation.prepare_doctor_capacity()
+        (self.target/'backups').mkdir()
+        with self.assertRaises(self.module.OwnershipError): self.operation.doctor_backups()
 
 
 class BackupErrorForTest(Exception):
