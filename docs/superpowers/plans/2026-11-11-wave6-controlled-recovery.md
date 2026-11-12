@@ -289,7 +289,7 @@ Owner明确同意依赖整合/合并、具体门禁解除、候选执行及发�
 
 ### 2026-11-12：新目标预留的使用时校验（内部切片，未接执行端）
 
-基于已合并main7cdd66c4独立实现`recovery_reservation.RecoveryReservation`，不改Claude #138的Release区域。先14项失败测试，再实现只读上下文：通过no-follow目录FD检查祖先/直接父目录及0700目标/control；读取0600、单链接、普通文件的精确三文件清单，JSON有界且重复字段/布尔伪整数/授权字段变化拒绝。reservation ID、随机项目提案、source observation、记录中的目标与control dev/inode均与调用绑定；source observation只是绑定，不是备份认证。持有原operation.lock非阻塞排他锁，不创建、修复或清理任何对象；FD不可继承。读取前后和正常退出复核文件身份/摘要及目录路径，额外项即拒绝，枚举只保留有限预期项。首次失败永久封锁该上下文，即使外部随后移除异常项也不能重新取得成功。
+基于已合并main7cdd66c4独立实现`recovery_reservation.RecoveryReservation`，不改Claude #138的Release区域。先建立失败回归，再实现只读上下文：通过no-follow目录FD检查祖先/直接父目录及0700目标/control；读取0600、单链接、普通文件的精确三文件清单，JSON有界且重复字段/布尔伪整数/授权字段变化拒绝。reservation ID、随机项目提案、source observation、记录中的目标与control dev/inode均与调用绑定；source observation只是绑定，不是备份认证。持有原operation.lock非阻塞排他锁，不创建、修复或清理任何对象；FD不可继承。读取前后和正常退出复核文件身份/摘要及目录路径，额外项即拒绝，枚举只保留有限预期项。首次失败永久封锁该上下文，即使外部随后移除异常项也不能重新取得成功。
 
 先红的目录读取期间替换和失败后复用两项均修复；14项目标测试以及184项原surveyctl回归本地通过，包含真实recovery-reserve产物接续、symlink/hardlink/FIFO、权限、拷贝/错绑定、锁冲突、同字节替换、原地改写与外来目标保留。仅本机真实文件系统/故障注入，不冒称Linux各平台或宿主崩溃证明；Linux结果由精确PR的现有CI核实。
 
