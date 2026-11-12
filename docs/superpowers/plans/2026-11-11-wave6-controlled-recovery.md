@@ -251,3 +251,13 @@ v1仅在精确live ExecInspect终态或原不可变CID证实缺席时可成为�
 协作预算措辞与检测增量：先红复现_local_check返回时已经超预算仍先unlink1条、资源回调迟到后仍多查一个回执。现capture在资源回调返回后和逐回执边界核时，local_check尾部及最终stat后/unlink前再核时，两个确定性已观察过期窗口零删除。不能因此承诺所有过期零删除：最终检查后时间仍可推进；第4/5次完整核验迟到时已有终态删除，新增回归确认最终拒绝且pending保留。opaque回调内仍不能强制中断，30秒非硬deadline。最终stat/unlink非原子、独占controller信任和批次远端核验边界不变。
 
 本增量34项回执、73项runtime、11项maintenance、default_backup4及upgrade/verify配额和verify拒绝顺序定向测试通过；未删除/跳过安全断言。仅隔离模型和真实管理器方法，真实SIGKILL/受信候选/升级端到端性能仍待GitHub组件与后续候选证据。所有恢复/原生/发布门禁保持，未合并/发布/碰生产或Claude Release。
+
+### 2026-11-12：doctor动态回执预算（独立待审）
+
+环境恢复后确认只有3项先红测试、源码未改，再继续同一独立分支（base #135 cea3301308）。默认owned doctor在新begin/helper前准备容量：2个迁移exec+最多30个relay cron+1个close，即33，再加当次每个备份verify独立cipher journal。relay循环与预算共用doctor.PROBE_MAX_RELAY_EXECS=30，原执行上限未改变。实际journal/exec分配沿用强制配额，不因预留成功取消分配点检查。
+
+备份root与成员使用非跟随stat身份，有界扫描最多256目录项，隐藏/非目录/链接不算备份；拒绝不安全属主/可写目录。固定root与备份清单身份在reserve后及每次verify前/扫描完成后复核，新增/替换/消失拒绝继续，不以静默截断清单制造预算。原语仍最多一批收束/5个完整capture及30秒协作成功预算，放不下即拒绝，不抬状态目录256上限。33+N超过可证明容量时零helper；没有硬总deadline/真实性能保证。
+
+先红三项后修订，15项maintenance、6项doctor相关管理器测试、73项runtime通过，default_backup4也通过；大清单/224个journal需求、准入后新增清单、原不存在root变为存在、容量拒绝早于intent/helper等模型覆盖。首次无备份仅warning断言原样保留，夹具补上实际admission对象。仅模型与管理器方法，真实候选doctor/双库业务旅程/完整升级/真实崩溃未验证；交GitHub既有组件CI及非作者复审。
+
+旧v1 GC+原CID存在和已有超限目录仍保守拒绝，不补证、不移走未知回执、不执行未授权现场清理。可信独占controller、非原子stat/unlink、协作预算可能有已完成删除及pending保持边界不变；所有恢复/原生/发布门禁保持，不合并/发布/碰Claude Release或生产。
