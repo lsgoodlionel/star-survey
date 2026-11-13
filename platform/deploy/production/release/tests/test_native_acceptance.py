@@ -140,12 +140,13 @@ def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dic
     testcase.assertEqual({'MATRIX_UBUNTU': '${{ matrix.ubuntu }}',
                           'MATRIX_ARCHITECTURE': '${{ matrix.architecture }}',
                           'NATIVE_SUMMARY': '${{ github.workspace }}/native-evidence/summary.json',
+                          'NATIVE_UPGRADE_DATA': '${{ github.workspace }}/native-evidence/upgrade-data.json',
                           # Validate with the workflow-source helper, never the candidate's copy.
                           'TRUSTED_EVIDENCE_HELPER': '${{ github.workspace }}/trusted-workflow-source/platform/deploy/production/release/native_acceptance_evidence.py'},
                          prepare.get('env'))
     # Reviewed body (#138 P-c): withheld diagnostic plus the single allowlisted,
     # trusted-helper-validated summary.json; any edit needs a new review.
-    testcase.assertEqual('df52e32e996fbf40e9900786969798e52608ada53fd520a5dda665c08daec3dd',
+    testcase.assertEqual('09d5daf226974a2eaf07c36b36dfdd936c14a437b0c5a8b6c279e12a03a01bda',
                          hashlib.sha256(prepare['run'].encode()).hexdigest())
     upload = next(item for item in job['steps'] if item.get('name') == 'Preserve fail-closed native diagnostic')
     testcase.assertEqual({'name', 'if', 'uses', 'with'}, set(upload))
@@ -367,6 +368,7 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a' * 40,
                    'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
                    'NATIVE_SUMMARY': str(untrusted / 'summary.json'),
+                   'NATIVE_UPGRADE_DATA': str(untrusted / 'upgrade-data.json'),
                    'TRUSTED_EVIDENCE_HELPER': str(EVIDENCE_HELPER_PATH),
                    'SYNTHETIC_SECRET': secret}
             result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
@@ -398,7 +400,9 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                     self.assertEqual('', output.read_text())
                     self.assertNotIn(secret, rejected.stdout + rejected.stderr)
 
-    def test_native_publication_allowlists_only_a_validated_matching_summary(self):
+    def test_native_publication_allowlists_only_validated_bound_evidence(self):
+        # #138 D5: only summary.json (and, for a verified predecessor upgrade, its
+        # bound upgrade-data.json) may be published; the fixed diagnostic always is.
         job = self.workflow['jobs']['native-acceptance']
         script = next(step['run'] for step in job['steps'] if step.get('id') == 'native_diagnostic')
         summary = {
@@ -411,35 +415,68 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
             'tls': {'scope': 'ci-local-trusted-ca', 'httpsMarkerVerified': True, 'publicAcmeVerified': False},
             'preflightDisk': 'separately-tested', 'completedAt': '2026-11-13T00:00:00+00:00',
         }
+        upgraded = {**summary, 'baselineMode': 'predecessor', 'upgradeVerified': True}
+        proof = {'schemaVersion': 1, 'status': 'passed', 'baselineVersion': '0.3.21-rc.1',
+                 'candidateVersion': '0.3.22-rc.1', 'baselineManifestSha256': 'e' * 64,
+                 'candidateManifestSha256': '1' * 64, 'versionSwitchVerified': True,
+                 'responseBeforeUpgradeVerified': True, 'responseAfterUpgradeVerified': True,
+                 'exportAnswerVerified': True, 'cleanupCompleted': True}
+        unreadable_supported = hasattr(os, 'geteuid') and os.geteuid() != 0
         cases = [
-            ('valid', summary, True, False),
-            ('other runner', {**summary, 'runner': {'ubuntu': '22.04', 'architecture': 'arm64'}}, False, False),
-            ('extra key', {**summary, 'raw': 'x'}, False, False),
-            ('symlink', summary, False, True),
+            # name, summary, upgrade proof, expected published names, special handling
+            ('bootstrap summary', summary, None, ['summary.json'], None),
+            ('verified upgrade with bound proof', upgraded, proof, ['summary.json', 'upgrade-data.json'], None),
+            ('verified upgrade without proof', upgraded, None, [], None),
+            ('proof for another candidate', upgraded, {**proof, 'candidateManifestSha256': '9' * 64}, [], None),
+            ('invalid proof', upgraded, {**proof, 'cleanupCompleted': False}, [], None),
+            ('bootstrap with proof', summary, proof, [], None),
+            ('other runner', {**summary, 'runner': {'ubuntu': '22.04', 'architecture': 'arm64'}}, None, [], None),
+            ('extra key', {**summary, 'raw': 'x'}, None, [], None),
+            ('symlinked summary', summary, None, [], 'link-summary'),
+            ('symlinked proof', upgraded, proof, [], 'link-proof'),
+            ('missing trusted helper', summary, None, [], 'no-helper'),
         ]
-        for name, value, published, as_link in cases:
+        if unreadable_supported:
+            cases += [('unreadable summary', summary, None, [], 'unreadable-summary'),
+                      ('unreadable proof', upgraded, proof, [], 'unreadable-proof')]
+        for name, value, upgrade, published, special in cases:
             with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 evidence = root / 'native-evidence'
                 evidence.mkdir()
-                real = evidence / ('real.json' if as_link else 'summary.json')
-                real.write_text(json.dumps(value))
-                if as_link:
-                    (evidence / 'summary.json').symlink_to(real)
+                for filename, payload, mode in (('summary.json', value, 'summary'), ('upgrade-data.json', upgrade, 'proof')):
+                    if payload is None:
+                        continue
+                    target = evidence / filename
+                    if special == f'link-{mode}':
+                        real = evidence / f'real-{filename}'
+                        real.write_text(json.dumps(payload))
+                        target.symlink_to(real)
+                    else:
+                        target.write_text(json.dumps(payload))
+                    if special == f'unreadable-{mode}':
+                        target.chmod(0)
                 output = root / 'github-output'
                 output.write_text('')
                 env = {**os.environ, 'RUNNER_TEMP': str(root), 'GITHUB_OUTPUT': str(output),
                        'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a' * 40,
                        'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
                        'NATIVE_SUMMARY': str(evidence / 'summary.json'),
-                       'TRUSTED_EVIDENCE_HELPER': str(EVIDENCE_HELPER_PATH)}
+                       'NATIVE_UPGRADE_DATA': str(evidence / 'upgrade-data.json'),
+                       'TRUSTED_EVIDENCE_HELPER': str(root / 'missing.py') if special == 'no-helper'
+                       else str(EVIDENCE_HELPER_PATH)}
                 result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
+                # Optional evidence never turns into a failed step or lost diagnostic.
                 self.assertEqual(0, result.returncode, result.stderr)
                 directory = Path(output.read_text().strip().removeprefix('path='))
                 names = sorted(item.name for item in directory.iterdir())
-                self.assertEqual(['diagnostic.json', 'summary.json'] if published else ['diagnostic.json'], names)
-                if published:
+                self.assertEqual(sorted(['diagnostic.json', *published]), names)
+                self.assertEqual('native-evidence-withheld',
+                                 json.loads((directory / 'diagnostic.json').read_text())['reason'])
+                if 'summary.json' in published:
                     self.assertEqual(value, json.loads((directory / 'summary.json').read_text()))
+                if 'upgrade-data.json' in published:
+                    self.assertEqual(upgrade, json.loads((directory / 'upgrade-data.json').read_text()))
 
     def test_tag_publication_gate_depends_on_the_complete_native_matrix(self):
         gate = self.workflow["jobs"]["release-ready"]

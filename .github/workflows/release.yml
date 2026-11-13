@@ -817,6 +817,7 @@ jobs:
           MATRIX_UBUNTU: ${{ matrix.ubuntu }}
           MATRIX_ARCHITECTURE: ${{ matrix.architecture }}
           NATIVE_SUMMARY: ${{ github.workspace }}/native-evidence/summary.json
+          NATIVE_UPGRADE_DATA: ${{ github.workspace }}/native-evidence/upgrade-data.json
           TRUSTED_EVIDENCE_HELPER: ${{ github.workspace }}/trusted-workflow-source/platform/deploy/production/release/native_acceptance_evidence.py
         run: |
           set -euo pipefail
@@ -830,20 +831,42 @@ jobs:
           diagnostic_dir="$(mktemp -d "$RUNNER_TEMP/native-diagnostic.XXXXXXXX")"
           printf '{"schemaVersion":1,"status":"failed","reason":"native-evidence-withheld","runId":"%s","attempt":"%s","workflowSha":"%s","candidateSha":null,"ubuntu":"%s","architecture":"%s"}\n' \
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$MATRIX_UBUNTU" "$MATRIX_ARCHITECTURE" > "$diagnostic_dir/diagnostic.json"
-          summary="$NATIVE_SUMMARY"
-          helper="$TRUSTED_EVIDENCE_HELPER"
-          if [[ -f "$summary" && ! -L "$summary" && -f "$helper" && ! -L "$helper" ]]; then
-            staged="$(mktemp -d "$RUNNER_TEMP/native-summary.XXXXXXXX")"
-            head -c 1048577 "$summary" > "$staged/summary.json"
-            if python3 "$helper" scan --directory "$staged" >/dev/null 2>&1 && python3 - "$staged/summary.json" <<'PY'
-          import json, os, sys
-          runner = json.load(open(sys.argv[1], encoding="utf-8"))["runner"]
-          if runner != {"ubuntu": os.environ["MATRIX_UBUNTU"], "architecture": os.environ["MATRIX_ARCHITECTURE"]}:
-              raise SystemExit(1)
-          PY
-            then
-              mv "$staged/summary.json" "$diagnostic_dir/summary.json"
+          # Optional allowlisted evidence. Any read, validation or binding failure
+          # publishes neither file and never removes the fixed diagnostic above.
+          publish_allowlisted() {
+            local staged
+            [[ -f "$NATIVE_SUMMARY" && ! -L "$NATIVE_SUMMARY" && -r "$NATIVE_SUMMARY" ]] || return 1
+            [[ -f "$TRUSTED_EVIDENCE_HELPER" && ! -L "$TRUSTED_EVIDENCE_HELPER" ]] || return 1
+            staged="$(mktemp -d "$RUNNER_TEMP/native-summary.XXXXXXXX")" || return 1
+            head -c 1048577 "$NATIVE_SUMMARY" > "$staged/summary.json" || return 1
+            if [[ -e "$NATIVE_UPGRADE_DATA" || -L "$NATIVE_UPGRADE_DATA" ]]; then
+              [[ -f "$NATIVE_UPGRADE_DATA" && ! -L "$NATIVE_UPGRADE_DATA" && -r "$NATIVE_UPGRADE_DATA" ]] || return 1
+              head -c 1048577 "$NATIVE_UPGRADE_DATA" > "$staged/upgrade-data.json" || return 1
             fi
+            python3 "$TRUSTED_EVIDENCE_HELPER" scan --directory "$staged" >/dev/null 2>&1 || return 1
+            python3 - "$staged" 2>/dev/null <<'PY' || return 1
+          import json, os, sys
+          from pathlib import Path
+          staged = Path(sys.argv[1])
+          summary = json.loads((staged / "summary.json").read_text(encoding="utf-8"))
+          if summary["runner"] != {"ubuntu": os.environ["MATRIX_UBUNTU"], "architecture": os.environ["MATRIX_ARCHITECTURE"]}:
+              raise SystemExit(1)
+          proof = staged / "upgrade-data.json"
+          if summary["baselineMode"] == "bootstrap" or not summary["upgradeVerified"]:
+              if proof.exists():
+                  raise SystemExit(1)
+          else:
+              data = json.loads(proof.read_text(encoding="utf-8"))
+              if data["candidateManifestSha256"] != summary["candidate"]["manifestSha256"]:
+                  raise SystemExit(1)
+          PY
+            if [[ -f "$staged/upgrade-data.json" ]]; then
+              mv "$staged/upgrade-data.json" "$diagnostic_dir/upgrade-data.json" || return 1
+            fi
+            mv "$staged/summary.json" "$diagnostic_dir/summary.json" || return 1
+          }
+          if ! publish_allowlisted; then
+            rm -f "$diagnostic_dir/summary.json" "$diagnostic_dir/upgrade-data.json"
           fi
           printf 'path=%s\n' "$diagnostic_dir" >> "$GITHUB_OUTPUT"
 
