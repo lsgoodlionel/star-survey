@@ -8,6 +8,10 @@ import io
 import contextlib
 from pathlib import Path
 import sys
+import tempfile
+import subprocess
+import py_compile
+import os
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -40,10 +44,12 @@ class NativeCleanupProofTest(unittest.TestCase):
         self.manifest = SimpleNamespace(version=self.binding['version'], sha256='b'*64,
             raw=dict(commit='a'*40, assets=dict(bundles=dict(amd64=dict(sha256='c'*64)))))
         self.installed={key:self.binding[key] for key in ('version','manifestSha256','architecture','bundleSha256')}
+        self.admissions=[]
         self.manager = SimpleNamespace(target=self.target, _mutation_lock=self.lock,
             _read_state=self.read_state, _runtime=lambda v:self.runtime,
             _release_dir=lambda v:self.target/'releases'/v,
             _verify_staged_release=lambda *a:copy.deepcopy(self.installed),
+            _load_owned_support=lambda version:self.admissions.append(version),
             _release_manifest=lambda v:self.manifest, uninstall=self.uninstall)
         self.after = lambda:None
 
@@ -222,7 +228,6 @@ class NativeCleanupProofTest(unittest.TestCase):
         self.assertEqual(1,self.calls)
 
     def test_cli_calls_the_same_proof_and_only_prints_bounded_result(self):
-        import surveyctl
         args=['--target',str(self.target)]
         for key,value in self.binding.items():
             if key!='schemaVersion':
@@ -230,14 +235,15 @@ class NativeCleanupProofTest(unittest.TestCase):
                     'runId':'run-id'}.get(key,key)
                 args += ['--'+option,value]
         output=io.StringIO()
-        with mock.patch.object(surveyctl,'SurveyManager',return_value=self.manager), contextlib.redirect_stdout(output):
+        controller=SimpleNamespace(SurveyManager=lambda target:self.manager,OWNED_IMPORT_ORDER=())
+        with mock.patch.object(self.m,'_bootstrap_controller',return_value=controller), contextlib.redirect_stdout(output):
             code=self.m.main(args)
         self.assertEqual(0,code)
         self.assertIs(True,json.loads(output.getvalue())['ordinaryUninstallVerified'])
         self.assertEqual(1,self.calls)
+        self.assertEqual([self.binding['version']],self.admissions)
 
     def test_cli_unknown_postcheck_is_exit_four_without_result_or_exception_leak(self):
-        import surveyctl
         args=['--target',str(self.target)]
         for key,value in self.binding.items():
             if key!='schemaVersion':
@@ -247,13 +253,29 @@ class NativeCleanupProofTest(unittest.TestCase):
         def fail(): raise OSError('synthetic-sensitive-body-never-print')
         self.after=fail
         output,errors=io.StringIO(),io.StringIO()
-        with mock.patch.object(surveyctl,'SurveyManager',return_value=self.manager), \
+        controller=SimpleNamespace(SurveyManager=lambda target:self.manager,OWNED_IMPORT_ORDER=())
+        with mock.patch.object(self.m,'_bootstrap_controller',return_value=controller), \
                 contextlib.redirect_stdout(output),contextlib.redirect_stderr(errors):
             code=self.m.main(args)
         self.assertEqual(4,code)
         self.assertEqual('',output.getvalue())
         self.assertNotIn('synthetic-sensitive-body',errors.getvalue())
         self.assertEqual(1,self.calls)
+
+    def test_cold_cli_rejects_preloaded_owned_module_before_admission_or_uninstall(self):
+        args=['--target',str(self.target)]
+        for key,value in self.binding.items():
+            if key!='schemaVersion':
+                option={'manifestSha256':'manifest-sha256','bundleSha256':'bundle-sha256',
+                    'runId':'run-id'}.get(key,key)
+                args+=['--'+option,value]
+        controller=SimpleNamespace(SurveyManager=lambda target:self.manager,
+            OWNED_IMPORT_ORDER=('owned_docker_exec',))
+        with mock.patch.object(self.m,'_bootstrap_controller',return_value=controller), \
+                contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(4,self.m.main(args))
+        self.assertEqual([],self.admissions)
+        self.assertEqual(0,self.calls)
 
     def test_settled_failed_install_uses_the_same_ordinary_cleanup_contract(self):
         self.state['status']='install_failed'
@@ -267,6 +289,58 @@ class NativeCleanupProofTest(unittest.TestCase):
         self.after=drift
         with self.assertRaises(self.m.CleanupProofError): self.m.prove_uninstall(self.manager,self.binding)
         self.assertEqual(1,self.calls)
+
+    def test_real_script_rejects_unchecked_pyc_and_only_executes_admitted_source(self):
+        import test_surveyctl as fixtures
+        production=Path(__file__).resolve().parents[1]
+        cases=[(name,False) for name in ('owned_docker_exec','surveyctl','native_cleanup_proof')]
+        for poisoned,drift in cases+[('owned_docker_exec',True)]:
+            with self.subTest(poisoned=poisoned,drift=drift),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory).resolve(); runtime=root/'runtime';runtime.mkdir(mode=0o700)
+                marker=root/'unchecked-cache-ran'; admitted=root/'verified-source-ran'
+                owned=(production/'owned_docker_exec.py').read_bytes()
+                owned+=('\nfrom pathlib import Path\nPath('+repr(str(admitted))+').touch()\n').encode()
+                f=fixtures.SurveyctlTest();f.setUp();self.addCleanup(f.doCleanups)
+                manifest,_=fixtures.write_test_release(f.root,version=self.binding['version'],
+                    _fixture_owned_support=True,payload_overrides={'owned_docker_exec.py':owned})
+                f.manager().install(manifest,'survey.example.com','operations','operations@example.com')
+                controller=f.module
+                for name in controller.OWNED_RUNTIME_FILES|controller.OWNED_HELPER_FILES:
+                    path=runtime/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_bytes(owned if name=='owned_docker_exec.py' else (production/name).read_bytes())
+                (runtime/'release.schema.json').write_bytes((production/'release.schema.json').read_bytes())
+                poison=root/'poison.py'
+                poison.write_text('from pathlib import Path\nPath('+repr(str(marker))+').touch()\nraise RuntimeError("unchecked cache")\n')
+                cache_root=str(root/'cache')
+                with mock.patch.object(sys,'pycache_prefix',cache_root):
+                    cache=importlib.util.cache_from_source(str(runtime/(poisoned+'.py')))
+                Path(cache).parent.mkdir(parents=True,exist_ok=True)
+                py_compile.compile(str(poison),cfile=cache,doraise=True,
+                    invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+                selected=controller.load_manifest(manifest)
+                arch=next(iter(selected.raw['assets']['bundles']))
+                # Prove this cached payload is consumable by a plain import;
+                # Mac temporary-path aliases must not make the attack vacuous.
+                plain=subprocess.run([sys.executable,'-B','-X','pycache_prefix='+cache_root,'-c',
+                    'import sys;sys.path.insert(0,'+repr(str(runtime))+');__import__('+repr(poisoned)+')'],
+                    capture_output=True,text=True,timeout=20)
+                self.assertNotEqual(0,plain.returncode)
+                self.assertTrue(marker.exists(),'poisoned cache control did not execute')
+                marker.unlink()
+                if drift:
+                    (runtime/'owned_docker_exec.py').write_bytes(owned+b'\n# unadmitted source drift\n')
+                args=[sys.executable,'-B','-X','pycache_prefix='+cache_root,str(runtime/'native_cleanup_proof.py'),'--target',str(f.target),
+                    '--version',selected.version,'--commit',selected.raw['commit'],
+                    '--manifest-sha256',selected.sha256,'--bundle-sha256',selected.bundle_for(arch)['sha256'],
+                    '--run-id','1','--attempt','1','--ubuntu','24.04','--architecture',arch]
+                run=subprocess.run(args,capture_output=True,text=True,timeout=20,
+                    env=dict(os.environ,PYTHONPYCACHEPREFIX=cache_root))
+                # Fixture has no owned runtime: refusal after admission is the
+                # legitimate control, with no Docker mutation or fake success.
+                self.assertEqual(4,run.returncode,run.stderr)
+                self.assertFalse(marker.exists(),'unchecked pyc executed before source admission')
+                self.assertEqual(not drift,admitted.exists(),'owned code must run only after full source admission')
+                self.assertEqual('',run.stdout)
 
 
 if __name__ == '__main__': unittest.main()

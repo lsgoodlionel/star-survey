@@ -488,3 +488,10 @@ Claude 后续：在其 P-c 接线 PR 用受校验候选 runtime 调用本接口�
 
 
 P-c 调用补充：模块同时提供显式CLI `python3 <受校验候选>/native_cleanup_proof.py --target <安装目标> --version <候选版本> --commit <40位提交> --manifest-sha256 <64位摘要> --bundle-sha256 <本架构包摘要> --run-id <运行号> --attempt <尝试号> --ubuntu <22.04或24.04> --architecture <amd64或arm64>`。仅传公开身份；须先按既有流程校验候选及脚本，不接受秘密或原始Docker响应。该CLI包含一次普通卸载，不能在外部重复调用uninstall。成功输出固定JSON；错误固定stderr、exit4、无stdout结果；未知时不得重放。另补CLI正负及settled-failure安装测试，proof组12项通过（总定向81项）；真实双库新head结果仍待GitHub。
+
+
+### P-c CLI 准入修订（2026-11-13，待独立复核）
+
+Claude 对77835915指出脚本顶层普通import可执行未经校验pyc，且随后sys.modules命中会跳过既有owned加载。本轮限定native_cleanup_proof.py及测试：脚本分支只执行stdlib bootstrap，按实际源字节编译可信controller入口，不读取surveyctl缓存；拒绝cold entry预载owned模块，先调用既有完整SHA准入，再从sys.modules中调用校验字节编译的具名proof。实际owned异常类/证明仅在准入后具名模块中定义；不改变Unknown/锁/普通卸载/保卷/固定错误输出合同。入口及controller仍须由可信native harness在启动前认证，不声称抵御任意Python启动环境或宿主接管。
+
+真实子进程测试先用普通import确认投毒缓存确实可执行，再跑脚本：旧入口owned_docker_exec与surveyctl缓存触发红测；新入口拒绝三类缓存（含named proof缓存），合法源实际执行，源码SHA漂移时所有owned源均不执行。临时路径解析和pycache_prefix显式固定，避免Mac路径别名造成假绿；不运行Docker或真实卸载。16项proof/CLI、4项真实本地打包、7项组件证据（27项）用于定向验证，完整CI/真实双库交新head在线验收。#155已入main eaac4ae，整合前核对actual main CI，不能沿用778旧绿色；仍需Claude增量非作者复核及P-c workflow接线，不解除任何其他门禁。

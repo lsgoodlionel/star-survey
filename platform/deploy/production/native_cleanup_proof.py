@@ -9,6 +9,78 @@ postcheck; the trust boundary remains an exclusive, trusted controller/daemon.
 from copy import deepcopy
 import re
 
+
+def _bootstrap_controller():
+    """Read the trusted controller entry as source, never import its pyc.
+
+    The native harness authenticates this entry and its bundle before launch,
+    as for surveyctl itself. The stdlib-only controller then admits all owned
+    source bytes against the installed inventory before any owned code runs.
+    """
+    import importlib.util
+    import os
+    from pathlib import Path
+    import stat
+    import sys
+    path=Path(__file__).absolute().with_name('surveyctl.py')
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|getattr(os,'O_CLOEXEC',0))
+    with os.fdopen(fd,'rb') as stream:
+        before=os.fstat(stream.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink!=1
+                or before.st_uid!=os.geteuid() or before.st_mode & 0o022):
+            raise RuntimeError('unsafe controller bootstrap source')
+        payload=stream.read(1024*1024+1)
+        identity=lambda s:(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_mode,s.st_uid,s.st_nlink)
+        if (len(payload)>1024*1024 or identity(before)!=identity(os.fstat(stream.fileno()))
+                or identity(before)!=identity(os.stat(path,follow_symlinks=False))):
+            raise RuntimeError('controller bootstrap source changed')
+    name='surveyctl_native_cleanup_bootstrap'
+    if name in sys.modules:
+        raise RuntimeError('controller bootstrap is already occupied')
+    spec=importlib.util.spec_from_file_location(name,path)
+    module=importlib.util.module_from_spec(spec)
+    sys.modules[name]=module
+    try:
+        exec(compile(payload,str(path),'exec',dont_inherit=True),module.__dict__)
+    except BaseException:
+        sys.modules.pop(name,None)
+        raise
+    return module
+
+
+def main(argv=None):
+    """Cold CLI bootstrap: stdlib/controller only, then verified named proof."""
+    import argparse
+    import json
+    import sys
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--target',required=True)
+    for option in ('version','commit','manifest-sha256','bundle-sha256','run-id','attempt','ubuntu','architecture'):
+        parser.add_argument('--'+option,required=True)
+    args=parser.parse_args(argv)
+    binding=dict(schemaVersion=1,version=args.version,commit=args.commit,
+        manifestSha256=args.manifest_sha256,bundleSha256=args.bundle_sha256,
+        runId=args.run_id,attempt=args.attempt,ubuntu=args.ubuntu,architecture=args.architecture)
+    try:
+        controller=_bootstrap_controller()
+        if any(name in sys.modules for name in controller.OWNED_IMPORT_ORDER):
+            raise RuntimeError('cold native entry contains preloaded owned modules')
+        manager=controller.SurveyManager(args.target)
+        manager._load_owned_support(args.version)
+        admitted=sys.modules['native_cleanup_proof']
+        result=admitted.prove_uninstall(manager,binding)
+    except Exception:
+        print('Native ordinary uninstall proof unavailable; preserve fixture and do not replay.',file=sys.stderr)
+        return 4
+    print(json.dumps(result,sort_keys=True))
+    return 0
+
+
+# Script execution stops here. Only the checksum-admitted named module below
+# may import the owned exception class or expose the actual proof operation.
+if __name__=='__main__':
+    raise SystemExit(main())
+
 from owned_docker_exec import UncertainExec
 
 
@@ -89,31 +161,3 @@ def prove_uninstall(manager, candidate):
         raise
     except Exception as exc:
         raise CleanupProofError('native cleanup outcome is unverified; preserve the fixture and do not replay') from exc
-
-
-def main(argv=None):
-    """Explicit native harness entry; inputs are public candidate identity only."""
-    import argparse
-    import json
-    import sys
-    from surveyctl import SurveyManager
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target',required=True)
-    for option in ('version','commit','manifest-sha256','bundle-sha256','run-id','attempt','ubuntu','architecture'):
-        parser.add_argument('--'+option,required=True)
-    args=parser.parse_args(argv)
-    binding=dict(schemaVersion=1,version=args.version,commit=args.commit,
-        manifestSha256=args.manifest_sha256,bundleSha256=args.bundle_sha256,
-        runId=args.run_id,attempt=args.attempt,ubuntu=args.ubuntu,architecture=args.architecture)
-    try:
-        result=prove_uninstall(SurveyManager(args.target),binding)
-    except Exception:
-        # Neither exception text nor API bodies/paths are suitable evidence.
-        print('Native ordinary uninstall proof unavailable; preserve fixture and do not replay.',file=sys.stderr)
-        return 4
-    print(json.dumps(result,sort_keys=True))
-    return 0
-
-
-if __name__=='__main__':
-    raise SystemExit(main())
