@@ -64,6 +64,14 @@ class ProductionImagePolicyTest(unittest.TestCase):
         runtime = runtime_stage(dockerfile("admin-web"))
         self.assertRegex(runtime, r"\bapk\s+upgrade\s+--no-cache\b")
 
+    def test_gateway_runtime_refreshes_alpine_security_packages(self):
+        # v0.3.21-rc.1 (run 43384842587) failed the release Trivy gate on 16 HIGH
+        # krb5-libs CVEs inherited from the python alpine base; refresh like admin.
+        runtime = runtime_stage(dockerfile("publish-gateway"))
+        self.assertRegex(runtime, r"\bapk\s+upgrade\s+--no-cache\b")
+        self.assertNotRegex(runtime, r"\bapk\s+add\b")
+        self.assertLess(runtime.index("apk upgrade"), runtime.index("USER 10001:10001"))
+
     def test_admin_static_bundle_builds_on_native_builder(self):
         contents = dockerfile("admin-web")
         self.assertRegex(contents, r"(?m)^FROM\s+--platform=\$BUILDPLATFORM\s+node:\S+\s+AS\s+build\s*$")
