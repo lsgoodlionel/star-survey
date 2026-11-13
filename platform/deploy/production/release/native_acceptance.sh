@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Do not touch the host until containment, recovery and cleanup are verified.
-printf 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.\n' >&2
-exit 1
-
+# Runs only on a fresh GitHub-hosted native runner after the workflow has
+# verified this orchestrator against its trusted source (#138 P-c, #119).
 [[ "${NATIVE_ACCEPTANCE_REAL:-}" == "1" ]]
 [[ "${GITHUB_ACTIONS:-}" == "true" ]]
 [[ "${SURVEY_NATIVE_ACCEPTANCE:-}" == "1" ]]
@@ -47,6 +45,7 @@ acceptance_status="failed"
 last_step="identity"
 upgrade_verified=false
 hosts_marker="survey-native-acceptance-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
+hosts_file="/etc/hosts"
 mkdir -p "$evidence_root" "$runtime"
 [[ -f "$evidence_helper" ]]
 
@@ -116,19 +115,73 @@ write_summary() {
     --upgrade-data-evidence "$evidence_root/upgrade-data.json"
 }
 
-# Resource labels and fixture markers alone cannot prove that all writers and
-# restore helpers stopped. Keep uninstall blocked until an independently
-# verified containment and ownership protocol is implemented.
-require_fixture_cleanup_proof() {
-  printf 'Native fixture cleanup is blocked: exclusive ownership and restore quiescence are unverified.\n' >&2
-  return 1
+# Ordinary uninstall runs only through the candidate's checksum-admitted proof
+# CLI (#156): it holds the installation lock, runs uninstall exactly once and
+# independently re-observes ownership, claim, cohort and retained volumes.
+# Never invoke the controller's uninstall directly or retry after a failed proof.
+prove_ordinary_uninstall() {
+  local proof_cli candidate_version candidate_commit
+  proof_cli="$(dirname "$ctl_bin")/native_cleanup_proof.py"
+  [[ -f "$proof_cli" && ! -L "$proof_cli" ]]
+  candidate_version="$(jq -er '.version' "$candidate_release_dir/release.json")"
+  candidate_commit="$(jq -er '.commit' "$candidate_release_dir/release.json")"
+  python3 "$proof_cli" --target "$target" \
+    --version "$candidate_version" --commit "$candidate_commit" \
+    --manifest-sha256 "$CANDIDATE_MANIFEST_SHA256" --bundle-sha256 "$CANDIDATE_BUNDLE_SHA256" \
+    --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+    --ubuntu "$EXPECTED_UBUNTU" --architecture "$EXPECTED_ARCHITECTURE" \
+    >"$work_root/cleanup-proof.json"
+  python3 - "$work_root/cleanup-proof.json" "$candidate_version" "$candidate_commit" <<'PY'
+import json
+import os
+import sys
+
+path, version, commit = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    proof = json.load(handle)
+expected_candidate = {
+    "schemaVersion": 1, "version": version, "commit": commit,
+    "manifestSha256": os.environ["CANDIDATE_MANIFEST_SHA256"],
+    "bundleSha256": os.environ["CANDIDATE_BUNDLE_SHA256"],
+    "runId": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+    "ubuntu": os.environ["EXPECTED_UBUNTU"], "architecture": os.environ["EXPECTED_ARCHITECTURE"],
+}
+keys = {"schemaVersion", "candidate", "ordinaryUninstallVerified", "retainedVolumeCount",
+        "claimRetained", "cohortQuiescent", "hostCleanupVerified", "candidateQualified"}
+count = proof.get("retainedVolumeCount") if isinstance(proof, dict) else None
+if (not isinstance(proof, dict) or set(proof) != keys or proof["schemaVersion"] != 1
+        or proof["candidate"] != expected_candidate
+        or proof["ordinaryUninstallVerified"] is not True or proof["claimRetained"] is not True
+        or proof["cohortQuiescent"] is not True or proof["hostCleanupVerified"] is not False
+        or proof["candidateQualified"] is not False
+        or type(count) is not int or count < 1):
+    raise SystemExit("native ordinary uninstall proof is not verified for this candidate")
+PY
+}
+
+# The only host change outside the fixture is this run's exact hosts line.
+# Remove it only after a verified uninstall; a missing or duplicated line fails.
+remove_hosts_marker() {
+  python3 - "$hosts_file" "127.0.0.1 $SURVEY_ACCEPTANCE_PUBLIC_HOST # $hosts_marker" <<'PY'
+import sys
+
+path, line = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    lines = handle.read().split("\n")
+if lines.count(line) != 1:
+    raise SystemExit("native hosts fixture line is missing or duplicated")
+lines.remove(line)
+# Rewrite in place: /etc/hosts may be a bind mount that must not be replaced.
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write("\n".join(lines))
+PY
 }
 
 collect_evidence() {
   local result=$?
   trap - EXIT
   set +e
-  # Preserve host and fixture state: cleanup cannot be safely authorized yet.
+  # Never clean up here: a failed or unverified run keeps host and fixture state.
   if ! docker ps --format '{"id":"{{.ID}}","image":"{{.Image}}","name":"{{.Names}}","state":"{{.State}}","health":"{{.Status}}"}' >"$work_root/services.jsonl"; then
     result=5
     acceptance_status="failed"
@@ -163,7 +216,11 @@ collect_evidence() {
     acceptance_status="failed"
     if ! write_summary "$result"; then result=5; fi
   fi
-  printf 'Native fixture and host state retained for investigation.\n' >&2
+  if [[ "$result" -eq 0 ]]; then
+    printf 'Ordinary uninstall proven; retained data volumes stay on this ephemeral runner.\n' >&2
+  else
+    printf 'Native fixture and host state retained for investigation.\n' >&2
+  fi
   exit "$result"
 }
 trap collect_evidence EXIT
@@ -289,7 +346,7 @@ python3 "$evidence_helper" preflight \
   --required-free-bytes "$profile_minimum_bytes"
 
 last_step="local-tls"
-printf '127.0.0.1 %s # %s\n' "$SURVEY_ACCEPTANCE_PUBLIC_HOST" "$hosts_marker" >> /etc/hosts
+printf '127.0.0.1 %s # %s\n' "$SURVEY_ACCEPTANCE_PUBLIC_HOST" "$hosts_marker" >> "$hosts_file"
 export SSL_CERT_FILE="$target/.surveyctl/native-acceptance-ca.crt"
 export SURVEY_NATIVE_ACCEPTANCE_PROFILE_MANIFEST="$candidate_release_dir/release.json"
 export SURVEY_NATIVE_ACCEPTANCE_PROFILE_MANIFEST_SHA256="$CANDIDATE_MANIFEST_SHA256"
@@ -335,6 +392,6 @@ last_step="doctor-final"
 write_doctor_evidence "doctor-final"
 
 last_step="uninstall"
-require_fixture_cleanup_proof
-run_ctl uninstall
+prove_ordinary_uninstall
+remove_hosts_marker
 acceptance_status="passed"
