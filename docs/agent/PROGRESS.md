@@ -1,5 +1,9 @@
 # 自治执行进度
 
+2026-11-13 rc22 bootstrap 登记准备（Owner 已批准该批次，尚未触发候选）：#159 已按精确 head 复核及真实 amd64 Trivy 补证后合并至 `4863a0a4c9d6ed077e315c22ddf2b7e93599a0a2`，实际合并 tree 与已审 head 一致；main CI [43416540816](https://github.com/lsgoodlionel/star-survey/actions/runs/43416540816) 仍进行中，不能记为通过。失败的 rc21 原标签与记录保留，不可作为合格前代。本切片仅追加 `0.3.22-rc.1` 的 bootstrap 策略、相邻解析回归及修正过时注释，不修改 Release workflow、上传白名单、恢复拒绝或 publication 门禁。新增测试先因缺登记失败，追加后通过；覆盖显式登记的 rc.2/稳定版本仍拒绝、bootstrap 不得携带合成前代及精确无前代输出。整份本地原生契约 61 项中两项既有 shell 负例失败，未改基线同样失败；本机 Bash 3.2 的失败 `[[ ... ]]` 未触发 `set -e` 已直接复现。未放宽断言，Linux 完整结果交 GitHub CI 验证。
+
+Claude 继续单一负责候选/Release 执行；为避免串行等待，Codex 在无同项 PR/远端分支时独立准备此登记草稿（[分工记录](https://github.com/lsgoodlionel/star-survey/issues/138#issuecomment-6851543270)）。新策略须独立复核、精确 PR 检查及实际合并 main CI/production smoke 成功后才可创建 `v0.3.22-rc.1`；当前没有新 tag/run/签名安装包。bootstrap 只验证适用的新安装，不是升级、恢复或 stable 准出；后续真实升级验收顺延并绑定首个完整合格的新协议前代。D5、restore、公开 Release 与生产权限不扩大，#158 不自动纳入。未移动 rc21、打新标签或发布。
+
 2026-11-11 Release 方案B准备（#119，Draft，阻断全部保留）：原生验收脚本不再执行真实restore，改为由证据助手调用候选控制器的 restore，要求精确的受控拒绝信息、无标准输出，且 `.surveyctl` 下 operation.intent/state.json 字节与目录条目不变，随后 doctor-final 及安全卸载；DOCTOR_FILE 改为 installed/upgraded/final。`native-acceptance.requirement.json` 用 restore-refused/doctor-final 替换 restore/doctor-restored，并以 deferredUntilStable 记录 stable 仍需真实恢复。先红后绿：新增 3 项拒绝检查与 2 项顺序/策略断言；Windows 本地 release 全部测试模块与未改 main 失败集合对照无新增（均为既有 Windows 失败），POSIX 以 CI 为准。release.yml 两处 exit、脚本顶部 exit 1、证据上传限制和 require_fixture_cleanup_proof 均未改动，待 Codex 在 #33 回答清理安全评估。
 
 2026-11-11 Wave6 #118 P2修订待托管验收：独立审查指出首记录前中断会留下可被普通安装采纳的空目标；两个窗口先红。改为同父目录私有随机暂存，完整记录/锁/pending及fsync/身份检查后不可覆盖地公布目标，缺接口/不支持文件系统拒绝，不使用普通rename fallback。保留原私有权限、路径替换、fsync故障断言，并将故障注入定位到暂存或公布后阶段；新增竞争空/非空目标inode不变、缺API拒绝、旧暂存重试不采纳。增量复审进一步指出私有空暂存仍可能显式传给install，补首记录前暂存及内部路径拒绝回归先红，再在普通安装入口拒绝保留命名空间，不仅依赖README告诫。最终154项控制器及169项Release/工作流契约共323项通过，增量独立静态复核确认原P2闭合且无新增阻断；macOS实际执行renameatx_np，Ubuntu renameat2需在线CI验证，未声称断电/真实崩溃或恢复执行通过。B清理安全仍未证明，Release/native/restore门禁不变。
