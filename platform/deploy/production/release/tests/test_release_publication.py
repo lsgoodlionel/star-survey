@@ -460,6 +460,34 @@ class PublicationMetadataAndReconciliationTest(unittest.TestCase):
         self.assertIn(publication.OWNERSHIP_GUIDANCE, text)
         self.assertIn(publication.FRESH_INSTALL_GUIDANCE, text)
 
+    def test_bootstrap_candidate_can_render_rc_but_never_stable(self):
+        publication = self.load_renderer(RENDER_PUBLICATION_PATH)
+        manifest = json.loads((self.assets / "release.json").read_text(encoding="utf-8"))
+        manifest["minimumSourceVersion"] = publication.BOOTSTRAP_MINIMUM_SOURCE_VERSION
+        (self.assets / "release.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        (self.assets / "release-notes.md").write_text(
+            "This release declares rollback policy `restore-only`, but recovery is currently disabled.\n"
+            + publication.OWNERSHIP_GUIDANCE + "\n",
+            encoding="utf-8",
+        )
+
+        rc_body, _, _ = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")
+        self.assertIn(publication.FRESH_INSTALL_GUIDANCE, rc_body.read_text(encoding="utf-8"))
+
+        output = self.root / "bootstrap-stable"
+        body = output / "body.md"
+        metadata = output / "expected.json"
+        result = subprocess.run([
+            "python3", str(RENDER_PUBLICATION_PATH), "--assets", str(self.assets),
+            "--repository", "example/project", "--target-tag", "v1.2.3",
+            "--source-tag", "v1.2.3-rc.4", "--target-commit", self.commit,
+            "--output-body", str(body), "--output-metadata", str(metadata),
+        ], text=True, capture_output=True, check=False)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("bootstrap candidate cannot be promoted to stable", result.stderr)
+        self.assertFalse(body.exists())
+        self.assertFalse(metadata.exists())
+
     def test_renderer_rejects_stable_tag_or_readiness_identity_drift(self):
         for target, source, commit in (
             ("v1.2.4", "v1.2.3-rc.4", self.commit),
