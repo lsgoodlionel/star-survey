@@ -365,7 +365,8 @@ class CaddySourceImagePinTest(unittest.TestCase):
                 references = set(re.findall(r"caddy:[0-9][^\s'\"]*", text))
                 self.assertEqual({CADDY_PINNED_IMAGE}, references)
 
-    def run_resolve_image(self, reference: str, registry_digest: str) -> subprocess.CompletedProcess[str]:
+    def run_resolve_image(self, reference: str, registry_digest: str,
+                          inspect_fails: bool = False) -> subprocess.CompletedProcess[str]:
         body = self.build_step["run"]
         start = body.index("resolve_image() {")
         end = body.index("\n}\n", start) + 3
@@ -377,15 +378,21 @@ class CaddySourceImagePinTest(unittest.TestCase):
             docker.write_text(
                 "#!/usr/bin/env bash\n"
                 "[[ \"$1 $2 $3\" == 'buildx imagetools inspect' ]] || exit 9\n"
+                "[[ -z \"${FAKE_INSPECT_FAILS:-}\" ]] || exit 1\n"
                 "printf 'Name:      %s\nMediaType: application/vnd.oci.image.index.v1+json\n"
                 "Digest:    %s\n' \"$4\" \"$FAKE_REGISTRY_DIGEST\"\n",
                 encoding="utf-8",
             )
             docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
             environment = dict(os.environ, FAKE_REGISTRY_DIGEST=registry_digest,
+                               FAKE_INSPECT_FAILS="1" if inspect_fails else "",
                                PATH=temporary + os.pathsep + os.environ.get("PATH", ""))
+            # Same shape as the release step: a command substitution does not
+            # inherit errexit, so resolve_image must fail explicitly.
+            script = ("set -euo pipefail\n" + function
+                      + 'image="$(resolve_image "$1")"\nprintf %s "$image"\n')
             return subprocess.run(
-                [bash, "-c", "set -euo pipefail\n" + function + 'resolve_image "$1"', "resolve", reference],
+                [bash, "-c", script, "resolve", reference],
                 text=True, capture_output=True, env=environment, check=False,
             )
 
@@ -403,6 +410,22 @@ class CaddySourceImagePinTest(unittest.TestCase):
                 result = self.run_resolve_image(reference, registry_digest)
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(expected, result.stdout)
+
+    def test_resolve_image_failures_stop_the_production_command_substitution(self):
+        pinned = CADDY_PINNED_IMAGE.split("@", 1)[1]
+        cases = [
+            ("pin mismatch", CADDY_PINNED_IMAGE, "sha256:" + "b" * 64, False),
+            ("inspect fails", "postgres:16.10-alpine", "sha256:" + "a" * 64, True),
+            ("inspect fails for pin", CADDY_PINNED_IMAGE, pinned, True),
+            ("empty digest", "postgres:16.10-alpine", "", False),
+            ("invalid digest", "postgres:16.10-alpine", "sha256:XYZ", False),
+            ("malformed pin", "caddy:2.11.9-alpine@sha256:short", "sha256:short", False),
+        ]
+        for name, reference, registry_digest, inspect_fails in cases:
+            with self.subTest(case=name):
+                result = self.run_resolve_image(reference, registry_digest, inspect_fails)
+                self.assertNotEqual(0, result.returncode, result.stdout)
+                self.assertEqual("", result.stdout)
 
     def test_resolve_image_rejects_a_registry_digest_that_differs_from_the_pin(self):
         result = self.run_resolve_image(CADDY_PINNED_IMAGE, "sha256:" + "b" * 64)

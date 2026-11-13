@@ -571,6 +571,8 @@ jobs:
           CANDIDATE_VERSION="$VERSION"
           printf '%s\n' "$CANDIDATE_VERSION" > image-inputs/candidate-version
 
+          # Called as "$(resolve_image ...)": command substitutions do not inherit
+          # errexit, so every check returns non-zero explicitly and prints nothing.
           resolve_image() {
             local reference="$1"
             local repository="${reference%%@*}"
@@ -578,15 +580,15 @@ jobs:
             local digest
             if [[ "$reference" == *@* ]]; then
               pinned="${reference#*@}"
-              [[ "$pinned" =~ ^sha256:[0-9a-f]{64}$ ]]
+              [[ "$pinned" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
             fi
             # Strip a tag only from the last path segment so registry ports survive.
             if [[ "${repository##*/}" == *:* ]]; then
               repository="${repository%:*}"
             fi
-            digest="$(docker buildx imagetools inspect "$reference" | awk '/^Digest:/ {print $2; exit}')"
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            [[ -z "$pinned" || "$digest" == "$pinned" ]]
+            digest="$(docker buildx imagetools inspect "$reference" | awk '/^Digest:/ {print $2; exit}')" || return 1
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+            [[ -z "$pinned" || "$digest" == "$pinned" ]] || return 1
             printf '%s@%s' "$repository" "$digest"
           }
 
