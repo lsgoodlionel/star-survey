@@ -28,13 +28,15 @@ import runtime_ownership as ownership
 from backup import VOLUME_SOURCES
 from owned_children import read_process_identity
 from owned_docker_exec import LocalDockerAPI, DockerRequestTimeout
+from native_cleanup_proof import prove_uninstall
 from runtime_controller_native import namespace_empty, remove_and_confirm
 from test_surveyctl import FakeHostProbe, load_module, write_test_release
 
 REQUIRED = {
     'backup-purge': ('realHashReceipt', 'backupVerified', 'archiveContentsVerified', 'restoreRefusedWithoutEffects',
                      'ownedUpgradeCompleted', 'persistentIDsKeptAcrossUpgrade', 'oldContainerIDsAbsentAfterUpgrade',
-                     'newContainerIDsBound', 'retainedNineVolumes', 'productPurgeVerified', 'allHelpersEnded'),
+                     'newContainerIDsBound', 'retainedNineVolumes', 'ordinaryUninstallProofVerified',
+                     'productPurgeVerified', 'allHelpersEnded'),
     'doctor-refusal': ('realHashReceipt', 'doctorBlockedWithoutLeak', 'pendingPreserved',
                       'unsafeUninstallRefused', 'allHelpersEnded'),
 }
@@ -115,7 +117,7 @@ def helper_receipts_ended(manager, api):
 
 
 def fixture_cleanup(manager, namespace, api):
-    """Exact fixture IDs; unknown mutation/child/RPC outcome is never retried."""
+    """Passed-case fixture teardown only; never exceptional finalization."""
     try:
         record = ownership.PrivateStore(manager.target).load()
         if record is None: return namespace_empty(namespace)
@@ -215,6 +217,21 @@ def write_component_release(work, images, payload, architecture, *, version='0.2
                               _fixture_owned_support=True, _fixture_architecture=architecture)
 
 
+def finalize_fixture(manager, namespace, api, result):
+    if result.get('status') != 'passed':
+        # A failed proof can leave pending intent + retained-data. Recognizable
+        # resources/claim do not authorize destructive exceptional teardown.
+        result['fixtureCleanup'] = 'preserved-failed-or-unknown'
+    else:
+        try:
+            verified = fixture_cleanup(manager, namespace, api)
+        except Exception:
+            verified = False
+        result['fixtureCleanup'] = 'verified' if verified is True else 'unknown-or-refused'
+    if result['fixtureCleanup'] != 'verified': PENDING_FIXTURES.append(manager)
+    result['privateStateRetained'] = True
+
+
 def run_case(images, scenario):
     namespace = 'survey-control-fixture-' + uuid.uuid4().hex
     ownership.PROJECT, ownership.CLAIM_NAME = namespace, namespace + '-ownership-v1'
@@ -292,11 +309,12 @@ def run_case(images, scenario):
                 result['restoreRefusedWithoutEffects'] = all(p.read_bytes() == data for p, data in before)
             stage = 'owned-upgrade'
             old = ownership.PrivateStore(target).load()
-            candidate_payload = dict(payload, **{'compose.yml': json.dumps(topology(namespace, target, images, '0.3.0')).encode()})
-            candidate_path, _ = write_component_release(work, images, candidate_payload, architecture, version='0.3.0')
+            candidate_version = '0.3.21-rc.1'  # Synthetic component source, not a release candidate/tag.
+            candidate_payload = dict(payload, **{'compose.yml': json.dumps(topology(namespace, target, images, candidate_version)).encode()})
+            candidate_path, _ = write_component_release(work, images, candidate_payload, architecture, version=candidate_version)
             manager.upgrade(candidate_path)
             upgraded = ownership.PrivateStore(target).load()
-            result['ownedUpgradeCompleted'] = (manager._read_state(require_current=True)['version'] == '0.3.0'
+            result['ownedUpgradeCompleted'] = (manager._read_state(require_current=True)['version'] == candidate_version
                                                 and upgraded['phase'] == 'ready')
             result['retainedNetworkCount'] = len(old['resources']['networks'])
             result['persistentIDsKeptAcrossUpgrade'] = (bool(old['resources']['networks'])
@@ -306,7 +324,15 @@ def run_case(images, scenario):
             result['newContainerIDsBound'] = (len(upgraded['resources']['containers']) == len(old['resources']['containers'])
                 and not set(upgraded['resources']['containers']).intersection(old['resources']['containers']))
             stage = 'uninstall'
-            manager.uninstall(False, None)
+            candidate = manager._release_manifest(candidate_version)
+            proof = prove_uninstall(manager, dict(schemaVersion=1, version=candidate_version,
+                commit=candidate.raw['commit'], manifestSha256=candidate.sha256,
+                bundleSha256=candidate.raw['assets']['bundles'][architecture]['sha256'],
+                runId='1', attempt='1', ubuntu='24.04', architecture=architecture))
+            result['ordinaryUninstallProofVerified'] = (proof['ordinaryUninstallVerified'] is True
+                and proof['retainedVolumeCount'] == 9 and proof['claimRetained'] is True
+                and proof['cohortQuiescent'] is True and proof['hostCleanupVerified'] is False
+                and proof['candidateQualified'] is False)
             record = ownership.PrivateStore(target).load()
             result['retainedNineVolumes'] = (record['phase'] == 'retained-data' and len(record['resources']['volumes']) == 9
                                             and not record['resources']['containers'])
@@ -367,9 +393,7 @@ def run_case(images, scenario):
         except Exception:
             result['receiptDiagnosticUnavailable'] = True
     finally:
-        result['fixtureCleanup'] = 'verified' if fixture_cleanup(manager, namespace, api) else 'unknown-or-refused'
-        if result['fixtureCleanup'] != 'verified': PENDING_FIXTURES.append(manager)
-        result['privateStateRetained'] = True
+        finalize_fixture(manager, namespace, api, result)
     return result
 
 
