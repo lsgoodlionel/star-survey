@@ -14,9 +14,11 @@ PRODUCTION = Path(__file__).resolve().parents[2]
 REPO = PRODUCTION.parents[2]
 BASE = 'e869516b72ffa8d669392a3c7c20a250479617e1'
 DIAGNOSTIC = '2d61cdd5d147d78fb18748c84db8382963e24d6d'
+# surveyctl includes the separately tracked missing-ExitCode observation delta;
+# actual bytes are pinned below, not claimed identical to the origin commit.
 BRANCH = 'diagnostic/ownership-health-e869'
 DIAGNOSTIC_FILES = {
-    'platform/deploy/production/surveyctl.py': '586d64c898cec3c5209cbaa85dc65c9f9954ea73de4704f8ea64ded611e31410',
+    'platform/deploy/production/surveyctl.py': '3fb322c33f096215ee4d8a415aaaf69f23487bab17ed0b23966c06d886ac81bf',
     'platform/deploy/production/tests/integration/owned_maintenance_native.py': '2c76cf0667e99df61cf641f51565016270cf1d6f25fe3da541e88a5d9f36a457',
 }
 CHANGED_FILES = set(DIAGNOSTIC_FILES) | {
@@ -103,17 +105,18 @@ def image_preflight(native):
         raise SamplingError('image-identity') from None
 
 
-def inventory(native):
+def inventory(native, controller=None):
     names = getattr(native, '_sampling_inventory_names', None)
     if names is None:
-        names = tuple(sorted(set(native.load_module().OWNED_RUNTIME_FILES) | {
+        controller = controller if controller is not None else native.load_module()
+        names = tuple(sorted(set(controller.OWNED_RUNTIME_FILES) | {
             'tests/integration/owned_maintenance_native.py', 'tests/integration/runtime_controller_native.py',
             'tests/test_surveyctl.py'}))
         native._sampling_inventory_names = names
     return {name: hashlib.sha256((PRODUCTION / name).read_bytes()).hexdigest() for name in sorted(names)}
 
 
-def project_case(native, case):
+def project_case(native, case, allowed_services):
     if (not isinstance(case, dict) or case.get('scenario') != 'backup-purge'
             or case.get('status') not in ('passed', 'failed')
             or case.get('fixtureCleanup') not in ('verified', 'unknown', 'unknown-or-refused', 'preserved-failed-or-unknown')):
@@ -150,7 +153,7 @@ def project_case(native, case):
             raise SamplingError('case-shape')
         error = types.SimpleNamespace(health_evidence={k: value[k] for k in ('services', 'engineInit')},
                                       health_wait_elapsed_ms=value['elapsedMs'])
-        projected = native.bounded_health_failure(error, native.LONG_RUNNING_SERVICES)
+        projected = native.bounded_health_failure(error, allowed_services)
         if projected is None:
             raise SamplingError('case-shape')
         result['initialHealth'] = projected
@@ -189,25 +192,28 @@ def run(report_path, expected_sha):
     report = {'schemaVersion': 1, 'scope': 'ownership-health-sampling', 'samplingStatus': 'unknown',
               'entireSuitePassed': False, 'candidateQualified': False, 'restorationEligible': False,
               'releaseEligible': False, 'cleanupVerified': False, 'baseCommit': BASE,
-              'diagnosticCommit': DIAGNOSTIC, 'phase': 'preflight'}
+              'diagnosticCommit': DIAGNOSTIC, 'diagnosticFilesSha256': dict(DIAGNOSTIC_FILES),
+              'diagnosticObservationDelta': 'missing-exit-code-is-unknown', 'phase': 'preflight'}
     try:
         write_report(report_path, report)
         report['execution'] = execution_context(expected_sha)
         verify_source(expected_sha)
         report['driverSha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         native = load_component()
+        controller = native.load_module()
+        allowed_services = frozenset(controller.LONG_RUNNING_SERVICES)
         report['imageMetadata'] = image_preflight(native)
-        report['sourceBefore'] = inventory(native)
+        report['sourceBefore'] = inventory(native, controller)
         report['phase'] = 'case-running'
         write_report(report_path, report)
         refs = list(IMAGES)
         images = {key: refs[0] for key in ('ADMIN_IMAGE', 'PLATFORM_IMAGE', 'PUBLISH_GATEWAY_IMAGE', 'ENGINE_IMAGE')}
         images.update(CADDY_IMAGE=refs[1], POSTGRES_IMAGE=refs[2], MARIADB_IMAGE=refs[3])
         case = native.run_case(images, 'backup-purge')  # Exactly one call. No retry or exceptional teardown here.
-        report['sourceAfter'] = inventory(native)
+        report['sourceAfter'] = inventory(native, controller)
         if report['sourceAfter'] != report['sourceBefore']:
             raise SamplingError('source-drift')
-        report['case'] = project_case(native, case)
+        report['case'] = project_case(native, case, allowed_services)
         complete = case['status'] == 'passed' and case['fixtureCleanup'] == 'verified'
         report['samplingStatus'] = 'completed-no-failure-reproduced' if complete else 'failure-observed'
         report['cleanupVerified'] = complete

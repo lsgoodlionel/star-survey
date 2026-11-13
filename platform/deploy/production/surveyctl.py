@@ -1481,14 +1481,16 @@ class SurveyManager:
         }
         init = by_service["engine-init"]
         raw_exit_code = init.get("ExitCode", 1)
+        # Keep the guard's conservative fallback, but never invent an observation.
+        observed_exit_code = init.get("ExitCode")
         def fixed(value, allowed):
             return value if isinstance(value, str) and value in allowed else 'unknown'
         states = {'created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead', 'completed'}
         bounded_exit = None
-        if type(raw_exit_code) is int and 0 <= raw_exit_code <= 255:
-            bounded_exit = raw_exit_code
-        elif isinstance(raw_exit_code, str) and re.fullmatch(r'[0-9]{1,3}', raw_exit_code) and int(raw_exit_code) <= 255:
-            bounded_exit = int(raw_exit_code)
+        if type(observed_exit_code) is int and 0 <= observed_exit_code <= 255:
+            bounded_exit = observed_exit_code
+        elif isinstance(observed_exit_code, str) and re.fullmatch(r'[0-9]{1,3}', observed_exit_code) and int(observed_exit_code) <= 255:
+            bounded_exit = int(observed_exit_code)
         observation = {
             'services': {name: {'state': fixed(by_service[name].get('State'), states),
                                  'health': fixed(by_service[name].get('Health'), {'starting', 'healthy', 'unhealthy'})}

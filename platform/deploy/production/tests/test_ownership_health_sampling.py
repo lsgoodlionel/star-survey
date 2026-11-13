@@ -30,7 +30,8 @@ class OwnershipSamplingEntryTest(unittest.TestCase):
         self.native = types.SimpleNamespace(
             REQUIRED={'backup-purge': ('backupVerified', 'ownedUpgradeCompleted', 'allHelpersEnded'),
                       'doctor-refusal': ('doctorBlockedWithoutLeak',)},
-            LONG_RUNNING_SERVICES={'edge'},
+            load_module=mock.Mock(return_value=types.SimpleNamespace(
+                OWNED_RUNTIME_FILES=(), LONG_RUNNING_SERVICES={'edge'})),
             run_case=mock.Mock(), fixture_cleanup=mock.Mock(),
             bounded_health_failure=mock.Mock(return_value={
                 'services': {'edge': {'state': 'running', 'health': 'starting'}},
@@ -106,6 +107,65 @@ class OwnershipSamplingEntryTest(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertNotIn('SECRET_MUST_NOT_BE_EXPORTED', json.dumps(report))
         self.assertEqual('case-shape', report['failureCategory'])
+
+    def test_real_component_boundary_preserves_a_valid_health_failure_without_docker(self):
+        real = self.entry.load_component()
+        self.assertFalse(hasattr(real, 'LONG_RUNNING_SERVICES'))
+        controller = real.load_module()
+        case = self.case()
+        case['initialHealth']['services'] = {
+            name: {'state': 'running', 'health': 'healthy'} for name in controller.LONG_RUNNING_SERVICES}
+        expected = copy.deepcopy(case['initialHealth'])
+        events = []
+        load = real.load_module
+        def metadata():
+            events.append('metadata')
+            return load()
+        def sample(*args):
+            events.append('case')
+            return case
+        with mock.patch.object(real, 'load_module', side_effect=metadata), \
+                mock.patch.object(real, 'run_case', side_effect=sample), \
+                mock.patch.object(real, 'fixture_cleanup') as cleanup, \
+                mock.patch.object(real, 'LocalDockerAPI', side_effect=AssertionError('no Docker')) as docker:
+            self.native = real
+            code, report = self.invoke(case)
+        self.assertEqual(1, code)
+        self.assertEqual('failure-observed', report['samplingStatus'])
+        self.assertEqual(expected, report['case']['initialHealth'])
+        self.assertEqual(['metadata', 'case'], events)
+        cleanup.assert_not_called()
+        docker.assert_not_called()
+
+    def test_real_health_guard_distinguishes_missing_exit_observation_from_explicit_one(self):
+        real = self.entry.load_component()
+        controller = real.load_module()
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                rows = [{'Service': name, 'State': 'running', 'Health': 'healthy'}
+                        for name in controller.LONG_RUNNING_SERVICES]
+                init = {'Service': 'engine-init', 'State': 'exited', 'Health': ''}
+                if not missing:
+                    init['ExitCode'] = 1
+                rows.append(init)
+                def response(command, *args, **kwargs):
+                    if '--services' in command:
+                        text = '\n'.join(sorted(controller.LONG_RUNNING_SERVICES | controller.ONE_SHOT_SERVICES))
+                    elif 'ps' in command:
+                        text = json.dumps(rows)
+                    else:
+                        raise AssertionError('unexpected runtime query')
+                    return self.entry.subprocess.CompletedProcess(command, 0, stdout=text, stderr='')
+                manager = object.__new__(controller.SurveyManager)
+                manager._run = mock.Mock(side_effect=response)
+                with mock.patch.object(controller.time, 'sleep') as sleep:
+                    with self.assertRaises(controller.RuntimeHealthError) as caught:
+                        manager._wait_healthy(['docker', 'compose'], 'bounded fixture')
+                sleep.assert_not_called()
+                self.assertIn('engine-init-ok=False', str(caught.exception))
+                value = real.bounded_health_failure(caught.exception, controller.LONG_RUNNING_SERVICES)
+                self.assertEqual(None if missing else 1, value['engineInit']['exitCode'])
+                self.assertEqual(2, manager._run.call_count)
 
     def test_unexpected_error_text_is_never_an_upload_field(self):
         code, report = self.invoke(self.case(), preflight=self.entry.SamplingError('SECRET_MUST_NOT_BE_EXPORTED'))
