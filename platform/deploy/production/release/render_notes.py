@@ -8,6 +8,24 @@ import json
 from pathlib import Path
 from typing import Any
 
+#: Owned-runtime controllers (surveyctl OWNED_RUNTIME_FILES) refuse to adopt an
+#: installation that lacks their recorded runtime ownership. Keep this text identical
+#: in render_notes.py and render_publication.py; the publication renderer detects it.
+OWNERSHIP_GUIDANCE = (
+    "This controller upgrades only installations that carry its recorded runtime ownership. "
+    "Installations created by earlier controllers without that record are refused, not adopted: "
+    "keep them on their current release and preserve their data, operation markers and backups. "
+    "While recovery is disabled, `surveyctl restore` cannot move their data into a new installation."
+)
+
+#: A bootstrap candidate is built with minimum source version 0.0.0 and no predecessor.
+FRESH_INSTALL_GUIDANCE = (
+    "This candidate is a fresh-install baseline: it was not built against a verified predecessor, "
+    "so no upgrade into it has been verified and it cannot be promoted to stable. Install it on a "
+    "new host for evaluation; do not use it to replace an existing installation."
+)
+BOOTSTRAP_MINIMUM_SOURCE_VERSION = "0.0.0"
+
 
 def render_notes(manifest: dict[str, Any]) -> str:
     version = manifest["version"]
@@ -19,6 +37,9 @@ def render_notes(manifest: dict[str, Any]) -> str:
     architectures = ", ".join(manifest["supportedHosts"]["architectures"])
     bundles = manifest["assets"]["bundles"]
     bundle_lines = "\n".join(f"- `{bundles[arch]['name']}` (`{arch}`)" for arch in sorted(bundles))
+    upgrade_limits = OWNERSHIP_GUIDANCE
+    if minimum == BOOTSTRAP_MINIMUM_SOURCE_VERSION:
+        upgrade_limits = FRESH_INSTALL_GUIDANCE + "\n\n" + upgrade_limits
     return f"""# Star Survey {version}
 
 Release channel: `{channel}`
@@ -57,6 +78,8 @@ Create and verify a backup before upgrading. Verify the target release assets, t
 ```
 
 This release declares rollback policy `{rollback}`. For `restore-only`, recovery is currently disabled. Preserve the installation, operation marker and verified pre-upgrade backup; do not start older images against a migrated database or bypass the block with an older controller or helper.
+
+{upgrade_limits}
 
 ## Verification
 

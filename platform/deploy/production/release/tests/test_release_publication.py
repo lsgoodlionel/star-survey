@@ -404,6 +404,62 @@ class PublicationMetadataAndReconciliationTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertFalse((self.root / "nonotes.md").exists())
 
+    def load_renderer(self, path: Path):
+        spec = importlib.util.spec_from_file_location(path.stem + "_under_test", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def owned_manifest(self, minimum: str) -> dict:
+        return {
+            "version": "1.2.3-rc.1", "channel": "candidate", "minimumSourceVersion": minimum,
+            "database": {"schema": 7, "backupSchema": 2, "rollback": "restore-only"},
+            "supportedHosts": {"ubuntu": ["22.04", "24.04"], "architectures": ["amd64", "arm64"]},
+            "assets": {"bundles": {"amd64": {"name": "a.tar.gz"}, "arm64": {"name": "b.tar.gz"}}},
+        }
+
+    def test_build_time_notes_state_legacy_refusal_and_bootstrap_limits(self):
+        # The owned-runtime controller refuses installs without its ownership record,
+        # and a bootstrap build (minimum source 0.0.0) has no verified upgrade path.
+        notes = self.load_renderer(RENDER_NOTES_PATH)
+        publication = self.load_renderer(RENDER_PUBLICATION_PATH)
+        self.assertEqual(notes.OWNERSHIP_GUIDANCE, publication.OWNERSHIP_GUIDANCE)
+        self.assertEqual(notes.FRESH_INSTALL_GUIDANCE, publication.FRESH_INSTALL_GUIDANCE)
+        self.assertIn(publication.OWNERSHIP_MARKER, notes.OWNERSHIP_GUIDANCE)
+        bootstrap = notes.render_notes(self.owned_manifest("0.0.0"))
+        predecessor = notes.render_notes(self.owned_manifest("1.2.2-rc.1"))
+        for text in (bootstrap, predecessor):
+            self.assertIn("refused, not adopted", text)
+            self.assertIn("keep them on their current release", text)
+            self.assertIn("recovery is currently disabled", text)
+        self.assertIn("fresh-install baseline", bootstrap)
+        self.assertIn("cannot be promoted to stable", bootstrap)
+        self.assertNotIn("fresh-install baseline", predecessor)
+
+    def test_publication_guidance_follows_the_candidate_controller_and_manifest(self):
+        publication = self.load_renderer(RENDER_PUBLICATION_PATH)
+        # Candidates built before the ownership protocol keep their reviewed body.
+        body, _, _ = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")
+        legacy = body.read_text(encoding="utf-8")
+        self.assertNotIn("refused, not adopted", legacy)
+        self.assertNotIn("fresh-install baseline", legacy)
+        (self.assets / "release-notes.md").write_text(
+            "This release declares rollback policy `restore-only`, but recovery is currently disabled.\n"
+            + publication.OWNERSHIP_GUIDANCE + "\n", encoding="utf-8")
+        for target in ("v1.2.3-rc.4", "v1.2.3"):
+            with self.subTest(target=target):
+                body, _, _ = self.render(target, "v1.2.3-rc.4")
+                text = body.read_text(encoding="utf-8")
+                self.assertIn(publication.OWNERSHIP_GUIDANCE, text)
+                self.assertNotIn("fresh-install baseline", text)
+        manifest = json.loads((self.assets / "release.json").read_text(encoding="utf-8"))
+        manifest["minimumSourceVersion"] = "0.0.0"
+        (self.assets / "release.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        body, _, _ = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")
+        text = body.read_text(encoding="utf-8")
+        self.assertIn(publication.OWNERSHIP_GUIDANCE, text)
+        self.assertIn(publication.FRESH_INSTALL_GUIDANCE, text)
+
     def test_renderer_rejects_stable_tag_or_readiness_identity_drift(self):
         for target, source, commit in (
             ("v1.2.4", "v1.2.3-rc.4", self.commit),
