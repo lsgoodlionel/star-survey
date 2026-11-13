@@ -472,3 +472,16 @@ RecoveryTargetBinding在启动任何验签工具前及后续recheck先走manager
 冻结顺序：先整合PR的精确head完整CI/独立复核，再由人工决定合并；随后核对实际main合并提交CI，才确定候选commit。签名制品与readiness的依赖已交Claude #138评论6826809003；21/22候选尚未登记或创建，不能先填未来SHA或复用旧标签。恢复/原生/上传/发布的每项具体解除和候选触发仍须先说明操作/证据/风险并获用户同意，Release仍Claude负责。本整合不触发标签、镜像、Release或生产。
 
 可独立故障证据：本机22份实际owned代码/helper准入后调用真实验签脚本，缺资产exit1拒绝、组已缺席、DBcopy未启动、私有fixture已清理（/tmp/survey-recovery-target-refusal-150.json SHA256935316509b29975eb3f88b0fcef7a7c2ae86110cd251d7257beb7ef2a6180982）；daemon/install明确模型，不是签名正向。实际签名/有效配置/业务恢复和四平台未完成，不因本整合提升capability为Accepted。
+
+
+## 2026-11-13 P-c 控制器侧普通卸载证明（Codex，待审）
+
+基线 main `7f069721025a673e42a43e4008b4f977710a01fa`。用户要求立即处理 P-c；本切片仅接手 production 控制器侧，不修改 Claude 的 Release/native workflow。
+
+新增 `native_cleanup_proof.prove_uninstall(manager, candidate)`：可信验收调用者先认证候选，再提供严格 schema 的 version/commit/manifestSha256/bundleSha256/runId/attempt/ubuntu/architecture。函数持有一次 `operation=uninstall` 安装锁，核对实际安装源与 ownership/claim/完整资源/cohort；调用既有 `uninstall(purge_data=False, confirmation=None)` 一次；重新加载源并独立查询，要求 retained-data、无本次容器/网络、同一 claim 与全部原数据卷指纹保留。后验失败传播 UncertainExec 子类，不重试、不 purge；真实 controller 回归证明后验未知时 intent 保持 pending，下一次拒绝。
+
+成功返回只包含固定事实、计数和候选身份，不返回 secrets/资源清单；`hostCleanupVerified=false`、`candidateQualified=false`。这不是签名验证、hosts/TLS fixture 清理或整体 P-c 证明，不能直接改变 aggregate 为 passed。模块进入现有 checksum runtime inventory；现有双库 Linux component 入口改为调用该证明，并新增必需事实，使用合成 manifest/身份，仍不构成真实签名候选。
+
+本地：新模块缺失及打包未纳入的失败测试先确认；9项证明/控制器锁及 pending 回归、6项组件证据回归、45项ownership、14项controller、4项真实本地打包测试通过（78项）。真实双库 Docker 与完整质量验证交 GitHub 既有 ownership-protocol/Survey CI，未在本机重复全套。
+
+Claude 后续：在其 P-c 接线 PR 用受校验候选 runtime 调用本接口，不另做一次外部 uninstall；补 clean-host/host marker 身份及收束、失败现场和受限白名单摘要/聚合合同。D4/tag已有具体许可，但只有完整证明与最终组合 CI 通过后方可执行；D5、restore、publication 门不由本切片开启。需非作者审查和实际双库 CI 证据，不提前确认 P-c 通过。

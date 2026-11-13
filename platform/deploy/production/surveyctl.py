@@ -73,6 +73,7 @@ OWNED_RUNTIME_FILES = {
     'owned_maintenance.py',
     'recovery_reservation.py', 'recovery_handoff.py',
     'controlled_database_import.py', 'recovery_target_binding.py',
+    'native_cleanup_proof.py',
 }
 OWNED_HELPER_FILES = {'release/verify_release.sh'}
 OWNED_IMPORT_ORDER = (
@@ -81,6 +82,7 @@ OWNED_IMPORT_ORDER = (
     'owned_backup_verify', 'owned_container_hash', 'runtime_cohort', 'runtime_docker',
     'runtime_controller', 'owned_maintenance',
     'recovery_reservation', 'recovery_handoff', 'controlled_database_import', 'recovery_target_binding',
+    'native_cleanup_proof',
 )
 _OWNED_IMPORT_LOCK = threading.RLock()
 

@@ -42,6 +42,7 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
         for key in ('schemaVersion', 'sourceAfter', 'cases'):
             bad = deepcopy(report); bad[key] = True
             self.assertFalse(self.module.passed(bad))
+
         for index, checks in enumerate(self.module.REQUIRED.values()):
             for key in checks:
                 for value in (False, 1, None):
@@ -55,6 +56,9 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
         for count in (0, True, None, 2):
             bad = deepcopy(report); bad['cases'][0]['retainedNetworkCount'] = count
             self.assertFalse(self.module.passed(bad))
+
+    def test_native_component_requires_independent_ordinary_uninstall_proof(self):
+        self.assertIn('ordinaryUninstallProofVerified', self.module.REQUIRED['backup-purge'])
 
     def test_upgrade_fixture_has_one_real_internal_network_without_published_ports(self):
         images = json.loads((Path(__file__).parent / 'fixtures/release.json').read_text())['images']
