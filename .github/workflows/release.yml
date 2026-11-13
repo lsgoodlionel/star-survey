@@ -699,12 +699,6 @@ jobs:
             architecture: arm64
             id: ubuntu-24-04-arm64
     steps:
-      - name: Block native lifecycle before host mutation
-        shell: bash
-        run: |
-          echo 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.' >&2
-          exit 1
-
       - name: Download the shared immutable candidate
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -756,6 +750,22 @@ jobs:
           printf 'engine-digest=%s\n' "$(jq -er '.images.engine.digest' "$identity")" >> "$GITHUB_OUTPUT"
           printf 'baseline-mode=%s\n' "$(jq -er '.baseline.mode' "$identity")" >> "$GITHUB_OUTPUT"
 
+      # The bundle bytes were checked against the workflow source above; run only
+      # the orchestrator extracted from that checksum-bound bundle.
+      - name: Extract the checksum-bound acceptance orchestrator
+        shell: bash
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          BUNDLE_SHA256: ${{ steps.identity.outputs.bundle-sha }}
+        run: |
+          set -euo pipefail
+          bundle="$(jq -er --arg architecture "$ARCHITECTURE" '.bundles[$architecture].name' candidate-assets/identity.json)"
+          [[ "$(sha256sum "candidate-assets/candidate/$bundle" | awk '{print $1}')" == "$BUNDLE_SHA256" ]]
+          mkdir -p orchestrator
+          tar -xzf "candidate-assets/candidate/$bundle" -C orchestrator \
+            release/native_acceptance.sh release/native_acceptance_evidence.py
+          chmod 0755 orchestrator/release/native_acceptance.sh orchestrator/release/native_acceptance_evidence.py
+
       - name: Require ready native systemd and Docker
         timeout-minutes: 4
         shell: bash
@@ -795,12 +805,10 @@ jobs:
           SURVEY_ACCEPTANCE_EXPECTED_PUBLIC_ADDRESS: 127.0.0.1
           SURVEY_ACCEPTANCE_ADMIN_EMAIL: native-acceptance@example.com
           EVIDENCE_DIR: ${{ github.workspace }}/native-evidence
-        run: |
-          echo 'Native lifecycle blocked: recovery and safe cleanup are not independently verified.' >&2
-          exit 1
+        run: sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh
 
-      # Until evidence scanning, crash containment and ownership are proven as
-      # one lifecycle, never upload files from the untrusted evidence directory.
+      # Raw evidence stays withheld (#138 D5). Only summary.json may be published,
+      # and only after the trusted workflow-source helper validates it in isolation.
       - name: Prepare fail-closed native diagnostic
         id: native_diagnostic
         if: always()
@@ -808,6 +816,8 @@ jobs:
         env:
           MATRIX_UBUNTU: ${{ matrix.ubuntu }}
           MATRIX_ARCHITECTURE: ${{ matrix.architecture }}
+          NATIVE_SUMMARY: ${{ github.workspace }}/native-evidence/summary.json
+          TRUSTED_EVIDENCE_HELPER: ${{ github.workspace }}/trusted-workflow-source/platform/deploy/production/release/native_acceptance_evidence.py
         run: |
           set -euo pipefail
           umask 077
@@ -820,7 +830,22 @@ jobs:
           diagnostic_dir="$(mktemp -d "$RUNNER_TEMP/native-diagnostic.XXXXXXXX")"
           printf '{"schemaVersion":1,"status":"failed","reason":"native-evidence-withheld","runId":"%s","attempt":"%s","workflowSha":"%s","candidateSha":null,"ubuntu":"%s","architecture":"%s"}\n' \
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$MATRIX_UBUNTU" "$MATRIX_ARCHITECTURE" > "$diagnostic_dir/diagnostic.json"
-          printf 'path=%s\n' "$diagnostic_dir/diagnostic.json" >> "$GITHUB_OUTPUT"
+          summary="$NATIVE_SUMMARY"
+          helper="$TRUSTED_EVIDENCE_HELPER"
+          if [[ -f "$summary" && ! -L "$summary" && -f "$helper" && ! -L "$helper" ]]; then
+            staged="$(mktemp -d "$RUNNER_TEMP/native-summary.XXXXXXXX")"
+            head -c 1048577 "$summary" > "$staged/summary.json"
+            if python3 "$helper" scan --directory "$staged" >/dev/null 2>&1 && python3 - "$staged/summary.json" <<'PY'
+          import json, os, sys
+          runner = json.load(open(sys.argv[1], encoding="utf-8"))["runner"]
+          if runner != {"ubuntu": os.environ["MATRIX_UBUNTU"], "architecture": os.environ["MATRIX_ARCHITECTURE"]}:
+              raise SystemExit(1)
+          PY
+            then
+              mv "$staged/summary.json" "$diagnostic_dir/summary.json"
+            fi
+          fi
+          printf 'path=%s\n' "$diagnostic_dir" >> "$GITHUB_OUTPUT"
 
       - name: Preserve fail-closed native diagnostic
         if: always() && steps.native_diagnostic.outcome == 'success'

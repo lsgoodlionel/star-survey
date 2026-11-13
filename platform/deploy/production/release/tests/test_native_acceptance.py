@@ -11,8 +11,11 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest import mock
@@ -63,7 +66,9 @@ REQUIRED_LIFECYCLE_COMMANDS = (
     'write_doctor_evidence "doctor-upgraded"',
     'python3 "$evidence_helper" restore-refused',
     'write_doctor_evidence "doctor-final"',
-    'run_ctl uninstall',
+    # #138 P-c: uninstall only through the candidate-bound proof, then remove
+    # this run's exact hosts line; success is recorded only after both.
+    'prove_ordinary_uninstall\nremove_hosts_marker',
     'acceptance_status="passed"',
 )
 
@@ -81,9 +86,14 @@ def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) 
     testcase.assertNotRegex(shell, r"(?m)\b(?:exit|return)(?=\s*(?:;|$))")
     testcase.assertNotRegex(shell, r"(?m)\bexec\b")
     exits = re.findall(r"(?m)\bexit\s+([^;\n]+)", shell)
-    testcase.assertEqual(["1", "2", "2", '"$result"'], exits, "native acceptance exit propagation changed")
-    testcase.assertIn("# Do not touch the host until containment, recovery and cleanup are verified.\nprintf 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.\\n' >&2\nexit 1\n", shell)
-    testcase.assertLess(shell.index('exit 1'), shell.index('work_root='))
+    testcase.assertEqual(["2", "2", '"$result"'], exits, "native acceptance exit propagation changed")
+    # The real-run guards are the first commands; nothing touches the host before them.
+    commands = [line for line in shell.splitlines()[1:] if line.strip() and not line.lstrip().startswith('#')]
+    testcase.assertEqual(['set -Eeuo pipefail', '[[ "${NATIVE_ACCEPTANCE_REAL:-}" == "1" ]]',
+                          '[[ "${GITHUB_ACTIONS:-}" == "true" ]]', '[[ "${SURVEY_NATIVE_ACCEPTANCE:-}" == "1" ]]'],
+                         commands[:4])
+    testcase.assertLess(shell.index('required_variables=('), shell.index('python3 "$evidence_helper" clean-host'))
+    testcase.assertLess(shell.index('python3 "$evidence_helper" clean-host'), shell.index('work_root='))
     testcase.assertEqual(1, shell.count('acceptance_status="passed"'))
     testcase.assertIn("trap collect_evidence EXIT", shell)
     testcase.assertIn("local result=$?", shell)
@@ -94,11 +104,18 @@ def assert_native_acceptance_contract(testcase: unittest.TestCase, source: str) 
         testcase.assertEqual(expected_count, shell.count(command), f"required lifecycle command count changed: {command}")
         positions.append(shell.rindex(command))
     testcase.assertEqual(sorted(positions), positions, "native lifecycle command order changed")
-    testcase.assertIn('require_fixture_cleanup_proof\nrun_ctl uninstall', shell)
+    testcase.assertIn('last_step="uninstall"\nprove_ordinary_uninstall\nremove_hosts_marker\nacceptance_status="passed"', shell)
+    # The controller uninstall is reachable only inside the proof CLI.
+    testcase.assertNotRegex(shell, r"\brun_ctl\s+uninstall\b")
+    testcase.assertNotRegex(shell, r"(?i)\bpurge\b")
+    testcase.assertEqual(2, shell.count('remove_hosts_marker'))
+    testcase.assertLess(shell.index('python3 "$proof_cli" --target "$target"'), shell.index('remove_hosts_marker() {'))
     # #119 option B: restore is only exercised through the refusal check.
     testcase.assertNotRegex(shell, r"(?m)^\s*(?:if\s+)?run_ctl\s+restore\b")
     cleanup = shell[shell.index('collect_evidence() {'):shell.index('\ntrap collect_evidence EXIT')]
     testcase.assertNotIn('run_ctl uninstall', cleanup)
+    testcase.assertNotIn('prove_ordinary_uninstall', cleanup)
+    testcase.assertNotIn('remove_hosts_marker', cleanup)
     testcase.assertNotIn('rm -rf', cleanup)
 
 
@@ -121,8 +138,14 @@ def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dic
     testcase.assertEqual('native_diagnostic', prepare.get('id'))
     testcase.assertEqual('bash', prepare.get('shell'))
     testcase.assertEqual({'MATRIX_UBUNTU': '${{ matrix.ubuntu }}',
-                          'MATRIX_ARCHITECTURE': '${{ matrix.architecture }}'}, prepare.get('env'))
-    testcase.assertEqual('62aace031efc6774343491a48c263fa59bdceba1249054dac3fde8fb708443a9',
+                          'MATRIX_ARCHITECTURE': '${{ matrix.architecture }}',
+                          'NATIVE_SUMMARY': '${{ github.workspace }}/native-evidence/summary.json',
+                          # Validate with the workflow-source helper, never the candidate's copy.
+                          'TRUSTED_EVIDENCE_HELPER': '${{ github.workspace }}/trusted-workflow-source/platform/deploy/production/release/native_acceptance_evidence.py'},
+                         prepare.get('env'))
+    # Reviewed body (#138 P-c): withheld diagnostic plus the single allowlisted,
+    # trusted-helper-validated summary.json; any edit needs a new review.
+    testcase.assertEqual('df52e32e996fbf40e9900786969798e52608ada53fd520a5dda665c08daec3dd',
                          hashlib.sha256(prepare['run'].encode()).hexdigest())
     upload = next(item for item in job['steps'] if item.get('name') == 'Preserve fail-closed native diagnostic')
     testcase.assertEqual({'name', 'if', 'uses', 'with'}, set(upload))
@@ -130,12 +153,23 @@ def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dic
     testcase.assertEqual({'name': 'native-acceptance-${{ matrix.ubuntu }}-${{ matrix.architecture }}',
                           'path': '${{ steps.native_diagnostic.outputs.path }}',
                           'if-no-files-found': 'error', 'retention-days': 30}, upload['with'])
-    first = job['steps'][0]
-    testcase.assertEqual('Block native lifecycle before host mutation', first['name'])
-    testcase.assertEqual("echo 'Native lifecycle blocked before host changes: recovery and cleanup are not verified.' >&2\nexit 1\n", first['run'])
+    names = [item.get('name') for item in job['steps']]
+    testcase.assertNotIn('Block native lifecycle before host mutation', names)
+    testcase.assertNotIn('Native lifecycle blocked', job_text(job))
+    # #138 P-c: the trusted-source check and the checksum-bound extraction both
+    # precede any host command; only the extracted orchestrator is executed.
+    order = ['Download the shared immutable candidate', 'Check out the workflow trust anchor',
+             'Verify candidate native scripts against workflow source', 'Load the shared candidate identity',
+             'Extract the checksum-bound acceptance orchestrator', 'Require ready native systemd and Docker',
+             'Execute real clean-host install upgrade restore and uninstall']
+    testcase.assertEqual(order, [name for name in names if name in order])
+    extract = next(item for item in job['steps'] if item.get('name') == 'Extract the checksum-bound acceptance orchestrator')
+    testcase.assertEqual('${{ steps.identity.outputs.bundle-sha }}', extract['env']['BUNDLE_SHA256'])
+    testcase.assertIn('[[ "$(sha256sum "candidate-assets/candidate/$bundle" | awk \'{print $1}\')" == "$BUNDLE_SHA256" ]]', extract['run'])
+    testcase.assertIn('release/native_acceptance.sh release/native_acceptance_evidence.py\n', extract['run'])
+    testcase.assertLess(extract['run'].index('sha256sum'), extract['run'].index('tar -xzf'))
     step = next(item for item in job["steps"] if item.get("name") == "Execute real clean-host install upgrade restore and uninstall")
-    testcase.assertEqual("echo 'Native lifecycle blocked: recovery and safe cleanup are not independently verified.' >&2\nexit 1\n", step['run'])
-    testcase.assertNotIn('sudo -E NATIVE_ACCEPTANCE_REAL=1', job_text(job))
+    testcase.assertEqual("sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh", step['run'].strip())
 
 
 class NativeAcceptanceWorkflowTest(unittest.TestCase):
@@ -213,7 +247,11 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertEqual('${{ github.sha }}', anchor['with']['ref'])
         self.assertFalse(anchor['with']['persist-credentials'])
         self.assertIn('verify_native_orchestrator.py', native_text)
-        self.assertNotIn('tar -xzf', native_text)
+        # The only extraction is the checksum-bound orchestrator step after verification.
+        self.assertEqual(1, native_text.count('tar -xzf'))
+        extract = next(step for step in self.workflow['jobs']['native-acceptance']['steps']
+                       if step.get('name') == 'Extract the checksum-bound acceptance orchestrator')
+        self.assertIn('tar -xzf', extract['run'])
         publication = self.workflow["jobs"]["publication"]
         self.assertIn("needs.policy.outputs.release == 'true'", publication["if"])
         self.assertIn("needs.policy.outputs.channel", publication["if"])
@@ -233,25 +271,38 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn('candidate-assets/identity.json', script)
         assert_native_workflow_invocation(self, self.workflow)
 
-    def test_native_workflow_blocks_before_downloading_legacy_candidate(self):
-        step = self.workflow['jobs']['native-acceptance']['steps'][0]
+    def test_native_orchestrator_is_extracted_only_from_the_checksum_bound_bundle(self):
+        step = next(item for item in self.workflow['jobs']['native-acceptance']['steps']
+                    if item.get('name') == 'Extract the checksum-bound acceptance orchestrator')
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            marker = root / 'executed'
-            legacy = root / 'legacy-orchestrator.sh'
-            legacy.write_text('#!/bin/sh\nprintf unsafe > "$MARKER"\n')
-            result = subprocess.run(['/bin/bash', '-c', step['run']], cwd=root,
-                                    env={**os.environ, 'MARKER': str(marker),
-                                         'CANDIDATE_RUN_ID': '12345'},
-                                    capture_output=True, text=True)
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn('blocked before host changes', result.stderr)
-            self.assertFalse(marker.exists())
-            self.assertTrue(legacy.exists())
+            payload = root / 'payload' / 'release'
+            payload.mkdir(parents=True)
+            for name in ('native_acceptance.sh', 'native_acceptance_evidence.py', 'unrelated.py'):
+                (payload / name).write_text(f'# {name}\n')
+            (root / 'candidate-assets' / 'candidate').mkdir(parents=True)
+            bundle = root / 'candidate-assets' / 'candidate' / 'survey-linux-arm64.tar.gz'
+            with tarfile.open(bundle, 'w:gz') as archive:
+                archive.add(payload, arcname='release')
+            (root / 'candidate-assets' / 'identity.json').write_text(json.dumps(
+                {'bundles': {'arm64': {'name': bundle.name}}}))
+            digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+            for expected, succeeds in (('0' * 64, False), (digest, True)):
+                with self.subTest(matches=succeeds):
+                    shutil.rmtree(root / 'orchestrator', ignore_errors=True)
+                    result = subprocess.run(['bash', '-c', step['run']], cwd=root,
+                                            env={**os.environ, 'ARCHITECTURE': 'arm64', 'BUNDLE_SHA256': expected},
+                                            capture_output=True, text=True)
+                    self.assertEqual(succeeds, result.returncode == 0, result.stderr)
+                    if succeeds:
+                        self.assertEqual({'native_acceptance.sh', 'native_acceptance_evidence.py'},
+                                         {path.name for path in (root / 'orchestrator' / 'release').iterdir()})
+                    else:
+                        self.assertFalse((root / 'orchestrator').exists())
 
     def test_native_workflow_rejects_error_suppression_and_host_bypass(self):
         for name, field, value in [
-            ('Block native lifecycle before host mutation', 'continue-on-error', True),
+            ('Extract the checksum-bound acceptance orchestrator', 'continue-on-error', True),
             ('Require ready native systemd and Docker', 'if', 'always()'),
             ('Execute real clean-host install upgrade restore and uninstall', 'if', 'failure()'),
             ('Download the shared immutable candidate', 'continue-on-error', True),
@@ -282,7 +333,8 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         job = self.workflow["jobs"]["native-acceptance"]
         text = job_text(job)
         self.assertIn("verify_native_orchestrator.py", text)
-        self.assertNotIn("sudo -E NATIVE_ACCEPTANCE_REAL=1", text)
+        # Exactly one privileged execution: the extracted, verified orchestrator.
+        self.assertEqual(1, text.count("sudo -E NATIVE_ACCEPTANCE_REAL=1"))
         assert_native_workflow_invocation(self, self.workflow)
         prepare = next(step for step in job["steps"] if step.get("id") == "native_diagnostic")
         self.assertEqual("always()", prepare["if"])
@@ -314,12 +366,15 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
             env = {**os.environ, 'RUNNER_TEMP': str(root), 'GITHUB_OUTPUT': str(output),
                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a' * 40,
                    'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
+                   'NATIVE_SUMMARY': str(untrusted / 'summary.json'),
+                   'TRUSTED_EVIDENCE_HELPER': str(EVIDENCE_HELPER_PATH),
                    'SYNTHETIC_SECRET': secret}
             result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stderr)
-            path = Path(output.read_text().strip().removeprefix('path='))
-            self.assertEqual('diagnostic.json', path.name)
-            self.assertEqual([path], list(path.parent.iterdir()))
+            published = Path(output.read_text().strip().removeprefix('path='))
+            path = published / 'diagnostic.json'
+            # An unvalidated summary is never published; raw files never are.
+            self.assertEqual(['diagnostic.json'], sorted(item.name for item in published.iterdir()))
             diagnostic = path.read_text()
             self.assertNotIn(secret, diagnostic + result.stdout + result.stderr)
             payload = json.loads(diagnostic)
@@ -342,6 +397,49 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                     self.assertNotEqual(0, rejected.returncode)
                     self.assertEqual('', output.read_text())
                     self.assertNotIn(secret, rejected.stdout + rejected.stderr)
+
+    def test_native_publication_allowlists_only_a_validated_matching_summary(self):
+        job = self.workflow['jobs']['native-acceptance']
+        script = next(step['run'] for step in job['steps'] if step.get('id') == 'native_diagnostic')
+        summary = {
+            'schemaVersion': 1, 'status': 'passed', 'exitCode': 0, 'lastStep': 'uninstall',
+            'runner': {'ubuntu': '24.04', 'architecture': 'arm64'},
+            'candidate': {'manifestSha256': '1' * 64, 'bundleSha256': '2' * 64,
+                          'images': {name: 'sha256:' + digit * 64 for name, digit in
+                                     (('admin', '3'), ('platform', '4'), ('publish-gateway', '5'), ('engine', '6'))}},
+            'baselineMode': 'bootstrap', 'upgradeVerified': False,
+            'tls': {'scope': 'ci-local-trusted-ca', 'httpsMarkerVerified': True, 'publicAcmeVerified': False},
+            'preflightDisk': 'separately-tested', 'completedAt': '2026-11-13T00:00:00+00:00',
+        }
+        cases = [
+            ('valid', summary, True, False),
+            ('other runner', {**summary, 'runner': {'ubuntu': '22.04', 'architecture': 'arm64'}}, False, False),
+            ('extra key', {**summary, 'raw': 'x'}, False, False),
+            ('symlink', summary, False, True),
+        ]
+        for name, value, published, as_link in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                evidence = root / 'native-evidence'
+                evidence.mkdir()
+                real = evidence / ('real.json' if as_link else 'summary.json')
+                real.write_text(json.dumps(value))
+                if as_link:
+                    (evidence / 'summary.json').symlink_to(real)
+                output = root / 'github-output'
+                output.write_text('')
+                env = {**os.environ, 'RUNNER_TEMP': str(root), 'GITHUB_OUTPUT': str(output),
+                       'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a' * 40,
+                       'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
+                       'NATIVE_SUMMARY': str(evidence / 'summary.json'),
+                       'TRUSTED_EVIDENCE_HELPER': str(EVIDENCE_HELPER_PATH)}
+                result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                directory = Path(output.read_text().strip().removeprefix('path='))
+                names = sorted(item.name for item in directory.iterdir())
+                self.assertEqual(['diagnostic.json', 'summary.json'] if published else ['diagnostic.json'], names)
+                if published:
+                    self.assertEqual(value, json.loads((directory / 'summary.json').read_text()))
 
     def test_tag_publication_gate_depends_on_the_complete_native_matrix(self):
         gate = self.workflow["jobs"]["release-ready"]
@@ -515,23 +613,135 @@ class NativeAcceptanceScriptTest(unittest.TestCase):
                 fake = bin_dir / name
                 fake.write_text('#!/bin/sh\nprintf called > "$MARKER"\nexit 0\n')
                 fake.chmod(0o755)
-            env = {**os.environ, 'PATH': str(bin_dir), 'MARKER': str(marker),
-                   'NATIVE_ACCEPTANCE_REAL': '1', 'GITHUB_ACTIONS': 'true',
-                   'SURVEY_NATIVE_ACCEPTANCE': '1', 'RUNNER_TEMP': str(root)}
-            result = subprocess.run(['/bin/bash', str(SCRIPT_PATH)], cwd=root, env=env,
-                                    capture_output=True, text=True)
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn('blocked before host changes', result.stderr)
-            self.assertFalse(marker.exists())
-            self.assertEqual('synthetic data', fixture.read_text())
+            base = {key: value for key, value in os.environ.items()
+                    if key not in {'NATIVE_ACCEPTANCE_REAL', 'GITHUB_ACTIONS', 'SURVEY_NATIVE_ACCEPTANCE'}}
+            base.update({'PATH': str(bin_dir), 'MARKER': str(marker), 'RUNNER_TEMP': str(root)})
+            real = {'NATIVE_ACCEPTANCE_REAL': '1', 'GITHUB_ACTIONS': 'true', 'SURVEY_NATIVE_ACCEPTANCE': '1'}
+            for name, env, message in [
+                ('not a real native run', base, ''),
+                ('missing candidate identity', {**base, **real}, 'required native acceptance variable is missing'),
+            ]:
+                with self.subTest(case=name):
+                    result = subprocess.run(['/bin/bash', str(SCRIPT_PATH)], cwd=root, env=env,
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(message, result.stderr)
+                    self.assertFalse(marker.exists())
+                    self.assertEqual('synthetic data', fixture.read_text())
 
-    def test_unverified_cleanup_cannot_authorize_uninstall(self):
-        guard = self.text[self.text.index('require_fixture_cleanup_proof() {'):
-                          self.text.index('\ncollect_evidence() {')]
-        result = subprocess.run(['bash', '-c', guard + '\nrequire_fixture_cleanup_proof'],
-                                capture_output=True, text=True)
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn('cleanup is blocked', result.stderr)
+    def run_cleanup_functions(self, root: Path, proof: dict | None, cli_exit: int = 0,
+                              hosts_text: str | None = None, link_cli: bool = False):
+        functions = self.text[self.text.index('prove_ordinary_uninstall() {'):
+                              self.text.index('\ncollect_evidence() {')]
+        runtime = root / 'runtime'
+        candidate = root / 'candidate'
+        runtime.mkdir()
+        candidate.mkdir()
+        calls = root / 'proof-calls'
+        cli = runtime / 'native_cleanup_proof.py'
+        body = ('import json, os, sys\n'
+                'open(os.environ["PROOF_CALLS"], "a").write(json.dumps(sys.argv[1:]) + "\\n")\n'
+                'payload = os.environ.get("PROOF_JSON")\n'
+                'if payload: print(payload)\n'
+                'raise SystemExit(int(os.environ["PROOF_EXIT"]))\n')
+        if link_cli:
+            (root / 'elsewhere.py').write_text(body)
+            cli.symlink_to(root / 'elsewhere.py')
+        else:
+            cli.write_text(body)
+        (candidate / 'release.json').write_text(json.dumps({'version': '0.3.21-rc.1', 'commit': 'c' * 40}))
+        hosts = root / 'hosts'
+        line = '127.0.0.1 survey-native.test # survey-native-acceptance-77-1'
+        hosts.write_text(hosts_text if hosts_text is not None else f'127.0.0.1 localhost\n{line}\n::1 ip6\n')
+        script = ('set -Eeuo pipefail\n' + functions + '\n'
+                  f'ctl_bin={shlex.quote(str(runtime / "surveyctl"))}\n'
+                  f'target={shlex.quote(str(root / "primary"))}\n'
+                  f'work_root={shlex.quote(str(root))}\n'
+                  f'candidate_release_dir={shlex.quote(str(candidate))}\n'
+                  f'hosts_file={shlex.quote(str(hosts))}\n'
+                  'hosts_marker=survey-native-acceptance-77-1\n'
+                  'prove_ordinary_uninstall\nremove_hosts_marker\n')
+        env = {**os.environ, 'PROOF_CALLS': str(calls), 'PROOF_EXIT': str(cli_exit),
+               'PROOF_JSON': json.dumps(proof) if proof is not None else '',
+               'CANDIDATE_MANIFEST_SHA256': 'a' * 64, 'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
+               'GITHUB_RUN_ID': '77', 'GITHUB_RUN_ATTEMPT': '1', 'EXPECTED_UBUNTU': '24.04',
+               'EXPECTED_ARCHITECTURE': 'arm64', 'SURVEY_ACCEPTANCE_PUBLIC_HOST': 'survey-native.test'}
+        result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+        call_lines = calls.read_text().splitlines() if calls.exists() else []
+        return result, [json.loads(item) for item in call_lines], hosts.read_text(), line
+
+    def valid_cleanup_proof(self) -> dict:
+        return {'schemaVersion': 1,
+                'candidate': {'schemaVersion': 1, 'version': '0.3.21-rc.1', 'commit': 'c' * 40,
+                              'manifestSha256': 'a' * 64, 'bundleSha256': 'b' * 64, 'runId': '77',
+                              'attempt': '1', 'ubuntu': '24.04', 'architecture': 'arm64'},
+                'ordinaryUninstallVerified': True, 'retainedVolumeCount': 9, 'claimRetained': True,
+                'cohortQuiescent': True, 'hostCleanupVerified': False, 'candidateQualified': False}
+
+    def test_proof_cli_is_a_checksum_admitted_module_in_every_candidate_bundle(self):
+        # The script runs native_cleanup_proof.py next to the candidate controller;
+        # it must be declared in OWNED_RUNTIME_FILES so build_release packages it
+        # and the controller admits it by checksum before any owned code runs.
+        release = ROOT / 'platform/deploy/production/release'
+        spec = importlib.util.spec_from_file_location('pc_release_builder', release / 'build_release.py')
+        builder = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(release))
+        try:
+            spec.loader.exec_module(builder)
+        finally:
+            sys.path.pop(0)
+        owned = builder.owned_runtime_files((release.parent / 'surveyctl.py').read_bytes())
+        self.assertIn('native_cleanup_proof.py', owned)
+        self.assertTrue((release.parent / 'native_cleanup_proof.py').is_file())
+        self.assertIn('proof_cli="$(dirname "$ctl_bin")/native_cleanup_proof.py"', self.text)
+
+    def test_verified_proof_runs_once_then_removes_only_this_runs_hosts_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, hosts, line = self.run_cleanup_functions(Path(tmp), self.valid_cleanup_proof())
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual([['--target', str(Path(tmp) / 'primary'), '--version', '0.3.21-rc.1',
+                               '--commit', 'c' * 40, '--manifest-sha256', 'a' * 64, '--bundle-sha256', 'b' * 64,
+                               '--run-id', '77', '--attempt', '1', '--ubuntu', '24.04', '--architecture', 'arm64']],
+                             calls)
+            self.assertEqual('127.0.0.1 localhost\n::1 ip6\n', hosts)
+            self.assertNotIn(line, hosts)
+
+    def test_unverified_proof_never_succeeds_and_keeps_the_hosts_fixture(self):
+        good = self.valid_cleanup_proof()
+        cases = [
+            ('cli unknown outcome', good, 4, False),
+            ('no output', None, 0, False),
+            ('host cleanup claimed', {**good, 'hostCleanupVerified': True}, 0, False),
+            ('candidate qualified claimed', {**good, 'candidateQualified': True}, 0, False),
+            ('uninstall not verified', {**good, 'ordinaryUninstallVerified': False}, 0, False),
+            ('claim not retained', {**good, 'claimRetained': False}, 0, False),
+            ('no retained volumes', {**good, 'retainedVolumeCount': 0}, 0, False),
+            ('boolean volume count', {**good, 'retainedVolumeCount': True}, 0, False),
+            ('other run', {**good, 'candidate': {**good['candidate'], 'runId': '78'}}, 0, False),
+            ('other architecture', {**good, 'candidate': {**good['candidate'], 'architecture': 'amd64'}}, 0, False),
+            ('extra field', {**good, 'resources': []}, 0, False),
+            ('symlinked proof cli', good, 0, True),
+        ]
+        for name, proof, exit_code, link in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                result, calls, hosts, line = self.run_cleanup_functions(Path(tmp), proof, exit_code, link_cli=link)
+                self.assertNotEqual(0, result.returncode)
+                self.assertLessEqual(len(calls), 1)
+                if link:
+                    self.assertEqual([], calls)
+                self.assertIn(line, hosts)
+
+    def test_hosts_line_must_exist_exactly_once(self):
+        line = '127.0.0.1 survey-native.test # survey-native-acceptance-77-1'
+        for name, text in [('missing', '127.0.0.1 localhost\n'),
+                           ('duplicated', f'{line}\n{line}\n'),
+                           ('other run', '127.0.0.1 survey-native.test # survey-native-acceptance-77-2\n')]:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                result, calls, hosts, _ = self.run_cleanup_functions(Path(tmp), self.valid_cleanup_proof(),
+                                                                     hosts_text=text)
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual(1, len(calls))
+                self.assertEqual(text, hosts)
 
     def test_failed_cleanup_preserves_fixture_and_never_uninstalls(self):
         cleanup = self.text[self.text.index('collect_evidence() {'):
@@ -551,6 +761,8 @@ docker() { if [[ "$1" == ps && "$FAIL_DOCKER" != 1 ]]; then return 0; fi; return
 python3() { [[ "$2" != scan || "$FAIL_SCAN" != 1 ]]; }
 write_summary() { printf '%s %s' "$acceptance_status" "$1" > "$SUMMARY_CAPTURE"; }
 run_ctl() { printf 'unexpected' > "$UNINSTALL_CAPTURE"; }
+prove_ordinary_uninstall() { printf 'unexpected' > "$UNINSTALL_CAPTURE"; }
+remove_hosts_marker() { printf 'unexpected' > "$UNINSTALL_CAPTURE"; }
 '''
                 env = {**os.environ, 'FAIL_SCAN': scan_failure, 'FAIL_DOCKER': docker_failure,
                        'INITIAL_STATUS': initial_status,
@@ -627,14 +839,17 @@ run_ctl() { printf 'unexpected' > "$UNINSTALL_CAPTURE"; }
     def test_script_executes_lifecycle_and_requires_restore_refusal(self):
         calls = re.findall(r"^\s*(?:if\s+)?run_ctl\s+([a-z-]+)", self.text, re.MULTILINE)
         self.assertEqual(1, calls.count("setup-probe"))
-        for command in ("install", "setup-probe", "doctor", "backup", "uninstall"):
+        for command in ("install", "setup-probe", "doctor", "backup"):
             self.assertIn(command, calls)
         self.assertNotIn("restore", calls)
+        # #138 P-c: uninstall runs only inside the candidate-bound proof CLI.
+        self.assertNotIn("uninstall", calls)
         refusal = 'python3 "$evidence_helper" restore-refused --ctl "$ctl_bin" --target "$target" --backup "$backup_name"'
         self.assertEqual(1, self.text.count(refusal))
         self.assertLess(self.text.index('run_ctl backup'), self.text.index(refusal))
         self.assertLess(self.text.index(refusal), self.text.index('write_doctor_evidence "doctor-final"'))
-        self.assertLess(self.text.index('write_doctor_evidence "doctor-final"'), self.text.index('run_ctl uninstall'))
+        self.assertLess(self.text.index('write_doctor_evidence "doctor-final"'),
+                        self.text.index('prove_ordinary_uninstall\nremove_hosts_marker'))
         self.assertIn("survey-restore-", self.text)
         self.assertIn("BASELINE_MODE", self.text)
 
