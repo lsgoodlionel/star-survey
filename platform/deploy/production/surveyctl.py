@@ -1336,7 +1336,7 @@ class SurveyManager:
                 raise RuntimeHealthError('installation failed and runtime cleanup is unverified; preserve markers') from cleanup
             raise RuntimeHealthError('installation readiness failed; exact runtime removed, volumes and operation marker retained') from exc
 
-    def _verify_staged_release(self, release: Path, version: str) -> None:
+    def _verify_staged_release(self, release: Path, version: str) -> dict[str, str]:
         self._reject_symlink_components(release)
         self._assert_trusted_path(release)
         for path in release.rglob("*"):
@@ -1375,7 +1375,8 @@ class SurveyManager:
         if integrity["bundleFile"] != ".release-bundle.tar.gz":
             raise IntegrityError("deployment bundle path is invalid")
         _regular_file(retained_bundle, "retained release bundle")
-        if not secrets.compare_digest(_sha256(retained_bundle), manifest.bundle_for(architecture)["sha256"]):
+        retained_sha256 = _sha256(retained_bundle)
+        if not secrets.compare_digest(retained_sha256, manifest.bundle_for(architecture)["sha256"]):
             raise IntegrityError("retained release bundle checksum does not match manifest")
         try:
             with tarfile.open(retained_bundle, "r:*") as archive:
@@ -1396,6 +1397,10 @@ class SurveyManager:
             _regular_file(path, "generated release configuration")
             if not secrets.compare_digest(_sha256(path), str(expected)):
                 raise IntegrityError(f"generated release configuration checksum mismatch: {name}")
+        # Return only the identity actually checked above, never infer an
+        # installed bundle from another architecture's valid manifest entry.
+        return {"version": version, "manifestSha256": manifest.sha256,
+                "architecture": architecture, "bundleSha256": retained_sha256}
 
     def _run(self, command: list[str], runtime_message: str, **kwargs):
         if command and command[0] == 'docker' and os.path.lexists(self.control_dir / 'runtime-owner.json'):

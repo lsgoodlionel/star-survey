@@ -39,8 +39,11 @@ class NativeCleanupProofTest(unittest.TestCase):
             data=dict(version=self.binding['version'], manifestSha256='b'*64))
         self.manifest = SimpleNamespace(version=self.binding['version'], sha256='b'*64,
             raw=dict(commit='a'*40, assets=dict(bundles=dict(amd64=dict(sha256='c'*64)))))
+        self.installed={key:self.binding[key] for key in ('version','manifestSha256','architecture','bundleSha256')}
         self.manager = SimpleNamespace(target=self.target, _mutation_lock=self.lock,
             _read_state=self.read_state, _runtime=lambda v:self.runtime,
+            _release_dir=lambda v:self.target/'releases'/v,
+            _verify_staged_release=lambda *a:copy.deepcopy(self.installed),
             _release_manifest=lambda v:self.manifest, uninstall=self.uninstall)
         self.after = lambda:None
 
@@ -140,10 +143,21 @@ class NativeCleanupProofTest(unittest.TestCase):
     def test_actual_controller_success_finishes_intent_after_independent_postcheck(self):
         self.actual_controller_case(unknown=False)
 
-    def actual_controller_case(self, *, unknown):
+    def test_actual_controller_rejects_other_valid_manifest_architecture_before_uninstall(self):
+        self.actual_controller_case(unknown=False, wrong_bundle=True)
+
+    def actual_controller_case(self, *, unknown, wrong_bundle=False):
         import test_surveyctl as fixtures
         f=fixtures.SurveyctlTest(); f.setUp(); self.addCleanup(f.doCleanups)
         manifest_path,_=fixtures.write_test_release(f.root,version=self.binding['version'])
+        if wrong_bundle:
+            manifest_data=json.loads(manifest_path.read_text())
+            installed_arch=next(iter(manifest_data['assets']['bundles']))
+            other_arch='amd64' if installed_arch=='arm64' else 'arm64'
+            manifest_data['supportedHosts']['architectures'].append(other_arch)
+            manifest_data['assets']['bundles'][other_arch]=dict(
+                name='survey-'+self.binding['version']+'-linux-'+other_arch+'.tar.gz',sha256='f'*64)
+            manifest_path.write_text(json.dumps(manifest_data))
         manager=f.manager()
         manager.install(manifest_path,'survey.example.com','operations','operations@example.com')
         manifest=manager._release_manifest(self.binding['version'])
@@ -166,6 +180,12 @@ class NativeCleanupProofTest(unittest.TestCase):
         runtime=SimpleNamespace(protocol=protocol,data=dict(version=manifest.version,manifestSha256=manifest.sha256),
             preflight_cleanup=protocol.preflight_cleanup,cleanup=cleanup)
         manager._runtime_factory=lambda *a,**kw:runtime
+        if wrong_bundle:
+            binding.update(architecture=other_arch,bundleSha256='f'*64)
+            with self.assertRaises(self.m.CleanupProofError): self.m.prove_uninstall(manager,binding)
+            self.assertEqual([],self.daemon.remove_calls)
+            self.assertEqual('healthy',json.loads(manager.state_path.read_text())['status'])
+            return
         if unknown:
             with self.assertRaises(self.m.CleanupProofError): self.m.prove_uninstall(manager,binding)
         else:
@@ -178,6 +198,18 @@ class NativeCleanupProofTest(unittest.TestCase):
         if unknown:
             count=len(self.daemon.remove_calls)
             with self.assertRaises(self.m.CleanupProofError): self.m.prove_uninstall(manager,binding)
+            self.assertEqual(count,len(self.daemon.remove_calls))
+            spec=importlib.util.spec_from_file_location('failed_native_fixture',
+                Path(__file__).parent/'integration/owned_maintenance_native.py')
+            native=importlib.util.module_from_spec(spec); spec.loader.exec_module(native)
+            report={'status':'failed'}
+            with mock.patch.object(native,'fixture_cleanup') as cleanup, \
+                    mock.patch.object(native,'PENDING_FIXTURES',[]):
+                native.finalize_fixture(manager,'synthetic-namespace',None,report)
+                cleanup.assert_not_called()
+                self.assertEqual([manager],native.PENDING_FIXTURES)
+            self.assertEqual('preserved-failed-or-unknown',report['fixtureCleanup'])
+            self.assertEqual('pending',json.loads((control/'operation.intent').read_text())['state'])
             self.assertEqual(count,len(self.daemon.remove_calls))
 
     def test_lock_finalization_error_never_returns_success(self):
@@ -229,6 +261,12 @@ class NativeCleanupProofTest(unittest.TestCase):
         result=self.m.prove_uninstall(self.manager,self.binding)
         self.assertIs(True,result['ordinaryUninstallVerified'])
         self.assertEqual(1,result['retainedVolumeCount'])
+
+    def test_installed_bundle_drift_after_uninstall_is_not_a_success(self):
+        def drift(): self.installed['bundleSha256']='f'*64
+        self.after=drift
+        with self.assertRaises(self.m.CleanupProofError): self.m.prove_uninstall(self.manager,self.binding)
+        self.assertEqual(1,self.calls)
 
 
 if __name__ == '__main__': unittest.main()

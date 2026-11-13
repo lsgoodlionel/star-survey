@@ -40,6 +40,9 @@ def _source(manager, binding):
             or manifest.raw.get('commit') != binding['commit']
             or bundle.get('sha256') != binding['bundleSha256']):
         raise CleanupProofError('native cleanup candidate differs from the installed source')
+    installed = manager._verify_staged_release(manager._release_dir(version), version)
+    if installed != {key: binding[key] for key in ('version','manifestSha256','architecture','bundleSha256')}:
+        raise CleanupProofError('native cleanup candidate differs from the verified installed bundle')
     runtime = manager._runtime(version)  # Validates staged code, source configuration and ownership overlay.
     if runtime.data.get('version') != version or runtime.data.get('manifestSha256') != binding['manifestSha256']:
         raise CleanupProofError('native cleanup runtime differs from the candidate')

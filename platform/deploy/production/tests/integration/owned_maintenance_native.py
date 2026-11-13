@@ -117,7 +117,7 @@ def helper_receipts_ended(manager, api):
 
 
 def fixture_cleanup(manager, namespace, api):
-    """Exact fixture IDs; unknown mutation/child/RPC outcome is never retried."""
+    """Passed-case fixture teardown only; never exceptional finalization."""
     try:
         record = ownership.PrivateStore(manager.target).load()
         if record is None: return namespace_empty(namespace)
@@ -215,6 +215,21 @@ def write_component_release(work, images, payload, architecture, *, version='0.2
     return write_test_release(work, version=version, images=images, payload_overrides=payload,
                               securityCapabilities={'platform-admin-session-v1': images['PLATFORM_IMAGE']},
                               _fixture_owned_support=True, _fixture_architecture=architecture)
+
+
+def finalize_fixture(manager, namespace, api, result):
+    if result.get('status') != 'passed':
+        # A failed proof can leave pending intent + retained-data. Recognizable
+        # resources/claim do not authorize destructive exceptional teardown.
+        result['fixtureCleanup'] = 'preserved-failed-or-unknown'
+    else:
+        try:
+            verified = fixture_cleanup(manager, namespace, api)
+        except Exception:
+            verified = False
+        result['fixtureCleanup'] = 'verified' if verified is True else 'unknown-or-refused'
+    if result['fixtureCleanup'] != 'verified': PENDING_FIXTURES.append(manager)
+    result['privateStateRetained'] = True
 
 
 def run_case(images, scenario):
@@ -378,9 +393,7 @@ def run_case(images, scenario):
         except Exception:
             result['receiptDiagnosticUnavailable'] = True
     finally:
-        result['fixtureCleanup'] = 'verified' if fixture_cleanup(manager, namespace, api) else 'unknown-or-refused'
-        if result['fixtureCleanup'] != 'verified': PENDING_FIXTURES.append(manager)
-        result['privateStateRetained'] = True
+        finalize_fixture(manager, namespace, api, result)
     return result
 
 
