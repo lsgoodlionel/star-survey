@@ -146,7 +146,7 @@ def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dic
                          prepare.get('env'))
     # Reviewed body (#138 P-c): withheld diagnostic plus the single allowlisted,
     # trusted-helper-validated summary.json; any edit needs a new review.
-    testcase.assertEqual('09d5daf226974a2eaf07c36b36dfdd936c14a437b0c5a8b6c279e12a03a01bda',
+    testcase.assertEqual('48fd664508bb6f8655b45cf48abb17f3eafc68cf18d090e9cf2bd77aa1ca5bee',
                          hashlib.sha256(prepare['run'].encode()).hexdigest())
     upload = next(item for item in job['steps'] if item.get('name') == 'Preserve fail-closed native diagnostic')
     testcase.assertEqual({'name', 'if', 'uses', 'with'}, set(upload))
@@ -411,12 +411,16 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
             'candidate': {'manifestSha256': '1' * 64, 'bundleSha256': '2' * 64,
                           'images': {name: 'sha256:' + digit * 64 for name, digit in
                                      (('admin', '3'), ('platform', '4'), ('publish-gateway', '5'), ('engine', '6'))}},
-            'baselineMode': 'bootstrap', 'upgradeVerified': False,
+            'execution': {'repository': 'lsgoodlionel/star-survey', 'runId': '123', 'attempt': '2'},
+            'baselineMode': 'bootstrap', 'upgradeVerified': False, 'upgradeDataSha256': None,
             'tls': {'scope': 'ci-local-trusted-ca', 'httpsMarkerVerified': True, 'publicAcmeVerified': False},
             'preflightDisk': 'separately-tested', 'completedAt': '2026-11-13T00:00:00+00:00',
         }
-        upgraded = {**summary, 'baselineMode': 'predecessor', 'upgradeVerified': True}
+        # upgradeDataSha256 is filled from the written proof bytes unless a case keeps it stale.
+        upgraded = {**summary, 'baselineMode': 'predecessor', 'upgradeVerified': True, 'upgradeDataSha256': 'f' * 64}
         proof = {'schemaVersion': 1, 'status': 'passed', 'baselineVersion': '0.3.21-rc.1',
+                 'execution': {'repository': 'lsgoodlionel/star-survey', 'runId': '123', 'attempt': '2',
+                               'ubuntu': '24.04', 'architecture': 'arm64'},
                  'candidateVersion': '0.3.22-rc.1', 'baselineManifestSha256': 'e' * 64,
                  'candidateManifestSha256': '1' * 64, 'versionSwitchVerified': True,
                  'responseBeforeUpgradeVerified': True, 'responseAfterUpgradeVerified': True,
@@ -435,6 +439,13 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
             ('symlinked summary', summary, None, [], 'link-summary'),
             ('symlinked proof', upgraded, proof, [], 'link-proof'),
             ('missing trusted helper', summary, None, [], 'no-helper'),
+            ('summary from another run', {**summary, 'execution': {**summary['execution'], 'runId': '124'}}, None, [], None),
+            ('summary from another attempt', {**summary, 'execution': {**summary['execution'], 'attempt': '1'}}, None, [], None),
+            ('proof from another runner', upgraded,
+             {**proof, 'execution': {**proof['execution'], 'architecture': 'amd64'}}, [], None),
+            ('proof from another run', upgraded, {**proof, 'execution': {**proof['execution'], 'runId': '9'}}, [], None),
+            ('proof bytes differ from summary hash', upgraded, proof, [], 'stale-sha'),
+            ('bootstrap summary claiming a proof hash', {**summary, 'upgradeDataSha256': 'f' * 64}, None, [], None),
         ]
         if unreadable_supported:
             cases += [('unreadable summary', summary, None, [], 'unreadable-summary'),
@@ -444,6 +455,8 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                 root = Path(tmp)
                 evidence = root / 'native-evidence'
                 evidence.mkdir()
+                if upgrade is not None and value['upgradeVerified'] and special != 'stale-sha':
+                    value = {**value, 'upgradeDataSha256': hashlib.sha256(json.dumps(upgrade).encode()).hexdigest()}
                 for filename, payload, mode in (('summary.json', value, 'summary'), ('upgrade-data.json', upgrade, 'proof')):
                     if payload is None:
                         continue
@@ -463,6 +476,7 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                        'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
                        'NATIVE_SUMMARY': str(evidence / 'summary.json'),
                        'NATIVE_UPGRADE_DATA': str(evidence / 'upgrade-data.json'),
+                       'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey',
                        'TRUSTED_EVIDENCE_HELPER': str(root / 'missing.py') if special == 'no-helper'
                        else str(EVIDENCE_HELPER_PATH)}
                 result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
@@ -492,6 +506,10 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertIn("native-release-readiness", text)
         self.assertIn("readiness", text)
         self.assertIn("verify-readiness", text)
+        # #157: both aggregation commands bind summaries to this workflow run.
+        script = next(step['run'] for step in gate['steps'] if step.get('id') == 'readiness')
+        self.assertEqual(2, script.count(
+            '--repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"'))
         self.assertIn("if-no-files-found", text)
         self.assertEqual("${{ steps.readiness.outputs.promotable }}", gate["outputs"]["promotable"])
         self.assertEqual("native-release-readiness", gate["outputs"]["readiness-artifact"])
@@ -1021,7 +1039,9 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
         probe, events = self.fixture()
         with self.assertRaises(OSError):
             self.module.record_continuity(probe, '0.3.17-rc.1', '0.3.18-rc.1', 'a'*64, 'b'*64, Path('/unused'),
-                                          mock.Mock(side_effect=OSError('write failed')))
+                                          mock.Mock(side_effect=OSError('write failed')),
+                                          execution={'repository': 'lsgoodlionel/star-survey', 'runId': '1',
+                                                     'attempt': '1', 'ubuntu': '22.04', 'architecture': 'amd64'})
         self.assertEqual(['close', 'archive'], events[-2:])
         self.assertEqual('evidence-write', probe.continuity_phase)
 
@@ -1388,17 +1408,42 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                'CANDIDATE_MANIFEST_SHA256': 'a' * 64, 'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
                'ADMIN_IMAGE_DIGEST': 'sha256:' + 'c' * 64, 'PLATFORM_IMAGE_DIGEST': 'sha256:' + 'd' * 64,
                'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + 'e' * 64, 'ENGINE_IMAGE_DIGEST': 'sha256:' + '2' * 64,
-               'BASELINE_MODE': 'predecessor'}
+               'BASELINE_MODE': 'predecessor', 'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey',
+               'GITHUB_RUN_ID': '77', 'GITHUB_RUN_ATTEMPT': '1'}
+        doctor = {'checks': [{'id': 'tls', 'status': 'ok'}]}
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, env):
             with self.assertRaises(self.module.EvidenceError):
-                self.module.write_summary_evidence(Path(temporary) / 'summary.json', 'passed', 0, 'uninstall', True,
-                                                   {'checks': [{'id': 'tls', 'status': 'ok'}]})
+                self.module.write_summary_evidence(Path(temporary) / 'summary.json', 'passed', 0, 'uninstall', True, doctor)
+            proof = {'schemaVersion': 1, 'status': 'passed',
+                     'execution': {'repository': 'lsgoodlionel/star-survey', 'runId': '77', 'attempt': '1',
+                                   'ubuntu': '22.04', 'architecture': 'amd64'},
+                     'baselineVersion': '0.3.21-rc.1', 'candidateVersion': '0.3.22-rc.1',
+                     'baselineManifestSha256': '8' * 64, 'candidateManifestSha256': 'a' * 64,
+                     'versionSwitchVerified': True, 'responseBeforeUpgradeVerified': True,
+                     'responseAfterUpgradeVerified': True, 'exportAnswerVerified': True, 'cleanupCompleted': True}
+            proof_path = Path(temporary) / 'upgrade-data.json'
+            self.module.write_evidence(proof_path, 'upgrade-data', proof)
+            output = Path(temporary) / 'summary.json'
+            self.module.write_summary_evidence(output, 'passed', 0, 'uninstall', True, doctor, proof_path)
+            written = json.loads(output.read_text())
+            self.assertEqual(hashlib.sha256(proof_path.read_bytes()).hexdigest(), written['upgradeDataSha256'])
+            self.assertEqual({'repository': 'lsgoodlionel/star-survey', 'runId': '77', 'attempt': '1'}, written['execution'])
+            for field, value in (('runId', '78'), ('attempt', '2'), ('architecture', 'arm64'), ('ubuntu', '24.04')):
+                altered = {**proof, 'execution': {**proof['execution'], field: value}}
+                self.module.write_evidence(proof_path, 'upgrade-data', altered)
+                with self.subTest(proof_execution=field), self.assertRaises(self.module.EvidenceError):
+                    self.module.write_summary_evidence(output, 'passed', 0, 'uninstall', True, doctor, proof_path)
+            for key in ('GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'):
+                with self.subTest(missing=key), mock.patch.dict(os.environ, {key: ''}), \
+                        self.assertRaises(self.module.EvidenceError):
+                    self.module.write_summary_evidence(output, 'failed', 4, 'install', False)
 
     def test_summary_reports_missing_marker_without_making_failure_look_successful(self):
         env = {'EXPECTED_UBUNTU': '22.04', 'EXPECTED_ARCHITECTURE': 'amd64',
                'CANDIDATE_MANIFEST_SHA256': 'a' * 64, 'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
                'ADMIN_IMAGE_DIGEST': 'sha256:' + 'c' * 64, 'PLATFORM_IMAGE_DIGEST': 'sha256:' + 'd' * 64,
-               'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + 'e' * 64, 'ENGINE_IMAGE_DIGEST': 'sha256:' + '2' * 64, 'BASELINE_MODE': 'bootstrap'}
+               'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + 'e' * 64, 'ENGINE_IMAGE_DIGEST': 'sha256:' + '2' * 64, 'BASELINE_MODE': 'bootstrap',
+               'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey', 'GITHUB_RUN_ID': '77', 'GITHUB_RUN_ATTEMPT': '1'}
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, env):
             path = Path(temporary) / 'summary.json'
             self.module.write_summary_evidence(path, 'failed', 4, 'install', False)
@@ -1586,8 +1631,10 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                             "engine": "sha256:" + "2" * 64,
                         },
                     },
+                    "execution": {"repository": "lsgoodlionel/star-survey", "runId": "77", "attempt": "1"},
                     "baselineMode": mode,
                     "upgradeVerified": verified,
+                    "upgradeDataSha256": "f" * 64 if verified else None,
                     "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": True, "publicAcmeVerified": False},
                     "preflightDisk": "separately-tested",
                     "completedAt": "2026-10-09T00:00:00+00:00",
@@ -1670,6 +1717,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
 
     def test_downloaded_assets_are_recomputed_before_readiness_is_trusted(self):
         runners = (("22.04", "amd64"), ("24.04", "amd64"), ("22.04", "arm64"), ("24.04", "arm64"))
+        expected = {"repository": "lsgoodlionel/star-survey", "runId": "77", "attempt": "1"}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             candidate = root / "candidate"
@@ -1717,6 +1765,13 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             for ubuntu, architecture in runners:
                 directory = evidence / f"native-acceptance-{ubuntu}-{architecture}"
                 directory.mkdir()
+                proof = {'schemaVersion': 1, 'status': 'passed',
+                         'execution': {**expected, 'ubuntu': ubuntu, 'architecture': architecture},
+                         'baselineVersion': '0.9.0', 'candidateVersion': '1.0.0',
+                         'baselineManifestSha256': '8'*64, 'candidateManifestSha256': identity['manifestSha256'],
+                         'versionSwitchVerified': True, 'responseBeforeUpgradeVerified': True,
+                         'responseAfterUpgradeVerified': True, 'exportAnswerVerified': True, 'cleanupCompleted': True}
+                self.module.write_evidence(directory / 'upgrade-data.json', 'upgrade-data', proof)
                 summary = {
                     "schemaVersion": 1, "status": "passed", "exitCode": 0, "lastStep": "uninstall",
                     "runner": {"ubuntu": ubuntu, "architecture": architecture},
@@ -1724,33 +1779,63 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                         "manifestSha256": identity["manifestSha256"],
                         "bundleSha256": bundle_hashes[architecture], "images": image_digests,
                     },
+                    "execution": dict(expected),
                     "baselineMode": "predecessor", "upgradeVerified": True,
+                    "upgradeDataSha256": hashlib.sha256((directory / 'upgrade-data.json').read_bytes()).hexdigest(),
                     "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": True, "publicAcmeVerified": False},
                     "preflightDisk": "separately-tested", "completedAt": "2026-10-09T00:00:00+00:00",
                 }
                 (directory / "summary.json").write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
-                proof = {'schemaVersion': 1, 'status': 'passed', 'baselineVersion': '0.9.0', 'candidateVersion': '1.0.0',
-                         'baselineManifestSha256': '8'*64, 'candidateManifestSha256': identity['manifestSha256'],
-                         'versionSwitchVerified': True, 'responseBeforeUpgradeVerified': True,
-                         'responseAfterUpgradeVerified': True, 'exportAnswerVerified': True, 'cleanupCompleted': True}
-                self.module.write_evidence(directory / 'upgrade-data.json', 'upgrade-data', proof)
             readiness_path = root / "release-readiness.json"
-            self.module.write_release_readiness_from_assets(identity_path, candidate, evidence, readiness_path)
-            self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+            self.module.write_release_readiness_from_assets(identity_path, candidate, evidence, readiness_path, expected)
+            self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
 
             proof_path = evidence / 'native-acceptance-22.04-amd64' / 'upgrade-data.json'
             original_proof = proof_path.read_text()
             proof_path.unlink()
             with self.assertRaises(self.module.EvidenceError):
-                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
             for field, value in [('baselineManifestSha256', '0'*64), ('candidateManifestSha256', '0'*64),
                                  ('candidateVersion', '1.0.1'), ('baselineVersion', '0.8.0'),
                                  ('exportAnswerVerified', False), ('cleanupCompleted', 1), ('raw', 'forbidden'),
                                  *[('schemaVersion', value) for value in (True, False, 1.0, '1', None, 0, 2)]]:
                 altered = json.loads(original_proof);altered[field] = value;proof_path.write_text(json.dumps(altered))
                 with self.subTest(upgrade_data=field, value=value), self.assertRaises(self.module.EvidenceError):
-                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
             proof_path.write_text(original_proof)
+
+            # #157 binding: same semantics with other bytes, a proof moved to another
+            # runner, one proof reused on every runner, and summaries from other runs.
+            proof_path.write_text(json.dumps(json.loads(original_proof), indent=4))
+            with self.subTest(binding='proof bytes changed'), self.assertRaises(self.module.EvidenceError):
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
+            proof_path.write_text(original_proof)
+            other_proof = evidence / 'native-acceptance-22.04-arm64' / 'upgrade-data.json'
+            other_original = other_proof.read_bytes()
+            other_proof.write_text(original_proof)
+            with self.subTest(binding='proof moved to another runner'), self.assertRaises(self.module.EvidenceError):
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
+            other_proof.write_bytes(other_original)
+            reuse_root = root / 'reuse'
+            shutil.copytree(evidence, reuse_root)
+            shared = (reuse_root / 'native-acceptance-22.04-amd64' / 'upgrade-data.json').read_bytes()
+            for ubuntu, architecture in runners:
+                directory = reuse_root / f"native-acceptance-{ubuntu}-{architecture}"
+                (directory / 'upgrade-data.json').write_bytes(shared)
+                rebound = json.loads((directory / 'summary.json').read_text())
+                rebound['upgradeDataSha256'] = hashlib.sha256(shared).hexdigest()
+                (directory / 'summary.json').write_text(json.dumps(rebound, sort_keys=True))
+            with self.subTest(binding='one proof reused on all runners'), self.assertRaises(self.module.EvidenceError):
+                self.module.write_release_readiness_from_assets(identity_path, candidate, reuse_root,
+                                                                root / 'reuse-readiness.json', expected)
+            for label, other in (('another run', {**expected, 'runId': '78'}),
+                                 ('another repository', {**expected, 'repository': 'someone/fork'}),
+                                 ('earlier aggregating attempt', {**expected, 'attempt': '0'})):
+                with self.subTest(binding=label), self.assertRaises(self.module.EvidenceError):
+                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, other)
+            # A re-run aggregation (later attempt) may consume summaries from attempt 1.
+            self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence,
+                                                        {**expected, 'attempt': '2'})
 
             original = readiness_path.read_text(encoding="utf-8")
             self.assertEqual(image_digests["engine"], json.loads(original)["engineManifestDigest"])
@@ -1777,7 +1862,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                     altered["candidate"]["images"]["engine"] = "sha256:" + "9" * 64
                 summary_path.write_text(json.dumps(altered))
                 with self.subTest(summary=mutation), self.assertRaises(self.module.EvidenceError):
-                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
             summary_path.write_text(original_summary)
             mutations = {
                 "candidateVersion": "1.0.1", "candidateCommit": "2" * 40,
@@ -1793,30 +1878,30 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                 mutated[field] = replacement
                 readiness_path.write_text(json.dumps(mutated), encoding="utf-8")
                 with self.subTest(field=field), self.assertRaises(self.module.EvidenceError):
-                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+                    self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
             mutated = json.loads(original)
             mutated["matrixEvidenceSha256"]["ubuntu-22.04-amd64"] = "9" * 64
             readiness_path.write_text(json.dumps(mutated), encoding="utf-8")
             with self.assertRaises(self.module.EvidenceError):
-                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
             mutated = json.loads(original)
             mutated["unexpected"] = "forbidden"
             readiness_path.write_text(json.dumps(mutated), encoding="utf-8")
             with self.assertRaises(self.module.EvidenceError):
-                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
             readiness_path.write_text(original, encoding="utf-8")
             amd64_bundle = candidate / bundles["amd64"]["name"]
             original_bundle = amd64_bundle.read_bytes()
             amd64_bundle.write_bytes(b"mutated bundle")
             with self.assertRaises(self.module.EvidenceError):
-                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
             amd64_bundle.write_bytes(original_bundle)
             summary_path = evidence / "native-acceptance-22.04-amd64" / "summary.json"
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["completedAt"] = "2026-10-09T00:00:01+00:00"
             summary_path.write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
             with self.assertRaises(self.module.EvidenceError):
-                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence)
+                self.module.verify_release_readiness_assets(readiness_path, identity_path, candidate, evidence, expected)
 
 
 if __name__ == "__main__":

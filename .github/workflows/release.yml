@@ -845,19 +845,25 @@ jobs:
             fi
             python3 "$TRUSTED_EVIDENCE_HELPER" scan --directory "$staged" >/dev/null 2>&1 || return 1
             python3 - "$staged" 2>/dev/null <<'PY' || return 1
-          import json, os, sys
+          import hashlib, json, os, sys
           from pathlib import Path
           staged = Path(sys.argv[1])
           summary = json.loads((staged / "summary.json").read_text(encoding="utf-8"))
-          if summary["runner"] != {"ubuntu": os.environ["MATRIX_UBUNTU"], "architecture": os.environ["MATRIX_ARCHITECTURE"]}:
+          runner = {"ubuntu": os.environ["MATRIX_UBUNTU"], "architecture": os.environ["MATRIX_ARCHITECTURE"]}
+          execution = {"repository": os.environ["GITHUB_REPOSITORY"], "runId": os.environ["GITHUB_RUN_ID"],
+                       "attempt": os.environ["GITHUB_RUN_ATTEMPT"]}
+          if summary["runner"] != runner or summary["execution"] != execution:
               raise SystemExit(1)
           proof = staged / "upgrade-data.json"
           if summary["baselineMode"] == "bootstrap" or not summary["upgradeVerified"]:
-              if proof.exists():
+              if proof.exists() or summary["upgradeDataSha256"] is not None:
                   raise SystemExit(1)
           else:
-              data = json.loads(proof.read_text(encoding="utf-8"))
-              if data["candidateManifestSha256"] != summary["candidate"]["manifestSha256"]:
+              payload = proof.read_bytes()
+              data = json.loads(payload)
+              if (hashlib.sha256(payload).hexdigest() != summary["upgradeDataSha256"]
+                      or data["execution"] != {**execution, **runner}
+                      or data["candidateManifestSha256"] != summary["candidate"]["manifestSha256"]):
                   raise SystemExit(1)
           PY
             if [[ -f "$staged/upgrade-data.json" ]]; then
@@ -922,12 +928,14 @@ jobs:
             --identity "$identity" \
             --candidate-directory release-candidate/candidate \
             --evidence-directory native-evidence \
-            --output release-readiness.json
+            --output release-readiness.json \
+            --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
           python3 readiness-runtime/release/native_acceptance_evidence.py verify-readiness \
             --readiness release-readiness.json \
             --identity "$identity" \
             --candidate-directory release-candidate/candidate \
-            --evidence-directory native-evidence
+            --evidence-directory native-evidence \
+            --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
           printf 'promotable=%s\n' "$(jq -er '.promotable' release-readiness.json)" >> "$GITHUB_OUTPUT"
 
       - name: Preserve the Task 4 promotion gate

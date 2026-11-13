@@ -53,6 +53,8 @@ SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
+REPOSITORY = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
+RUN_NUMBER = re.compile(r"[1-9][0-9]{0,19}")
 DOCTOR_FILE = re.compile(r"doctor-(installed|upgraded|final)\.json")
 # #119 option B: native acceptance proves restore stays refused, not that it recovers.
 RESTORE_REFUSAL = "controlled restore is disabled until writer and helper isolation are verified"
@@ -391,6 +393,30 @@ def string(value: Any, label: str, maximum: int, pattern: re.Pattern[str] | None
     return value
 
 
+def validate_execution(value: Any, label: str, with_runner: bool) -> dict[str, Any]:
+    """Execution identity bound into native evidence: repository, run and attempt,
+    plus the matrix runner for per-runner proofs (#157)."""
+    keys = {"repository", "runId", "attempt"} | ({"ubuntu", "architecture"} if with_runner else set())
+    item = exact_keys(value, keys, label)
+    string(item["repository"], f"{label} repository", 201, REPOSITORY)
+    string(item["runId"], f"{label} runId", 20, RUN_NUMBER)
+    string(item["attempt"], f"{label} attempt", 20, RUN_NUMBER)
+    if with_runner and (item["ubuntu"], item["architecture"]) not in RUNNERS:
+        raise EvidenceError(f"{label} runner is outside the native matrix")
+    return item
+
+
+def current_execution(with_runner: bool) -> dict[str, str]:
+    """Read the fixed GitHub context of this job; never accept it from evidence."""
+    value = {"repository": os.environ.get("GITHUB_REPOSITORY", ""),
+             "runId": os.environ.get("GITHUB_RUN_ID", ""), "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", "")}
+    if with_runner:
+        value.update(ubuntu=os.environ.get("EXPECTED_UBUNTU", ""),
+                     architecture=os.environ.get("EXPECTED_ARCHITECTURE", ""))
+    validate_execution(value, "current execution", with_runner)
+    return value
+
+
 def integer(value: Any, label: str, minimum: int = 0, maximum: int | None = None) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise EvidenceError(f"{label} must be an integer of at least {minimum}")
@@ -436,9 +462,10 @@ def validate_services(value: Any) -> None:
 
 def validate_summary(value: Any) -> None:
     summary = exact_keys(value, {
-        "schemaVersion", "status", "exitCode", "lastStep", "runner", "candidate",
-        "baselineMode", "upgradeVerified", "tls", "preflightDisk", "completedAt",
+        "schemaVersion", "status", "exitCode", "lastStep", "runner", "execution", "candidate",
+        "baselineMode", "upgradeVerified", "upgradeDataSha256", "tls", "preflightDisk", "completedAt",
     }, "summary")
+    validate_execution(summary["execution"], "summary execution", False)
     if summary["schemaVersion"] != 1 or summary["status"] not in {"passed", "failed"}:
         raise EvidenceError("summary schema or status is invalid")
     integer(summary["exitCode"], "summary exitCode", 0, 255)
@@ -457,6 +484,12 @@ def validate_summary(value: Any) -> None:
     if summary["baselineMode"] not in {"bootstrap", "predecessor"}:
         raise EvidenceError("summary baselineMode is invalid")
     boolean(summary["upgradeVerified"], "summary upgradeVerified")
+    # The summary binds the exact bytes of this runner's upgrade proof; bootstrap
+    # or unverified summaries carry no proof hash at all.
+    if summary["upgradeVerified"]:
+        string(summary["upgradeDataSha256"], "summary upgradeDataSha256", 64, SHA256)
+    elif summary["upgradeDataSha256"] is not None:
+        raise EvidenceError("summary without a verified upgrade cannot bind upgrade data")
     tls = exact_keys(summary["tls"], {"scope", "httpsMarkerVerified", "publicAcmeVerified"}, "summary tls")
     if tls["scope"] != "ci-local-trusted-ca":
         raise EvidenceError("summary TLS scope is invalid")
@@ -559,8 +592,9 @@ VALIDATORS = {
 def validate_upgrade_data(value: Any) -> None:
     flags = {'versionSwitchVerified', 'responseBeforeUpgradeVerified', 'responseAfterUpgradeVerified',
              'exportAnswerVerified', 'cleanupCompleted'}
-    report = exact_keys(value, {'schemaVersion', 'status', 'baselineVersion', 'candidateVersion',
+    report = exact_keys(value, {'schemaVersion', 'status', 'execution', 'baselineVersion', 'candidateVersion',
                                'baselineManifestSha256', 'candidateManifestSha256'} | flags, 'upgrade data')
+    validate_execution(report['execution'], 'upgrade data execution', True)
     integer(report['schemaVersion'], 'upgrade data schemaVersion', 1, 1)
     if report['status'] != 'passed':
         raise EvidenceError('upgrade data evidence is not passed')
@@ -694,17 +728,26 @@ def write_engine_health_evidence(health: Any, output: Path) -> None:
 
 
 def write_summary_evidence(output: Path, status: str, exit_code: int, last_step: str, upgrade_verified: bool, doctor: Any = None,
-                           upgrade_data: Any = None) -> None:
+                           upgrade_data_path: Path | None = None) -> None:
+    execution = current_execution(False)
+    upgrade_data_sha = None
     if upgrade_verified:
+        if upgrade_data_path is None:
+            raise EvidenceError('upgrade claim requires this runner upgrade data evidence')
+        upgrade_data_sha = sha256_file(upgrade_data_path, 'upgrade data evidence')
+        upgrade_data = load_json(upgrade_data_path)
         validate_evidence('upgrade-data', upgrade_data)
         if os.environ['BASELINE_MODE'] != 'predecessor' or upgrade_data['candidateManifestSha256'] != os.environ['CANDIDATE_MANIFEST_SHA256']:
             raise EvidenceError('upgrade data does not match the native candidate')
+        if upgrade_data['execution'] != current_execution(True):
+            raise EvidenceError('upgrade data was not produced by this run, attempt and runner')
     write_evidence(output, "summary", {
         "schemaVersion": 1,
         "status": status,
         "exitCode": exit_code,
         "lastStep": last_step,
         "runner": {"ubuntu": os.environ["EXPECTED_UBUNTU"], "architecture": os.environ["EXPECTED_ARCHITECTURE"]},
+        "execution": execution,
         "candidate": {
             "manifestSha256": os.environ["CANDIDATE_MANIFEST_SHA256"],
             "bundleSha256": os.environ["CANDIDATE_BUNDLE_SHA256"],
@@ -717,6 +760,7 @@ def write_summary_evidence(output: Path, status: str, exit_code: int, last_step:
         },
         "baselineMode": os.environ["BASELINE_MODE"],
         "upgradeVerified": upgrade_verified,
+        "upgradeDataSha256": upgrade_data_sha,
         "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": tls_marker_from_doctor(doctor), "publicAcmeVerified": False},
         "preflightDisk": "separately-tested",
         "completedAt": datetime.now(timezone.utc).isoformat(),
@@ -878,24 +922,39 @@ def verify_candidate_assets(identity: dict[str, Any], candidate_directory: Path)
             raise EvidenceError(f"downloaded candidate image manifest mismatch: {name}")
 
 
+def verify_native_execution(summaries: list[dict[str, Any]], expected: dict[str, Any]) -> None:
+    """Every summary must come from this repository and workflow run, at an attempt
+    no later than the aggregating one (re-run jobs keep earlier attempts)."""
+    validate_execution(expected, "expected execution", False)
+    for summary in summaries:
+        execution = summary["execution"]
+        if (execution["repository"] != expected["repository"] or execution["runId"] != expected["runId"]
+                or int(execution["attempt"]) > int(expected["attempt"])):
+            raise EvidenceError("native summary was not produced by this workflow run")
+
+
 def write_release_readiness_from_assets(
     identity_path: Path, candidate_directory: Path, evidence_directory: Path, output: Path,
+    expected_execution: dict[str, Any],
 ) -> None:
     identity = load_json(identity_path)
     verify_candidate_assets(identity, candidate_directory)
     summaries, hashes = load_native_summaries(evidence_directory)
+    verify_native_execution(summaries, expected_execution)
     verify_upgrade_data_assets(identity, evidence_directory)
     write_release_readiness(identity, summaries, hashes, output)
 
 
 def verify_release_readiness_assets(
     readiness_path: Path, identity_path: Path, candidate_directory: Path, evidence_directory: Path,
+    expected_execution: dict[str, Any],
 ) -> None:
     readiness = load_json(readiness_path)
     validate_evidence("readiness", readiness)
     identity = load_json(identity_path)
     verify_candidate_assets(identity, candidate_directory)
     summaries, hashes = load_native_summaries(evidence_directory)
+    verify_native_execution(summaries, expected_execution)
     verify_upgrade_data_assets(identity, evidence_directory)
     expected = build_release_readiness(identity, summaries, hashes)
     if readiness != expected:
@@ -904,13 +963,23 @@ def verify_release_readiness_assets(
 
 def verify_upgrade_data_assets(identity: dict[str, Any], evidence_directory: Path) -> None:
     for path in evidence_directory.glob('*/summary.json'):
+        summary = load_json(path)
+        validate_evidence('summary', summary)
         proof_path = path.parent / 'upgrade-data.json'
         if identity['baseline']['mode'] == 'bootstrap':
-            if proof_path.exists():
+            if proof_path.exists() or proof_path.is_symlink():
                 raise EvidenceError('bootstrap cannot include an upgrade data assertion')
+            if summary['upgradeDataSha256'] is not None:
+                raise EvidenceError('bootstrap summary cannot bind upgrade data')
             continue
+        # Recompute this runner's proof bytes; the summary hash is itself covered
+        # by matrixEvidenceSha256, so proof bytes are bound without a cycle.
+        if sha256_file(proof_path, 'upgrade data evidence') != summary['upgradeDataSha256']:
+            raise EvidenceError('upgrade data bytes differ from the summary binding')
         report = load_json(proof_path)
         validate_evidence('upgrade-data', report)
+        if report['execution'] != {**summary['execution'], **summary['runner']}:
+            raise EvidenceError('upgrade data execution differs from its runner summary')
         expected = {'candidateVersion': identity['version'], 'candidateManifestSha256': identity['manifestSha256'],
                     'baselineVersion': identity['baseline'].get('version'),
                     'baselineManifestSha256': identity['baseline'].get('manifestSha256')}
@@ -1070,11 +1139,11 @@ def perform_upgrade(ctl, target, manifest, manifest_sha, version, manager, error
         raise failure from None
 
 
-def record_continuity(probe, baseline, candidate, baseline_sha, candidate_sha, output, writer):
+def record_continuity(probe, baseline, candidate, baseline_sha, candidate_sha, output, writer, *, execution):
     flags = probe.run_and_verify()
     # Persist only after the original product probe has finished all cleanup.
     probe.continuity_phase = 'evidence-write'
-    writer(output, 'upgrade-data', {'schemaVersion': 1, 'status': 'passed',
+    writer(output, 'upgrade-data', {'schemaVersion': 1, 'status': 'passed', 'execution': execution,
            'baselineVersion': baseline, 'candidateVersion': candidate,
            'baselineManifestSha256': baseline_sha, 'candidateManifestSha256': candidate_sha, **flags})
     probe.continuity_phase = 'complete'
@@ -1084,6 +1153,8 @@ def run_upgrade_data_probe(args):
     if any(os.environ.get(key) != value for key, value in {'NATIVE_ACCEPTANCE_REAL': '1', 'GITHUB_ACTIONS': 'true',
                                                          'SURVEY_NATIVE_ACCEPTANCE': '1'}.items()) or not args.host.endswith('.test'):
         raise EvidenceError('real isolated GitHub native acceptance context required')
+    # Bind before any upgrade: a missing run/attempt/runner fails before host changes.
+    execution = current_execution(True)
     baseline_path, candidate_path = Path(args.baseline_manifest), Path(args.candidate_manifest)
     for path, expected in ((baseline_path, args.baseline_sha), (candidate_path, args.candidate_sha)):
         if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
@@ -1102,7 +1173,7 @@ def run_upgrade_data_probe(args):
                   upgraded_compose=lambda: manager._compose(candidate['version']))
     try:
         record_continuity(probe, baseline['version'], candidate['version'], args.baseline_sha, args.candidate_sha,
-                          Path(args.output), write_evidence)
+                          Path(args.output), write_evidence, execution=execution)
     except Exception as exc:
         status = getattr(exc, 'status', None)
         status = status if type(status) is int and 100 <= status <= 599 else None
@@ -1163,9 +1234,17 @@ def parser() -> argparse.ArgumentParser:
     verify_readiness.add_argument("--identity", type=Path, required=True)
     verify_readiness.add_argument("--candidate-directory", type=Path, required=True)
     verify_readiness.add_argument("--evidence-directory", type=Path, required=True)
+    # The aggregating job's own GitHub context; summaries must come from this run.
+    for parser_ in (readiness, verify_readiness):
+        for name in ("repository", "run-id", "run-attempt"):
+            parser_.add_argument("--" + name, required=True)
     scan = sub.add_parser("scan")
     scan.add_argument("--directory", type=Path, required=True)
     return result
+
+
+def expected_execution_from(args: Any) -> dict[str, str]:
+    return {"repository": args.repository, "runId": args.run_id, "attempt": args.run_attempt}
 
 
 def main() -> int:
@@ -1200,17 +1279,19 @@ def main() -> int:
             write_summary_evidence(
                 args.output, args.status, args.exit_code, args.last_step, args.upgrade_verified == "true",
                 load_json(args.doctor_evidence) if args.doctor_evidence and args.doctor_evidence.exists() else None,
-                load_json(args.upgrade_data_evidence) if args.upgrade_data_evidence and args.upgrade_data_evidence.exists() else None,
+                args.upgrade_data_evidence if args.upgrade_data_evidence and args.upgrade_data_evidence.exists() else None,
             )
         elif args.command == "preflight":
             write_preflight_evidence(args.output, args.actual_free_bytes, args.required_free_bytes)
         elif args.command == "readiness":
             write_release_readiness_from_assets(
                 args.identity, args.candidate_directory, args.evidence_directory, args.output,
+                expected_execution_from(args),
             )
         elif args.command == "verify-readiness":
             verify_release_readiness_assets(
                 args.readiness, args.identity, args.candidate_directory, args.evidence_directory,
+                expected_execution_from(args),
             )
         else:
             scan_directory(args.directory, secrets)
