@@ -485,3 +485,6 @@ RecoveryTargetBinding在启动任何验签工具前及后续recheck先走manager
 本地：新模块缺失及打包未纳入的失败测试先确认；9项证明/控制器锁及 pending 回归、6项组件证据回归、45项ownership、14项controller、4项真实本地打包测试通过（78项）。真实双库 Docker 与完整质量验证交 GitHub 既有 ownership-protocol/Survey CI，未在本机重复全套。
 
 Claude 后续：在其 P-c 接线 PR 用受校验候选 runtime 调用本接口，不另做一次外部 uninstall；补 clean-host/host marker 身份及收束、失败现场和受限白名单摘要/聚合合同。D4/tag已有具体许可，但只有完整证明与最终组合 CI 通过后方可执行；D5、restore、publication 门不由本切片开启。需非作者审查和实际双库 CI 证据，不提前确认 P-c 通过。
+
+
+P-c 调用补充：模块同时提供显式CLI `python3 <受校验候选>/native_cleanup_proof.py --target <安装目标> --version <候选版本> --commit <40位提交> --manifest-sha256 <64位摘要> --bundle-sha256 <本架构包摘要> --run-id <运行号> --attempt <尝试号> --ubuntu <22.04或24.04> --architecture <amd64或arm64>`。仅传公开身份；须先按既有流程校验候选及脚本，不接受秘密或原始Docker响应。该CLI包含一次普通卸载，不能在外部重复调用uninstall。成功输出固定JSON；错误固定stderr、exit4、无stdout结果；未知时不得重放。另补CLI正负及settled-failure安装测试，proof组12项通过（总定向81项）；真实双库新head结果仍待GitHub。

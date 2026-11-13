@@ -4,10 +4,13 @@ from contextlib import contextmanager
 import importlib
 import importlib.util
 import json
+import io
+import contextlib
 from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_runtime_ownership import Store, Daemon
@@ -185,6 +188,47 @@ class NativeCleanupProofTest(unittest.TestCase):
         self.manager._mutation_lock=broken
         with self.assertRaises(self.m.CleanupProofError): self.m.prove_uninstall(self.manager,self.binding)
         self.assertEqual(1,self.calls)
+
+    def test_cli_calls_the_same_proof_and_only_prints_bounded_result(self):
+        import surveyctl
+        args=['--target',str(self.target)]
+        for key,value in self.binding.items():
+            if key!='schemaVersion':
+                option={'manifestSha256':'manifest-sha256','bundleSha256':'bundle-sha256',
+                    'runId':'run-id'}.get(key,key)
+                args += ['--'+option,value]
+        output=io.StringIO()
+        with mock.patch.object(surveyctl,'SurveyManager',return_value=self.manager), contextlib.redirect_stdout(output):
+            code=self.m.main(args)
+        self.assertEqual(0,code)
+        self.assertIs(True,json.loads(output.getvalue())['ordinaryUninstallVerified'])
+        self.assertEqual(1,self.calls)
+
+    def test_cli_unknown_postcheck_is_exit_four_without_result_or_exception_leak(self):
+        import surveyctl
+        args=['--target',str(self.target)]
+        for key,value in self.binding.items():
+            if key!='schemaVersion':
+                option={'manifestSha256':'manifest-sha256','bundleSha256':'bundle-sha256',
+                    'runId':'run-id'}.get(key,key)
+                args += ['--'+option,value]
+        def fail(): raise OSError('synthetic-sensitive-body-never-print')
+        self.after=fail
+        output,errors=io.StringIO(),io.StringIO()
+        with mock.patch.object(surveyctl,'SurveyManager',return_value=self.manager), \
+                contextlib.redirect_stdout(output),contextlib.redirect_stderr(errors):
+            code=self.m.main(args)
+        self.assertEqual(4,code)
+        self.assertEqual('',output.getvalue())
+        self.assertNotIn('synthetic-sensitive-body',errors.getvalue())
+        self.assertEqual(1,self.calls)
+
+    def test_settled_failed_install_uses_the_same_ordinary_cleanup_contract(self):
+        self.state['status']='install_failed'
+        self.store.record['phase']='settled-failure'
+        result=self.m.prove_uninstall(self.manager,self.binding)
+        self.assertIs(True,result['ordinaryUninstallVerified'])
+        self.assertEqual(1,result['retainedVolumeCount'])
 
 
 if __name__ == '__main__': unittest.main()

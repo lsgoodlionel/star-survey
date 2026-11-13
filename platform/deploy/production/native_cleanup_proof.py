@@ -86,3 +86,31 @@ def prove_uninstall(manager, candidate):
         raise
     except Exception as exc:
         raise CleanupProofError('native cleanup outcome is unverified; preserve the fixture and do not replay') from exc
+
+
+def main(argv=None):
+    """Explicit native harness entry; inputs are public candidate identity only."""
+    import argparse
+    import json
+    import sys
+    from surveyctl import SurveyManager
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--target',required=True)
+    for option in ('version','commit','manifest-sha256','bundle-sha256','run-id','attempt','ubuntu','architecture'):
+        parser.add_argument('--'+option,required=True)
+    args=parser.parse_args(argv)
+    binding=dict(schemaVersion=1,version=args.version,commit=args.commit,
+        manifestSha256=args.manifest_sha256,bundleSha256=args.bundle_sha256,
+        runId=args.run_id,attempt=args.attempt,ubuntu=args.ubuntu,architecture=args.architecture)
+    try:
+        result=prove_uninstall(SurveyManager(args.target),binding)
+    except Exception:
+        # Neither exception text nor API bodies/paths are suitable evidence.
+        print('Native ordinary uninstall proof unavailable; preserve fixture and do not replay.',file=sys.stderr)
+        return 4
+    print(json.dumps(result,sort_keys=True))
+    return 0
+
+
+if __name__=='__main__':
+    raise SystemExit(main())
