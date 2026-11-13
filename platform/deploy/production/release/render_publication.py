@@ -212,6 +212,11 @@ def render(args: argparse.Namespace) -> int:
         fail("source tag does not match release manifest version")
     if manifest.get("commit") != args.target_commit or readiness.get("candidateCommit") != args.target_commit:
         fail("target tag, manifest, and native readiness commit identity differ")
+    if (
+        target_stable is not None
+        and manifest.get("minimumSourceVersion") == BOOTSTRAP_MINIMUM_SOURCE_VERSION
+    ):
+        fail("bootstrap candidate cannot be promoted to stable")
     if target_stable is not None and not (
         readiness.get("promotable") is True and readiness.get("reason") == "upgrade-verified"
     ):
