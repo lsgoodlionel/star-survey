@@ -651,6 +651,28 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertNotEqual(0, resolve('0.3.21-rc.2').returncode)
         self.assertNotEqual(0, resolve('0.3.21').returncode)
 
+    def test_rc22_replaces_the_failed_rc21_as_the_bootstrap_candidate(self):
+        # v0.3.21-rc.1 stopped at the release Trivy gate (run 43384842587) before
+        # any candidate existed; bootstrap is only valid for rc.1, so the Owner
+        # chose 0.3.22-rc.1 as the fresh-install baseline (#138). rc21 stays as a
+        # historical record and rc23 must name rc22 as its predecessor.
+        policy = json.loads(BASELINE_POLICY_PATH.read_text())
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases'].get('0.3.22-rc.1'))
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases'].get('0.3.21-rc.1'))
+        step = next(s for s in self.workflow['jobs']['candidate-assets']['steps'] if s.get('id') == 'baseline')
+        script = step['run'].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        def resolve(version):
+            return subprocess.run([sys.executable, '-', version, str(BASELINE_POLICY_PATH)],
+                                  input=script, text=True, capture_output=True, check=False)
+        result = resolve('0.3.22-rc.1')
+        self.assertEqual(0, result.returncode, result.stderr)
+        values = dict(line.split('=', 1) for line in result.stdout.splitlines())
+        self.assertEqual('bootstrap', values['BASELINE_MODE'])
+        self.assertEqual('0.0.0', values['MINIMUM_SOURCE_VERSION'])
+        self.assertNotIn('BASELINE_RUN_ID', values)
+        self.assertNotEqual(0, resolve('0.3.22-rc.2').returncode)
+        self.assertNotEqual(0, resolve('0.3.22').returncode)
+
 class NativeAcceptanceScriptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
