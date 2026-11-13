@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -324,6 +326,114 @@ class ReleaseWorkflowPolicyTest(unittest.TestCase):
                 self.assertTrue(exception["rootCause"].strip())
                 self.assertTrue(exception["owner"].strip())
                 self.assertGreater(date.fromisoformat(exception["expiresAt"]), date.today())
+
+
+
+# caddy:2.11.6-alpine ships /usr/bin/caddy with cap_net_bind_service=ep, so the
+# admin hash helper (all capabilities dropped) exits 126 before hashing. The
+# reviewed 2.11.9 image carries the capability as permitted only. Every place
+# that names the Caddy source image must use this exact digest-pinned reference.
+CADDY_PINNED_IMAGE = (
+    "caddy:2.11.9-alpine@sha256:"
+    "0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee"
+)
+CADDY_REFERENCE_FILES = (
+    "platform/deploy/production/env.example",
+    "platform/deploy/production/production_smoke.py",
+    "platform/deploy/production/tests/fixtures/test.env",
+    "platform/tools/publish-gateway/tests/test_production_caddy_http.py",
+)
+
+
+class CaddySourceImagePinTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = load_yaml(WORKFLOW_PATH)
+        cls.build_step = next(
+            step for step in cls.workflow["jobs"]["candidate-assets"]["steps"]
+            if step.get("name") == "Build the candidate bundle once"
+        )
+
+    def test_release_build_uses_the_reviewed_caddy_digest(self):
+        self.assertEqual(CADDY_PINNED_IMAGE, self.build_step["env"]["CADDY_SOURCE_IMAGE"])
+
+    def test_every_caddy_source_reference_matches_the_release_pin(self):
+        for relative in CADDY_REFERENCE_FILES:
+            with self.subTest(path=relative):
+                text = (ROOT / relative).read_text(encoding="utf-8")
+                self.assertNotIn("caddy:2.11.6", text)
+                references = set(re.findall(r"caddy:[0-9][^\s'\"]*", text))
+                self.assertEqual({CADDY_PINNED_IMAGE}, references)
+
+    def run_resolve_image(self, reference: str, registry_digest: str,
+                          inspect_fails: bool = False) -> subprocess.CompletedProcess[str]:
+        body = self.build_step["run"]
+        start = body.index("resolve_image() {")
+        end = body.index("\n}\n", start) + 3
+        function = body[start:end].replace("\n  ", "\n")
+        bash = shutil.which("bash")
+        self.assertIsNotNone(bash, "bash is required to exercise the release step")
+        with tempfile.TemporaryDirectory() as temporary:
+            docker = Path(temporary) / "docker"
+            docker.write_text(
+                "#!/usr/bin/env bash\n"
+                "[[ \"$1 $2 $3\" == 'buildx imagetools inspect' ]] || exit 9\n"
+                "[[ -z \"${FAKE_INSPECT_FAILS:-}\" ]] || exit 1\n"
+                "printf 'Name:      %s\nMediaType: application/vnd.oci.image.index.v1+json\n"
+                "Digest:    %s\n' \"$4\" \"$FAKE_REGISTRY_DIGEST\"\n",
+                encoding="utf-8",
+            )
+            docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+            environment = dict(os.environ, FAKE_REGISTRY_DIGEST=registry_digest,
+                               FAKE_INSPECT_FAILS="1" if inspect_fails else "",
+                               PATH=temporary + os.pathsep + os.environ.get("PATH", ""))
+            # Same shape as the release step: a command substitution does not
+            # inherit errexit, so resolve_image must fail explicitly.
+            script = ("set -euo pipefail\n" + function
+                      + 'image="$(resolve_image "$1")"\nprintf %s "$image"\n')
+            return subprocess.run(
+                [bash, "-c", script, "resolve", reference],
+                text=True, capture_output=True, env=environment, check=False,
+            )
+
+    def test_resolve_image_keeps_a_pinned_digest_and_strips_only_the_tag(self):
+        pinned = CADDY_PINNED_IMAGE.split("@", 1)[1]
+        other = "sha256:" + "a" * 64
+        cases = [
+            (CADDY_PINNED_IMAGE, pinned, "caddy@" + pinned),
+            ("postgres:16.10-alpine", other, "postgres@" + other),
+            ("localhost:5000/smoke/caddy:test", other, "localhost:5000/smoke/caddy@" + other),
+            ("localhost:5000/smoke/caddy@" + pinned, pinned, "localhost:5000/smoke/caddy@" + pinned),
+        ]
+        for reference, registry_digest, expected in cases:
+            with self.subTest(reference=reference):
+                result = self.run_resolve_image(reference, registry_digest)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(expected, result.stdout)
+
+    def test_resolve_image_failures_stop_the_production_command_substitution(self):
+        pinned = CADDY_PINNED_IMAGE.split("@", 1)[1]
+        cases = [
+            ("pin mismatch", CADDY_PINNED_IMAGE, "sha256:" + "b" * 64, False),
+            ("inspect fails", "postgres:16.10-alpine", "sha256:" + "a" * 64, True),
+            ("inspect fails for pin", CADDY_PINNED_IMAGE, pinned, True),
+            ("empty digest", "postgres:16.10-alpine", "", False),
+            ("invalid digest", "postgres:16.10-alpine", "sha256:XYZ", False),
+            ("malformed pin", "caddy:2.11.9-alpine@sha256:short", "sha256:short", False),
+        ]
+        for name, reference, registry_digest, inspect_fails in cases:
+            with self.subTest(case=name):
+                result = self.run_resolve_image(reference, registry_digest, inspect_fails)
+                self.assertNotEqual(0, result.returncode, result.stdout)
+                self.assertEqual("", result.stdout)
+
+    def test_resolve_image_rejects_a_registry_digest_that_differs_from_the_pin(self):
+        result = self.run_resolve_image(CADDY_PINNED_IMAGE, "sha256:" + "b" * 64)
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("", result.stdout)
+        result = self.run_resolve_image("caddy:2.11.9-alpine@sha256:short", "sha256:short")
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("", result.stdout)
 
 
 if __name__ == "__main__":

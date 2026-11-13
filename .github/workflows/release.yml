@@ -559,7 +559,9 @@ jobs:
         env:
           VERSION: ${{ needs.policy.outputs.version }}
           GH_TOKEN: ${{ github.token }}
-          CADDY_SOURCE_IMAGE: caddy:2.11.6-alpine
+          # 2.11.6-alpine sets cap_net_bind_service=ep and the capability-free
+          # admin hash helper cannot exec it; keep this reviewed digest pinned.
+          CADDY_SOURCE_IMAGE: caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
           POSTGRES_SOURCE_IMAGE: postgres:16.10-alpine
           MARIADB_SOURCE_IMAGE: mariadb:10.11.14
         run: |
@@ -569,12 +571,25 @@ jobs:
           CANDIDATE_VERSION="$VERSION"
           printf '%s\n' "$CANDIDATE_VERSION" > image-inputs/candidate-version
 
+          # Called as "$(resolve_image ...)": command substitutions do not inherit
+          # errexit, so every check returns non-zero explicitly and prints nothing.
           resolve_image() {
             local reference="$1"
+            local repository="${reference%%@*}"
+            local pinned=""
             local digest
-            digest="$(docker buildx imagetools inspect "$reference" | awk '/^Digest:/ {print $2; exit}')"
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            printf '%s@%s' "${reference%%:*}" "$digest"
+            if [[ "$reference" == *@* ]]; then
+              pinned="${reference#*@}"
+              [[ "$pinned" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+            fi
+            # Strip a tag only from the last path segment so registry ports survive.
+            if [[ "${repository##*/}" == *:* ]]; then
+              repository="${repository%:*}"
+            fi
+            digest="$(docker buildx imagetools inspect "$reference" | awk '/^Digest:/ {print $2; exit}')" || return 1
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+            [[ -z "$pinned" || "$digest" == "$pinned" ]] || return 1
+            printf '%s@%s' "$repository" "$digest"
           }
 
           caddy_image="$(resolve_image "$CADDY_SOURCE_IMAGE")"
