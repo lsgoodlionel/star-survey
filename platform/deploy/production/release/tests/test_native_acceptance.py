@@ -474,6 +474,30 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                           'BASELINE_MANIFEST_SHA256': expected['manifestSha256']}, values)
 
 
+    def test_rc21_bootstraps_because_legacy_installs_cannot_be_adopted(self):
+        # The owned-runtime controller refuses to adopt installs without an
+        # ownership record, so no earlier RC can serve as the rc21 predecessor.
+        # rc21 proves fresh installs only; rc22 must name rc21 as predecessor.
+        policy = json.loads(BASELINE_POLICY_PATH.read_text())
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases'].get('0.3.21-rc.1'))
+        self.assertEqual({'mode': 'predecessor-artifact', 'version': '0.3.19-rc.1', 'runId': 41942118701,
+                          'commit': '46766fd4326c370e0a5eeaa8de50235b5abb4a16',
+                          'manifestSha256': '4c29b4e4f9dcdeda22963eb203ea11264c6555e5f0e3ce6baf6db73a71829e8a'},
+                         policy['releases']['0.3.20-rc.1'])
+        step = next(s for s in self.workflow['jobs']['candidate-assets']['steps'] if s.get('id') == 'baseline')
+        script = step['run'].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        def resolve(version):
+            return subprocess.run([sys.executable, '-', version, str(BASELINE_POLICY_PATH)],
+                                  input=script, text=True, capture_output=True, check=False)
+        result = resolve('0.3.21-rc.1')
+        self.assertEqual(0, result.returncode, result.stderr)
+        values = dict(line.split('=', 1) for line in result.stdout.splitlines())
+        self.assertEqual('bootstrap', values['BASELINE_MODE'])
+        self.assertNotIn('BASELINE_RUN_ID', values)
+        self.assertNotIn('BASELINE_MANIFEST_SHA256', values)
+        self.assertNotEqual(0, resolve('0.3.21-rc.2').returncode)
+        self.assertNotEqual(0, resolve('0.3.21').returncode)
+
 class NativeAcceptanceScriptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
