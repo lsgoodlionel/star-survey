@@ -14,7 +14,6 @@ jobs:
     timeout-minutes: 10
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      PYTHONPYCACHEPREFIX: ${{ runner.temp }}/ownership-sampling-isolated-pycache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -27,6 +26,8 @@ jobs:
       - name: Initialize bounded unknown evidence
         run: |
           set -euo pipefail
+          export PYTHONPYCACHEPREFIX="$RUNNER_TEMP/ownership-sampling-isolated-pycache"
+          printf 'PYTHONPYCACHEPREFIX=%s\n' "$PYTHONPYCACHEPREFIX" >> "$GITHUB_ENV"
           mkdir -m 0700 "$PYTHONPYCACHEPREFIX"
           mkdir -m 0700 "$RUNNER_TEMP/ownership-health-evidence"
           python3 - <<'PY'

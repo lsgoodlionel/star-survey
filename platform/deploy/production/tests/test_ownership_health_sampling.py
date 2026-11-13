@@ -223,6 +223,14 @@ class OwnershipSamplingEntryTest(unittest.TestCase):
         self.assertNotIn('gh release', runs)
         self.assertNotIn('git push', runs)
 
+    def test_runner_temporary_path_is_initialized_after_runner_assignment(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/production-smoke.yml').read_text())
+        job = workflow['jobs']['ownership-health-sample']
+        self.assertNotIn('runner.', json.dumps(job.get('env', {})))
+        initialize = next(step['run'] for step in job['steps'] if step.get('name') == 'Initialize bounded unknown evidence')
+        self.assertIn('export PYTHONPYCACHEPREFIX="$RUNNER_TEMP/ownership-sampling-isolated-pycache"', initialize)
+        self.assertIn('>> "$GITHUB_ENV"', initialize)
+
 
 if __name__ == '__main__':
     unittest.main()
