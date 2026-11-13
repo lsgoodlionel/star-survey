@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import unittest
 import tempfile
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location('maintenance_native',
     Path(__file__).parent / 'integration/owned_maintenance_native.py')
@@ -42,6 +43,7 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
         for key in ('schemaVersion', 'sourceAfter', 'cases'):
             bad = deepcopy(report); bad[key] = True
             self.assertFalse(self.module.passed(bad))
+
         for index, checks in enumerate(self.module.REQUIRED.values()):
             for key in checks:
                 for value in (False, 1, None):
@@ -55,6 +57,23 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
         for count in (0, True, None, 2):
             bad = deepcopy(report); bad['cases'][0]['retainedNetworkCount'] = count
             self.assertFalse(self.module.passed(bad))
+
+    def test_native_component_requires_independent_ordinary_uninstall_proof(self):
+        self.assertIn('ordinaryUninstallProofVerified', self.module.REQUIRED['backup-purge'])
+
+    def test_failed_or_unknown_case_never_runs_destructive_finally_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(self.module.tempfile,'mkdtemp',return_value=directory), \
+                mock.patch.object(self.module,'namespace_empty',side_effect=OSError('synthetic failure')), \
+                mock.patch.object(self.module,'fixture_cleanup',return_value=True) as cleanup, \
+                mock.patch.object(self.module,'PENDING_FIXTURES',[]), \
+                mock.patch.object(self.module.ownership,'PROJECT',self.module.ownership.PROJECT), \
+                mock.patch.object(self.module.ownership,'CLAIM_NAME',self.module.ownership.CLAIM_NAME):
+            result=self.module.run_case({},'backup-purge')
+            cleanup.assert_not_called()
+            self.assertEqual('failed',result['status'])
+            self.assertEqual('preserved-failed-or-unknown',result['fixtureCleanup'])
+            self.assertEqual(1,len(self.module.PENDING_FIXTURES))
 
     def test_upgrade_fixture_has_one_real_internal_network_without_published_ports(self):
         images = json.loads((Path(__file__).parent / 'fixtures/release.json').read_text())['images']
