@@ -630,7 +630,8 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
     def test_rc21_bootstraps_because_legacy_installs_cannot_be_adopted(self):
         # The owned-runtime controller refuses to adopt installs without an
         # ownership record, so no earlier RC can serve as the rc21 predecessor.
-        # rc21 proves fresh installs only; rc22 must name rc21 as predecessor.
+        # Only a fully verified owned-runtime bootstrap may become a later
+        # upgrade predecessor; a failed candidate cannot supply that baseline.
         policy = json.loads(BASELINE_POLICY_PATH.read_text())
         self.assertEqual({'mode': 'bootstrap'}, policy['releases'].get('0.3.21-rc.1'))
         self.assertEqual({'mode': 'predecessor-artifact', 'version': '0.3.19-rc.1', 'runId': 41942118701,
@@ -650,6 +651,42 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
         self.assertNotIn('BASELINE_MANIFEST_SHA256', values)
         self.assertNotEqual(0, resolve('0.3.21-rc.2').returncode)
         self.assertNotEqual(0, resolve('0.3.21').returncode)
+
+    def test_rc22_bootstraps_after_rc21_failed_before_native_acceptance(self):
+        policy = json.loads(BASELINE_POLICY_PATH.read_text())
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases'].get('0.3.22-rc.1'))
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases']['0.3.21-rc.1'])
+        step = next(s for s in self.workflow['jobs']['candidate-assets']['steps'] if s.get('id') == 'baseline')
+        script = step['run'].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+
+        def resolve(version, path):
+            return subprocess.run([sys.executable, '-', version, str(path)],
+                                  input=script, text=True, capture_output=True, check=False)
+
+        result = resolve('0.3.22-rc.1', BASELINE_POLICY_PATH)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({'BASELINE_MODE': 'bootstrap', 'BASELINE_SOURCE': 'bootstrap',
+                          'MINIMUM_SOURCE_VERSION': '0.0.0'},
+                         dict(line.split('=', 1) for line in result.stdout.splitlines()))
+        # Exercise the format guard even if someone registers the invalid version.
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'baseline-policy.json'
+            for version in ('0.3.22-rc.2', '0.3.22'):
+                with self.subTest(version=version):
+                    invalid = copy.deepcopy(policy)
+                    invalid['releases'][version] = {'mode': 'bootstrap'}
+                    path.write_text(json.dumps(invalid))
+                    denied = resolve(version, path)
+                    self.assertNotEqual(0, denied.returncode)
+                    self.assertEqual('', denied.stdout)
+                    self.assertIn('bootstrap is only valid for the first prerelease RC', denied.stderr)
+            invalid = copy.deepcopy(policy)
+            invalid['releases']['0.3.22-rc.1']['version'] = '0.3.21-rc.1'
+            path.write_text(json.dumps(invalid))
+            denied = resolve('0.3.22-rc.1', path)
+            self.assertNotEqual(0, denied.returncode)
+            self.assertEqual('', denied.stdout)
+            self.assertIn('bootstrap policy cannot name a synthetic predecessor', denied.stderr)
 
 class NativeAcceptanceScriptTest(unittest.TestCase):
     @classmethod
