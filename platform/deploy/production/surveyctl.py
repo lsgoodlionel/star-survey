@@ -1432,7 +1432,8 @@ class SurveyManager:
             raise RuntimeHealthError(runtime_message) from exc
 
     def _wait_healthy(self, compose: list[str], message: str, timeout: float = 120) -> None:
-        deadline = time.monotonic() + timeout
+        started = time.monotonic()
+        deadline = started + timeout
         while True:
             try:
                 self._assert_healthy(compose, message)
@@ -1440,8 +1441,14 @@ class SurveyManager:
             except StartupPending as exc:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise RuntimeHealthError(f"{message}: startup health deadline exceeded") from exc
+                    failure = RuntimeHealthError(f"{message}: startup health deadline exceeded")
+                    failure.health_evidence = getattr(exc, 'health_evidence', None)
+                    failure.health_wait_elapsed_ms = min(3600000, max(0, round((timeout - remaining) * 1000)))
+                    raise failure from exc
                 time.sleep(min(1, remaining))
+            except RuntimeHealthError as exc:
+                exc.health_wait_elapsed_ms = min(3600000, max(0, round((time.monotonic() - started) * 1000)))
+                raise
 
     def _assert_healthy(self, compose: list[str], message: str) -> None:
         # `_compose(version)` has already verified the staged release and its
@@ -1474,11 +1481,28 @@ class SurveyManager:
         }
         init = by_service["engine-init"]
         raw_exit_code = init.get("ExitCode", 1)
+        def fixed(value, allowed):
+            return value if isinstance(value, str) and value in allowed else 'unknown'
+        states = {'created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead', 'completed'}
+        bounded_exit = None
+        if type(raw_exit_code) is int and 0 <= raw_exit_code <= 255:
+            bounded_exit = raw_exit_code
+        elif isinstance(raw_exit_code, str) and re.fullmatch(r'[0-9]{1,3}', raw_exit_code) and int(raw_exit_code) <= 255:
+            bounded_exit = int(raw_exit_code)
+        observation = {
+            'services': {name: {'state': fixed(by_service[name].get('State'), states),
+                                 'health': fixed(by_service[name].get('Health'), {'starting', 'healthy', 'unhealthy'})}
+                         for name in sorted(running_services)},
+            'engineInit': {'state': fixed(init.get('State'), states), 'exitCode': bounded_exit},
+        }
+        def observed_failure(error):
+            error.health_evidence = observation
+            return error
         if isinstance(raw_exit_code, bool) or not (
             isinstance(raw_exit_code, int)
             or (isinstance(raw_exit_code, str) and re.fullmatch(r"\d+", raw_exit_code) is not None)
         ):
-            raise RuntimeHealthError(f"{message}: engine-init status is invalid")
+            raise observed_failure(RuntimeHealthError(f"{message}: engine-init status is invalid"))
         exit_code = int(raw_exit_code)
         init_ok = init.get("State") in {"exited", "completed"} and exit_code == 0
         if unhealthy and init_ok and all(
@@ -1486,9 +1510,9 @@ class SurveyManager:
             and by_service[service].get("Health") == "starting"
             for service in unhealthy
         ):
-            raise StartupPending(f"{message}: healthchecks still starting")
+            raise observed_failure(StartupPending(f"{message}: healthchecks still starting"))
         if unhealthy or not init_ok:
-            raise RuntimeHealthError(f"{message}: unhealthy={sorted(unhealthy)}, engine-init-ok={init_ok}")
+            raise observed_failure(RuntimeHealthError(f"{message}: unhealthy={sorted(unhealthy)}, engine-init-ok={init_ok}"))
 
     def _validate_install_inputs(self, public_host: str, admin_user: str, admin_email: str) -> None:
         hostname = r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
