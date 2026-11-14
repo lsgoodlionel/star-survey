@@ -586,7 +586,9 @@ jobs:
             if [[ "${repository##*/}" == *:* ]]; then
               repository="${repository%:*}"
             fi
-            digest="$(docker buildx imagetools inspect "$reference" | awk '/^Digest:/ {print $2; exit}')" || return 1
+            # awk must drain the whole output: exiting at the first Digest line
+            # SIGPIPEs inspect mid-Manifests, and pipefail makes that a failure.
+            digest="$(docker buildx imagetools inspect "$reference" | awk '/^Digest:/ && digest == "" {digest = $2} END {print digest}')" || return 1
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
             [[ -z "$pinned" || "$digest" == "$pinned" ]] || return 1
             printf '%s@%s' "$repository" "$digest"
