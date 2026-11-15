@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-15 rc24 bootstrap 登记（Owner 已授权合并 #165 并登记，打 tag 另需授权）：`v0.3.23-rc.1` 的 release run [43669018859](https://github.com/lsgoodlionel/star-survey/actions/runs/43669018859) 候选包组装成功（#162 生效），但四台原生验收主机均在首次调用 controller 时报“installation path ownership or permissions are unsafe”：fixture 位于 runner 用户拥有的 `RUNNER_TEMP` 下，不满足 root controller 的上级目录规则。#165 改为 `/tmp` 下创建 fixture，并在安装前按同一规则校验（失败优先测试，Linux CI 通过；唯一失败为与之无关的 ownership-protocol 已知间歇问题，按 Codex 要求未重跑），已按已审 head 合并为 `0e78bb6814`。rc23 tag 保留为失败记录，没有主机接受过它，不能作为前代。本切片只追加 `0.3.24-rc.1` 的 bootstrap 策略和相邻 resolver 回归（rc.2/稳定版本拒绝、不允许合成前代、输出精确无前代）；新测试在缺登记时失败，追加后通过。未改 Release workflow、controller/runtime 或其他门禁，没有新 tag、run 或发布。
+
 2026-11-15 #164 整合 #163：正常合入 main `79f19fbb8caf643087b2a23a56cc42863df85d8c`，仅本进度文件顶部两段追加发生冲突，双方历史记录原样保留。#163 的策略及原生契约测试与主线一致，#164 的 Digest 修复和回归未变；组合验证及新 head GitHub CI 待完成。Claude 对原 head c9ae8a1542 的评论式非作者复核无阻断，不冒称正式 Approve或新组合已验证。不合并 PR、打 tag 或发布。
 
 2026-11-14 首个 Digest 选择语义修复准备（基于 main `f05d187e3322a711924d025fbd4ee467606b0174`，本地待审）：#162 的完整消费输出逻辑用摘要空值表示“尚未选择”，导致首行为空/纯空白、后续合法时被接受。新增带 pin/无 pin 的组合回归先失败四个子例；改为独立 `seen` 标记后仍完整消费输出，首行无效保持拒绝，后续行不能纠正 pin 不匹配。Mac 完整 workflow 测试21项通过；固定已有镜像的隔离 Linux ARM64 / Bash5.2.37 执行真实测试类六项 resolver 方法，旧代码四个失败子例、新代码全通过，包含长尾、inspect失败、空/非法摘要和pin负例。该验证使用假 inspect，不证明历史 rc22 的唯一失败原因、真实 registry查询或候选组装通过。未修改策略、运行候选、合并或解除门禁；此前 GitHub 评论更新被拒后未换渠道重试。
