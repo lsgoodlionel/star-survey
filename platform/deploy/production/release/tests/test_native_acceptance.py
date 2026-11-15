@@ -1351,7 +1351,7 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                    'ENGINE_IMAGE_DIGEST': 'sha256:' + '4' * 64,
                    'EXPECTED_UBUNTU': '24.04', 'EXPECTED_ARCHITECTURE': 'arm64',
                    'COMPOSE_PROJECT_NAME': 'survey-production',
-                   'DOCKER_HOST': 'unix:///var/run/docker.sock', 'RUNNER_TEMP': str(parent)}
+                   'DOCKER_HOST': 'unix:///var/run/docker.sock', 'NATIVE_FIXTURE_PARENT': str(parent)}
             with mock.patch.dict(os.environ, env, clear=True):
                 with mock.patch.object(self.module, 'require_clean_native_host') as preflight:
                     self.module.write_fixture_owner(work, marker)
@@ -1400,6 +1400,76 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
                 work.chmod(0o755)
                 with self.assertRaises(self.module.EvidenceError):
                     self.module.write_fixture_owner(work, marker)
+
+    def test_fixture_parent_must_satisfy_the_root_controller_ancestry_rule(self):
+        # v0.3.23-rc.1 (run 43669018859): the fixture sat under RUNNER_TEMP, whose
+        # ancestors belong to the runner user, and surveyctl (root) refused the
+        # target on all four hosts. The helper must refuse that before install.
+        trusted = self.module.require_controller_trusted_ancestry
+        trusted(Path('/tmp'))  # root-owned sticky, as on the hosted runners
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            trusted(parent)
+            # As root, a directory owned by the unprivileged user is untrusted.
+            with mock.patch.object(self.module.os, 'geteuid', return_value=0):
+                with self.assertRaises(self.module.EvidenceError):
+                    trusted(parent)
+            shared = parent / 'shared'
+            shared.mkdir()
+            shared.chmod(0o777)  # writable by others and not sticky
+            with self.assertRaises(self.module.EvidenceError):
+                trusted(shared)
+            shared.chmod(0o700)
+            link = parent / 'link'
+            link.symlink_to(shared)
+            with self.assertRaises(self.module.EvidenceError):
+                trusted(link)
+            with self.assertRaises(self.module.EvidenceError):
+                trusted(parent / 'missing')
+            regular = parent / 'file'
+            regular.write_text('x')
+            with self.assertRaises(self.module.EvidenceError):
+                trusted(regular)
+
+            work = parent / 'survey-native-acceptance.test'
+            work.mkdir(mode=0o700)
+            marker = work / 'owner.json'
+            env = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+                   'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey',
+                   'GITHUB_RUN_ID': '12345', 'GITHUB_RUN_ATTEMPT': '1',
+                   'CANDIDATE_MANIFEST_SHA256': 'a' * 64,
+                   'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
+                   'ADMIN_IMAGE_DIGEST': 'sha256:' + '1' * 64,
+                   'PLATFORM_IMAGE_DIGEST': 'sha256:' + '2' * 64,
+                   'PUBLISH_GATEWAY_IMAGE_DIGEST': 'sha256:' + '3' * 64,
+                   'ENGINE_IMAGE_DIGEST': 'sha256:' + '4' * 64,
+                   'EXPECTED_UBUNTU': '24.04', 'EXPECTED_ARCHITECTURE': 'arm64',
+                   'COMPOSE_PROJECT_NAME': 'survey-production',
+                   'DOCKER_HOST': 'unix:///var/run/docker.sock'}
+            # RUNNER_TEMP no longer chooses the parent; a missing parent is refused.
+            for name, extra in [('missing parent', {'RUNNER_TEMP': str(parent)}),
+                                ('relative parent', {'NATIVE_FIXTURE_PARENT': 'tmp'})]:
+                with self.subTest(case=name), mock.patch.dict(os.environ, {**env, **extra}, clear=True):
+                    with mock.patch.object(self.module, 'require_clean_native_host') as preflight:
+                        with self.assertRaises(self.module.EvidenceError):
+                            self.module.write_fixture_owner(work, marker)
+                        preflight.assert_not_called()
+                    self.assertFalse(marker.exists())
+            with mock.patch.dict(os.environ, {**env, 'NATIVE_FIXTURE_PARENT': str(parent)}, clear=True):
+                with mock.patch.object(self.module, 'require_clean_native_host') as preflight, \
+                        mock.patch.object(self.module.os, 'geteuid', return_value=0):
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.write_fixture_owner(work, marker)
+                    preflight.assert_not_called()
+                self.assertFalse(marker.exists())
+
+    def test_script_places_the_fixture_under_a_root_trusted_parent(self):
+        text = SCRIPT_PATH.read_text(encoding='utf-8')
+        self.assertFalse('RUNNER_TEMP' in text, 'the fixture must not follow the runner temp directory')
+        export = text.index('export NATIVE_FIXTURE_PARENT=/tmp\n')
+        work = text.index('work_root="$(mktemp -d "$NATIVE_FIXTURE_PARENT/survey-native-acceptance.XXXXXX")"\n')
+        self.assertLess(export, work)
+        self.assertLess(work, text.index('fixture-owner-create'))
 
     def test_clean_host_guard_fails_closed_on_nonhosted_or_existing_resources(self):
         completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
