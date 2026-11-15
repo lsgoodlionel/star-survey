@@ -688,6 +688,44 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
             self.assertEqual('', denied.stdout)
             self.assertIn('bootstrap policy cannot name a synthetic predecessor', denied.stderr)
 
+    def test_rc23_bootstraps_after_rc22_failed_before_native_acceptance(self):
+        # v0.3.22-rc.1 (run 43539208895) failed assembling the candidate before any
+        # native acceptance (fixed in #162), so it cannot be a predecessor either.
+        policy = json.loads(BASELINE_POLICY_PATH.read_text())
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases'].get('0.3.23-rc.1'))
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases']['0.3.22-rc.1'])
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases']['0.3.21-rc.1'])
+        step = next(s for s in self.workflow['jobs']['candidate-assets']['steps'] if s.get('id') == 'baseline')
+        script = step['run'].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+
+        def resolve(version, path):
+            return subprocess.run([sys.executable, '-', version, str(path)],
+                                  input=script, text=True, capture_output=True, check=False)
+
+        result = resolve('0.3.23-rc.1', BASELINE_POLICY_PATH)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({'BASELINE_MODE': 'bootstrap', 'BASELINE_SOURCE': 'bootstrap',
+                          'MINIMUM_SOURCE_VERSION': '0.0.0'},
+                         dict(line.split('=', 1) for line in result.stdout.splitlines()))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'baseline-policy.json'
+            for version in ('0.3.23-rc.2', '0.3.23'):
+                with self.subTest(version=version):
+                    invalid = copy.deepcopy(policy)
+                    invalid['releases'][version] = {'mode': 'bootstrap'}
+                    path.write_text(json.dumps(invalid))
+                    denied = resolve(version, path)
+                    self.assertNotEqual(0, denied.returncode)
+                    self.assertEqual('', denied.stdout)
+                    self.assertIn('bootstrap is only valid for the first prerelease RC', denied.stderr)
+            invalid = copy.deepcopy(policy)
+            invalid['releases']['0.3.23-rc.1']['version'] = '0.3.22-rc.1'
+            path.write_text(json.dumps(invalid))
+            denied = resolve('0.3.23-rc.1', path)
+            self.assertNotEqual(0, denied.returncode)
+            self.assertEqual('', denied.stdout)
+            self.assertIn('bootstrap policy cannot name a synthetic predecessor', denied.stderr)
+
 class NativeAcceptanceScriptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

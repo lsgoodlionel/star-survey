@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-14 rc23 bootstrap 登记（Owner 已授权登记，打 tag 另需授权）：`v0.3.22-rc.1` 的 release run [43539208895](https://github.com/lsgoodlionel/star-survey/actions/runs/43539208895) 四个镜像均通过扫描、签名与 attestation（#159 已生效），但组装候选包时无声失败，没有生成候选包、原生验收或 Release。根因是 #152 引入的 `resolve_image` 回归：awk 在第一行 Digest 处退出，inspect 被 SIGPIPE 终止，pipefail 将其判为失败。#162 已修复（带失败优先测试）并合并为 `f05d187e33`。rc22 tag 保留为失败记录，不能作为前代。本切片只追加 `0.3.23-rc.1` 的 bootstrap 策略和相邻的 resolver 回归测试（rc.2/稳定版本仍被拒绝，不允许合成前代，输出精确无前代）。新测试在缺登记时失败，追加后通过。未改 Release workflow 或其他门禁，没有新 tag、run 或发布。
+
 2026-11-13 rc22 bootstrap 登记准备（Owner 已批准该批次，尚未触发候选）：#159 已按精确 head 复核及真实 amd64 Trivy 补证后合并至 `4863a0a4c9d6ed077e315c22ddf2b7e93599a0a2`，实际合并 tree 与已审 head 一致；main CI [43416540816](https://github.com/lsgoodlionel/star-survey/actions/runs/43416540816) 仍进行中，不能记为通过。失败的 rc21 原标签与记录保留，不可作为合格前代。本切片仅追加 `0.3.22-rc.1` 的 bootstrap 策略、相邻解析回归及修正过时注释，不修改 Release workflow、上传白名单、恢复拒绝或 publication 门禁。新增测试先因缺登记失败，追加后通过；覆盖显式登记的 rc.2/稳定版本仍拒绝、bootstrap 不得携带合成前代及精确无前代输出。整份本地原生契约 61 项中两项既有 shell 负例失败，未改基线同样失败；本机 Bash 3.2 的失败 `[[ ... ]]` 未触发 `set -e` 已直接复现。未放宽断言，Linux 完整结果交 GitHub CI 验证。
 
 Claude 继续单一负责候选/Release 执行；为避免串行等待，Codex 在无同项 PR/远端分支时独立准备此登记草稿（[分工记录](https://github.com/lsgoodlionel/star-survey/issues/138#issuecomment-6851543270)）。新策略须独立复核、精确 PR 检查及实际合并 main CI/production smoke 成功后才可创建 `v0.3.22-rc.1`；当前没有新 tag/run/签名安装包。bootstrap 只验证适用的新安装，不是升级、恢复或 stable 准出；后续真实升级验收顺延并绑定首个完整合格的新协议前代。D5、restore、公开 Release 与生产权限不扩大，#158 不自动纳入。未移动 rc21、打新标签或发布。
