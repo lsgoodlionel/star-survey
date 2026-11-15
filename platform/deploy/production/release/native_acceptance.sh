@@ -34,7 +34,12 @@ export COMPOSE_PROJECT_NAME=survey-production
 candidate_root="$(realpath "$CANDIDATE_DIR")"
 identity_path="$(realpath "$CANDIDATE_IDENTITY")"
 evidence_root="$(realpath -m "$EVIDENCE_DIR")"
-work_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/survey-native-acceptance.XXXXXX")"
+# The root controller trusts only ancestors owned by root (or itself) that are not
+# group/other writable, or root-owned sticky ones. The runner temp directory lives
+# under the runner user's home, so the fixture goes under /tmp
+# (v0.3.23-rc.1 run 43669018859 failed on every host).
+export NATIVE_FIXTURE_PARENT=/tmp
+work_root="$(mktemp -d "$NATIVE_FIXTURE_PARENT/survey-native-acceptance.XXXXXX")"
 target="$work_root/primary"
 runtime="$work_root/runtime"
 candidate_release_dir="$candidate_root/candidate"

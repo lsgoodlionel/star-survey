@@ -175,6 +175,27 @@ def require_no_restore_resources() -> None:
             raise EvidenceError('isolated restore project resources remain')
 
 
+def require_controller_trusted_ancestry(path: Path) -> None:
+    """Mirror surveyctl's rule for ancestors outside the installation target.
+
+    v0.3.23-rc.1 (run 43669018859) placed the fixture under RUNNER_TEMP, whose
+    ancestors belong to the unprivileged runner user, so the root controller
+    refused the target on every host. Refuse such a parent before any install.
+    Every component must be a real directory owned by root or the effective user
+    and not group/other writable, except a root-owned sticky directory (/tmp).
+    """
+    for component in (*reversed(path.parents), path):
+        try:
+            info = os.lstat(component)
+        except OSError as exc:
+            raise EvidenceError('fixture parent is not controller-trusted') from exc
+        writable = info.st_mode & 0o022
+        sticky_root = info.st_uid == 0 and info.st_mode & stat.S_ISVTX
+        if (stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid not in {0, os.geteuid()} or (writable and not sticky_root)):
+            raise EvidenceError('fixture parent is not controller-trusted')
+
+
 def _fixture_owner(work: Path, target: Path, marker: Path) -> dict[str, str]:
     """Validate the isolated runner identity before constructing an ownership marker."""
     if (os.environ.get('GITHUB_ACTIONS') != 'true' or
@@ -197,9 +218,12 @@ def _fixture_owner(work: Path, target: Path, marker: Path) -> dict[str, str]:
             SHA256.fullmatch(manifest) is None or SHA256.fullmatch(bundle) is None or (ubuntu, arch) not in RUNNERS or
             any(DIGEST.fullmatch(value) is None for value in images.values())):
         raise EvidenceError('fixture candidate or run identity is invalid')
-    temp = Path(os.environ.get('RUNNER_TEMP', ''))
-    if (not temp.is_absolute() or not work.is_absolute() or work.is_symlink() or not work.is_dir() or
-            work.resolve().parent != temp.resolve() or not work.name.startswith('survey-native-acceptance.') or
+    parent = Path(os.environ.get('NATIVE_FIXTURE_PARENT', ''))
+    if not parent.is_absolute():
+        raise EvidenceError('fixture target path is invalid')
+    require_controller_trusted_ancestry(parent)
+    if (not work.is_absolute() or work.is_symlink() or not work.is_dir() or
+            work.resolve().parent != parent.resolve() or not work.name.startswith('survey-native-acceptance.') or
             target != work / 'primary' or target.is_symlink() or marker != work / 'owner.json'):
         raise EvidenceError('fixture target path is invalid')
     metadata = work.stat()
