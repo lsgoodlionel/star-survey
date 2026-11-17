@@ -448,7 +448,8 @@ class OwnedDoctorRunner:
             output = self.operation.exec_bytes(profiles[suffix], suffix[0])
             return subprocess.CompletedProcess(command, 0, output.decode('utf-8', 'strict'), '')
         read_only = (args[:len(compose)] == compose and args[len(compose):] in (
-            ['config', '--format', 'json'], ['ps', '--all', '--format', 'json']))
+            ['config', '--format', 'json'], ['ps', '--all', '--format', 'json'],
+            ['ps', '--all', '--no-trunc', '--format', 'json']))
         read_only = read_only or args == ['ss', '-H', '-ltnp'] or (
             len(args) == 5 and args[:2] == ['ps', '-p'] and re.fullmatch(r'[1-9][0-9]{0,9}', args[2])
             and args[3:] == ['-o', 'args='])
