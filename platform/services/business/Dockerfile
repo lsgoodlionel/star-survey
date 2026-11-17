@@ -32,7 +32,6 @@ WORKDIR /app
 COPY --from=build /tmp/business.jar /app/business.jar
 
 USER 10001:10001
-VOLUME ["/var/lib/survey"]
 EXPOSE 8080
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=6 \
