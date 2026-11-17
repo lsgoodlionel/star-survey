@@ -87,6 +87,9 @@
     },
     "0.3.24-rc.1": {
       "mode": "bootstrap"
+    },
+    "0.3.25-rc.1": {
+      "mode": "bootstrap"
     }
   }
 }
