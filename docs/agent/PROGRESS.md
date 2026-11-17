@@ -630,3 +630,5 @@ After independent review/merge, only the actual main commit with complete succes
 第一切片新增 recovery-plan，只读观察无 current/pending/recovery_required 现场及可选备份 metadata，限定全新非重叠目标，输出始终 execution-blocked/executable=false；不调用 helper/Docker、不读密钥、不解密、不写现场或清理标记。通过既有私有锁协调当前控制器并复查文件/目录快照，但不声称旧控制器或外部写入者排空。观察指纹不是授权、签名或执行租约；备份 authenticated/payloadsChecked 均为 false。计划已写入 docs/superpowers/plans/2026-11-11-wave6-controlled-recovery.md；执行端、原生/restore/卸载硬阻断保留。
 
 首批新增测试先因入口缺失失败，14项定向通过；旧控制器精确命令清单随后按新命令更新，未删除断言。读取替换、原位变化、锁冲突、文件出现、权限/链接/FIFO/JSON/大小、只读无泄漏和实际打包清单均有合成回归。合并到既有控制器测试后修正了一处测试路径迁移笔误；完整本地控制器130项、Release/工作流167项均通过（共297项，新增14项已含其中）；GitHub CI 仍待本切片最终精确 head 验证，不能标记恢复/清理通过。后续真实执行必须先证明新目标资源隔离、可信备份与 floor、helper/崩溃明文 containment、人员失效及可归因清理，不重新接入 #102 已拒绝的实验。没有新 tag、候选、Release、生产或真实身份操作。
+
+2026-11-17：针对 rc24 安装阶段可能遇到的平台镜像隐式父卷冲突，独立分支移除业务镜像的 `/var/lib/survey` 父 VOLUME 声明，保留 Compose 中 assets 与 exports 两个独立命名卷及原有所有权检查。新增静态契约测试对原 Dockerfile 先失败、修复后通过；runtime controller 14 项回归通过。ARM64 和 AMD64 本地测试镜像的配置均未声明该父卷，Tart ARM64 仅观察两个空文件跨测试容器保留。实际 rc24 失败根因、真实业务数据与升级、正式候选四平台验收尚未证实；恢复及发布门禁未改变。

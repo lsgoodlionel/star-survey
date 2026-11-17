@@ -3,6 +3,8 @@
 本目录是 Ubuntu 22.04/24.04、AMD64/ARM64 的 Docker Compose 单机生产运行时。生产安装只消费
 Release manifest、校验过的架构 bundle 和固定 digest 镜像；服务器不需要源码，也不会在镜像拉取失败时回退到本地构建。
 
+生产 Compose 使用独立命名卷分别持久化平台 assets 与 exports，升级时必须保留这两个卷的身份。平台镜像不再自动为 `/var/lib/survey` 创建父匿名卷；脱离该 Compose 单独运行镜像时，需要自行为需要持久化的目录配置挂载。其他写入父目录的用途也须显式配置持久化。
+
 ## 前提
 
 - systemd 正常运行，Docker Engine >= 24，Docker Compose plugin >= 2.20。
