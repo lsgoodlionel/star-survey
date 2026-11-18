@@ -135,18 +135,30 @@ class OwnedMaintenance:
                     failed = True  # Still try every other recorded writer.
             if not failed:
                 for attempt in range(30):
-                    states = [self._state(cid) for cid in writers]
-                    if all(s['Running'] and s.get('Health', {}).get('Status') == 'healthy' for s in states): break
+                    observations.clear()
+                    for cid in writers:
+                        try:
+                            state = self._state(cid)
+                            running, health_info = state['Running'], state.get('Health', {})
+                        except Exception:
+                            observations[names[cid]] = 'state-unavailable'
+                            failed = True
+                            break
+                        if not isinstance(health_info, dict):
+                            observations[names[cid]] = 'health-unknown'
+                            failed = True
+                        elif running is not True:
+                            observations[names[cid]] = 'not-running'
+                        else:
+                            health = health_info.get('Status')
+                            if health != 'healthy':
+                                observations[names[cid]] = health if health in ('starting', 'unhealthy') else 'health-unknown'
+                    if failed or not observations:
+                        break
                     if attempt == 29:
                         failed = True
-                        for cid, state in zip(writers, states):
-                            health_info = state.get('Health')
-                            health = health_info.get('Status') if isinstance(health_info, dict) else None
-                            if not state.get('Running'):
-                                observations[names[cid]] = 'not-running'
-                            elif health != 'healthy':
-                                observations[names[cid]] = health if health in ('starting', 'unhealthy') else 'health-unknown'
-                    else: self.sleep(2)
+                    else:
+                        self.sleep(2)
             if failed:
                 self.uncertain = True
                 error = UncertainMaintenance('writer resume or health recovery is unverified; preserve markers')

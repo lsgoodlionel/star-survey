@@ -255,7 +255,7 @@ def bounded_writer_observations(exc):
     rows = getattr(exc, 'writer_observations', None)
     services = {'edge', 'admin-web', 'platform', 'publish-gateway', 'engine', 'engine-relay'}
     values = {'resume-preflight', 'unpause-request', 'resume-verify', 'not-running',
-              'starting', 'unhealthy', 'health-unknown'}
+              'starting', 'unhealthy', 'health-unknown', 'state-unavailable'}
     if (type(rows) is not dict or not rows or len(rows) > len(services)
             or not rows.keys() <= services
             or any(type(value) is not str or value not in values for value in rows.values())):

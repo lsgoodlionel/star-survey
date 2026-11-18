@@ -96,6 +96,40 @@ class MaintenanceTest(unittest.TestCase):
         self.assertEqual(4, len(self.events))
         self.assertTrue(self.operation.uncertain)
 
+    def test_null_health_or_unreadable_writer_state_stays_uncertain(self):
+        original = self.operation._state
+        def observe(cid, **kwargs):
+            if kwargs.get('allow_paused'):
+                return original(cid, **kwargs)
+            if cid == self.ids['edge']:
+                return {'Running': True, 'Health': None}
+            raise OSError('private fixture detail')
+        with patch.object(self.operation, '_state', side_effect=observe), patch.object(self.operation, 'sleep') as sleep:
+            with self.assertRaises(self.module.UncertainMaintenance) as caught:
+                with self.operation.frozen_writers():
+                    pass
+        self.assertTrue(self.operation.uncertain)
+        self.assertEqual({"edge": "health-unknown", "platform": "state-unavailable"},
+                         caught.exception.writer_observations)
+        self.assertEqual(4, len(self.events))
+        sleep.assert_not_called()
+
+    def test_null_health_alone_fails_closed_without_wait_or_control_replay(self):
+        original = self.operation._state
+        def observe(cid, **kwargs):
+            state = original(cid, **kwargs)
+            if not kwargs.get('allow_paused') and cid == self.ids['edge']:
+                state['Health'] = None
+            return state
+        with patch.object(self.operation, '_state', side_effect=observe), patch.object(self.operation, 'sleep') as sleep:
+            with self.assertRaises(self.module.UncertainMaintenance) as caught:
+                with self.operation.frozen_writers():
+                    pass
+        self.assertTrue(self.operation.uncertain)
+        self.assertEqual({"edge": "health-unknown"}, caught.exception.writer_observations)
+        self.assertEqual(4, len(self.events))
+        sleep.assert_not_called()
+
     def test_recorded_pause_uses_docker_paused_status_and_still_resumes(self):
         observe = self.runtime.driver._container
         def actual_status(cid, **kwargs):
