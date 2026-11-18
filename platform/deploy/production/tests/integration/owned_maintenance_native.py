@@ -44,10 +44,44 @@ PENDING_FIXTURES = []  # Keep unknown leases/managers alive until this process e
 
 
 def doctor_refusal_report(value):
-    return (isinstance(value, dict) and type(value.get('schemaVersion')) is int and value == {
-        'schemaVersion': 1, 'status': 'blocked', 'checks': [{
-            'id': 'doctor-runtime', 'status': 'blocked',
-            'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'}]})
+    # Validate the full fixed projection, never raw exception text or paths.
+    if (type(value) is not dict or set(value) != {'schemaVersion', 'status', 'checks'}
+            or type(value['schemaVersion']) is not int or value['schemaVersion'] != 1
+            or value['status'] != 'blocked' or type(value['checks']) is not list
+            or len(value['checks']) != 2):
+        return False
+    original, diagnostic = value['checks']
+    if original != {'id': 'doctor-runtime', 'status': 'blocked',
+                    'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'}:
+        return False
+    stages = ('metadata', 'compose-config', 'runtime-exposure', 'tls', 'containers',
+              'migrations', 'volumes', 'backups', 'product-probe', 'report', 'unknown')
+    categories = ('permission', 'missing', 'timeout', 'io', 'unknown')
+    return (type(diagnostic) is dict and set(diagnostic) == {'id', 'status', 'summary'}
+            and type(diagnostic['id']) is str
+            and diagnostic['id'] in {'doctor-last-observed-' + stage for stage in stages}
+            and diagnostic['status'] == 'blocked' and type(diagnostic['summary']) is str
+            and diagnostic['summary'] in {'category=' + category for category in categories})
+
+
+def doctor_refusal_output(raw):
+    # Reject ambiguity before parsing so duplicate keys cannot hide leaked text.
+    if type(raw) is not str or len(raw) > 4096:
+        return False
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate key')
+            result[key] = value
+        return result
+    try:
+        if len(raw.encode('utf-8')) > 4096:
+            return False
+        value = json.loads(raw, object_pairs_hook=unique)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return False
+    return doctor_refusal_report(value)
 
 
 def passed(report):
@@ -217,6 +251,39 @@ def write_component_release(work, images, payload, architecture, *, version='0.2
                               _fixture_owned_support=True, _fixture_architecture=architecture)
 
 
+def bounded_writer_observations(exc):
+    rows = getattr(exc, 'writer_observations', None)
+    services = {'edge', 'admin-web', 'platform', 'publish-gateway', 'engine', 'engine-relay'}
+    values = {'resume-preflight', 'unpause-request', 'resume-verify', 'not-running',
+              'starting', 'unhealthy', 'health-unknown', 'state-unavailable'}
+    if (type(rows) is not dict or not rows or len(rows) > len(services)
+            or not rows.keys() <= services
+            or any(type(value) is not str or value not in values for value in rows.values())):
+        return None
+    return dict(rows)
+
+
+def bounded_health_failure(exc, allowed_services):
+    """Only fixed state enums and bounded numbers; never raw inspect or text."""
+    value = getattr(exc, 'health_evidence', None)
+    elapsed = getattr(exc, 'health_wait_elapsed_ms', None)
+    if (not isinstance(value, dict) or set(value) != {'services', 'engineInit'}
+            or type(elapsed) is not int or not 0 <= elapsed <= 3600000): return None
+    services, init = value['services'], value['engineInit']
+    states = {'created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead', 'completed', 'unknown'}
+    if (not isinstance(services, dict) or not services or len(services) > 16
+            or not set(services) <= set(allowed_services) or not isinstance(init, dict)
+            or set(init) != {'state', 'exitCode'} or not isinstance(init['state'], str)
+            or init['state'] not in states or not (init['exitCode'] is None or
+                type(init['exitCode']) is int and 0 <= init['exitCode'] <= 255)): return None
+    for row in services.values():
+        if (not isinstance(row, dict) or set(row) != {'state', 'health'}
+                or not isinstance(row['state'], str) or row['state'] not in states
+                or not isinstance(row['health'], str) or row['health'] not in {'starting', 'healthy', 'unhealthy', 'unknown'}): return None
+    return {'services': {name: dict(services[name]) for name in sorted(services)},
+            'engineInit': dict(init), 'elapsedMs': elapsed}
+
+
 def finalize_fixture(manager, namespace, api, result):
     if result.get('status') != 'passed':
         # A failed proof can leave pending intent + retained-data. Recognizable
@@ -350,8 +417,7 @@ def run_case(images, scenario):
             with patch.object(owned_maintenance.OwnedDoctor, '_tls_probe', return_value=False), contextlib.redirect_stdout(output):
                 try: manager.doctor()
                 except module.RuntimeHealthError:
-                    report = json.loads(output.getvalue())
-                    result['doctorBlockedWithoutLeak'] = doctor_refusal_report(report)
+                    result['doctorBlockedWithoutLeak'] = doctor_refusal_output(output.getvalue())
             result['pendingPreserved'] = json.loads((manager.control_dir / 'operation.intent').read_text())['state'] == 'pending'
             before = [(p, p.read_bytes()) for p in (manager.state_path, manager.control_dir / 'operation.intent',
                                                    manager.control_dir / 'runtime-owner.json')]
@@ -365,6 +431,12 @@ def run_case(images, scenario):
         chain, locations, operations = [], [], []
         allowed = {Path(__file__).name, 'runtime_controller_native.py', *module.OWNED_RUNTIME_FILES}
         while exc is not None and len(chain) < 6:
+            writers = bounded_writer_observations(exc)
+            if writers is not None:
+                result.setdefault("writerObservations", writers)
+            health = bounded_health_failure(exc, module.LONG_RUNNING_SERVICES)
+            if health is not None and 'initialHealth' not in result:
+                result['initialHealth'] = health
             if isinstance(exc, DockerRequestTimeout) and exc.operation in ('container-stop', 'docker-json'):
                 operations.append(exc.operation)
             chain.append(type(exc).__name__)

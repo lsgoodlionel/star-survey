@@ -327,6 +327,21 @@ class CommandRunner:
         return subprocess.run(command, **kwargs)
 
 
+def _safe_doctor_check(operation):
+    stages = ('metadata', 'compose-config', 'runtime-exposure', 'tls', 'containers',
+              'migrations', 'volumes', 'backups', 'product-probe', 'report')
+    categories = ('permission', 'missing', 'timeout', 'io', 'unknown')
+    stage, category = 'unknown', 'unknown'
+    try:
+        value = getattr(operation, '_doctor_diagnostic', None)
+        if (type(value) is tuple and len(value) == 2 and type(value[0]) is str
+                and type(value[1]) is str and value[0] in stages and value[1] in categories):
+            stage, category = value
+    except Exception:
+        pass
+    return {'id': 'doctor-last-observed-' + stage, 'status': 'blocked', 'summary': 'category=' + category}
+
+
 class HostProbe:
     ARCHITECTURES = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 
@@ -1432,7 +1447,8 @@ class SurveyManager:
             raise RuntimeHealthError(runtime_message) from exc
 
     def _wait_healthy(self, compose: list[str], message: str, timeout: float = 120) -> None:
-        deadline = time.monotonic() + timeout
+        started = time.monotonic()
+        deadline = started + timeout
         while True:
             try:
                 self._assert_healthy(compose, message)
@@ -1440,8 +1456,14 @@ class SurveyManager:
             except StartupPending as exc:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise RuntimeHealthError(f"{message}: startup health deadline exceeded") from exc
+                    failure = RuntimeHealthError(f"{message}: startup health deadline exceeded")
+                    failure.health_evidence = getattr(exc, 'health_evidence', None)
+                    failure.health_wait_elapsed_ms = min(3600000, max(0, round((timeout - remaining) * 1000)))
+                    raise failure from exc
                 time.sleep(min(1, remaining))
+            except RuntimeHealthError as exc:
+                exc.health_wait_elapsed_ms = min(3600000, max(0, round((time.monotonic() - started) * 1000)))
+                raise
 
     def _assert_healthy(self, compose: list[str], message: str) -> None:
         # `_compose(version)` has already verified the staged release and its
@@ -1474,11 +1496,30 @@ class SurveyManager:
         }
         init = by_service["engine-init"]
         raw_exit_code = init.get("ExitCode", 1)
+        # Keep the guard's conservative fallback, but never invent an observation.
+        observed_exit_code = init.get("ExitCode")
+        def fixed(value, allowed):
+            return value if isinstance(value, str) and value in allowed else 'unknown'
+        states = {'created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead', 'completed'}
+        bounded_exit = None
+        if type(observed_exit_code) is int and 0 <= observed_exit_code <= 255:
+            bounded_exit = observed_exit_code
+        elif isinstance(observed_exit_code, str) and re.fullmatch(r'[0-9]{1,3}', observed_exit_code) and int(observed_exit_code) <= 255:
+            bounded_exit = int(observed_exit_code)
+        observation = {
+            'services': {name: {'state': fixed(by_service[name].get('State'), states),
+                                 'health': fixed(by_service[name].get('Health'), {'starting', 'healthy', 'unhealthy'})}
+                         for name in sorted(running_services)},
+            'engineInit': {'state': fixed(init.get('State'), states), 'exitCode': bounded_exit},
+        }
+        def observed_failure(error):
+            error.health_evidence = observation
+            return error
         if isinstance(raw_exit_code, bool) or not (
             isinstance(raw_exit_code, int)
             or (isinstance(raw_exit_code, str) and re.fullmatch(r"\d+", raw_exit_code) is not None)
         ):
-            raise RuntimeHealthError(f"{message}: engine-init status is invalid")
+            raise observed_failure(RuntimeHealthError(f"{message}: engine-init status is invalid"))
         exit_code = int(raw_exit_code)
         init_ok = init.get("State") in {"exited", "completed"} and exit_code == 0
         if unhealthy and init_ok and all(
@@ -1486,9 +1527,9 @@ class SurveyManager:
             and by_service[service].get("Health") == "starting"
             for service in unhealthy
         ):
-            raise StartupPending(f"{message}: healthchecks still starting")
+            raise observed_failure(StartupPending(f"{message}: healthchecks still starting"))
         if unhealthy or not init_ok:
-            raise RuntimeHealthError(f"{message}: unhealthy={sorted(unhealthy)}, engine-init-ok={init_ok}")
+            raise observed_failure(RuntimeHealthError(f"{message}: unhealthy={sorted(unhealthy)}, engine-init-ok={init_ok}"))
 
     def _validate_install_inputs(self, public_host: str, admin_user: str, admin_email: str) -> None:
         hostname = r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -2465,7 +2506,8 @@ class SurveyManager:
             except Exception as exc:
                 print(json.dumps({'schemaVersion': 1, 'status': 'blocked', 'checks': [{
                     'id': 'doctor-runtime', 'status': 'blocked',
-                    'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'}]}))
+                    'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'},
+                    _safe_doctor_check(operation)]}))
                 raise RuntimeHealthError('controlled doctor did not complete; preserve operation evidence') from exc
             print(json.dumps(report))
             if report.get('status') == 'blocked':

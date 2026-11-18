@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+# These isolated application checks do not collect PHP coverage.
+env:
+  SURVEY_INSTALL_XDEBUG: "0"
+
 jobs:
   real-relay:
     name: Development stack relay (${{ matrix.db }})

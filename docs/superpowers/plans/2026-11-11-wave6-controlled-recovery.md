@@ -495,3 +495,12 @@ P-c 调用补充：模块同时提供显式CLI `python3 <受校验候选>/native
 Claude 对77835915指出脚本顶层普通import可执行未经校验pyc，且随后sys.modules命中会跳过既有owned加载。本轮限定native_cleanup_proof.py及测试：脚本分支只执行stdlib bootstrap，按实际源字节编译可信controller入口，不读取surveyctl缓存；拒绝cold entry预载owned模块，先调用既有完整SHA准入，再从sys.modules中调用校验字节编译的具名proof。实际owned异常类/证明仅在准入后具名模块中定义；不改变Unknown/锁/普通卸载/保卷/固定错误输出合同。入口及controller仍须由可信native harness在启动前认证，不声称抵御任意Python启动环境或宿主接管。
 
 真实子进程测试先用普通import确认投毒缓存确实可执行，再跑脚本：旧入口owned_docker_exec与surveyctl缓存触发红测；新入口拒绝三类缓存（含named proof缓存），合法源实际执行，源码SHA漂移时所有owned源均不执行。临时路径解析和pycache_prefix显式固定，避免Mac路径别名造成假绿；不运行Docker或真实卸载。16项proof/CLI、4项真实本地打包、7项组件证据（27项）用于定向验证，完整CI/真实双库交新head在线验收。#155已入main eaac4ae，整合前核对actual main CI，不能沿用778旧绿色；仍需Claude增量非作者复核及P-c workflow接线，不解除任何其他门禁。
+
+
+### 2026-11-13 P-c 初始化失败的受限观察（Codex，待审）
+
+#157 c7da2df 的 ownership artifact14014319399已核验ZIP和25份源hash：backup-purge通过且清理verified，doctor-refusal在initialize于unhealthy/not-init-ok分支失败，fixture保留。未证明与旧writer resume同根因，也未确定是哪个服务或竞态。Claude负责Release旧summary fixture21errors；本切片独立于其3个Release文件。
+
+本切片仅让现有RuntimeHealthError/StartupPending携带白名单服务State/Health、engine-init受限ExitCode及health等待已耗时；maintenance组件从异常链严格重验后只导出固定投影。无原始inspect/log/env/凭据，无额外Docker查询或重跑；原健康判断、120秒健康等待参数、即时失败/starting重试行为及失败现场保留均未变。耗时只是有界数值观察，不是整个安装硬deadline，也不说明清理成功。
+
+先确认4项新测试失败，再实现；4项初始化诊断、7项组件证据、16项cleanup、184项surveyctl、4项打包，共215项定向通过。保留原始错误；字段无效或快照缺失不导出诊断，不能使失败转通过。真实双库/production smoke交既有GitHub在线CI，合法正向不保证再次触发间歇故障；只有复现并读取新快照才能进一步确定根因。本切片不是startup修复或P-c准出，不改Claude工作流/D5/restore/publication。以main91dfc466为基线，需非作者复核及后续组合CI。

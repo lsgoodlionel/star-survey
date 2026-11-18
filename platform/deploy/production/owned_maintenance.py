@@ -116,26 +116,54 @@ class OwnedMaintenance:
             yield
         finally:
             failed = False
+            observations = {}
+            names = {cid: name for name, cid in self.services.items() if name in WRITER_SERVICES}
             for cid in writers:
                 if cid not in self.paused: continue
                 try:
+                    stage = 'resume-preflight'
                     state = self._state(cid, allow_paused=True)
                     if state['Paused']:
+                        stage = 'unpause-request'
                         self._control(cid, 'unpause')
+                    stage = 'resume-verify'
                     if self._state(cid, allow_paused=True)['Paused'] is not False:
                         raise UncertainMaintenance('writer resume was not observed')
                     self.paused.remove(cid)
                 except Exception:
+                    observations[names[cid]] = stage
                     failed = True  # Still try every other recorded writer.
             if not failed:
                 for attempt in range(30):
-                    states = [self._state(cid) for cid in writers]
-                    if all(s['Running'] and s.get('Health', {}).get('Status') == 'healthy' for s in states): break
-                    if attempt == 29: failed = True
-                    else: self.sleep(2)
+                    observations.clear()
+                    for cid in writers:
+                        try:
+                            state = self._state(cid)
+                            running, health_info = state['Running'], state.get('Health', {})
+                        except Exception:
+                            observations[names[cid]] = 'state-unavailable'
+                            failed = True
+                            break
+                        if not isinstance(health_info, dict):
+                            observations[names[cid]] = 'health-unknown'
+                            failed = True
+                        elif running is not True:
+                            observations[names[cid]] = 'not-running'
+                        else:
+                            health = health_info.get('Status')
+                            if health != 'healthy':
+                                observations[names[cid]] = health if health in ('starting', 'unhealthy') else 'health-unknown'
+                    if failed or not observations:
+                        break
+                    if attempt == 29:
+                        failed = True
+                    else:
+                        self.sleep(2)
             if failed:
                 self.uncertain = True
-                raise UncertainMaintenance('writer resume or health recovery is unverified; preserve markers')
+                error = UncertainMaintenance('writer resume or health recovery is unverified; preserve markers')
+                error.writer_observations = observations
+                raise error
 
     def archive(self, cid, path, output, maximum):
         if self.uncertain: raise UncertainMaintenance('prior maintenance remains unverified')
@@ -373,6 +401,7 @@ class OwnedMaintenance:
         return [self.manager.target/'backups'/name for name,_ in self._doctor_snapshot[1]]
 
     def doctor(self):
+        self._doctor_diagnostic = None
         def run():
             runner = OwnedDoctorRunner(self)
             return OwnedDoctor(self, runner).run()
@@ -406,6 +435,23 @@ class OwnedDoctor(Doctor):
         self.operation = operation
         super().__init__(operation.manager.target, runner=runner,
             product_probe=lambda host, compose: OwnedProductProbe(operation, host, compose, runner).run())
+
+    def _stage(self, name, action):
+        # A successful stage must not be blamed for a later outer failure.
+        try:
+            self.operation._doctor_diagnostic = None
+        except Exception:
+            pass
+        try:
+            return action()
+        except Exception as exc:
+            category = {PermissionError: 'permission', FileNotFoundError: 'missing',
+                        TimeoutError: 'timeout', OSError: 'io'}.get(type(exc), 'unknown')
+            try:
+                self.operation._doctor_diagnostic = (name, category)
+            except Exception:
+                pass
+            raise
 
     def _load_installation(self):
         version, schema, host, _ = super()._load_installation()
