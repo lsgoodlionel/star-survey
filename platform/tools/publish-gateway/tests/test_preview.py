@@ -8,6 +8,8 @@ import time
 import unittest
 import uuid
 import threading
+from unittest.mock import patch
+from http.server import BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
@@ -572,13 +574,23 @@ class PreviewHttpRouteTest(unittest.TestCase):
         payload, url = self.ready_url()
         close = PreviewGatewayTest.identity(payload)
 
-        first = self.post("/v1/preview/close", close)
-        second = self.post("/v1/preview/close", close)
+        # Exercise a real second boundary without sleeping or changing the signing clock.
+        handler = self.server.httpd.RequestHandlerClass
+        format_date = BaseHTTPRequestHandler.date_time_string
+        instants = iter((0, 1))
+        with patch.object(handler, "date_time_string", lambda request: format_date(request, next(instants))):
+            first = self.post("/v1/preview/close", close)
+            second = self.post("/v1/preview/close", close)
         split = urlsplit(url)
         status, _, _ = self.server.request("GET", split.path + "?" + split.query)
 
-        self.assertEqual(200, first[0])
-        self.assertEqual(first, second)
+        for response, date in ((first, "Thu, 01 Jan 1970 00:00:00 GMT"),
+                               (second, "Thu, 01 Jan 1970 00:00:01 GMT")):
+            code, headers, raw = response
+            self.assertEqual(200, code)
+            self.assertEqual({"status": "closed"}, json.loads(raw))
+            self.assertEqual(date, headers.pop("Date"))
+        self.assertEqual(first, second)  # All remaining headers and exact body bytes.
         self.assertEqual(410, status)
 
 
