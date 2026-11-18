@@ -49,6 +49,32 @@ class InitialHealthEvidenceTest(unittest.TestCase):
         self.assertEqual('unhealthy',value['services']['engine']['health'])
         self.assertIsNone(value['engineInit']['exitCode'])
 
+    def test_missing_exit_code_and_explicit_one_are_distinct_observations(self):
+        class Runner(fixtures.FakeRunner):
+            def run(self, command, **kwargs):
+                result = super().run(command, **kwargs)
+                if 'ps' in command and self.omit_exit_code:
+                    rows = json.loads(result.stdout)
+                    for row in rows:
+                        if row['Service'] == 'engine-init':
+                            row.pop('ExitCode', None)
+                    result.stdout = json.dumps(rows)
+                return result
+
+        for omit, expected in ((True, None), (False, 1)):
+            with self.subTest(omit_exit_code=omit):
+                runner = Runner(engine_init_exit_code=1)
+                runner.fixture_running = True
+                runner.omit_exit_code = omit
+                manager = self.f.manager(runner=runner)
+                with mock.patch.object(self.f.module.time, 'sleep') as sleep:
+                    with self.assertRaises(self.f.module.RuntimeHealthError) as caught:
+                        manager._wait_healthy(['docker', 'compose'], 'fixture')
+                sleep.assert_not_called()
+                value = self.native.bounded_health_failure(
+                    caught.exception, self.f.module.LONG_RUNNING_SERVICES)
+                self.assertEqual(expected, value['engineInit']['exitCode'])
+
     def test_pending_deadline_keeps_last_snapshot_without_extending_timeout(self):
         runner=fixtures.FakeRunner();runner.fixture_running=True
         manager=self.f.manager(runner=runner)
