@@ -251,6 +251,39 @@ def write_component_release(work, images, payload, architecture, *, version='0.2
                               _fixture_owned_support=True, _fixture_architecture=architecture)
 
 
+def bounded_writer_observations(exc):
+    rows = getattr(exc, 'writer_observations', None)
+    services = {'edge', 'admin-web', 'platform', 'publish-gateway', 'engine', 'engine-relay'}
+    values = {'resume-preflight', 'unpause-request', 'resume-verify', 'not-running',
+              'starting', 'unhealthy', 'health-unknown', 'state-unavailable'}
+    if (type(rows) is not dict or not rows or len(rows) > len(services)
+            or not rows.keys() <= services
+            or any(type(value) is not str or value not in values for value in rows.values())):
+        return None
+    return dict(rows)
+
+
+def bounded_health_failure(exc, allowed_services):
+    """Only fixed state enums and bounded numbers; never raw inspect or text."""
+    value = getattr(exc, 'health_evidence', None)
+    elapsed = getattr(exc, 'health_wait_elapsed_ms', None)
+    if (not isinstance(value, dict) or set(value) != {'services', 'engineInit'}
+            or type(elapsed) is not int or not 0 <= elapsed <= 3600000): return None
+    services, init = value['services'], value['engineInit']
+    states = {'created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead', 'completed', 'unknown'}
+    if (not isinstance(services, dict) or not services or len(services) > 16
+            or not set(services) <= set(allowed_services) or not isinstance(init, dict)
+            or set(init) != {'state', 'exitCode'} or not isinstance(init['state'], str)
+            or init['state'] not in states or not (init['exitCode'] is None or
+                type(init['exitCode']) is int and 0 <= init['exitCode'] <= 255)): return None
+    for row in services.values():
+        if (not isinstance(row, dict) or set(row) != {'state', 'health'}
+                or not isinstance(row['state'], str) or row['state'] not in states
+                or not isinstance(row['health'], str) or row['health'] not in {'starting', 'healthy', 'unhealthy', 'unknown'}): return None
+    return {'services': {name: dict(services[name]) for name in sorted(services)},
+            'engineInit': dict(init), 'elapsedMs': elapsed}
+
+
 def finalize_fixture(manager, namespace, api, result):
     if result.get('status') != 'passed':
         # A failed proof can leave pending intent + retained-data. Recognizable
@@ -398,6 +431,12 @@ def run_case(images, scenario):
         chain, locations, operations = [], [], []
         allowed = {Path(__file__).name, 'runtime_controller_native.py', *module.OWNED_RUNTIME_FILES}
         while exc is not None and len(chain) < 6:
+            writers = bounded_writer_observations(exc)
+            if writers is not None:
+                result.setdefault("writerObservations", writers)
+            health = bounded_health_failure(exc, module.LONG_RUNNING_SERVICES)
+            if health is not None and 'initialHealth' not in result:
+                result['initialHealth'] = health
             if isinstance(exc, DockerRequestTimeout) and exc.operation in ('container-stop', 'docker-json'):
                 operations.append(exc.operation)
             chain.append(type(exc).__name__)
