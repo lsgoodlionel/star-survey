@@ -73,9 +73,27 @@ class MaintenanceTest(unittest.TestCase):
 
     def test_resume_zero_reply_without_state_change_is_not_success(self):
         self.resume_noop = True
-        with self.assertRaises(self.module.UncertainMaintenance):
+        with self.assertRaises(self.module.UncertainMaintenance) as caught:
             with self.operation.frozen_writers(): pass
+        self.assertEqual({"edge": "resume-verify", "platform": "resume-verify"}, caught.exception.writer_observations)
         self.assertTrue(self.paused)
+        self.assertTrue(self.operation.uncertain)
+
+    def test_final_writer_health_uses_last_poll_and_preserves_unknown(self):
+        original = self.operation._state
+        def observe(cid, **kwargs):
+            state = original(cid, **kwargs)
+            if not kwargs.get('allow_paused'):
+                state['Health'] = {'Status': 'private fixture detail'}
+            return state
+        with patch.object(self.operation, '_state', side_effect=observe), patch.object(self.operation, 'sleep') as sleep:
+            with self.assertRaises(self.module.UncertainMaintenance) as caught:
+                with self.operation.frozen_writers():
+                    pass
+        self.assertEqual(29, sleep.call_count)
+        self.assertEqual({"edge": "health-unknown", "platform": "health-unknown"},
+                         caught.exception.writer_observations)
+        self.assertEqual(4, len(self.events))
         self.assertTrue(self.operation.uncertain)
 
     def test_recorded_pause_uses_docker_paused_status_and_still_resumes(self):

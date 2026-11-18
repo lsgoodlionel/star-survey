@@ -15,6 +15,15 @@ class InitialHealthEvidenceTest(unittest.TestCase):
             Path(__file__).parent/'integration/owned_maintenance_native.py')
         self.native=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.native)
 
+    def test_writer_projection_only_allows_fixed_services_and_values(self):
+        error = RuntimeError("private fixture message")
+        for invalid in ({}, {"arbitrary-id": "starting"}, {"edge": "private fixture message"},
+                        {"edge": {"raw": "unhealthy"}}, []):
+            error.writer_observations = invalid
+            self.assertIsNone(self.native.bounded_writer_observations(error))
+        error.writer_observations = {"engine": "health-unknown", "platform": "resume-verify"}
+        self.assertEqual(error.writer_observations, self.native.bounded_writer_observations(error))
+
     def test_running_init_is_still_rejected_but_reports_state_and_elapsed(self):
         class Runner(fixtures.FakeRunner):
             def run(self,command,**kw):

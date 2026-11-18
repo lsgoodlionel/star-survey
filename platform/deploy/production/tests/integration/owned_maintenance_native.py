@@ -251,6 +251,18 @@ def write_component_release(work, images, payload, architecture, *, version='0.2
                               _fixture_owned_support=True, _fixture_architecture=architecture)
 
 
+def bounded_writer_observations(exc):
+    rows = getattr(exc, 'writer_observations', None)
+    services = {'edge', 'admin-web', 'platform', 'publish-gateway', 'engine', 'engine-relay'}
+    values = {'resume-preflight', 'unpause-request', 'resume-verify', 'not-running',
+              'starting', 'unhealthy', 'health-unknown'}
+    if (type(rows) is not dict or not rows or len(rows) > len(services)
+            or not rows.keys() <= services
+            or any(type(value) is not str or value not in values for value in rows.values())):
+        return None
+    return dict(rows)
+
+
 def bounded_health_failure(exc, allowed_services):
     """Only fixed state enums and bounded numbers; never raw inspect or text."""
     value = getattr(exc, 'health_evidence', None)
@@ -419,6 +431,9 @@ def run_case(images, scenario):
         chain, locations, operations = [], [], []
         allowed = {Path(__file__).name, 'runtime_controller_native.py', *module.OWNED_RUNTIME_FILES}
         while exc is not None and len(chain) < 6:
+            writers = bounded_writer_observations(exc)
+            if writers is not None:
+                result.setdefault("writerObservations", writers)
             health = bounded_health_failure(exc, module.LONG_RUNNING_SERVICES)
             if health is not None and 'initialHealth' not in result:
                 result['initialHealth'] = health

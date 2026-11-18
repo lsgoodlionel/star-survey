@@ -116,26 +116,42 @@ class OwnedMaintenance:
             yield
         finally:
             failed = False
+            observations = {}
+            names = {cid: name for name, cid in self.services.items() if name in WRITER_SERVICES}
             for cid in writers:
                 if cid not in self.paused: continue
                 try:
+                    stage = 'resume-preflight'
                     state = self._state(cid, allow_paused=True)
                     if state['Paused']:
+                        stage = 'unpause-request'
                         self._control(cid, 'unpause')
+                    stage = 'resume-verify'
                     if self._state(cid, allow_paused=True)['Paused'] is not False:
                         raise UncertainMaintenance('writer resume was not observed')
                     self.paused.remove(cid)
                 except Exception:
+                    observations[names[cid]] = stage
                     failed = True  # Still try every other recorded writer.
             if not failed:
                 for attempt in range(30):
                     states = [self._state(cid) for cid in writers]
                     if all(s['Running'] and s.get('Health', {}).get('Status') == 'healthy' for s in states): break
-                    if attempt == 29: failed = True
+                    if attempt == 29:
+                        failed = True
+                        for cid, state in zip(writers, states):
+                            health_info = state.get('Health')
+                            health = health_info.get('Status') if isinstance(health_info, dict) else None
+                            if not state.get('Running'):
+                                observations[names[cid]] = 'not-running'
+                            elif health != 'healthy':
+                                observations[names[cid]] = health if health in ('starting', 'unhealthy') else 'health-unknown'
                     else: self.sleep(2)
             if failed:
                 self.uncertain = True
-                raise UncertainMaintenance('writer resume or health recovery is unverified; preserve markers')
+                error = UncertainMaintenance('writer resume or health recovery is unverified; preserve markers')
+                error.writer_observations = observations
+                raise error
 
     def archive(self, cid, path, output, maximum):
         if self.uncertain: raise UncertainMaintenance('prior maintenance remains unverified')
