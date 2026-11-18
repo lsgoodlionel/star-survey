@@ -366,7 +366,9 @@ class CaddySourceImagePinTest(unittest.TestCase):
                 self.assertEqual({CADDY_PINNED_IMAGE}, references)
 
     def run_resolve_image(self, reference: str, registry_digest: str,
-                          inspect_fails: bool = False) -> subprocess.CompletedProcess[str]:
+                          inspect_fails: bool = False,
+                          manifest_tail_lines: int = 0,
+                          second_digest: str = "") -> subprocess.CompletedProcess[str]:
         body = self.build_step["run"]
         start = body.index("resolve_image() {")
         end = body.index("\n}\n", start) + 3
@@ -380,12 +382,22 @@ class CaddySourceImagePinTest(unittest.TestCase):
                 "[[ \"$1 $2 $3\" == 'buildx imagetools inspect' ]] || exit 9\n"
                 "[[ -z \"${FAKE_INSPECT_FAILS:-}\" ]] || exit 1\n"
                 "printf 'Name:      %s\nMediaType: application/vnd.oci.image.index.v1+json\n"
-                "Digest:    %s\n' \"$4\" \"$FAKE_REGISTRY_DIGEST\"\n",
+                "Digest:    %s\n' \"$4\" \"$FAKE_REGISTRY_DIGEST\"\n"
+                "if [[ -n \"${FAKE_SECOND_DIGEST:-}\" ]]; then\n"
+                "  printf 'Digest:    %s\\n' \"$FAKE_SECOND_DIGEST\"\n"
+                "fi\n"
+                # Real inspect output keeps going after Digest (Manifests: ...).
+                "printf 'Manifests:\n'\n"
+                "for ((i = 0; i < ${FAKE_MANIFEST_TAIL_LINES:-0}; i++)); do\n"
+                "  printf '  Name: %s@sha256:%064d\n  Platform: linux/amd64\n' \"$4\" \"$i\"\n"
+                "done\n",
                 encoding="utf-8",
             )
             docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
             environment = dict(os.environ, FAKE_REGISTRY_DIGEST=registry_digest,
                                FAKE_INSPECT_FAILS="1" if inspect_fails else "",
+                               FAKE_MANIFEST_TAIL_LINES=str(manifest_tail_lines),
+                               FAKE_SECOND_DIGEST=second_digest,
                                PATH=temporary + os.pathsep + os.environ.get("PATH", ""))
             # Same shape as the release step: a command substitution does not
             # inherit errexit, so resolve_image must fail explicitly.
@@ -410,6 +422,55 @@ class CaddySourceImagePinTest(unittest.TestCase):
                 result = self.run_resolve_image(reference, registry_digest)
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(expected, result.stdout)
+
+    def test_resolve_image_reads_all_inspect_output_before_choosing_the_digest(self):
+        # v0.3.22-rc.1 (run 43539208895) failed silently here: awk exited at the
+        # first Digest line, inspect died of SIGPIPE writing its Manifests block,
+        # and pipefail turned that into `return 1`. The tail exceeds a pipe buffer.
+        pinned = CADDY_PINNED_IMAGE.split("@", 1)[1]
+        other = "sha256:" + "a" * 64
+        cases = [
+            (CADDY_PINNED_IMAGE, pinned, "caddy@" + pinned),
+            ("postgres:16.10-alpine", other, "postgres@" + other),
+        ]
+        for reference, registry_digest, expected in cases:
+            with self.subTest(reference=reference):
+                result = self.run_resolve_image(reference, registry_digest,
+                                                manifest_tail_lines=2000)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(expected, result.stdout)
+        result = self.run_resolve_image(CADDY_PINNED_IMAGE, "sha256:" + "b" * 64,
+                                        manifest_tail_lines=2000)
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("", result.stdout)
+
+    def test_resolve_image_rejects_an_empty_first_digest_before_a_valid_one(self):
+        pinned = CADDY_PINNED_IMAGE.split("@", 1)[1]
+        for reference in (CADDY_PINNED_IMAGE, "postgres:16.10-alpine"):
+            for first_digest in ("", "   ", "sha256:XYZ"):
+                with self.subTest(reference=reference, first_digest=first_digest):
+                    result = self.run_resolve_image(
+                        reference, first_digest, manifest_tail_lines=2000,
+                        second_digest=pinned,
+                    )
+                    self.assertNotEqual(0, result.returncode, result.stdout)
+                    self.assertEqual("", result.stdout)
+
+    def test_resolve_image_keeps_the_first_of_multiple_digest_lines(self):
+        pinned = CADDY_PINNED_IMAGE.split("@", 1)[1]
+        other = "sha256:" + "a" * 64
+        result = self.run_resolve_image(
+            "postgres:16.10-alpine", other, manifest_tail_lines=2000,
+            second_digest=pinned,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("postgres@" + other, result.stdout)
+        result = self.run_resolve_image(
+            CADDY_PINNED_IMAGE, other, manifest_tail_lines=2000,
+            second_digest=pinned,
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertEqual("", result.stdout)
 
     def test_resolve_image_failures_stop_the_production_command_substitution(self):
         pinned = CADDY_PINNED_IMAGE.split("@", 1)[1]

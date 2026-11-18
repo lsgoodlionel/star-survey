@@ -19,7 +19,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PUBGW_PORT=8080 \
     PUBGW_STATE_DIR=/var/lib/pubgw
 
-RUN addgroup -S -g 10001 pubgw \
+# 只刷新基础镜像里已有的 Alpine 包（不新增任何包）：python:3.12.15-alpine3.24
+# 自带的 krb5-libs 1.22.2-r1 有 16 个 HIGH CVE，在 1.22.3-r0 修复，
+# v0.3.21-rc.1 的 Trivy 门禁因此失败（run 43384842587）。做法与 admin、business 镜像一致。
+RUN apk upgrade --no-cache \
+ && addgroup -S -g 10001 pubgw \
  && adduser -S -D -H -u 10001 -G pubgw pubgw \
  && mkdir -p /var/lib/pubgw \
  && chown pubgw:pubgw /var/lib/pubgw

@@ -327,6 +327,21 @@ class CommandRunner:
         return subprocess.run(command, **kwargs)
 
 
+def _safe_doctor_check(operation):
+    stages = ('metadata', 'compose-config', 'runtime-exposure', 'tls', 'containers',
+              'migrations', 'volumes', 'backups', 'product-probe', 'report')
+    categories = ('permission', 'missing', 'timeout', 'io', 'unknown')
+    stage, category = 'unknown', 'unknown'
+    try:
+        value = getattr(operation, '_doctor_diagnostic', None)
+        if (type(value) is tuple and len(value) == 2 and type(value[0]) is str
+                and type(value[1]) is str and value[0] in stages and value[1] in categories):
+            stage, category = value
+    except Exception:
+        pass
+    return {'id': 'doctor-last-observed-' + stage, 'status': 'blocked', 'summary': 'category=' + category}
+
+
 class HostProbe:
     ARCHITECTURES = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 
@@ -2491,7 +2506,8 @@ class SurveyManager:
             except Exception as exc:
                 print(json.dumps({'schemaVersion': 1, 'status': 'blocked', 'checks': [{
                     'id': 'doctor-runtime', 'status': 'blocked',
-                    'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'}]}))
+                    'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'},
+                    _safe_doctor_check(operation)]}))
                 raise RuntimeHealthError('controlled doctor did not complete; preserve operation evidence') from exc
             print(json.dumps(report))
             if report.get('status') == 'blocked':

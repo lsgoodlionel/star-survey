@@ -2785,6 +2785,29 @@ raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-inte
                              Path(sys.modules['owned_crypto_child'].__file__))
         self.assertFalse(marker.exists())
 
+    def test_owned_doctor_failure_has_safe_check_and_preserves_intent(self):
+        self.install()
+        manager = self.module.SurveyManager(self.target, runner=self.runner)
+        operation = mock.Mock()
+        operation._doctor_diagnostic = ('runtime-exposure', 'permission')
+        operation.doctor.side_effect = RuntimeError('private-path token=secret-value')
+        output, error = io.StringIO(), io.StringIO()
+        with mock.patch.object(manager, '_runtime'), \
+             mock.patch('owned_maintenance.OwnedMaintenance', return_value=operation), \
+             mock.patch.object(self.module, 'SurveyManager', return_value=manager), \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+            status = self.module.main(['--target', str(self.target), 'doctor'])
+        self.assertEqual(4, status)
+        report = json.loads(output.getvalue())
+        self.assertEqual('blocked', report['status'])
+        self.assertEqual({'id':'doctor-last-observed-runtime-exposure','status':'blocked',
+                          'summary':'category=permission'}, report['checks'][1])
+        self.assertNotIn('private-path', output.getvalue()+error.getvalue())
+        self.assertNotIn('secret-value', output.getvalue()+error.getvalue())
+        intent = json.loads((self.target / '.surveyctl' / 'operation.intent').read_text())
+        self.assertEqual('doctor', intent['operation'])
+        self.assertNotEqual('complete', intent['state'])
+
     def test_default_backup_and_doctor_do_not_launch_legacy_helpers(self):
         self.install()
         manager = self.module.SurveyManager(self.target, runner=self.runner)

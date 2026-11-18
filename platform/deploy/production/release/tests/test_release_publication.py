@@ -701,9 +701,13 @@ class VerifyReleaseScriptTest(unittest.TestCase):
             summary = {
                 "schemaVersion": 1, "status": "passed", "exitCode": 0, "lastStep": "uninstall",
                 "runner": {"ubuntu": ubuntu, "architecture": architecture},
+                # #157 bound summary schema; publication tests consume the readiness
+                # it produces and do not exercise the per-runner proof bytes.
+                "execution": {"repository": "lsgoodlionel/star-survey", "runId": "77", "attempt": "1"},
                 "candidate": {"manifestSha256": manifest_sha, "bundleSha256": bundles[architecture]["sha256"],
                               "images": {name: image_digest for name in image_keys}},
                 "baselineMode": mode, "upgradeVerified": promotable,
+                "upgradeDataSha256": "9" * 64 if promotable else None,
                 "tls": {"scope": "ci-local-trusted-ca", "httpsMarkerVerified": True, "publicAcmeVerified": False},
                 "preflightDisk": "separately-tested", "completedAt": "2026-11-03T00:00:00+00:00",
             }
