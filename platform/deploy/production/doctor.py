@@ -512,7 +512,7 @@ class Doctor:
         return self._check("containers", "ok" if not bad else "blocked", "all production containers are healthy" if not bad else f"unhealthy services: {', '.join(bad)}")
 
     def _runtime_exposure_check(self, compose):
-        ps = self._command(compose + ["ps", "--all", "--format", "json"])
+        ps = self._command(compose + ["ps", "--all", "--no-trunc", "--format", "json"])
         try:
             text = (ps.stdout or "").strip()
             payload = json.loads(text) if text.startswith("[") else [json.loads(line) for line in text.splitlines() if line]
