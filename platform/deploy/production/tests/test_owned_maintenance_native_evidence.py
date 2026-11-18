@@ -86,14 +86,45 @@ class MaintenanceNativeEvidenceTest(unittest.TestCase):
         self.assertTrue(all(service.get('network_mode') == 'none' for name, service in compose['services'].items()
                             if name != 'admin-web'))
 
-    def test_empty_or_unbounded_doctor_error_report_cannot_qualify(self):
-        report = {'schemaVersion': 1, 'status': 'blocked', 'checks': [{
-            'id': 'doctor-runtime', 'status': 'blocked',
-            'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'}]}
+    def test_doctor_refusal_requires_exact_bounded_two_check_projection(self):
+        report = {'schemaVersion': 1, 'status': 'blocked', 'checks': [
+            {'id':'doctor-runtime', 'status':'blocked',
+             'summary':'controlled diagnostic operation failed; preserve its receipts and marker'},
+            {'id':'doctor-last-observed-runtime-exposure', 'status':'blocked', 'summary':'category=permission'}]}
         self.assertTrue(self.module.doctor_refusal_report(report))
-        for updates in ({'checks': []}, {'schemaVersion': True}, {'raw': 'unbounded'}, {'status': 'ok'}):
-            bad = deepcopy(report); bad.update(updates)
+        for stage in ('metadata','compose-config','runtime-exposure','tls','containers','migrations',
+                      'volumes','backups','product-probe','report','unknown'):
+            for category in ('permission','missing','timeout','io','unknown'):
+                good = deepcopy(report)
+                good['checks'][1]['id'] = 'doctor-last-observed-' + stage
+                good['checks'][1]['summary'] = 'category=' + category
+                self.assertTrue(self.module.doctor_refusal_report(good))
+        bad_reports = []
+        for updates in ({'checks': []}, {'schemaVersion': True}, {'raw': 'unbounded'}, {'status': 'ok'},
+                        {'checks': report['checks'][:1]}, {'checks': report['checks']+[report['checks'][1]]}):
+            bad = deepcopy(report); bad.update(updates); bad_reports.append(bad)
+        for key, value in (('id','doctor-last-observed-private-path'),('id','doctor-last-observed-unknown\nsecret'),
+                           ('summary','category=unknown token=secret'),('status','ok'),('extra','private'),
+                           ('id',None),('summary',True)):
+            bad = deepcopy(report); bad['checks'][1][key] = value; bad_reports.append(bad)
+        for bad in bad_reports:
             self.assertFalse(self.module.doctor_refusal_report(bad))
+
+    def test_raw_doctor_output_rejects_duplicate_keys_and_unbounded_data(self):
+        report = {'schemaVersion':1,'status':'blocked','checks':[
+            {'id':'doctor-runtime','status':'blocked',
+             'summary':'controlled diagnostic operation failed; preserve its receipts and marker'},
+            {'id':'doctor-last-observed-unknown','status':'blocked','summary':'category=unknown'}]}
+        raw = json.dumps(report)
+        self.assertTrue(self.module.doctor_refusal_output(raw))
+        bad = [raw.replace('"schemaVersion": 1', '"schemaVersion": 1, "schemaVersion": 1'),
+               raw.replace('"summary": "category=unknown"',
+                           '"summary": "secret", "summary": "category=unknown"'),
+               raw.replace('"id": "doctor-runtime"', '"id": "doctor-runtime", "id": "doctor-runtime"'),
+               raw + ' trailing', raw + ' ' * 4097, b'{}', None]
+        for value in bad:
+            with self.subTest(kind=type(value).__name__, size=len(value) if value is not None else None):
+                self.assertFalse(self.module.doctor_refusal_output(value))
 
     def test_missing_image_labels_are_supported_and_env_is_never_projected(self):
         class API:

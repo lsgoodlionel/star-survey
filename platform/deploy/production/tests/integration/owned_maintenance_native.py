@@ -44,10 +44,44 @@ PENDING_FIXTURES = []  # Keep unknown leases/managers alive until this process e
 
 
 def doctor_refusal_report(value):
-    return (isinstance(value, dict) and type(value.get('schemaVersion')) is int and value == {
-        'schemaVersion': 1, 'status': 'blocked', 'checks': [{
-            'id': 'doctor-runtime', 'status': 'blocked',
-            'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'}]})
+    # Validate the full fixed projection, never raw exception text or paths.
+    if (type(value) is not dict or set(value) != {'schemaVersion', 'status', 'checks'}
+            or type(value['schemaVersion']) is not int or value['schemaVersion'] != 1
+            or value['status'] != 'blocked' or type(value['checks']) is not list
+            or len(value['checks']) != 2):
+        return False
+    original, diagnostic = value['checks']
+    if original != {'id': 'doctor-runtime', 'status': 'blocked',
+                    'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'}:
+        return False
+    stages = ('metadata', 'compose-config', 'runtime-exposure', 'tls', 'containers',
+              'migrations', 'volumes', 'backups', 'product-probe', 'report', 'unknown')
+    categories = ('permission', 'missing', 'timeout', 'io', 'unknown')
+    return (type(diagnostic) is dict and set(diagnostic) == {'id', 'status', 'summary'}
+            and type(diagnostic['id']) is str
+            and diagnostic['id'] in {'doctor-last-observed-' + stage for stage in stages}
+            and diagnostic['status'] == 'blocked' and type(diagnostic['summary']) is str
+            and diagnostic['summary'] in {'category=' + category for category in categories})
+
+
+def doctor_refusal_output(raw):
+    # Reject ambiguity before parsing so duplicate keys cannot hide leaked text.
+    if type(raw) is not str or len(raw) > 4096:
+        return False
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate key')
+            result[key] = value
+        return result
+    try:
+        if len(raw.encode('utf-8')) > 4096:
+            return False
+        value = json.loads(raw, object_pairs_hook=unique)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return False
+    return doctor_refusal_report(value)
 
 
 def passed(report):
@@ -350,8 +384,7 @@ def run_case(images, scenario):
             with patch.object(owned_maintenance.OwnedDoctor, '_tls_probe', return_value=False), contextlib.redirect_stdout(output):
                 try: manager.doctor()
                 except module.RuntimeHealthError:
-                    report = json.loads(output.getvalue())
-                    result['doctorBlockedWithoutLeak'] = doctor_refusal_report(report)
+                    result['doctorBlockedWithoutLeak'] = doctor_refusal_output(output.getvalue())
             result['pendingPreserved'] = json.loads((manager.control_dir / 'operation.intent').read_text())['state'] == 'pending'
             before = [(p, p.read_bytes()) for p in (manager.state_path, manager.control_dir / 'operation.intent',
                                                    manager.control_dir / 'runtime-owner.json')]
