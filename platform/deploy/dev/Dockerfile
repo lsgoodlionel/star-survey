@@ -1,12 +1,13 @@
 # Local development image for LimeSurvey (PHP 8.3 + Apache)
 FROM php:8.3-apache
+ARG SURVEY_INSTALL_XDEBUG=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpng-dev libjpeg-dev libfreetype6-dev libzip-dev libicu-dev \
         libldap2-dev libxml2-dev libonig-dev libsodium-dev libpq-dev unzip git \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j"$(nproc)" gd zip intl ldap mysqli pdo_mysql mbstring xml sodium calendar pdo_pgsql pgsql \
-    && pecl install xdebug && docker-php-ext-enable xdebug \
+    && case "$SURVEY_INSTALL_XDEBUG" in 1) pecl install xdebug && docker-php-ext-enable xdebug ;; 0) : ;; *) exit 2 ;; esac \
     && a2enmod rewrite \
     && rm -rf /var/lib/apt/lists/*
 

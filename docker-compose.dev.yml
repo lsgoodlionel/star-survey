@@ -4,7 +4,10 @@
 #         TEST_DB=pgsql platform/deploy/test/run-tests.sh ...  (PostgreSQL 16)
 services:
   web:
-    build: ./platform/deploy/dev
+    build:
+      context: ./platform/deploy/dev
+      args:
+        SURVEY_INSTALL_XDEBUG: "${SURVEY_INSTALL_XDEBUG:-1}"
     image: survey-web
     container_name: survey-web
     ports:
