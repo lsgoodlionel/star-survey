@@ -22,6 +22,10 @@ concurrency:
   group: platform-quality-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# These isolated application checks do not collect PHP coverage.
+env:
+  SURVEY_INSTALL_XDEBUG: "0"
+
 jobs:
   parity-tables:
     if: inputs.profile != 'policy'
