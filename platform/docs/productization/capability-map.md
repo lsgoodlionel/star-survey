@@ -16,7 +16,7 @@
 
 | 能力 | 需求编号 | 后端 | 前端 | 流程 | 生产 | 总体状态 | 下一波次 |
 |---|---|---|---|---|---|---|---|
-| 管理 | `R19-01`, `R19-03`, `R20-01`, `R20-02`, `R20-03`, `R22-01`, `R22-11`, `R22-12` | 部分完成 | 未开始 | 未开始 | 未开始 | 部分完成 | Wave 6 |
+| 管理 | `R19-01`, `R19-03`, `R20-01`, `R20-02`, `R20-03`, `R22-01`, `R22-11`, `R22-12` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 6 |
 | 审批与发布 | `R01-07`, `R01-09` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
 | 通讯录与投放 | `R05-04`, `R05-05`, `R05-06`, `R18-01`, `R18-02`, `R18-03`, `R18-06` | 部分完成 | 部分完成 | 部分完成 | 未开始 | 部分完成 | Wave 4 |
 | 投放链接与二维码 | `R05-01`, `R05-07`, `R05-08` | 完成 | 完成 | 完成 | 未开始 | 部分完成 | Wave 1 |
@@ -35,7 +35,9 @@
 
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/tenant/TenantAdminController.java`](../../services/business/src/main/java/cn/mjy/platform/tenant/TenantAdminController.java) 定位 `public class TenantAdminController`：租户生命周期管理后端接口已存在。
 - **后端** （实现）[`platform/services/business/src/main/java/cn/mjy/platform/tenant/engine/EngineInstanceAdminController.java`](../../services/business/src/main/java/cn/mjy/platform/tenant/engine/EngineInstanceAdminController.java) 定位 `public class EngineInstanceAdminController`：引擎实例运营接口已存在。
-- **前端** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `**运营后台**`：核查报告记录运营后台仍待产品化。
+- **流程** （浏览器测试）[`platform/apps/admin-web/e2e/personnel-status.spec.ts`](../../apps/admin-web/e2e/personnel-status.spec.ts) 定位 `live personnel grant controls tenant status and revocation takes effect`：隔离浏览器流程覆盖人员运营授权、租户状态与撤权。
+- **前端** （审计）[`docs/audits/2026-10-09-product-alignment/14-full-development-report.md`](../../../docs/audits/2026-10-09-product-alignment/14-full-development-report.md) 定位 `**运营后台**`：早期审计记录运营后台起点。
+- **前端** （实现）[`platform/apps/admin-web/src/app/router.tsx`](../../apps/admin-web/src/app/router.tsx) 定位 `path: 'operations/tenants'`：已接入租户运营目录、引擎管理、套餐与组织设置页面。
 - **需求** （需求规格）[`platform/docs/traceability/requirement-index.md`](../traceability/requirement-index.md) 定位 `| R19-01 |`：多用户与项目分配需求已编号。
 
 ### 审批与发布 (`approval-publish`)
