@@ -373,6 +373,7 @@ class OwnedMaintenance:
         return [self.manager.target/'backups'/name for name,_ in self._doctor_snapshot[1]]
 
     def doctor(self):
+        self._doctor_diagnostic = None
         def run():
             runner = OwnedDoctorRunner(self)
             return OwnedDoctor(self, runner).run()
@@ -406,6 +407,23 @@ class OwnedDoctor(Doctor):
         self.operation = operation
         super().__init__(operation.manager.target, runner=runner,
             product_probe=lambda host, compose: OwnedProductProbe(operation, host, compose, runner).run())
+
+    def _stage(self, name, action):
+        # A successful stage must not be blamed for a later outer failure.
+        try:
+            self.operation._doctor_diagnostic = None
+        except Exception:
+            pass
+        try:
+            return action()
+        except Exception as exc:
+            category = {PermissionError: 'permission', FileNotFoundError: 'missing',
+                        TimeoutError: 'timeout', OSError: 'io'}.get(type(exc), 'unknown')
+            try:
+                self.operation._doctor_diagnostic = (name, category)
+            except Exception:
+                pass
+            raise
 
     def _load_installation(self):
         version, schema, host, _ = super()._load_installation()

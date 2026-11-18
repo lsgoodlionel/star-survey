@@ -628,20 +628,25 @@ class Doctor:
         except DoctorRuntimeError:
             return self._check("minimal-probe", "blocked", "disposable product journey failed during setup")
 
+    def _stage(self, name, action):
+        return action()
+
     def run(self):
-        version, schema, host, compose = self._load_installation()
-        checks = [*self._config_checks(compose), self._runtime_exposure_check(compose)]
-        tls_ok = self.tls_probe(host)
+        version, schema, host, compose = self._stage('metadata', self._load_installation)
+        checks = [*self._stage('compose-config', lambda: self._config_checks(compose)),
+                  self._stage('runtime-exposure', lambda: self._runtime_exposure_check(compose))]
+        tls_ok = self._stage('tls', lambda: self.tls_probe(host))
         checks.extend([
             self._check("tls", "ok" if tls_ok else "blocked", "public TLS deployment marker verified" if tls_ok else "public TLS deployment marker failed"),
-            self._container_check(compose),
-            self._migration_check(compose, schema),
-            self._volume_check(),
-            self._backup_check(),
-            self._probe_check(host, compose),
+            self._stage('containers', lambda: self._container_check(compose)),
+            self._stage('migrations', lambda: self._migration_check(compose, schema)),
+            self._stage('volumes', self._volume_check),
+            self._stage('backups', self._backup_check),
+            self._stage('product-probe', lambda: self._probe_check(host, compose)),
         ])
         status = "blocked" if any(item["status"] == "blocked" for item in checks) else "warning" if any(item["status"] == "warning" for item in checks) else "ok"
-        return self._redact({"schemaVersion": 1, "status": status, "version": version, "checks": checks})
+        return self._stage('report', lambda: self._redact({"schemaVersion": 1, "status": status, "version": version, "checks": checks}))
+
 
 
 def build_parser():
