@@ -197,15 +197,17 @@
       "title": "管理",
       "requirementIds": ["R19-01", "R19-03", "R20-01", "R20-02", "R20-03", "R22-01", "R22-11", "R22-12"],
       "backend": "partial",
-      "frontend": "not_started",
-      "flow": "not_started",
+      "frontend": "partial",
+      "flow": "partial",
       "production": "not_started",
       "status": "partial",
       "evidence": [
         {"layer": "requirement", "kind": "requirement-spec", "path": "platform/docs/traceability/requirement-index.md", "locator": "| R19-01 |", "description": "多用户与项目分配需求已编号。"},
         {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/tenant/TenantAdminController.java", "locator": "public class TenantAdminController", "description": "租户生命周期管理后端接口已存在。"},
         {"layer": "backend", "kind": "implementation", "path": "platform/services/business/src/main/java/cn/mjy/platform/tenant/engine/EngineInstanceAdminController.java", "locator": "public class EngineInstanceAdminController", "description": "引擎实例运营接口已存在。"},
-        {"layer": "frontend", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "**运营后台**", "description": "核查报告记录运营后台仍待产品化。"}
+        {"layer": "frontend", "kind": "audit", "path": "docs/audits/2026-10-09-product-alignment/14-full-development-report.md", "locator": "**运营后台**", "description": "早期审计记录运营后台起点。"},
+        {"layer": "frontend", "kind": "implementation", "path": "platform/apps/admin-web/src/app/router.tsx", "locator": "path: 'operations/tenants'", "description": "已接入租户运营目录、引擎管理、套餐与组织设置页面。"},
+        {"layer": "flow", "kind": "browser-test", "path": "platform/apps/admin-web/e2e/personnel-status.spec.ts", "locator": "live personnel grant controls tenant status and revocation takes effect", "description": "隔离浏览器流程覆盖人员运营授权、租户状态与撤权。"}
       ],
       "nextWave": "Wave 6"
     },
