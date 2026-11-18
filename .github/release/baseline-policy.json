@@ -90,6 +90,9 @@
     },
     "0.3.25-rc.1": {
       "mode": "bootstrap"
+    },
+    "0.3.26-rc.1": {
+      "mode": "bootstrap"
     }
   }
 }
