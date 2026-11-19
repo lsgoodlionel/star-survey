@@ -83,6 +83,21 @@ class EvidenceError(ValueError):
     pass
 
 
+def _unique_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise EvidenceError("duplicate JSON member names are forbidden in evidence")
+        result[key] = value
+    return result
+
+
+def strict_json_loads(text: str | bytes) -> Any:
+    """Decode JSON rejecting duplicate members at every level, so validation
+    always sees exactly the bytes that may later be published (#176 review)."""
+    return json.loads(text, object_pairs_hook=_unique_members)
+
+
 def require_clean_native_host() -> None:
     """Reject pre-existing project resources before a hosted native test starts.
 
@@ -258,7 +273,7 @@ def verify_fixture_owner(work: Path, target: Path, marker: Path) -> None:
             if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600 or
                     metadata.st_uid != os.geteuid() or metadata.st_size > 4096):
                 raise EvidenceError('fixture owner marker is unsafe')
-            if json.loads(stream.read(4097)) != expected:
+            if strict_json_loads(stream.read(4097)) != expected:
                 raise EvidenceError('fixture owner marker does not match this run')
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError('fixture owner marker cannot be read') from exc
@@ -305,7 +320,7 @@ def read_fixture_volumes() -> dict[str, dict[str, str]]:
             if len(names) != len(expected) or set(names) != set(expected):
                 raise EvidenceError('fixture volume listing differs from expected inventory')
         result = subprocess.run(prefix + ['inspect', *expected], check=True, capture_output=True, text=True, timeout=30)
-        return parse_fixture_volumes(json.loads(result.stdout))
+        return parse_fixture_volumes(strict_json_loads(result.stdout))
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
         raise EvidenceError('fixture volume inspection failed') from exc
 
@@ -334,7 +349,7 @@ def verify_fixture_volume_snapshot(work: Path, marker: Path, snapshot: Path) -> 
             if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600 or
                     metadata.st_uid != os.geteuid() or metadata.st_size > 8192):
                 raise EvidenceError('fixture volume snapshot is unsafe')
-            recorded = json.loads(stream.read(8193))
+            recorded = strict_json_loads(stream.read(8193))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError('fixture volume snapshot cannot be read') from exc
     if recorded != read_fixture_volumes():
@@ -468,6 +483,34 @@ def validate_doctor(value: Any) -> None:
         string(check["id"], f"doctor check {index} id", 64, re.compile(r"[a-z0-9-]+"))
         string(check["status"], f"doctor check {index} status", 32)
         string(check["summary"], f"doctor check {index} summary", 4096)
+
+
+# Bounded projection of a controlled doctor that did not complete (#170): the
+# controller emits only `doctor-last-observed-<stage>` and `category=<category>`
+# from these fixed sets. Nothing else (exception text, paths, IDs) may cross.
+DOCTOR_LIFECYCLE_STEPS = ("doctor-installed", "doctor-upgraded", "doctor-final")
+DOCTOR_DIAGNOSTIC_STAGES = ("metadata", "compose-config", "runtime-exposure", "tls", "containers",
+                            "migrations", "volumes", "backups", "product-probe", "report", "unknown")
+DOCTOR_DIAGNOSTIC_CATEGORIES = ("permission", "missing", "timeout", "io", "unknown")
+DOCTOR_RUNTIME_CHECK = {"id": "doctor-runtime", "status": "blocked",
+                        "summary": "controlled diagnostic operation failed; preserve its receipts and marker"}
+# Bound to this run's pre-signing candidate inputs, never to a verified Release.
+DOCTOR_DIAGNOSTIC_BINDING = "same-run-presigning-input"
+
+
+def validate_doctor_diagnostic(value: Any) -> None:
+    report = exact_keys(value, {"schemaVersion", "status", "step", "stage", "category", "binding",
+                                "execution", "candidate"}, "doctor diagnostic")
+    if (report["schemaVersion"] != 1 or report["status"] != "blocked"
+            or report["step"] not in DOCTOR_LIFECYCLE_STEPS
+            or report["stage"] not in DOCTOR_DIAGNOSTIC_STAGES
+            or report["category"] not in DOCTOR_DIAGNOSTIC_CATEGORIES
+            or report["binding"] != DOCTOR_DIAGNOSTIC_BINDING):
+        raise EvidenceError("doctor diagnostic is outside the bounded projection")
+    validate_execution(report["execution"], "doctor diagnostic execution", True)
+    candidate = exact_keys(report["candidate"], {"manifestSha256", "bundleSha256"}, "doctor diagnostic candidate")
+    string(candidate["manifestSha256"], "doctor diagnostic manifestSha256", 64, SHA256)
+    string(candidate["bundleSha256"], "doctor diagnostic bundleSha256", 64, SHA256)
 
 
 def validate_services(value: Any) -> None:
@@ -610,6 +653,7 @@ VALIDATORS = {
     "readiness": validate_readiness,
     "engine-health": validate_engine_health,
     "gateway-diagnostic": validate_gateway_diagnostic,
+    "doctor-diagnostic": validate_doctor_diagnostic,
 }
 
 
@@ -687,13 +731,49 @@ def write_doctor_evidence(report: dict[str, Any], output: Path, secret_values: I
     }, secret_values)
 
 
+def write_doctor_diagnostic_evidence(doctor_evidence: Path, step: str, output: Path) -> None:
+    """Project an incomplete controlled doctor onto its bounded stage and category.
+
+    The input is this run's already sanitized doctor evidence. Only the exact
+    controller shape (#170) is accepted; any other report yields no diagnostic.
+    """
+    if step not in DOCTOR_LIFECYCLE_STEPS or doctor_evidence.name != step + ".json":
+        raise EvidenceError("doctor diagnostic step is not this lifecycle doctor evidence")
+    if output.name != "doctor-diagnostic.json":
+        raise EvidenceError("doctor diagnostic output is not allowlisted")
+    report = load_json(doctor_evidence)
+    validate_evidence("doctor", report)
+    checks = report["checks"]
+    if report["status"] != "blocked" or len(checks) != 2 or checks[0] != DOCTOR_RUNTIME_CHECK:
+        raise EvidenceError("doctor evidence is not an incomplete controlled doctor")
+    projection = checks[1]
+    prefix = "doctor-last-observed-"
+    stage = projection["id"].removeprefix(prefix)
+    category = projection["summary"].removeprefix("category=")
+    if (not projection["id"].startswith(prefix) or stage not in DOCTOR_DIAGNOSTIC_STAGES
+            or projection["status"] != "blocked" or projection["summary"] != "category=" + category
+            or category not in DOCTOR_DIAGNOSTIC_CATEGORIES):
+        raise EvidenceError("doctor evidence projection is outside the bounded vocabulary")
+    write_evidence(output, "doctor-diagnostic", {
+        "schemaVersion": 1,
+        "status": "blocked",
+        "step": step,
+        "stage": stage,
+        "category": category,
+        "binding": DOCTOR_DIAGNOSTIC_BINDING,
+        "execution": current_execution(True),
+        "candidate": {"manifestSha256": os.environ.get("CANDIDATE_MANIFEST_SHA256", ""),
+                      "bundleSha256": os.environ.get("CANDIDATE_BUNDLE_SHA256", "")},
+    })
+
+
 def write_service_evidence(lines: str, output: Path, secret_values: Iterable[str] = ()) -> None:
     services = []
     for line in lines.splitlines():
         if not line.strip():
             continue
         try:
-            item = json.loads(line)
+            item = strict_json_loads(line)
         except json.JSONDecodeError as exc:
             raise EvidenceError("container evidence is not JSON") from exc
         if not isinstance(item, dict):
@@ -1014,7 +1094,7 @@ def verify_upgrade_data_assets(identity: dict[str, Any], evidence_directory: Pat
 def evidence_kind(path: Path) -> str:
     if DOCTOR_FILE.fullmatch(path.name):
         return "doctor"
-    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services", "engine-health.json": "engine-health", "gateway-diagnostic.json": "gateway-diagnostic", 'upgrade-data.json': 'upgrade-data'}
+    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services", "engine-health.json": "engine-health", "gateway-diagnostic.json": "gateway-diagnostic", 'upgrade-data.json': 'upgrade-data', "doctor-diagnostic.json": "doctor-diagnostic"}
     try:
         return kinds[path.name]
     except KeyError as exc:
@@ -1027,7 +1107,7 @@ def load_json(path: Path) -> Any:
     if path.stat().st_size > MAX_EVIDENCE_BYTES:
         raise EvidenceError(f"evidence exceeds the maximum size: {path.name}")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return strict_json_loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError(f"evidence is not valid JSON: {path.name}") from exc
 
@@ -1183,7 +1263,7 @@ def run_upgrade_data_probe(args):
     for path, expected in ((baseline_path, args.baseline_sha), (candidate_path, args.candidate_sha)):
         if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             raise EvidenceError('continuity manifest identity mismatch')
-    baseline, candidate = json.loads(baseline_path.read_text()), json.loads(candidate_path.read_text())
+    baseline, candidate = strict_json_loads(baseline_path.read_text()), strict_json_loads(candidate_path.read_text())
     sys.path.insert(0, args.runtime)
     from doctor import ProductProbe, DoctorRuntimeError, CommandRunner
     from surveyctl import SurveyManager
@@ -1224,6 +1304,10 @@ def parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--input", type=Path, required=True)
     doctor.add_argument("--output", type=Path, required=True)
+    diagnostic = sub.add_parser("doctor-diagnostic")
+    diagnostic.add_argument("--doctor-evidence", type=Path, required=True)
+    diagnostic.add_argument("--step", required=True)
+    diagnostic.add_argument("--output", type=Path, required=True)
     services = sub.add_parser("services")
     services.add_argument("--input", type=Path, required=True)
     services.add_argument("--output", type=Path, required=True)
@@ -1291,6 +1375,8 @@ def main() -> int:
             verify_fixture_volume_snapshot(args.work, args.marker, args.work / 'volumes.json')
         elif args.command == "doctor":
             write_doctor_evidence(load_json(args.input), args.output, secrets)
+        elif args.command == "doctor-diagnostic":
+            write_doctor_diagnostic_evidence(args.doctor_evidence, args.step, args.output)
         elif args.command == "services":
             write_service_evidence(args.input.read_text(encoding="utf-8"), args.output, secrets)
         elif args.command == 'engine-health':

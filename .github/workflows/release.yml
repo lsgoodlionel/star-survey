@@ -809,8 +809,10 @@ jobs:
           EVIDENCE_DIR: ${{ github.workspace }}/native-evidence
         run: sudo -E NATIVE_ACCEPTANCE_REAL=1 bash orchestrator/release/native_acceptance.sh
 
-      # Raw evidence stays withheld (#138 D5). Only summary.json may be published,
-      # and only after the trusted workflow-source helper validates it in isolation.
+      # Raw evidence stays withheld (#138 D5). Only summary.json (plus its bound
+      # upgrade-data.json or, for an incomplete doctor, bounded doctor-diagnostic.json)
+      # may be published, and only after the trusted workflow-source helper validates
+      # them in isolation.
       - name: Prepare fail-closed native diagnostic
         id: native_diagnostic
         if: always()
@@ -820,6 +822,9 @@ jobs:
           MATRIX_ARCHITECTURE: ${{ matrix.architecture }}
           NATIVE_SUMMARY: ${{ github.workspace }}/native-evidence/summary.json
           NATIVE_UPGRADE_DATA: ${{ github.workspace }}/native-evidence/upgrade-data.json
+          NATIVE_DOCTOR_DIAGNOSTIC: ${{ github.workspace }}/native-evidence/doctor-diagnostic.json
+          NATIVE_IDENTITY_MANIFEST_SHA256: ${{ steps.identity.outputs.manifest-sha }}
+          NATIVE_IDENTITY_BUNDLE_SHA256: ${{ steps.identity.outputs.bundle-sha }}
           TRUSTED_EVIDENCE_HELPER: ${{ github.workspace }}/trusted-workflow-source/platform/deploy/production/release/native_acceptance_evidence.py
         run: |
           set -euo pipefail
@@ -845,12 +850,23 @@ jobs:
               [[ -f "$NATIVE_UPGRADE_DATA" && ! -L "$NATIVE_UPGRADE_DATA" && -r "$NATIVE_UPGRADE_DATA" ]] || return 1
               head -c 1048577 "$NATIVE_UPGRADE_DATA" > "$staged/upgrade-data.json" || return 1
             fi
+            # Bounded stage/category of an incomplete doctor (#170); same-run pre-signing binding only.
+            if [[ -e "$NATIVE_DOCTOR_DIAGNOSTIC" || -L "$NATIVE_DOCTOR_DIAGNOSTIC" ]]; then
+              [[ -f "$NATIVE_DOCTOR_DIAGNOSTIC" && ! -L "$NATIVE_DOCTOR_DIAGNOSTIC" && -r "$NATIVE_DOCTOR_DIAGNOSTIC" ]] || return 1
+              head -c 1048577 "$NATIVE_DOCTOR_DIAGNOSTIC" > "$staged/doctor-diagnostic.json" || return 1
+            fi
             python3 "$TRUSTED_EVIDENCE_HELPER" scan --directory "$staged" >/dev/null 2>&1 || return 1
             python3 - "$staged" 2>/dev/null <<'PY' || return 1
           import hashlib, json, os, sys
           from pathlib import Path
+          def unique(pairs):
+              if len({key for key, _ in pairs}) != len(pairs):
+                  raise SystemExit(1)
+              return dict(pairs)
+          def strict(payload):
+              return json.loads(payload, object_pairs_hook=unique)
           staged = Path(sys.argv[1])
-          summary = json.loads((staged / "summary.json").read_text(encoding="utf-8"))
+          summary = strict((staged / "summary.json").read_text(encoding="utf-8"))
           runner = {"ubuntu": os.environ["MATRIX_UBUNTU"], "architecture": os.environ["MATRIX_ARCHITECTURE"]}
           execution = {"repository": os.environ["GITHUB_REPOSITORY"], "runId": os.environ["GITHUB_RUN_ID"],
                        "attempt": os.environ["GITHUB_RUN_ATTEMPT"]}
@@ -862,19 +878,33 @@ jobs:
                   raise SystemExit(1)
           else:
               payload = proof.read_bytes()
-              data = json.loads(payload)
+              data = strict(payload)
               if (hashlib.sha256(payload).hexdigest() != summary["upgradeDataSha256"]
                       or data["execution"] != {**execution, **runner}
                       or data["candidateManifestSha256"] != summary["candidate"]["manifestSha256"]):
+                  raise SystemExit(1)
+          diagnostic = staged / "doctor-diagnostic.json"
+          if diagnostic.exists():
+              data = strict(diagnostic.read_bytes())
+              candidate = {"manifestSha256": summary["candidate"]["manifestSha256"],
+                           "bundleSha256": summary["candidate"]["bundleSha256"]}
+              # Bind to this job's trusted identity outputs, not only to the summary.
+              identity = {"manifestSha256": os.environ.get("NATIVE_IDENTITY_MANIFEST_SHA256", ""),
+                          "bundleSha256": os.environ.get("NATIVE_IDENTITY_BUNDLE_SHA256", "")}
+              if (summary["status"] != "failed" or data["step"] != summary["lastStep"] or candidate != identity
+                      or data["execution"] != {**execution, **runner} or data["candidate"] != candidate):
                   raise SystemExit(1)
           PY
             if [[ -f "$staged/upgrade-data.json" ]]; then
               mv "$staged/upgrade-data.json" "$diagnostic_dir/upgrade-data.json" || return 1
             fi
+            if [[ -f "$staged/doctor-diagnostic.json" ]]; then
+              mv "$staged/doctor-diagnostic.json" "$diagnostic_dir/doctor-diagnostic.json" || return 1
+            fi
             mv "$staged/summary.json" "$diagnostic_dir/summary.json" || return 1
           }
           if ! publish_allowlisted; then
-            rm -f "$diagnostic_dir/summary.json" "$diagnostic_dir/upgrade-data.json"
+            rm -f "$diagnostic_dir/summary.json" "$diagnostic_dir/upgrade-data.json" "$diagnostic_dir/doctor-diagnostic.json"
           fi
           printf 'path=%s\n' "$diagnostic_dir" >> "$GITHUB_OUTPUT"
 
