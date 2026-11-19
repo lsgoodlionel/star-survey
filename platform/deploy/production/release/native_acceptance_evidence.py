@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+from contextlib import nullcontext
 import io
 import subprocess
+import tempfile
 import zipfile
 from datetime import datetime, timezone
 import hashlib
@@ -1164,6 +1166,7 @@ def make_continuity_probe(base_probe, error_type):
             self.after_token = None
             self.upgrade_completed = self.response_verified = self.export_verified = False
             self.continuity_phase = 'prepare'
+            self.upgrade_failure_stage = 'unknown'
             self.upgrade_failure_category, self.upgrade_exit_code = 'none', None
 
         def _token(self, config):
@@ -1181,6 +1184,7 @@ def make_continuity_probe(base_probe, error_type):
                 try:
                     self.upgrade_action()
                 except Exception as exc:
+                    self.upgrade_failure_stage = getattr(exc, 'upgrade_stage', 'unknown')
                     self.upgrade_failure_category = getattr(exc, 'upgrade_category', 'unknown')
                     self.upgrade_exit_code = getattr(exc, 'upgrade_exit_code', None)
                     raise
@@ -1228,14 +1232,44 @@ def make_continuity_probe(base_probe, error_type):
     return ContinuityProbe
 
 
+# Only accept one complete frame from the private child descriptor. stdout and
+# stderr may contain tool output and never participate in stage classification.
+UPGRADE_STAGE_FRAMES = {
+    (stage + "\n").encode("ascii"): stage for stage in (
+        "upgrade-staging", "upgrade-backup", "upgrade-backup-check", "upgrade-image-pull",
+        "upgrade-owner-handoff", "upgrade-runtime-switch", "upgrade-start", "upgrade-health",
+        "upgrade-tls", "upgrade-activate",
+    )
+}
+
+
 def perform_upgrade(ctl, target, manifest, manifest_sha, version, manager, error_type):
+    stage = "unknown"
     try:
-        subprocess.run([str(ctl), '--target', str(target), 'upgrade', '--manifest', str(manifest),
-                        '--manifest-sha256', manifest_sha], check=True, capture_output=True, text=True, timeout=600)
+        try:
+            diagnostic = tempfile.TemporaryFile()
+        except OSError:
+            diagnostic = nullcontext(None)
+        with diagnostic as channel:
+            options = {}
+            if channel is not None:
+                fd = channel.fileno()
+                options = {"env": {**os.environ, "SURVEYCTL_STAGE_FD": str(fd)}, "pass_fds": (fd,)}
+            try:
+                subprocess.run([str(ctl), '--target', str(target), 'upgrade', '--manifest', str(manifest),
+                        '--manifest-sha256', manifest_sha], check=True, capture_output=True, timeout=600, **options)
+            except subprocess.CalledProcessError:
+                try:
+                    if channel is not None:
+                        stage = UPGRADE_STAGE_FRAMES.get(os.pread(fd, 64, 0), "unknown")
+                except OSError:
+                    pass
+                raise
         if manager._read_state(require_current=True)['version'] != version:
             raise error_type('upgrade did not activate the expected version')
     except Exception as exc:
         failure = error_type('continuity upgrade or version verification failed')
+        failure.upgrade_stage = stage
         failure.upgrade_category = ('cli-exit' if isinstance(exc, subprocess.CalledProcessError) else
                                     'cli-timeout' if isinstance(exc, subprocess.TimeoutExpired) else
                                     'cli-launch' if isinstance(exc, OSError) else 'version-check')
@@ -1282,7 +1316,7 @@ def run_upgrade_data_probe(args):
         status = getattr(exc, 'status', None)
         status = status if type(status) is int and 100 <= status <= 599 else None
         print(f'upgrade data continuity failed phase={probe.continuity_phase} http={status} '
-              f'upgrade={probe.upgrade_failure_category} exit={probe.upgrade_exit_code}', file=sys.stderr)
+              f'upgrade={probe.upgrade_failure_category} exit={probe.upgrade_exit_code} stage={probe.upgrade_failure_stage}', file=sys.stderr)
         return 4
     return 0
 

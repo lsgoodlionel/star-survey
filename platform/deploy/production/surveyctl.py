@@ -87,6 +87,14 @@ OWNED_IMPORT_ORDER = (
 _OWNED_IMPORT_LOCK = threading.RLock()
 
 
+# These fixed tokens are the only payload on the optional native diagnostic channel.
+NATIVE_FAILURE_STAGES = frozenset({
+    "install-owner-init", "upgrade-staging", "upgrade-backup", "upgrade-backup-check",
+    "upgrade-image-pull", "upgrade-owner-handoff", "upgrade-runtime-switch",
+    "upgrade-start", "upgrade-health", "upgrade-tls", "upgrade-activate",
+})
+
+
 class SurveyctlError(Exception):
     exit_code = EXIT_INPUT
 
@@ -560,6 +568,7 @@ class SurveyManager:
         self._mutation_depth = 0
         self._runtime_factory = _runtime_factory
         self._runtime_lock_fd = None
+        self._first_failed_stage = None
         self._upgrade_execution_version = None
 
     @contextmanager
@@ -1237,6 +1246,15 @@ class SurveyManager:
             command += ['-f', str(self.control_dir / 'runtime-owner.compose.json')]
         return command
 
+    @contextmanager
+    def _failure_boundary(self, stage):
+        try:
+            yield
+        except Exception:
+            if self._first_failed_stage is None:
+                self._first_failed_stage = stage
+            raise
+
     def _runtime(self, version, *, create=False):
         try:
             if self._runtime_factory is not None:
@@ -1913,7 +1931,8 @@ class SurveyManager:
             if self._runtime_factory is None:
                 self._verify_owned_support(manifest.version)
             self._run(compose + ["pull"], "image pull failed")
-            runtime = self._runtime(manifest.version, create=True)
+            with self._failure_boundary("install-owner-init"):
+                runtime = self._runtime(manifest.version, create=True)
             self._write_state(**initial_state)  # Fresh creation admission must precede this state.
             runtime.ensure_admin_hash()
             self._owned_start_install(runtime, manifest.version, public_host)
@@ -2278,7 +2297,8 @@ class SurveyManager:
         # the installation. A killed process leaves a durable command latch.
         self._begin_operation()
         self._write_state(status="upgrading", previousVersion=previous, recoveryBackup=None)
-        self._stage_release(manifest, values["architecture"], state["publicHost"], state["adminUser"], state["adminEmail"], bundle_path, asset_loader)
+        with self._failure_boundary("upgrade-staging"):
+            self._stage_release(manifest, values["architecture"], state["publicHost"], state["adminUser"], state["adminEmail"], bundle_path, asset_loader)
         if self._runtime_factory is None:
             return self._upgrade_owned_staged(manifest, state)
         backup_name = f"pre-upgrade-{previous}-to-{manifest.version}"
@@ -2321,23 +2341,32 @@ class SurveyManager:
         verified_backup = None
         self._upgrade_execution_version = manifest.version
         try:
-            backup = self._backup_for_upgrade_or_manual(backup_name, self._read_state(require_current=True))
-            self._verify_backup(backup, previous, state['databaseSchema'])
+            with self._failure_boundary("upgrade-backup"):
+                backup = self._backup_for_upgrade_or_manual(backup_name, self._read_state(require_current=True))
+            with self._failure_boundary("upgrade-backup-check"):
+                self._verify_backup(backup, previous, state['databaseSchema'])
             verified_backup = backup_name
             # Pull is not permission to operate on existing project resources.
             # Source contracts are computed only after the fixed images exist.
-            self._run(self._compose(manifest.version, owned_overlay=False) + ['pull'], 'upgrade image pull failed')
+            with self._failure_boundary("upgrade-image-pull"):
+                self._run(self._compose(manifest.version, owned_overlay=False) + ['pull'], 'upgrade image pull failed')
             from runtime_controller import RuntimeController
-            runtime = RuntimeController.prepare_upgrade(self, previous, manifest.version)
+            with self._failure_boundary("upgrade-owner-handoff"):
+                runtime = RuntimeController.prepare_upgrade(self, previous, manifest.version)
             self._activate_personnel_floor(manifest.version)
             self._write_state(status='upgrading', previousVersion=previous, recoveryBackup=verified_backup)
             def start():
                 compose = self._compose(manifest.version)
-                self._run(compose + ['up', '-d'], 'controlled upgrade migration or start failed')
-                self._wait_healthy(compose, 'controlled upgrade health check failed')
-                self._verify_public_tls(state['publicHost'])
-            runtime.upgrade(start)
-            self._atomic_write(self.current_path, manifest.version + '\n')
+                with self._failure_boundary("upgrade-start"):
+                    self._run(compose + ['up', '-d'], 'controlled upgrade migration or start failed')
+                with self._failure_boundary("upgrade-health"):
+                    self._wait_healthy(compose, 'controlled upgrade health check failed')
+                with self._failure_boundary("upgrade-tls"):
+                    self._verify_public_tls(state['publicHost'])
+            with self._failure_boundary("upgrade-runtime-switch"):
+                runtime.upgrade(start)
+            with self._failure_boundary("upgrade-activate"):
+                self._atomic_write(self.current_path, manifest.version + '\n')
             self._write_state(status='healthy', version=manifest.version, databaseSchema=manifest.database_schema,
                               previousVersion=previous)
         except Exception as exc:
@@ -2675,6 +2704,29 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    stage_fd = None
+    manager = None
+    raw_fd = os.environ.pop("SURVEYCTL_STAGE_FD", "")
+    if args.command in ("install", "upgrade") and re.fullmatch(r"[0-9]{1,9}", raw_fd):
+        fd = int(raw_fd)
+        if fd > 2:
+            try:
+                os.set_inheritable(fd, False)
+                stage_fd = fd
+            except OSError:
+                pass
+
+    def report_stage():
+        if stage_fd is None:
+            return False
+        stage = getattr(manager, "_first_failed_stage", None)
+        if stage not in NATIVE_FAILURE_STAGES:
+            stage = "unknown"
+        try:
+            os.write(stage_fd, (stage + "\n").encode("ascii"))
+        except OSError:
+            pass  # Diagnostic delivery must not replace the operation exit code.
+        return True
     try:
         manager_options = {}
         if getattr(args, "expected_public_address", None):
@@ -2715,13 +2767,16 @@ def main(argv=None) -> int:
             manager.uninstall(args.purge_data, confirmation)
         return EXIT_SUCCESS
     except SurveyctlError as exc:
-        print(f"surveyctl: {exc}", file=sys.stderr)
+        if not report_stage():
+            print(f"surveyctl: {exc}", file=sys.stderr)
         return exc.exit_code
     except (OSError, UnicodeError, ValueError) as exc:
-        print(f"surveyctl: environment operation failed: {type(exc).__name__}", file=sys.stderr)
+        if not report_stage():
+            print(f"surveyctl: environment operation failed: {type(exc).__name__}", file=sys.stderr)
         return EXIT_ENVIRONMENT
     except Exception as exc:
-        print(f"surveyctl: internal runtime failure: {type(exc).__name__}", file=sys.stderr)
+        if not report_stage():
+            print(f"surveyctl: internal runtime failure: {type(exc).__name__}", file=sys.stderr)
         return EXIT_RUNTIME
 
 
