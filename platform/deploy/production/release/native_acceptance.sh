@@ -78,6 +78,13 @@ write_doctor_evidence() {
   python3 "$evidence_helper" "${args[@]}" doctor --input "$raw" --output "$evidence_root/${label}.json"
   rm -f "$raw"
   if [[ "$doctor_status" -ne 0 ]]; then
+    # Optional bounded stage/category of a controlled doctor that did not
+    # complete (#170). Any other report, or a missing run identity, leaves no
+    # file; the doctor return code is always preserved.
+    if ! python3 "$evidence_helper" doctor-diagnostic --step "$label" \
+        --doctor-evidence "$evidence_root/${label}.json" --output "$evidence_root/doctor-diagnostic.json"; then
+      rm -f "$evidence_root/doctor-diagnostic.json"
+    fi
     return "$doctor_status"
   fi
   python3 - "$evidence_root/${label}.json" "$label" <<'PY'

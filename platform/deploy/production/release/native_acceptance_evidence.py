@@ -470,6 +470,34 @@ def validate_doctor(value: Any) -> None:
         string(check["summary"], f"doctor check {index} summary", 4096)
 
 
+# Bounded projection of a controlled doctor that did not complete (#170): the
+# controller emits only `doctor-last-observed-<stage>` and `category=<category>`
+# from these fixed sets. Nothing else (exception text, paths, IDs) may cross.
+DOCTOR_LIFECYCLE_STEPS = ("doctor-installed", "doctor-upgraded", "doctor-final")
+DOCTOR_DIAGNOSTIC_STAGES = ("metadata", "compose-config", "runtime-exposure", "tls", "containers",
+                            "migrations", "volumes", "backups", "product-probe", "report", "unknown")
+DOCTOR_DIAGNOSTIC_CATEGORIES = ("permission", "missing", "timeout", "io", "unknown")
+DOCTOR_RUNTIME_CHECK = {"id": "doctor-runtime", "status": "blocked",
+                        "summary": "controlled diagnostic operation failed; preserve its receipts and marker"}
+# Bound to this run's pre-signing candidate inputs, never to a verified Release.
+DOCTOR_DIAGNOSTIC_BINDING = "same-run-presigning-input"
+
+
+def validate_doctor_diagnostic(value: Any) -> None:
+    report = exact_keys(value, {"schemaVersion", "status", "step", "stage", "category", "binding",
+                                "execution", "candidate"}, "doctor diagnostic")
+    if (report["schemaVersion"] != 1 or report["status"] != "blocked"
+            or report["step"] not in DOCTOR_LIFECYCLE_STEPS
+            or report["stage"] not in DOCTOR_DIAGNOSTIC_STAGES
+            or report["category"] not in DOCTOR_DIAGNOSTIC_CATEGORIES
+            or report["binding"] != DOCTOR_DIAGNOSTIC_BINDING):
+        raise EvidenceError("doctor diagnostic is outside the bounded projection")
+    validate_execution(report["execution"], "doctor diagnostic execution", True)
+    candidate = exact_keys(report["candidate"], {"manifestSha256", "bundleSha256"}, "doctor diagnostic candidate")
+    string(candidate["manifestSha256"], "doctor diagnostic manifestSha256", 64, SHA256)
+    string(candidate["bundleSha256"], "doctor diagnostic bundleSha256", 64, SHA256)
+
+
 def validate_services(value: Any) -> None:
     report = exact_keys(value, {"schemaVersion", "services"}, "services")
     if report["schemaVersion"] != 1:
@@ -610,6 +638,7 @@ VALIDATORS = {
     "readiness": validate_readiness,
     "engine-health": validate_engine_health,
     "gateway-diagnostic": validate_gateway_diagnostic,
+    "doctor-diagnostic": validate_doctor_diagnostic,
 }
 
 
@@ -685,6 +714,42 @@ def write_doctor_evidence(report: dict[str, Any], output: Path, secret_values: I
         "status": report.get("status"),
         "checks": checks,
     }, secret_values)
+
+
+def write_doctor_diagnostic_evidence(doctor_evidence: Path, step: str, output: Path) -> None:
+    """Project an incomplete controlled doctor onto its bounded stage and category.
+
+    The input is this run's already sanitized doctor evidence. Only the exact
+    controller shape (#170) is accepted; any other report yields no diagnostic.
+    """
+    if step not in DOCTOR_LIFECYCLE_STEPS or doctor_evidence.name != step + ".json":
+        raise EvidenceError("doctor diagnostic step is not this lifecycle doctor evidence")
+    if output.name != "doctor-diagnostic.json":
+        raise EvidenceError("doctor diagnostic output is not allowlisted")
+    report = load_json(doctor_evidence)
+    validate_evidence("doctor", report)
+    checks = report["checks"]
+    if report["status"] != "blocked" or len(checks) != 2 or checks[0] != DOCTOR_RUNTIME_CHECK:
+        raise EvidenceError("doctor evidence is not an incomplete controlled doctor")
+    projection = checks[1]
+    prefix = "doctor-last-observed-"
+    stage = projection["id"].removeprefix(prefix)
+    category = projection["summary"].removeprefix("category=")
+    if (not projection["id"].startswith(prefix) or stage not in DOCTOR_DIAGNOSTIC_STAGES
+            or projection["status"] != "blocked" or projection["summary"] != "category=" + category
+            or category not in DOCTOR_DIAGNOSTIC_CATEGORIES):
+        raise EvidenceError("doctor evidence projection is outside the bounded vocabulary")
+    write_evidence(output, "doctor-diagnostic", {
+        "schemaVersion": 1,
+        "status": "blocked",
+        "step": step,
+        "stage": stage,
+        "category": category,
+        "binding": DOCTOR_DIAGNOSTIC_BINDING,
+        "execution": current_execution(True),
+        "candidate": {"manifestSha256": os.environ.get("CANDIDATE_MANIFEST_SHA256", ""),
+                      "bundleSha256": os.environ.get("CANDIDATE_BUNDLE_SHA256", "")},
+    })
 
 
 def write_service_evidence(lines: str, output: Path, secret_values: Iterable[str] = ()) -> None:
@@ -1014,7 +1079,7 @@ def verify_upgrade_data_assets(identity: dict[str, Any], evidence_directory: Pat
 def evidence_kind(path: Path) -> str:
     if DOCTOR_FILE.fullmatch(path.name):
         return "doctor"
-    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services", "engine-health.json": "engine-health", "gateway-diagnostic.json": "gateway-diagnostic", 'upgrade-data.json': 'upgrade-data'}
+    kinds = {"summary.json": "summary", "preflight.json": "preflight", "services.json": "services", "engine-health.json": "engine-health", "gateway-diagnostic.json": "gateway-diagnostic", 'upgrade-data.json': 'upgrade-data', "doctor-diagnostic.json": "doctor-diagnostic"}
     try:
         return kinds[path.name]
     except KeyError as exc:
@@ -1224,6 +1289,10 @@ def parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--input", type=Path, required=True)
     doctor.add_argument("--output", type=Path, required=True)
+    diagnostic = sub.add_parser("doctor-diagnostic")
+    diagnostic.add_argument("--doctor-evidence", type=Path, required=True)
+    diagnostic.add_argument("--step", required=True)
+    diagnostic.add_argument("--output", type=Path, required=True)
     services = sub.add_parser("services")
     services.add_argument("--input", type=Path, required=True)
     services.add_argument("--output", type=Path, required=True)
@@ -1291,6 +1360,8 @@ def main() -> int:
             verify_fixture_volume_snapshot(args.work, args.marker, args.work / 'volumes.json')
         elif args.command == "doctor":
             write_doctor_evidence(load_json(args.input), args.output, secrets)
+        elif args.command == "doctor-diagnostic":
+            write_doctor_diagnostic_evidence(args.doctor_evidence, args.step, args.output)
         elif args.command == "services":
             write_service_evidence(args.input.read_text(encoding="utf-8"), args.output, secrets)
         elif args.command == 'engine-health':

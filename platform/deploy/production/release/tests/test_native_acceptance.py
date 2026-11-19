@@ -141,12 +141,14 @@ def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dic
                           'MATRIX_ARCHITECTURE': '${{ matrix.architecture }}',
                           'NATIVE_SUMMARY': '${{ github.workspace }}/native-evidence/summary.json',
                           'NATIVE_UPGRADE_DATA': '${{ github.workspace }}/native-evidence/upgrade-data.json',
+                          'NATIVE_DOCTOR_DIAGNOSTIC': '${{ github.workspace }}/native-evidence/doctor-diagnostic.json',
                           # Validate with the workflow-source helper, never the candidate's copy.
                           'TRUSTED_EVIDENCE_HELPER': '${{ github.workspace }}/trusted-workflow-source/platform/deploy/production/release/native_acceptance_evidence.py'},
                          prepare.get('env'))
-    # Reviewed body (#138 P-c): withheld diagnostic plus the single allowlisted,
-    # trusted-helper-validated summary.json; any edit needs a new review.
-    testcase.assertEqual('48fd664508bb6f8655b45cf48abb17f3eafc68cf18d090e9cf2bd77aa1ca5bee',
+    # Reviewed body (#138 P-c): withheld diagnostic plus the allowlisted,
+    # trusted-helper-validated summary.json and its bound optional upgrade-data.json
+    # or doctor-diagnostic.json (#170); any edit needs a new review.
+    testcase.assertEqual('5dd56374fdb8c5383451851dede1764c30fa7b8e13e1d7ce81891414700cc663',
                          hashlib.sha256(prepare['run'].encode()).hexdigest())
     upload = next(item for item in job['steps'] if item.get('name') == 'Preserve fail-closed native diagnostic')
     testcase.assertEqual({'name', 'if', 'uses', 'with'}, set(upload))
@@ -369,6 +371,7 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                    'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
                    'NATIVE_SUMMARY': str(untrusted / 'summary.json'),
                    'NATIVE_UPGRADE_DATA': str(untrusted / 'upgrade-data.json'),
+                   'NATIVE_DOCTOR_DIAGNOSTIC': str(untrusted / 'doctor-diagnostic.json'),
                    'TRUSTED_EVIDENCE_HELPER': str(EVIDENCE_HELPER_PATH),
                    'SYNTHETIC_SECRET': secret}
             result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
@@ -476,6 +479,7 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                        'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
                        'NATIVE_SUMMARY': str(evidence / 'summary.json'),
                        'NATIVE_UPGRADE_DATA': str(evidence / 'upgrade-data.json'),
+                       'NATIVE_DOCTOR_DIAGNOSTIC': str(evidence / 'doctor-diagnostic.json'),
                        'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey',
                        'TRUSTED_EVIDENCE_HELPER': str(root / 'missing.py') if special == 'no-helper'
                        else str(EVIDENCE_HELPER_PATH)}
@@ -491,6 +495,75 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                     self.assertEqual(value, json.loads((directory / 'summary.json').read_text()))
                 if 'upgrade-data.json' in published:
                     self.assertEqual(upgrade, json.loads((directory / 'upgrade-data.json').read_text()))
+
+    def test_native_publication_adds_only_bound_doctor_diagnostic_to_failed_summary(self):
+        # #138/#170: an incomplete doctor's bounded stage/category is published only
+        # beside a validated failed summary of the same run, runner and candidate inputs.
+        job = self.workflow['jobs']['native-acceptance']
+        script = next(step['run'] for step in job['steps'] if step.get('id') == 'native_diagnostic')
+        summary = {
+            'schemaVersion': 1, 'status': 'failed', 'exitCode': 1, 'lastStep': 'doctor-installed',
+            'runner': {'ubuntu': '24.04', 'architecture': 'arm64'},
+            'candidate': {'manifestSha256': '1' * 64, 'bundleSha256': '2' * 64,
+                          'images': {name: 'sha256:' + digit * 64 for name, digit in
+                                     (('admin', '3'), ('platform', '4'), ('publish-gateway', '5'), ('engine', '6'))}},
+            'execution': {'repository': 'lsgoodlionel/star-survey', 'runId': '123', 'attempt': '2'},
+            'baselineMode': 'bootstrap', 'upgradeVerified': False, 'upgradeDataSha256': None,
+            'tls': {'scope': 'ci-local-trusted-ca', 'httpsMarkerVerified': False, 'publicAcmeVerified': False},
+            'preflightDisk': 'separately-tested', 'completedAt': '2026-11-18T00:00:00+00:00',
+        }
+        diagnostic = {'schemaVersion': 1, 'status': 'blocked', 'step': 'doctor-installed', 'stage': 'containers',
+                      'category': 'unknown', 'binding': 'same-run-presigning-input',
+                      'execution': {'repository': 'lsgoodlionel/star-survey', 'runId': '123', 'attempt': '2',
+                                    'ubuntu': '24.04', 'architecture': 'arm64'},
+                      'candidate': {'manifestSha256': '1' * 64, 'bundleSha256': '2' * 64}}
+        def changed(section, **values):
+            return {**diagnostic, section: {**diagnostic[section], **values}}
+        cases = [
+            ('failed summary with bound diagnostic', summary, diagnostic, ['doctor-diagnostic.json', 'summary.json'], None),
+            ('failed summary without diagnostic', summary, None, ['summary.json'], None),
+            ('passed summary with diagnostic', {**summary, 'status': 'passed', 'exitCode': 0, 'lastStep': 'uninstall',
+                                                'tls': {**summary['tls'], 'httpsMarkerVerified': True}}, diagnostic, [], None),
+            ('diagnostic for another step', summary, {**diagnostic, 'step': 'doctor-final'}, [], None),
+            ('diagnostic from another run', summary, changed('execution', runId='124'), [], None),
+            ('diagnostic from another attempt', summary, changed('execution', attempt='1'), [], None),
+            ('diagnostic from another runner', summary, changed('execution', architecture='amd64'), [], None),
+            ('diagnostic from another repository', summary, changed('execution', repository='other/star-survey'), [], None),
+            ('diagnostic for another manifest', summary, changed('candidate', manifestSha256='9' * 64), [], None),
+            ('diagnostic for another bundle', summary, changed('candidate', bundleSha256='9' * 64), [], None),
+            ('diagnostic with raw detail', summary, {**diagnostic, 'detail': '/srv/survey'}, [], None),
+            ('diagnostic outside vocabulary', summary, {**diagnostic, 'category': 'oserror'}, [], None),
+            ('symlinked diagnostic', summary, diagnostic, [], 'link'),
+        ]
+        for name, value, extra, published, special in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                evidence = root / 'native-evidence'
+                evidence.mkdir()
+                (evidence / 'summary.json').write_text(json.dumps(value))
+                if extra is not None:
+                    target = evidence / 'doctor-diagnostic.json'
+                    if special == 'link':
+                        (evidence / 'real.json').write_text(json.dumps(extra))
+                        target.symlink_to(evidence / 'real.json')
+                    else:
+                        target.write_text(json.dumps(extra))
+                output = root / 'github-output'
+                output.write_text('')
+                env = {**os.environ, 'RUNNER_TEMP': str(root), 'GITHUB_OUTPUT': str(output),
+                       'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'a' * 40,
+                       'MATRIX_UBUNTU': '24.04', 'MATRIX_ARCHITECTURE': 'arm64',
+                       'NATIVE_SUMMARY': str(evidence / 'summary.json'),
+                       'NATIVE_UPGRADE_DATA': str(evidence / 'upgrade-data.json'),
+                       'NATIVE_DOCTOR_DIAGNOSTIC': str(evidence / 'doctor-diagnostic.json'),
+                       'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey',
+                       'TRUSTED_EVIDENCE_HELPER': str(EVIDENCE_HELPER_PATH)}
+                result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                directory = Path(output.read_text().strip().removeprefix('path='))
+                self.assertEqual(sorted(['diagnostic.json', *published]), sorted(item.name for item in directory.iterdir()))
+                if 'doctor-diagnostic.json' in published:
+                    self.assertEqual(extra, json.loads((directory / 'doctor-diagnostic.json').read_text()))
 
     def test_tag_publication_gate_depends_on_the_complete_native_matrix(self):
         gate = self.workflow["jobs"]["release-ready"]
@@ -1741,6 +1814,166 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
             evidence = (evidence_dir / "doctor-installed.json").read_text()
             self.assertEqual("error", json.loads(evidence)["status"])
             self.assertNotIn("unique-test-secret", evidence)
+
+    DIAGNOSTIC_ENV = {
+        'EXPECTED_UBUNTU': '24.04', 'EXPECTED_ARCHITECTURE': 'amd64',
+        'CANDIDATE_MANIFEST_SHA256': 'a' * 64, 'CANDIDATE_BUNDLE_SHA256': 'b' * 64,
+        'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey', 'GITHUB_RUN_ID': '44253199488', 'GITHUB_RUN_ATTEMPT': '1',
+    }
+
+    @staticmethod
+    def blocked_doctor(stage='containers', category='unknown'):
+        # Exact stdout of surveyctl.doctor() when operation.doctor() raised (#170).
+        return {'schemaVersion': 1, 'status': 'blocked', 'checks': [
+            {'id': 'doctor-runtime', 'status': 'blocked',
+             'summary': 'controlled diagnostic operation failed; preserve its receipts and marker'},
+            {'id': 'doctor-last-observed-' + stage, 'status': 'blocked', 'summary': 'category=' + category}]}
+
+    def test_doctor_diagnostic_vocabulary_matches_controller_projection(self):
+        # The helper must accept exactly what surveyctl._safe_doctor_check can emit.
+        tree = ast.parse((ROOT / 'platform/deploy/production/surveyctl.py').read_text(encoding='utf-8'))
+        function = next(node for node in tree.body
+                        if isinstance(node, ast.FunctionDef) and node.name == '_safe_doctor_check')
+        tuples = {target.id: ast.literal_eval(node.value) for node in ast.walk(function)
+                  if isinstance(node, ast.Assign) and isinstance(node.value, ast.Tuple)
+                  for target in node.targets if isinstance(target, ast.Name)}
+        self.assertEqual((*tuples['stages'], 'unknown'), self.module.DOCTOR_DIAGNOSTIC_STAGES)
+        self.assertEqual(tuples['categories'], self.module.DOCTOR_DIAGNOSTIC_CATEGORIES)
+
+    def test_doctor_diagnostic_projects_only_bound_stage_and_category(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, self.DIAGNOSTIC_ENV):
+            root = Path(temporary)
+            for step in ('doctor-installed', 'doctor-upgraded', 'doctor-final'):
+                for stage in self.module.DOCTOR_DIAGNOSTIC_STAGES:
+                    for category in self.module.DOCTOR_DIAGNOSTIC_CATEGORIES:
+                        with self.subTest(step=step, stage=stage, category=category):
+                            evidence = root / f'{step}-{stage}-{category}'
+                            evidence.mkdir()
+                            self.module.write_doctor_evidence(self.blocked_doctor(stage, category), evidence / f'{step}.json')
+                            output = evidence / 'doctor-diagnostic.json'
+                            self.module.write_doctor_diagnostic_evidence(evidence / f'{step}.json', step, output)
+                            self.assertEqual({
+                                'schemaVersion': 1, 'status': 'blocked', 'step': step, 'stage': stage,
+                                'category': category, 'binding': 'same-run-presigning-input',
+                                'execution': {'repository': 'lsgoodlionel/star-survey', 'runId': '44253199488',
+                                              'attempt': '1', 'ubuntu': '24.04', 'architecture': 'amd64'},
+                                'candidate': {'manifestSha256': 'a' * 64, 'bundleSha256': 'b' * 64},
+                            }, json.loads(output.read_text(encoding='utf-8')))
+                            self.module.scan_directory(evidence)
+
+    def test_doctor_diagnostic_rejects_anything_but_the_exact_bounded_projection(self):
+        valid = self.blocked_doctor()
+        def altered(mutate):
+            report = copy.deepcopy(valid)
+            mutate(report)
+            return report
+        reports = {
+            'completed doctor': altered(lambda r: r.update(status='ok')),
+            'ordinary blocked checks': {'schemaVersion': 1, 'status': 'blocked',
+                                        'checks': [{'id': 'tls', 'status': 'blocked', 'summary': 'certificate rejected'}]},
+            'missing runtime check': altered(lambda r: r['checks'].pop(0)),
+            'missing projection': altered(lambda r: r['checks'].pop(1)),
+            'extra check': altered(lambda r: r['checks'].append({'id': 'tls', 'status': 'ok', 'summary': 'ok'})),
+            'duplicate projection': altered(lambda r: r['checks'].append(dict(r['checks'][1]))),
+            'reordered checks': altered(lambda r: r['checks'].reverse()),
+            'unknown stage': altered(lambda r: r['checks'][1].update(id='doctor-last-observed-srv-survey')),
+            'unknown category': altered(lambda r: r['checks'][1].update(summary='category=oserror')),
+            'raw exception text': altered(lambda r: r['checks'][1].update(summary='category=io /srv/survey/state.json')),
+            'projection not blocked': altered(lambda r: r['checks'][1].update(status='ok')),
+            'runtime summary changed': altered(lambda r: r['checks'][0].update(summary='PermissionError: /srv/survey')),
+        }
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, self.DIAGNOSTIC_ENV):
+            root = Path(temporary)
+            for name, report in reports.items():
+                with self.subTest(report=name):
+                    source = root / 'doctor-installed.json'
+                    source.write_text(json.dumps(report), encoding='utf-8')
+                    output = root / 'doctor-diagnostic.json'
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.write_doctor_diagnostic_evidence(source, 'doctor-installed', output)
+                    self.assertFalse(output.exists())
+            source = root / 'doctor-installed.json'
+            self.module.write_doctor_evidence(valid, source)
+            for name, (path, step, output) in {
+                'step differs from evidence file': (source, 'doctor-final', root / 'doctor-diagnostic.json'),
+                'step outside lifecycle': (root / 'install.json', 'install', root / 'doctor-diagnostic.json'),
+                'output not allowlisted': (source, 'doctor-installed', root / 'doctor.json'),
+            }.items():
+                if not path.exists():
+                    path.write_bytes(source.read_bytes())
+                with self.subTest(binding=name), self.assertRaises(self.module.EvidenceError):
+                    self.module.write_doctor_diagnostic_evidence(path, step, output)
+                self.assertFalse(output.exists())
+            for key, value in (('GITHUB_RUN_ID', ''), ('EXPECTED_ARCHITECTURE', 'x86'),
+                               ('CANDIDATE_MANIFEST_SHA256', 'not-a-digest'), ('CANDIDATE_BUNDLE_SHA256', '')):
+                with self.subTest(environment=key), mock.patch.dict(os.environ, {key: value}), \
+                        self.assertRaises(self.module.EvidenceError):
+                    self.module.write_doctor_diagnostic_evidence(source, 'doctor-installed', root / 'doctor-diagnostic.json')
+                self.assertFalse((root / 'doctor-diagnostic.json').exists())
+
+    def test_doctor_diagnostic_schema_is_closed(self):
+        valid = {'schemaVersion': 1, 'status': 'blocked', 'step': 'doctor-installed', 'stage': 'containers',
+                 'category': 'unknown', 'binding': 'same-run-presigning-input',
+                 'execution': {'repository': 'lsgoodlionel/star-survey', 'runId': '1', 'attempt': '1',
+                               'ubuntu': '22.04', 'architecture': 'arm64'},
+                 'candidate': {'manifestSha256': 'a' * 64, 'bundleSha256': 'b' * 64}}
+        self.module.validate_evidence('doctor-diagnostic', valid)
+        self.assertEqual('doctor-diagnostic', self.module.evidence_kind(Path('doctor-diagnostic.json')))
+        invalid = [
+            {**valid, 'detail': 'x'}, {**valid, 'schemaVersion': 2}, {**valid, 'status': 'failed'},
+            {**valid, 'step': 'install'}, {**valid, 'stage': 'x' * 300}, {**valid, 'category': 'oserror'},
+            {**valid, 'binding': 'verified-candidate'},
+            {**valid, 'execution': {**valid['execution'], 'ubuntu': '20.04'}},
+            {**valid, 'execution': {k: v for k, v in valid['execution'].items() if k != 'attempt'}},
+            {**valid, 'candidate': {**valid['candidate'], 'images': {}}},
+            {**valid, 'candidate': {**valid['candidate'], 'bundleSha256': 'B' * 64}},
+        ]
+        for index, value in enumerate(invalid):
+            with self.subTest(case=index), self.assertRaises(self.module.EvidenceError):
+                self.module.validate_evidence('doctor-diagnostic', value)
+
+    def test_shell_records_doctor_diagnostic_only_for_incomplete_doctor_and_keeps_exit(self):
+        script = SCRIPT_PATH.read_text(encoding='utf-8')
+        function = script[script.index('write_doctor_evidence() {'):script.index('\nwrite_summary() {')]
+        cases = [('incomplete doctor', self.blocked_doctor('tls', 'permission'), 4, True),
+                 ('ordinary blocked doctor', {'schemaVersion': 1, 'status': 'blocked',
+                  'checks': [{'id': 'tls', 'status': 'blocked', 'summary': 'certificate rejected'}]}, 4, False)]
+        for name, report, code, recorded in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                evidence = root / 'evidence'
+                evidence.mkdir()
+                fixture = root / 'report.json'
+                fixture.write_text(json.dumps(report))
+                fake = f'run_ctl() {{ cat "$fixture_report"; return {code}; }}\nevidence_secret_args() {{ :; }}\n'
+                result = subprocess.run(['bash', '-c', 'set -e\n' + fake + function + '\nwrite_doctor_evidence doctor-upgraded'],
+                                        capture_output=True, text=True,
+                                        env={**os.environ, **self.DIAGNOSTIC_ENV, 'work_root': str(root),
+                                             'evidence_root': str(evidence), 'fixture_report': str(fixture),
+                                             'evidence_helper': str(EVIDENCE_HELPER_PATH)})
+                self.assertEqual(code, result.returncode, result.stderr)
+                self.assertTrue((evidence / 'doctor-upgraded.json').exists())
+                diagnostic = evidence / 'doctor-diagnostic.json'
+                self.assertEqual(recorded, diagnostic.exists())
+                if recorded:
+                    payload = json.loads(diagnostic.read_text())
+                    self.assertEqual(('doctor-upgraded', 'tls', 'permission'),
+                                     (payload['step'], payload['stage'], payload['category']))
+        # Without the run identity the diagnostic is withheld; the doctor exit status is kept.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evidence = root / 'evidence'
+            evidence.mkdir()
+            fixture = root / 'report.json'
+            fixture.write_text(json.dumps(self.blocked_doctor()))
+            fake = 'run_ctl() { cat "$fixture_report"; return 3; }\nevidence_secret_args() { :; }\n'
+            environment = {key: value for key, value in os.environ.items() if key not in self.DIAGNOSTIC_ENV}
+            result = subprocess.run(['bash', '-c', 'set -e\n' + fake + function + '\nwrite_doctor_evidence doctor-installed'],
+                                    capture_output=True, text=True,
+                                    env={**environment, 'work_root': str(root), 'evidence_root': str(evidence),
+                                         'fixture_report': str(fixture), 'evidence_helper': str(EVIDENCE_HELPER_PATH)})
+            self.assertEqual(3, result.returncode, result.stderr)
+            self.assertFalse((evidence / 'doctor-diagnostic.json').exists())
 
     def test_real_shell_gate_accepts_only_expected_first_install_backup_warning(self):
         import copy
