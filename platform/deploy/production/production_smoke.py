@@ -302,7 +302,9 @@ def main():
             stage = 'build-' + name.lower().replace('_image', '').replace('_', '-')
             tag = 'localhost:5000/smoke/' + name.lower() + ':test'
             run(['docker', 'build', '--platform', 'linux/amd64', '-f', str(root / dockerfile), '-t', tag, str(root / context)])
+            stage = 'registry-push-' + name.lower().replace('_image', '').replace('_', '-')
             run(['docker', 'push', tag])
+            stage = 'resolve-digest-' + name.lower().replace('_image', '').replace('_', '-')
             images[name] = json.loads(run(['docker', 'image', 'inspect', tag]).stdout)[0]['RepoDigests'][0]
         for key, tag in [('CADDY_IMAGE', 'caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee'), ('POSTGRES_IMAGE', 'postgres:16.10-alpine'), ('MARIADB_IMAGE', f'mariadb:{MARIADB_SOURCE_VERSION}')]:
             stage = 'pull-' + key.lower().replace('_image', '')
