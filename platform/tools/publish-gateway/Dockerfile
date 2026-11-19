@@ -1,4 +1,4 @@
-# 发布网关服务镜像：纯标准库，不装任何额外包。
+# 发布网关服务镜像：Python 服务只使用标准库，受控 exec 使用 Alpine 的 Bash。
 #   docker build -t survey-publish-gateway platform/tools/publish-gateway
 # 运行所需的环境变量与引擎配置格式见 README.md「作为服务运行」。
 FROM python:3.12.15-alpine3.24
@@ -19,10 +19,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PUBGW_PORT=8080 \
     PUBGW_STATE_DIR=/var/lib/pubgw
 
-# 只刷新基础镜像里已有的 Alpine 包（不新增任何包）：python:3.12.15-alpine3.24
+# 刷新基础镜像已有的 Alpine 包：python:3.12.15-alpine3.24
 # 自带的 krb5-libs 1.22.2-r1 有 16 个 HIGH CVE，在 1.22.3-r0 修复，
 # v0.3.21-rc.1 的 Trivy 门禁因此失败（run 43384842587）。做法与 admin、business 镜像一致。
 RUN apk upgrade --no-cache \
+ && apk add --no-cache bash \
+ && /bin/bash -ec 'enable -f /usr/lib/bash/fdflags fdflags; enable -f /usr/lib/bash/tee tee' \
  && addgroup -S -g 10001 pubgw \
  && adduser -S -D -H -u 10001 -G pubgw pubgw \
  && mkdir -p /var/lib/pubgw \

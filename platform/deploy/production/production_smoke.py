@@ -5,10 +5,12 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 
 MARIADB_SOURCE_VERSION = "10.11.14"
 
@@ -27,6 +29,22 @@ def run(command, **kwargs):
     # Never forward raw subprocess output: Compose and HTTP failures may contain
     # generated test credentials. Only fixed phase and exception classes escape.
     return subprocess.run(command, check=True, capture_output=True, text=True, **kwargs)
+
+
+def check_image_exec(compose, service, profile, *, body=None):
+    from doctor import DoctorRuntimeError
+    from owned_docker_exec import ExecProtocolError, PROFILES, PayloadProof, command_for
+    nonce = secrets.token_hex(32)
+    command = command_for(profile, nonce, body=body)
+    try:
+        result = subprocess.run(compose + ['exec', '-T', service, *command], check=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=PROFILES[profile][0] + 10)
+        proof = PayloadProof(nonce, lambda block: None, 1024 * 1024)
+        proof.feed(result.stdout)
+        proof.finish()
+    except (OSError, subprocess.SubprocessError, ExecProtocolError):
+        raise DoctorRuntimeError('source image controlled exec failed') from None
 
 
 def assert_resources_absent(prefixes, runner=run):
@@ -341,8 +359,19 @@ def main():
         }, indent=2) + '\n')
         stage = 'gateway-rpc-authentication'
         check_gateway_rpc(compose)
+        stage = 'controlled-engine-status'
+        check_image_exec(compose, 'engine', 'engine-status')
+        stage = 'controlled-engine-event-cron'
+        check_image_exec(compose, 'engine', 'engine-event-cron')
+
+        class ControlledCleanupProbe(ProductProbe):
+            def _close_engine_survey(self, instance, sid):
+                check_image_exec(self.compose, 'publish-gateway', 'gateway-close',
+                                 body={'requestId': str(uuid.uuid4()),
+                                       'engineInstanceId': instance, 'surveyId': sid})
+
         stage = 'doctor'
-        observed = observed_probe_class(ProductProbe, evidence)
+        observed = observed_probe_class(ControlledCleanupProbe, evidence)
         report = Doctor(target, product_probe=lambda host, commands: observed(target, host, commands, CommandRunner()).run()).run()
         secrets = [(target / 'shared/secrets' / p).read_text().strip() for p in os.listdir(target / 'shared/secrets')]
         write_doctor_evidence(report, evidence / 'doctor-installed.json', secrets)

@@ -11,6 +11,42 @@ class ProductionSmokeTest(unittest.TestCase):
         self.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.module)
 
+    def test_image_exec_requires_digest_from_the_same_invocation(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import hashlib
+        import sys
+        with patch.object(sys, 'path', [str(SOURCE.parent), *sys.path]):
+            from doctor import DoctorRuntimeError
+            from owned_docker_exec import PayloadProof
+            def result(argv, **kwargs):
+                self.assertTrue(kwargs['check'])
+                self.assertEqual(['compose', 'exec', '-T', 'engine', '/bin/bash'], argv[:5])
+                nonce = argv[-1].encode()
+                data = b'fixture output\n'
+                digest = hashlib.sha256(data).hexdigest().encode()
+                return SimpleNamespace(stdout=data + PayloadProof.PREFIX + nonce + b':' + digest + b'\n')
+            with patch.object(self.module.subprocess, 'run', side_effect=result):
+                self.module.check_image_exec(['compose'], 'engine', 'engine-status')
+            with patch.object(self.module.subprocess, 'run', return_value=SimpleNamespace(stdout=b'')):
+                with self.assertRaisesRegex(DoctorRuntimeError, '^source image controlled exec failed$'):
+                    self.module.check_image_exec(['compose'], 'engine', 'engine-status')
+
+    def test_controlled_cleanup_reports_only_a_safe_failure(self):
+        import subprocess
+        import sys
+        from unittest.mock import patch
+        with patch.object(sys, 'path', [str(SOURCE.parent), *sys.path]):
+            from doctor import DoctorRuntimeError
+            body = {'requestId': '00000000-0000-4000-8000-000000000003',
+                    'engineInstanceId': 'fixture', 'surveyId': 123}
+            for failure in (subprocess.CalledProcessError(1, 'private-fixture-command'),
+                            subprocess.TimeoutExpired('private-fixture-command', 5)):
+                with self.subTest(failure=type(failure).__name__), \
+                        patch.object(self.module.subprocess, 'run', side_effect=failure), \
+                        self.assertRaisesRegex(DoctorRuntimeError, '^source image controlled exec failed$'):
+                    self.module.check_image_exec(['compose'], 'publish-gateway', 'gateway-close', body=body)
+
     def test_refuses_local_self_hosted_or_arm_execution(self):
         for env in ({}, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'self-hosted', 'RUNNER_ARCH': 'X64'},
                     {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted', 'RUNNER_ARCH': 'ARM64'}):

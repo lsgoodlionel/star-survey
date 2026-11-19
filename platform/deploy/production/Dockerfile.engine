@@ -14,8 +14,9 @@ RUN set -eux; \
     if [ -n "$APK_MIRROR" ]; then sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR%/}#g" /etc/apk/repositories; fi; \
     apk update || { cp /tmp/repositories.official /etc/apk/repositories; apk update; }; \
     apk upgrade --no-cache; \
-    apk add --no-cache apache2 php83 php83-apache2 php83-calendar php83-ctype php83-curl php83-dom php83-fileinfo php83-gd php83-iconv php83-intl php83-ldap php83-mbstring php83-mysqli php83-opcache php83-openssl php83-pdo php83-pdo_mysql php83-pdo_pgsql php83-pdo_sqlite php83-pgsql php83-phar php83-posix php83-session php83-simplexml php83-sodium php83-sqlite3 php83-tokenizer php83-xml php83-xmlreader php83-xmlwriter php83-zip php83-zlib; \
+    apk add --no-cache bash apache2 php83 php83-apache2 php83-calendar php83-ctype php83-curl php83-dom php83-fileinfo php83-gd php83-iconv php83-intl php83-ldap php83-mbstring php83-mysqli php83-opcache php83-openssl php83-pdo php83-pdo_mysql php83-pdo_pgsql php83-pdo_sqlite php83-pgsql php83-phar php83-posix php83-session php83-simplexml php83-sodium php83-sqlite3 php83-tokenizer php83-xml php83-xmlreader php83-xmlwriter php83-zip php83-zlib; \
     cp /tmp/repositories.official /etc/apk/repositories; rm /tmp/repositories.official; \
+    /bin/bash -ec 'enable -f /usr/lib/bash/fdflags fdflags; enable -f /usr/lib/bash/tee tee'; \
     ln -sf /usr/bin/php83 /usr/local/bin/php; \
     addgroup -g 10001 survey; adduser -D -H -u 10001 -G survey survey; \
     sed -i -e 's/^User .*/User survey/' -e 's/^Group .*/Group survey/' -e 's#^DocumentRoot .*#DocumentRoot "/var/www/html"#' -e 's/^#LoadModule rewrite_module/LoadModule rewrite_module/' /etc/apache2/httpd.conf; \
