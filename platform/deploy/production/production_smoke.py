@@ -31,6 +31,23 @@ def run(command, **kwargs):
     return subprocess.run(command, check=True, capture_output=True, text=True, **kwargs)
 
 
+def build_failure_category(error):
+    # BuildKit output can contain private values. Publish only a fixed class.
+    diagnostic = ((error.stderr or '') + '\n' + (error.stdout or '')).lower()
+    for label, indicators in (
+        ('disk-full', ('no space left on device',)),
+        ('rate-limited', ('too many requests', 'toomanyrequests')),
+        ('registry-denied', ('unauthorized:', 'pull access denied')),
+        ('connection-timeout', ('i/o timeout', 'connection timed out', 'tls handshake timeout')),
+        ('dependency-transfer', ('could not transfer artifact', 'non-resolvable parent pom')),
+        ('base-image-resolution', ('failed to resolve source metadata',)),
+        ('java-compilation', ('compilation error', 'compilation failure')),
+    ):
+        if any(indicator in diagnostic for indicator in indicators):
+            return label
+    return 'unclassified'
+
+
 def check_image_exec(compose, service, profile, *, body=None):
     from doctor import DoctorRuntimeError
     from owned_docker_exec import ExecProtocolError, PROFILES, PayloadProof, command_for
@@ -286,6 +303,7 @@ def main():
     target, assets = work / 'target', work / 'assets'
     compose = None
     backup_evidence = None
+    build_failure = None
     registry_started = False
     stage, error, journey, cleanup = 'build', None, False, False
     host, marker = 'survey-smoke.test', '# survey-production-smoke'
@@ -301,7 +319,7 @@ def main():
             ('ENGINE_IMAGE', '.', 'platform/deploy/production/Dockerfile.engine')):
             stage = 'build-' + name.lower().replace('_image', '').replace('_', '-')
             tag = 'localhost:5000/smoke/' + name.lower() + ':test'
-            run(['docker', 'build', '--platform', 'linux/amd64', '-f', str(root / dockerfile), '-t', tag, str(root / context)])
+            run(['docker', 'build', '--progress=plain', '--platform', 'linux/amd64', '-f', str(root / dockerfile), '-t', tag, str(root / context)])
             stage = 'registry-push-' + name.lower().replace('_image', '').replace('_', '-')
             run(['docker', 'push', tag])
             stage = 'resolve-digest-' + name.lower().replace('_image', '').replace('_', '-')
@@ -402,6 +420,8 @@ def main():
         journey = True
     except Exception as exc:
         error = type(exc).__name__
+        if stage.startswith('build-') and isinstance(exc, subprocess.CalledProcessError):
+            build_failure = build_failure_category(exc)
         if compose:
             try:
                 engine = run(compose + ['ps', '-aq', 'engine']).stdout.strip()
@@ -440,6 +460,8 @@ def main():
                   'lastStep': stage, 'errorCategory': error, 'journeyPassed': journey, 'cleanupPassed': cleanup,
                   'backupIntegrityVerified': bool(backup_evidence and backup_evidence.get('integrityVerified')),
                   'restorationEligible': False, 'releaseAcceptance': False}
+        if build_failure is not None:
+            result['buildFailureCategory'] = build_failure
         (evidence / 'smoke-summary.json').write_text(json.dumps(result, indent=2) + '\n')
     return 0 if journey and cleanup else 1
 

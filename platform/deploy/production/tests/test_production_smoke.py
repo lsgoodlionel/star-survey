@@ -47,6 +47,16 @@ class ProductionSmokeTest(unittest.TestCase):
                         self.assertRaisesRegex(DoctorRuntimeError, '^source image controlled exec failed$'):
                     self.module.check_image_exec(['compose'], 'publish-gateway', 'gateway-close', body=body)
 
+    def test_build_failure_reports_only_fixed_categories(self):
+        import subprocess
+        for message, category in [
+                ('failed to resolve source metadata for private/image: 429 Too Many Requests', 'rate-limited'),
+                ('Could not transfer artifact private:artifact', 'dependency-transfer'),
+                ('no space left on device: private-path', 'disk-full'),
+                ('private-build-detail', 'unclassified')]:
+            error = subprocess.CalledProcessError(1, ['docker', 'build'], stderr=message)
+            self.assertEqual(category, self.module.build_failure_category(error))
+
     def test_refuses_local_self_hosted_or_arm_execution(self):
         for env in ({}, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'self-hosted', 'RUNNER_ARCH': 'X64'},
                     {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted', 'RUNNER_ARCH': 'ARM64'}):
