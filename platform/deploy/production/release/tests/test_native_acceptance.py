@@ -142,13 +142,16 @@ def assert_native_workflow_invocation(testcase: unittest.TestCase, workflow: dic
                           'NATIVE_SUMMARY': '${{ github.workspace }}/native-evidence/summary.json',
                           'NATIVE_UPGRADE_DATA': '${{ github.workspace }}/native-evidence/upgrade-data.json',
                           'NATIVE_DOCTOR_DIAGNOSTIC': '${{ github.workspace }}/native-evidence/doctor-diagnostic.json',
+                          # The diagnostic binds to this job's trusted pre-signing inputs (#176 review).
+                          'NATIVE_IDENTITY_MANIFEST_SHA256': '${{ steps.identity.outputs.manifest-sha }}',
+                          'NATIVE_IDENTITY_BUNDLE_SHA256': '${{ steps.identity.outputs.bundle-sha }}',
                           # Validate with the workflow-source helper, never the candidate's copy.
                           'TRUSTED_EVIDENCE_HELPER': '${{ github.workspace }}/trusted-workflow-source/platform/deploy/production/release/native_acceptance_evidence.py'},
                          prepare.get('env'))
     # Reviewed body (#138 P-c): withheld diagnostic plus the allowlisted,
     # trusted-helper-validated summary.json and its bound optional upgrade-data.json
     # or doctor-diagnostic.json (#170); any edit needs a new review.
-    testcase.assertEqual('5dd56374fdb8c5383451851dede1764c30fa7b8e13e1d7ce81891414700cc663',
+    testcase.assertEqual('fef2caef59e15200e29ed83ecdf302afba1a889dbc6ee17bfc403013d99c5d84',
                          hashlib.sha256(prepare['run'].encode()).hexdigest())
     upload = next(item for item in job['steps'] if item.get('name') == 'Preserve fail-closed native diagnostic')
     testcase.assertEqual({'name', 'if', 'uses', 'with'}, set(upload))
@@ -534,20 +537,37 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
             ('diagnostic with raw detail', summary, {**diagnostic, 'detail': '/srv/survey'}, [], None),
             ('diagnostic outside vocabulary', summary, {**diagnostic, 'category': 'oserror'}, [], None),
             ('symlinked diagnostic', summary, diagnostic, [], 'link'),
+            # Summary and diagnostic agree with each other but not with this job's identity outputs.
+            ('both differ from workflow manifest', {**summary, 'candidate': {**summary['candidate'], 'manifestSha256': '9' * 64}},
+             changed('candidate', manifestSha256='9' * 64), [], None),
+            ('both differ from workflow bundle', {**summary, 'candidate': {**summary['candidate'], 'bundleSha256': '9' * 64}},
+             changed('candidate', bundleSha256='9' * 64), [], None),
+            ('workflow identity unavailable', summary, diagnostic, [], 'no-identity'),
+            # Duplicate members are rejected at every level; only the fixed diagnostic remains.
+            ('duplicate nested diagnostic key', summary, diagnostic, [], 'dup-diagnostic'),
+            ('duplicate nested summary key', summary, diagnostic, [], 'dup-summary'),
+            ('duplicate top-level diagnostic key', summary, diagnostic, [], 'dup-top'),
         ]
+        def encoded(payload, mode):
+            text = json.dumps(payload)
+            if mode == 'nested':
+                return text.replace('"runId": "123"', '"runId": "999", "runId": "123"', 1)
+            if mode == 'top':
+                return text.replace('"stage": "containers"', '"stage": "tls", "stage": "containers"', 1)
+            return text
         for name, value, extra, published, special in cases:
             with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 evidence = root / 'native-evidence'
                 evidence.mkdir()
-                (evidence / 'summary.json').write_text(json.dumps(value))
+                (evidence / 'summary.json').write_text(encoded(value, 'nested' if special == 'dup-summary' else None))
                 if extra is not None:
                     target = evidence / 'doctor-diagnostic.json'
                     if special == 'link':
                         (evidence / 'real.json').write_text(json.dumps(extra))
                         target.symlink_to(evidence / 'real.json')
                     else:
-                        target.write_text(json.dumps(extra))
+                        target.write_text(encoded(extra, {'dup-diagnostic': 'nested', 'dup-top': 'top'}.get(special)))
                 output = root / 'github-output'
                 output.write_text('')
                 env = {**os.environ, 'RUNNER_TEMP': str(root), 'GITHUB_OUTPUT': str(output),
@@ -556,6 +576,8 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                        'NATIVE_SUMMARY': str(evidence / 'summary.json'),
                        'NATIVE_UPGRADE_DATA': str(evidence / 'upgrade-data.json'),
                        'NATIVE_DOCTOR_DIAGNOSTIC': str(evidence / 'doctor-diagnostic.json'),
+                       'NATIVE_IDENTITY_MANIFEST_SHA256': '' if special == 'no-identity' else '1' * 64,
+                       'NATIVE_IDENTITY_BUNDLE_SHA256': '' if special == 'no-identity' else '2' * 64,
                        'GITHUB_REPOSITORY': 'lsgoodlionel/star-survey',
                        'TRUSTED_EVIDENCE_HELPER': str(EVIDENCE_HELPER_PATH)}
                 result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True, text=True)
@@ -1931,6 +1953,36 @@ class NativeAcceptanceEvidenceTest(unittest.TestCase):
         for index, value in enumerate(invalid):
             with self.subTest(case=index), self.assertRaises(self.module.EvidenceError):
                 self.module.validate_evidence('doctor-diagnostic', value)
+
+    def test_evidence_json_rejects_duplicate_members_at_every_level(self):
+        # Validation must see exactly the bytes that are published (#176 review).
+        documents = {
+            'top level': '{"schemaVersion": 1, "schemaVersion": 1, "status": "ok", "checks": [{"id": "tls", "status": "ok", "summary": "ok"}]}',
+            'nested object': '{"schemaVersion": 1, "status": "ok", "checks": [{"id": "tls", "id": "tls", "status": "ok", "summary": "ok"}]}',
+            'deep object': '{"a": {"b": [{"c": {"d": 1, "d": 2}}]}}',
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, text in documents.items():
+                with self.subTest(document=name):
+                    path = root / 'doctor-installed.json'
+                    path.write_text(text, encoding='utf-8')
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.load_json(path)
+                    with self.assertRaises(self.module.EvidenceError):
+                        self.module.scan_directory(root)
+                    path.unlink()
+            with self.assertRaises(self.module.EvidenceError):
+                self.module.write_service_evidence('{"id": "a", "id": "b"}\n', root / 'services.json')
+            self.assertFalse((root / 'services.json').exists())
+            # A duplicated projection never yields a diagnostic, even when the last value is valid.
+            with mock.patch.dict(os.environ, self.DIAGNOSTIC_ENV):
+                source = root / 'doctor-installed.json'
+                source.write_text(json.dumps(self.blocked_doctor()).replace(
+                    '"summary": "category=unknown"', '"summary": "category=io /srv", "summary": "category=unknown"'), encoding='utf-8')
+                with self.assertRaises(self.module.EvidenceError):
+                    self.module.write_doctor_diagnostic_evidence(source, 'doctor-installed', root / 'doctor-diagnostic.json')
+                self.assertFalse((root / 'doctor-diagnostic.json').exists())
 
     def test_shell_records_doctor_diagnostic_only_for_incomplete_doctor_and_keeps_exit(self):
         script = SCRIPT_PATH.read_text(encoding='utf-8')

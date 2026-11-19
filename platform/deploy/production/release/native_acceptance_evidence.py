@@ -83,6 +83,21 @@ class EvidenceError(ValueError):
     pass
 
 
+def _unique_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise EvidenceError("duplicate JSON member names are forbidden in evidence")
+        result[key] = value
+    return result
+
+
+def strict_json_loads(text: str | bytes) -> Any:
+    """Decode JSON rejecting duplicate members at every level, so validation
+    always sees exactly the bytes that may later be published (#176 review)."""
+    return json.loads(text, object_pairs_hook=_unique_members)
+
+
 def require_clean_native_host() -> None:
     """Reject pre-existing project resources before a hosted native test starts.
 
@@ -258,7 +273,7 @@ def verify_fixture_owner(work: Path, target: Path, marker: Path) -> None:
             if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600 or
                     metadata.st_uid != os.geteuid() or metadata.st_size > 4096):
                 raise EvidenceError('fixture owner marker is unsafe')
-            if json.loads(stream.read(4097)) != expected:
+            if strict_json_loads(stream.read(4097)) != expected:
                 raise EvidenceError('fixture owner marker does not match this run')
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError('fixture owner marker cannot be read') from exc
@@ -305,7 +320,7 @@ def read_fixture_volumes() -> dict[str, dict[str, str]]:
             if len(names) != len(expected) or set(names) != set(expected):
                 raise EvidenceError('fixture volume listing differs from expected inventory')
         result = subprocess.run(prefix + ['inspect', *expected], check=True, capture_output=True, text=True, timeout=30)
-        return parse_fixture_volumes(json.loads(result.stdout))
+        return parse_fixture_volumes(strict_json_loads(result.stdout))
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
         raise EvidenceError('fixture volume inspection failed') from exc
 
@@ -334,7 +349,7 @@ def verify_fixture_volume_snapshot(work: Path, marker: Path, snapshot: Path) -> 
             if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600 or
                     metadata.st_uid != os.geteuid() or metadata.st_size > 8192):
                 raise EvidenceError('fixture volume snapshot is unsafe')
-            recorded = json.loads(stream.read(8193))
+            recorded = strict_json_loads(stream.read(8193))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError('fixture volume snapshot cannot be read') from exc
     if recorded != read_fixture_volumes():
@@ -758,7 +773,7 @@ def write_service_evidence(lines: str, output: Path, secret_values: Iterable[str
         if not line.strip():
             continue
         try:
-            item = json.loads(line)
+            item = strict_json_loads(line)
         except json.JSONDecodeError as exc:
             raise EvidenceError("container evidence is not JSON") from exc
         if not isinstance(item, dict):
@@ -1092,7 +1107,7 @@ def load_json(path: Path) -> Any:
     if path.stat().st_size > MAX_EVIDENCE_BYTES:
         raise EvidenceError(f"evidence exceeds the maximum size: {path.name}")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return strict_json_loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError(f"evidence is not valid JSON: {path.name}") from exc
 
@@ -1248,7 +1263,7 @@ def run_upgrade_data_probe(args):
     for path, expected in ((baseline_path, args.baseline_sha), (candidate_path, args.candidate_sha)):
         if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             raise EvidenceError('continuity manifest identity mismatch')
-    baseline, candidate = json.loads(baseline_path.read_text()), json.loads(candidate_path.read_text())
+    baseline, candidate = strict_json_loads(baseline_path.read_text()), strict_json_loads(candidate_path.read_text())
     sys.path.insert(0, args.runtime)
     from doctor import ProductProbe, DoctorRuntimeError, CommandRunner
     from surveyctl import SurveyManager
