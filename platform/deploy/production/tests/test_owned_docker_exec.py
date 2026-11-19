@@ -11,12 +11,119 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from test_owned_children import Guard, Store
 from test_owned_memory import PortableFDBackend
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+
+class ExecTimeoutCompatibilityTest(unittest.TestCase):
+    def test_shared_command_passes_fixed_deadline_and_nonce(self):
+        from owned_docker_exec import PROFILES, command_for
+        for profile, (seconds, _) in PROFILES.items():
+            with self.subTest(profile=profile):
+                body = None
+                if profile == 'gateway-close':
+                    body = {'requestId': '00000000-0000-4000-8000-000000000003',
+                            'engineInstanceId': 'production-engine-01', 'surveyId': 123}
+                self.assertEqual([str(seconds), 'a' * 64],
+                                 command_for(profile, 'a' * 64, body=body)[-2:])
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process-group contract')
+    def test_deadline_stops_payload_and_grandchild_without_stopping_peer(self):
+        from owned_docker_exec import PROFILES, command_for
+        with tempfile.TemporaryDirectory() as directory:
+            child_pid = Path(directory) / 'child'
+            command = ['/bin/bash', '-c', 'read -r s < /proc/$$/stat; '
+                       'read -r state pp pg rest <<< "${s##*) }"; echo "$pg" > "$1"; sleep 6 & wait',
+                       'fixture', str(child_pid)]
+            with patch.dict(PROFILES, {'deadline-fixture': (1, command)}):
+                args = command_for('deadline-fixture', 'a' * 64)
+                with subprocess.Popen(['sleep', '6']) as peer:
+                    try:
+                        result = subprocess.run(args, capture_output=True, timeout=5)
+                        self.assertEqual(137, result.returncode)
+                        self.assertEqual(b'', result.stdout)
+                        self.assertIsNone(peer.poll())
+                        self.assert_group_gone(int(child_pid.read_text()))
+                    finally:
+                        peer.terminate()
+
+    @staticmethod
+    def assert_group_gone(group):
+        import time
+        deadline = time.monotonic() + 2
+        while True:
+            states = []
+            for stat in Path('/proc').glob('[0-9]*/stat'):
+                try:
+                    fields = stat.read_text().rsplit(') ', 1)[1].split()
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                if fields[2] == str(group):
+                    states.append(fields[0])
+            if not states:
+                return
+            if time.monotonic() >= deadline:
+                raise AssertionError(f'owned group still has members: {states}')
+            time.sleep(.02)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux pipe and process-group contract')
+    def test_deadline_before_handoff_and_full_output_pipe(self):
+        import fcntl
+        from owned_docker_exec import PROFILES, command_for
+        with tempfile.TemporaryDirectory() as directory:
+            group = Path(directory) / 'group'
+            hook = Path(directory) / 'bash-env'
+            # Delay the worker exactly at its notification to the watchdog.
+            # On the old implementation the public trailer already existed.
+            hook.write_text("printf() { if [[ ${writer:-} && $1 != -v && "
+                            "( $1 == 'done\\n' || $1 == '%s\\n' ) ]]; then sleep 5; fi; "
+                            'builtin printf "$@"; }\n')
+            argv = ['/bin/bash', '-c', 'read -r s < /proc/$$/stat; '
+                    'read -r state pp pg rest <<< "${s##*) }"; echo "$pg" > "$1"',
+                    'fixture', str(group)]
+            for available in (None, 0, 80):
+                with self.subTest(available=available), patch.dict(PROFILES, {'deadline-fixture': (1, argv)}):
+                    cmd = command_for('deadline-fixture', 'a' * 64)
+                    if available is None:
+                        result = subprocess.run(cmd, capture_output=True, timeout=4,
+                                                env=dict(os.environ, BASH_ENV=str(hook)))
+                        self.assertEqual(b'', result.stdout)
+                    else:
+                        readfd, writefd = os.pipe()
+                        try:
+                            capacity = fcntl.fcntl(writefd, fcntl.F_GETPIPE_SZ)
+                            padding = b'x' * (capacity - available)
+                            self.assertEqual(len(padding), os.write(writefd, padding))
+                            result = subprocess.run(cmd, stdout=writefd, stderr=subprocess.PIPE, timeout=4)
+                            os.close(writefd)
+                            writefd = None
+                            with os.fdopen(readfd, 'rb', closefd=False) as reader:
+                                self.assertEqual(padding, reader.read())
+                        finally:
+                            os.close(readfd)
+                            if writefd is not None:
+                                os.close(writefd)
+                    self.assertEqual(137, result.returncode)
+                    self.assert_group_gone(int(group.read_text()))
+                    group.unlink()
+
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux monotonic clock contract')
+    def test_delayed_writer_rechecks_original_deadline(self):
+        from owned_docker_exec import PROFILES, command_for
+        with patch.dict(PROFILES, {'deadline-fixture': (1, ['/bin/true'])}):
+            cmd = command_for('deadline-fixture', 'a' * 64)
+        # A scheduler delay between admission in the parent loop and execution
+        # in the writer must not turn an expired digest into a successful frame.
+        self.assertIn('emit() {', cmd[4])
+        cmd[4] = cmd[4].replace('emit() {', 'emit() { sleep 1.2; ')
+        result = subprocess.run(cmd, capture_output=True, timeout=5)
+        self.assertEqual((137, b''), (result.returncode, result.stdout))
 
 
 class OwnedDockerExecTest(unittest.TestCase):
@@ -65,12 +172,10 @@ class OwnedDockerExecTest(unittest.TestCase):
 
     def test_diagnostic_profiles_are_fixed_and_close_body_is_strictly_bounded(self):
         nonce = 'a' * 64
-        for profile in ('postgres-schema', 'engine-status', 'engine-event-cron'):
-            self.assertIn('/usr/bin/timeout', self.module.command_for(profile, nonce))
         body = {'requestId': '00000000-0000-4000-8000-000000000003',
                 'engineInstanceId': 'production-engine-01', 'surveyId': 123}
         command = self.module.command_for('gateway-close', nonce, body=body)
-        self.assertIn('http://127.0.0.1:8080/v1/close', command[5])
+        self.assertIn('http://127.0.0.1:8080/v1/close', command[4])
         for updates in ({'surveyId': True}, {'surveyId': 0}, {'engineInstanceId': 'bad/route'},
                         {'requestId': 'bad'}, {'url': 'http://elsewhere'}):
             with self.assertRaises(ValueError):
