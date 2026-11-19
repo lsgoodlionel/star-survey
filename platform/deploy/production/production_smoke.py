@@ -5,10 +5,12 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 
 MARIADB_SOURCE_VERSION = "10.11.14"
 
@@ -27,6 +29,39 @@ def run(command, **kwargs):
     # Never forward raw subprocess output: Compose and HTTP failures may contain
     # generated test credentials. Only fixed phase and exception classes escape.
     return subprocess.run(command, check=True, capture_output=True, text=True, **kwargs)
+
+
+def build_failure_category(error):
+    # BuildKit output can contain private values. Publish only a fixed class.
+    diagnostic = ((error.stderr or '') + '\n' + (error.stdout or '')).lower()
+    for label, indicators in (
+        ('disk-full', ('no space left on device',)),
+        ('rate-limited', ('too many requests', 'toomanyrequests')),
+        ('registry-denied', ('unauthorized:', 'pull access denied')),
+        ('connection-timeout', ('i/o timeout', 'connection timed out', 'tls handshake timeout')),
+        ('dependency-transfer', ('could not transfer artifact', 'non-resolvable parent pom')),
+        ('base-image-resolution', ('failed to resolve source metadata',)),
+        ('java-compilation', ('compilation error', 'compilation failure')),
+    ):
+        if any(indicator in diagnostic for indicator in indicators):
+            return label
+    return 'unclassified'
+
+
+def check_image_exec(compose, service, profile, *, body=None):
+    from doctor import DoctorRuntimeError
+    from owned_docker_exec import ExecProtocolError, PROFILES, PayloadProof, command_for
+    nonce = secrets.token_hex(32)
+    command = command_for(profile, nonce, body=body)
+    try:
+        result = subprocess.run(compose + ['exec', '-T', service, *command], check=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=PROFILES[profile][0] + 10)
+        proof = PayloadProof(nonce, lambda block: None, 1024 * 1024)
+        proof.feed(result.stdout)
+        proof.finish()
+    except (OSError, subprocess.SubprocessError, ExecProtocolError):
+        raise DoctorRuntimeError('source image controlled exec failed') from None
 
 
 def assert_resources_absent(prefixes, runner=run):
@@ -268,6 +303,7 @@ def main():
     target, assets = work / 'target', work / 'assets'
     compose = None
     backup_evidence = None
+    build_failure = None
     registry_started = False
     stage, error, journey, cleanup = 'build', None, False, False
     host, marker = 'survey-smoke.test', '# survey-production-smoke'
@@ -283,8 +319,10 @@ def main():
             ('ENGINE_IMAGE', '.', 'platform/deploy/production/Dockerfile.engine')):
             stage = 'build-' + name.lower().replace('_image', '').replace('_', '-')
             tag = 'localhost:5000/smoke/' + name.lower() + ':test'
-            run(['docker', 'build', '--platform', 'linux/amd64', '-f', str(root / dockerfile), '-t', tag, str(root / context)])
+            run(['docker', 'build', '--progress=plain', '--platform', 'linux/amd64', '-f', str(root / dockerfile), '-t', tag, str(root / context)])
+            stage = 'registry-push-' + name.lower().replace('_image', '').replace('_', '-')
             run(['docker', 'push', tag])
+            stage = 'resolve-digest-' + name.lower().replace('_image', '').replace('_', '-')
             images[name] = json.loads(run(['docker', 'image', 'inspect', tag]).stdout)[0]['RepoDigests'][0]
         for key, tag in [('CADDY_IMAGE', 'caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee'), ('POSTGRES_IMAGE', 'postgres:16.10-alpine'), ('MARIADB_IMAGE', f'mariadb:{MARIADB_SOURCE_VERSION}')]:
             stage = 'pull-' + key.lower().replace('_image', '')
@@ -341,8 +379,19 @@ def main():
         }, indent=2) + '\n')
         stage = 'gateway-rpc-authentication'
         check_gateway_rpc(compose)
+        stage = 'controlled-engine-status'
+        check_image_exec(compose, 'engine', 'engine-status')
+        stage = 'controlled-engine-event-cron'
+        check_image_exec(compose, 'engine', 'engine-event-cron')
+
+        class ControlledCleanupProbe(ProductProbe):
+            def _close_engine_survey(self, instance, sid):
+                check_image_exec(self.compose, 'publish-gateway', 'gateway-close',
+                                 body={'requestId': str(uuid.uuid4()),
+                                       'engineInstanceId': instance, 'surveyId': sid})
+
         stage = 'doctor'
-        observed = observed_probe_class(ProductProbe, evidence)
+        observed = observed_probe_class(ControlledCleanupProbe, evidence)
         report = Doctor(target, product_probe=lambda host, commands: observed(target, host, commands, CommandRunner()).run()).run()
         secrets = [(target / 'shared/secrets' / p).read_text().strip() for p in os.listdir(target / 'shared/secrets')]
         write_doctor_evidence(report, evidence / 'doctor-installed.json', secrets)
@@ -371,6 +420,8 @@ def main():
         journey = True
     except Exception as exc:
         error = type(exc).__name__
+        if stage.startswith('build-') and isinstance(exc, subprocess.CalledProcessError):
+            build_failure = build_failure_category(exc)
         if compose:
             try:
                 engine = run(compose + ['ps', '-aq', 'engine']).stdout.strip()
@@ -409,6 +460,8 @@ def main():
                   'lastStep': stage, 'errorCategory': error, 'journeyPassed': journey, 'cleanupPassed': cleanup,
                   'backupIntegrityVerified': bool(backup_evidence and backup_evidence.get('integrityVerified')),
                   'restorationEligible': False, 'releaseAcceptance': False}
+        if build_failure is not None:
+            result['buildFailureCategory'] = build_failure
         (evidence / 'smoke-summary.json').write_text(json.dumps(result, indent=2) + '\n')
     return 0 if journey and cleanup else 1
 

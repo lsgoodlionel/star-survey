@@ -69,7 +69,11 @@ class ProductionImagePolicyTest(unittest.TestCase):
         # krb5-libs CVEs inherited from the python alpine base; refresh like admin.
         runtime = runtime_stage(dockerfile("publish-gateway"))
         self.assertRegex(runtime, r"\bapk\s+upgrade\s+--no-cache\b")
-        self.assertNotRegex(runtime, r"\bapk\s+add\b")
+        # bash supplies fdflags and tee for controlled exec. Keep the package
+        # exception narrow, including Dockerfile line continuations.
+        commands = runtime.replace(chr(92) + "\n", " ")
+        additions = re.findall(r"\bapk\s+add\b([^;&|\n]*)", commands)
+        self.assertEqual([args.split() for args in additions], [["--no-cache", "bash"]])
         self.assertLess(runtime.index("apk upgrade"), runtime.index("USER 10001:10001"))
 
     def test_admin_static_bundle_builds_on_native_builder(self):

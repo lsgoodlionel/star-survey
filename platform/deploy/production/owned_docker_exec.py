@@ -180,6 +180,114 @@ class PayloadProof:
         self.closed = True
 
 
+# Establish a fresh process group before starting the controlled command.
+# An async Bash job needs an explicit stdin for database-input profiles.
+_LAUNCH_GROUP = """set -eu
+set -m
+exec 9<&0
+/bin/bash -c "$1" survey-owned-group "$2" "$3" <&9 9<&- &
+worker=$!
+exec 9<&-
+wait "$worker"
+"""
+
+# The pinned MariaDB server does not reap unrelated orphaned exec children.
+# Make only this exec a Linux child subreaper. wait() can reap its own
+# children and adopted descendants, never children of a parallel exec.
+_MARIA_LAUNCH_GROUP = """use strict;
+use warnings;
+use Errno qw(EINTR ECHILD);
+require 'syscall.ph';
+syscall(&SYS_prctl, 36, 1, 0, 0, 0) == 0 or exit 125;  # PR_SET_CHILD_SUBREAPER
+my $worker = fork();
+defined $worker or exit 125;
+if ($worker == 0) {
+    setpgrp(0, 0) or exit 125;
+    exec '/bin/bash', '-c', $ARGV[0], 'survey-owned-group', @ARGV[1, 2];
+    exit 125;
+}
+my $status;
+while (1) {
+    my $pid = wait();
+    if ($pid < 0) {
+        next if $! == EINTR;
+        exit 125 unless $! == ECHILD;
+        last;
+    }
+    $status = $? if $pid == $worker;
+}
+defined $status or exit 125;
+exit(($status & 127) ? 128 + ($status & 127) : $status >> 8);
+"""
+
+
+# Do not arm a group-wide signal unless this worker leads its own group.
+# With job control off, the watchdog and the payload inherit that group.
+_GROUP_SETUP = """set -euo pipefail
+set +m
+IFS= read -r procstat < "/proc/$BASHPID/stat"
+read -r state parent group rest <<< "${procstat##*) }"
+[[ $group == "$BASHPID" ]]
+exec 8>&1
+coproc DEADLINE {
+    # The watchdog alone decides the outcome. Its private pipe carries a
+    # candidate digest, never a trailer already committed to Docker stdout.
+    now() {
+        local uptime rest
+        read -r uptime rest < /proc/uptime
+        ticks=$((10#${uptime%.*} * 100 + 10#${uptime#*.}))
+    }
+    now
+    end=$((ticks + 100 * $1))
+    if ! IFS= read -r -t "$1" message; then kill -KILL 0; fi
+    [[ $message != failed ]] || exit 0
+    [[ $message =~ ^[a-f0-9]{64}$ && -p /dev/fd/8 ]] || exit 125
+    # An owned non-TTY Docker stdout is a pipe. The frame is smaller than
+    # POSIX PIPE_BUF. A nonblocking write fits in full or yields EAGAIN.
+    # Set the flag only after the payload pipeline has finished.
+    if [[ -r /usr/lib/bash/fdflags && -r /usr/lib/bash/tee ]]; then
+        enable -f /usr/lib/bash/fdflags fdflags
+        enable -f /usr/lib/bash/tee tee
+        fdflags -s +nonblock 8
+        emit() {
+            now
+            (( ticks < end )) || return 124
+            # The here-string is prefilled in one chunk. Unlike printf, this
+            # builtin forwards that chunk with write(2), without stdio buffering.
+            builtin tee >&8 <<< "$frame"
+        }
+    else
+        emit() {
+            /usr/bin/perl -MFcntl=F_GETFL,F_SETFL,O_NONBLOCK -e '
+                my $flags = fcntl(STDOUT, F_GETFL, 0);
+                defined($flags) && fcntl(STDOUT, F_SETFL, $flags | O_NONBLOCK) or exit 125;
+                my $frame = $ARGV[0] . chr(10);
+                open my $clock, q{<}, q{/proc/uptime} or exit 125;
+                <$clock> =~ /^(\\d+)\\.(\\d{2})/ or exit 125;
+                exit 124 if $1 * 100 + $2 >= $ARGV[1];
+                my $n = syswrite(STDOUT, $frame);
+                exit 75 if !defined($n) && ($!{EAGAIN} || $!{EWOULDBLOCK});
+                exit(defined($n) && $n == length($frame) ? 0 : 125);
+            ' "$frame" "$end" >&8
+        }
+    fi
+    printf -v frame '\\nSURVEY-EXEC-SHA256:%s:%s' "$2" "$message"
+    while :; do
+        now
+        if (( ticks >= end )); then kill -KILL 0; fi
+        if emit 2>/dev/null; then exit 0; else rc=$?; fi
+        if (( rc == 124 )); then kill -KILL 0; fi
+        # The Bash builtin reports a write error with status 1; Perl reports
+        # a full pipe with 75. Retry within this same monotonic deadline.
+        [[ $rc == 1 || $rc == 75 ]] || exit "$rc"
+        sleep 0.01
+    done
+}
+watchdog=$DEADLINE_PID
+writer=${DEADLINE[1]}
+"""
+
+
 def command_for(profile, nonce, *, body=None):
     seconds, command = PROFILES[profile]
     if profile == 'gateway-close':
@@ -195,10 +303,13 @@ def command_for(profile, nonce, *, body=None):
     # fd3 is the original stdout. tee sends the same bytes to fd3 and sha256sum;
     # command substitution captures only the digest, never the dump. pipefail
     # forbids an end record when dump/tee/hash fails. No named plaintext/tempfile.
-    script = ('set -euo pipefail; exec 3>&1; digest=$(' + shlex.join(command)
-        + ' | tee /dev/fd/3 | sha256sum); exec 3>&-; '
-        + 'printf "\\nSURVEY-EXEC-SHA256:%s:%s\\n" "$1" "${digest%% *}"')
-    return ['/usr/bin/timeout', '--signal=KILL', str(seconds), '/bin/bash', '-c', script, 'survey-owned-exec', nonce]
+    script = (_GROUP_SETUP + 'exec 3>&1; status=0; digest=$(' + shlex.join(command)
+        + ' | tee /dev/fd/3 | sha256sum) || status=$?; exec 3>&-; '
+        + 'message=failed; if (( status == 0 )); then message=${digest%% *}; fi; '
+        + 'printf "%s\\n" "$message" >&"$writer"; wait "$watchdog"; exit "$status"')
+    if profile in ('mariadb-empty', 'mariadb-import', 'mariadb-dump'):
+        return ['/usr/bin/perl', '-e', _MARIA_LAUNCH_GROUP, '--', script, str(seconds), nonce]
+    return ['/bin/bash', '-c', _LAUNCH_GROUP, 'survey-owned-exec', script, str(seconds), nonce]
 
 
 class _DeadlineReader:
