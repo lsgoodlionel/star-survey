@@ -77,6 +77,15 @@ class ProductionImagePolicyTest(unittest.TestCase):
         self.assertRegex(contents, r"(?m)^FROM\s+--platform=\$BUILDPLATFORM\s+node:\S+\s+AS\s+build\s*$")
         self.assertRegex(runtime_stage(contents), r"(?m)^FROM\s+nginx:\S+\s+AS\s+runtime\s*$")
 
+    def test_admin_runtime_nginx_includes_release_blocking_fixes(self):
+        # v0.3.27-rc.1 (run 44440756192) was blocked by Trivy: nginx 1.30.6-r1 in the
+        # admin runtime carried five HIGH CVEs fixed in 1.30.7. `apk upgrade` cannot
+        # lift it because nginx ships with the base image, so the base tag is the floor.
+        match = re.search(r"(?m)^FROM\s+nginx:(\d+)\.(\d+)\.(\d+)-alpine\d+\.\d+\s+AS\s+runtime\s*$",
+                          dockerfile("admin-web"))
+        self.assertIsNotNone(match, "admin runtime must pin an exact nginx alpine tag")
+        self.assertGreaterEqual(tuple(int(part) for part in match.groups()), (1, 30, 7))
+
     def test_business_uses_java_21_builder_and_minimal_jre_runtime(self):
         contents = dockerfile("business")
         runtime = runtime_stage(contents)
