@@ -1551,6 +1551,29 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
             self.assertEqual(('cli-exit', 4), (failure.exception.upgrade_category, failure.exception.upgrade_exit_code))
             self.assertNotIn('do-not-expose', str(failure.exception))
 
+    def test_stage_channel_faults_never_replace_the_real_upgrade_exit(self):
+        # The diagnostic frame is optional. Any fault while reading it, or a
+        # platform without positional reads, must keep the real CLI exit.
+        manager = mock.Mock()
+        exit4 = subprocess.CalledProcessError(4, ['/ctl'])
+        for fault in (ValueError('bad descriptor'), AttributeError('pread'), RuntimeError('synthetic')):
+            with self.subTest(fault=type(fault).__name__), \
+                 mock.patch.object(self.module.subprocess, 'run', side_effect=exit4), \
+                 mock.patch.object(self.module.os, 'pread', side_effect=fault, create=True):
+                with self.assertRaises(self.doctor.DoctorRuntimeError) as failure:
+                    self.module.perform_upgrade('/ctl', '/target', '/manifest', 'a'*64, '0.3.18-rc.1', manager, self.doctor.DoctorRuntimeError)
+                self.assertEqual(('cli-exit', 4, 'unknown'), (failure.exception.upgrade_category,
+                                 failure.exception.upgrade_exit_code, failure.exception.upgrade_stage))
+        # Without POSIX descriptor passing the CLI still runs, with no channel.
+        with mock.patch.object(self.module, '_stage_channel_supported', return_value=False), \
+             mock.patch.object(self.module.subprocess, 'run', side_effect=exit4) as run:
+            with self.assertRaises(self.doctor.DoctorRuntimeError) as failure:
+                self.module.perform_upgrade('/ctl', '/target', '/manifest', 'a'*64, '0.3.18-rc.1', manager, self.doctor.DoctorRuntimeError)
+            self.assertNotIn('pass_fds', run.call_args.kwargs)
+            self.assertNotIn('env', run.call_args.kwargs)
+            self.assertEqual(('cli-exit', 4, 'unknown'), (failure.exception.upgrade_category,
+                             failure.exception.upgrade_exit_code, failure.exception.upgrade_stage))
+
 
 class NativeAcceptanceEvidenceTest(unittest.TestCase):
     @classmethod
