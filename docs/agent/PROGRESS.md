@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-20 rc32 升级候选登记（Owner 已授权合并 #187 并登记；打 tag 需另行授权）：`v0.3.31-rc.1` 的 release run [44663939453](https://github.com/lsgoodlionel/star-survey/actions/runs/44663939453) 在四台原生主机的 `install` 以退出码 5 失败（候选 CLI 拒绝操作 rc29 payload），不是已验证前代。rc32 带上 #187（基线生命周期改用 rc29 自己的 bundle CLI），继续从同一个已验证的 rc29 Actions artifact（run 44486836652，manifest `28df2365…`）升级。测试锁定 rc32 规则，并确认 rc30、rc31 仍指向 rc29、rc29 仍为 bootstrap。
+
 2026-11-20 rc31 升级候选登记（合并与打 tag 需 Owner 逐项授权）：`v0.3.30-rc.1` 的 release run [44500745667](https://github.com/lsgoodlionel/star-survey/actions/runs/44500745667) 在四台原生主机上全部失败：三台在从 rc29 升级时返回 4，24.04 amd64 在安装 rc29 前代时返回 4。没有生成 `upgrade-data.json`，因此 rc30 不能作为前代。#184（Codex）加入固定失败阶段诊断，经 Claude 三轮非作者复核后，按精确 head `1fff77df14` 合并为 `fa05036f68`。本切片追加 `0.3.31-rc.1`，仍从已验证的 rc29 制品（run 44486836652，manifest `28df2365…`，制品于 2026-12-19 过期）升级，并加入相邻 resolver 回归测试：缺少登记时失败，追加后通过。未修改 Release workflow 和 controller/runtime；没有新 tag、run 或发布。
 
 2026-11-20 阶段通道平台守卫（Release 负责人 Claude）：#184 的 `perform_upgrade` 在升级命令返回非零后读取阶段帧，但只捕获 `OSError`。在没有 `os.pread` 的平台上，或读取时出现其他异常，诊断故障都会盖掉真实的 `CalledProcessError`，退出码 4 被误报为 `version-check`/`None`；Windows 本地复现了这一现象。修复后，只在 POSIX 且支持 `pread` 时启用阶段通道；读取帧时出现任何异常都记为 `unknown`，保留真实退出码。新增测试在修复前失败，修复后通过。Linux 上的行为不变，未改动控制器、workflow 或门禁。

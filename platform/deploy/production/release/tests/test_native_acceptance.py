@@ -1142,6 +1142,41 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                     self.assertNotEqual(0, resolve({**expected, field: value}).returncode)
             self.assertNotEqual(0, resolve({**expected, 'mode': 'bootstrap'}).returncode)
 
+    def test_rc32_retries_upgrade_from_rc29_with_the_baselines_own_cli(self):
+        # v0.3.31-rc.1 (run 44663939453) failed install on every host: the
+        # candidate CLI refused to operate the rc29 payload. It is not a verified
+        # predecessor. rc32 carries #187 (baseline lifecycle on rc29's own CLI)
+        # and upgrades again from the same verified rc29 Actions artifact.
+        policy = json.loads(BASELINE_POLICY_PATH.read_text())
+        expected = {'mode': 'predecessor-artifact', 'version': '0.3.29-rc.1', 'runId': 44486836652,
+                    'commit': '88edbaf7b2d19f43795f156dfd31d31fe8780f90',
+                    'manifestSha256': '28df23651663559ab9c81607f8344152931adbdb9dbd28d8d2bf488fdfaf2284'}
+        self.assertEqual(expected, policy['releases'].get('0.3.32-rc.1'))
+        for failed in ('0.3.30-rc.1', '0.3.31-rc.1'):
+            self.assertEqual(expected, policy['releases'][failed])
+        self.assertEqual({'mode': 'bootstrap'}, policy['releases']['0.3.29-rc.1'])
+        step = next(s for s in self.workflow['jobs']['candidate-assets']['steps'] if s.get('id') == 'baseline')
+        script = step['run'].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        result = subprocess.run([sys.executable, '-', '0.3.32-rc.1', str(BASELINE_POLICY_PATH)],
+                                input=script, text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        values = dict(line.split('=', 1) for line in result.stdout.splitlines())
+        self.assertEqual({'BASELINE_MODE': 'predecessor', 'BASELINE_SOURCE': 'predecessor-artifact',
+                          'BASELINE_VERSION': expected['version'], 'MINIMUM_SOURCE_VERSION': expected['version'],
+                          'BASELINE_RUN_ID': str(expected['runId']), 'BASELINE_COMMIT': expected['commit'],
+                          'BASELINE_MANIFEST_SHA256': expected['manifestSha256']}, values)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'policy.json'
+            def resolve(value):
+                path.write_text(json.dumps({'schemaVersion': 1, 'releases': {'0.3.32-rc.1': value}}))
+                return subprocess.run([sys.executable, '-', '0.3.32-rc.1', str(path)], input=script, text=True,
+                                      capture_output=True, check=False)
+            for field, value in [('runId', True), ('runId', 0), ('runId', '44486836652'), ('commit', 'bad'),
+                                 ('manifestSha256', 'bad'), ('version', '0.3.29'), ('url', 'https://invalid.example')]:
+                with self.subTest(field=field, value=value):
+                    self.assertNotEqual(0, resolve({**expected, field: value}).returncode)
+            self.assertNotEqual(0, resolve({**expected, 'mode': 'bootstrap'}).returncode)
+
 class NativeAcceptanceScriptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
