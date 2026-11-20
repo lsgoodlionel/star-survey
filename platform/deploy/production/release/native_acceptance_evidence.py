@@ -1240,6 +1240,7 @@ UPGRADE_STAGE_FRAMES = {
         "upgrade-owner-handoff", "upgrade-runtime-switch", "upgrade-start", "upgrade-health",
         "upgrade-tls", "upgrade-activate", "upgrade-owner-open", "upgrade-owner-preflight",
         "upgrade-source-contract", "upgrade-personnel-floor", "upgrade-state-write",
+        "upgrade-owner-check", "upgrade-owner-support",
     )
 }
 

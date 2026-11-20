@@ -102,7 +102,8 @@ _OWNER_PREPARE_STEPS = {
 # These fixed tokens are the only payload on the optional native diagnostic channel.
 NATIVE_FAILURE_STAGES = frozenset({
     "install-owner-init", "upgrade-staging", "upgrade-backup", "upgrade-backup-check",
-    "upgrade-image-pull", "upgrade-owner-handoff", "upgrade-runtime-switch",
+    "upgrade-image-pull", "upgrade-owner-handoff", "upgrade-owner-check", "upgrade-owner-support",
+    "upgrade-runtime-switch",
     "upgrade-start", "upgrade-health", "upgrade-tls", "upgrade-activate",
     "install-owner-acquire", "install-owner-read", "upgrade-personnel-floor", "upgrade-state-write",
 }).union(_OWNER_PREPARE_STEPS["prepare"].values(), _OWNER_PREPARE_STEPS["prepare_upgrade"].values())
@@ -1298,11 +1299,19 @@ class SurveyManager:
                     if frame.f_globals is vars(module):
                         if name == operation:
                             entered = True
+                            # The exception originated in the preparation method itself.
+                            if operation == "prepare_upgrade" and tb.tb_next is None:
+                                self._first_failed_stage = "upgrade-owner-check"
+                                break
                         elif entered:
                             stage = _OWNER_PREPARE_STEPS[operation].get(name)
                             if stage:
                                 self._first_failed_stage = stage
                                 break
+                    elif (entered and operation == "prepare_upgrade" and frame.f_globals is globals()
+                          and name == "_verify_owned_support"):
+                        self._first_failed_stage = "upgrade-owner-support"
+                        break
                     elif entered and operation == "prepare" and frame.f_globals is vars(module.ownership):
                         if name in ("load", "acquire"):
                             self._first_failed_stage = "install-owner-read" if name == "load" else "install-owner-acquire"

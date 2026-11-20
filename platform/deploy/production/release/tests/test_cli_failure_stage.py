@@ -208,3 +208,47 @@ sys.exit(ctl.main())
                 self.assertEqual(states[-1], "recovery_required")
                 self.assertIsNone(manager._upgrade_execution_version)
                 self.assertEqual(handoff.return_value.upgrade.call_count, int(point == "healthy"))
+
+    def test_upgrade_prepare_direct_check_and_support_verification(self):
+        from contextlib import ExitStack
+        sys.path.insert(0, str(RELEASE.parent))
+        self.addCleanup(sys.path.remove, str(RELEASE.parent))
+        import surveyctl as ctl
+        import runtime_controller as runtime
+
+        previous, target = "0.3.29-rc.1", "0.3.30-rc.1"
+        for point, expected in (("context", "upgrade-owner-check"),
+                                ("support", "upgrade-owner-support"),
+                                ("phase", "upgrade-owner-check"),
+                                ("topology", "upgrade-owner-check"),
+                                ("foreign", "upgrade-owner-handoff")):
+            with self.subTest(point=point), ExitStack() as mocks:
+                manager = ctl.SurveyManager("unused")
+                manager._operation_name = "upgrade"
+                manager._mutation_depth = int(point != "context")
+                manager._upgrade_execution_version = target
+                if point == "support":
+                    error = ctl.IntegrityError("synthetic failure")
+                    mocks.enter_context(patch.object(manager, "_release_dir", return_value=Path("unused")))
+                    mocks.enter_context(patch.object(manager, "_verify_staged_release", side_effect=error))
+                elif point == "foreign":
+                    def _verify_owned_support(version):
+                        raise runtime.ownership.OwnershipError("synthetic failure")
+                    mocks.enter_context(patch.object(manager, "_verify_owned_support", _verify_owned_support))
+                else:
+                    mocks.enter_context(patch.object(manager, "_verify_owned_support"))
+                owned = mocks.enter_context(patch.object(runtime.RuntimeController, "open")).return_value
+                owned.store.load.return_value = {"phase": "pending" if point == "phase" else "ready"}
+                owned.data = {"contract": {"networks": ["previous"], "volumes": []}}
+                contract = mocks.enter_context(patch.object(runtime, "source_contract",
+                    return_value={"contract": {"networks": ["next"], "volumes": []}}))
+                exception = ctl.IntegrityError if point == "support" else runtime.ownership.OwnershipError
+                with self.assertRaises(exception) as caught:
+                    with manager._failure_boundary("upgrade-owner-handoff"):
+                        with manager._owner_prepare_boundary(runtime, "prepare_upgrade"):
+                            runtime.RuntimeController.prepare_upgrade(manager, previous, target)
+                if point == "support":
+                    self.assertIs(caught.exception, error)
+                self.assertEqual(contract.call_count, int(point == "topology"))
+                self.assertEqual(manager._first_failed_stage, expected)
+                self.assertEqual(evidence.UPGRADE_STAGE_FRAMES[(expected + "\n").encode()], expected)
