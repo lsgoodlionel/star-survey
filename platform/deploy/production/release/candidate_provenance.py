@@ -63,12 +63,23 @@ def verify_human_approval(issue, approval, evidence, owner, run_id, tag, commit,
     if evidence.get('issue_url') != f'https://api.github.com/repos/{owner}/star-survey/issues/41':
         raise ValueError('acceptance evidence belongs to a different issue')
     binding = f'run: {run_id}\ntag: {tag}\ncommit: {commit}\nmanifest-sha256: {manifest_sha256}\n'
+    evidence_body = evidence.get('body', '')
     evidence_prefix = ('SURVEY-VOICEOVER-ACCEPTANCE v1\n' + binding + 'result: passed\n'
                        'coverage: editor,keyboard,focus,errors,save,preview,publish,respond\nmethod: manual-voiceover\n')
-    record = re.fullmatch(re.escape(evidence_prefix) + r'tester: ([A-Za-z0-9_-]{2,39})\nindependent-reviewer: ([A-Za-z0-9_-]{2,39})\nevidence: ([^\r\n]{25,1000})', evidence.get('body', ''))
-    if record is None or record.group(1).lower() == record.group(2).lower():
-        raise ValueError('manual acceptance and independent review evidence required')
-    approval_body = ('SURVEY-RELEASE-APPROVAL v1\n' + binding + 'voiceover-result: passed\n'
+    # Owner decision: a candidate-bound waiver signed by the owner may stand in for
+    # manual VoiceOver acceptance. It never claims that screen reader testing happened.
+    waiver_prefix = ('SURVEY-VOICEOVER-WAIVER v1\n' + binding + 'decision: waive-manual-voiceover\n'
+                     f'waived-by: {owner}\n')
+    if evidence_body.startswith('SURVEY-VOICEOVER-WAIVER v1\n'):
+        if re.fullmatch(re.escape(waiver_prefix) + r'reason: ([^\r\n]{25,1000})', evidence_body) is None:
+            raise ValueError('owner voiceover waiver does not match the exact candidate')
+        voiceover_result = 'waived'
+    else:
+        record = re.fullmatch(re.escape(evidence_prefix) + r'tester: ([A-Za-z0-9_-]{2,39})\nindependent-reviewer: ([A-Za-z0-9_-]{2,39})\nevidence: ([^\r\n]{25,1000})', evidence_body)
+        if record is None or record.group(1).lower() == record.group(2).lower():
+            raise ValueError('manual acceptance and independent review evidence required')
+        voiceover_result = 'passed'
+    approval_body = ('SURVEY-RELEASE-APPROVAL v1\n' + binding + f'voiceover-result: {voiceover_result}\n'
                      f'voiceover-evidence: https://github.com/{owner}/star-survey/issues/41#issuecomment-{evidence_id}\n'
                      'decision: approve-publication\n'
                      'voiceover-evidence-sha256: ' + hashlib.sha256(evidence['body'].encode('utf-8')).hexdigest())

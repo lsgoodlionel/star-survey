@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-20 Owner 免除人工读屏验收的发布路径（Owner 决策；合并需 Owner 授权）：`v0.3.33-rc.1`（run [44703576883](https://github.com/lsgoodlionel/star-survey/actions/runs/44703576883)）已通过四台主机的原生升级验收，但没有人工 VoiceOver 验收。Owner 决定这次发布不再要求人工读屏验收。`candidate_provenance.verify_human_approval` 新增 `SURVEY-VOICEOVER-WAIVER v1`：必须由仓库所有者在 #41 签署、逐字绑定 run、tag、commit 和 manifest 散列，`waived-by` 必须是所有者本人，并写明原因；对应的批准正文写 `voiceover-result: waived`。原有验收路径和其余校验不变。免除记录不代表做过读屏测试。新增测试先失败后通过，覆盖伪造、换候选、改作者、事后修改和批准与记录不一致。
+
 2026-11-20 rc33 升级候选登记（合并与打 tag 需 Owner 逐项授权）：`v0.3.32-rc.1` 的 release run [44687047258](https://github.com/lsgoodlionel/star-survey/actions/runs/44687047258) 中，rc29 基线生命周期全部通过（#187 生效），升级越过交接、启动和健康检查后，四台主机一致停在 `upgrade-tls`（exit 4）：契约已切到目标版本，TLS 校验却仍按 state 中的前代版本执行 compose。Codex 的 #189 改为让 TLS 校验显式绑定正在运行的版本，Release 负责人已复核所有调用点。rc33 带上 #189，继续从同一个已验证的 rc29 Actions artifact 升级；测试锁定 rc33 规则，并确认 rc30 至 rc32 仍指向 rc29。
 
 2026-11-20 rc32 升级候选登记（Owner 已授权合并 #187 并登记；打 tag 需另行授权）：`v0.3.31-rc.1` 的 release run [44663939453](https://github.com/lsgoodlionel/star-survey/actions/runs/44663939453) 在四台原生主机的 `install` 以退出码 5 失败（候选 CLI 拒绝操作 rc29 payload），不是已验证前代。rc32 带上 #187（基线生命周期改用 rc29 自己的 bundle CLI），继续从同一个已验证的 rc29 Actions artifact（run 44486836652，manifest `28df2365…`）升级。测试锁定 rc32 规则，并确认 rc30、rc31 仍指向 rc29、rc29 仍为 bootstrap。

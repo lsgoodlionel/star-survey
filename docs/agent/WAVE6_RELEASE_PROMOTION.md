@@ -24,6 +24,25 @@ independent-reviewer: <identifier>
 evidence: <actual evidence and review location>
 ```
 
+### Owner 免除人工读屏验收
+
+Owner 可以决定某个候选不做人工 VoiceOver 验收。此时用下面这条由仓库所有者在 #41 签署、绑定候选的免除记录，代替上面的验收记录。`waived-by` 必须是仓库所有者本人；`reason` 写明免除原因（单行，25 至 1000 字符）。免除记录只说明 Owner 接受未经人工读屏验收就发布，**不代表**做过读屏测试，也不能作为无障碍合规的证据：
+
+```text
+SURVEY-VOICEOVER-WAIVER v1
+run: <run-id>
+tag: <rc-tag>
+commit: <40-lowercase-hex>
+manifest-sha256: <64-lowercase-hex>
+decision: waive-manual-voiceover
+waived-by: lsgoodlionel
+reason: <owner's reason>
+```
+
+使用免除记录时，下面批准正文中的 `voiceover-result` 写 `waived`，`voiceover-evidence` 和 `voiceover-evidence-sha256` 指向免除记录。其余校验（Owner 签署、位于 #41、#41 已完成关闭、批准晚于关闭、记录在批准后未被修改、发布前复查）不变。
+
+### 发布批准
+
 待 #41 依既定流程完成并关闭后，仓库所有者在同一 issue 再发表**针对该候选的明确发布批准**。其中 evidence ID 指上面评论，证据 SHA-256 是该评论正文 UTF-8 原始字节的摘要：
 
 ```text
@@ -32,7 +51,7 @@ run: <run-id>
 tag: <rc-tag>
 commit: <40-lowercase-hex>
 manifest-sha256: <64-lowercase-hex>
-voiceover-result: passed
+voiceover-result: <passed|waived>
 voiceover-evidence: https://github.com/lsgoodlionel/star-survey/issues/41#issuecomment-<id>
 decision: approve-publication
 voiceover-evidence-sha256: <64-lowercase-hex>

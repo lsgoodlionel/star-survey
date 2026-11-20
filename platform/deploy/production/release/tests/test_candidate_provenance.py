@@ -77,6 +77,67 @@ class HumanApprovalTest(unittest.TestCase):
                 self.validate({**self.issue, **(issue_patch or {})}, {**self.comment, **(approval_patch or {})},
                               {**self.evidence, **(evidence_patch or {})})
 
+class OwnerVoiceoverWaiverTest(unittest.TestCase):
+    """An owner-signed, candidate-bound waiver may replace manual VoiceOver evidence."""
+
+    def setUp(self):
+        self.issue = {'number': 41, 'state': 'closed', 'state_reason': 'completed',
+                      'closed_at': '2026-11-03T10:00:00Z'}
+        binding = ('run: 123\ntag: v1.2.3-rc.1\ncommit: ' + 'a' * 40 + '\n'
+                   'manifest-sha256: ' + 'b' * 64 + '\n')
+        self.waiver = {'id': 2345, 'issue_url': 'https://api.github.com/repos/lsgoodlionel/star-survey/issues/41',
+                       'user': {'login': 'lsgoodlionel'}, 'author_association': 'OWNER',
+                       'updated_at': '2026-11-03T10:00:30Z',
+                       'body': ('SURVEY-VOICEOVER-WAIVER v1\n' + binding +
+                                'decision: waive-manual-voiceover\n'
+                                'waived-by: lsgoodlionel\n'
+                                'reason: owner accepts publishing without manual screen reader acceptance')}
+        self.approval = {'user': {'login': 'lsgoodlionel'}, 'author_association': 'OWNER',
+                         'created_at': '2026-11-03T10:01:00Z',
+                         'body': ('SURVEY-RELEASE-APPROVAL v1\n' + binding +
+                                  'voiceover-result: waived\n'
+                                  'voiceover-evidence: https://github.com/lsgoodlionel/star-survey/issues/41#issuecomment-2345\n'
+                                  'decision: approve-publication\n'
+                                  'voiceover-evidence-sha256: ' + hashlib.sha256(self.waiver['body'].encode()).hexdigest())}
+
+    def validate(self, issue=None, approval=None, waiver=None):
+        module.verify_human_approval(issue or self.issue, approval or self.approval, waiver or self.waiver,
+                                     'lsgoodlionel', 123, 'v1.2.3-rc.1', 'a' * 40, 'b' * 64)
+
+    def test_owner_signed_waiver_bound_to_candidate_is_accepted(self):
+        self.validate()
+
+    def test_waiver_fails_closed_on_forgery_or_mismatch(self):
+        body = self.waiver['body']
+        approval = self.approval['body']
+        cases = [
+            (None, None, {'user': {'login': 'someone'}}),
+            (None, None, {'author_association': 'COLLABORATOR'}),
+            (None, None, {'issue_url': 'https://api.github.com/repos/lsgoodlionel/star-survey/issues/42'}),
+            (None, None, {'updated_at': '2026-11-03T10:02:00Z'}),
+            (None, None, {'body': body.replace('v1.2.3-rc.1', 'v1.2.3-rc.2')}),
+            (None, None, {'body': body.replace('b' * 64, 'c' * 64)}),
+            (None, None, {'body': body.replace('waived-by: lsgoodlionel', 'waived-by: someone')}),
+            (None, None, {'body': body.replace('waive-manual-voiceover', 'waive')}),
+            (None, None, {'body': body.split('reason: ')[0] + 'reason: too short'}),
+            (None, None, {'body': body + '\nextra'}),
+            (None, {'body': approval.replace('voiceover-result: waived', 'voiceover-result: passed')}, None),
+            (None, {'body': approval.replace('issuecomment-2345', 'issuecomment-2346')}, None),
+            (None, {'body': approval[:-64] + '0' * 64}, None),
+            (None, {'created_at': '2026-11-03T09:00:00Z'}, None),
+            ({'state': 'open'}, None, None),
+        ]
+        for issue_patch, approval_patch, waiver_patch in cases:
+            with self.subTest(case=(issue_patch, approval_patch, waiver_patch)), self.assertRaises(ValueError):
+                self.validate({**self.issue, **(issue_patch or {})}, {**self.approval, **(approval_patch or {})},
+                              {**self.waiver, **(waiver_patch or {})})
+
+    def test_acceptance_approval_cannot_point_at_a_waiver(self):
+        approval = self.approval['body'].replace('voiceover-result: waived', 'voiceover-result: passed')
+        with self.assertRaises(ValueError):
+            self.validate(approval={**self.approval, 'body': approval})
+
+
 class WorkflowArtifactPredecessorTest(unittest.TestCase):
     def test_artifact_predecessor_is_pinned_and_reverified(self):
         import yaml

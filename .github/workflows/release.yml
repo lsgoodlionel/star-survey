@@ -31,7 +31,7 @@ on:
         required: false
         type: string
       evidence_comment_id:
-        description: Owner-recorded VoiceOver acceptance comment on issue 41
+        description: Owner-recorded VoiceOver acceptance or owner VoiceOver waiver comment on issue 41
         required: false
         type: string
 
