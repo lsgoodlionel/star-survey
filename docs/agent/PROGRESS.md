@@ -1,5 +1,7 @@
 # 自治执行进度
 
+rc30 诊断复核修订（#184）。启用阶段通道时保留经过白名单核对的固定错误提示。控制器在归属初始化失败处辨认已进入的固定子步骤，保持前代校验所依赖的 runtime 文件字节；升级的人员权限下限和状态写入也有独立阶段。父子帧集合有精确一致性测试。当前验证使用合成失败，真实候选的内层原因待验收。
+
 rc30 原生诊断（本地待审，以 5ea6254901 为基线）。原生安装和升级探针通过独立文件描述符接收首次失败的固定阶段值，子进程退出码独立保留；未知或非单帧内容归为 unknown。受控模拟覆盖真实 CLI 子进程、失败状态保留及升级失败时禁止写入成功证明。此结果仅验证诊断通道；rc30 四台主机的内部根因仍待新的已授权运行验证。
 
 2026-11-19 rc30 升级候选登记（合并与打 tag 需 Owner 逐项授权）：`v0.3.29-rc.1`（tag 对象 `89ac5d329f`，提交 `88edbaf7b2`）的 release run [44486836652](https://github.com/lsgoodlionel/star-survey/actions/runs/44486836652) 全部通过：四个镜像的 Trivy、签名和 attestation 通过，四台原生主机均 `passed` 并完成卸载，RC 资产签名成功，`promotable=false`（bootstrap）。这是新归属协议下第一个完整合格的候选，Codex 已独立核对。本切片把 `0.3.30-rc.1` 登记为 `predecessor-artifact`，前代为 rc29：runId `44486836652`、commit `88edbaf7b2`、`release.json` SHA256 `28df2365…`。Claude 独立下载 `verified-release-assets`（artifact 14512093546，ZIP 摘要 `272a03af…`，与 GitHub 记录一致），核对了 `release.json` 的 SHA、版本、提交、nativeAcceptance 配置和双架构包；数据库 schema 为 953，与当前 main 相同。新增测试在缺登记时失败，追加后通过，并覆盖畸形 runId/commit/sha/version、多余字段和回退到 bootstrap 的拒绝。该 artifact 于 2026-12-19 过期，rc30 必须在此之前运行。升级、业务连续性和四平台结果待新候选运行。未改 Release workflow、controller/runtime 或其他门禁，没有新 tag、run 或发布。

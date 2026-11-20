@@ -119,3 +119,92 @@ sys.exit(ctl.main())
             self.assertEqual(result.returncode, 4)
             self.assertEqual(channel.read(), b'install-owner-init\n')
             self.assertNotIn(b"synthetic private detail", result.stderr + result.stdout)
+
+    def test_channel_preserves_fixed_errors_and_excludes_dynamic_details(self):
+        for message in ("image pull failed",
+                        "controlled runtime ownership is unavailable; preserve the installation and markers",
+                        "cannot read release manifest: /synthetic/private"):
+            with self.subTest(message=message):
+                child = self.child(
+                    "import surveyctl as ctl\n"
+                    f"def fail(*args): raise ctl.RuntimeHealthError({message!r})\n"
+                    "ctl.SurveyManager.upgrade=fail\nsys.exit(ctl.main())\n")
+                with tempfile.TemporaryFile() as channel:
+                    result = subprocess.run([child, "upgrade", "--manifest", "unused"], capture_output=True,
+                                            env={**os.environ, "SURVEYCTL_STAGE_FD": str(channel.fileno())},
+                                            pass_fds=(channel.fileno(),))
+                    channel.seek(0)
+                    self.assertEqual(result.returncode, 4)
+                    self.assertEqual(channel.read(), b"unknown\n")
+                    expected = "runtime operation failed" if "/synthetic" in message else message
+                    self.assertEqual(result.stderr.decode().strip(), "surveyctl: " + expected)
+
+    def test_stage_vocabularies_are_exact(self):
+        sys.path.insert(0, str(RELEASE.parent))
+        self.addCleanup(sys.path.remove, str(RELEASE.parent))
+        import surveyctl
+        expected = {s for s in surveyctl.NATIVE_FAILURE_STAGES if s.startswith("upgrade-")}
+        self.assertEqual(evidence.UPGRADE_STAGE_FRAMES, {(s+"\n").encode("ascii"): s for s in expected})
+        self.assertTrue({"upgrade-owner-open", "upgrade-owner-preflight", "upgrade-source-contract",
+                         "upgrade-personnel-floor", "upgrade-state-write"} <= expected)
+
+    def test_real_prepare_failures_have_bounded_substages(self):
+        sys.path.insert(0, str(RELEASE.parent))
+        self.addCleanup(sys.path.remove, str(RELEASE.parent))
+        import surveyctl as ctl
+        import runtime_controller as runtime
+        manager = ctl.SurveyManager("unused")
+        manager._upgrade_execution_version = "next"
+        manager._operation_name = "upgrade"
+        manager._mutation_depth = 1
+        for prepare, expected in (("prepare", "install-source-contract"),
+                                  ("prepare_upgrade", "upgrade-owner-open")):
+            manager._first_failed_stage = None
+            method = getattr(runtime.RuntimeController, prepare)
+            args = ("prev", "next") if prepare == "prepare_upgrade" else ("prev",)
+            def load(store):
+                if prepare == "prepare_upgrade":
+                    raise RuntimeError("synthetic detail")
+                return None
+            with patch.object(runtime.ownership.PrivateStore, "load", load), \
+                 patch.object(manager, "_verify_owned_support"), \
+                 patch.object(manager, "_release_dir", side_effect=RuntimeError("synthetic detail")), \
+                 self.assertRaises(RuntimeError):
+                with manager._owner_prepare_boundary(runtime, prepare):
+                    method(manager, *args)
+            self.assertEqual(manager._first_failed_stage, expected)
+
+    def test_handoff_to_activation_failures_preserve_first_stage_and_recovery(self):
+        from contextlib import ExitStack
+        from types import SimpleNamespace
+        sys.path.insert(0, str(RELEASE.parent))
+        self.addCleanup(sys.path.remove, str(RELEASE.parent))
+        import surveyctl as ctl
+        import runtime_controller as runtime
+
+        for point, expected in (("floor", "upgrade-personnel-floor"), ("upgrading", "upgrade-state-write"),
+                                ("healthy", "upgrade-state-write")):
+            with self.subTest(point=point), ExitStack() as mocks:
+                manager = ctl.SurveyManager("unused")
+                error = ctl.RuntimeHealthError("synthetic failure")
+                states = []
+                def write_state(**fields):
+                    states.append(fields["status"])
+                    if fields["status"] == point:
+                        raise error
+                for method in ("_require_personnel_capability", "_verify_owned_support", "_verify_backup",
+                               "_backup_for_upgrade_or_manual", "_read_state", "_atomic_write", "_run"):
+                    mocks.enter_context(patch.object(manager, method))
+                mocks.enter_context(patch.object(manager, "_compose", return_value=["compose"]))
+                mocks.enter_context(patch.object(manager, "_write_state", side_effect=write_state))
+                mocks.enter_context(patch.object(manager, "_activate_personnel_floor",
+                                                 side_effect=error if point == "floor" else None))
+                handoff = mocks.enter_context(patch.object(runtime.RuntimeController, "prepare_upgrade"))
+                with self.assertRaises(ctl.RuntimeHealthError) as caught:
+                    manager._upgrade_owned_staged(SimpleNamespace(version="next", database_schema="953"),
+                                                  dict(version="prev", databaseSchema="953", publicHost="unused"))
+                self.assertIs(caught.exception, error)
+                self.assertEqual(manager._first_failed_stage, expected)
+                self.assertEqual(states[-1], "recovery_required")
+                self.assertIsNone(manager._upgrade_execution_version)
+                self.assertEqual(handoff.return_value.upgrade.call_count, int(point == "healthy"))
