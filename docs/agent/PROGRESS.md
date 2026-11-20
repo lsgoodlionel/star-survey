@@ -1,5 +1,7 @@
 # 自治执行进度
 
+2026-11-20 rc33 升级候选登记（合并与打 tag 需 Owner 逐项授权）：`v0.3.32-rc.1` 的 release run [44687047258](https://github.com/lsgoodlionel/star-survey/actions/runs/44687047258) 中，rc29 基线生命周期全部通过（#187 生效），升级越过交接、启动和健康检查后，四台主机一致停在 `upgrade-tls`（exit 4）：契约已切到目标版本，TLS 校验却仍按 state 中的前代版本执行 compose。Codex 的 #189 改为让 TLS 校验显式绑定正在运行的版本，Release 负责人已复核所有调用点。rc33 带上 #189，继续从同一个已验证的 rc29 Actions artifact 升级；测试锁定 rc33 规则，并确认 rc30 至 rc32 仍指向 rc29。
+
 2026-11-20 rc32 升级候选登记（Owner 已授权合并 #187 并登记；打 tag 需另行授权）：`v0.3.31-rc.1` 的 release run [44663939453](https://github.com/lsgoodlionel/star-survey/actions/runs/44663939453) 在四台原生主机的 `install` 以退出码 5 失败（候选 CLI 拒绝操作 rc29 payload），不是已验证前代。rc32 带上 #187（基线生命周期改用 rc29 自己的 bundle CLI），继续从同一个已验证的 rc29 Actions artifact（run 44486836652，manifest `28df2365…`）升级。测试锁定 rc32 规则，并确认 rc30、rc31 仍指向 rc29、rc29 仍为 bootstrap。
 
 2026-11-20 前代基线由前代自身 CLI 运行（Release 负责人 Claude；合并与下一候选登记、打 tag 需 Owner 逐项授权）：`v0.3.31-rc.1` 的 release run [44663939453](https://github.com/lsgoodlionel/star-survey/actions/runs/44663939453) 镜像门禁全部通过，四台原生主机都在 `install` 以退出码 5 失败，固定提示为“executing controlled runtime differs from the verified release payload”。原因是验收脚本用候选（rc31）的 surveyctl 安装 rc29：#184 之后 CLI 会把自身运行文件与已安装 release 的 bundle 清单逐一核对，rc31 代码与 rc29 payload 不同，必然拒绝。rc30 没有触发，是因为它与 rc29 代码字节相同。修复：前代模式下把已校验的 rc29 bundle 解到独立的 `baseline-runtime`，`install`、`setup-probe`、`doctor-installed`、`backup` 都用 rc29 自己的 CLI，只有升级调用候选 CLI；连续性探针的基线 compose 改由 rc29 runtime 在隔离子进程中生成，输出流丢弃，只接受严格形状的命令列表，失败统一为固定错误。bootstrap 模式行为不变。先写失败测试；Windows 全量仍为既有 49 项 POSIX 失败，以 Linux CI 为准。未改动 Codex 负责的控制器文件。
