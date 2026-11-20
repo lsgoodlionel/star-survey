@@ -55,7 +55,11 @@ mkdir -p "$evidence_root" "$runtime"
 [[ -f "$evidence_helper" ]]
 
 run_ctl() {
-  "$ctl_bin" --target "$target" "$@"
+  if [[ "$1" == install ]]; then
+    SURVEYCTL_STAGE_FD=3 "$ctl_bin" --target "$target" "$@" 3>&2
+  else
+    "$ctl_bin" --target "$target" "$@"
+  fi
 }
 
 evidence_secret_args() {
