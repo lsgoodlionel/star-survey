@@ -1251,6 +1251,41 @@ def _stage_channel_supported():
     return os.name == "posix" and hasattr(os, "pread")
 
 
+_BASELINE_COMPOSE_CHILD = (
+    "import json, sys\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "from surveyctl import SurveyManager\n"
+    "command = SurveyManager(sys.argv[2])._compose(sys.argv[3])\n"
+    "with open(sys.argv[4], 'w', encoding='utf-8') as handle:\n"
+    "    json.dump(command, handle)\n"
+)
+
+
+def baseline_runtime_compose(runtime, target, version):
+    """Build the predecessor compose command with the predecessor's own runtime.
+
+    A candidate controller verifies its executing support files against the
+    installed release payload, so it cannot compose an older installation. The
+    baseline bundle runs in an isolated child; its output streams are discarded
+    and only a strictly shaped command list crosses back.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        result_path = Path(tmp) / 'compose.json'
+        try:
+            completed = subprocess.run(
+                [sys.executable, '-I', '-c', _BASELINE_COMPOSE_CHILD, str(runtime), str(target), str(version),
+                 str(result_path)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False, timeout=120)
+            command = json.loads(result_path.read_text(encoding='utf-8')) if completed.returncode == 0 else None
+        except Exception:
+            command = None
+    if (not isinstance(command, list) or len(command) < 2 or command[:2] != ['docker', 'compose']
+            or not all(isinstance(item, str) and item for item in command)):
+        raise EvidenceError('baseline runtime compose is unavailable') from None
+    return command
+
+
 def perform_upgrade(ctl, target, manifest, manifest_sha, version, manager, error_type):
     stage = "unknown"
     try:
@@ -1315,7 +1350,9 @@ def run_upgrade_data_probe(args):
     if manager._read_state(require_current=True)['version'] != baseline['version']:
         raise EvidenceError('installed version differs from the verified predecessor')
     Probe = make_continuity_probe(ProductProbe, DoctorRuntimeError)
-    probe = Probe(args.target, args.host, manager._compose(baseline['version']), CommandRunner(),
+    # The predecessor installation is composed by its own runtime (#138 rc31).
+    baseline_compose = baseline_runtime_compose(args.baseline_runtime, args.target, baseline['version'])
+    probe = Probe(args.target, args.host, baseline_compose, CommandRunner(),
                   upgrade_action=lambda: perform_upgrade(args.ctl, args.target, candidate_path, args.candidate_sha,
                                                          candidate['version'], manager, DoctorRuntimeError),
                   upgraded_compose=lambda: manager._compose(candidate['version']))
@@ -1361,7 +1398,7 @@ def parser() -> argparse.ArgumentParser:
     gateway = sub.add_parser('gateway-diagnostic')
     gateway.add_argument('--output', type=Path, required=True)
     upgrade = sub.add_parser('upgrade-data-probe')
-    for name in ('runtime', 'ctl', 'target', 'host', 'baseline-manifest', 'baseline-sha',
+    for name in ('runtime', 'baseline-runtime', 'ctl', 'target', 'host', 'baseline-manifest', 'baseline-sha',
                  'candidate-manifest', 'candidate-sha', 'output'):
         upgrade.add_argument('--' + name, required=True)
     summary = sub.add_parser("summary")
