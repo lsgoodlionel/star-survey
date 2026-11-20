@@ -1245,13 +1245,21 @@ UPGRADE_STAGE_FRAMES = {
 }
 
 
+def _stage_channel_supported():
+    # Descriptor passing and positional reads are POSIX-only; elsewhere the
+    # upgrade still runs and the stage stays "unknown".
+    return os.name == "posix" and hasattr(os, "pread")
+
+
 def perform_upgrade(ctl, target, manifest, manifest_sha, version, manager, error_type):
     stage = "unknown"
     try:
-        try:
-            diagnostic = tempfile.TemporaryFile()
-        except OSError:
-            diagnostic = nullcontext(None)
+        diagnostic = nullcontext(None)
+        if _stage_channel_supported():
+            try:
+                diagnostic = tempfile.TemporaryFile()
+            except OSError:
+                pass
         with diagnostic as channel:
             options = {}
             if channel is not None:
@@ -1264,8 +1272,8 @@ def perform_upgrade(ctl, target, manifest, manifest_sha, version, manager, error
                 try:
                     if channel is not None:
                         stage = UPGRADE_STAGE_FRAMES.get(os.pread(fd, 64, 0), "unknown")
-                except OSError:
-                    pass
+                except Exception:
+                    stage = "unknown"  # A diagnostic fault never replaces the real CLI exit.
                 raise
         if manager._read_state(require_current=True)['version'] != version:
             raise error_type('upgrade did not activate the expected version')
