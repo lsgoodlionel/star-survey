@@ -1419,7 +1419,7 @@ class SurveyManager:
             self._run(self._compose(version) + ['up', '-d'], 'installation start failed')
             try:
                 self._wait_healthy(self._compose(version), 'installation health check failed')
-                self._verify_public_tls(public_host)
+                self._verify_public_tls(public_host, version)
             except SurveyctlError as exc:
                 # Only this post-success boundary can state all create/start
                 # calls returned. A failed/unknown up is never classified here.
@@ -1709,15 +1709,14 @@ class SurveyManager:
         values["native_acceptance_profile"] = bool(native_profile)
         return values
 
-    def _verify_public_tls(self, host: str) -> None:
+    def _verify_public_tls(self, host: str, version: str) -> None:
         ca_file = None
         try:
-            state = self._read_state()
-            manifest = self._release_manifest(state["version"])
+            manifest = self._release_manifest(version)
             if self._native_acceptance_profile(manifest):
                 ca_file = self._managed(".surveyctl/native-acceptance-ca.crt")
                 self._run(
-                    self._compose(state["version"]) + [
+                    self._compose(version) + [
                         "cp", "edge:/data/caddy/pki/authorities/local/root.crt", str(ca_file),
                     ],
                     "native acceptance CA export failed",
@@ -2377,7 +2376,7 @@ class SurveyManager:
             self._run(compose + ["pull"], "upgrade image pull failed")
             self._run(compose + ["up", "-d", "--remove-orphans"], "upgrade migration or start failed")
             self._wait_healthy(compose, "upgrade health check failed")
-            self._verify_public_tls(state["publicHost"])
+            self._verify_public_tls(state["publicHost"], manifest.version)
             self._atomic_write(self.current_path, manifest.version + "\n")
             self._write_state(status="healthy", version=manifest.version, databaseSchema=manifest.database_schema, previousVersion=previous)
         except SurveyctlError as failure:
@@ -2431,7 +2430,7 @@ class SurveyManager:
                 with self._failure_boundary("upgrade-health"):
                     self._wait_healthy(compose, 'controlled upgrade health check failed')
                 with self._failure_boundary("upgrade-tls"):
-                    self._verify_public_tls(state['publicHost'])
+                    self._verify_public_tls(state['publicHost'], manifest.version)
             with self._failure_boundary("upgrade-runtime-switch"):
                 runtime.upgrade(start)
             with self._failure_boundary("upgrade-activate"):
@@ -2501,7 +2500,7 @@ class SurveyManager:
                 old_compose = self._compose(previous)
                 self._run(old_compose + ["up", "-d", "--remove-orphans"], "compatible rollback start failed")
                 self._wait_healthy(old_compose, "compatible rollback health check failed")
-                self._verify_public_tls(self._read_state()["publicHost"])
+                self._verify_public_tls(self._read_state()["publicHost"], previous)
                 self._atomic_write(self.current_path, previous + "\n")
                 self._write_state(status="upgrade_failed", version=previous)
             except SurveyctlError as recovery_error:
@@ -2567,7 +2566,7 @@ class SurveyManager:
         self._begin_operation()
         self._run(compose + ["up", "-d", "--remove-orphans"], "rollback start failed")
         self._wait_healthy(compose, "rollback health check failed")
-        self._verify_public_tls(state["publicHost"])
+        self._verify_public_tls(state["publicHost"], target_version)
         previous = state["version"]
         self._atomic_write(self.current_path, target_version + "\n")
         self._write_state(status="healthy", version=target_version, databaseSchema=manifest.database_schema, previousVersion=previous)
