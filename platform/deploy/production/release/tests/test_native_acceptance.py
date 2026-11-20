@@ -1331,6 +1331,31 @@ remove_hosts_marker() { printf 'unexpected' > "$UNINSTALL_CAPTURE"; }
         assert_native_acceptance_contract(self, self.text)
         assert_native_workflow_invocation(self, load_workflow())
 
+    def test_predecessor_baseline_lifecycle_runs_with_the_baselines_own_cli(self):
+        # rc31 run 44663939453: the candidate CLI verifies its own support files
+        # against the installed release payload, so it cannot install/operate rc29.
+        # The baseline phase must use rc29's checksum-bound bundle CLI; only the
+        # upgrade itself runs the candidate CLI.
+        extract = 'tar -xzf "$baseline_dir/$baseline_bundle" -C "$baseline_runtime"'
+        self.assertEqual(1, self.text.count(extract))
+        self.assertIn('baseline_runtime="$work_root/baseline-runtime"', self.text)
+        self.assertLess(self.text.index('[[ "$(sha256sum "$baseline_dir/$baseline_bundle"'), self.text.index(extract))
+        self.assertIn('candidate_ctl="$runtime/surveyctl"', self.text)
+        baseline_ctl = 'ctl_bin="$baseline_runtime/surveyctl"'
+        self.assertEqual(1, self.text.count(baseline_ctl))
+        self.assertLess(self.text.index(extract), self.text.index(baseline_ctl))
+        self.assertLess(self.text.index(baseline_ctl), self.text.index('run_ctl install'))
+        probe = self.text[self.text.index('python3 "$evidence_helper" upgrade-data-probe'):]
+        probe = probe[:probe.index('--output "$evidence_root/upgrade-data.json"')]
+        self.assertIn('--ctl "$candidate_ctl"', probe)
+        self.assertIn('--runtime "$runtime"', probe)
+        self.assertIn('--baseline-runtime "$baseline_runtime"', probe)
+        self.assertNotIn('--ctl "$ctl_bin"', probe)
+        selection = self.text[self.text.index('if [[ "$BASELINE_MODE" == predecessor ]]; then\n  baseline_manifest_sha'):]
+        bootstrap = selection[selection.index('\nelse\n'):selection.index('\nfi\n')]
+        self.assertIn('ctl_bin="$candidate_ctl"', bootstrap)
+        self.assertNotIn('baseline_runtime', bootstrap)
+
     def test_upgrade_data_is_verified_before_upgrade_can_be_claimed(self):
         self.assertIn('upgrade-data-probe', self.text)
         self.assertLess(self.text.index('upgrade-data-probe'), self.text.index('upgrade_verified=true'))
@@ -1434,6 +1459,73 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
             spec.loader.exec_module(cls.doctor)
         finally:
             sys.path.pop(0)
+
+
+    def _fake_runtime(self, root, body):
+        runtime = root / 'baseline-runtime'
+        runtime.mkdir()
+        (runtime / 'surveyctl.py').write_text(body, encoding='utf-8')
+        return runtime
+
+    def test_baseline_compose_is_built_by_the_baselines_own_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = self._fake_runtime(root, (
+                'import os\n'
+                'class SurveyManager:\n'
+                '    def __init__(self, target): self.target = target\n'
+                '    def _compose(self, version):\n'
+                '        return ["docker", "compose", "-f", os.path.join(self.target, version, "baseline-own")]\n'))
+            compose = self.module.baseline_runtime_compose(runtime, root / 'target', '0.3.29-rc.1')
+            self.assertEqual(['docker', 'compose', '-f',
+                              os.path.join(str(root / 'target'), '0.3.29-rc.1', 'baseline-own')], compose)
+
+    def test_baseline_compose_failures_are_fixed_and_never_leak_runtime_output(self):
+        head = 'class SurveyManager:\n    def __init__(self, t): pass\n'
+        bodies = {
+            'raises': head + '    def _compose(self, v): raise RuntimeError("token=unique-baseline-secret")\n',
+            'not-list': head + '    def _compose(self, v): return "docker compose unique-baseline-secret"\n',
+            'empty': head + '    def _compose(self, v): return []\n',
+            'not-docker': head + '    def _compose(self, v): return ["sh", "unique-baseline-secret"]\n',
+            'non-string': head + '    def _compose(self, v): return ["docker", 7]\n',
+            'docker-only': head + '    def _compose(self, v): return ["docker"]\n',
+            'blank-item': head + '    def _compose(self, v): return ["docker", "compose", ""]\n',
+            'missing': 'x = 1\n',
+        }
+        for name, body in bodies.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                runtime = self._fake_runtime(Path(tmp), body)
+                with self.assertRaises(self.module.EvidenceError) as raised:
+                    self.module.baseline_runtime_compose(runtime, Path(tmp) / 'target', '0.3.29-rc.1')
+                self.assertEqual('baseline runtime compose is unavailable', str(raised.exception))
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertNotIn('unique-baseline-secret', repr(raised.exception))
+
+    def test_baseline_runtime_output_streams_are_discarded(self):
+        body = ('import sys\nprint("unique-baseline-secret")\nprint("unique-baseline-secret", file=sys.stderr)\n'
+                'class SurveyManager:\n    def __init__(self, t): pass\n'
+                '    def _compose(self, v): return ["docker", "compose", "-p", "survey-production"]\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = self._fake_runtime(Path(tmp), body)
+            with mock.patch('sys.stdout', io.StringIO()) as out, mock.patch('sys.stderr', io.StringIO()) as err:
+                compose = self.module.baseline_runtime_compose(runtime, Path(tmp) / 'target', '0.3.29-rc.1')
+        self.assertEqual(['docker', 'compose', '-p', 'survey-production'], compose)
+        self.assertNotIn('unique-baseline-secret', out.getvalue() + err.getvalue())
+
+    def test_upgrade_probe_never_composes_the_baseline_with_candidate_code(self):
+        text = UPGRADE_HELPER_PATH.read_text(encoding='utf-8')
+        node = next(item for item in ast.parse(text).body
+                    if isinstance(item, ast.FunctionDef) and item.name == 'run_upgrade_data_probe')
+        source = ast.get_source_segment(text, node)
+        self.assertNotIn("manager._compose(baseline", source)
+        self.assertEqual(1, source.count(
+            "baseline_runtime_compose(args.baseline_runtime, args.target, baseline['version'])"))
+        base = ['upgrade-data-probe', '--runtime', 'r', '--ctl', 'c', '--target', 't', '--host', 'h.test',
+                '--baseline-manifest', 'bm', '--baseline-sha', 'bs', '--candidate-manifest', 'cm',
+                '--candidate-sha', 'cs', '--output', 'o']
+        self.assertEqual('b', self.module.parser().parse_args(base + ['--baseline-runtime', 'b']).baseline_runtime)
+        with self.assertRaises(SystemExit), mock.patch('sys.stderr', io.StringIO()):
+            self.module.parser().parse_args(base)
 
     @staticmethod
     def export_fixture(mode):

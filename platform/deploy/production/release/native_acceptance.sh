@@ -337,20 +337,30 @@ rm -f "$work_root/image-references"
 tar -xzf "$candidate_release_dir/$candidate_bundle" -C "$runtime"
 chmod 0755 "$runtime/surveyctl" "$runtime/surveyctl.py"
 grep -q 'survey-restore-' "$runtime/restore.py"
+candidate_ctl="$runtime/surveyctl"
 
 if [[ "$BASELINE_MODE" == predecessor ]]; then
   baseline_manifest_sha="$(sha256sum "$baseline_dir/release.json" | awk '{print $1}')"
   baseline_bundle="$(jq -er --arg architecture "$EXPECTED_ARCHITECTURE" '.baseline.bundles[$architecture].name' "$identity_path")"
   baseline_bundle_sha="$(jq -er --arg architecture "$EXPECTED_ARCHITECTURE" '.baseline.bundles[$architecture].sha256' "$identity_path")"
   [[ "$(sha256sum "$baseline_dir/$baseline_bundle" | awk '{print $1}')" == "$baseline_bundle_sha" ]]
+  # A candidate CLI verifies its own support files against the installed
+  # release payload (#184), so it cannot install or operate the predecessor
+  # (v0.3.31-rc.1 run 44663939453). The baseline lifecycle runs the
+  # predecessor's own checksum-bound bundle CLI; only the upgrade runs the
+  # candidate CLI.
+  baseline_runtime="$work_root/baseline-runtime"
+  mkdir -p "$baseline_runtime"
+  tar -xzf "$baseline_dir/$baseline_bundle" -C "$baseline_runtime"
+  chmod 0755 "$baseline_runtime/surveyctl" "$baseline_runtime/surveyctl.py"
   install_manifest="$baseline_dir/release.json"
   install_manifest_sha="$baseline_manifest_sha"
+  ctl_bin="$baseline_runtime/surveyctl"
 else
   install_manifest="$candidate_release_dir/release.json"
   install_manifest_sha="$CANDIDATE_MANIFEST_SHA256"
+  ctl_bin="$candidate_ctl"
 fi
-ctl_bin="$runtime/surveyctl"
-chmod 0755 "$ctl_bin"
 
 last_step="preflight-disk"
 actual_free_bytes="$(( $(df -Pk "$work_root" | awk 'NR==2 {print $4}') * 1024 ))"
@@ -389,7 +399,7 @@ run_ctl backup --output "$backup_name"
 if [[ "$BASELINE_MODE" == predecessor ]]; then
   last_step="upgrade-data-continuity"
   python3 "$evidence_helper" upgrade-data-probe \
-    --runtime "$runtime" --ctl "$ctl_bin" --target "$target" --host "$SURVEY_ACCEPTANCE_PUBLIC_HOST" \
+    --runtime "$runtime" --baseline-runtime "$baseline_runtime" --ctl "$candidate_ctl" --target "$target" --host "$SURVEY_ACCEPTANCE_PUBLIC_HOST" \
     --baseline-manifest "$baseline_dir/release.json" --baseline-sha "$baseline_manifest_sha" \
     --candidate-manifest "$candidate_release_dir/release.json" --candidate-sha "$CANDIDATE_MANIFEST_SHA256" \
     --output "$evidence_root/upgrade-data.json"
