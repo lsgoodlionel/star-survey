@@ -2339,7 +2339,9 @@ raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-inte
         class Runtime:
             def upgrade(runtime, effect):
                 events.append(('owned-upgrade',))
-                return effect()
+                # The target runtime is live, but activation must wait for TLS.
+                with mock.patch.object(manager, '_native_acceptance_profile', return_value={'tlsMode': 'local-ca'}):
+                    return effect()
         import runtime_controller
         with mock.patch.object(manager, '_require_owned_upgrade_source'), \
              mock.patch.object(manager, '_verify_owned_support', side_effect=admit), \
@@ -2350,6 +2352,11 @@ raise SystemExit(m.main(['--target',sys.argv[2],'backup','--output','helper-inte
         self.assertEqual([('code', '0.3.0'), ('backup-source', '0.2.0', '0.3.0'), ('owned-upgrade',)], events)
         prepare.assert_called_once_with(manager, '0.2.0', '0.3.0')
         self.assertEqual('0.2.0', verify.call_args.args[1])
+        ca_exports = [cmd for cmd in self.runner.commands if 'edge:/data/caddy/pki/authorities/local/root.crt' in cmd]
+        self.assertEqual(1, len(ca_exports))
+        export = ca_exports[0]
+        self.assertEqual(str(self.target / 'releases' / '0.3.0'), export[export.index('--project-directory') + 1])
+        self.assertEqual(self.target / '.surveyctl' / 'native-acceptance-ca.crt', manager.host_probe.ca_file)
         self.assertIsNone(manager._upgrade_execution_version)
         self.assertFalse(any('--remove-orphans' in command for command in self.runner.commands[-4:]))
         self.assertEqual('0.3.0', manager._read_current())

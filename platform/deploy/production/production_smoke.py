@@ -361,7 +361,7 @@ def main():
         hosts_changed = True
         os.environ['SSL_CERT_FILE'] = str(target / '.surveyctl/native-acceptance-ca.crt')
         stage = 'tls'
-        manager._verify_public_tls(host)
+        manager._verify_public_tls(host, manifest.version)
         manager._atomic_write(manager.current_path, manifest.version + '\n')
         manager._write_state(status='healthy')
         stage = 'machine-setup'
