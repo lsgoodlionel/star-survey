@@ -244,6 +244,9 @@ def render(args: argparse.Namespace) -> int:
     return 0
 
 
+DEFAULT_BRANCH = "main"
+
+
 def compare(args: argparse.Namespace) -> int:
     expected = load_object(args.expected)
     actual = load_object(args.actual)
@@ -257,7 +260,9 @@ def compare(args: argparse.Namespace) -> int:
         fail("canonical publication body differs from its reviewed identity")
     if actual.get("tagName") != expected.get("tagName"):
         fail("existing Release tag identity differs")
-    if actual.get("targetCommitish") != expected.get("targetCommitish"):
+    # A Release created without target_commitish reports the default branch. The
+    # tag-to-commit binding is verified against the live tag by candidate_provenance.
+    if actual.get("targetCommitish") not in (expected.get("targetCommitish"), DEFAULT_BRANCH):
         fail("existing Release target commit differs")
     if actual.get("isDraft") is not True and actual.get("isDraft") is not False:
         fail("existing Release draft state is invalid")
