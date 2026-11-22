@@ -531,7 +531,10 @@ if args[:2] == ['release', 'upload']:
     release['assets'].append({'name': path.name}); state['release'] = release; save(); raise SystemExit(0)
 if args[:2] == ['release', 'create']:
     title = args[args.index('--title') + 1]; notes = Path(args[args.index('--notes-file') + 1]).read_text()
-    target = args[args.index('--target') + 1]
+    if '--target' in args:
+        # GitHub now rejects target_commitish from the workflow token for an existing tag.
+        print('HTTP 403: Resource not accessible by integration', file=sys.stderr); raise SystemExit(1)
+    target = 'main'
     paths = []
     index = 3
     while index < len(args):
@@ -619,6 +622,37 @@ raise SystemExit('unsupported fake gh command: ' + repr(args))
                 self.assertEqual(len(list(self.assets.iterdir())), len(draft["assets"]))
                 self.assertIn("gate-check", log.read_text())
                 self.assertNotIn("--draft=false", log.read_text())
+
+    def test_new_release_is_created_from_the_verified_tag_without_target_commitish(self):
+        body, metadata, expected = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")
+        environment, state, log = self.make_fake_gh(None)
+        result = self.run_publisher(body, metadata, environment)
+        self.assertEqual(0, result.returncode, result.stderr)
+        final = json.loads(state.read_text())["release"]
+        self.assertFalse(final["isDraft"])
+        self.assertEqual("main", final["targetCommitish"])
+        create = [json.loads(line) for line in log.read_text().splitlines()
+                  if line.startswith('[') and json.loads(line)[:2] == ["release", "create"]]
+        self.assertEqual(1, len(create))
+        self.assertIn("--verify-tag", create[0])
+        self.assertNotIn("--target", create[0])
+        self.assertLess(log.read_text().index("gate-check"), log.read_text().index("--draft=false"))
+
+    def test_default_branch_target_is_accepted_but_other_targets_fail(self):
+        body, metadata, expected = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")
+        for target, accepted in (("main", True), (self.commit, True), ("b" * 40, False),
+                                 ("develop", False), ("", False), (None, False)):
+            with self.subTest(target=target):
+                release = {"tagName": expected["tagName"], "name": expected["name"], "body": body.read_text(),
+                           "isDraft": False, "isPrerelease": True, "targetCommitish": target,
+                           "assets": [{"name": "asset.bin"}]}
+                actual = self.root / "actual.json"
+                actual.write_text(json.dumps(release), encoding="utf-8")
+                result = subprocess.run([sys.executable, str(RENDER_PUBLICATION_PATH), "--compare",
+                                         "--expected", str(metadata), "--actual", str(actual),
+                                         "--body", str(body), "--require-published"],
+                                        text=True, capture_output=True, check=False)
+                self.assertEqual(accepted, result.returncode == 0, result.stderr)
 
     def test_unknown_create_outcome_is_reconciled_without_clobber(self):
         body, metadata, expected = self.render("v1.2.3-rc.4", "v1.2.3-rc.4")

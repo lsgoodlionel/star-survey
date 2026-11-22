@@ -147,8 +147,12 @@ if query_release; then
 else
   prerelease_args=()
   [[ "$prerelease" == true ]] && prerelease_args=(--prerelease)
+  # The tag already exists (--verify-tag) and candidate_provenance.py binds it to
+  # $target_commit before creation and again before publishing. GitHub rejects
+  # target_commitish from the workflow token (HTTP 403), so it is not sent; the
+  # Release then reports the default branch as its target.
   if ! gh release create "$tag" "${desired[@]}" --repo "$repository" --verify-tag --draft \
-    --target "$target_commit" --title "$title" --notes-file "$body_file" --latest=false \
+    --title "$title" --notes-file "$body_file" --latest=false \
     "${prerelease_args[@]}"; then
     query_release
   fi
