@@ -16,7 +16,7 @@ export interface EditableQuestion {
   editable: boolean;
   mandatory?: boolean;
   condition?: string;
-  validation?: { rule: string; message: string } | null;
+  validation?: { rule: string; message?: string } | null;
   other?: boolean;
   answers?: EditableChoice[];
   themeOptions?: JsonObject;
@@ -210,10 +210,13 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-function validationValue(value: unknown): { rule: string; message: string } | undefined {
+function validationValue(value: unknown): { rule: string; message?: string } | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const validation = value as JsonObject;
-  if (typeof validation.rule !== 'string' || typeof validation.message !== 'string') return undefined;
+  if (Object.keys(validation).some((key) => key !== 'rule' && key !== 'message')) return undefined;
+  if (typeof validation.rule !== 'string') return undefined;
+  if (validation.message === undefined) return { rule: validation.rule };
+  if (typeof validation.message !== 'string') return undefined;
   return { rule: validation.rule, message: validation.message };
 }
 

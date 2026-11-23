@@ -116,6 +116,15 @@ describe('lossless survey definition model', () => {
     expect(clearedQuestion).not.toHaveProperty('validation');
   });
 
+  test('preserves unknown validation keys when a different property is edited', () => {
+    const source = sourceWithExtensions();
+    const questions = (source.groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions;
+    questions[1].validation = { rule: 'length(self) <= 5', message: 'notice', futureToken: { preserve: true } };
+    const edited = updateQuestion(parseDefinition(source), textUuid, { text: '新题干' });
+    const saved = ((serializeDefinition(edited) as typeof source).groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions[1];
+    expect(saved.validation).toEqual(questions[1].validation);
+  });
+
   test('editsOnlyTheSelectedBasicQuestion', () => {
     const source = sourceWithExtensions();
     const definition = parseDefinition(source);

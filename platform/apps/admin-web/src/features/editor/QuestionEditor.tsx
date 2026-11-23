@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { EditableQuestion } from './model/definition';
 import type { ApiClient } from '../../shared/api/http';
 import { AdvancedQuestionOptions } from './AdvancedQuestionOptions';
@@ -15,6 +16,7 @@ interface QuestionEditorProps {
 }
 
 export function QuestionEditor({ question, supportsLogic, conditionSources, api, tenantId, disabled, onChange, onSlideAssetChange }: QuestionEditorProps) {
+  const [lengthInputRejected, setLengthInputRejected] = useState(false);
   if (!question.editable) return <ReadOnlyQuestion question={question} />;
   if (question.source.theme === 'mjy-carousel' && (!Array.isArray(question.themeOptions?.slides)
     || question.themeOptions.slides.some((slide) => !slide || typeof slide !== 'object' || Array.isArray(slide)))) {
@@ -35,6 +37,12 @@ export function QuestionEditor({ question, supportsLogic, conditionSources, api,
   const visibleTextLength = textLengthValidation && Number(textLengthValidation[1]) <= 2000
     ? textLengthValidation[1] : '';
   const complexValidation = Boolean(question.validation && !visibleTextLength);
+  const unsupportedValidation = question.validation === undefined && question.source.validation != null;
+  const attributes = question.source.attributes;
+  const legacyAttributeLength = attributes && typeof attributes === 'object' && 'maximum_chars' in attributes
+    ? attributes.maximum_chars : undefined;
+  const legacyLimits = [question.source.maxLength, legacyAttributeLength].filter((value) => value != null);
+  const readOnlyLength = unsupportedValidation || legacyLimits.length > 0;
 
   return (
     <div className="question-editor">
@@ -92,28 +100,35 @@ export function QuestionEditor({ question, supportsLogic, conditionSources, api,
       {supportsLogic && (question.type === 'S' || question.type === 'T') ? (
         <fieldset disabled={disabled}>
           <legend>答案校验</legend>
-          {complexValidation ? (
+          {legacyLimits.length > 0 ? <p role="status">旧版字数限制（只读）：{legacyLimits.map((value) =>
+            typeof value === 'number' || typeof value === 'string' ? String(value) : '无法识别').join('、')}。</p> : null}
+          {unsupportedValidation ? <p role="status">现有校验包含无法编辑的配置，将保留原样。</p> : null}
+          {complexValidation && !readOnlyLength ? (
             <p role="status">现有复杂校验规则会保持原样。若需改成最大字数，请先清除。</p>
           ) : null}
           <label>
             最大字数
             <input
               aria-label="最大字数"
-              type="number"
-              min="1"
-              max="2000"
-              disabled={complexValidation}
+              type="text"
+              inputMode="numeric"
+              disabled={complexValidation || readOnlyLength}
               value={visibleTextLength}
               onChange={(event) => {
-                const maxLength = Number(event.target.value);
-                onChange({ validation: Number.isInteger(maxLength) && maxLength >= 1 && maxLength <= 2000
-                  ? { rule: `length(self) <= ${maxLength}`, message: `最多填写 ${maxLength} 个字符` }
-                  : null });
+                const value = event.target.value;
+                if (value !== '' && (!/^[1-9][0-9]{0,3}$/.test(value) || Number(value) > 2000)) {
+                  setLengthInputRejected(true);
+                  return;
+                }
+                setLengthInputRejected(false);
+                onChange({ validation: value === '' ? null
+                  : { rule: `length(self) <= ${value}`, message: `最多填写 ${value} 个字符` } });
               }}
             />
           </label>
-          <small>留空表示不限制；可填写 1–2000。</small>
-          {complexValidation ? <button type="button" onClick={() => onChange({ validation: null })}>清除校验规则</button> : null}
+          {lengthInputRejected ? <p role="alert">请输入 1–2000 之间的整数，上一次有效设置已保留。</p> : null}
+          {!readOnlyLength && !complexValidation ? <small>留空表示不限制；可填写 1–2000。</small> : null}
+          {complexValidation && !readOnlyLength ? <button type="button" onClick={() => onChange({ validation: null })}>清除校验规则</button> : null}
         </fieldset>
       ) : null}
       {question.type === 'X' && question.source.theme === 'mjy-collapsible' && question.themeOptions ? (
