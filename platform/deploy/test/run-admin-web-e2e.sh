@@ -218,7 +218,7 @@ run_playwright() {
     elif [[ "$E2E_SUITE" == "wave3" ]]; then
       npm run e2e -- --project=chromium-wave3-data
     elif [[ "$E2E_SUITE" == "a4" ]]; then
-      npm run e2e -- --project=chromium-desktop --retries=0 --grep 'A4 text maximum length'
+      npm run e2e -- --project=chromium-a4 --retries=0
     else
       npm run e2e -- --project=chromium-desktop --project=chromium-template-branding --project=chromium-mobile
     fi

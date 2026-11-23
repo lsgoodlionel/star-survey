@@ -65,6 +65,7 @@ SANITIZED_TRACE_FIELDS = {
 SANITIZED_PROJECT_TESTS = {
     "chromium-desktop": "desktop-authoring",
     "chromium-mobile": "mobile-responsive-editor",
+    "chromium-a4": "desktop-authoring",
 }
 SANITIZED_STATUSES = {"failed", "timedOut", "interrupted"}
 SANITIZED_NETWORK_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}

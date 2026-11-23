@@ -422,12 +422,14 @@ test('Wave 5 advanced questions survive authoring, isolated preview and publishe
   await expect(page.locator('.response-answers')).toContainText('C2');
 });
 
-test('A4 text maximum length is Unicode-consistent from authoring through response readback', async ({ page }) => {
+test('A4 text maximum length is Unicode-consistent from authoring through response readback', { tag: '@a4' }, async ({ page }) => {
   test.setTimeout(480_000);
   const metadata = await readMetadata();
+  console.info('[A4] login');
   const me = await login(page, await readToken(), metadata);
   await clickAction(page.getByRole('link', { name: '项目与问卷' }));
   const projectName = `A4 字符长度项目-${Date.now().toString(36)}`;
+  console.info('[A4] create');
   await createResource(page, '新建项目', '创建项目', projectName, (payload) =>
     recordRunRootId(requiredEnv('ADMIN_WEB_TEST_RESULTS_DIR'), payload).then(() => undefined));
   await clickAction(currentResource(page, projectName));
@@ -436,6 +438,7 @@ test('A4 text maximum length is Unicode-consistent from authoring through respon
   await createResource(page, '新建问卷', '创建问卷', 'A4 字符长度验收');
   const surveyId = surveyIdFrom(page.url());
 
+  console.info('[A4] author');
   await fillAction(page.getByLabel('题目文本'), 'A4 说明');
   await page.getByLabel('添加题型').selectOption('S');
   await clickAction(page.getByRole('button', { name: '添加题目' }));
@@ -461,11 +464,13 @@ test('A4 text maximum length is Unicode-consistent from authoring through respon
     { rule: 'length(self) <= 1', message: '最多填写 1 个字符' },
   ]);
 
+  console.info('[A4] publish');
   await clickAction(page.getByRole('link', { name: '发布与版本' }));
   await clickAction(page.getByRole('button', { name: '提交审批' }));
   await clickAction(page.getByRole('button', { name: '批准申请' }));
   await clickAction(page.getByRole('button', { name: '发布问卷' }));
   await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+  console.info('[A4] link');
   await fillAction(page.getByLabel('链接名称'), 'A4 字符长度正式链接');
   const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`)
     && response.request().method() === 'POST');
@@ -478,6 +483,7 @@ test('A4 text maximum length is Unicode-consistent from authoring through respon
   const browser = page.context().browser();
   expect(browser).not.toBeNull();
 
+  console.info('[A4] submit');
   for (const [index, value] of ['', '中', '😀'].entries()) {
     await test.step(`accept ${value || '<empty>'}`, async () => {
       const context = await browser!.newContext();
@@ -487,6 +493,7 @@ test('A4 text maximum length is Unicode-consistent from authoring through respon
       await expect.poll(responseCount, { timeout: 60_000, intervals: [500, 1000, 2000] }).toBe(index + 1);
     });
   }
+  console.info('[A4] reject');
   await test.step('reject 中文', async () => {
     const context = await browser!.newContext();
     const invalid = await context.newPage();
@@ -495,6 +502,7 @@ test('A4 text maximum length is Unicode-consistent from authoring through respon
     expect(await responseCount()).toBe(3);
   });
 
+  console.info('[A4] readback');
   await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '答卷与导出' }));
   await expect(async () => {
     await clickAction(page.getByRole('button', { name: '刷新答卷数据' }));
