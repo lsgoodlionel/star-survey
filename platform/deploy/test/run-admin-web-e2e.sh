@@ -217,6 +217,8 @@ run_playwright() {
       npm run e2e -- --project=chromium-desktop --retries=0 --grep 'author filters stable resources, restores archive, and publishes the same survey'
     elif [[ "$E2E_SUITE" == "wave3" ]]; then
       npm run e2e -- --project=chromium-wave3-data
+    elif [[ "$E2E_SUITE" == "a4" ]]; then
+      npm run e2e -- --project=chromium-desktop --retries=0 --grep 'A4 text maximum length'
     else
       npm run e2e -- --project=chromium-desktop --project=chromium-template-branding --project=chromium-mobile
     fi
@@ -353,7 +355,7 @@ PYLOG
     return 1
   fi
   stop_engine_relay
-  if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" != "1" ]]; then
+  if [[ "${ADMIN_WEB_ATTACHMENT_DIAGNOSTIC:-}" != "1" && "$E2E_SUITE" != "a4" ]]; then
     [[ -f "$ADMIN_WEB_RESULT_FILE" ]] || fail "Playwright did not write the redacted result"
   fi
   if ! export_failure_artifacts; then
@@ -428,7 +430,8 @@ while (($#)); do
   case "$1" in
     --fresh) is_fresh=true ;;
     --wave3) E2E_SUITE=wave3 ;;
-    *) echo "usage: $0 [--fresh] [--wave3]" >&2; return 2 ;;
+    --a4) E2E_SUITE=a4 ;;
+    *) echo "usage: $0 [--fresh] [--wave3|--a4]" >&2; return 2 ;;
   esac
   shift
 done
@@ -574,6 +577,11 @@ ok "engine first-preview baseline ready"
 
 step "browser: issue a fresh 10-minute token, then run desktop and mobile checks"
 run_browser_tests
+
+if [[ "$E2E_SUITE" == "a4" ]]; then
+  echo "Admin web A4 real-stack e2e passed ($TEST_DB); full gate was not evaluated" >&2
+  return 0
+fi
 
 step "gate: platform API, platform DB, gateway and engine DB"
 verify_and_archive_run_root

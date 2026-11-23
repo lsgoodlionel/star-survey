@@ -432,6 +432,52 @@ describe('EditorPage', () => {
     expect(saved.condition).toBe(`q("${singleUuid}") == "A1"`);
     expect(saved.futureLogic).toEqual({ keep: true });
   });
+  test('authors a text maximum length validation and preserves a complex existing rule until cleared', async () => {
+    const source = structuredClone(gatewayFixture);
+    source.definitionVersion = 2;
+    const question = source.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    question.validation = { rule: 'answered(self) and length(self) <= 40', message: '保留复杂规则' };
+    question.futureLogic = { keep: true };
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    expect(await screen.findByText('现有复杂校验规则会保持原样。若需改成最大字数，请先清除。')).toBeInTheDocument();
+    expect(screen.getByLabelText('最大字数')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '清除校验规则' }));
+    fireEvent.change(screen.getByLabelText('最大字数'), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    expect(saved.validation).toEqual({ rule: 'length(self) <= 120', message: '最多填写 120 个字符' });
+    expect(saved.futureLogic).toEqual({ keep: true });
+  });
+  test('keeps a text length edit when another question is added immediately afterwards', async () => {
+    const source = structuredClone(gatewayFixture);
+    source.definitionVersion = 2;
+    let savedDefinition: typeof source | undefined;
+    const api = editorApi({
+      [`GET /v1/surveys/${surveyId}/draft`]: () => ({ surveyId, version: 4, definition: source }),
+      [`PUT /v1/surveys/${surveyId}/draft`]: (request) => {
+        savedDefinition = (request.body as { definition: typeof source }).definition;
+        return { surveyId, version: 5, definition: savedDefinition };
+      },
+    });
+    renderEditor(api, `/surveys/${surveyId}/edit?question=${textUuid}`);
+    await screen.findByLabelText('最大字数');
+    fireEvent.change(screen.getByLabelText('最大字数'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('添加题型'), { target: { value: 'T' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加题目' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await screen.findByText('已保存版本 5');
+    const saved = savedDefinition!.groups[0].questions.find((item) => item.uuid === textUuid)! as Record<string, unknown>;
+    expect(saved.validation).toEqual({ rule: 'length(self) <= 1', message: '最多填写 1 个字符' });
+  });
   test('uses a stable source UUID when the question code is a DSL keyword and later changes', async () => {
     const source = structuredClone(gatewayFixture);
     source.definitionVersion = 2;

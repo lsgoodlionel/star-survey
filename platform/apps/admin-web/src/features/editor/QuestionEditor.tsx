@@ -10,7 +10,7 @@ interface QuestionEditorProps {
   api: ApiClient;
   tenantId: string;
   disabled: boolean;
-  onChange(update: Partial<Pick<EditableQuestion, 'answers' | 'code' | 'condition' | 'mandatory' | 'other' | 'text' | 'themeOptions' | 'slideIds'>>): void;
+  onChange(update: Partial<Pick<EditableQuestion, 'answers' | 'code' | 'condition' | 'mandatory' | 'other' | 'text' | 'themeOptions' | 'slideIds' | 'validation'>>): void;
   onSlideAssetChange(questionUuid: string, slideId: string, assetId: string): void;
 }
 
@@ -31,6 +31,10 @@ export function QuestionEditor({ question, supportsLogic, conditionSources, api,
     (simpleCondition[1] ? source.uuid === simpleCondition[1] : source.code === simpleCondition[2])
     && source.answers?.some((answer) => answer.code === simpleCondition[3])) : undefined;
   const complexCondition = Boolean(question.condition && !selectedSource);
+  const textLengthValidation = /^length\(self\) <= ([1-9][0-9]{0,3})$/.exec(question.validation?.rule ?? '');
+  const visibleTextLength = textLengthValidation && Number(textLengthValidation[1]) <= 2000
+    ? textLengthValidation[1] : '';
+  const complexValidation = Boolean(question.validation && !visibleTextLength);
 
   return (
     <div className="question-editor">
@@ -83,6 +87,33 @@ export function QuestionEditor({ question, supportsLogic, conditionSources, api,
             </select>
           </label> : null}
           {complexCondition ? <button type="button" onClick={() => onChange({ condition: '' })}>清除显示条件</button> : null}
+        </fieldset>
+      ) : null}
+      {supportsLogic && (question.type === 'S' || question.type === 'T') ? (
+        <fieldset disabled={disabled}>
+          <legend>答案校验</legend>
+          {complexValidation ? (
+            <p role="status">现有复杂校验规则会保持原样。若需改成最大字数，请先清除。</p>
+          ) : null}
+          <label>
+            最大字数
+            <input
+              aria-label="最大字数"
+              type="number"
+              min="1"
+              max="2000"
+              disabled={complexValidation}
+              value={visibleTextLength}
+              onChange={(event) => {
+                const maxLength = Number(event.target.value);
+                onChange({ validation: Number.isInteger(maxLength) && maxLength >= 1 && maxLength <= 2000
+                  ? { rule: `length(self) <= ${maxLength}`, message: `最多填写 ${maxLength} 个字符` }
+                  : null });
+              }}
+            />
+          </label>
+          <small>留空表示不限制；可填写 1–2000。</small>
+          {complexValidation ? <button type="button" onClick={() => onChange({ validation: null })}>清除校验规则</button> : null}
         </fieldset>
       ) : null}
       {question.type === 'X' && question.source.theme === 'mjy-collapsible' && question.themeOptions ? (

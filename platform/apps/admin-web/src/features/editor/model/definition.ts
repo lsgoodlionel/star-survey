@@ -16,6 +16,7 @@ export interface EditableQuestion {
   editable: boolean;
   mandatory?: boolean;
   condition?: string;
+  validation?: { rule: string; message: string } | null;
   other?: boolean;
   answers?: EditableChoice[];
   themeOptions?: JsonObject;
@@ -132,6 +133,7 @@ function parseQuestion(value: unknown): EditableQuestion {
     editable,
     mandatory: editable && typeof source.mandatory === 'boolean' ? source.mandatory : undefined,
     condition: editable && typeof source.condition === 'string' ? source.condition : undefined,
+    validation: editable ? validationValue(source.validation) : undefined,
     other: editable && typeof source.other === 'boolean' ? source.other : undefined,
     answers,
     themeOptions: ['mjy-collapsible', 'mjy-cascading-select', 'mjy-carousel'].includes(String(source.theme)) && source.themeOptions && typeof source.themeOptions === 'object' && !Array.isArray(source.themeOptions)
@@ -168,6 +170,8 @@ function serializeQuestion(question: EditableQuestion): JsonObject {
   setOptional(serialized, 'mandatory', question.mandatory);
   if (question.condition === '') delete serialized.condition;
   else setOptional(serialized, 'condition', question.condition);
+  if (question.validation === null) delete serialized.validation;
+  else setOptional(serialized, 'validation', question.validation);
   setOptional(serialized, 'other', question.other);
   if (question.themeOptions !== undefined) serialized.themeOptions = cloneJson(question.themeOptions);
   if (question.answers !== undefined) {
@@ -204,6 +208,13 @@ function numberValue(value: unknown, label: string): number {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function validationValue(value: unknown): { rule: string; message: string } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const validation = value as JsonObject;
+  if (typeof validation.rule !== 'string' || typeof validation.message !== 'string') return undefined;
+  return { rule: validation.rule, message: validation.message };
 }
 
 function stringMap(value: unknown): Record<string, string> | undefined {

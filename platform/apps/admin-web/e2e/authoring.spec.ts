@@ -422,6 +422,128 @@ test('Wave 5 advanced questions survive authoring, isolated preview and publishe
   await expect(page.locator('.response-answers')).toContainText('C2');
 });
 
+test('A4 text maximum length is Unicode-consistent from authoring through response readback', async ({ page }) => {
+  test.setTimeout(480_000);
+  const metadata = await readMetadata();
+  const me = await login(page, await readToken(), metadata);
+  await clickAction(page.getByRole('link', { name: '项目与问卷' }));
+  const projectName = `A4 字符长度项目-${Date.now().toString(36)}`;
+  await createResource(page, '新建项目', '创建项目', projectName, (payload) =>
+    recordRunRootId(requiredEnv('ADMIN_WEB_TEST_RESULTS_DIR'), payload).then(() => undefined));
+  await clickAction(currentResource(page, projectName));
+  await createResource(page, '新建文件夹', '创建文件夹', 'A4 验收资料');
+  await clickAction(currentResource(page, 'A4 验收资料'));
+  await createResource(page, '新建问卷', '创建问卷', 'A4 字符长度验收');
+  const surveyId = surveyIdFrom(page.url());
+
+  await fillAction(page.getByLabel('题目文本'), 'A4 说明');
+  await page.getByLabel('添加题型').selectOption('S');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByLabel('题目编码')).toHaveValue('Q1');
+  await fillAction(page.getByLabel('题目文本'), '短文本长度验收');
+  await fillAction(page.getByLabel('最大字数'), '1');
+  await saveAndReloadDraft(page, surveyId);
+  await page.getByLabel('添加题型').selectOption('T');
+  await clickAction(page.getByRole('button', { name: '添加题目' }));
+  await expect(page.getByLabel('题目编码')).toHaveValue('Q2');
+  await fillAction(page.getByLabel('题目文本'), '长文本长度验收');
+  await fillAction(page.getByLabel('最大字数'), '1');
+
+  const saveRequest = page.waitForRequest((request) => request.url().includes(`/v1/surveys/${surveyId}/draft`)
+    && request.method() === 'PUT');
+  await saveAndReloadDraft(page, surveyId);
+  const saved = (await saveRequest).postDataJSON() as { definition: { groups: Array<{ questions: Array<{ text: string; validation?: { rule: string; message: string } }> }> } };
+  const textQuestions = saved.definition.groups.flatMap((group) => group.questions)
+    .filter((question) => question.text.endsWith('文本长度验收'));
+  expect(textQuestions).toHaveLength(2);
+  expect(textQuestions.map((question) => question.validation)).toEqual([
+    { rule: 'length(self) <= 1', message: '最多填写 1 个字符' },
+    { rule: 'length(self) <= 1', message: '最多填写 1 个字符' },
+  ]);
+
+  await clickAction(page.getByRole('link', { name: '发布与版本' }));
+  await clickAction(page.getByRole('button', { name: '提交审批' }));
+  await clickAction(page.getByRole('button', { name: '批准申请' }));
+  await clickAction(page.getByRole('button', { name: '发布问卷' }));
+  await expect(page.getByText('发布成功')).toBeVisible({ timeout: 210_000 });
+  await fillAction(page.getByLabel('链接名称'), 'A4 字符长度正式链接');
+  const linkResponse = page.waitForResponse((response) => response.url().includes(`/v1/delivery/surveys/${surveyId}/links`)
+    && response.request().method() === 'POST');
+  await clickAction(page.getByRole('button', { name: '创建链接' }));
+  const link = await readCreatedDeliveryLink(await linkResponse);
+  const engineSid = await publishedEngineSid(surveyId, me.tenantId);
+  const responseCount = async () => Number(await platformQuery(me.tenantId,
+    `SELECT count(*) FROM response_projection WHERE tenant_id='${me.tenantId}' AND survey_id=${engineSid} AND state='engine_completed';`));
+  expect(await responseCount()).toBe(0);
+  const browser = page.context().browser();
+  expect(browser).not.toBeNull();
+
+  for (const [index, value] of ['', '中', '😀'].entries()) {
+    await test.step(`accept ${value || '<empty>'}`, async () => {
+      const context = await browser!.newContext();
+      const respondent = await context.newPage();
+      await answerTextLengthSurvey(respondent, link.url, value, true);
+      await context.close();
+      await expect.poll(responseCount, { timeout: 60_000, intervals: [500, 1000, 2000] }).toBe(index + 1);
+    });
+  }
+  await test.step('reject 中文', async () => {
+    const context = await browser!.newContext();
+    const invalid = await context.newPage();
+    await answerTextLengthSurvey(invalid, link.url, '中文', false);
+    await context.close();
+    expect(await responseCount()).toBe(3);
+  });
+
+  await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '答卷与导出' }));
+  await expect(async () => {
+    await clickAction(page.getByRole('button', { name: '刷新答卷数据' }));
+    await expect(page.getByLabel('已完成 3')).toBeVisible();
+  }).toPass({ timeout: 60_000, intervals: [1000, 2000, 5000] });
+  const answers = page.locator('.response-answers');
+  await expect(answers).toHaveCount(3);
+  await expect(answers.nth(0)).not.toContainText(/中|😀/);
+  await expect(answers.nth(1)).toContainText('中');
+  await expect(answers.nth(2)).toContainText('😀');
+  expect((await answers.allTextContents()).join('\n')).not.toContain('中文');
+});
+
+async function answerTextLengthSurvey(enginePage: Page, url: string, value: string, accepted: boolean) {
+  await enginePage.goto(url);
+  await enginePage.waitForLoadState('domcontentloaded');
+  for (let step = 0; step < 4 && await enginePage.getByText('短文本长度验收').count() === 0; step += 1) {
+    await limeSurveyAdvanceButton(enginePage).click();
+    await enginePage.waitForLoadState('domcontentloaded');
+  }
+  const shortQuestion = enginePage.locator('.question-container').filter({ hasText: '短文本长度验收' });
+  const longQuestion = enginePage.locator('.question-container').filter({ hasText: '长文本长度验收' });
+  await expect(shortQuestion).toBeVisible();
+  await expect(longQuestion).toBeVisible();
+  await shortQuestion.locator('input[type="text"]').fill(value);
+  await longQuestion.locator('textarea').fill(value);
+  if (accepted) {
+    for (let step = 0; step < 4; step += 1) {
+      const submit = limeSurveyAdvanceButton(enginePage);
+      if (await submit.count() === 0) break;
+      await submit.click();
+      await enginePage.waitForLoadState('domcontentloaded');
+      const diagnostics = await enginePage.locator('.ls-em-tip:visible, .error:visible, [role="alert"]:visible')
+        .allTextContents();
+      if (diagnostics.length) {
+        throw new Error(`value ${value || '<empty>'} was rejected: ${diagnostics.join(' | ')}`);
+      }
+    }
+  } else {
+    for (let step = 0; step < 4; step += 1) {
+      await limeSurveyAdvanceButton(enginePage).click();
+      await enginePage.waitForLoadState('domcontentloaded');
+      await expect(shortQuestion, `value ${value} must not be accepted`).toBeVisible();
+    }
+    await expect(shortQuestion.locator('input[type="text"]')).toHaveValue(value);
+    await expect(longQuestion.locator('textarea')).toHaveValue(value);
+  }
+}
+
 test('a single-choice display condition is authored and works in isolated preview', async ({ page }) => {
   test.setTimeout(360_000);
   const metadata = await readMetadata();
@@ -996,9 +1118,7 @@ function runBytes(file: string, args: string[]) {
 }
 
 function limeSurveyAdvanceButton(enginePage: Page) {
-  return enginePage.locator(
-    '#ls-button-submit:visible, #ls-button-next:visible, button[type="submit"]:visible, input[type="submit"]:visible',
-  ).last();
+  return enginePage.locator('#ls-button-submit:visible, #ls-button-next:visible').first();
 }
 
 test('desktop pointer dragging persists question and group order after refresh', async ({ page }) => {
