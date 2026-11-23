@@ -31,6 +31,11 @@ DirectoryIndex index.php index.html
     AllowOverride All
     Require all granted
 </Directory>
+# Yii reads these files locally and publishes browser URLs under tmp/assets.
+<Directory "/var/www/html/node_modules">
+    AllowOverride None
+    Require all denied
+</Directory>
 CONF
 COPY <<'SCRIPT' /usr/local/bin/apache2-foreground
 #!/bin/sh

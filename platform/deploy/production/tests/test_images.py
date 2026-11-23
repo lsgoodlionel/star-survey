@@ -22,6 +22,17 @@ def runtime_stage(contents: str) -> str:
 
 
 class ProductionImagePolicyTest(unittest.TestCase):
+    def test_engine_packages_individual_runtime_files(self):
+        ignore = REPOSITORY_ROOT / "platform/deploy/production/Dockerfile.engine.dockerignore"
+        entries = [line[1:] for line in ignore.read_text().splitlines() if line.startswith("!node_modules/")]
+        self.assertIn("node_modules/decimal.js/decimal.js", entries)
+        self.assertIn("node_modules/jquery/dist/jquery.min.js", entries)
+        for name in entries:
+            with self.subTest(name=name):
+                self.assertTrue((REPOSITORY_ROOT / name).is_file())
+                self.assertNotRegex(name, r"(?i)/(?:tests?|examples?|docs?|node_modules)/|[?*]|\.map$")
+        self.assertIn("node_modules/**", ignore.read_text().splitlines())
+
     def test_every_runtime_is_non_root_and_health_checked(self):
         for name, path in DOCKERFILES.items():
             with self.subTest(image=name):
