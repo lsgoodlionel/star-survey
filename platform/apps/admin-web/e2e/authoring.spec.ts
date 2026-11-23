@@ -542,8 +542,17 @@ async function answerTextLengthSurvey(enginePage: Page, url: string, value: stri
       }
     }
   } else {
+    // The engine may show its translated validation alert after an invalid submit.
+    // Dismiss only that message so the respondent can submit the unchanged input again.
+    const alert = enginePage.locator('#bootstrap-alert-box-modal:visible');
+    await enginePage.addLocatorHandler(alert, async () => {
+      await expect(alert.locator('.modal-body')).toContainText(
+        /未按有效方式回答|not been answered in a valid manner/,
+      );
+      await alert.locator('.modal-header button[data-bs-dismiss="modal"]').click();
+    });
     for (let step = 0; step < 4; step += 1) {
-      await limeSurveyAdvanceButton(enginePage).click();
+      await limeSurveyAdvanceButton(enginePage).click({ timeout: ACTION_TIMEOUT_MS });
       await enginePage.waitForLoadState('domcontentloaded');
       await expect(shortQuestion, `value ${value} must not be accepted`).toBeVisible();
     }
