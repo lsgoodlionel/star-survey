@@ -504,16 +504,32 @@ test('A4 text maximum length is Unicode-consistent from authoring through respon
 
   console.info('[A4] readback');
   await clickAction(page.getByRole('navigation', { name: '问卷工作流' }).getByRole('link', { name: '答卷与导出' }));
+  const rows = page.locator('.response-table-wrap tbody tr');
+  const completed = rows.filter({ has: page.getByRole('cell', { name: '已完成', exact: true }) });
+  const inProgress = rows.filter({ has: page.getByRole('cell', { name: '填写中', exact: true }) });
   await expect(async () => {
     await clickAction(page.getByRole('button', { name: '刷新答卷数据' }));
     await expect(page.getByLabel('已完成 3')).toBeVisible();
+    await expect(page.getByLabel('填写中 1')).toBeVisible();
+    await expect(rows).toHaveCount(4);
+    await expect(completed).toHaveCount(3);
+    await expect(inProgress).toHaveCount(1);
   }).toPass({ timeout: 60_000, intervals: [1000, 2000, 5000] });
-  const answers = page.locator('.response-answers');
+  await expect(inProgress.getByText('中文', { exact: true })).toHaveCount(2);
+  await page.getByLabel('答卷状态').selectOption('engine_completed');
+  await expect(rows).toHaveCount(3);
+  await expect(completed).toHaveCount(3);
+  await expect(inProgress).toHaveCount(0);
+  const answers = completed.locator('.response-answers');
   await expect(answers).toHaveCount(3);
-  await expect(answers.nth(0)).not.toContainText(/中|😀/);
-  await expect(answers.nth(1)).toContainText('中');
-  await expect(answers.nth(2)).toContainText('😀');
+  for (const [index, expected] of ['', '中', '😀'].entries()) {
+    const values = answers.nth(index).locator('dd');
+    // The final two questions in this definition are the authored S and T fields.
+    await expect(values.nth(-2)).toHaveText(expected);
+    await expect(values.last()).toHaveText(expected);
+  }
   expect((await answers.allTextContents()).join('\n')).not.toContain('中文');
+  expect(await responseCount()).toBe(3);
 });
 
 async function answerTextLengthSurvey(enginePage: Page, url: string, value: string, accepted: boolean) {
