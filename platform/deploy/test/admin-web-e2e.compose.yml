@@ -106,3 +106,9 @@ services:
       - test-tmp:/var/www/html/tmp
     working_dir: /var/www/html
     command: ["/bin/sh", "platform/deploy/production/init/event-relay.sh"]
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${ADMIN_WEB_NETWORK_SUBNET:-10.253.231.0/24}

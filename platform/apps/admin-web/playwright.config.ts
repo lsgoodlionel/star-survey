@@ -34,7 +34,13 @@ export default defineConfig({
       name: 'chromium-desktop',
       use: { ...devices['Desktop Chrome'] },
       testMatch: [/authoring\.spec\.ts/, /redaction\.spec\.ts/, /delivery-import\.spec\.ts/],
-      grepInvert: /@mobile/,
+      grepInvert: /@mobile|@a4/,
+    },
+    {
+      name: 'chromium-a4',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /authoring\.spec\.ts/,
+      grep: /@a4/,
     },
     {
       name: 'chromium-dashboard',

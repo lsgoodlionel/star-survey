@@ -92,6 +92,39 @@ describe('lossless survey definition model', () => {
     expect(clearedQuestion).not.toHaveProperty('condition');
   });
 
+  test('edits a text length validation without changing unrelated question fields', () => {
+    const source = sourceWithExtensions();
+    source.definitionVersion = 2;
+    const question = (source.groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions[1];
+    question.validation = { rule: 'length(self) <= 80', message: '最多填写 80 个字符' };
+    question.futureValidationField = { keep: true };
+
+    const parsed = parseDefinition(source);
+    expect(parsed.groups[0].questions[1].validation).toEqual({
+      rule: 'length(self) <= 80',
+      message: '最多填写 80 个字符',
+    });
+    const edited = updateQuestion(parsed, textUuid, {
+      validation: { rule: 'length(self) <= 120', message: '最多填写 120 个字符' },
+    });
+    const saved = ((serializeDefinition(edited) as typeof source).groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions[1];
+    expect(saved.validation).toEqual({ rule: 'length(self) <= 120', message: '最多填写 120 个字符' });
+    expect(saved.futureValidationField).toEqual({ keep: true });
+
+    const cleared = updateQuestion(edited, textUuid, { validation: null });
+    const clearedQuestion = ((serializeDefinition(cleared) as typeof source).groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions[1];
+    expect(clearedQuestion).not.toHaveProperty('validation');
+  });
+
+  test('preserves unknown validation keys when a different property is edited', () => {
+    const source = sourceWithExtensions();
+    const questions = (source.groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions;
+    questions[1].validation = { rule: 'length(self) <= 5', message: 'notice', futureToken: { preserve: true } };
+    const edited = updateQuestion(parseDefinition(source), textUuid, { text: '新题干' });
+    const saved = ((serializeDefinition(edited) as typeof source).groups as Array<{ questions: Array<Record<string, unknown>> }>)[0].questions[1];
+    expect(saved.validation).toEqual(questions[1].validation);
+  });
+
   test('editsOnlyTheSelectedBasicQuestion', () => {
     const source = sourceWithExtensions();
     const definition = parseDefinition(source);
