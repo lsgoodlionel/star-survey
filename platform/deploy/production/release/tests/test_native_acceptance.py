@@ -1211,6 +1211,27 @@ class NativeAcceptanceWorkflowTest(unittest.TestCase):
                     self.assertNotEqual(0, resolve({**expected, field: value}).returncode)
             self.assertNotEqual(0, resolve({**expected, 'mode': 'bootstrap'}).returncode)
 
+    def test_rc34_resolves_signed_rc33_as_artifact_predecessor(self):
+        # rc33 publishes release.json; the artifact path re-verifies that manifest
+        # and its signatures using the original candidate run, tag and commit.
+        step = next(step for step in self.workflow['jobs']['candidate-assets']['steps']
+                    if step.get('id') == 'baseline')
+        resolver = step['run'].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        result = subprocess.run(
+            [sys.executable, '-', '0.3.34-rc.1', str(BASELINE_POLICY_PATH)],
+            input=resolver, text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({
+            'BASELINE_MODE': 'predecessor',
+            'BASELINE_SOURCE': 'predecessor-artifact',
+            'BASELINE_VERSION': '0.3.33-rc.1',
+            'MINIMUM_SOURCE_VERSION': '0.3.33-rc.1',
+            'BASELINE_RUN_ID': '44703576883',
+            'BASELINE_COMMIT': '25b24a1979b938073df254469127eed8fa20a4ac',
+            'BASELINE_MANIFEST_SHA256': 'c69ed6b8c7f3a4fb26ae0c970d6cb8fb30106504e164b261d74618c0419b8e35',
+        }, dict(line.split('=', 1) for line in result.stdout.splitlines()))
+
+
 class NativeAcceptanceScriptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
