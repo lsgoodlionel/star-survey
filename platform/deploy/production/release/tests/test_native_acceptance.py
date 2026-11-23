@@ -1665,6 +1665,14 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
                     self.assertEqual(['candidate-compose'], probe.compose)
                 row = {'version': 1, 'engineSid': 123, 'generation': 'generation-one', 'responseId': 7, 'state': 'engine_completed', 'answersStatus': 'available',
                        'answers': {'probe-column': 'production acceptance'}}
+                if mode == 'wrong-original-survey':
+                    row['engineSid'] = 124
+                elif mode == 'draft-original-response':
+                    row['state'] = 'engine_in_progress'
+                elif mode == 'ambiguous-original-answer':
+                    row['answers']['second-column'] = 'production acceptance'
+                elif mode == 'missing-original-identity':
+                    row.pop('generation')
                 if mode == 'no-original-answer':
                     row.update(answersStatus='missing', answers=None)
                 return 200, {'items': [] if mode == 'lost-response' and state['upgraded'] else [row]}
@@ -1678,8 +1686,13 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
             raise AssertionError((method, path))
         def configuration(probe):
             return {**config, 'actorId': 'changed'} if state['upgraded'] and mode == 'identity-change' else config
+        def predecessor_answer(sid):
+            events.append('answer')
+            self.assertEqual(123, sid)
+            if mode == 'answer-failure':
+                raise self.module.EvidenceError('predecessor submission failed')
         methods = {'_configuration': configuration, '_token': lambda probe, config: 'after' if state['upgraded'] else 'before',
-                   '_api': api, '_answer': lambda probe, sid: events.append('answer'),
+                   '_api': api, '_answer': lambda probe, sid: events.append('candidate-answer'),
                    '_close_engine_survey': lambda probe, instance, sid: events.append('close')}
         for name, replacement in methods.items():
             patch = mock.patch.object(self.doctor.ProductProbe, name, replacement)
@@ -1691,7 +1704,51 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
             state['upgraded'] = True
         Probe = self.module.make_continuity_probe(self.doctor.ProductProbe, self.doctor.DoctorRuntimeError)
         return Probe('/unused', 'fixture.test', ['baseline-compose'], mock.Mock(),
-                     upgrade_action=upgrade, upgraded_compose=lambda: ['candidate-compose']), events
+                     predecessor_answer=predecessor_answer, upgrade_action=upgrade,
+                     upgraded_compose=lambda: ['candidate-compose']), events
+
+    def test_predecessor_submission_failure_blocks_upgrade(self):
+        probe, events = self.fixture('answer-failure')
+        with self.assertRaises(self.doctor.DoctorRuntimeError):
+            probe.run_and_verify()
+        self.assertEqual(['answer', 'close', 'archive'], events)
+        self.assertIsNone(probe.before_items)
+
+    def test_only_exact_completed_predecessor_response_can_start_upgrade(self):
+        for mode in ('wrong-original-survey', 'draft-original-response',
+                     'ambiguous-original-answer', 'missing-original-identity'):
+            with self.subTest(mode=mode):
+                probe, events = self.fixture(mode)
+                with self.assertRaises(self.doctor.DoctorRuntimeError):
+                    probe.run_and_verify()
+                self.assertNotIn('upgrade', events)
+                self.assertFalse(probe.before_items)
+
+    def test_upgraded_answer_uses_candidate_probe(self):
+        probe, events = self.fixture()
+        probe.upgrade_completed = True
+        probe._answer(123)
+        self.assertEqual(['candidate-answer'], events)
+
+    def test_predecessor_answer_executes_only_the_supplied_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / 'baseline'
+            runtime.mkdir()
+            doctor = runtime / 'doctor.py'
+            doctor.write_text(
+                'from pathlib import Path\n'
+                'class CommandRunner: pass\n'
+                'class ProductProbe:\n'
+                '    def __init__(self, target, host, compose, runner):\n'
+                '        self.target = Path(target); self.host = host\n'
+                '    def _answer(self, sid):\n'
+                '        (self.target / "answer").write_text(f"{self.host} {sid}")\n')
+            self.module.baseline_runtime_answer(runtime, root, 'fixture.test', 123, ['docker', 'compose'])
+            self.assertEqual('fixture.test 123', (root / 'answer').read_text())
+            doctor.write_text('raise RuntimeError("private fixture detail")')
+            with self.assertRaisesRegex(self.module.EvidenceError, '^predecessor submission failed$'):
+                self.module.baseline_runtime_answer(runtime, root, 'fixture.test', 123, ['docker', 'compose'])
 
     def test_same_response_and_original_answer_are_verified_after_upgrade(self):
         probe, events = self.fixture()

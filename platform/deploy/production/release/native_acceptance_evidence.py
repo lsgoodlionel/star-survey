@@ -1158,8 +1158,10 @@ def verify_continuity_export(payload, original):
 
 def make_continuity_probe(base_probe, error_type):
     class ContinuityProbe(base_probe):
-        def __init__(self, *args, upgrade_action, upgraded_compose, **kwargs):
+        def __init__(self, *args, predecessor_answer, upgrade_action, upgraded_compose, **kwargs):
             super().__init__(*args, **kwargs)
+            self.predecessor_answer = predecessor_answer
+            self.predecessor_sid = None
             self.upgrade_action = upgrade_action
             self.upgraded_compose = upgraded_compose
             self.before_items = self.response_path = self.fixture_identity = None
@@ -1168,6 +1170,15 @@ def make_continuity_probe(base_probe, error_type):
             self.continuity_phase = 'prepare'
             self.upgrade_failure_stage = 'unknown'
             self.upgrade_failure_category, self.upgrade_exit_code = 'none', None
+
+        def _answer(self, sid):
+            if self.upgrade_completed:
+                return super()._answer(sid)
+            try:
+                self.predecessor_answer(sid)
+                self.predecessor_sid = sid
+            except EvidenceError:
+                raise error_type('predecessor submission failed') from None
 
         def _token(self, config):
             if self.fixture_identity is None:
@@ -1203,7 +1214,14 @@ def make_continuity_probe(base_probe, error_type):
                     if len(value['items']) != 1:
                         raise error_type('continuity fixture must contain exactly one response')
                     row = value['items'][0]
-                    if not isinstance(row, dict) or row.get('answersStatus') != 'available' or not isinstance(row.get('answers'), dict) or 'production acceptance' not in row['answers'].values():
+                    if (not isinstance(row, dict) or row.get('engineSid') != self.predecessor_sid
+                            or row.get('version') != 1 or row.get('state') != 'engine_completed'
+                            or type(row.get('responseId')) is not int or row['responseId'] <= 0
+                            or not isinstance(row.get('generation'), str) or not row['generation']):
+                        raise error_type('original response identity is invalid before upgrade')
+                    answers = row.get('answers')
+                    if (row.get('answersStatus') != 'available' or not isinstance(answers, dict)
+                            or list(answers.values()).count('production acceptance') != 1):
                         raise error_type('original engine answer is unavailable before upgrade')
                     self.before_items = json.loads(json.dumps(value['items']))
                     self.response_path = path
@@ -1259,6 +1277,29 @@ _BASELINE_COMPOSE_CHILD = (
     "with open(sys.argv[4], 'w', encoding='utf-8') as handle:\n"
     "    json.dump(command, handle)\n"
 )
+
+
+# native_acceptance.sh binds this extracted runtime to the signed baseline
+# bundle before invoking the helper. Keep its module imports out of the candidate.
+_BASELINE_ANSWER_CHILD = """
+import runpy, sys
+from pathlib import Path
+runtime, target, host, sid, *compose = sys.argv[1:]
+sys.path.insert(0, runtime)
+doctor = runpy.run_path(str(Path(runtime) / 'doctor.py'))
+probe = doctor['ProductProbe'](target, host, compose, doctor['CommandRunner']())
+probe._answer(int(sid))
+"""
+
+
+def baseline_runtime_answer(runtime, target, host, sid, compose):
+    try:
+        subprocess.run([sys.executable, '-I', '-c', _BASELINE_ANSWER_CHILD,
+                        str(runtime), str(target), host, str(sid), *compose], check=True,
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        raise EvidenceError('predecessor submission failed') from None
 
 
 def baseline_runtime_compose(runtime, target, version):
@@ -1353,6 +1394,8 @@ def run_upgrade_data_probe(args):
     # The predecessor installation is composed by its own runtime (#138 rc31).
     baseline_compose = baseline_runtime_compose(args.baseline_runtime, args.target, baseline['version'])
     probe = Probe(args.target, args.host, baseline_compose, CommandRunner(),
+                  predecessor_answer=lambda sid: baseline_runtime_answer(
+                      args.baseline_runtime, args.target, args.host, sid, baseline_compose),
                   upgrade_action=lambda: perform_upgrade(args.ctl, args.target, candidate_path, args.candidate_sha,
                                                          candidate['version'], manager, DoctorRuntimeError),
                   upgraded_compose=lambda: manager._compose(candidate['version']))
