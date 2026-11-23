@@ -114,6 +114,51 @@ class DoctorRunner:
 
 
 class DoctorAndCleanHostTest(unittest.TestCase):
+    def test_public_form_requires_fetchable_engine_script_and_theme_stylesheet(self):
+        from email.message import Message
+        from io import BytesIO
+        from contextlib import ExitStack
+        module = load_doctor()
+        probe = module.ProductProbe('.', 'fixture.invalid', [], DoctorRunner())
+        script = '/survey/tmp/assets/abcd/decimal.js'
+        style = '/survey/tmp/assets/ef12/css/base.css'
+        form = f'<script src="{script}"></script><link rel="stylesheet" href="{style}">'
+        def response(body, mime):
+            stream = BytesIO(body)
+            stream.headers = Message()
+            stream.headers['Content-Type'] = mime
+            stream.status = 200
+            return stream
+        for page, mime, body, valid in (
+                (form, 'text/css', b'body{}', True),
+                ('<form></form><h2>500: Internal Server Error</h2>', 'text/css', b'x', False),
+                (form.replace(script, 'https://outside.invalid'+script), 'text/css', b'x', False),
+                (form, 'text/html', b'error', False), (form, 'text/css', b'', False)):
+            with self.subTest(page=page, mime=mime, valid=valid), ExitStack() as stack:
+                opener = stack.enter_context(mock.patch.object(module.urllib.request, 'build_opener')).return_value
+                opener.open.side_effect = [response(b'var Decimal;', 'application/javascript'), response(body, mime)]
+                if not valid:
+                    stack.enter_context(self.assertRaises(module.DoctorRuntimeError))
+                probe._verify_form_assets(page)
+                if valid:
+                    self.assertEqual([probe.base_url+script, probe.base_url+style],
+                                     [c.args[0] for c in opener.open.call_args_list])
+
+    def test_missing_published_script_preserves_only_http_status(self):
+        from io import BytesIO
+        module = load_doctor()
+        probe = module.ProductProbe('.', 'fixture.invalid', [], DoctorRunner())
+        form = BytesIO(b'<script src="/survey/tmp/assets/a/decimal.js"></script>'
+                       b'<link rel="stylesheet" href="/survey/tmp/assets/b/css/base.css">')
+        form.geturl = lambda: probe.base_url
+        with mock.patch.object(module.urllib.request, 'build_opener') as factory:
+            factory.return_value.open.side_effect = [
+                form, urllib.error.HTTPError(probe.base_url, 404, 'private-detail', {}, None)]
+            with self.assertRaises(module.ProbeHttpError) as caught:
+                probe._answer(123)
+        self.assertEqual(404, caught.exception.status)
+        self.assertNotIn('private-detail', str(caught.exception))
+
     def test_public_answer_http_failure_preserves_only_status(self):
         module = load_doctor()
         probe = module.ProductProbe('.', 'fixture.invalid', [], DoctorRunner())
