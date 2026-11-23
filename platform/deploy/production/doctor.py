@@ -75,6 +75,29 @@ class CleanHostScenario:
             execute(step)
 
 
+class _SurveyAssetParser(HTMLParser):
+    """Identify representative assets from the fixed product-probe theme."""
+    def __init__(self):
+        super().__init__()
+        self.assets = {}
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "script":
+            path = attrs.get("src") or ""
+            if re.fullmatch(r"/survey/tmp/assets/[a-zA-Z0-9_-]+/decimal\.js", path):
+                self.assets["script"] = path
+        elif tag == "link" and "stylesheet" in (attrs.get("rel") or "").lower().split():
+            path = attrs.get("href") or ""
+            if re.fullmatch(r"/survey/tmp/assets/[a-zA-Z0-9_-]+/css/base\.css", path):
+                self.assets["style"] = path
+
+
+class _NoAssetRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class _SurveyFormParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -183,6 +206,20 @@ class ProductProbe:
             raise DoctorRuntimeError(f"product probe {label} failed")
         return value
 
+    def _verify_form_assets(self, html):
+        """Check representative asset availability and MIME type in the probe form."""
+        parser = _SurveyAssetParser()
+        parser.feed(html)
+        expected = {"script": {"text/javascript", "application/javascript"}, "style": {"text/css"}}
+        if parser.assets.keys() != expected.keys():
+            raise DoctorRuntimeError("product probe form assets are missing")
+        opener = urllib.request.build_opener(_NoAssetRedirect())
+        for kind, types in expected.items():
+            with opener.open(self.base_url + parser.assets[kind], timeout=15) as response:
+                if (response.status != 200 or response.headers.get_content_type() not in types
+                        or not response.read(512).strip()):
+                    raise DoctorRuntimeError("product probe form asset is invalid")
+
     def _answer(self, sid):
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         url = f"{self.base_url}/survey/index.php/{sid}?newtest=Y&lang=en"
@@ -193,6 +230,7 @@ class ProductProbe:
                     url = response.geturl()
                 if "completed-wrapper" in html:
                     return
+                self._verify_form_assets(html)
                 parser = _SurveyFormParser()
                 parser.feed(html)
                 move = "movesubmit" if "movesubmit" in parser.moves else "movenext" if "movenext" in parser.moves else None
