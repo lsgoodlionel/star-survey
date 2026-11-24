@@ -1649,7 +1649,7 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
                 self.assertEqual(['close', 'archive'], events[-2:])
                 self.assertFalse(probe.export_verified)
 
-    def fixture(self, mode='success'):
+    def fixture(self, mode='success', *, row_override=None, override_after=False):
         events, state = [], {'upgraded': False}
         config = {'tenantId': '11111111-1111-4111-8111-111111111111', 'actorId': 'fixture-owner'}
         def api(probe, token, method, path, body=None, raw=False):
@@ -1665,6 +1665,8 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
                     self.assertEqual(['candidate-compose'], probe.compose)
                 row = {'version': 1, 'engineSid': 123, 'generation': 'generation-one', 'responseId': 7, 'state': 'engine_completed', 'answersStatus': 'available',
                        'answers': {'probe-column': 'production acceptance'}}
+                if row_override and state['upgraded'] == override_after:
+                    row.update(row_override)
                 if mode == 'wrong-original-survey':
                     row['engineSid'] = 124
                 elif mode == 'draft-original-response':
@@ -1723,6 +1725,17 @@ class UpgradeContinuityProbeTest(unittest.TestCase):
                     probe.run_and_verify()
                 self.assertNotIn('upgrade', events)
                 self.assertFalse(probe.before_items)
+
+    def test_identity_numbers_must_remain_json_integers(self):
+        for field, value in (('version', True), ('version', 1.0), ('engineSid', 123.0), ('responseId', 7.0)):
+            for after in (False, True):
+                with self.subTest(field=field, value=value, after=after):
+                    probe, events = self.fixture(row_override={field: value}, override_after=after)
+                    with self.assertRaises(self.doctor.DoctorRuntimeError):
+                        probe.run_and_verify()
+                    self.assertEqual(after, 'upgrade' in events)
+                    self.assertFalse(probe.response_verified)
+                    self.assertNotIn('export', events)
 
     def test_upgraded_answer_uses_candidate_probe(self):
         probe, events = self.fixture()

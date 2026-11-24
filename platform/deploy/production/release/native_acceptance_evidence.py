@@ -1204,7 +1204,8 @@ def make_continuity_probe(base_probe, error_type):
                 self.after_token = self._token(self._configuration())
                 self.continuity_phase = 'response-read'
                 status, responses = super()._api(self.after_token, 'GET', self.response_path)
-                if status != 200 or not isinstance(responses, dict) or responses.get('items') != self.before_items:
+                if (status != 200 or not isinstance(responses, dict)
+                        or json.dumps(responses.get('items'), sort_keys=True) != json.dumps(self.before_items, sort_keys=True)):
                     raise error_type('original response changed or disappeared across upgrade')
                 self.response_verified = True
             status, value = super()._api(self.after_token or token, method, path, body, raw)
@@ -1214,7 +1215,8 @@ def make_continuity_probe(base_probe, error_type):
                     if len(value['items']) != 1:
                         raise error_type('continuity fixture must contain exactly one response')
                     row = value['items'][0]
-                    if (not isinstance(row, dict) or row.get('engineSid') != self.predecessor_sid
+                    if (not isinstance(row, dict) or type(row.get('engineSid')) is not int
+                            or row['engineSid'] != self.predecessor_sid or type(row.get('version')) is not int
                             or row.get('version') != 1 or row.get('state') != 'engine_completed'
                             or type(row.get('responseId')) is not int or row['responseId'] <= 0
                             or not isinstance(row.get('generation'), str) or not row['generation']):
